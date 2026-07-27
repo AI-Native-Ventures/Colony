@@ -202,6 +202,54 @@ Widget _buildTestable({
   );
 }
 
+Widget _buildNavigationTestable({
+  required Channel channelA,
+  required Channel channelB,
+  required RelaySessionNotifier relaySession,
+}) {
+  return ProviderScope(
+    overrides: [
+      relaySessionProvider.overrideWith(() => relaySession),
+      channelMessagesProvider(
+        channelA.id,
+      ).overrideWith(() => _FakeMessagesNotifier([], channelId: channelA.id)),
+      channelMessagesProvider(
+        channelB.id,
+      ).overrideWith(() => _FakeMessagesNotifier([], channelId: channelB.id)),
+      channelTypingProvider(
+        channelA.id,
+      ).overrideWith(() => _FakeTypingNotifier([], channelId: channelA.id)),
+      channelTypingProvider(
+        channelB.id,
+      ).overrideWith(() => _FakeTypingNotifier([], channelId: channelB.id)),
+      channelDetailsProvider(
+        channelA.id,
+      ).overrideWith((ref) async => ChannelDetails.fromChannel(channelA)),
+      channelDetailsProvider(
+        channelB.id,
+      ).overrideWith((ref) async => ChannelDetails.fromChannel(channelB)),
+      channelMembersProvider(
+        channelA.id,
+      ).overrideWith((ref) async => const <ChannelMember>[]),
+      channelMembersProvider(
+        channelB.id,
+      ).overrideWith((ref) async => const <ChannelMember>[]),
+      userCacheProvider.overrideWith(() => _FakeUserCacheNotifier({})),
+      profileProvider.overrideWith(() => _FakeProfileNotifier()),
+      channelsProvider.overrideWith(
+        () => _FakeChannelsNotifier([channelA, channelB]),
+      ),
+      relayClientProvider.overrideWithValue(
+        RelayClient(baseUrl: 'http://localhost:3000'),
+      ),
+    ],
+    child: MaterialApp(
+      theme: AppTheme.light(),
+      home: ChannelDetailPage(channel: channelA),
+    ),
+  );
+}
+
 /// Finder that searches for text within RichText spans. [find.text] only
 /// matches the top-level text property; this also searches nested TextSpans.
 Finder findRichText(String text) {
@@ -230,6 +278,103 @@ double? effectiveFontSizeForText(
 
 void main() {
   group('ChannelDetailPage', () {
+    testWidgets(
+      'restores the previous channel replay priority after a nested pop',
+      (tester) async {
+        final channelA = _channel(id: 'channel-a', name: 'channel A');
+        final channelB = _channel(id: 'channel-b', name: 'channel B');
+        final socket = _RecordingRelaySocket();
+        final relaySession = RelaySessionNotifier();
+        relaySession.debugAttachSocketForTest(socket);
+
+        final subscribeB = relaySession.subscribe(
+          _filterForChannel(channelB.id),
+          (_) {},
+        );
+        relaySession.debugHandleMessage(['EOSE', 'l-1']);
+        await subscribeB;
+        final subscribeA = relaySession.subscribe(
+          _filterForChannel(channelA.id),
+          (_) {},
+        );
+        relaySession.debugHandleMessage(['EOSE', 'l-2']);
+        await subscribeA;
+
+        await tester.pumpWidget(
+          _buildNavigationTestable(
+            channelA: channelA,
+            channelB: channelB,
+            relaySession: relaySession,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final navigator = Navigator.of(
+          tester.element(find.byType(ChannelDetailPage)),
+        );
+        navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => ChannelDetailPage(channel: channelB),
+          ),
+        );
+        await tester.pumpAndSettle();
+        navigator.pop();
+        await tester.pumpAndSettle();
+
+        socket.messages.clear();
+        await relaySession.debugReplayLiveSubscriptions();
+
+        expect(_replayedChannelIds(socket), [channelA.id, channelB.id]);
+      },
+    );
+
+    testWidgets(
+      'keeps replacement channel replay priority after old route disposal',
+      (tester) async {
+        final channelA = _channel(id: 'channel-a', name: 'channel A');
+        final channelB = _channel(id: 'channel-b', name: 'channel B');
+        final socket = _RecordingRelaySocket();
+        final relaySession = RelaySessionNotifier();
+        relaySession.debugAttachSocketForTest(socket);
+
+        final subscribeA = relaySession.subscribe(
+          _filterForChannel(channelA.id),
+          (_) {},
+        );
+        relaySession.debugHandleMessage(['EOSE', 'l-1']);
+        await subscribeA;
+        final subscribeB = relaySession.subscribe(
+          _filterForChannel(channelB.id),
+          (_) {},
+        );
+        relaySession.debugHandleMessage(['EOSE', 'l-2']);
+        await subscribeB;
+
+        await tester.pumpWidget(
+          _buildNavigationTestable(
+            channelA: channelA,
+            channelB: channelB,
+            relaySession: relaySession,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        Navigator.of(
+          tester.element(find.byType(ChannelDetailPage)),
+        ).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => ChannelDetailPage(channel: channelB),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        socket.messages.clear();
+        await relaySession.debugReplayLiveSubscriptions();
+
+        expect(_replayedChannelIds(socket), [channelB.id, channelA.id]);
+      },
+    );
+
     testWidgets('defers read-state mark until after build', (tester) async {
       final readState = _SynchronousReadStateNotifier(
         const ReadStateState(
@@ -1659,7 +1804,8 @@ Channel _channel({required String id, required String name}) => Channel(
 
 class _FakeMessagesNotifier extends ChannelMessagesNotifier {
   List<NostrEvent> _messages;
-  _FakeMessagesNotifier(this._messages) : super(_channelId);
+  _FakeMessagesNotifier(this._messages, {String channelId = _channelId})
+    : super(channelId);
 
   @override
   AsyncValue<List<NostrEvent>> build() => AsyncData(_messages);
@@ -1686,7 +1832,8 @@ class _ErrorMessagesNotifier extends ChannelMessagesNotifier {
 
 class _FakeTypingNotifier extends ChannelTypingNotifier {
   final List<TypingEntry> _entries;
-  _FakeTypingNotifier(this._entries) : super(_channelId);
+  _FakeTypingNotifier(this._entries, {String channelId = _channelId})
+    : super(channelId);
 
   @override
   List<TypingEntry> build() => _entries;
@@ -1762,6 +1909,42 @@ class _FakeChannelActions extends ChannelActions {
     return;
   }
 }
+
+class _RecordingRelaySocket extends RelaySocket {
+  _RecordingRelaySocket()
+    : super(
+        wsUrl: 'wss://relay.example',
+        nsec: null,
+        onMessage: (_) {},
+        onConnected: () {},
+        onDisconnected: (_) {},
+      );
+
+  final List<List<dynamic>> messages = [];
+
+  @override
+  void send(List<dynamic> payload) => messages.add(payload);
+
+  @override
+  void dispose() {}
+}
+
+NostrFilter _filterForChannel(String channelId) => NostrFilter(
+  kinds: EventKind.channelEventKinds,
+  tags: {
+    '#h': [channelId],
+  },
+  limit: 0,
+);
+
+List<String> _replayedChannelIds(_RecordingRelaySocket socket) => socket
+    .messages
+    .where((message) => message.first == 'REQ')
+    .map(
+      (message) =>
+          ((message[2] as Map<String, dynamic>)['#h'] as List).single as String,
+    )
+    .toList();
 
 class _TestNavigatorObserver extends NavigatorObserver {
   int pushCount = 0;

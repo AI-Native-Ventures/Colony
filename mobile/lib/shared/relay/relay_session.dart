@@ -120,7 +120,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   bool _paused = false;
   bool _hasConnectedOnce = false;
   int _connectionGeneration = 0;
-  String? _visibleChannelId;
+  final Map<Object, String> _visibleChannelsByOwner = {};
   bool _socketConnected = false;
 
   @override
@@ -349,9 +349,12 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _socketConnected = true;
   }
 
-  /// Marks the channel currently visible so reconnect replay prioritizes it.
-  void setVisibleChannelId(String? channelId) {
-    _visibleChannelId = channelId;
+  /// Registers a visible channel and returns an owner-scoped release callback.
+  /// The most recently registered owner is prioritized during reconnect replay.
+  void Function() registerVisibleChannel(String channelId) {
+    final owner = Object();
+    _visibleChannelsByOwner[owner] = channelId;
+    return () => _visibleChannelsByOwner.remove(owner);
   }
 
   /// Force a reconnect (e.g., returning from background).
@@ -472,7 +475,9 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     if (!_isActiveConnection(generation)) return;
 
     final entries = _liveSubscriptions.entries.toList();
-    final visibleChannelId = _visibleChannelId;
+    final visibleChannelId = _visibleChannelsByOwner.isEmpty
+        ? null
+        : _visibleChannelsByOwner.values.last;
     if (visibleChannelId != null) {
       entries.sort((left, right) {
         final leftVisible =
@@ -804,7 +809,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _backgroundGraceTimer?.cancel();
     _cancelAllClosedRetries();
     _rateLimitGate.reset();
-    _visibleChannelId = null;
+    _visibleChannelsByOwner.clear();
     _socketConnected = false;
     _cancelAllHistory(null);
     _rejectAllPending(null);

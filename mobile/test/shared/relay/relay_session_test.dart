@@ -637,6 +637,41 @@ void main() {
     await second;
   });
 
+  test(
+    'visible channel owners restore and ignore out-of-order release',
+    () async {
+      final socket = _RecordingRelaySocket();
+      final session = RelaySessionNotifier();
+      session.debugAttachSocketForTest(socket);
+      const channelIds = ['channel-a', 'channel-b', 'channel-c'];
+
+      for (var i = 0; i < channelIds.length; i++) {
+        final subscribe = session.subscribe(
+          _filterForChannel(channelIds[i]),
+          (_) {},
+        );
+        session.debugHandleMessage(['EOSE', 'l-${i + 1}']);
+        await subscribe;
+      }
+
+      final releaseA = session.registerVisibleChannel('channel-a');
+      final releaseB = session.registerVisibleChannel('channel-b');
+      final releaseC = session.registerVisibleChannel('channel-c');
+      releaseB();
+      socket.messages.clear();
+      await session.debugReplayLiveSubscriptions();
+      expect(_replayedChannelIds(socket).first, 'channel-c');
+
+      releaseC();
+      socket.messages.clear();
+      await session.debugReplayLiveSubscriptions();
+      expect(_replayedChannelIds(socket).first, 'channel-a');
+
+      releaseB();
+      releaseA();
+    },
+  );
+
   test('replay is visible-first and batched eight at a time', () async {
     final replayDelays = <Duration>[];
     final replayDelayCompleter = Completer<void>();
@@ -656,7 +691,9 @@ void main() {
       await subscribe;
     }
     socket.messages.clear();
-    session.setVisibleChannelId(_visibleChannelId);
+    final releaseVisibleChannel = session.registerVisibleChannel(
+      _visibleChannelId,
+    );
 
     final replay = session.debugReplayLiveSubscriptions();
     await Future<void>.delayed(Duration.zero);
@@ -671,6 +708,7 @@ void main() {
     replayDelayCompleter.complete();
     await replay;
     expect(_reqs(socket), hasLength(9));
+    releaseVisibleChannel();
   });
 
   test(
@@ -821,6 +859,13 @@ NostrFilter _filterForChannel(String channelId) => NostrFilter(
   },
   limit: 0,
 );
+
+List<String> _replayedChannelIds(_RecordingRelaySocket socket) => _reqs(socket)
+    .map(
+      (message) =>
+          ((message[2] as Map<String, dynamic>)['#h'] as List).single as String,
+    )
+    .toList();
 
 List<List<dynamic>> _reqs(_RecordingRelaySocket socket) =>
     socket.messages.where((message) => message.first == 'REQ').toList();

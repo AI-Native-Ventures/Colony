@@ -158,8 +158,7 @@ class ChannelDetailPage extends HookConsumerWidget {
 
     useEffect(() {
       final session = ref.read(relaySessionProvider.notifier);
-      session.setVisibleChannelId(channel.id);
-      return () => session.setVisibleChannelId(null);
+      return session.registerVisibleChannel(channel.id);
     }, [channel.id]);
 
     // Preload channel member profiles so @mentions resolve correctly.
