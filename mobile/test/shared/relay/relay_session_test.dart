@@ -298,7 +298,7 @@ void main() {
     unsubscribeSecond();
   });
 
-  test('live subscribe fails when relay closes before ready', () async {
+  test('terminal CLOSED fails a live subscribe before ready', () async {
     final session = RelaySessionNotifier();
     const filter = NostrFilter(kinds: [EventKind.agentObserverFrame], limit: 0);
 
@@ -322,32 +322,362 @@ void main() {
   });
 
   test(
-    'live onClosed callback runs when relay closes an open subscription',
+    'retryable CLOSED before EOSE retains and retries the live sub',
     () async {
-      final session = RelaySessionNotifier();
-      final closedMessages = <String>[];
-      const filter = NostrFilter(
-        kinds: [EventKind.agentObserverFrame],
-        limit: 0,
+      final timers = <_ManualTimer>[];
+      final socket = _RecordingRelaySocket();
+      final session = RelaySessionNotifier(
+        retryTimerFactory: (duration, callback) {
+          final timer = _ManualTimer(duration, callback);
+          timers.add(timer);
+          return timer;
+        },
       );
+      session.debugAttachSocketForTest(socket);
 
-      final subscribe = session.subscribe(
-        filter,
-        (_) {},
-        onClosed: closedMessages.add,
-      );
-      session.debugHandleMessage(['EOSE', 'l-1']);
+      final subscribe = session.subscribe(_channelFilter, (_) {});
+      session.debugHandleMessage(['CLOSED', 'l-1', 'error: relay overloaded']);
       final unsubscribe = await subscribe;
-      session.debugHandleMessage([
-        'CLOSED',
-        'l-1',
-        'restricted: no longer valid',
-      ]);
 
-      expect(closedMessages, ['restricted: no longer valid']);
+      expect(timers.single.duration, const Duration(seconds: 1));
+      timers.single.fire();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(_reqs(socket).where((req) => req[1] == 'l-1'), hasLength(2));
       unsubscribe();
     },
   );
+
+  test('CLOSED retries back off and reset after EOSE', () async {
+    final timers = <_ManualTimer>[];
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    expect(timers.last.duration, const Duration(seconds: 1));
+    timers.last.fire();
+    await Future<void>.delayed(Duration.zero);
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    expect(timers.last.duration, const Duration(seconds: 2));
+
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    expect(timers.last.duration, const Duration(seconds: 1));
+    unsubscribe();
+  });
+
+  test('CLOSED retries reset after a delivered event', () async {
+    final timers = <_ManualTimer>[];
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    timers.last.fire();
+    await Future<void>.delayed(Duration.zero);
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    expect(timers.last.duration, const Duration(seconds: 2));
+
+    session.debugHandleMessage([
+      'EVENT',
+      'l-1',
+      _event(createdAt: 30).toJson(),
+    ]);
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    expect(timers.last.duration, const Duration(seconds: 1));
+    unsubscribe();
+  });
+
+  test('CLOSED retries reset after disconnect and reconnect', () async {
+    final timers = <_ManualTimer>[];
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    timers.last.fire();
+    await Future<void>.delayed(Duration.zero);
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    expect(timers.last.duration, const Duration(seconds: 2));
+
+    session.debugResetClosedRetriesForDisconnect();
+    expect(timers.last.isActive, isFalse);
+    session.debugSetSessionStatus(SessionStatus.connected);
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    expect(timers.last.duration, const Duration(seconds: 1));
+    unsubscribe();
+  });
+
+  test('a CLOSED retry timer does not send while disconnected', () async {
+    final timers = <_ManualTimer>[];
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+    final requestCount = _reqs(socket).length;
+
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    session.debugSetSessionStatus(SessionStatus.reconnecting);
+    timers.single.fire();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(_reqs(socket), hasLength(requestCount));
+    unsubscribe();
+  });
+
+  test('terminal CLOSED removes a live sub without retrying it', () async {
+    final timers = <_ManualTimer>[];
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    await subscribe;
+
+    session.debugHandleMessage(['CLOSED', 'l-1', 'restricted: access revoked']);
+    await session.debugReplayLiveSubscriptions();
+
+    expect(timers, isEmpty);
+    expect(_reqs(socket).where((req) => req[1] == 'l-1'), hasLength(1));
+  });
+
+  test('unsubscribe and dispose cancel CLOSED retry timers', () async {
+    final timers = <_ManualTimer>[];
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+
+    final firstSubscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await firstSubscribe;
+    session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+    final unsubscribeTimer = timers.last;
+    unsubscribe();
+    expect(unsubscribeTimer.isActive, isFalse);
+
+    final secondSubscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-2']);
+    await secondSubscribe;
+    session.debugHandleMessage(['CLOSED', 'l-2', 'error: transient']);
+    final disposeTimer = timers.last;
+    session.debugDispose();
+    expect(disposeTimer.isActive, isFalse);
+  });
+
+  test('rate-limited live CLOSED honours the gate floor', () async {
+    final retryTimers = <_ManualTimer>[];
+    final gateTimers = <_ManualTimer>[];
+    final gate = RelayRateLimitGate(
+      timerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        gateTimers.add(timer);
+        return timer;
+      },
+    );
+    final session = RelaySessionNotifier(
+      rateLimitGate: gate,
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        retryTimers.add(timer);
+        return timer;
+      },
+    );
+    final socket = _RecordingRelaySocket();
+    session.debugAttachSocketForTest(socket);
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+
+    session.debugHandleMessage([
+      'CLOSED',
+      'l-1',
+      'rate-limited: quota exceeded; retry in 4s',
+    ]);
+
+    expect(
+      retryTimers.single.duration.inMilliseconds,
+      inInclusiveRange(3990, 4000),
+    );
+    expect(gateTimers.single.duration, const Duration(seconds: 4));
+    unsubscribe();
+  });
+
+  test('rate-limited history CLOSED gates the next REQ', () async {
+    final gateTimers = <_ManualTimer>[];
+    final gate = RelayRateLimitGate(
+      timerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        gateTimers.add(timer);
+        return timer;
+      },
+    );
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(rateLimitGate: gate);
+    session.debugAttachSocketForTest(socket);
+
+    final first = session.fetchHistory(_channelFilter);
+    session.debugHandleMessage([
+      'CLOSED',
+      'h-1',
+      'rate-limited: quota exceeded; retry in 4s',
+    ]);
+    await expectLater(first, throwsException);
+
+    final second = session.fetchHistory(_channelFilter);
+    await Future<void>.delayed(Duration.zero);
+    expect(_reqs(socket), hasLength(1));
+    expect(gateTimers.single.duration, const Duration(seconds: 4));
+
+    gateTimers.single.fire();
+    await Future<void>.delayed(Duration.zero);
+    expect(_reqs(socket), hasLength(2));
+    session.debugHandleMessage(['EOSE', 'h-2']);
+    await second;
+  });
+
+  test('replay is visible-first and batched eight at a time', () async {
+    final replayDelays = <Duration>[];
+    final replayDelayCompleter = Completer<void>();
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      replayDelay: (duration) {
+        replayDelays.add(duration);
+        return replayDelayCompleter.future;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+
+    for (var i = 0; i < 9; i++) {
+      final channelId = i == 8 ? _visibleChannelId : 'channel-$i';
+      final subscribe = session.subscribe(_filterForChannel(channelId), (_) {});
+      session.debugHandleMessage(['EOSE', 'l-${i + 1}']);
+      await subscribe;
+    }
+    socket.messages.clear();
+    session.setVisibleChannelId(_visibleChannelId);
+
+    final replay = session.debugReplayLiveSubscriptions();
+    await Future<void>.delayed(Duration.zero);
+
+    final firstBatch = _reqs(socket);
+    expect(firstBatch, hasLength(8));
+    expect((firstBatch.first[2] as Map<String, dynamic>)['#h'], [
+      _visibleChannelId,
+    ]);
+    expect(replayDelays, [const Duration(milliseconds: 50)]);
+
+    replayDelayCompleter.complete();
+    await replay;
+    expect(_reqs(socket), hasLength(9));
+  });
+
+  test(
+    'replay generation guard bails after a connection is superseded',
+    () async {
+      final replayDelayCompleter = Completer<void>();
+      final socket = _RecordingRelaySocket();
+      final session = RelaySessionNotifier(
+        replayDelay: (_) => replayDelayCompleter.future,
+      );
+      session.debugAttachSocketForTest(socket);
+
+      for (var i = 0; i < 9; i++) {
+        final subscribe = session.subscribe(
+          _filterForChannel('channel-$i'),
+          (_) {},
+        );
+        session.debugHandleMessage(['EOSE', 'l-${i + 1}']);
+        await subscribe;
+      }
+      socket.messages.clear();
+
+      final replay = session.debugReplayLiveSubscriptions();
+      await Future<void>.delayed(Duration.zero);
+      expect(_reqs(socket), hasLength(8));
+
+      session.debugSupersedeConnection();
+      replayDelayCompleter.complete();
+      await replay;
+
+      expect(_reqs(socket), hasLength(8));
+    },
+  );
+
+  test('live onClosed callback runs only for a terminal CLOSED', () async {
+    final session = RelaySessionNotifier();
+    final closedMessages = <String>[];
+    const filter = NostrFilter(kinds: [EventKind.agentObserverFrame], limit: 0);
+
+    final subscribe = session.subscribe(
+      filter,
+      (_) {},
+      onClosed: closedMessages.add,
+    );
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+    session.debugHandleMessage([
+      'CLOSED',
+      'l-1',
+      'error: temporarily unavailable',
+    ]);
+    expect(closedMessages, isEmpty);
+    session.debugHandleMessage([
+      'CLOSED',
+      'l-1',
+      'restricted: no longer valid',
+    ]);
+
+    expect(closedMessages, ['restricted: no longer valid']);
+    unsubscribe();
+  });
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
@@ -407,11 +737,11 @@ class _FakeRelayConfigNotifier extends RelayConfigNotifier {
   RelayConfig build() => RelayConfig(baseUrl: _baseUrl, nsec: _nsec);
 }
 
-NostrEvent _event() {
-  return const NostrEvent(
+NostrEvent _event({int createdAt = 20}) {
+  return NostrEvent(
     id: 'event-1',
     pubkey: 'alice',
-    createdAt: 20,
+    createdAt: createdAt,
     kind: EventKind.streamMessageV2,
     tags: [
       ['h', _channelId],
@@ -419,4 +749,66 @@ NostrEvent _event() {
     content: 'hello',
     sig: 'sig',
   );
+}
+
+const _visibleChannelId = '99999999-9999-4999-8999-999999999999';
+const _channelFilter = NostrFilter(
+  kinds: EventKind.channelEventKinds,
+  tags: {
+    '#h': [_channelId],
+  },
+  limit: 0,
+);
+
+NostrFilter _filterForChannel(String channelId) => NostrFilter(
+  kinds: EventKind.channelEventKinds,
+  tags: {
+    '#h': [channelId],
+  },
+  limit: 0,
+);
+
+List<List<dynamic>> _reqs(_RecordingRelaySocket socket) =>
+    socket.messages.where((message) => message.first == 'REQ').toList();
+
+class _RecordingRelaySocket extends RelaySocket {
+  _RecordingRelaySocket()
+    : super(
+        wsUrl: 'wss://relay.example',
+        nsec: null,
+        onMessage: (_) {},
+        onConnected: () {},
+        onDisconnected: (_) {},
+      );
+
+  final List<List<dynamic>> messages = [];
+
+  @override
+  void send(List<dynamic> payload) => messages.add(payload);
+
+  @override
+  void dispose() {}
+}
+
+class _ManualTimer implements Timer {
+  _ManualTimer(this.duration, this._callback);
+
+  final Duration duration;
+  final void Function() _callback;
+  bool _active = true;
+
+  void fire() {
+    if (!_active) return;
+    _active = false;
+    _callback();
+  }
+
+  @override
+  void cancel() => _active = false;
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  int get tick => _active ? 0 : 1;
 }
