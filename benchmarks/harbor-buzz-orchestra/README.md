@@ -148,7 +148,7 @@ tokens never reach the counters above. On a long trial with the default
 
 The runtime parses the handoff log lines — which carry the pre-handoff context
 size — and publishes a worst case beside the metered figure: each handoff is
-charged at most its pre-handoff context as input plus 32000 tokens of output, at
+charged at most its pre-handoff context as input plus tokens of output, at
 full rate. So `cost_usd` is the floor, `cost_usd_including_handoff_bound` is the
 ceiling, and the truth is between them. Receipts keep `handoffs`,
 `handoff_input_tokens_upper_bound`, and `handoff_cost_usd_upper_bound` separate

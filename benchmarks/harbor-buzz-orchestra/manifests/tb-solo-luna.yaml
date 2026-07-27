@@ -27,14 +27,6 @@ roster:
     prompt:
       path: personas/bench/solo.md
       sha256: 6997ae38384ea4f84bbdc1422a668be089fbfd2709d412392dbbb4911c565596
-    generation:
-      # Reasoning tokens are billed and counted as output, so this is a
-      # thinking budget as much as an answer budget. It is also subtracted
-      # from the window to set the compaction threshold, so it cannot simply
-      # be maximised: 32k leaves compaction at 240k, still under the 272k
-      # price boundary.
-      max_output_tokens: 32000
-      context_window_tokens: 272000
 prices:
   # Operator-supplied list prices, doc 04 §7. cache_read_rate stays 0.0 until
   # DB10 is settled — these endpoints are on the OpenAI Responses route, which

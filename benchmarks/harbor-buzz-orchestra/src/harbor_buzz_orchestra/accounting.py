@@ -41,7 +41,7 @@ trial with the default ``max_handoffs`` of 80 the omission is easily larger than
 everything else we model. We cannot recover the true figure without a change to
 ``buzz-agent``, so instead we parse the handoff log lines — which do carry the
 pre-handoff context size — and publish a *bound*: each handoff is charged at
-most its pre-handoff context as input plus ``HANDOFF_MAX_OUTPUT_TOKENS`` (32000)
+most its pre-handoff context as input plus ``HANDOFF_MAX_OUTPUT_TOKENS``
 as output. Receipts carry the metered cost and the bound separately, never
 merged, and any trial that handed off is flagged in the reconciliation note.
 """

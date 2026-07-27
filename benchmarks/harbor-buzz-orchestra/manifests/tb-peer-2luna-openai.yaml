@@ -29,9 +29,7 @@ roster:
     prompt:
       path: personas/bench/peer-driver.md
       sha256: 4461b3b7e735b9cdf7c30646a6a54d6b429879c37ea3eb4c8b29b2daceaa7a1d
-    generation:
-      max_output_tokens: 32000
-      context_window_tokens: 272000
+
   - id: navigator
     kind: worker
     # Read verbatim by both personas out of the "Your team" table — peer-driver
@@ -45,9 +43,7 @@ roster:
     prompt:
       path: personas/bench/peer-navigator.md
       sha256: ec0758b9982cfc499af622be244919305a3b480dc06aa13b3389634efed8ea32
-    generation:
-      max_output_tokens: 32000
-      context_window_tokens: 272000
+
 prices:
   # PLACEHOLDER, identical to tb-solo-luna-openai's — carried over from the
   # Databricks list price for the same model and NOT checked against OpenAI's

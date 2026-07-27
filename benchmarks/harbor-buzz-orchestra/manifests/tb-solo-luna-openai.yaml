@@ -28,10 +28,6 @@ roster:
     prompt:
       path: personas/bench/solo.md
       sha256: 6997ae38384ea4f84bbdc1422a668be089fbfd2709d412392dbbb4911c565596
-    generation:
-      # Matches tb-solo-luna so the two differ only in serving path.
-      max_output_tokens: 32000
-      context_window_tokens: 272000
 prices:
   # PLACEHOLDER — carried over from the Databricks list price for the same
   # model (doc 04 §7) so the accounting path is exercised end to end. These

@@ -19,9 +19,7 @@ roster:
     prompt:
       path: personas/solo-tb.md
       sha256: 5303e47d921820cc44cb8c029e41962be9649f273002c34398dd9145b224482d
-    generation:
-      max_output_tokens: 32000
-      context_window_tokens: 200000
+
 # Cache-read rates are 0.0 on every Anthropic-route endpoint on purpose:
 # buzz-agent never sends `cache_control`, and Anthropic prompt caching is
 # opt-in, so no cache reads occur and no discount should be modelled. Revisit

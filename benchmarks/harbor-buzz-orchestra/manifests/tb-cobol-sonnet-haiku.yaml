@@ -14,9 +14,7 @@ roster:
     prompt:
       path: personas/orchestrator-tb.md
       sha256: 206829331cdd85fb277266901b9489e190ba23097600a8bb69142d044b9a42e6
-    generation:
-      max_output_tokens: 32000
-      context_window_tokens: 200000
+
   - id: worker
     kind: worker
     role: implementer
@@ -26,9 +24,7 @@ roster:
     prompt:
       path: personas/worker-tb.md
       sha256: 664a994ae3ba93f02ebbb8f61f781f6a59ea3327b21e26e7ffc2d06827ed3e45
-    generation:
-      max_output_tokens: 32000
-      context_window_tokens: 200000
+
 # Cache-read rates are 0.0 on every Anthropic-route endpoint on purpose:
 # buzz-agent never sends `cache_control`, and Anthropic prompt caching is
 # opt-in, so no cache reads occur and no discount should be modelled. Revisit

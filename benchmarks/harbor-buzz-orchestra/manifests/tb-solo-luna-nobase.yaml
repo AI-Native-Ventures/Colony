@@ -31,9 +31,7 @@ roster:
       path: personas/bench/solo.md
       sha256: 6997ae38384ea4f84bbdc1422a668be089fbfd2709d412392dbbb4911c565596
     include_platform_prompt: false
-    generation:
-      max_output_tokens: 32000
-      context_window_tokens: 272000
+
 prices:
   # Operator-supplied list prices, doc 04 §7. See tb-solo-luna.yaml for why
   # cache_read_rate is 0.0 (DB10).
