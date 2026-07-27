@@ -1,0 +1,327 @@
+from pathlib import Path
+
+import pytest
+
+from harbor_buzz_orchestra import accounting
+from harbor_buzz_orchestra.manifest import ExperimentManifest
+
+
+def usage_line(session: str, input_tokens: int, output_tokens: int) -> str:
+    """A buzz-acp usage line as tracing's compact formatter renders it."""
+    return (
+        "2026-07-26T01:02:03.456789Z DEBUG acp::usage: goose usage update "
+        f"session_id={session} input={input_tokens} output={output_tokens}"
+    )
+
+
+def test_parse_usage_log_takes_the_high_water_mark_per_session():
+    text = "\n".join(
+        [
+            "2026-07-26T01:02:03.000000Z  INFO buzz_acp: subscribed to channel c",
+            usage_line("sess-1", 100, 10),
+            usage_line("sess-1", 250, 40),
+            usage_line("sess-2", 7, 3),
+        ]
+    )
+    assert accounting.parse_usage_log(text) == (
+        accounting.SessionUsage("sess-1", 250, 40),
+        accounting.SessionUsage("sess-2", 7, 3),
+    )
+
+
+def test_parse_usage_log_survives_out_of_order_lines():
+    """Counters are cumulative, so a late-arriving smaller value is not the total."""
+    text = "\n".join([usage_line("s", 900, 90), usage_line("s", 100, 10)])
+    assert accounting.parse_usage_log(text) == (accounting.SessionUsage("s", 900, 90),)
+
+
+def test_parse_usage_log_reads_the_coloured_lines_a_real_trial_produces():
+    """`tracing` colours its output even when redirected to a file.
+
+    Verbatim from the first live trial (job smoke-a1-openssl). The escapes sit
+    between each field name and its `=`, so an uncoloured fixture — which is
+    what every other test here uses — passes while every real run parses to
+    nothing and prices at zero. That failure is silent: the trial still
+    succeeds, still costs money, and reports $0.00.
+    """
+    text = (
+        "\x1b[2m2026-07-26T22:56:54.225244Z\x1b[0m \x1b[34mDEBUG\x1b[0m "
+        "\x1b[2macp::usage\x1b[0m\x1b[2m:\x1b[0m goose usage update "
+        "\x1b[3msession_id\x1b[0m\x1b[2m=\x1b[0mses_5a06a6a8cf2f0afb "
+        "\x1b[3minput\x1b[0m\x1b[2m=\x1b[0m20658 "
+        "\x1b[3moutput\x1b[0m\x1b[2m=\x1b[0m900"
+    )
+    assert accounting.parse_usage_log(text) == (
+        accounting.SessionUsage("ses_5a06a6a8cf2f0afb", 20658, 900),
+    )
+
+
+def test_parse_handoffs_reads_coloured_lines_too():
+    """Same formatter, same escapes — the compaction bound must not silently zero."""
+    text = (
+        "\x1b[2m2026-07-26T22:56:54Z\x1b[0m \x1b[32m INFO\x1b[0m "
+        "\x1b[2mbuzz_agent::handoff\x1b[0m\x1b[2m:\x1b[0m "
+        "handoff #1 (history 84 -> 3 items; 181430 -> 5120 tokens)"
+    )
+    assert accounting.parse_handoffs(text).count == 1
+    assert accounting.parse_handoffs(text).input_tokens_upper_bound == 181430
+
+
+def test_parse_usage_log_ignores_unrelated_output():
+    text = "\n".join(
+        [
+            "some tool printed input=5 output=6 without the marker",
+            "2026-07-26T01:02:03Z DEBUG acp::usage: goose usage update malformed",
+        ]
+    )
+    assert accounting.parse_usage_log(text) == ()
+
+
+@pytest.fixture
+def solo_manifest(manifest_data) -> ExperimentManifest:
+    data = dict(manifest_data)
+    data["roster"] = [manifest_data["roster"][0]]
+    return ExperimentManifest.model_validate(data)
+
+
+def write_log(trial_dir: Path, agent_id: str, body: str) -> None:
+    (trial_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (trial_dir / "logs" / f"{agent_id}.stdout.log").write_text(body, encoding="utf-8")
+
+
+def test_collect_prices_usage_from_the_manifest(tmp_path, solo_manifest):
+    write_log(tmp_path, "opus-orchestrator-1", usage_line("s", 1_000_000, 100_000))
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert result.input_tokens == 1_000_000
+    assert result.output_tokens == 100_000
+    # $5/Mtok input + $25/Mtok output
+    assert result.cost_usd == pytest.approx(5.0 + 2.5)
+    assert result.reconciled is True
+
+
+def test_collect_flags_a_trial_that_reported_no_tokens(tmp_path, solo_manifest):
+    write_log(tmp_path, "opus-orchestrator-1", "no usage here")
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert result.cost_usd == 0.0
+    # The whole point: a zero-token trial must not read as a free trial.
+    assert result.reconciled is False
+    assert "RUST_LOG" in result.reconciliation_note
+
+
+def test_collect_flags_a_partially_silent_roster(tmp_path, manifest_data):
+    manifest = ExperimentManifest.model_validate(manifest_data)
+    orchestrator, workers = manifest.roster
+    write_log(tmp_path, "opus-orchestrator-1", usage_line("s", 500, 50))
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=manifest,
+        agents=[
+            ("opus-orchestrator-1", "orchestrator", orchestrator),
+            ("qwen-workers-1", "worker", workers),
+        ],
+    )
+    assert result.input_tokens == 500
+    assert result.reconciled is False
+    assert "qwen-workers-1" in result.reconciliation_note
+    # A silent agent is still a row, so the roster is legible from the receipts.
+    assert [receipt.agent_id for receipt in result.receipts] == [
+        "opus-orchestrator-1",
+        "qwen-workers-1",
+    ]
+
+
+def test_collect_reads_stderr_as_well_as_stdout(tmp_path, solo_manifest):
+    (tmp_path / "logs").mkdir(parents=True)
+    (tmp_path / "logs" / "opus-orchestrator-1.stderr.log").write_text(
+        usage_line("s", 42, 7), encoding="utf-8"
+    )
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert (result.input_tokens, result.output_tokens) == (42, 7)
+
+
+def test_receipts_are_written_one_json_object_per_line(tmp_path, solo_manifest):
+    import json
+
+    write_log(tmp_path, "opus-orchestrator-1", usage_line("s", 10, 2))
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    path = tmp_path / "receipts.jsonl"
+    result.write_receipts(path)
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["agent_id"] == "opus-orchestrator-1"
+    assert rows[0]["endpoint"] == "databricks/opus"
+    # The caveats travel with the number.
+    assert rows[0]["cache_read_tokens_are_estimated"] is True
+    assert rows[0]["reasoning_tokens_included_in_output"] is True
+    assert "cost_usd_no_cache_discount" in rows[0]
+
+
+def test_default_cache_rate_is_the_no_discount_upper_bound(solo_manifest):
+    """Rate 0.0 must reproduce full-rate pricing exactly — no silent discount."""
+    price = solo_manifest.prices["databricks/opus"]
+    assert price.cache_read_rate == 0.0
+    priced = accounting.price_usage(price, 1_000_000, 0)
+    assert priced.cost_usd == pytest.approx(price.input_per_million_usd)
+    assert priced.cost_usd == priced.cost_usd_no_cache_discount
+    assert priced.estimated_cache_read_tokens == 0
+
+
+def test_cache_rate_splits_input_between_the_two_rates(solo_manifest):
+    price = solo_manifest.prices["databricks/opus"].model_copy(
+        update={"cache_read_rate": 0.75}
+    )
+    priced = accounting.price_usage(price, 1_000_000, 0)
+    # 250k at $5/Mtok + 750k at $0.50/Mtok
+    assert priced.cost_usd == pytest.approx(1.25 + 0.375)
+    assert priced.estimated_cache_read_tokens == 750_000
+    # The no-discount figure is still reported, so the gap is legible.
+    assert priced.cost_usd_no_cache_discount == pytest.approx(5.0)
+
+
+def test_cache_rate_never_discounts_output(solo_manifest):
+    """Reasoning is billed at the output rate; caching applies only to input."""
+    price = solo_manifest.prices["databricks/opus"].model_copy(
+        update={"cache_read_rate": 1.0}
+    )
+    priced = accounting.price_usage(price, 0, 1_000_000)
+    assert priced.cost_usd == pytest.approx(price.output_per_million_usd)
+
+
+def test_cache_rate_reaches_the_trial_totals(tmp_path, solo_manifest):
+    manifest = solo_manifest.model_copy(
+        update={
+            "prices": {
+                "databricks/opus": solo_manifest.prices["databricks/opus"].model_copy(
+                    update={"cache_read_rate": 0.5}
+                )
+            }
+        }
+    )
+    write_log(tmp_path, "opus-orchestrator-1", usage_line("s", 1_000_000, 0))
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", manifest.roster[0])],
+    )
+    assert result.estimated_cache_read_tokens == 500_000
+    assert result.cost_usd == pytest.approx(2.5 + 0.25)
+    assert result.cost_usd_no_cache_discount == pytest.approx(5.0)
+    assert result.assumes_cache_discount is True
+    assert result.to_metadata()["accounting_assumes_cache_discount"] is True
+
+
+def handoff_line(number: int, before: int, after: int = 5_120) -> str:
+    """A buzz-agent auto-compaction line, as it reaches the captured stderr."""
+    return (
+        "2026-07-26T01:05:00.000000Z  INFO buzz_agent::handoff: "
+        f"handoff #{number} (history 84 -> 3 items; {before} -> {after} tokens)"
+    )
+
+
+def test_parse_handoffs_bounds_the_tokens_each_compaction_burned():
+    text = "\n".join([handoff_line(1, 180_000), handoff_line(2, 175_000)])
+    result = accounting.parse_handoffs(text)
+    assert result.count == 2
+    assert result.input_tokens_upper_bound == 355_000
+    assert result.output_tokens_upper_bound == 2 * accounting.HANDOFF_MAX_OUTPUT_TOKENS
+    assert result.truncations == 0
+
+
+def test_parse_handoffs_counts_fallbacks_to_truncation():
+    """Cap reached or summary failed: context was dropped, not summarised."""
+    text = "\n".join(
+        [
+            handoff_line(1, 180_000),
+            "2026-07-26T01:06:00Z  INFO buzz_agent::handoff: "
+            "handoff cap reached (10); using truncation",
+            "2026-07-26T01:07:00Z  WARN buzz_agent::handoff: "
+            "handoff returned empty summary; truncating",
+        ]
+    )
+    result = accounting.parse_handoffs(text)
+    assert result.count == 1
+    assert result.truncations == 2
+
+
+def test_parse_handoffs_ignores_unrelated_lines():
+    assert accounting.parse_handoffs("handoff is a word\ntruncating output") == (
+        accounting.HandoffUsage()
+    )
+
+
+def test_collect_keeps_the_handoff_bound_out_of_the_metered_cost(
+    tmp_path, solo_manifest
+):
+    """cost_usd stays what the provider reported; the bound travels beside it."""
+    write_log(
+        tmp_path,
+        "opus-orchestrator-1",
+        "\n".join([usage_line("s", 1_000_000, 100_000), handoff_line(1, 180_000)]),
+    )
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert result.input_tokens == 1_000_000
+    assert result.cost_usd == pytest.approx(5.0 + 2.5)
+    assert result.handoffs == 1
+    # 180k input at $5/Mtok + the summary's output allowance at $25/Mtok
+    expected = 180_000 * 5.0 / 1e6 + accounting.HANDOFF_MAX_OUTPUT_TOKENS * 25.0 / 1e6
+    assert result.handoff_cost_usd_upper_bound == pytest.approx(expected)
+    assert result.cost_usd_including_handoff_bound == pytest.approx(7.5 + expected)
+    # Reconciliation still passes — the metered numbers are genuine — but the
+    # note has to say the total is a floor.
+    assert result.reconciled is True
+    assert "floor" in result.reconciliation_note
+
+
+def test_collect_warns_when_an_agent_truncated_its_own_history(
+    tmp_path, solo_manifest
+):
+    write_log(
+        tmp_path,
+        "opus-orchestrator-1",
+        "\n".join(
+            [
+                usage_line("s", 1_000, 100),
+                "INFO buzz_agent::handoff: handoff cap reached (10); using truncation",
+            ]
+        ),
+    )
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert result.handoff_truncations == 1
+    assert any("truncated its own history" in w for w in result.warnings)
+
+
+def test_a_trial_without_handoffs_reports_no_bound(tmp_path, solo_manifest):
+    write_log(tmp_path, "opus-orchestrator-1", usage_line("s", 1_000, 100))
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert result.handoffs == 0
+    assert result.handoff_cost_usd_upper_bound == 0.0
+    assert result.cost_usd_including_handoff_bound == result.cost_usd
+    assert "floor" not in result.reconciliation_note

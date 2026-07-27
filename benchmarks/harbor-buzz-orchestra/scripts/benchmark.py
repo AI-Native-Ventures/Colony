@@ -36,6 +36,8 @@ import sys
 import time
 from pathlib import Path
 
+from harbor_buzz_orchestra.verifier_health import verifier_broken
+
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = PACKAGE_ROOT.parents[1]
 STATE_DIR = PACKAGE_ROOT / ".benchmark"
@@ -50,10 +52,20 @@ PG_HOST_PORT = 5633
 METRICS_HOST_PORT = 9602
 GUI_BUNDLE_IDENTIFIER = "xyz.block.buzz.app.benchmark"
 
+# Harbor accepts two dataset forms and resolves them from different places:
+#   org/name[@ref]  -> the hub package registry (PackageDatasetClient)
+#   name[@version]  -> registry.json (JsonRegistryClient)
+# Terminal-Bench 2.1 is only published as a package: `terminal-bench@2.0` in
+# registry.json is the older 2.0 cut. Verified 2026-07-26 against the pinned
+# harbor 0.16.1 — terminal-bench/terminal-bench-2-1 resolves to 89 tasks.
+# validate_dataset() checks whichever form is given against the right source.
 DEFAULT_DATASET = "terminal-bench/terminal-bench-2-1"
 DEFAULT_ATTEMPTS = 5
-DEFAULT_MANIFEST = PACKAGE_ROOT / "manifests" / "tb-cobol-sonnet-haiku.yaml"
-DEFAULT_ENDPOINTS = PACKAGE_ROOT / "testbed" / "endpoints" / "anthropic-live.json"
+# The Databricks bring-up pair is the default because it is the slate the
+# study actually runs on (doc 04 §6); the Anthropic manifests predate it and
+# need a key this project does not provision.
+DEFAULT_MANIFEST = PACKAGE_ROOT / "manifests" / "tb-solo-luna.yaml"
+DEFAULT_ENDPOINTS = PACKAGE_ROOT / "testbed" / "endpoints" / "databricks-live.json"
 SCHEMA_SQL = PACKAGE_ROOT / "testbed" / "sql" / "benchmark_schema.sql"
 
 # Linux builds of the production agent stack, uploaded into each task
@@ -75,6 +87,171 @@ _spec = importlib.util.spec_from_file_location(
 run_leaderboard = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("run_leaderboard", run_leaderboard)
 _spec.loader.exec_module(run_leaderboard)
+
+
+# The host every Terminal-Bench verifier reaches before it can score anything:
+# each one pip/uv-installs pytest into the task container as its first act.
+PYPI_TLS_HOST = "files.pythonhosted.org"
+
+# Substrings that mark a certificate issuer as a corporate interception CA
+# rather than a public one. Matching on the operator's own name is deliberate:
+# a public CA never puts a company name in the O= field of a TLS server chain,
+# and every intercepting proxy does, because the whole point is that it minted
+# the certificate itself.
+INTERCEPTION_ISSUER_MARKERS = (
+    "cloudflare gateway",
+    "zscaler",
+    "netskope",
+    "palo alto",
+    "forcepoint",
+    "bluecoat",
+    "blue coat",
+    "mitmproxy",
+    "charles proxy",
+    "fiddler",
+)
+
+
+# Harbor exception types that describe the agent's own performance rather than
+# a fault in the harness. A trial that ends this way has a legitimate score and
+# must not be re-run on resume; see scored_tasks().
+AGENT_FAULT_EXCEPTIONS = frozenset({"AgentTimeoutError"})
+
+
+class InterceptedTLSError(RuntimeError):
+    """The path to PyPI is being MITM'd, so no verifier can install pytest."""
+
+
+def pypi_tls_issuer(timeout: float = 10.0) -> str | None:
+    """The O=/CN= of whoever signed the certificate PyPI is serving us.
+
+    Returns None when the issuer cannot be determined — no network, no
+    openssl, a malformed handshake. Unknown is not the same as intercepted,
+    and a preflight that cannot see must not block the run.
+    """
+    try:
+        completed = subprocess.run(
+            [
+                "openssl", "s_client",
+                "-connect", f"{PYPI_TLS_HOST}:443",
+                "-servername", PYPI_TLS_HOST,
+            ],
+            input="", capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in completed.stdout.splitlines():
+        if line.startswith("issuer="):
+            return line[len("issuer="):].strip()
+    return None
+
+
+def check_tls_not_intercepted() -> None:
+    """Refuse to start a sweep that cannot possibly be scored.
+
+    Terminal-Bench verifiers install pytest from PyPI inside the task
+    container, which trusts only public roots. Under a TLS-intercepting
+    gateway that install fails, the verifier never runs, and the trial is
+    recorded as reward 0 — indistinguishable, in the results, from an agent
+    that got the answer wrong.
+
+    That is not hypothetical. Cloudflare WARP connected partway through an
+    89-task sweep and turned it into 0/89: 88 verifiers died on
+    ``invalid peer certificate: UnknownIssuer`` while the agents worked
+    correctly and published sound reports. It cost two hours and $17.71 and
+    read, at a glance, like the model had collapsed. Ten seconds of handshake
+    here is cheap against that.
+
+    A clean network makes this a no-op, so it costs nothing on a CI box or an
+    EC2 runner where no interception exists.
+    """
+    issuer = pypi_tls_issuer()
+    if issuer is None:
+        print(f"  TLS to {PYPI_TLS_HOST}: issuer unknown (skipping check)")
+        return
+    lowered = issuer.lower()
+    marker = next((m for m in INTERCEPTION_ISSUER_MARKERS if m in lowered), None)
+    if marker is None:
+        print(f"  TLS to {PYPI_TLS_HOST}: {issuer}")
+        return
+    raise InterceptedTLSError(
+        f"TLS to {PYPI_TLS_HOST} is being intercepted by: {issuer}\n"
+        "  Task containers do not trust that CA, so every verifier's "
+        "`pip install pytest` will fail and every trial will score 0 for a "
+        "reason that has nothing to do with the agent.\n"
+        "  Disconnect the interception client (for Cloudflare WARP: "
+        "`warp-cli disconnect`) and re-run, or run on a host without it."
+    )
+
+
+def scored_tasks(job_dir: Path) -> set[str]:
+    """Bare task names in ``job_dir`` that produced a trustworthy score.
+
+    "Trustworthy" is narrower than "finished" but wider than "passed".
+
+    A launch failure, a crash, or a verifier that could not install its own
+    tests is work still owed: the reward of 0 was never a measurement of the
+    agent, and re-running is the only way to find out what the agent would have
+    done.
+
+    A timeout is the opposite. Exhausting the task's own ``timeout_sec`` is a
+    real Terminal-Bench outcome that scores zero, and it is the same outcome
+    every other agent on the leaderboard is subject to. Re-running only the
+    trials that failed — and keeping whichever result comes back better — is
+    resampling failures, which inflates the score by construction. So a timeout
+    counts as done, and the zero stands.
+
+    ``AGENT_FAULT_EXCEPTIONS`` is therefore a list of outcomes attributable to
+    the agent rather than to the harness around it.
+    """
+    done: set[str] = set()
+    for result_path in sorted(job_dir.glob("*/result.json")):
+        try:
+            data = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        exception = data.get("exception_info") or {}
+        if exception and exception.get("exception_type") not in AGENT_FAULT_EXCEPTIONS:
+            continue
+        rewards = (data.get("verifier_result") or {}).get("rewards") or {}
+        if not isinstance(rewards.get("reward"), (int, float)):
+            continue
+        if verifier_broken(result_path.parent):
+            continue
+        task = str(data.get("task_name", ""))
+        if task:
+            done.add(task.rsplit("/", 1)[-1])
+    return done
+
+
+def resume_exclusions(args: argparse.Namespace) -> list[str]:
+    """Task names to skip because a previous job already scored them.
+
+    A sweep is 89 independent trials but costs two hours and real money as a
+    unit, so losing it to an infrastructure fault partway through means paying
+    twice for the tasks that already worked. Harbor retries within a run
+    (``--n-retries``) but has no concept of resuming one, so resumption is
+    expressed the only way it can be: exclude what is already done and write
+    the remainder to a new job directory.
+
+    Splitting across two directories costs nothing at read time — summarize.py
+    groups by condition and manifest hash, not by job — so a resumed sweep adds
+    up to one row exactly as an uninterrupted one would. That only holds while
+    the manifest is unchanged, which is also precisely when resuming is
+    legitimate: edit a persona and the earlier trials are a different
+    condition, and the hash will say so rather than silently pooling them.
+    """
+    if not args.resume_from:
+        return []
+    job_dir = args.jobs_dir / args.resume_from
+    if not job_dir.is_dir():
+        raise DatasetError(f"--resume-from: no such job directory: {job_dir}")
+    done = scored_tasks(job_dir)
+    if not done:
+        print(f"  resume: {args.resume_from} scored nothing re-usable; running all tasks")
+        return []
+    print(f"  resume: skipping {len(done)} task(s) already scored in {args.resume_from}")
+    return sorted(done)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -115,6 +292,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--jobs-dir", type=Path, default=PACKAGE_ROOT / "jobs", help="Job output root"
     )
     parser.add_argument("--job-name", default=None, help="Job name (default: lb-<condition>-<UTC>)")
+    parser.add_argument(
+        "--resume-from", default=None, metavar="JOB",
+        help="Skip tasks a previous job already scored, and run only the rest. "
+             "Only trials whose verifier actually ran count as done. Use the "
+             "same manifest, or the two halves will not group together.",
+    )
     parser.add_argument(
         "--upload", action="store_true", help="Upload to Harbor Hub when the job finishes"
     )
@@ -166,14 +349,22 @@ def load_state() -> dict[str, str]:
     return state
 
 
-def print_user_identity(state: dict[str, str]) -> None:
-    """Show the pinned benchmark user's key so a human can import it during
-    the desktop GUI's onboarding (this stack is local-only; the key guards
-    nothing beyond it)."""
+def print_user_identity(state: dict[str, str], *, show_secret: bool = False) -> None:
+    """Show the pinned benchmark user's identity.
+
+    The private half is only useful for importing into the desktop GUI's
+    onboarding, so it is printed only when the GUI was actually asked for.
+    The key guards nothing outside this local stack, but every run's stdout
+    is captured to a log that outlives the run, and a private key that is
+    printed unconditionally is one that eventually gets pasted somewhere it
+    shouldn't be.
+    """
+    print(f"benchmark user pubkey: {state['user_pubkey']}")
+    if not show_secret:
+        return
     from harbor_buzz_testbed.keys import encode_nsec
 
     print(
-        f"benchmark user pubkey: {state['user_pubkey']}\n"
         f"benchmark user nsec:   {encode_nsec(state['user_secret_key'])} "
         "(import this in the GUI onboarding to watch as the benchmark user)"
     )
@@ -220,6 +411,105 @@ def postgres_dsn(state: dict[str, str]) -> str:
         f"postgresql://buzz:{state['postgres_password']}"
         f"@127.0.0.1:{PG_HOST_PORT}/buzz"
     )
+
+
+def trial_timeout_seconds(manifest: Path) -> int:
+    """The manifest's per-trial wall-clock budget, for lifetime estimates only."""
+    try:
+        import yaml
+
+        return int(yaml.safe_load(manifest.read_text())["trial_budget"]["timeout_seconds"])
+    except (OSError, ValueError, KeyError, TypeError):
+        # The manifest is validated properly downstream; a bad one must fail
+        # there with a real message, not here inside a token warning.
+        return 900
+
+
+def databricks_oauth_token() -> tuple[str, int] | None:
+    """The bearer and expiry from buzz-agent's own OAuth cache, if it has one.
+
+    A task container has no PKCE cache and must not open a browser, so the
+    Databricks bearer has to be a plain string in the environment. Rather than
+    ask for one to be pasted, reuse the token `buzz-agent` already minted on
+    this host — same workspace, same scopes.
+    """
+    cache = Path.home() / ".config" / "buzz-agent" / "oauth" / "databricks"
+    files = sorted(cache.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in files:
+        try:
+            payload = json.loads(path.read_text())
+            return payload["access_token"], int(payload["expires_at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
+def resolve_databricks_token(needed_seconds: int) -> None:
+    """Populate DATABRICKS_TOKEN from the OAuth cache and vet its lifetime.
+
+    Expiry is a first-class preflight concern, not a detail: these are
+    short-lived OAuth bearers, and one that dies mid-sweep does not look like
+    an auth failure. It looks like a sudden cluster of model errors across
+    every remaining trial — the most expensive kind of bad data, because the
+    runs still complete and still cost money.
+    """
+    if os.environ.get("DATABRICKS_TOKEN"):
+        print("DATABRICKS_TOKEN: using the value already in the environment")
+        return
+    found = databricks_oauth_token()
+    if found is None:
+        return  # write_provisioner_config raises the actionable error.
+    token, expires_at = found
+    remaining = expires_at - int(time.time())
+    if remaining <= 0:
+        raise SystemExit(
+            "the cached Databricks OAuth token expired "
+            f"{-remaining // 60} min ago — re-authenticate buzz-agent, or "
+            "export a long-lived DATABRICKS_TOKEN"
+        )
+    os.environ["DATABRICKS_TOKEN"] = token
+    print(f"DATABRICKS_TOKEN: from buzz-agent's OAuth cache, {remaining // 60} min left")
+    if remaining < needed_seconds:
+        print(
+            f"  WARNING: this run needs at least {needed_seconds // 60} min "
+            "(one task's attempts at the manifest trial timeout) and the real "
+            "sweep is longer. The token will expire mid-run, and every trial "
+            "after that point fails at the gateway while still consuming its "
+            "timeout. Export a long-lived DATABRICKS_TOKEN for real sweeps.",
+            file=sys.stderr,
+        )
+
+
+def required_key_envs(endpoint_config: Path) -> set[str]:
+    """The API-key environment variable names this endpoint config asks for."""
+    try:
+        endpoints = json.loads(endpoint_config.read_text())
+    except (OSError, json.JSONDecodeError):
+        return set()  # write_provisioner_config raises the actionable error.
+    return {
+        entry["api_key_env"]
+        for entry in endpoints.values()
+        if isinstance(entry, dict) and "api_key_env" in entry
+    }
+
+
+def resolve_openai_key() -> None:
+    """Accept the conventional ``OPENAI_API_KEY`` for an OpenAI endpoint.
+
+    buzz-agent reads ``OPENAI_COMPAT_API_KEY`` — its OpenAI path is a
+    generic OpenAI-*compatible* client, so the variable is deliberately not the
+    vendor's name. But ``OPENAI_API_KEY`` is what is actually exported in a
+    shell profile, and requiring the operator to re-export it under a second
+    name is a preflight failure waiting to happen for no benefit.
+    """
+    if os.environ.get("OPENAI_COMPAT_API_KEY"):
+        print("OPENAI_COMPAT_API_KEY: using the value already in the environment")
+        return
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        return  # write_provisioner_config raises the actionable error.
+    os.environ["OPENAI_COMPAT_API_KEY"] = key
+    print("OPENAI_COMPAT_API_KEY: taken from OPENAI_API_KEY")
 
 
 def write_provisioner_config(
@@ -482,21 +772,138 @@ def launch_gui(state: dict[str, str]) -> subprocess.Popen:
     )
 
 
+# -- dataset preflight ---------------------------------------------------------
+
+
+class DatasetError(RuntimeError):
+    """Raised when the requested dataset cannot be resolved in the registry."""
+
+
+def registry_datasets(timeout: float = 20.0) -> set[str] | None:
+    """Return every ``name@version`` in Harbor's registry, or None if offline.
+
+    Distinguishing "the registry says no" from "we could not reach the registry"
+    matters: the first is a typo the operator must fix, the second is a network
+    problem that the rest of preflight is already responsible for reporting.
+    """
+    import urllib.error
+    import urllib.request
+
+    from harbor.constants import DEFAULT_REGISTRY_URL
+
+    url = os.environ.get("HARBOR_REGISTRY_URL", DEFAULT_REGISTRY_URL)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            entries = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    return {
+        f"{entry['name']}@{entry['version']}"
+        for entry in entries
+        if isinstance(entry, dict) and "name" in entry and "version" in entry
+    }
+
+
+def package_dataset_tasks(dataset: str, timeout: float = 90.0) -> int | None:
+    """Task count for an ``org/name[@ref]`` dataset, or None if unresolvable."""
+    import asyncio
+
+    from harbor.registry.client.package import PackageDatasetClient
+
+    async def resolve() -> int:
+        metadata = await PackageDatasetClient()._get_dataset_metadata(dataset)
+        return len(metadata.task_ids)
+
+    try:
+        return asyncio.run(asyncio.wait_for(resolve(), timeout))
+    except Exception:  # noqa: BLE001 — unreachable and unpublished look alike here
+        return None
+
+
+def validate_dataset(dataset: str) -> None:
+    """Fail fast on a dataset string Harbor cannot resolve.
+
+    Cheap to run and it forecloses a whole class of wasted sweeps: the dataset
+    is only dereferenced once trials start, so a bad name otherwise surfaces
+    after the Docker stack, the relay, and the cross-compiled binaries are all
+    up.
+
+    The two forms resolve from different registries, so they are checked
+    differently — an ``org/name`` package reference is not in registry.json and
+    a registry.json name is not a package.
+    """
+    if "/" in dataset:
+        tasks = package_dataset_tasks(dataset)
+        if tasks is None:
+            raise DatasetError(
+                f"dataset package {dataset!r} did not resolve. Check the org and "
+                "name, that the ref exists (default 'latest'), and that the hub "
+                "registry is reachable"
+            )
+        print(f"  dataset {dataset}: {tasks} tasks", file=sys.stderr)
+        return
+
+    if "@" not in dataset:
+        raise DatasetError(
+            f"dataset {dataset!r} is missing a version; a registry.json dataset "
+            "is 'name@version' (e.g. 'terminal-bench@2.0'), and a hub package is "
+            "'org/name' (e.g. 'terminal-bench/terminal-bench-2-1')"
+        )
+    available = registry_datasets()
+    if available is None:
+        print(
+            f"  warning: cannot reach the Harbor registry; {dataset!r} unverified",
+            file=sys.stderr,
+        )
+        return
+    if dataset in available:
+        return
+    name = dataset.split("@", 1)[0]
+    versions = sorted(entry for entry in available if entry.startswith(f"{name}@"))
+    hint = (
+        f" available versions of {name!r}: {', '.join(versions)}"
+        if versions
+        else f" no dataset named {name!r} is published"
+    )
+    raise DatasetError(f"dataset {dataset!r} is not in the Harbor registry;{hint}")
+
+
 # -- main ---------------------------------------------------------------------
+
+
+def qualify_task_pattern(pattern: str, dataset: str) -> str:
+    """Let ``-i openssl-selfsigned-cert`` mean what the operator obviously meant.
+
+    Harbor matches task filters against ``PackageTaskId.get_name()``, which for
+    a package dataset is ``org/name`` — so a bare task name matches nothing and
+    the run dies with "No tasks matched", after the Docker stack is already up.
+    The name printed by every listing, and written in this repo's docs, is the
+    bare one. Qualify it here rather than making every caller remember.
+
+    Only bare patterns are touched: one that already contains ``/`` is the
+    operator being explicit, and one for a ``--path`` dataset is matched against
+    a bare name already.
+    """
+    if "/" in pattern or "/" not in dataset:
+        return pattern
+    return f"*/{pattern}"
 
 
 def leaderboard_argv(
     args: argparse.Namespace, provisioner_config: Path, agent_bin_dir: Path
 ) -> list[str]:
     argv: list[str] = []
+    dataset = "" if args.path else (args.dataset or DEFAULT_DATASET)
     if args.path:
         argv += ["--path", str(args.path)]
     else:
-        argv += ["--dataset", args.dataset or DEFAULT_DATASET]
+        argv += ["--dataset", dataset]
     for pattern in args.include_task:
-        argv += ["--include-task", pattern]
-    for pattern in args.exclude_task:
-        argv += ["--exclude-task", pattern]
+        argv += ["--include-task", qualify_task_pattern(pattern, dataset)]
+    for pattern in list(args.exclude_task) + resume_exclusions(args):
+        argv += ["--exclude-task", qualify_task_pattern(pattern, dataset)]
     argv += [
         "--attempts", str(args.attempts),
         "--manifest", str(args.manifest),
@@ -525,9 +932,42 @@ def leaderboard_argv(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # Before anything expensive: a local --path needs no registry, a registry
+    # dataset must resolve.
+    if not args.path:
+        try:
+            validate_dataset(args.dataset or DEFAULT_DATASET)
+        except DatasetError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+    # Checked here rather than only where it is used, so a typo fails before the
+    # stack comes up instead of after. resume_exclusions() re-raises as a
+    # backstop; this is the path that reports it.
+    if args.resume_from and not (args.jobs_dir / args.resume_from).is_dir():
+        print(
+            f"error: --resume-from: no such job directory: "
+            f"{args.jobs_dir / args.resume_from}",
+            file=sys.stderr,
+        )
+        return 2
+    # Before the stack, the binaries, and the money: a sweep run through a TLS
+    # interception proxy cannot be scored at all.
+    try:
+        check_tls_not_intercepted()
+    except InterceptedTLSError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     state = load_state()
-    print_user_identity(state)
+    print_user_identity(state, show_secret=args.gui)
     write_env_file(state)
+    # Resolve only the credentials this endpoint config actually asks for. A
+    # run on OpenAI must not die because a Databricks OAuth token it will never
+    # send happens to have expired.
+    needed = required_key_envs(args.endpoint_config)
+    if "DATABRICKS_TOKEN" in needed:
+        resolve_databricks_token(trial_timeout_seconds(args.manifest) * args.attempts)
+    if "OPENAI_COMPAT_API_KEY" in needed:
+        resolve_openai_key()
     provisioner_config = write_provisioner_config(state, args.endpoint_config)
 
     if args.dry_run:

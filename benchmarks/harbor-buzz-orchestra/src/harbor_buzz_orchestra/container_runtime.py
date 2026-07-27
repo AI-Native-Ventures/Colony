@@ -18,14 +18,40 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import certifi
 from harbor.environments.base import BaseEnvironment
 
-from .manifest import AgentClass, ExperimentManifest
+from . import accounting, bundle
+from .manifest import AgentClass, ExperimentManifest, GenerationConfig
 from .provisioning import AgentCredential, TrialHandle
 from .runtime import RuntimeResult
 
 
-DEFAULT_MAX_AGENT_ROUNDS = 32
+# Tool/LLM rounds allowed per agent turn (BUZZ_AGENT_MAX_ROUNDS).
+#
+# Deliberately set high enough that no condition reaches it, because the cap is
+# per *turn* and the counter resets on every wake (buzz-agent agent.rs:82). A
+# solo agent is woken exactly once, so its cap is its whole budget for the task;
+# a team member gets the same cap per assignment, across arbitrarily many
+# assignments. Any value a real task can hit therefore handicaps the solo
+# baseline for a reason unrelated to team shape. Let the trial timeout and the
+# cost ceiling bind instead — those apply to every condition equally.
+DEFAULT_MAX_AGENT_ROUNDS = 300
+# buzz-acp logs each agent's cumulative token counters under this tracing
+# target. It is the harness's only token source, so the directive is not
+# optional decoration — without it every trial reports zero cost. See
+# accounting.py.
+USAGE_LOG_TARGET = "acp::usage"
+DEFAULT_RUST_LOG = f"buzz_acp=info,{USAGE_LOG_TARGET}=debug"
+# Reasoning effort, held constant across every agent in every condition.
+#
+# Deliberately a constant rather than a manifest field: per-entry effort is a
+# real experiment (G2) and needs its own axis in the matrix, but until that
+# axis exists, an unset effort means "whatever the provider defaults to" —
+# which is neither recorded nor stable across endpoints. Pinning it here makes
+# the study's one uniform-effort claim true, and buzz-agent logs a clamp
+# warning if a model cannot honour it (config.rs:223).
+THINKING_EFFORT = "medium"
 # Container-side layout for the uploaded Buzz stack.
 REMOTE_ROOT = "/opt/buzz"
 REMOTE_BIN = f"{REMOTE_ROOT}/bin"
@@ -37,8 +63,29 @@ REMOTE_LOGS = f"{REMOTE_ROOT}/logs"
 # canonical loopback address and bridges the byte stream to the gateway.
 FORWARDER = f"{REMOTE_BIN}/relay-forwarder"
 FORWARDER_LOG = f"{REMOTE_LOGS}/relay-forwarder.log"
+# Trust anchors the agent uses to reach its model provider over TLS.
+#
+# buzz-agent links reqwest's `rustls` feature, which loads roots via
+# rustls-native-certs — it reads the *container's* trust store, and a task
+# image that never installed `ca-certificates` has none. `Client::builder()
+# .build()` then fails outright ("http: builder error"), buzz-agent exits
+# before it ever reaches the relay, and the trial dies in launch with a
+# RuntimeLaunchError. That failure is a property of the task image rather than
+# of the agent, so leaving it in place would score a fixed subset of
+# Terminal-Bench tasks zero for every condition and understate every model's
+# ability by the same silent margin.
+#
+# Shipping our own bundle and pointing SSL_CERT_FILE at it (rustls-native-certs
+# 0.8 honours it, lib.rs:361) fixes this without touching the task image, and
+# without needing the network or a package manager inside the container.
+REMOTE_CA_BUNDLE = f"{REMOTE_ROOT}/ca-certificates.crt"
 # How many done-poll iterations between in-container liveness probes.
 LIVENESS_EVERY = 10
+# Messages pulled into the saved transcript. Well above what a trial can
+# produce — a 900s budget at roughly one message per agent turn does not reach
+# three figures — so hitting it means something pathological happened, which is
+# itself worth seeing. Recorded as ``truncated`` when reached.
+TRANSCRIPT_LIMIT = 1000
 
 
 class RuntimeLaunchError(RuntimeError):
@@ -77,6 +124,7 @@ class BuzzContainerRuntime:
         buzz_cli_binary: str = "buzz",
         relay_gateway: str = "",
         forwarder_binary: str = "relay-forwarder",
+        ca_bundle: str | None = None,
         max_agent_rounds: int = DEFAULT_MAX_AGENT_ROUNDS,
         readiness_timeout_seconds: float = 60.0,
         poll_seconds: float = 1.0,
@@ -100,6 +148,11 @@ class BuzzContainerRuntime:
         # the relay's community row is bound to — to this gateway.
         self.relay_gateway = relay_gateway
         self.forwarder_binary = forwarder_binary
+        # Uploaded into every task container regardless of what the image
+        # already trusts: see REMOTE_CA_BUNDLE. certifi is the Mozilla bundle
+        # already pinned in this project's lockfile, so the trust anchors are
+        # versioned with the harness instead of varying per task image.
+        self.ca_bundle = ca_bundle or certifi.where()
         self.max_agent_rounds = max_agent_rounds
         self.readiness_timeout_seconds = readiness_timeout_seconds
         self.poll_seconds = poll_seconds
@@ -114,9 +167,10 @@ class BuzzContainerRuntime:
     ) -> RuntimeResult:
         classes = self._classes_by_agent_id(manifest, trial.credentials)
         orchestrator = next(c for c in trial.credentials if c.role == "orchestrator")
-        workers = [c for c in trial.credentials if c.agent_id != orchestrator.agent_id]
-        if not workers:
-            raise RuntimeLaunchError("Buzz orchestration requires at least one worker")
+        # A zero-worker roster is the single-agent baseline, not an error. The
+        # lone agent gets byte-identical wiring to a worker (same binaries, same
+        # MCP toolset, same env) — anything less would handicap the baseline
+        # every multi-agent condition is compared against.
         trial_dir = self.logs_dir / "buzz"
         trial_dir.mkdir(parents=True, exist_ok=True)
 
@@ -143,6 +197,7 @@ class BuzzContainerRuntime:
                         credential=credential,
                         agent_class=classes[credential.agent_id],
                         trial_dir=trial_dir,
+                        turn_timeout_seconds=manifest.trial_budget.timeout_seconds,
                     )
                 )
             await self._wait_for_agents_ready(
@@ -162,8 +217,27 @@ class BuzzContainerRuntime:
         finally:
             await self._stop_agents(environment, agents + infra)
             await self._collect_logs(environment, trial_dir)
+            # Before bundle.write, so the transcript is listed in the bundle's
+            # file index and covered by its secret scan.
+            await self._collect_transcript(trial, trial_dir)
+            # Accounting runs even when the trial failed or timed out: a trial
+            # that burned tokens and then stalled still cost money, and
+            # excluding it would bias the sweep's cost figures toward successes.
+            trial_accounting = self._collect_accounting(
+                trial_dir, manifest, trial, classes
+            )
+            bundle.write(
+                trial_dir=trial_dir,
+                manifest=manifest,
+                trial=trial,
+                accounting=trial_accounting,
+                endpoints=self.endpoints,
+            )
 
         return RuntimeResult(
+            input_tokens=trial_accounting.input_tokens,
+            output_tokens=trial_accounting.output_tokens,
+            cost_usd=trial_accounting.cost_usd,
             metadata={
                 "completion_message_id": final_message["id"],
                 "completion_message": final_message["content"],
@@ -177,8 +251,52 @@ class BuzzContainerRuntime:
                     )
                     for credential in trial.credentials
                 },
-            }
+                "solo_roster": manifest.is_solo,
+                # Recorded per agent because the sensitivity check that turns
+                # the [Base] section off is only interpretable next to a run
+                # that left it on.
+                "agent_platform_prompt": {
+                    credential.agent_id: classes[
+                        credential.agent_id
+                    ].include_platform_prompt
+                    for credential in trial.credentials
+                },
+                **trial_accounting.to_metadata(),
+            },
         )
+
+    @staticmethod
+    def _collect_accounting(
+        trial_dir: Path,
+        manifest: ExperimentManifest,
+        trial: TrialHandle,
+        classes: dict[str, AgentClass],
+    ) -> accounting.TrialAccounting:
+        """Price the trial from the downloaded logs, never raising.
+
+        A defect in accounting must not destroy an otherwise complete trial: the
+        run is the expensive artifact, the numbers can be recomputed from the
+        bundle. An unparseable trial comes back unreconciled, which the caller
+        surfaces rather than averaging in.
+        """
+        try:
+            return accounting.collect(
+                trial_dir=trial_dir,
+                manifest=manifest,
+                agents=[
+                    (
+                        credential.agent_id,
+                        credential.role,
+                        classes[credential.agent_id],
+                    )
+                    for credential in trial.credentials
+                ],
+            )
+        except Exception as error:  # noqa: BLE001 — never lose a paid trial
+            return accounting.TrialAccounting(
+                reconciled=False,
+                reconciliation_note=f"accounting failed: {error}",
+            )
 
     # -- container setup ------------------------------------------------------
 
@@ -205,6 +323,10 @@ class BuzzContainerRuntime:
         for target, source in uploads.items():
             await environment.upload_file(source, target)
         await environment.exec(f"chmod 0755 {REMOTE_BIN}/*")
+        # Outside REMOTE_BIN so the chmod above does not mark it executable.
+        if not Path(self.ca_bundle).is_file():
+            raise RuntimeLaunchError(f"CA bundle not found: {self.ca_bundle}")
+        await environment.upload_file(self.ca_bundle, REMOTE_CA_BUNDLE)
 
     async def _start_forwarder(
         self, environment: BaseEnvironment, trial: TrialHandle
@@ -283,6 +405,7 @@ class BuzzContainerRuntime:
         credential: AgentCredential,
         agent_class: AgentClass,
         trial_dir: Path,
+        turn_timeout_seconds: int = 0,
     ) -> _Agent:
         if not credential.llm_endpoint:
             raise RuntimeLaunchError("credential llm_endpoint must not be empty")
@@ -311,6 +434,7 @@ class BuzzContainerRuntime:
             agent_class=agent_class,
             endpoint=endpoint,
             remote_prompt=remote_prompt,
+            turn_timeout_seconds=turn_timeout_seconds,
         )
         command = (
             f"{shlex.quote(f'{REMOTE_BIN}/buzz-acp')} </dev/null "
@@ -334,10 +458,20 @@ class BuzzContainerRuntime:
         agent_class: AgentClass,
         endpoint: EndpointLaunchConfig,
         remote_prompt: str,
+        turn_timeout_seconds: int = 0,
     ) -> dict[str, str]:
         """The desktop-launch environment: real acp/agent/dev-mcp wiring."""
         return {
+            **self._turn_duration_env(turn_timeout_seconds),
             **endpoint.env,
+            "RUST_LOG": self._usage_rust_log(endpoint.env.get("RUST_LOG")),
+            # Ahead of the identity wiring because without it buzz-agent never
+            # builds an HTTP client at all: see REMOTE_CA_BUNDLE. Only the file
+            # is set — SSL_CERT_DIR is left alone because rustls-native-certs
+            # splits it on `:` and requires every entry to be an existing
+            # directory, so an empty value would name one bad path and fail
+            # exactly the way this is meant to prevent.
+            "SSL_CERT_FILE": REMOTE_CA_BUNDLE,
             "BUZZ_RELAY_URL": trial.relay_ws_url,
             "BUZZ_PRIVATE_KEY": credential.nostr_secret_key,
             # Desktop parity: the GUI also sets NOSTR_PRIVATE_KEY on buzz-acp
@@ -352,14 +486,17 @@ class BuzzContainerRuntime:
             "BUZZ_ACP_RESPOND_TO": "anyone",
             "BUZZ_ACP_NO_MEMORY": "true",
             "BUZZ_ACP_SYSTEM_PROMPT_FILE": remote_prompt,
+            **self._platform_prompt_env(agent_class),
             "BUZZ_AGENT_PROVIDER": endpoint.provider,
             "BUZZ_AGENT_MODEL": credential.llm_endpoint,
+            "BUZZ_AGENT_THINKING_EFFORT": THINKING_EFFORT,
             "BUZZ_AGENT_MAX_OUTPUT_TOKENS": str(
                 agent_class.generation.max_output_tokens
             ),
             "BUZZ_AGENT_MAX_CONTEXT_TOKENS": str(
                 agent_class.generation.context_window_tokens
             ),
+            **self._compaction_env(agent_class.generation),
             "BUZZ_AGENT_MAX_ROUNDS": str(
                 agent_class.budget.max_calls or self.max_agent_rounds
             ),
@@ -368,6 +505,84 @@ class BuzzContainerRuntime:
             "BUZZ_AGENT_NO_HINTS": "1",
             endpoint.api_key_env: credential.llm_api_key,
         }
+
+    @staticmethod
+    def _turn_duration_env(turn_timeout_seconds: int) -> dict[str, str]:
+        """Let one turn last as long as the trial the condition budgets for.
+
+        buzz-acp caps a single turn at 2h by default (config.rs:31). A solo
+        agent is woken exactly once, so its one turn *is* the whole trial — and
+        Terminal-Bench's longest tasks allow more than that. Leaving the default
+        in place would cut those turns off for a reason unrelated to the task,
+        and silently: the cap ends the turn without publishing anything.
+
+        The idle timer moves with it. buzz-acp separately ends a turn after 900s
+        with no ACP wire activity (config.rs:27), sized for a desktop agent whose
+        longest single tool call is a 600s shell command. A graded trial breaks
+        that assumption: the agent may work the terminal for a quarter of an hour
+        without emitting anything the outer channel can see, and the timer fires
+        as silently as the turn cap does. One cacert-fix-check trial died exactly
+        that way — buzz-acp quit at 900.2s on a task Harbor allowed 1800s, having
+        published nothing, and scored zero at full cost.
+
+        Set it one second under the turn cap. That is deliberately close to
+        disabling it: Harbor already enforces each task's own deadline, so a
+        wedged agent is bounded either way, and the only thing the shorter timer
+        adds here is a way to lose a live trial. Staying below the cap keeps
+        buzz-acp's `idle_timeout < max_turn_duration` invariant, which it
+        validates at startup.
+
+        Neither is set when no budget is known, so buzz-acp's own defaults still
+        apply rather than an accidental zero.
+        """
+        if turn_timeout_seconds <= 0:
+            return {}
+        return {
+            "BUZZ_ACP_MAX_TURN_DURATION": str(turn_timeout_seconds),
+            "BUZZ_ACP_IDLE_TIMEOUT": str(turn_timeout_seconds - 1),
+        }
+
+    @staticmethod
+    def _platform_prompt_env(agent_class: AgentClass) -> dict[str, str]:
+        """Suppress buzz-acp's `[Base]` section when the condition opts out.
+
+        Set only when opting out, for the same reason the compaction knobs are:
+        a variable present in the bundle should mean the experiment chose it.
+        The default path leaves buzz-acp's own behaviour untouched.
+        """
+        if agent_class.include_platform_prompt:
+            return {}
+        return {"BUZZ_ACP_NO_BASE_PROMPT": "1"}
+
+    @staticmethod
+    def _compaction_env(generation: GenerationConfig) -> dict[str, str]:
+        """Auto-compaction policy, omitted entirely when the manifest is silent.
+
+        Omitting rather than passing the agent's own defaults keeps the
+        container env honest about what the condition actually pins: a variable
+        present in the bundle means the experiment chose it.
+        """
+        env: dict[str, str] = {}
+        if generation.compact_at_percent is not None:
+            env["BUZZ_AGENT_HANDOFF_PERCENT"] = str(generation.compact_at_percent)
+        if generation.compact_at_tokens is not None:
+            env["BUZZ_AGENT_HANDOFF_AT_TOKENS"] = str(generation.compact_at_tokens)
+        return env
+
+    @staticmethod
+    def _usage_rust_log(configured: str | None) -> str:
+        """Guarantee the usage target is enabled without discarding operator intent.
+
+        An endpoint config may legitimately raise verbosity for debugging. Rather
+        than letting that silently switch off token accounting — which would show
+        up as a $0.00 trial, not as an error — append the usage directive to
+        whatever was asked for.
+        """
+        if not configured:
+            return DEFAULT_RUST_LOG
+        if USAGE_LOG_TARGET in configured:
+            return configured
+        return f"{configured},{USAGE_LOG_TARGET}=debug"
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -477,6 +692,64 @@ class BuzzContainerRuntime:
         try:
             await environment.download_dir(REMOTE_LOGS, trial_dir)
         except Exception:  # noqa: BLE001 — best effort; env may be torn down
+            pass
+
+    async def _collect_transcript(self, trial: TrialHandle, trial_dir: Path) -> None:
+        """Save the channel conversation as the trial's most perishable artifact.
+
+        The agent stack persists no session file: what one agent said to another
+        exists only as relay events, and teardown archives the channel. For a
+        solo condition that costs little — the stdout log implies the shape of
+        the run. For a team it is the whole object of study. Who woke whom, who
+        went silent, who acknowledged instead of working, and which @mention
+        resolved to nobody are all questions only the transcript answers, and
+        they are exactly the questions a persona rewrite has to be based on.
+
+        Read as the trial user, the same identity that observed the channel
+        while it ran, so this sees precisely what the harness was entitled to
+        see. Best effort throughout: this runs in a ``finally``, and losing the
+        transcript must never turn a completed trial into a failed one.
+        """
+        try:
+            messages = await self._buzz_json(
+                trial.user, trial,
+                "messages", "get", "--channel", trial.channel_id,
+                "--limit", str(TRANSCRIPT_LIMIT),
+            )
+        except Exception:  # noqa: BLE001 — a lost transcript is not a failed trial
+            return
+        if not isinstance(messages, list):
+            return
+
+        names = {
+            credential.nostr_pubkey: credential.agent_id
+            for credential in (*trial.credentials, trial.user)
+        }
+        ordered = sorted(
+            (message for message in messages if isinstance(message, dict)),
+            key=lambda message: message.get("created_at") or 0,
+        )
+        payload = {
+            "channel_id": trial.channel_id,
+            "message_count": len(ordered),
+            # The relay caps what one query returns. If the cap was reached the
+            # earliest messages are missing, and a reader comparing a chatty
+            # condition against a terse one would silently be comparing a
+            # truncated record against a complete one.
+            "truncated": len(messages) >= TRANSCRIPT_LIMIT,
+            "messages": [
+                # Author resolved to the roster id: a transcript addressed only
+                # by pubkey cannot be read without cross-referencing, which in
+                # practice means it does not get read.
+                {"author": names.get(message.get("pubkey"), "unknown"), **message}
+                for message in ordered
+            ],
+        }
+        try:
+            (trial_dir / "transcript.json").write_text(
+                json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+            )
+        except OSError:
             pass
 
     # -- Buzz CLI as the trial user / provisioning identities -------------------
@@ -608,6 +881,11 @@ class BuzzContainerRuntime:
         has to discover them over the relay.
         """
         persona = persona_path.read_text(encoding="utf-8")
+        teammates = [
+            teammate
+            for teammate in trial.credentials
+            if teammate.agent_id != credential.agent_id
+        ]
         lines = [
             "",
             "## Your team",
@@ -618,15 +896,24 @@ class BuzzContainerRuntime:
             f"(pubkey `{trial.user.nostr_pubkey}`); address your final report "
             "to them.",
             "",
-            "| Name | Role | Pubkey |",
-            "|------|------|--------|",
         ]
-        for teammate in trial.credentials:
-            if teammate.agent_id == credential.agent_id:
-                continue
-            lines.append(
-                f"| {teammate.agent_id} | {teammate.role} "
+        if teammates:
+            lines += ["| Name | Role | Pubkey |", "|------|------|--------|"]
+            lines += [
+                # The manifest's role, not the kind: personas address each
+                # other by job ("the teammate whose Role column reads
+                # `critic`"), and a table that said `worker` twice would leave
+                # a lead unable to tell its implementer from its verifier.
+                f"| {teammate.agent_id} | {teammate.manifest_role or teammate.role} "
                 f"| `{teammate.nostr_pubkey}` |"
+                for teammate in teammates
+            ]
+        else:
+            # Solo baseline: saying "no teammates" explicitly stops the agent
+            # burning rounds trying to delegate to a roster that isn't there.
+            lines.append(
+                "You have no teammates on this trial — you are working alone. "
+                "Do the work yourself; there is nobody to delegate to."
             )
         composed = persona + "\n".join(lines) + "\n"
         path = trial_dir / f"{credential.agent_id}.system-prompt.md"

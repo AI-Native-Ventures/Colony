@@ -1,0 +1,59 @@
+# A1 solo baseline routed through the OpenAI API instead of the Databricks
+# gateway. Same model, same persona, same budget as tb-solo-luna — the only
+# thing that changes is who serves the tokens.
+#
+# It exists because the Databricks bearer is a short-lived OAuth token that
+# expires roughly hourly, which makes an unattended sweep impossible. A plain
+# OpenAI key does not expire mid-run.
+#
+# The endpoint name is the literal OpenAI model id, because the runtime sets
+# BUZZ_AGENT_MODEL from the manifest endpoint name and buzz-agent passes that
+# straight through as the model. Provider and key resolve via
+# testbed/endpoints/openai-live.json.
+#
+# NOT interchangeable with tb-solo-luna for cost comparison. Same weights, but
+# a different serving stack, a different route (OPENAI_COMPAT_API=auto selects
+# the Responses API for *.openai.com), and — until the prices below are
+# confirmed — a different price sheet. Compare scores across the two; do not
+# pool their dollar figures.
+schema_version: "1"
+condition: tb-solo-luna-openai
+roster:
+  - id: solo
+    kind: orchestrator
+    role: solo
+    count: 1
+    endpoint: gpt-5.6-luna
+    model_revision: gpt-5.6-luna
+    prompt:
+      path: personas/bench/solo.md
+      sha256: 6997ae38384ea4f84bbdc1422a668be089fbfd2709d412392dbbb4911c565596
+    generation:
+      # Matches tb-solo-luna so the two differ only in serving path.
+      max_output_tokens: 32000
+      context_window_tokens: 272000
+prices:
+  # PLACEHOLDER — carried over from the Databricks list price for the same
+  # model (doc 04 §7) so the accounting path is exercised end to end. These
+  # have NOT been checked against OpenAI's published rates. Replace them before
+  # any dollar figure from this condition is reported anywhere; token counts
+  # are measured and trustworthy regardless.
+  gpt-5.6-luna:
+    input_per_million_usd: 1.0
+    cached_input_per_million_usd: 0.1
+    output_per_million_usd: 6.0
+    cache_read_rate: 0.0
+trial_budget:
+  # A backstop, not the operative deadline. Harbor already enforces each task's
+  # own `[agent] timeout_sec` from its task.toml, which across Terminal-Bench
+  # 2.1 ranges from 600s to 12000s — 39 of the 89 tasks allow more than 900s.
+  # A flat 900s here fired *inside* that and cut those tasks off early: the
+  # first live dna-assembly trial was killed at 905s against a task budget of
+  # 1800s, scoring zero for a reason that had nothing to do with the model.
+  # Worse, it made the whole run incomparable to any published Terminal-Bench
+  # result, since every other agent gets the task's own budget.
+  #
+  # Set above the longest task in the dataset so the per-task value always
+  # governs. This remains a real ceiling — it bounds a pathological hang that
+  # outlives Harbor's own timer — it just no longer binds first.
+  timeout_seconds: 12000
