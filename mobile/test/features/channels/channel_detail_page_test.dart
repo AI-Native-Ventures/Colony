@@ -242,6 +242,7 @@ Widget _buildNavigationTestable({
       relayClientProvider.overrideWithValue(
         RelayClient(baseUrl: 'http://localhost:3000'),
       ),
+      savedPrefsProvider.overrideWithValue(_testPrefs),
     ],
     child: MaterialApp(
       theme: AppTheme.light(),
