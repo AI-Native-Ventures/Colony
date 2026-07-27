@@ -13,7 +13,7 @@ import {
   type InboxReply,
   buildInboxItems,
   formatInboxFullTimestamp,
-  getInboxConversationId,
+  getInboxItemConversationId,
 } from "@/features/home/lib/inbox";
 import { useInboxSelectionAnchor } from "@/features/home/useInboxSelectionAnchor";
 import { useInboxEditMessage } from "@/features/home/useInboxEditMessage";
@@ -398,7 +398,7 @@ export function HomeView({
   // correct row selected (by conversationId) even after the anchor event has
   // been displaced from groupItems by a newer representative.
   const latchedConversationId = activeLatchedItem
-    ? getInboxConversationId(activeLatchedItem.tags, activeLatchedItem.id)
+    ? getInboxItemConversationId(activeLatchedItem)
     : null;
   const selectedConversationId =
     selectedItemFromAll?.conversationId ?? latchedConversationId;

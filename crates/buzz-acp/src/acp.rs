@@ -466,6 +466,10 @@ impl AcpClient {
         #[cfg(unix)]
         cmd.process_group(0);
 
+        // Suppress the console window that Windows otherwise allocates for every
+        // console-subsystem child process spawned from a GUI/non-console parent.
+        configure_no_window(&mut cmd);
+
         let mut child = cmd.spawn()?;
 
         let stdin = child
@@ -1987,6 +1991,19 @@ fn kill_process_group(_pid: u32) -> bool {
     false
 }
 
+/// Suppress the console window that Windows otherwise allocates for every
+/// console-subsystem child process spawned from a GUI (non-console) parent.
+/// No-op on non-Windows platforms.
+fn configure_no_window(cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2655,7 +2672,7 @@ mod tests {
     #[tokio::test]
     async fn idle_resets_on_stdout_activity() {
         // Send valid JSON (session/update notifications) to reset the idle timer.
-        // Non-JSON lines no longer reset idle (Finding #6 hardening).
+        // Non-JSON lines no longer reset idle — only valid JSON notifications do.
         let mut client = spawn_script(
             r#"for i in $(seq 1 10); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"thinking"}}}}'; sleep 0.05; done; sleep 10"#,
         )

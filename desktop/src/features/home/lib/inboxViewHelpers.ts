@@ -4,6 +4,7 @@ import {
   type InboxFilter,
   type InboxItem,
 } from "@/features/home/lib/inbox";
+import { isProjectInboxItem } from "@/features/home/lib/projectInbox";
 import {
   getChannelIdFromTags,
   getThreadReference,
@@ -50,6 +51,12 @@ export function matchesInboxFilter(
   if (filter === "thread") {
     return [item.item, ...(item.groupItems ?? [])].some((groupItem) =>
       groupItem ? hasThreadReplyTags(groupItem.tags) : false,
+    );
+  }
+
+  if (filter === "project") {
+    return [item.item, ...(item.groupItems ?? [])].some(
+      (groupItem) => groupItem && isProjectInboxItem(groupItem),
     );
   }
 

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
+import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
@@ -38,6 +39,7 @@ import type {
   RelayEvent,
 } from "@/shared/api/types";
 import { summarizeProjectActivityEvents } from "./projectActivity.mjs";
+import { resolveProjectDefaultBranch } from "./lib/projectBranches";
 import { effectiveCloneUrls } from "./lib/projectCloneUrl";
 import type { ProjectIssue } from "./projectIssues.mjs";
 import { projectIssueEventsToIssues } from "./projectIssues.mjs";
@@ -46,7 +48,9 @@ import type {
   ProjectPullRequestCommentAnchor,
 } from "./projectPullRequests.mjs";
 import {
+  nextProjectPullRequestReviewCreatedAt,
   normalizeProjectPullRequestCommentAnchor,
+  PR_CHANGES_REQUESTED_LABEL,
   PR_INLINE_COMMENT_LABEL,
   projectPullRequestEventsToPullRequests,
 } from "./projectPullRequests.mjs";
@@ -57,6 +61,8 @@ export type {
   ProjectPullRequest,
   ProjectPullRequestCommentAnchor,
 };
+
+export type ProjectPullRequestCommentDecision = "request-changes";
 
 const HIDDEN_PROJECT_CARDS_KEY = "buzz.projects.hidden-cards.v1";
 
@@ -308,9 +314,13 @@ async function fetchProject(projectId: string): Promise<Project | null> {
 
   if (isDeletedByA(project, deletionEvents)) return null;
   const repoState = await fetchRepoState(project);
-  return repoState?.head
-    ? { ...project, defaultBranch: repoState.head }
-    : project;
+  return {
+    ...project,
+    defaultBranch: resolveProjectDefaultBranch(
+      project.defaultBranch,
+      repoState,
+    ),
+  };
 }
 
 function eventToRepoState(event: RelayEvent): RepoState {
@@ -340,9 +350,17 @@ function eventToRepoState(event: RelayEvent): RepoState {
 }
 
 async function fetchRepoState(project: Project): Promise<RepoState | null> {
+  const relaySelf = await getRelaySelf();
+  const trustedAuthors = [
+    ...new Set(
+      [project.owner, relaySelf].filter((value): value is string =>
+        Boolean(value),
+      ),
+    ),
+  ];
   const events = await relayClient.fetchEvents({
     kinds: [KIND_REPO_STATE],
-    authors: [project.owner],
+    authors: trustedAuthors,
     "#d": [project.dtag],
     limit: 1,
   });
@@ -425,6 +443,7 @@ async function fetchProjectPullRequests(
 async function createProjectPullRequestComment({
   anchor,
   content,
+  decision,
   mediaTags,
   mentionPubkeys = [],
   project,
@@ -432,6 +451,7 @@ async function createProjectPullRequestComment({
 }: {
   anchor?: ProjectPullRequestCommentAnchor;
   content: string;
+  decision?: ProjectPullRequestCommentDecision;
   mediaTags?: string[][];
   mentionPubkeys?: string[];
   project: Project;
@@ -447,8 +467,8 @@ async function createProjectPullRequestComment({
   if (anchor && !normalizedAnchor) {
     throw new Error("Comment location is invalid.");
   }
-  if (normalizedAnchor && !pullRequest.commit) {
-    throw new Error("Pull request commit is required for inline comments.");
+  if ((normalizedAnchor || decision) && !pullRequest.commit) {
+    throw new Error("Pull request commit is required for review comments.");
   }
 
   const recipients = new Set([
@@ -470,12 +490,26 @@ async function createProjectPullRequestComment({
           ["line", String(normalizedAnchor.line)],
         ]
       : []),
+    ...(decision
+      ? [
+          ["t", PR_CHANGES_REQUESTED_LABEL],
+          ...(!normalizedAnchor ? [["c", pullRequest.commit as string]] : []),
+        ]
+      : []),
     ...(mediaTags ?? []),
   ];
 
   const event = await signRelayEvent({
     kind: KIND_TEXT_NOTE,
     content: body,
+    ...(decision
+      ? {
+          createdAt: nextProjectPullRequestReviewCreatedAt(
+            pullRequest,
+            Math.floor(Date.now() / 1_000),
+          ),
+        }
+      : {}),
     tags,
   });
 
@@ -534,6 +568,7 @@ async function fetchProjectRepoSnapshot(
   project: Project,
   branchName?: string | null,
   pullRequest?: ProjectPullRequest | null,
+  tag?: { name: string; commit: string } | null,
 ): Promise<ProjectRepoSnapshot | null> {
   const cloneUrl = pullRequest?.cloneUrls[0] ?? project.cloneUrls[0];
   if (!cloneUrl) return null;
@@ -542,8 +577,12 @@ async function fetchProjectRepoSnapshot(
     cloneUrl,
     defaultBranch: branchName ?? project.defaultBranch,
     baseBranch: project.defaultBranch,
-    targetCommit: pullRequest?.commit ?? null,
-    targetRef: pullRequest ? `refs/nostr/${pullRequest.id}` : null,
+    targetCommit: tag?.commit ?? pullRequest?.commit ?? null,
+    targetRef: tag
+      ? `refs/tags/${tag.name}`
+      : pullRequest
+        ? `refs/nostr/${pullRequest.id}`
+        : null,
   });
 }
 
@@ -678,6 +717,7 @@ export function useProjectRepoSnapshotQuery(
   project: Project | null | undefined,
   branchName?: string | null,
   pullRequest?: ProjectPullRequest | null,
+  tag?: { name: string; commit: string } | null,
 ) {
   const selectedBranch = branchName ?? project?.defaultBranch ?? null;
 
@@ -690,10 +730,17 @@ export function useProjectRepoSnapshotQuery(
       selectedBranch ?? "default",
       pullRequest?.id ?? "none",
       pullRequest?.commit ?? "none",
+      tag?.name ?? "no-tag",
+      tag?.commit ?? "no-tag-commit",
     ],
     queryFn: () => {
       if (!project) throw new Error("No project selected.");
-      return fetchProjectRepoSnapshot(project, selectedBranch, pullRequest);
+      return fetchProjectRepoSnapshot(
+        project,
+        selectedBranch,
+        pullRequest,
+        tag,
+      );
     },
     staleTime: 30_000,
     retry: 1,
@@ -880,12 +927,14 @@ export function useCreateProjectPullRequestCommentMutation(
     mutationFn: ({
       anchor,
       content,
+      decision,
       mediaTags,
       mentionPubkeys,
       pullRequest,
     }: {
       anchor?: ProjectPullRequestCommentAnchor;
       content: string;
+      decision?: ProjectPullRequestCommentDecision;
       mediaTags?: string[][];
       mentionPubkeys?: string[];
       pullRequest: ProjectPullRequest;
@@ -894,6 +943,7 @@ export function useCreateProjectPullRequestCommentMutation(
       return createProjectPullRequestComment({
         anchor,
         content,
+        decision,
         mediaTags,
         mentionPubkeys,
         project,

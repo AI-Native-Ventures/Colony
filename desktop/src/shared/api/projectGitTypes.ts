@@ -43,6 +43,7 @@ export type ProjectRepoDiff = {
   files: ProjectRepoDiffFile[];
   additions: number;
   deletions: number;
+  commitBody: string | null;
 };
 
 export type ProjectLocalRepoSnapshot = {
@@ -58,6 +59,7 @@ export type ProjectLocalRepository = {
 export type ProjectRepoSyncStatus = {
   localPath: string | null;
   localBranch: string | null;
+  localBranches: string[];
   localHead: string | null;
   localShortHead: string | null;
   remoteBranch: string | null;
@@ -90,6 +92,12 @@ export type ProjectRepoPullResult = {
 export type ProjectRepoCloneResult = {
   path: string;
   cloned: boolean;
+  message: string;
+};
+
+export type ProjectRepoBranchResult = {
+  branch: string;
+  commit: string;
   message: string;
 };
 

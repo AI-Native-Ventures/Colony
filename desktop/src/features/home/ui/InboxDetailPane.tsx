@@ -6,7 +6,10 @@ import type {
   InboxItem,
   InboxReply,
 } from "@/features/home/lib/inbox";
+import { getProjectInboxReference } from "@/features/home/lib/projectInbox";
+import { ProjectInboxDetail } from "@/features/home/ui/ProjectInboxDetail";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { formatInboxTypeLabel } from "@/features/home/lib/inbox";
 import {
   type InboxDisplayMessage,
@@ -110,7 +113,23 @@ type InboxDetailPaneProps = {
   ) => Promise<void>;
 };
 
-export function InboxDetailPane({
+/** Routes Inbox selections to their canonical message or Buzz Git detail. */
+export function InboxDetailPane(props: InboxDetailPaneProps) {
+  if (props.item && getProjectInboxReference(props.item.item)) {
+    return (
+      <ProjectInboxDetail
+        isSinglePanelView={props.isSinglePanelView}
+        item={props.item}
+        onBack={props.onBack}
+        profiles={props.profiles}
+      />
+    );
+  }
+
+  return <InboxMessageDetailPane {...props} />;
+}
+
+function InboxMessageDetailPane({
   agentPubkeys,
   canDelete,
   canOpenChannel,
@@ -139,6 +158,7 @@ export function InboxDetailPane({
   onToggleReaction,
 }: InboxDetailPaneProps) {
   const detailPaneRef = React.useRef<HTMLElement | null>(null);
+  const { activeCommunity } = useCommunities();
   // Refs for the shared anchored-scroll hook's container and content roots.
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -649,6 +669,7 @@ export function InboxDetailPane({
             currentPubkey={currentPubkey}
             onOpenChange={setIsMembersSidebarOpen}
             open={isMembersSidebarOpen}
+            relayUrl={activeCommunity?.relayUrl}
           />
         </React.Suspense>
       ) : null}
