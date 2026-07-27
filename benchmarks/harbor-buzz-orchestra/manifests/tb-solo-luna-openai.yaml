@@ -56,4 +56,10 @@ trial_budget:
   # Set above the longest task in the dataset so the per-task value always
   # governs. This remains a real ceiling — it bounds a pathological hang that
   # outlives Harbor's own timer — it just no longer binds first.
-  timeout_seconds: 12000
+  #
+  # 36000 = the dataset's longest task (12000s) at the 3x timeout multiplier the
+  # study now runs with (DEFAULT_TIMEOUT_MULTIPLIER in scripts/benchmark.py).
+  # These two numbers are one setting: benchmark.py refuses to start if this one
+  # is the smaller, because the harness would then cut a task short of the
+  # deadline Harbor granted it and record the result as a timeout.
+  timeout_seconds: 36000

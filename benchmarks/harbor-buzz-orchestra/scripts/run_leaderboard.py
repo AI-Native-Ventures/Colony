@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Run a problem set with a team manifest and produce leaderboard-ready results.
 
-One command wraps ``harbor run`` with only leaderboard-legal settings — no
-timeout or resource overrides are accepted or forwarded, so the resulting job
-directory passes Harbor's static validation as produced. After the run it
-writes a ``metadata.yaml`` template derived from the manifest and prints the
-exact upload/submit commands.
+One command wraps ``harbor run``. Resource overrides are never accepted or
+forwarded, and neither is any timeout knob except ``--timeout-multiplier``,
+which is passed through because a study can legitimately want to know what an
+agent scores when the clock is not the constraint. Harbor rejects a submission
+whose ``timeout_multiplier`` is anything but 1.0 (``_check_no_job_overrides`` in
+``harbor/leaderboard/static_validation.py``), so a job produced with it is a
+local measurement, not a leaderboard entry, and this script says so when it runs.
+After the run it writes a ``metadata.yaml`` template derived from the manifest
+and prints the exact upload/submit commands.
 
 Run inside the testbed environment so ``harbor`` and the adapter are
 importable:
@@ -97,6 +101,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "relay address to this gateway",
     )
     parser.add_argument("--n-concurrent", "-n", type=int, default=4, help="Concurrent trials")
+    parser.add_argument(
+        "--timeout-multiplier", type=float, default=None, metavar="N",
+        help="Scale every Harbor phase timeout (agent, verifier, setup, build) "
+             "by N. Anything but 1.0 makes the job unsubmittable to the "
+             "leaderboard; omit it for a submittable run.",
+    )
     parser.add_argument("--jobs-dir", type=Path, default=Path("jobs"), help="Job output root")
     parser.add_argument("--job-name", default=None, help="Job name (default: lb-<condition>-<UTC>)")
     parser.add_argument(
@@ -142,9 +152,13 @@ def build_command(
     binaries: dict[str, Path],
     agent_binaries: dict[str, Path],
 ) -> list[str]:
-    """Compose the harbor invocation. Standard settings only: any timeout or
-    resource override would fail leaderboard static validation, so none are
-    accepted or forwarded."""
+    """Compose the harbor invocation.
+
+    Standard settings, plus ``--timeout-multiplier`` when asked for. Resource
+    overrides (cpus, memory, storage, gpus) are never forwarded: unlike a clock,
+    they change what the machine can do, so a result produced under them is not
+    a result about the agent.
+    """
     command = [
         "harbor", "run", "--yes",
         "--job-name", args.job_name,
@@ -152,6 +166,8 @@ def build_command(
         "-k", str(args.attempts),
         "--n-concurrent", str(args.n_concurrent),
     ]
+    if args.timeout_multiplier is not None:
+        command += ["--timeout-multiplier", str(args.timeout_multiplier)]
     if args.dataset:
         command += ["--dataset", args.dataset]
     else:
@@ -257,6 +273,18 @@ def main(argv: list[str] | None = None) -> int:
         return result.returncode
 
     metadata_path = write_metadata_template(args, job_dir)
+    if args.timeout_multiplier is not None:
+        # Said once, at the end, where the submit instructions would otherwise
+        # be: printing them for a job Harbor will refuse wastes someone's
+        # afternoon finding out why.
+        print(
+            f"\nJob complete: {job_dir}\n"
+            f"  Ran with timeout_multiplier={args.timeout_multiplier}, so Harbor's "
+            "static validation will reject this job as a leaderboard submission "
+            "(no_job_overrides). It is a local measurement — report the score "
+            "with the multiplier stated alongside it."
+        )
+        return 0
     print("\nLeaderboard-ready job complete.")
     print(f"  1. Review submitter details in {metadata_path}")
     print(f"  2. harbor upload {job_dir}")

@@ -82,6 +82,8 @@ class Trial:
     reconciled: bool
     round_capped: bool
     verifier_broken: bool
+    stopped_without_done: bool
+    timeout_multiplier: float
     agents: int
     path: Path
 
@@ -126,6 +128,20 @@ class Condition:
     @property
     def verifier_broken(self) -> int:
         return sum(trial.verifier_broken for trial in self.trials)
+
+    @property
+    def stopped_without_done(self) -> int:
+        return sum(trial.stopped_without_done for trial in self.trials)
+
+    @property
+    def timeout_multipliers(self) -> list[float]:
+        """Every distinct clock the trials in this row ran against.
+
+        A list, not a scalar, because a resumed sweep can straddle a settings
+        change, and a row that silently averages two different clocks is worse
+        than one that admits it.
+        """
+        return sorted({trial.timeout_multiplier for trial in self.trials})
 
     @property
     def cost_per_trial(self) -> float:
@@ -222,6 +238,31 @@ def _manifest_identity(manifest_path: str) -> tuple[str, str] | None:
     except Exception:  # noqa: BLE001 — an unreadable manifest is not fatal here
         return None
     return manifest.condition, manifest.sha256
+
+
+def _timeout_multiplier(trial_dir: Path) -> float:
+    """How much of Harbor's clock this trial was given, relative to the task's own.
+
+    Read per trial rather than taken on trust, because it is the one setting that
+    changes what a score *means* without changing anything about the agent: a
+    condition run at 3x is answering "can it solve this at all", and one run at
+    1.0 is answering "can it solve this inside Terminal-Bench's clock". Reporting
+    the two in the same column without saying which is which would be the most
+    misleading thing this script could do.
+
+    Harbor writes both the job-wide multiplier and the agent-phase override into
+    every trial's config.json. The agent-phase value wins when set, matching
+    _resolve_timeout_sec in harbor/trial/trial.py.
+    """
+    try:
+        config = json.loads((trial_dir / "config.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 1.0
+    for key in ("agent_timeout_multiplier", "timeout_multiplier"):
+        value = config.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return 1.0
 
 
 def _identity_from_config(trial_dir: Path) -> tuple[str, str] | None:
@@ -327,6 +368,8 @@ def read_trial(result_path: Path) -> Trial | None:
         reconciled=reconciled,
         round_capped=_round_capped(trial_dir),
         verifier_broken=verifier_broken(trial_dir),
+        stopped_without_done=bool(metadata.get("stopped_without_done")),
+        timeout_multiplier=_timeout_multiplier(trial_dir),
         agents=agents,
         path=trial_dir,
     )
@@ -367,6 +410,11 @@ def format_table(conditions: list[Condition]) -> str:
             flags.append(f"unpriced×{c.unreconciled}")
         if c.verifier_broken:
             flags.append(f"VERIFIER-BROKEN×{c.verifier_broken}")
+        if c.stopped_without_done:
+            flags.append(f"no-done×{c.stopped_without_done}")
+        for multiplier in c.timeout_multipliers:
+            if multiplier != 1.0:
+                flags.append(f"clock×{multiplier:g}")
         lines.append(
             f"{c.condition[:26]:<26} {c.manifest_sha256[:8]:<8} {c.agents:>2} "
             f"{c.n:>4} {c.pass_rate:>6.3f} {c.cost_per_trial:>8.4f} "
@@ -388,6 +436,31 @@ def format_table(conditions: list[Condition]) -> str:
             "computed. The usual cause is a TLS-intercepting proxy between the "
             "container and PyPI; benchmark.py now refuses to start under one. "
             "Any flagged condition must be re-run, not reported.",
+        ]
+    if any(m != 1.0 for c in conditions for m in c.timeout_multipliers):
+        lines += [
+            "",
+            "NOTE: a clock×N row ran with every Harbor phase deadline multiplied "
+            "by N, so its score answers 'can the team solve this at all' rather "
+            "than 'inside Terminal-Bench's clock'. Not comparable to published "
+            "leaderboard numbers, and Harbor will refuse it as a submission. "
+            "Quote the multiplier wherever the score is quoted; the sec column "
+            "is what the extra time actually cost.",
+        ]
+    if any(len(c.timeout_multipliers) > 1 for c in conditions):
+        lines += [
+            "",
+            "WARNING: a row above pools trials run under different clocks, which "
+            "is not one condition. Split the job dirs or re-run the odd half.",
+        ]
+    if any(c.stopped_without_done for c in conditions):
+        lines += [
+            "",
+            "NOTE: a no-done trial ended its turn without posting DONE. The "
+            "reward is real — the verifier scored the container either way — but "
+            "the completion protocol was dropped, so the agent got no chance to "
+            "check its own work. Compare the flag across conditions: a rate that "
+            "moves with team shape is a finding, not noise.",
         ]
     if any(c.round_capped for c in conditions):
         lines += [
@@ -414,6 +487,7 @@ def write_csv(conditions: list[Condition], path: Path) -> None:
                 "cost_usd_per_trial", "cost_usd_total", "tokens_per_trial",
                 "agent_seconds_per_trial", "timeouts", "launch_failures",
                 "errors", "round_capped", "unreconciled", "verifier_broken",
+                "stopped_without_done", "timeout_multipliers",
             ]
         )
         for c in conditions:
@@ -425,6 +499,8 @@ def write_csv(conditions: list[Condition], path: Path) -> None:
                     f"{c.seconds_per_trial:.2f}", c.timeouts,
                     c.launch_failures, c.errors,
                     c.round_capped, c.unreconciled, c.verifier_broken,
+                    c.stopped_without_done,
+                    " ".join(f"{m:g}" for m in c.timeout_multipliers),
                 ]
             )
 

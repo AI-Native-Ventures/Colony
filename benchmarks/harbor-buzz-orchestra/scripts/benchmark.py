@@ -61,6 +61,28 @@ GUI_BUNDLE_IDENTIFIER = "xyz.block.buzz.app.benchmark"
 # validate_dataset() checks whichever form is given against the right source.
 DEFAULT_DATASET = "terminal-bench/terminal-bench-2-1"
 DEFAULT_ATTEMPTS = 5
+# Scales every Harbor phase deadline: agent, verifier, setup, image build.
+#
+# 3.0 rather than 1.0 because this study is asking what the team can solve, and
+# a clock that stops a still-working agent answers a different question. It is
+# deliberately generous: at 1.0, three trials of the first solo sweep were cut
+# off mid-turn, and no multiplier that merely clears those would tell us whether
+# a fourth was about to be. Time is still measured — it is one of the study's
+# four headline numbers — it is just measured rather than enforced.
+#
+# The cost is submittability, not validity: Harbor's leaderboard validator
+# rejects any job whose multiplier is set at all (no_job_overrides, in
+# harbor/leaderboard/static_validation.py:733), so these scores are ours to
+# report with the multiplier stated, not to post. Pass --timeout-multiplier 1.0
+# for a run meant for the leaderboard.
+DEFAULT_TIMEOUT_MULTIPLIER = 3.0
+# The longest `[agent] timeout_sec` in Terminal-Bench 2.1, from the 89 cached
+# task.toml files: 600s(1) 750s(1) 900s(48) 1200s(5) 1800s(17) 2400s(2)
+# 3600s(13) 7200s(1) 12000s(1). Harbor multiplies each task's own value, so this
+# is what the largest one becomes — and the manifest's trial_budget has to clear
+# it, or the harness's own wait_for cuts the biggest tasks short of the deadline
+# Harbor granted them. Checked before every run; see check_budget_clears_clock.
+MAX_TASK_TIMEOUT_SECONDS = 12000
 # The Databricks bring-up pair is the default because it is the slate the
 # study actually runs on (doc 04 §6); the Anthropic manifests predate it and
 # need a key this project does not provision.
@@ -289,6 +311,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--n-concurrent", "-n", type=int, default=4, help="Concurrent trials")
     parser.add_argument(
+        "--timeout-multiplier", type=float, default=DEFAULT_TIMEOUT_MULTIPLIER,
+        metavar="N",
+        help="Scale every Harbor phase deadline (agent, verifier, setup, build) "
+             f"by N (default: {DEFAULT_TIMEOUT_MULTIPLIER}). Pass 1.0 for a run "
+             "that can be submitted to the leaderboard; anything else makes the "
+             "job local-only.",
+    )
+    parser.add_argument(
         "--jobs-dir", type=Path, default=PACKAGE_ROOT / "jobs", help="Job output root"
     )
     parser.add_argument("--job-name", default=None, help="Job name (default: lb-<condition>-<UTC>)")
@@ -423,6 +453,37 @@ def trial_timeout_seconds(manifest: Path) -> int:
         # The manifest is validated properly downstream; a bad one must fail
         # there with a real message, not here inside a token warning.
         return 900
+
+
+def check_budget_clears_clock(manifest: Path, multiplier: float) -> None:
+    """Refuse a multiplier the harness's own ceiling would silently undo.
+
+    Two deadlines bound a trial. Harbor enforces each task's `timeout_sec`,
+    scaled by the multiplier. The harness separately wraps the wait for `DONE:`
+    in the manifest's `trial_budget.timeout_seconds`, and passes that same value
+    to buzz-acp as its turn cap. Whichever is smaller is the real deadline.
+
+    Raising only the multiplier therefore buys nothing on the tasks that need it
+    most: the 12000s task at 3x gets 36000s from Harbor and is still killed by us
+    at 12000s. Worse, it fails as a timeout — indistinguishable from the agent
+    genuinely running out of clock, which is exactly the confusion the multiplier
+    was raised to remove.
+
+    So this is an error rather than a warning: the two numbers are one setting
+    expressed in two files, and a run where they disagree measures neither.
+    """
+    if multiplier <= 0:
+        raise DatasetError("--timeout-multiplier must be positive")
+    required = int(MAX_TASK_TIMEOUT_SECONDS * multiplier)
+    budget = trial_timeout_seconds(manifest)
+    if budget < required:
+        raise DatasetError(
+            f"--timeout-multiplier {multiplier} gives Harbor's longest task "
+            f"{required}s, but {manifest.name} caps every trial at "
+            f"{budget}s (trial_budget.timeout_seconds), so the harness would cut "
+            f"it short and record a timeout. Raise trial_budget.timeout_seconds "
+            f"to at least {required} in that manifest, or lower the multiplier."
+        )
 
 
 def databricks_oauth_token() -> tuple[str, int] | None:
@@ -921,6 +982,11 @@ def leaderboard_argv(
         "--n-concurrent", str(args.n_concurrent),
         "--jobs-dir", str(args.jobs_dir),
     ]
+    if args.timeout_multiplier != 1.0:
+        # Forwarded only when it changes something: Harbor's validator rejects
+        # the flag being *set*, not just being non-unity, so a submittable run
+        # must not carry it at all.
+        argv += ["--timeout-multiplier", str(args.timeout_multiplier)]
     if args.job_name:
         argv += ["--job-name", args.job_name]
     if args.upload:
@@ -950,13 +1016,32 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    # Both deadlines are one setting in two files; catch a disagreement here
+    # rather than as 89 unexplained timeouts. Only for the registry dataset:
+    # MAX_TASK_TIMEOUT_SECONDS describes Terminal-Bench 2.1, and a local --path
+    # task (the M1 smoke) sets its own, much smaller, budget.
+    if not args.path:
+        try:
+            check_budget_clears_clock(args.manifest, args.timeout_multiplier)
+        except DatasetError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+    if args.timeout_multiplier != 1.0:
+        print(
+            f"timeout multiplier: {args.timeout_multiplier}x on every Harbor "
+            "phase — scores are local-only (not leaderboard-submittable), and "
+            "time is reported rather than enforced"
+        )
     # Before the stack, the binaries, and the money: a sweep run through a TLS
-    # interception proxy cannot be scored at all.
-    try:
-        check_tls_not_intercepted()
-    except InterceptedTLSError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
+    # interception proxy cannot be scored at all. Skipped for --dry-run, which
+    # prints a command and touches nothing — refusing there would block the one
+    # invocation that is safe to make while the proxy is still connected.
+    if not args.dry_run:
+        try:
+            check_tls_not_intercepted()
+        except InterceptedTLSError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
     state = load_state()
     print_user_identity(state, show_secret=args.gui)
     write_env_file(state)

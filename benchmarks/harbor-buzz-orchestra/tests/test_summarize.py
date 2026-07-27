@@ -29,6 +29,7 @@ def write_trial(
     agents: int = 1,
     log: str | None = None,
     verifier_stdout: str | None = None,
+    timeout_multiplier: float | None = None,
 ) -> Path:
     """One trial directory shaped like Harbor's, with a Buzz bundle inside."""
     trial_dir = jobs_dir / job / name
@@ -42,6 +43,10 @@ def write_trial(
         bundle = trial_dir / "agent" / "buzz"
         bundle.mkdir(parents=True)
         (bundle / "solo-1.stdout.log").write_text(log, encoding="utf-8")
+    if timeout_multiplier is not None:
+        (trial_dir / "config.json").write_text(
+            json.dumps({"timeout_multiplier": timeout_multiplier}), encoding="utf-8"
+        )
     (trial_dir / "result.json").write_text(
         json.dumps(
             {
@@ -413,3 +418,33 @@ def test_csv_round_trips_every_condition(tmp_path):
     rows = out.read_text(encoding="utf-8").splitlines()
     assert rows[0].startswith("condition,manifest_sha256,agents,n,pass_rate")
     assert len(rows) == 3
+
+
+def test_a_stretched_clock_is_never_reported_as_a_leaderboard_score(tmp_path):
+    """The one setting that changes what a score means without touching the agent.
+
+    A 3x row answers "can the team solve this at all"; a 1.0 row answers "inside
+    Terminal-Bench's clock". Printing them in the same column with nothing to
+    tell them apart is the most misleading thing this script could do.
+    """
+    write_trial(tmp_path, "job", "t1", timeout_multiplier=3.0)
+    table = summarize.format_table(summarize.collect(tmp_path))
+    assert "clock×3" in table
+    assert "not comparable to published" in table.lower()
+    assert "refuse it as a submission" in table
+
+
+def test_an_unstretched_run_says_nothing_about_clocks(tmp_path):
+    write_trial(tmp_path, "job", "t1", timeout_multiplier=1.0)
+    write_trial(tmp_path, "job", "t2")  # no config.json at all
+    table = summarize.format_table(summarize.collect(tmp_path))
+    assert "clock×" not in table
+
+
+def test_pooling_two_different_clocks_into_one_row_is_called_out(tmp_path):
+    """A resumed sweep can straddle a settings change; that is not one condition."""
+    write_trial(tmp_path, "job", "before", timeout_multiplier=1.0)
+    write_trial(tmp_path, "job", "after", timeout_multiplier=3.0)
+    table = summarize.format_table(summarize.collect(tmp_path))
+    assert "clock×3" in table
+    assert "pools trials run under different clocks" in table

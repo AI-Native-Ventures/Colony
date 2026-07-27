@@ -76,7 +76,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 #       session_id=01J... input=12345 output=678
 # Match the fields independently so a formatter change (field order, added
 # fields) degrades to "no samples" rather than a wrong number.
-_USAGE_MARKER = "goose usage update"
+USAGE_MARKER = "goose usage update"
 _SESSION_RE = re.compile(r"\bsession_id=(\S+)")
 _INPUT_RE = re.compile(r"\binput=(\d+)\b")
 _OUTPUT_RE = re.compile(r"\boutput=(\d+)\b")
@@ -155,7 +155,7 @@ def parse_usage_log(text: str) -> tuple[SessionUsage, ...]:
     """
     high_water: dict[str, tuple[int, int]] = {}
     for line in _ANSI_RE.sub("", text).splitlines():
-        if _USAGE_MARKER not in line:
+        if USAGE_MARKER not in line:
             continue
         input_match = _INPUT_RE.search(line)
         output_match = _OUTPUT_RE.search(line)

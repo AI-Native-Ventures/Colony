@@ -12,12 +12,14 @@ from harbor_buzz_orchestra.manifest import ExperimentManifest
 from harbor_buzz_orchestra.provisioning import AgentCredential, TrialHandle
 from harbor_buzz_orchestra.container_runtime import (
     DEFAULT_MAX_AGENT_ROUNDS,
+    DEFAULT_RUST_LOG,
     REMOTE_BIN,
     REMOTE_CA_BUNDLE,
     REMOTE_LOGS,
     BuzzContainerRuntime,
     EndpointLaunchConfig,
     RuntimeLaunchError,
+    _Agent,
 )
 
 
@@ -407,14 +409,33 @@ async def test_launch_enables_the_usage_log_target(tmp_path):
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [
-        (None, "buzz_acp=info,acp::usage=debug"),
-        # Operator verbosity is preserved, but never at the cost of accounting.
-        ("buzz_acp=trace", "buzz_acp=trace,acp::usage=debug"),
-        ("acp::usage=trace", "acp::usage=trace"),
+        (None, DEFAULT_RUST_LOG),
+        # Operator verbosity is preserved, but never at the cost of the targets
+        # the harness reads: tokens, and whether a turn has ended.
+        (
+            "buzz_acp=trace",
+            "buzz_acp=trace,acp::usage=debug,pool::prompt=info,"
+            "acp::stream=info,acp::tool=info",
+        ),
+        # A target the operator already set keeps the operator's level.
+        (
+            "acp::usage=trace,pool::prompt=trace",
+            "acp::usage=trace,pool::prompt=trace,acp::stream=info,acp::tool=info",
+        ),
     ],
 )
-def test_usage_rust_log_never_drops_the_usage_target(configured, expected):
-    assert BuzzContainerRuntime._usage_rust_log(configured) == expected
+def test_stack_rust_log_never_drops_a_target_the_harness_reads(configured, expected):
+    assert BuzzContainerRuntime._stack_rust_log(configured) == expected
+
+
+def test_default_rust_log_enables_every_target_the_harness_reads():
+    """Both are load-bearing: one prices the trial, one ends it.
+
+    The first full sweep ran without the turn target and paid 3.2 hours of dead
+    waiting for it.
+    """
+    for target in ("acp::usage", "pool::prompt"):
+        assert target in DEFAULT_RUST_LOG
 
 
 def test_solo_prompt_states_there_is_nobody_to_delegate_to(tmp_path):
@@ -474,8 +495,15 @@ async def test_solo_roster_runs_and_is_priced(tmp_path, monkeypatch):
             if "buzz-acp" in command:
                 return ExecResult(stdout="99\n", stderr="", return_code=0)
             if command.startswith("cat "):
+                # Both markers the harness polls this log for: the readiness
+                # subscription, and the turn's usage line.
                 return ExecResult(
-                    stdout="subscribed to channel channel\n", stderr="", return_code=0
+                    stdout=(
+                        "subscribed to channel channel\n"
+                        "goose usage update input=2000000 output=1000000\n"
+                    ),
+                    stderr="",
+                    return_code=0,
                 )
             return ExecResult(stdout="", stderr="", return_code=0)
 
@@ -531,6 +559,142 @@ def test_runtime_rejects_unbounded_agent_rounds(tmp_path):
         runtime(tmp_path, max_agent_rounds=0)
     with pytest.raises(ValueError, match="positive"):
         runtime(tmp_path, readiness_timeout_seconds=0)
+    with pytest.raises(ValueError, match="negative"):
+        runtime(tmp_path, usage_settle_seconds=-1)
+
+
+def settle_agent(agent_id="solo-1"):
+    return _Agent(
+        credential=credential(agent_id, "orchestrator", "orch-model"),
+        pid=99,
+        stdout_log=f"{REMOTE_LOGS}/{agent_id}.stdout.log",
+        stderr_log=f"{REMOTE_LOGS}/{agent_id}.stderr.log",
+    )
+
+
+async def test_settle_waits_for_a_usage_line_that_has_not_landed_yet(tmp_path):
+    """The one record of a trial's tokens is written after `DONE:` is published.
+
+    buzz-agent emits its usage notification just before returning the
+    session/prompt response, so a solo agent's only usage line trails the
+    `DONE:` tool call it is billed for.
+    """
+    rt = runtime(tmp_path, poll_seconds=0, usage_settle_seconds=5)
+
+    class LateUsage(Environment):
+        polls = 0
+
+        async def exec(self, command, env=None, **kwargs):
+            self.polls += 1
+            stdout = "goose usage update input=1 output=2\n" if self.polls >= 3 else ""
+            return ExecResult(stdout=stdout, stderr="", return_code=0)
+
+    environment = LateUsage()
+    await rt._settle_usage(environment, [settle_agent()])
+    assert environment.polls == 3
+
+
+async def test_settle_reads_both_streams_of_every_agent(tmp_path):
+    """A pair's usage lines arrive independently, and either stream may hold one."""
+    rt = runtime(tmp_path, poll_seconds=0, usage_settle_seconds=5)
+    seen = []
+
+    class TwoAgents(Environment):
+        async def exec(self, command, env=None, **kwargs):
+            seen.append(command)
+            # The driver reports at once; the navigator only on its second poll.
+            if "orch-1" in command or len(seen) > 2:
+                return ExecResult(
+                    stdout="goose usage update input=1 output=2\n",
+                    stderr="",
+                    return_code=0,
+                )
+            return ExecResult(stdout="", stderr="", return_code=0)
+
+    await rt._settle_usage(
+        TwoAgents(), [settle_agent("orch-1"), settle_agent("worker-1")]
+    )
+    # The satisfied agent drops out; only the quiet one is polled again.
+    assert len(seen) == 3
+    assert all(
+        ".stdout.log" in command and ".stderr.log" in command for command in seen
+    )
+    assert "orch-1" not in seen[-1]
+
+
+async def test_a_usage_line_that_never_comes_does_not_hang_the_sweep(tmp_path):
+    """Bounded by design: a lost cost record is cheaper than a stalled run.
+
+    The accounting layer already reports the trial as unpriced, and the task's
+    own result stands regardless.
+    """
+    rt = runtime(tmp_path, poll_seconds=0, usage_settle_seconds=0)
+
+    class NeverReports(Environment):
+        polls = 0
+
+        async def exec(self, command, env=None, **kwargs):
+            self.polls += 1
+            return ExecResult(stdout="", stderr="", return_code=0)
+
+    environment = NeverReports()
+    await rt._settle_usage(environment, [settle_agent()])
+    assert environment.polls == 1
+
+
+async def test_usage_is_settled_before_teardown_kills_the_agent(tmp_path, monkeypatch):
+    """The whole point of the wait: it has to happen while the agent is alive.
+
+    24 of 89 trials in the first full solo sweep reported zero tokens — 14 of
+    them passing — because teardown fired inside this window.
+    """
+    manifest = write_manifest(tmp_path)
+    credentials = (
+        credential("orch-1", "orchestrator", "orch-model", "lead"),
+        credential("worker-1", "worker", "worker-model", "implementer"),
+    )
+    trial = trial_handle(credentials)
+    rt = runtime(tmp_path, poll_seconds=0, usage_settle_seconds=5)
+    order = []
+
+    class LateUsageEnvironment(Environment):
+        done = False
+        settles = 0
+
+        async def exec(self, command, env=None, **kwargs):
+            if "buzz-acp" in command:
+                return ExecResult(stdout="99\n", stderr="", return_code=0)
+            if command.startswith("cat "):
+                stdout = "subscribed to channel channel\n"
+                if self.done:
+                    self.settles += 1
+                    if self.settles >= 4:  # two agents, two rounds
+                        order.append("usage")
+                        stdout += "goose usage update input=1 output=2\n"
+                return ExecResult(stdout=stdout, stderr="", return_code=0)
+            if "/proc/[0-9]*" in command:
+                order.append("kill")
+            return ExecResult(stdout="", stderr="", return_code=0)
+
+    environment = LateUsageEnvironment()
+
+    async def done(*args, **kwargs):
+        environment.done = True
+        return {"id": "m1", "content": "DONE: done"}
+
+    monkeypatch.setattr(rt, "_install_stack", lambda env: _noop())
+    monkeypatch.setattr(rt, "_wait_for_done", done)
+    monkeypatch.setattr(rt, "_buzz_json", lambda *a, **k: _value([]))
+
+    await rt.run(
+        instruction="do the thing",
+        environment=environment,
+        manifest=manifest,
+        trial=trial,
+    )
+
+    assert order[0] == "usage", "teardown ran before the usage line was flushed"
+    assert "kill" in order
 
 
 async def test_wait_for_agents_ready_requires_every_channel_subscription(tmp_path):
@@ -633,6 +797,177 @@ async def test_wait_for_done_requires_orchestrator_authorship(tmp_path, monkeypa
     assert json.dumps(result).find("real") > 0
     # observation happens as the trial user, never as an agent identity
     assert set(observers) == {"user"}
+
+
+async def test_a_lone_agent_that_ends_its_turn_ends_the_trial(tmp_path, monkeypatch):
+    """Nobody left to wake it, so waiting only inflates the clock.
+
+    13 trials in the first full solo sweep sat like this for a quarter of an hour
+    each — 3.2 hours, a third of the sweep's agent time — after work that had
+    finished in under four minutes. Five had already passed their tests.
+    """
+    rt = runtime(tmp_path, poll_seconds=0)
+    orch = credential("orch-1", "orchestrator", "orch-model")
+    trial = trial_handle((orch,))
+    monkeypatch.setattr(rt, "_buzz_json", lambda *a, **k: _value([]))
+
+    ended = Environment(
+        responses={
+            "cat ": ExecResult(
+                stdout="turn complete for channel c: end_turn\n",
+                stderr="",
+                return_code=0,
+            )
+        }
+    )
+    assert await rt._wait_for_done(
+        ended, orch, trial, [], solo=settle_agent("orch-1")
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "turn hit max_tokens for channel c — session will be rotated",
+        "turn hit max_turn_requests for channel c — session will be rotated",
+        "turn refused for channel c",
+        "turn cancelled for channel c",
+    ],
+)
+async def test_a_turn_that_ended_badly_still_ended(tmp_path, monkeypatch, line):
+    """An agent stopped by its own limits is finished, not thinking."""
+    rt = runtime(tmp_path, poll_seconds=0)
+    orch = credential("orch-1", "orchestrator", "orch-model")
+    monkeypatch.setattr(rt, "_buzz_json", lambda *a, **k: _value([]))
+    environment = Environment(
+        responses={"cat ": ExecResult(stdout=line, stderr="", return_code=0)}
+    )
+    assert await rt._wait_for_done(
+        environment, orch, trial_handle((orch,)), [], solo=settle_agent("orch-1")
+    ) is None
+
+
+async def test_a_working_agent_is_never_mistaken_for_a_finished_one(
+    tmp_path, monkeypatch
+):
+    """No turn-end line means the agent is still mid-turn: keep waiting.
+
+    Stopping early here would throw away a live trial, so the DONE that arrives
+    on a later poll has to win.
+    """
+    rt = runtime(tmp_path, poll_seconds=0)
+    orch = credential("orch-1", "orchestrator", "orch-model")
+    rounds = iter([[], [], [{"id": "9", "pubkey": orch.nostr_pubkey, "content": "DONE: ok"}]])
+    monkeypatch.setattr(rt, "_buzz_json", lambda *a, **k: _value(next(rounds)))
+    working = Environment(
+        responses={
+            "cat ": ExecResult(
+                stdout="subscribed to channel c\n", stderr="", return_code=0
+            )
+        }
+    )
+    result = await rt._wait_for_done(
+        working, orch, trial_handle((orch,)), [], solo=settle_agent("orch-1")
+    )
+    assert result["content"] == "DONE: ok"
+
+
+async def test_a_team_keeps_waiting_because_a_worker_can_still_wake_the_lead(
+    tmp_path, monkeypatch
+):
+    """`solo` is the whole guard: with more than one agent, turn-end proves nothing.
+
+    buzz-acp logs turn ends and not turn starts, so a lead between turns looks
+    exactly like a lead that has stopped for good.
+    """
+    rt = runtime(tmp_path, poll_seconds=0)
+    orch = credential("orch-1", "orchestrator", "orch-model")
+    rounds = iter([[], [{"id": "9", "pubkey": orch.nostr_pubkey, "content": "DONE: ok"}]])
+    monkeypatch.setattr(rt, "_buzz_json", lambda *a, **k: _value(next(rounds)))
+    ended = Environment(
+        responses={
+            "cat ": ExecResult(
+                stdout="turn complete for channel c: end_turn\n",
+                stderr="",
+                return_code=0,
+            )
+        }
+    )
+    # No solo agent passed: the run() call site only passes one for a lone agent.
+    result = await rt._wait_for_done(ended, orch, trial_handle((orch,)), [])
+    assert result["content"] == "DONE: ok"
+
+
+async def test_a_quiet_stop_is_recorded_rather_than_inferred(tmp_path, monkeypatch):
+    """The trial completes and is priced; the dropped protocol is a flag, not a zero."""
+    manifest = ExperimentManifest.load(
+        {
+            "condition": "solo",
+            "roster": [
+                {
+                    "id": "solo", "kind": "orchestrator", "role": "lead", "count": 1,
+                    "endpoint": "orch-model", "model_revision": "r1",
+                    "prompt": {
+                        "path": "prompt.md",
+                        "sha256": hashlib.sha256(b"prompt").hexdigest(),
+                    },
+                    "generation": {
+                        "max_output_tokens": 100, "context_window_tokens": 1000
+                    },
+                }
+            ],
+            "prices": {
+                "orch-model": {
+                    "input_per_million_usd": 10,
+                    "cached_input_per_million_usd": 1,
+                    "output_per_million_usd": 30,
+                }
+            },
+            "trial_budget": {"timeout_seconds": 30},
+        }
+    )
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    solo = credential("solo-1", "orchestrator", "orch-model")
+    rt = runtime(tmp_path, poll_seconds=0)
+
+    class QuietStop(Environment):
+        async def exec(self, command, env=None, **kwargs):
+            self.commands.append((command, env))
+            if "buzz-acp" in command:
+                return ExecResult(stdout="99\n", stderr="", return_code=0)
+            if command.startswith("cat "):
+                return ExecResult(
+                    stdout=(
+                        "subscribed to channel channel\n"
+                        "goose usage update input=1000 output=500\n"
+                        "turn complete for channel channel: end_turn\n"
+                    ),
+                    stderr="",
+                    return_code=0,
+                )
+            return ExecResult(stdout="", stderr="", return_code=0)
+
+        async def download_dir(self, source, target):
+            Path(target).mkdir(parents=True, exist_ok=True)
+            (Path(target) / "solo-1.stdout.log").write_text(
+                "goose usage update session_id=s input=1000 output=500\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(rt, "_install_stack", lambda environment: _noop())
+    monkeypatch.setattr(rt, "_buzz_json", lambda *a, **k: _value([]))
+
+    result = await rt.run(
+        instruction="do the thing",
+        environment=QuietStop(),
+        manifest=manifest,
+        trial=trial_handle((solo,)),
+    )
+
+    assert result.metadata["stopped_without_done"] is True
+    assert result.metadata["completion_message_id"] == ""
+    # Still priced — the tokens were spent whether or not DONE was posted.
+    assert result.input_tokens == 1000
 
 
 async def test_transcript_is_saved_in_author_order_with_names(tmp_path, monkeypatch):

@@ -22,6 +22,7 @@ import certifi
 from harbor.environments.base import BaseEnvironment
 
 from . import accounting, bundle
+from .accounting import USAGE_MARKER
 from .manifest import AgentClass, ExperimentManifest, GenerationConfig
 from .provisioning import AgentCredential, TrialHandle
 from .runtime import RuntimeResult
@@ -42,7 +43,38 @@ DEFAULT_MAX_AGENT_ROUNDS = 300
 # optional decoration — without it every trial reports zero cost. See
 # accounting.py.
 USAGE_LOG_TARGET = "acp::usage"
-DEFAULT_RUST_LOG = f"buzz_acp=info,{USAGE_LOG_TARGET}=debug"
+# buzz-acp logs the end of every turn under this target — "turn complete for
+# channel <id>: end_turn" for a clean finish, warnings for max_tokens,
+# max_turn_requests, refusal, cancellation (pool.rs:3058). The harness reads it
+# to tell a working agent from a finished one; see _turn_ended.
+TURN_LOG_TARGET = "pool::prompt"
+# What the agent said and which tools it called. Neither is load-bearing, and
+# both were off for the first full sweep — which is why 13 trials that ended
+# their turn in under four minutes could not be distinguished from 13 trials
+# still grinding, and were written off as slow. Cheap to keep on: one line per
+# message and per tool call, in a log the bundle already scans for secrets.
+STREAM_LOG_TARGET = "acp::stream"
+TOOL_LOG_TARGET = "acp::tool"
+DEFAULT_RUST_LOG = ",".join(
+    (
+        "buzz_acp=info",
+        f"{USAGE_LOG_TARGET}=debug",
+        f"{TURN_LOG_TARGET}=info",
+        f"{STREAM_LOG_TARGET}=info",
+        f"{TOOL_LOG_TARGET}=info",
+    )
+)
+# Marker for a turn that ended for any reason. Every log_stop_reason branch
+# starts with this, so it matches the clean end_turn and the four failure
+# reasons alike — an agent that stopped because it hit max_tokens is just as
+# finished as one that stopped because it was done.
+TURN_ENDED_MARKERS = (
+    "turn complete for",
+    "turn cancelled for",
+    "turn hit max_tokens for",
+    "turn hit max_turn_requests for",
+    "turn refused for",
+)
 # Reasoning effort, held constant across every agent in every condition.
 #
 # Deliberately a constant rather than a manifest field: per-entry effort is a
@@ -127,12 +159,20 @@ class BuzzContainerRuntime:
         ca_bundle: str | None = None,
         max_agent_rounds: int = DEFAULT_MAX_AGENT_ROUNDS,
         readiness_timeout_seconds: float = 60.0,
+        # Grace for the post-DONE usage notification; see _settle_usage.
+        # Generous on purpose: `DONE:` is published from inside a tool call, so
+        # the notification can be a whole model round-trip behind it, and a
+        # thinking model's round-trip is tens of seconds. Costs nothing when the
+        # line is already there, which is the common case.
+        usage_settle_seconds: float = 60.0,
         poll_seconds: float = 1.0,
     ) -> None:
         if max_agent_rounds <= 0:
             raise ValueError("max_agent_rounds must be positive")
         if readiness_timeout_seconds <= 0:
             raise ValueError("readiness_timeout_seconds must be positive")
+        if usage_settle_seconds < 0:
+            raise ValueError("usage_settle_seconds must not be negative")
         self.logs_dir = Path(logs_dir)
         self.artifact_root = Path(artifact_root)
         self.endpoints = endpoints
@@ -155,6 +195,7 @@ class BuzzContainerRuntime:
         self.ca_bundle = ca_bundle or certifi.where()
         self.max_agent_rounds = max_agent_rounds
         self.readiness_timeout_seconds = readiness_timeout_seconds
+        self.usage_settle_seconds = usage_settle_seconds
         self.poll_seconds = poll_seconds
 
     async def run(
@@ -210,9 +251,21 @@ class BuzzContainerRuntime:
                 trial.user, trial, f"@{orchestrator.agent_id} {instruction}"
             )
             final_message = await asyncio.wait_for(
-                self._wait_for_done(environment, orchestrator, trial, agents + infra),
+                self._wait_for_done(
+                    environment,
+                    orchestrator,
+                    trial,
+                    agents + infra,
+                    # Only a lone agent's finished turn ends the trial; see
+                    # _wait_for_done on why a team has no equivalent signal.
+                    solo=agents[0] if len(agents) == 1 else None,
+                ),
                 timeout=manifest.trial_budget.timeout_seconds,
             )
+            # `DONE:` is published before the turn's usage notification is, so
+            # teardown has to wait or the trial's tokens are lost. Inside the
+            # try, and only on this path: a timeout has no usage to flush.
+            await self._settle_usage(environment, agents)
             await self._verify_m1_output(environment, manifest)
         finally:
             await self._stop_agents(environment, agents + infra)
@@ -239,8 +292,18 @@ class BuzzContainerRuntime:
             output_tokens=trial_accounting.output_tokens,
             cost_usd=trial_accounting.cost_usd,
             metadata={
-                "completion_message_id": final_message["id"],
-                "completion_message": final_message["content"],
+                "completion_message_id": (
+                    final_message["id"] if final_message else ""
+                ),
+                "completion_message": (
+                    final_message["content"] if final_message else ""
+                ),
+                # The agent stopped without posting DONE. Not an error and not a
+                # zero — the verifier still scored the container — but the
+                # completion protocol was dropped, and a condition that drops it
+                # often is a finding, so it is recorded per trial rather than
+                # inferred later from an empty message id.
+                "stopped_without_done": final_message is None,
                 "agent_runtime": "in-container",
                 "agent_hints_enabled": False,
                 "task_seed": "user-identity-prompt",
@@ -464,7 +527,7 @@ class BuzzContainerRuntime:
         return {
             **self._turn_duration_env(turn_timeout_seconds),
             **endpoint.env,
-            "RUST_LOG": self._usage_rust_log(endpoint.env.get("RUST_LOG")),
+            "RUST_LOG": self._stack_rust_log(endpoint.env.get("RUST_LOG")),
             # Ahead of the identity wiring because without it buzz-agent never
             # builds an HTTP client at all: see REMOTE_CA_BUNDLE. Only the file
             # is set — SSL_CERT_DIR is left alone because rustls-native-certs
@@ -570,19 +633,31 @@ class BuzzContainerRuntime:
         return env
 
     @staticmethod
-    def _usage_rust_log(configured: str | None) -> str:
-        """Guarantee the usage target is enabled without discarding operator intent.
+    def _stack_rust_log(configured: str | None) -> str:
+        """Guarantee the harness's own targets without discarding operator intent.
 
         An endpoint config may legitimately raise verbosity for debugging. Rather
         than letting that silently switch off token accounting — which would show
-        up as a $0.00 trial, not as an error — append the usage directive to
-        whatever was asked for.
+        up as a $0.00 trial, not as an error — each directive the harness depends
+        on is appended to whatever was asked for, unless that target is already
+        mentioned, in which case the operator's level wins.
+
+        Every target here is read by the harness, not just kept for a human: the
+        usage target is the only token source, and the turn target is how a
+        finished agent is told apart from a working one.
         """
         if not configured:
             return DEFAULT_RUST_LOG
-        if USAGE_LOG_TARGET in configured:
-            return configured
-        return f"{configured},{USAGE_LOG_TARGET}=debug"
+        directives = [configured]
+        for target, level in (
+            (USAGE_LOG_TARGET, "debug"),
+            (TURN_LOG_TARGET, "info"),
+            (STREAM_LOG_TARGET, "info"),
+            (TOOL_LOG_TARGET, "info"),
+        ):
+            if target not in configured:
+                directives.append(f"{target}={level}")
+        return ",".join(directives)
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -621,11 +696,34 @@ class BuzzContainerRuntime:
         orchestrator: AgentCredential,
         trial: TrialHandle,
         agents: list[_Agent],
-    ) -> dict[str, Any]:
-        """Observe the channel as the trial user until the orchestrator posts DONE.
+        solo: _Agent | None = None,
+    ) -> dict[str, Any] | None:
+        """Observe the channel as the trial user until the team stops.
 
-        Observation only: the harness never speaks as any agent. If the team
-        stalls, the trial times out and the stall is the measured result.
+        Observation only: the harness never speaks as any agent. `DONE:` from the
+        orchestrator returns that message — the team reported finishing, which is
+        the protocol working.
+
+        `solo`, when given, is the run's only agent, and its turn ending is the
+        second way to stop: it returns None. Nobody else can speak in the
+        channel, so nothing can wake it again, and every further second is spent
+        watching a process that will never act. In the first full solo sweep that
+        wait came to 3.2 hours — a third of the sweep's total agent time — across
+        13 trials whose work had finished in under four minutes, five of which had
+        already passed their tests. The zeros were real; a third of the clock was
+        not, and time is one of the four numbers this study reports.
+
+        A team has no equivalent signal: buzz-acp logs turn ends and not turn
+        starts, so a lead that ended one turn and was woken into another by a
+        worker's reply is indistinguishable from a lead that has stopped for
+        good. Teams therefore still wait for `DONE:` or the trial timeout, and
+        catching their version of this stall needs a turn-*start* line in
+        buzz-acp first.
+
+        Either way the verifier scores the container, so the quiet stop costs no
+        points. It is recorded in the trial's metadata and flagged by the sweep
+        summary, so a condition that keeps dropping the `DONE:` contract shows up
+        as exactly that rather than as a slow agent.
         """
         polls = 0
         while True:
@@ -642,6 +740,74 @@ class BuzzContainerRuntime:
                     message.get("content", "")
                 ).startswith("DONE:"):
                     return message
+            # Ordered after the channel read on purpose: the turn that posts
+            # DONE ends immediately afterwards, and that agent finished — it
+            # must not be reported as having stopped without saying so.
+            if solo is not None and await self._turn_ended(environment, solo):
+                return None
+            await asyncio.sleep(self.poll_seconds)
+
+    @staticmethod
+    async def _turn_ended(environment: BaseEnvironment, agent: _Agent) -> bool:
+        """Whether buzz-acp has logged the end of a turn for this agent.
+
+        Matches every reason a turn can end, not just the clean one: an agent
+        that stopped because it hit max_tokens or its round cap is just as
+        finished as one that stopped because it was done, and the difference
+        belongs in the log for a human to read, not in this decision.
+        """
+        result = await environment.exec(
+            f"cat {shlex.quote(agent.stdout_log)} "
+            f"{shlex.quote(agent.stderr_log)} 2>/dev/null"
+        )
+        text = result.stdout or ""
+        return any(marker in text for marker in TURN_ENDED_MARKERS)
+
+    async def _settle_usage(
+        self, environment: BaseEnvironment, agents: list[_Agent]
+    ) -> None:
+        """Give each agent the moment it needs to report what it spent.
+
+        buzz-agent emits its `_goose/unstable/session/update` usage notification
+        once per turn, immediately *before* returning the `session/prompt`
+        response (buzz-agent/src/lib.rs:708). A solo agent gets exactly one turn
+        per trial, so that single notification is the only record of the trial's
+        tokens — and it is written after the agent has already published `DONE:`
+        as a tool call.
+
+        `_wait_for_done` returns the instant `DONE:` appears in the channel, and
+        teardown kills the agent straight after. That window is a race the
+        harness was losing: 24 of 89 trials in the A1 sweep reported zero tokens,
+        14 of them having *passed*, which understated the run's cost by about a
+        quarter and made cost-per-task unusable for comparing conditions.
+
+        Bounded, and usually free: the notification is normally already there on
+        the first poll. The budget is sized for the case where it is not —
+        `DONE:` reaches the channel from inside a tool call, so the turn may
+        still owe one model round-trip before it ends and reports, and for a
+        thinking model that is tens of seconds, not milliseconds.
+        Waiting is pointless on the timeout path — a turn that never completed
+        has no usage to flush — so callers only invoke this once `DONE:` is seen.
+        A miss is not fatal; the accounting note already reports an unpriced
+        trial, and losing the tokens is better than hanging the sweep.
+        """
+        deadline = asyncio.get_running_loop().time() + self.usage_settle_seconds
+        pending = {agent.credential.agent_id: agent for agent in agents}
+        while pending:
+            for agent_id, agent in list(pending.items()):
+                result = await environment.exec(
+                    f"cat {shlex.quote(agent.stdout_log)} "
+                    f"{shlex.quote(agent.stderr_log)} 2>/dev/null"
+                )
+                if USAGE_MARKER in (result.stdout or ""):
+                    del pending[agent_id]
+            if not pending:
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                # Left to the accounting layer to report as unpriced rather than
+                # raised: the task itself succeeded, and failing the trial over
+                # a missing cost record would throw away a real result.
+                return
             await asyncio.sleep(self.poll_seconds)
 
     async def _raise_for_dead_agents(

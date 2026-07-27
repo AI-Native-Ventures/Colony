@@ -64,6 +64,7 @@ trial_budget:
   # solo agent — every handoff is a round trip — but giving it a larger budget
   # would confound the comparison, and this value does not bind anyway: Harbor
   # enforces each task's own `[agent] timeout_sec`, which tops out at 12000s
-  # across Terminal-Bench 2.1. Both conditions therefore run against the task's
-  # own clock, which is the only budget the comparison can honestly share.
-  timeout_seconds: 12000
+  # across Terminal-Bench 2.1, scaled by the study's 3x timeout multiplier.
+  # Both conditions therefore run against the task's own clock, which is the
+  # only budget the comparison can honestly share.
+  timeout_seconds: 36000

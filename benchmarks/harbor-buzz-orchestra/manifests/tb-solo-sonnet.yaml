@@ -34,4 +34,12 @@ prices:
     output_per_million_usd: 15
     cache_read_rate: 0.0
 trial_budget:
-  timeout_seconds: 900
+  # 36000 = the dataset's longest task (12000s) at the 3x timeout multiplier the
+  # study runs with (DEFAULT_TIMEOUT_MULTIPLIER in scripts/benchmark.py). The two
+  # are one setting in two files: benchmark.py refuses to start if this is the
+  # smaller of the pair, because the harness would then cut a task short of the
+  # deadline Harbor granted it and record a timeout the agent never hit. A flat
+  # 900s did exactly that before the multiplier existed — 39 of the 89 tasks
+  # allow more than 900s, and one live trial died at 905s against a task budget
+  # of 1800s.
+  timeout_seconds: 36000
