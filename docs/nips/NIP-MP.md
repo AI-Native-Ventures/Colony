@@ -119,7 +119,7 @@ A project MAY reference a coordinate that resolves to nothing: a repository not 
 
 The project signer's authority begins and ends at the container.
 
-- **Over the container**: total. Only the signer can replace or delete their `(pubkey, 30621, d)` coordinate.
+- **Over the container**: total. Only the signer can replace their `(pubkey, 30621, d)` coordinate. Deletion additionally admits the signer's registered NIP-OA owner — see [Deletion](#deletion).
 - **Over member repositories**: none. No edit, no delete, no push, no administration, no ability to change a member repository's own metadata or protections. Adding Bob's repository to Alice's project changes nothing about Bob's repository or who may push to it. It is Alice's signed assertion that the two belong together, and it is attributable to her key.
 
 Clients MUST preserve each member repository's own owner provenance in the UI. A repository rendered inside a project must not appear to be owned or governed by the project signer.
@@ -146,6 +146,12 @@ A repository may be a member of any number of projects. It renders inside each (
 
 Deleting a project (NIP-09 `kind:5` naming the project coordinate) deletes the `kind:30621` only. Member repositories are untouched — their `kind:30617` events, refs, channels, and protections all survive, and each falls back to an implicit card unless another listing-eligible project claims it.
 
+**Who may delete.** The project signer always may. On the Buzz relay, so may the signer's registered NIP-OA owner: `validate_standard_deletion_event` resolves the deletion's effective author and accepts it when that actor is the target pubkey's registered owner (`crates/buzz-relay/src/handlers/side_effects.rs`). This is a **Buzz relay extension to NIP-09**, applied uniformly to every kind rather than specially to projects — it is what lets a human clean up events published by an agent they own. Vanilla NIP-09 relays accept only the signer, so a project deleted through the owner path on Buzz will still be live on a relay that lacks the extension.
+
+Replacement admits no such widening: it is signer-only on every relay, because NIP-33 keys the coordinate on the pubkey itself rather than on a permission check.
+
+A deletion whose `created_at` precedes the live head does not remove it — see [Relay Processing Algorithm](#relay-processing-algorithm).
+
 There is no cascade, in either direction. Deleting a member repository does not modify the project; the project keeps a coordinate that no longer resolves, and clients render it as unavailable.
 
 ## Relay Processing Algorithm
@@ -170,7 +176,12 @@ Rules 3 through 5 are evaluated in that order, so an oversized tag list is refus
 
 **Scope.** Writes require the `repos:write` scope, matching `kind:30617` and `kind:30618`. A project is repository metadata; a client authorized to announce repositories is authorized to group them.
 
-**Replacement and deletion** follow NIP-33 and NIP-09 with no special cases: newest `created_at` wins per `(pubkey, 30621, d)`, and a `kind:5` from the same pubkey naming the coordinate deletes it.
+**Replacement** follows NIP-33 with no special cases: newest `created_at` wins per `(pubkey, 30621, d)`, and one pubkey can never overwrite another's coordinate.
+
+**Deletion** follows NIP-09 with two Buzz-wide behaviors that are not project-specific:
+
+- A `kind:5` naming the coordinate deletes it when signed by the project signer **or** by that signer's registered NIP-OA owner ([Deletion](#deletion)).
+- The deletion applies only to versions whose `created_at` is at or before the deletion's own, per NIP-09. A delayed or replayed tombstone signed before the current head MUST NOT remove it; the relay compares timestamps at the coordinate (`soft_delete_by_coordinate`, `crates/buzz-db/src/event.rs`).
 
 ## Client Behavior
 
@@ -257,7 +268,7 @@ Each case carries an **unsigned** template — `kind`, `content`, `tags`. Consum
 
 - **NIP-34**: Supplies the member repositories. Members are `kind:30617` announcements referenced by coordinate; a NIP-34 client that does not know `kind:30621` still discovers and renders each repository normally.
 - **NIP-33**: Supplies addressing, replacement, and the owner-only editing model. Owner-only editing is not enforcement code in Buzz — it is what NIP-33 replacement already means.
-- **NIP-09**: Supplies container deletion, which deletes the container only.
+- **NIP-09**: Supplies container deletion, which deletes the container only. Buzz extends it in two ways that are not project-specific: an agent's registered NIP-OA owner may also delete, and a tombstone applies only at or before its own `created_at` ([Deletion](#deletion)).
 - **NIP-29**: Supplies the channel a project's `buzz-channel` names. The reference is metadata; project state is never channel-scoped.
 - **NIP-51**: The closest existing precedent — a signed, addressable list referencing content the author need not own. Not reused because a project is a shared named forge container with its own channel binding and visibility, not a user's private-or-public bookmark set.
-- **NIP-OA**: Unaffected. Agents inherit repository push access from their owner through the repository's own protections; a project is never consulted.
+- **NIP-OA**: Consulted for container deletion only — an agent's registered owner may delete the agent's project ([Deletion](#deletion)). Push access is unaffected: agents inherit repository push access from their owner through the repository's own protections, and a project is never consulted.
