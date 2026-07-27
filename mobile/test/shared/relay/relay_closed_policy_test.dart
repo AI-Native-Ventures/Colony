@@ -35,6 +35,8 @@ void main() {
     expect(parseRateLimitRetrySeconds('RETRY IN 2S'), 2);
     expect(parseRateLimitRetrySeconds('retry in 0s'), 0);
     expect(parseRateLimitRetrySeconds('retry in 999999s'), 999999);
+    final oversizedHint = List.filled(1000, '9').join();
+    expect(parseRateLimitRetrySeconds('retry in ${oversizedHint}s'), isNull);
     expect(
       parseRateLimitRetrySeconds('rate-limited: too many concurrent requests'),
       isNull,

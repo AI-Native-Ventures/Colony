@@ -233,7 +233,6 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     void Function(NostrEvent) onEvent, {
     void Function(String message)? onClosed,
   }) async {
-    if (_rateLimitGate.isActive) await _rateLimitGate.wait();
     if (_disposed) throw StateError('Relay session is disposed');
     final subId = _nextSubId('l');
     final readyCompleter = Completer<void>();
@@ -623,10 +622,9 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     if (liveSub.closedRetryTimer != null) return;
 
     final attempt = liveSub.closedRetryAttempt;
-    final backoffMs = min(
-      _baseReconnectDelayMs * pow(2, attempt).toInt(),
-      _maxReconnectDelayMs,
-    );
+    final backoffMs = attempt >= 5
+        ? _maxReconnectDelayMs
+        : _baseReconnectDelayMs * (1 << attempt);
     var delayMs = backoffMs;
     if (closedClass == RelayClosedClass.rateLimited) {
       final retrySeconds = parseRateLimitRetrySeconds(message);

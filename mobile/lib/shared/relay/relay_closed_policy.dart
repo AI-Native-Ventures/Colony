@@ -35,5 +35,5 @@ final _rateLimitRetryPattern = RegExp(r'retry in (\d+)s', caseSensitive: false);
 /// Parses the relay's canonical `retry in Ns` hint, when present.
 int? parseRateLimitRetrySeconds(String message) {
   final match = _rateLimitRetryPattern.firstMatch(message);
-  return match == null ? null : int.parse(match.group(1)!);
+  return match == null ? null : int.tryParse(match.group(1)!);
 }

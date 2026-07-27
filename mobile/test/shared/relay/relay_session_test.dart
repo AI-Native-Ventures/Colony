@@ -376,6 +376,36 @@ void main() {
     unsubscribe();
   });
 
+  test('CLOSED retry backoff saturates before a high-attempt shift', () async {
+    final timers = <_ManualTimer>[];
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(
+      retryTimerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+    session.debugAttachSocketForTest(socket);
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+
+    for (var attempt = 0; attempt < 100; attempt++) {
+      session.debugHandleMessage(['CLOSED', 'l-1', 'error: transient']);
+      expect(
+        timers.last.duration,
+        attempt >= 5
+            ? const Duration(seconds: 30)
+            : Duration(seconds: 1 << attempt),
+      );
+      timers.last.fire();
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    unsubscribe();
+  });
+
   test('CLOSED retries reset after a delivered event', () async {
     final timers = <_ManualTimer>[];
     final socket = _RecordingRelaySocket();
@@ -548,6 +578,30 @@ void main() {
     );
     expect(gateTimers.single.duration, const Duration(seconds: 4));
     unsubscribe();
+  });
+
+  test('active rate-limit gate does not delay a new live subscribe', () async {
+    final gateTimers = <_ManualTimer>[];
+    final gate = RelayRateLimitGate(
+      timerFactory: (duration, callback) {
+        final timer = _ManualTimer(duration, callback);
+        gateTimers.add(timer);
+        return timer;
+      },
+    );
+    final socket = _RecordingRelaySocket();
+    final session = RelaySessionNotifier(rateLimitGate: gate);
+    session.debugAttachSocketForTest(socket);
+    gate.activate(4);
+
+    final subscribe = session.subscribe(_channelFilter, (_) {});
+
+    expect(_reqs(socket), hasLength(1));
+    expect(gateTimers.single.duration, const Duration(seconds: 4));
+    session.debugHandleMessage(['EOSE', 'l-1']);
+    final unsubscribe = await subscribe;
+    unsubscribe();
+    session.debugDispose();
   });
 
   test('rate-limited history CLOSED gates the next REQ', () async {
