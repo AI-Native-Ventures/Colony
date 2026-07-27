@@ -25,7 +25,6 @@ import {
   buildVideoReviewContextForMessage,
 } from "@/features/messages/lib/videoReviewContext";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
-import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
@@ -38,8 +37,8 @@ import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout"
 import { useThreadViewMode } from "@/features/channels/lib/threadViewModePreference";
 import { useThreadViewModeSwitch } from "@/features/channels/ui/useThreadViewModeSwitch";
 import { useFocusDrawerPresence } from "@/features/channels/ui/useFocusDrawerPresence";
-import { useChannelWorkingAgentPubkeys } from "@/features/agents/agentWorkingSignal";
 import { BotActivityComposerAction } from "@/features/channels/ui/BotActivityBar";
+import { ChannelComposerActivityRow } from "@/features/channels/ui/ChannelComposerActivityRow";
 import {
   containsWelcomePersonaMention,
   WelcomeComposerBanner,
@@ -399,15 +398,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   );
   const canDropInMainColumn =
     hasMainComposerOverlay && !isComposerDisabled && !isSinglePanelView;
-  const hasTypingActivity = typingPubkeys.length > 0;
-  // Unified working set for the composer bar: observer-derived turns primary,
-  // bot typing fallback (both folded together by agentWorkingSignal). This is
-  // what makes the bar show for an agent whose observer stream is live but
-  // whose typing signal never arrives — and vice versa.
-  const composerWorkingBotPubkeys = useChannelWorkingAgentPubkeys(
-    activeChannel?.id ?? null,
-  );
-  const hasComposerBotActivity = composerWorkingBotPubkeys.length > 0;
   const threadComposerBotTypingPubkeys = React.useMemo(() => {
     if (!openThreadHeadId) {
       return [];
@@ -787,35 +777,15 @@ export const ChannelPane = React.memo(function ChannelPane({
                   }
                   showTopBorder={false}
                 />
-                <div
-                  className="min-h-8 overflow-visible bg-background px-5 pb-1.5 pt-0"
-                  data-testid="channel-composer-activity-row"
-                >
-                  <div className="flex h-full w-full items-center gap-2 overflow-visible">
-                    {hasComposerBotActivity ? (
-                      <div className="flex min-w-0 flex-1 overflow-visible">
-                        <BotActivityComposerAction
-                          agents={activityAgents}
-                          channelId={activeChannel?.id ?? null}
-                          onOpenAgentSession={onOpenAgentSession}
-                          openAgentSessionPubkey={openAgentSessionPubkey}
-                          profiles={profiles}
-                          workingBotPubkeys={composerWorkingBotPubkeys}
-                          variant="inline"
-                        />
-                      </div>
-                    ) : null}
-                    {hasTypingActivity ? (
-                      <TypingIndicatorRow
-                        channel={activeChannel}
-                        className="min-w-0 flex-1 py-0 pl-[calc(0.75rem+1px)] pr-0 sm:pl-[calc(1rem+1px)]"
-                        currentPubkey={currentPubkey}
-                        profiles={profiles}
-                        typingPubkeys={typingPubkeys}
-                      />
-                    ) : null}
-                  </div>
-                </div>
+                <ChannelComposerActivityRow
+                  agents={activityAgents}
+                  channel={activeChannel}
+                  currentPubkey={currentPubkey}
+                  onOpenAgentSession={onOpenAgentSession}
+                  openAgentSessionPubkey={openAgentSessionPubkey}
+                  profiles={profiles}
+                  typingPubkeys={typingPubkeys}
+                />
               </div>
             </div>
           )}
