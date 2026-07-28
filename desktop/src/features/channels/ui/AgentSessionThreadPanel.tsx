@@ -247,7 +247,7 @@ export function AgentSessionThreadPanel({
     preferResolvedSelfLabel: true,
   });
   const viewLabel = showRawFeed ? "Raw ACP activity" : "Activity";
-  const headerMetadata = `${viewLabel} · ${scopeLabel} · ${lastUpdatedLabel}`;
+  const headerScopeLabel = `${viewLabel} · ${scopeLabel}`;
   const animateActivity = useTranscriptAnimationEnabled();
   const showTimestamps = useTranscriptTimestampsEnabled();
   async function handleInterruptTurn() {
@@ -442,13 +442,24 @@ export function AgentSessionThreadPanel({
           >
             {agentLabel}
           </h2>
-          <p
-            className="min-w-0 truncate text-xs text-muted-foreground"
-            data-testid="agent-session-scope-label"
-            title={lastUpdatedTitle}
-          >
-            {headerMetadata}
-          </p>
+          <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            <p
+              className="min-w-0 flex-1 truncate"
+              data-testid="agent-session-scope-label"
+            >
+              {headerScopeLabel}
+            </p>
+            <span aria-hidden="true" className="shrink-0">
+              ·
+            </span>
+            <span
+              className="shrink-0"
+              data-testid="agent-session-recency-label"
+              title={lastUpdatedTitle}
+            >
+              {lastUpdatedLabel}
+            </span>
+          </div>
         </div>
       </AuxiliaryPanelHeaderGroup>
       {agentHeaderActions}

@@ -63,15 +63,31 @@ test.describe("activity panel scope label", () => {
       "Observer Agent",
     );
     await expect(page.getByTestId("agent-session-agent-avatar")).toBeVisible();
-    await expect(page.getByTestId("agent-session-scope-label")).toContainText(
-      "Activity · #agents · No updates yet",
-    );
+    const scope = page.getByTestId("agent-session-scope-label");
+    await expect(scope).toHaveText("Activity · #agents");
+    const recency = page.getByTestId("agent-session-recency-label");
+    await expect(recency).toHaveText("No updates yet");
+    await expect(recency).toBeVisible();
+
+    // Simulate long-scope pressure deterministically: scope owns truncation
+    // while the independently shrinking recency stays visible.
+    await scope.evaluate((element) => {
+      element.style.width = "5rem";
+      element.style.flex = "none";
+    });
+    expect(
+      await scope.evaluate((element) => element.scrollWidth),
+    ).toBeGreaterThan(await scope.evaluate((element) => element.clientWidth));
+    await expect(recency).toBeVisible();
 
     await page.getByTestId("agent-session-settings-menu-trigger").click();
     await page.getByTestId("agent-session-toggle-raw-feed").click();
-    await expect(page.getByTestId("agent-session-scope-label")).toContainText(
-      "Raw ACP activity · #agents · No updates yet",
-    );
+    await expect(scope).toHaveText("Raw ACP activity · #agents");
+    expect(
+      await scope.evaluate((element) => element.scrollWidth),
+    ).toBeGreaterThan(await scope.evaluate((element) => element.clientWidth));
+    await expect(recency).toHaveText("No updates yet");
+    await expect(recency).toBeVisible();
     await page.keyboard.press("Escape");
 
     await waitForAnimations(page);
@@ -119,9 +135,27 @@ test.describe("activity panel scope label", () => {
     ).toBeGreaterThan(
       await agentName.evaluate((element) => element.clientWidth),
     );
-    await expect(page.getByTestId("agent-session-scope-label")).toContainText(
-      "Activity · All channels · No updates yet",
+    const scope = page.getByTestId("agent-session-scope-label");
+    await expect(scope).toHaveText("Activity · All channels");
+    const recency = page.getByTestId("agent-session-recency-label");
+    await expect(recency).toHaveText("No updates yet");
+    await expect(recency).toBeVisible();
+
+    await page.setViewportSize({ width: 720, height: 700 });
+    await expect(scope).toBeVisible();
+    await expect(recency).toBeVisible();
+    const recencyWidth = await recency.evaluate(
+      (element) => element.clientWidth,
     );
+
+    await page.getByTestId("agent-session-settings-menu-trigger").click();
+    await page.getByTestId("agent-session-toggle-raw-feed").click();
+    await expect(scope).toHaveText("Raw ACP activity · All channels");
+    await expect(recency).toBeVisible();
+    expect(await recency.evaluate((element) => element.clientWidth)).toBe(
+      recencyWidth,
+    );
+    await page.keyboard.press("Escape");
 
     await waitForAnimations(page);
     await panel.screenshot({ path: `${SHOTS}/02-all-channels.png` });
