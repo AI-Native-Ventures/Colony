@@ -8,8 +8,6 @@ from pathlib import Path
 import pytest
 from harbor.environments.base import ExecResult
 
-from harbor_buzz_orchestra.manifest import ExperimentManifest
-from harbor_buzz_orchestra.provisioning import AgentCredential, TrialHandle
 from harbor_buzz_orchestra.container_runtime import (
     DEFAULT_MAX_AGENT_ROUNDS,
     DEFAULT_RUST_LOG,
@@ -22,6 +20,8 @@ from harbor_buzz_orchestra.container_runtime import (
     RuntimeLaunchError,
     _Agent,
 )
+from harbor_buzz_orchestra.manifest import ExperimentManifest
+from harbor_buzz_orchestra.provisioning import AgentCredential, TrialHandle
 
 
 def write_manifest(
@@ -41,10 +41,20 @@ def write_manifest(
         {
             "condition": "test",
             "roster": [
-                {"id": "orch", "kind": "orchestrator", "role": "lead",
-                 "endpoint": "orch-model", **roster_entry},
-                {"id": "worker", "kind": "worker", "role": "implementer",
-                 "endpoint": "worker-model", **roster_entry},
+                {
+                    "id": "orch",
+                    "kind": "orchestrator",
+                    "role": "lead",
+                    "endpoint": "orch-model",
+                    **roster_entry,
+                },
+                {
+                    "id": "worker",
+                    "kind": "worker",
+                    "role": "implementer",
+                    "endpoint": "worker-model",
+                    **roster_entry,
+                },
             ],
             "prices": {
                 name: {
@@ -171,10 +181,7 @@ def test_user_relay_url_prefers_host_view(tmp_path):
         == "http://localhost:3600"
     )
     # pre-v1.2 handles fall back to deriving http from the agents' ws view.
-    assert (
-        rt._user_relay_url(trial_handle(()))
-        == "http://host.docker.internal:3600"
-    )
+    assert rt._user_relay_url(trial_handle(())) == "http://host.docker.internal:3600"
     with pytest.raises(RuntimeLaunchError, match="ws://"):
         rt._cli_relay_url("http://relay")
 
@@ -340,16 +347,21 @@ async def test_forwarder_bridges_the_canonical_relay_address(tmp_path):
         forwarder_binary=str(forwarder),
     )
     trial = TrialHandle(
-        run_id="run", trial_id="trial", manifest_hash="hash",
-        relay_ws_url="ws://localhost:3600", channel_id="channel",
-        credentials=(), user=user_credential(),
+        run_id="run",
+        trial_id="trial",
+        manifest_hash="hash",
+        relay_ws_url="ws://localhost:3600",
+        channel_id="channel",
+        credentials=(),
+        user=user_credential(),
     )
     environment = Environment(
         responses={
             FORWARDER: ExecResult(stdout="99\n", stderr="", return_code=0),
             "cat ": ExecResult(
                 stdout="forwarding 127.0.0.1:3600 -> host.docker.internal:3600",
-                stderr="", return_code=0,
+                stderr="",
+                return_code=0,
             ),
         }
     )
@@ -769,9 +781,7 @@ async def test_wait_for_agents_ready_requires_every_channel_subscription(tmp_pat
         async def exec(self, command, env=None, **kwargs):
             if command.startswith("cat "):
                 agent_id = re.search(r"([\w-]+)\.stdout\.log", command).group(1)
-                return ExecResult(
-                    stdout=logs[agent_id], stderr="", return_code=0
-                )
+                return ExecResult(stdout=logs[agent_id], stderr="", return_code=0)
             return ExecResult(stdout="", stderr="", return_code=0)
 
     from harbor_buzz_orchestra.container_runtime import _Agent
@@ -800,9 +810,7 @@ async def test_wait_for_agents_ready_requires_every_channel_subscription(tmp_pat
 async def test_dead_agent_processes_fail_the_trial(tmp_path):
     from harbor_buzz_orchestra.container_runtime import _Agent
 
-    agents = [
-        _Agent(credential("worker-1", "worker", "worker-model"), 7, "o", "e")
-    ]
+    agents = [_Agent(credential("worker-1", "worker", "worker-model"), 7, "o", "e")]
     environment = Environment(
         responses={
             "kill -0": ExecResult(stdout="DEAD:worker-1\n", stderr="", return_code=0)
