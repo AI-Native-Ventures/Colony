@@ -80,6 +80,11 @@ USAGE_MARKER = "goose usage update"
 _SESSION_RE = re.compile(r"\bsession_id=(\S+)")
 _INPUT_RE = re.compile(r"\binput=(\d+)\b")
 _OUTPUT_RE = re.compile(r"\boutput=(\d+)\b")
+# The cache-served subset of `input`, added to the usage line by buzz-acp. Absent
+# in logs written by an agent build that predates it, which is why a missing
+# field must read as "unknown" (fall back to the modelled rate) and never as 0 —
+# a silent 0 here would price a fully cached run at the full rate.
+_CACHED_RE = re.compile(r"\bcached=(\d+)\b")
 
 # buzz-agent logs one line per completed auto-compaction, at INFO on its own
 # stderr (which buzz-acp inherits, so it lands in the captured log):
@@ -143,6 +148,11 @@ class SessionUsage:
     session_id: str
     input_tokens: int
     output_tokens: int
+    # The cache-served subset of ``input_tokens``, or ``None`` when the log line
+    # carried no ``cached=`` field at all. ``None`` and ``0`` are different
+    # answers: the first means "this build could not tell us", the second means
+    # "the provider served nothing from cache".
+    cached_input_tokens: int | None = None
 
 
 def parse_usage_log(text: str) -> tuple[SessionUsage, ...]:
@@ -153,7 +163,7 @@ def parse_usage_log(text: str) -> tuple[SessionUsage, ...]:
     max rather than the last line also survives interleaved or truncated
     output, which a container log tail can easily produce.
     """
-    high_water: dict[str, tuple[int, int]] = {}
+    high_water: dict[str, tuple[int, int, int | None]] = {}
     for line in _ANSI_RE.sub("", text).splitlines():
         if USAGE_MARKER not in line:
             continue
@@ -163,14 +173,22 @@ def parse_usage_log(text: str) -> tuple[SessionUsage, ...]:
             continue
         session_match = _SESSION_RE.search(line)
         session_id = session_match.group(1) if session_match else "unknown"
-        seen_in, seen_out = high_water.get(session_id, (0, 0))
+        seen_in, seen_out, seen_cached = high_water.get(session_id, (0, 0, None))
+        cached_match = _CACHED_RE.search(line)
+        if cached_match is not None:
+            cached = int(cached_match.group(1))
+            seen_cached = cached if seen_cached is None else max(seen_cached, cached)
         high_water[session_id] = (
             max(seen_in, int(input_match.group(1))),
             max(seen_out, int(output_match.group(1))),
+            seen_cached,
         )
     return tuple(
         SessionUsage(
-            session_id=session_id, input_tokens=tokens[0], output_tokens=tokens[1]
+            session_id=session_id,
+            input_tokens=tokens[0],
+            output_tokens=tokens[1],
+            cached_input_tokens=tokens[2],
         )
         for session_id, tokens in sorted(high_water.items())
     )
@@ -241,6 +259,17 @@ class TrialAccounting:
         return self.estimated_cache_read_tokens > 0
 
     @property
+    def cache_read_tokens_are_measured(self) -> bool:
+        """True when every agent's cache split came from the provider.
+
+        A trial that mixes measured and modelled agents reads as *not* measured:
+        the weaker claim is the only one that holds for the trial as a whole.
+        """
+        return bool(self.receipts) and not any(
+            receipt.cache_read_tokens_are_estimated for receipt in self.receipts
+        )
+
+    @property
     def cost_usd_including_handoff_bound(self) -> float:
         """Upper bound on trial cost with unmetered auto-compaction included."""
         return self.cost_usd + self.handoff_cost_usd_upper_bound
@@ -258,6 +287,12 @@ class TrialAccounting:
             "accounting_cost_usd_no_cache_discount": self.cost_usd_no_cache_discount,
             "accounting_estimated_cache_read_tokens": self.estimated_cache_read_tokens,
             "accounting_assumes_cache_discount": self.assumes_cache_discount,
+            # Whether the line above is a measurement or a model. Without this a
+            # reader cannot tell a provider-reported cache split from one
+            # inferred off the manifest's `cache_read_rate`.
+            "accounting_cache_read_tokens_are_measured": (
+                self.cache_read_tokens_are_measured
+            ),
             # Auto-compaction: billed by the provider, never reported by the
             # agent. Travels as a separate bound so no reader mistakes the
             # metered cost for the whole cost on a long trial.
@@ -302,22 +337,45 @@ class PricedUsage:
     # Same usage priced with no cache discount at all. Reporting both makes the
     # assumption's leverage visible instead of burying it in one number.
     cost_usd_no_cache_discount: float
+    # The cache-read count actually used for pricing: measured when the agent
+    # reported one, modelled from ``cache_read_rate`` otherwise. Which of the two
+    # it is, is recorded in ``cache_read_tokens_are_estimated``.
     estimated_cache_read_tokens: int
     cache_read_rate: float
+    cache_read_tokens_are_estimated: bool = True
 
 
-def price_usage(price: Price, input_tokens: int, output_tokens: int) -> PricedUsage:
-    """Cost in USD, splitting input by the endpoint's assumed cache-read rate.
+def price_usage(
+    price: Price,
+    input_tokens: int,
+    output_tokens: int,
+    measured_cache_read_tokens: int | None = None,
+) -> PricedUsage:
+    """Cost in USD, pricing the cache-served slice of input at the cached rate.
 
-    The upstream counts are an inclusive input total with no cache split, so the
-    discount is *modelled*: ``cache_read_rate`` of the input is billed at
-    ``cached_input_per_million_usd`` and the remainder at the full rate. At the
-    default rate of 0.0 this is exactly the no-discount upper bound.
+    ``measured_cache_read_tokens`` is the provider-reported cache-read count. It
+    is a **subset** of ``input_tokens`` (every provider we speak to reports an
+    inclusive input total), so it is subtracted to find what was billed at the
+    full rate — never added.
+
+    When it is ``None`` the split is *modelled* instead: ``cache_read_rate`` of
+    the input is billed at ``cached_input_per_million_usd`` and the remainder at
+    the full rate. At the default rate of 0.0 that is exactly the no-discount
+    upper bound, which is what logs written before the agent reported cache
+    counts will produce.
 
     Reasoning tokens need no special handling — providers bill them at the
     output rate, so they are already priced correctly inside ``output_tokens``.
     """
-    cache_read = round(input_tokens * price.cache_read_rate)
+    if measured_cache_read_tokens is None:
+        cache_read = round(input_tokens * price.cache_read_rate)
+        estimated = True
+    else:
+        # Clamp: a cached count above the inclusive total would mean one of the
+        # two is wrong, and charging a negative number of full-rate tokens would
+        # turn that into a credit.
+        cache_read = max(0, min(measured_cache_read_tokens, input_tokens))
+        estimated = False
     uncached = input_tokens - cache_read
     output_cost = output_tokens * price.output_per_million_usd
     return PricedUsage(
@@ -333,6 +391,7 @@ def price_usage(price: Price, input_tokens: int, output_tokens: int) -> PricedUs
         / 1_000_000,
         estimated_cache_read_tokens=cache_read,
         cache_read_rate=price.cache_read_rate,
+        cache_read_tokens_are_estimated=estimated,
     )
 
 
@@ -376,6 +435,17 @@ def collect(
         handoff = parse_handoffs(log_text)
         input_tokens = sum(session.input_tokens for session in sessions)
         output_tokens = sum(session.output_tokens for session in sessions)
+        # Only treat the cache split as measured when every session reported one.
+        # Summing a mix would silently under-count the cached slice for the
+        # sessions that stayed quiet, biasing cost upward with no way to see it.
+        reported = [
+            session.cached_input_tokens
+            for session in sessions
+            if session.cached_input_tokens is not None
+        ]
+        measured_cache_read = (
+            sum(reported) if sessions and len(reported) == len(sessions) else None
+        )
         if not sessions:
             silent.append(agent_id)
         price = manifest.prices.get(agent_class.endpoint)
@@ -387,7 +457,9 @@ def collect(
             priced = PricedUsage(0.0, 0.0, 0, 0.0)
             handoff_cost = 0.0
         else:
-            priced = price_usage(price, input_tokens, output_tokens)
+            priced = price_usage(
+                price, input_tokens, output_tokens, measured_cache_read
+            )
             # Priced with no cache discount: a summarisation prompt is a
             # freshly assembled digest, so assuming it hits a warm cache would
             # be the wrong direction for something already labelled a bound.
@@ -417,6 +489,7 @@ def collect(
                 cost_usd_no_cache_discount=priced.cost_usd_no_cache_discount,
                 estimated_cache_read_tokens=priced.estimated_cache_read_tokens,
                 cache_read_rate=priced.cache_read_rate,
+                cache_read_tokens_are_estimated=priced.cache_read_tokens_are_estimated,
                 handoffs=handoff.count,
                 handoff_truncations=handoff.truncations,
                 handoff_input_tokens_upper_bound=handoff.input_tokens_upper_bound,

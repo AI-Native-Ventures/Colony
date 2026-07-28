@@ -1079,11 +1079,18 @@ fn parse_responses(v: Value) -> Result<LlmResponse, AgentError> {
     };
     let input_tokens = sum_usage(&v, &["input_tokens"]);
     let output_tokens = sum_usage(&v, &["output_tokens"]);
+    // The Responses API nests the cache split under `input_tokens_details`.
+    let cached_input_tokens = usage_first(
+        &v,
+        &["cache_read_input_tokens"],
+        &[("input_tokens_details", "cached_tokens")],
+    );
     Ok(LlmResponse {
         text,
         tool_calls,
         stop,
         input_tokens,
+        cached_input_tokens,
         output_tokens,
         reasoning,
     })
@@ -1147,6 +1154,51 @@ fn openai_chat_input_tokens(v: &Value) -> Option<u64> {
     )
 }
 
+/// First present value among `usage.<field>` and `usage.<nested>.<leaf>` pairs.
+///
+/// Cache counts are the one usage figure providers do not agree on the shape of.
+/// Anthropic puts `cache_read_input_tokens` flat on `usage`; OpenAI nests the
+/// same quantity one level down, under `prompt_tokens_details` on
+/// `/chat/completions` and `input_tokens_details` on `/responses`. [`sum_usage`]
+/// only reads flat keys, which is why the OpenAI split was invisible for so
+/// long: `prompt_tokens` is already inclusive, so the *total* was right and
+/// nothing looked broken while the discount silently went unclaimed.
+///
+/// Returns the first candidate that resolves, not a sum — these are alternative
+/// spellings of one number, so adding them would double-count on Databricks,
+/// which reports both shapes.
+fn usage_first(v: &Value, flat: &[&str], nested: &[(&str, &str)]) -> Option<u64> {
+    let usage = v.get("usage")?;
+    for f in flat {
+        if let Some(n) = usage.get(*f).and_then(Value::as_u64) {
+            return Some(n);
+        }
+    }
+    for (outer, leaf) in nested {
+        if let Some(n) = usage
+            .get(*outer)
+            .and_then(|o| o.get(*leaf))
+            .and_then(Value::as_u64)
+        {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Cache-read tokens for an OpenAI Chat Completions response.
+///
+/// `prompt_tokens_details.cached_tokens` is where vanilla OpenAI reports it.
+/// The flat Anthropic spelling is checked first for Databricks, which routes
+/// Anthropic models through an OpenAI-shaped envelope.
+fn openai_chat_cached_tokens(v: &Value) -> Option<u64> {
+    usage_first(
+        v,
+        &["cache_read_input_tokens"],
+        &[("prompt_tokens_details", "cached_tokens")],
+    )
+}
+
 fn str_field(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_owned()
 }
@@ -1184,11 +1236,15 @@ fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
     }
     let input_tokens = anthropic_input_tokens(&v);
     let output_tokens = sum_usage(&v, &["output_tokens"]);
+    // Anthropic reports the cache split flat on `usage`. Note this is already
+    // part of `input_tokens` above, which sums it in deliberately.
+    let cached_input_tokens = usage_first(&v, &["cache_read_input_tokens"], &[]);
     Ok(LlmResponse {
         text,
         tool_calls,
         stop,
         input_tokens,
+        cached_input_tokens,
         output_tokens,
         reasoning,
     })
@@ -1235,11 +1291,13 @@ fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
     }
     let input_tokens = openai_chat_input_tokens(&v);
     let output_tokens = sum_usage(&v, &["completion_tokens"]);
+    let cached_input_tokens = openai_chat_cached_tokens(&v);
     Ok(LlmResponse {
         text,
         tool_calls,
         stop,
         input_tokens,
+        cached_input_tokens,
         output_tokens,
         reasoning,
     })
@@ -3515,6 +3573,114 @@ mod tests {
             "choices": [{"finish_reason": "stop", "message": {"content": "hi"}}]
         });
         assert_eq!(parse_openai(v).unwrap().input_tokens, None);
+    }
+
+    #[test]
+    fn parse_openai_reads_nested_cached_tokens() {
+        // The shape vanilla OpenAI actually returns, captured from a live
+        // /chat/completions probe on gpt-5.6-luna: `prompt_tokens` is already
+        // inclusive and the cache split is nested one level down. Reading only
+        // flat keys left the discount unclaimed while the total looked correct,
+        // which is why this went unnoticed.
+        let v = serde_json::json!({
+            "choices": [{"finish_reason": "stop", "message": {"content": "OK"}}],
+            "usage": {
+                "prompt_tokens": 5229,
+                "completion_tokens": 4,
+                "total_tokens": 5233,
+                "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 5226,
+                                          "cache_write_tokens": 0}
+            }
+        });
+        let r = parse_openai(v).unwrap();
+        assert_eq!(r.input_tokens, Some(5229), "total must stay inclusive");
+        assert_eq!(r.cached_input_tokens, Some(5226));
+    }
+
+    #[test]
+    fn parse_openai_cache_write_round_reports_zero_cached() {
+        // First request of a cold prefix: the provider writes the cache and
+        // serves nothing from it. `Some(0)` not `None` — the split was reported,
+        // it was simply zero, and a consumer must be able to tell the two apart.
+        let v = serde_json::json!({
+            "choices": [{"finish_reason": "stop", "message": {"content": "OK"}}],
+            "usage": {
+                "prompt_tokens": 5229,
+                "completion_tokens": 4,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 5226}
+            }
+        });
+        assert_eq!(parse_openai(v).unwrap().cached_input_tokens, Some(0));
+    }
+
+    #[test]
+    fn parse_openai_no_cache_detail_is_none() {
+        let v = serde_json::json!({
+            "choices": [{"finish_reason": "stop", "message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 123, "completion_tokens": 4}
+        });
+        assert_eq!(parse_openai(v).unwrap().cached_input_tokens, None);
+    }
+
+    #[test]
+    fn parse_openai_prefers_flat_anthropic_spelling_over_nested() {
+        // Databricks reports both shapes for the same quantity. Take one, never
+        // the sum, or the cached slice double-counts and can exceed the input
+        // total it is supposed to be a subset of.
+        let v = serde_json::json!({
+            "choices": [{"finish_reason": "stop", "message": {"content": "hi"}}],
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 4,
+                "cache_read_input_tokens": 800,
+                "prompt_tokens_details": {"cached_tokens": 800}
+            }
+        });
+        let r = parse_openai(v).unwrap();
+        assert_eq!(r.cached_input_tokens, Some(800));
+        assert!(r.cached_input_tokens.unwrap() <= r.input_tokens.unwrap());
+    }
+
+    #[test]
+    fn parse_anthropic_reports_cache_read_as_cached() {
+        // Anthropic's `input_tokens` EXCLUDES cached, so the inclusive total is
+        // a sum -- but the cached slice must still be a subset of that total.
+        let v = serde_json::json!({
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 7,
+                "cache_read_input_tokens": 900,
+                "cache_creation_input_tokens": 50
+            }
+        });
+        let r = parse_anthropic(v).unwrap();
+        assert_eq!(r.input_tokens, Some(1050));
+        assert_eq!(r.cached_input_tokens, Some(900));
+        assert!(r.cached_input_tokens.unwrap() <= r.input_tokens.unwrap());
+    }
+
+    #[test]
+    fn parse_responses_reads_nested_cached_tokens() {
+        // The Responses API nests the same figure under a different key than
+        // /chat/completions does.
+        let v = serde_json::json!({
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi"}]
+            }],
+            "usage": {
+                "input_tokens": 4000,
+                "output_tokens": 9,
+                "input_tokens_details": {"cached_tokens": 3584}
+            }
+        });
+        let r = parse_responses(v).unwrap();
+        assert_eq!(r.input_tokens, Some(4000));
+        assert_eq!(r.cached_input_tokens, Some(3584));
     }
 
     #[test]

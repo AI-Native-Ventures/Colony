@@ -325,3 +325,151 @@ def test_a_trial_without_handoffs_reports_no_bound(tmp_path, solo_manifest):
     assert result.handoff_cost_usd_upper_bound == 0.0
     assert result.cost_usd_including_handoff_bound == result.cost_usd
     assert "floor" not in result.reconciliation_note
+
+
+# ── Measured cache reads ────────────────────────────────────────────────────
+# Before these, the cache split was always modelled off the manifest's
+# `cache_read_rate`, because buzz-agent read OpenAI's `prompt_tokens_details.
+# cached_tokens` nowhere and buzz-acp logged only `input=`/`output=`. The input
+# total was correct throughout, so cost was silently *overstated* — every cached
+# token billed at the full rate — with nothing in the output to reveal it.
+
+
+def usage_line_with_cache(
+    session: str, input_tokens: int, output_tokens: int, cached: int
+) -> str:
+    """A usage line from a buzz-acp build that reports the cache split."""
+    return (
+        "2026-07-26T01:02:03.456789Z DEBUG acp::usage: goose usage update "
+        f"session_id={session} input={input_tokens} output={output_tokens} "
+        f"cached={cached}"
+    )
+
+
+def test_parse_usage_log_reads_the_cached_field():
+    text = "\n".join(
+        [
+            usage_line_with_cache("s", 100, 10, 0),
+            usage_line_with_cache("s", 250, 40, 90),
+        ]
+    )
+    assert accounting.parse_usage_log(text) == (
+        accounting.SessionUsage("s", 250, 40, 90),
+    )
+
+
+def test_parse_usage_log_without_cached_field_reports_unknown_not_zero():
+    """An older agent build must not read as "nothing was cached".
+
+    `None` routes pricing back to the modelled rate; a `0` here would assert a
+    measurement the log never made and price a fully cached run at full price.
+    """
+    (only,) = accounting.parse_usage_log(usage_line("s", 100, 10))
+    assert only.cached_input_tokens is None
+
+
+def test_parse_usage_log_reads_cached_from_coloured_output():
+    text = (
+        "\x1b[2m2026-07-28T22:56:54.225244Z\x1b[0m \x1b[34mDEBUG\x1b[0m "
+        "\x1b[2macp::usage\x1b[0m\x1b[2m:\x1b[0m goose usage update "
+        "\x1b[3msession_id\x1b[0m\x1b[2m=\x1b[0mses_abc "
+        "\x1b[3minput\x1b[0m\x1b[2m=\x1b[0m20658 "
+        "\x1b[3moutput\x1b[0m\x1b[2m=\x1b[0m900 "
+        "\x1b[3mcached\x1b[0m\x1b[2m=\x1b[0m18000"
+    )
+    assert accounting.parse_usage_log(text) == (
+        accounting.SessionUsage("ses_abc", 20658, 900, 18000),
+    )
+
+
+def test_measured_cache_reads_override_the_modelled_rate(solo_manifest):
+    """A real count beats the manifest's guess, in either direction."""
+    price = solo_manifest.prices["databricks/opus"].model_copy(
+        update={"cache_read_rate": 0.1}
+    )
+    priced = accounting.price_usage(
+        price, 1_000_000, 0, measured_cache_read_tokens=750_000
+    )
+    # 250k at $5/Mtok + 750k at $0.50/Mtok -- the 0.1 rate is ignored.
+    assert priced.cost_usd == pytest.approx(1.25 + 0.375)
+    assert priced.estimated_cache_read_tokens == 750_000
+    assert priced.cache_read_tokens_are_estimated is False
+
+
+def test_a_measured_zero_prices_at_the_full_rate_but_is_not_an_estimate(solo_manifest):
+    price = solo_manifest.prices["databricks/opus"].model_copy(
+        update={"cache_read_rate": 0.9}
+    )
+    priced = accounting.price_usage(price, 1_000_000, 0, measured_cache_read_tokens=0)
+    assert priced.cost_usd == pytest.approx(priced.cost_usd_no_cache_discount)
+    assert priced.cache_read_tokens_are_estimated is False
+
+
+def test_measured_cache_reads_are_clamped_to_the_input_total(solo_manifest):
+    """Cached is a subset of input; a larger value would bill negative tokens."""
+    price = solo_manifest.prices["databricks/opus"]
+    priced = accounting.price_usage(price, 1_000, 0, measured_cache_read_tokens=99_999)
+    assert priced.estimated_cache_read_tokens == 1_000
+    assert priced.cost_usd == pytest.approx(
+        1_000 * price.cached_input_per_million_usd / 1_000_000
+    )
+
+
+def test_collect_uses_the_measured_split_and_says_so(tmp_path, solo_manifest):
+    write_log(
+        tmp_path,
+        "opus-orchestrator-1",
+        usage_line_with_cache("s", 1_000_000, 100_000, 800_000),
+    )
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    # 200k at $5 + 800k at $0.50 + 100k at $25
+    assert result.cost_usd == pytest.approx(1.0 + 0.4 + 2.5)
+    assert result.cost_usd_no_cache_discount == pytest.approx(5.0 + 2.5)
+    assert result.estimated_cache_read_tokens == 800_000
+    assert result.cache_read_tokens_are_measured is True
+    assert result.to_metadata()["accounting_cache_read_tokens_are_measured"] is True
+
+
+def test_collect_falls_back_to_the_model_when_a_session_is_silent_on_cache(
+    tmp_path, solo_manifest
+):
+    """One session reporting and one not is not a trial-wide measurement.
+
+    Summing only the sessions that spoke would under-count the cached slice and
+    overstate cost, with `are_measured: True` claiming otherwise.
+    """
+    write_log(
+        tmp_path,
+        "opus-orchestrator-1",
+        "\n".join(
+            [
+                usage_line_with_cache("s1", 1_000, 100, 900),
+                usage_line("s2", 1_000, 100),
+            ]
+        ),
+    )
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert result.cache_read_tokens_are_measured is False
+    assert result.to_metadata()["accounting_cache_read_tokens_are_measured"] is False
+    # cache_read_rate is 0.0 for this endpoint, so the fallback is the upper bound.
+    assert result.cost_usd == pytest.approx(result.cost_usd_no_cache_discount)
+
+
+def test_logs_without_the_cached_field_price_exactly_as_before(tmp_path, solo_manifest):
+    """Back-compat: every job already on disk must produce the same number."""
+    write_log(tmp_path, "opus-orchestrator-1", usage_line("s", 1_000_000, 100_000))
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    assert result.cost_usd == pytest.approx(5.0 + 2.5)
+    assert result.cache_read_tokens_are_measured is False
