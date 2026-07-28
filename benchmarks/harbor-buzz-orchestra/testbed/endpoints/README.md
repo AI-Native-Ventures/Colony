@@ -45,10 +45,18 @@ a working Databricks token.
 
 ## databricks-live.json
 
-The `sol` + `luna` bring-up pair served by the Databricks AI Gateway
-(`provider=databricks_v2`, `api_key_env=DATABRICKS_TOKEN`). `DATABRICKS_HOST`
-rides in each entry's `env` block and Harbor injects it into the agent
-container — it is not a secret and needs no host-side export.
+`gpt-5.6-sol`, `gpt-5.6-luna` and `claude-opus-5` served by the Databricks AI
+Gateway (`provider=databricks_v2`, `api_key_env=DATABRICKS_TOKEN`).
+`DATABRICKS_HOST` rides in each entry's `env` block and Harbor injects it into
+the agent container — it is not a secret and needs no host-side export.
+
+**Two gateway routes, selected per model by the provider, not by config.**
+`databricks_v2_route_for_model` in buzz-agent sends `gpt-5`-named models to the
+OpenAI `/ai-gateway/openai/v1/responses` path and `claude`-named models to
+`/ai-gateway/anthropic/v1/messages` (Opus 5 does not speak `/responses`). So
+`databricks-claude-opus-5` works through the same provider with no extra
+config — the endpoint name is all that picks the route. Verified `200` on the
+staging box with a well-formed anthropic `usage` block.
 
 `DATABRICKS_HOST` points at the **staging** workspace
 (`block-lakehouse-staging.cloud.databricks.com`), not production. On the
