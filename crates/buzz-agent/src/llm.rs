@@ -1138,20 +1138,26 @@ fn anthropic_input_tokens(v: &Value) -> Option<u64> {
     )
 }
 
-/// Input-token total for OpenAI Chat Completions and Databricks responses.
-/// OpenAI's `prompt_tokens` is already inclusive. Databricks uses the same
-/// `prompt_tokens` wire field but ALSO reports Anthropic-style cache fields
-/// alongside it, so we sum them; the cache fields are simply absent (and
-/// contribute 0) for vanilla OpenAI.
+/// Input-token total for OpenAI Chat Completions and Databricks MLflow-route
+/// responses. `prompt_tokens` is already the inclusive input total on both, so
+/// it is read alone and never summed with the cache fields.
+///
+/// Vanilla OpenAI nests the cache split under `prompt_tokens_details` and
+/// `prompt_tokens` includes it. The Databricks MLflow route reports the split
+/// with the flat Anthropic spelling (`cache_read_input_tokens`) *alongside* an
+/// already-inclusive `prompt_tokens` — so summing double-counts. Verified on
+/// `databricks-glm-5-2` (2026-07-28): `prompt_tokens 13320`,
+/// `cache_read_input_tokens 13312`, `completion_tokens 30`, `total_tokens
+/// 13350`; since `prompt_tokens + completion_tokens == total_tokens`, the 13312
+/// cached tokens are contained in the 13320, not additional to it. Summing gave
+/// 26632 — nearly double — inflating both the context-budget gate and cost.
+///
+/// This differs from Anthropic's native route (see [`anthropic_input_tokens`]),
+/// where `input_tokens` genuinely EXCLUDES the cache fields and must be summed.
+/// The two never collide here: the router sends `claude*` models to the
+/// Anthropic route, so `parse_openai` only ever sees inclusive `prompt_tokens`.
 fn openai_chat_input_tokens(v: &Value) -> Option<u64> {
-    sum_usage(
-        v,
-        &[
-            "prompt_tokens",
-            "cache_read_input_tokens",
-            "cache_creation_input_tokens",
-        ],
-    )
+    sum_usage(v, &["prompt_tokens"])
 }
 
 /// First present value among `usage.<field>` and `usage.<nested>.<leaf>` pairs.
@@ -3551,20 +3557,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_openai_databricks_sums_cache_fields() {
-        // Databricks uses the OpenAI chat wire format (prompt_tokens) but also
-        // reports Anthropic-style cache fields; the inclusive total sums them.
+    fn parse_openai_databricks_prompt_tokens_already_inclusive() {
+        // Databricks' MLflow route uses the OpenAI chat wire format
+        // (prompt_tokens) but ALSO reports the flat Anthropic-style
+        // cache_read_input_tokens. prompt_tokens is already inclusive of that
+        // slice, so the total is prompt_tokens alone — summing double-counts.
+        // Values are the live databricks-glm-5-2 response (2026-07-28), where
+        // prompt_tokens + completion_tokens == total_tokens proves inclusivity.
         let v = serde_json::json!({
             "choices": [{"finish_reason": "stop", "message": {"content": "hi"}}],
             "usage": {
-                "prompt_tokens": 200,
-                "completion_tokens": 4,
-                "total_tokens": 204,
-                "cache_read_input_tokens": 800,
-                "cache_creation_input_tokens": 0
+                "prompt_tokens": 13320,
+                "completion_tokens": 30,
+                "total_tokens": 13350,
+                "cache_read_input_tokens": 13312,
+                "prompt_tokens_details": {"cached_tokens": 13312}
             }
         });
-        assert_eq!(parse_openai(v).unwrap().input_tokens, Some(1000));
+        let r = parse_openai(v).unwrap();
+        assert_eq!(
+            r.input_tokens,
+            Some(13320),
+            "prompt_tokens is the inclusive total"
+        );
+        assert_eq!(r.cached_input_tokens, Some(13312));
+        assert!(
+            r.cached_input_tokens.unwrap() <= r.input_tokens.unwrap(),
+            "the cached slice is a subset of the input total"
+        );
     }
 
     #[test]
@@ -3625,18 +3645,19 @@ mod tests {
     #[test]
     fn parse_openai_prefers_flat_anthropic_spelling_over_nested() {
         // Databricks reports both shapes for the same quantity. Take one, never
-        // the sum, or the cached slice double-counts and can exceed the input
-        // total it is supposed to be a subset of.
+        // the sum, or the cached slice double-counts. cache_read (800) is a
+        // subset of the inclusive prompt_tokens (1000), as it must be.
         let v = serde_json::json!({
             "choices": [{"finish_reason": "stop", "message": {"content": "hi"}}],
             "usage": {
-                "prompt_tokens": 200,
+                "prompt_tokens": 1000,
                 "completion_tokens": 4,
                 "cache_read_input_tokens": 800,
                 "prompt_tokens_details": {"cached_tokens": 800}
             }
         });
         let r = parse_openai(v).unwrap();
+        assert_eq!(r.input_tokens, Some(1000));
         assert_eq!(r.cached_input_tokens, Some(800));
         assert!(r.cached_input_tokens.unwrap() <= r.input_tokens.unwrap());
     }

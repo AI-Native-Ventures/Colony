@@ -12,18 +12,24 @@ counts at the end of every turn. ``buzz-acp`` records it and logs it under the
 ``container_runtime.DEFAULT_RUST_LOG``) puts the counters in each agent's
 captured process log, which the runtime already downloads. We parse them there.
 
-**Cached input is not separable, so the discount is modelled.**
-``LlmResponse.input_tokens`` in ``buzz-agent`` is an inclusive sum
-(``input + cache_read + cache_creation``) and nothing downstream carries the
-split. Rather than pricing every input token at the full rate — which
-over-reports, and unevenly, since OpenAI-route endpoints cache automatically
-while Anthropic-route ones currently do not cache at all — each endpoint
-declares a ``cache_read_rate`` in its manifest ``Price``. That fraction of input
-is billed at the cached rate. Because the assumption lives in the manifest it is
-frozen into the condition hash, and every receipt carries both the estimate and
-``cost_usd_no_cache_discount``, so the assumption's leverage is always visible.
-Getting *measured* cache reads means threading the cache fields through
-``LlmResponse`` and the usage notification.
+**Cached input is now measured, and the discount is priced from it.**
+``buzz-agent`` threads the provider's reported cache-read count through
+``LlmResponse.cached_input_tokens`` (a subset of the inclusive ``input_tokens``,
+never an addition) into the ``acp::usage`` line as ``cached=``. When that field
+is present, ``price_usage`` bills exactly ``input - cached`` at the full rate and
+``cached`` at ``cached_input_per_million_usd``, and the receipt is flagged
+``cache_read_tokens_are_estimated=False``. The manifest ``cache_read_rate``
+survives only as a *fallback* for logs that predate the cache field: when no
+``cached=`` is reported, that fraction of input is modelled at the cached rate
+instead, and the receipt is flagged estimated. Either way ``cost_usd`` and
+``cost_usd_no_cache_discount`` both travel so the discount's leverage stays
+visible.
+
+One caveat, on the MLflow route only (``parse_openai``): the provider's
+``prompt_tokens`` is already inclusive of the cached slice, so ``input_tokens``
+and thus ``cost_usd`` are correct there as of the ``openai_chat_input_tokens``
+fix. The Responses and Anthropic routes — the Claude + GPT-5 slate — were always
+correct.
 
 **Reasoning tokens are not separable, and this does not affect cost.**
 Providers bill thinking at the output rate, so reasoning tokens inside
