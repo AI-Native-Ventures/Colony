@@ -1,5 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { decode } from "nostr-tools/nip19";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
@@ -7546,7 +7546,7 @@ type MockUpdatePersonaInput = {
 async function handleUpdatePersona(args: {
   input: MockUpdatePersonaInput;
 }): Promise<RawPersona> {
-  return { ...applyMockPersonaUpdate(args.input) };
+  return { ...(await applyMockPersonaUpdate(args.input)) };
 }
 
 /**
@@ -7559,7 +7559,9 @@ async function handleUpdatePersona(args: {
  * make a UI that never calls `update_persona_and_publish` look like it kept
  * the "Save and publish" promise.
  */
-function applyMockPersonaUpdate(input: MockUpdatePersonaInput): RawPersona {
+async function applyMockPersonaUpdate(
+  input: MockUpdatePersonaInput,
+): Promise<RawPersona> {
   const persona = mockPersonas.find((candidate) => candidate.id === input.id);
   if (!persona) {
     throw new Error(`agent ${input.id} not found`);
@@ -7577,9 +7579,7 @@ function applyMockPersonaUpdate(input: MockUpdatePersonaInput): RawPersona {
   applyMockPersonaBehavior(persona, input.behavior);
   persona.updated_at = new Date().toISOString();
 
-  for (const callback of tauriEventListeners.get("agents-data-changed") ?? []) {
-    callback();
-  }
+  await emit("agents-data-changed");
   return persona;
 }
 
@@ -7741,7 +7741,10 @@ async function handleUpdatePersonaAndPublish(
   args: { input: MockUpdatePersonaInput },
   config?: E2eConfig,
 ): Promise<MockPersonaPublicationResult> {
-  return publishMockPersonaHead(applyMockPersonaUpdate(args.input), config);
+  return publishMockPersonaHead(
+    await applyMockPersonaUpdate(args.input),
+    config,
+  );
 }
 
 function ensureMockPersonaIsActive(personaId: string) {
@@ -11715,6 +11718,22 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ = (command, payload) =>
     handleMockCommand(command, payload ?? null);
   mockIPC(handleMockCommand, { shouldMockEvents: true });
+  const tauriInternals = (
+    window as typeof window & {
+      __TAURI_INTERNALS__: {
+        listen?: (
+          event: string,
+          callback: () => void,
+        ) => Promise<() => Promise<void>>;
+      };
+    }
+  ).__TAURI_INTERNALS__;
+  // Page-evaluated E2E specs use this surface; delegate to Tauri's mocked channel
+  // so their listeners observe the same events emitted by application test seams.
+  tauriInternals.listen = async (event, callback) => {
+    const unlisten = await listen(event, () => callback());
+    return async () => unlisten();
+  };
 
   installed = true;
 }
