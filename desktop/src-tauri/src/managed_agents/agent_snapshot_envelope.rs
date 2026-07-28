@@ -343,6 +343,7 @@ mod tests {
                 name_pool: Vec::new(),
                 idle_timeout_seconds: None,
                 max_turn_duration_seconds: None,
+                source_is_builtin: false,
             },
             profile: AgentSnapshotProfile {
                 display_name: "Locked Test".to_string(),
@@ -407,8 +408,10 @@ mod tests {
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,
+            shared: false,
             source_team: None,
             source_team_persona_slug: None,
+            catalog_source: None,
             definition_respond_to: None,
             definition_respond_to_allowlist: Vec::new(),
             definition_parallelism: None,

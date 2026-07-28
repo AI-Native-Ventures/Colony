@@ -15,6 +15,8 @@ import {
 } from "@/shared/ui/dialog";
 import { Separator } from "@/shared/ui/separator";
 
+import { AgentDefinitionMetadata } from "./AgentDefinitionMetadata";
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type ImportPhase = "preview" | "confirming" | "result";
@@ -174,6 +176,12 @@ export function PreviewBody({
           </p>
         </div>
       ) : null}
+
+      <AgentDefinitionMetadata
+        isBuiltIn={preview.isBuiltIn}
+        model={preview.model}
+        runtime={preview.runtime}
+      />
 
       {/* Portable behavior — never hide executable configuration behind a summary. */}
       <section

@@ -64,9 +64,11 @@ fn minimal_record() -> ManagedAgentRecord {
         name_pool: vec!["Alice".to_string(), "Bob".to_string()],
         is_builtin: false,
         is_active: true,
+        shared: false,
         source_team: Some("team-id-123".to_string()), // MUST NOT appear
         source_team_persona_slug: Some("lep".to_string()), // MUST NOT appear
         definition_respond_to: Some("allowlist".to_string()),
+        catalog_source: None,
         definition_respond_to_allowlist: vec!["abc123def".to_string()],
         definition_parallelism: Some(4),
         relay_mesh: None,
@@ -523,6 +525,7 @@ fn definition_fields_present_in_snapshot() {
     let snapshot = build_snapshot(&record, MemoryLevel::None, vec![], None);
 
     assert_eq!(snapshot.definition.name, "Test Agent Display");
+    assert!(!snapshot.definition.source_is_builtin);
     assert_eq!(
         snapshot.definition.system_prompt.as_deref(),
         Some("You are a test agent.")
