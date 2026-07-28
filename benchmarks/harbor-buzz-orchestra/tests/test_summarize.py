@@ -262,7 +262,7 @@ def test_non_buzz_trials_are_left_alone(tmp_path):
     assert summarize.collect(tmp_path) == []
 
 
-def write_manifest(path: Path, condition: str = "tb-solo-luna-openai") -> str:
+def write_manifest(path: Path, condition: str = "tb-solo-luna") -> str:
     """A minimal valid manifest, returned with its canonical hash."""
     path.write_text(
         "\n".join(
@@ -316,7 +316,7 @@ def test_a_timed_out_trials_real_cost_comes_from_the_bundle(tmp_path):
     (bundle / "summary.json").write_text(
         json.dumps(
             {
-                "condition": "tb-solo-luna-openai",
+                "condition": "tb-solo-luna",
                 "manifest_sha256": digest,
                 "accounting": {"reconciled": True},
                 "roster": [{"agent_id": "solo-1"}],
@@ -380,7 +380,7 @@ def test_a_trial_that_died_before_reporting_is_still_counted(tmp_path):
     digest = write_manifest(manifest)
     write_trial(
         tmp_path, "job", "healthy",
-        condition="tb-solo-luna-openai", manifest_sha256=digest, reward=1.0,
+        condition="tb-solo-luna", manifest_sha256=digest, reward=1.0,
     )
     write_dead_trial(
         tmp_path, "job", "never-started", manifest,
@@ -415,7 +415,7 @@ def test_a_condition_whose_every_trial_died_still_appears(tmp_path):
     )
     (condition,) = summarize.collect(tmp_path)
     assert (condition.condition, condition.manifest_sha256) == (
-        "tb-solo-luna-openai",
+        "tb-solo-luna",
         digest,
     )
     assert (condition.n, condition.pass_rate) == (1, 0.0)

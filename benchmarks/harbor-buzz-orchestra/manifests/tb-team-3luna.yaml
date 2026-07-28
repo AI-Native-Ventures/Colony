@@ -1,5 +1,5 @@
 # C2 — three gpt-5.6-luna agents in a hierarchy: one delegating lead and two
-# implementers. The topology control for tb-triad-3luna-openai.
+# implementers. The topology control for tb-triad-3luna.
 #
 # This is the cleanest prompt-scheme experiment in the study. Against C1 it holds
 # the model, the agent count, the serving path, the price sheet and the trial
@@ -28,8 +28,11 @@
 # No critic here on purpose. Adding one would make C2 differ from C1 in both
 # topology and headcount-of-verifiers, and then neither comparison isolates
 # anything.
+#
+# Endpoint names are exact Databricks serving-endpoint names; provider/host/key
+# resolve via testbed/endpoints/databricks-live.json.
 schema_version: "1"
-condition: tb-team-3luna-openai
+condition: tb-team-3luna
 roster:
   - id: orch
     kind: orchestrator
@@ -38,7 +41,7 @@ roster:
     # sends all report success, and the trial stalls to its timeout with no error.
     role: lead
     count: 1
-    endpoint: gpt-5.6-luna
+    endpoint: databricks-gpt-5-6-luna
     model_revision: gpt-5.6-luna
     prompt:
       # Byte-identical to the file tb-team-sol-luna.yaml pins, so the lead's
@@ -50,25 +53,25 @@ roster:
     kind: worker
     role: implementer
     count: 2
-    endpoint: gpt-5.6-luna
+    endpoint: databricks-gpt-5-6-luna
     model_revision: gpt-5.6-luna
     prompt:
       path: personas/bench/worker.md
       sha256: 7b3332e3d3da384a7c242c1aa34e90a063e7152ddf6de69f8a4e7e4a0b710726
 
 prices:
-  # PLACEHOLDER, identical to every other luna condition. See
-  # tb-triad-3luna-openai.yaml for why these must be replaced before any absolute
-  # dollar figure is reported, and why the ratios survive being wrong.
-  gpt-5.6-luna:
+  # Operator-supplied list prices, doc 04 §7, identical to every other luna
+  # condition. See tb-triad-3luna.yaml for why holding these equal keeps the
+  # cross-condition cost ratios sound, and why cache_read_rate is 0.0 (DB10).
+  databricks-gpt-5-6-luna:
     input_per_million_usd: 1.0
     cached_input_per_million_usd: 0.1
     output_per_million_usd: 6.0
-    # Fallback only; the agent now reports the provider's measured cache split
-    # and the accounting path prices that instead, flagging which of the two it
+    # Fallback only; the agent reports the provider's measured cache split and
+    # the accounting path prices that instead, flagging which of the two it
     # used. 0.0 keeps a fallback conservative rather than inventing a discount.
     cache_read_rate: 0.0
 trial_budget:
   # Identical to every other condition in the comparison set. See
-  # tb-triad-3luna-openai.yaml.
+  # tb-triad-3luna.yaml.
   timeout_seconds: 36000

@@ -3,10 +3,9 @@
 #
 # The question this condition exists to answer: can three cheap agents talking to
 # each other match one expensive agent working alone, for less money? Against
-# tb-solo-sol-openai it is the whole thesis; against tb-solo-luna-openai it says
-# what the extra two agents bought; against tb-peer-2luna-openai it isolates the
-# marginal value of the *third* agent, since B1 is this roster minus the critic
-# and nothing else moves.
+# tb-solo-sol it is the whole thesis; against tb-solo-luna it says what the extra
+# two agents bought; against tb-peer-2luna it isolates the marginal value of the
+# *third* agent, since B1 is this roster minus the critic and nothing else moves.
 #
 # Topology, and why this one. The driver owns the keyboard, the navigator argues
 # before decisions are made, and the critic checks only finished work — once,
@@ -28,10 +27,12 @@
 # Expect it to cost more per task than solo luna: three agents, and every handoff
 # re-sends context. That is the measurement. The break-even that matters is
 # against sol, not against luna — at these prices sol is 5x luna on both axes, so
-# this roster may burn up to 5x the tokens of tb-solo-sol-openai and still win on
-# cost.
+# this roster may burn up to 5x the tokens of tb-solo-sol and still win on cost.
+#
+# Endpoint names are exact Databricks serving-endpoint names; provider/host/key
+# resolve via testbed/endpoints/databricks-live.json.
 schema_version: "1"
-condition: tb-triad-3luna-openai
+condition: tb-triad-3luna
 roster:
   - id: driver
     kind: orchestrator
@@ -42,14 +43,14 @@ roster:
     # and the run stalls to its timeout with no error anywhere.
     role: driver
     count: 1
-    endpoint: gpt-5.6-luna
+    endpoint: databricks-gpt-5-6-luna
     model_revision: gpt-5.6-luna
     prompt:
       # Derived from personas/bench/peer-driver.md rather than reusing it: that
       # file says "You and one peer" and knows nothing about a critic, so a
       # third agent would be invisible to it. Editing it in place would have
-      # rewritten tb-peer-2luna-openai's hash and orphaned B1's results, so the
-      # triad gets its own file and the pair keeps its own.
+      # rewritten tb-peer-2luna's hash and orphaned B1's results, so the triad
+      # gets its own file and the pair keeps its own.
       path: personas/bench/triad-driver.md
       sha256: 32cd9460082784f7e19bc0aad7d218a33308c63a1877474f5862f0b6c81545b6
 
@@ -57,7 +58,7 @@ roster:
     kind: worker
     role: navigator
     count: 1
-    endpoint: gpt-5.6-luna
+    endpoint: databricks-gpt-5-6-luna
     model_revision: gpt-5.6-luna
     prompt:
       path: personas/bench/triad-navigator.md
@@ -67,7 +68,7 @@ roster:
     kind: worker
     role: critic
     count: 1
-    endpoint: gpt-5.6-luna
+    endpoint: databricks-gpt-5-6-luna
     model_revision: gpt-5.6-luna
     prompt:
       # Byte-identical to the file tb-team-* conditions use. critic.md is
@@ -79,33 +80,28 @@ roster:
       sha256: b253b735a31ae6eb3c1b8ee318e5e83cef9b6821d49eabff8fe14370ba6b00c6
 
 prices:
-  # PLACEHOLDER, identical to tb-solo-luna-openai's and tb-peer-2luna-openai's —
-  # carried over from the Databricks list price for the same model and NOT
-  # checked against OpenAI's published rates. Being wrong in the same direction
-  # across all luna conditions keeps the solo/pair/triad cost *ratios* sound, but
-  # no absolute dollar figure may be reported until these are replaced. The
-  # sol-versus-luna ratio is the single number the headline is most sensitive to.
-  gpt-5.6-luna:
+  # Operator-supplied list prices, doc 04 §7, identical to tb-solo-luna's and
+  # tb-peer-2luna's luna figures — holding them equal across all luna conditions
+  # keeps the solo/pair/triad cost *ratios* sound. The sol-versus-luna ratio is
+  # the single number the headline is most sensitive to. See tb-solo-luna.yaml
+  # for why cache_read_rate is 0.0 (DB10).
+  databricks-gpt-5-6-luna:
     input_per_million_usd: 1.0
     cached_input_per_million_usd: 0.1
     output_per_million_usd: 6.0
-    # Fallback only, and it should never fire on this condition. The agent now
-    # reports the provider's real cache split on its usage line and the
-    # accounting path prices the measured count, recording
-    # `accounting_cache_read_tokens_are_measured: true`. This rate is used only
-    # when a log carries no `cached=` field — an older agent build — and 0.0 is
-    # deliberately the conservative choice there: it prices every input token at
-    # the full rate, so a fallback overstates cost rather than inventing a
-    # discount. Cache matters more here than in any solo condition, because a
-    # team's re-sent context is exactly what a prefix cache serves.
+    # Fallback only, and it should never fire on this condition. The agent reports
+    # the provider's real cache split on its usage line and the accounting path
+    # prices the measured count, recording
+    # `accounting_cache_read_tokens_are_measured: true`. Cache matters more here
+    # than in any solo condition, because a team's re-sent context is exactly what
+    # a prefix cache serves.
     cache_read_rate: 0.0
 trial_budget:
-  # Matches tb-solo-luna-openai, tb-solo-sol-openai and tb-peer-2luna-openai
-  # exactly. A triad genuinely needs longer than a solo agent — every handoff is
-  # a round trip — but granting it a larger budget would confound the comparison
-  # with the thing being measured. It does not bind anyway: Harbor enforces each
-  # task's own `[agent] timeout_sec`, which tops out at 12000s across
-  # Terminal-Bench 2.1, scaled by the study's 3x multiplier. All conditions
-  # therefore run against the task's own clock, which is the only budget they can
-  # honestly share.
+  # Matches tb-solo-luna, tb-solo-sol and tb-peer-2luna exactly. A triad genuinely
+  # needs longer than a solo agent — every handoff is a round trip — but granting
+  # it a larger budget would confound the comparison with the thing being
+  # measured. It does not bind anyway: Harbor enforces each task's own
+  # `[agent] timeout_sec`, which tops out at 12000s across Terminal-Bench 2.1,
+  # scaled by the study's 3x multiplier. All conditions therefore run against the
+  # task's own clock, which is the only budget they can honestly share.
   timeout_seconds: 36000

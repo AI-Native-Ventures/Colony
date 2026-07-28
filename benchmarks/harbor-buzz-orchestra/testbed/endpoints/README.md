@@ -42,3 +42,24 @@ route these reasoning models need.
 when only the latter is exported, and resolves provider credentials only for
 the endpoints a given config actually names — so an OpenAI run does not require
 a working Databricks token.
+
+## databricks-live.json
+
+The `sol` + `luna` bring-up pair served by the Databricks AI Gateway
+(`provider=databricks_v2`, `api_key_env=DATABRICKS_TOKEN`). `DATABRICKS_HOST`
+rides in each entry's `env` block and Harbor injects it into the agent
+container — it is not a secret and needs no host-side export.
+
+`DATABRICKS_HOST` points at the **staging** workspace
+(`block-lakehouse-staging.cloud.databricks.com`), not production. On the
+buzz-oss staging benchmark runner this is the reachable one: staging's
+privatelink endpoint (`10.170.107.x`) is routable from the staging VPC both
+directly and through cloudproxy, whereas production's (`10.172.98.x`) is a
+blackhole from there. Both serve the same `gpt-5.6-luna`/`sol` endpoints. See
+`docs/06-ec2-benchmark-runbook.md` §5.5 for the reachability proof and the
+production caveat.
+
+Unlike the OAuth bearer the `openai-live.json` note warns about, the token
+here is a long-lived personal access token (`DATABRICKS_TOKEN`), so an
+unattended sweep is possible. On the runner it is fetched from the Secrets
+Manager secret `buzz-oss/staging/benchmark/databricks-token`.
