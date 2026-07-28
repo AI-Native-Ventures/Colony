@@ -11,6 +11,7 @@ import {
   useCardGalleryOpen,
   useCardViewerState,
 } from "@/features/agents/cardMintStore";
+import { agentCardGalleryViewState } from "@/features/agents/lib/agentCardGalleryState";
 import {
   useOpenDmMutation,
   useUpsertCachedChannel,
@@ -288,6 +289,7 @@ function AgentCardGalleryContent() {
   });
 
   const cards = cardsQuery.data ?? [];
+  const viewState = agentCardGalleryViewState(cardsQuery);
 
   return (
     <Dialog onOpenChange={(open) => setCardGalleryOpen(open)} open>
@@ -305,11 +307,30 @@ function AgentCardGalleryContent() {
             share it.
           </DialogDescription>
         </DialogHeader>
-        {cardsQuery.isLoading ? (
+        {viewState.kind === "loading" ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
             Loading cards…
           </p>
-        ) : cards.length === 0 ? (
+        ) : viewState.kind === "error" ? (
+          <div
+            className="flex flex-col items-center gap-3 py-8"
+            data-testid="agent-card-gallery-error"
+            role="alert"
+          >
+            <p className="text-center text-sm text-destructive">
+              Couldn’t load your minted cards: {viewState.message}
+            </p>
+            <Button
+              disabled={cardsQuery.isFetching}
+              onClick={() => void cardsQuery.refetch()}
+              size="sm"
+              variant="outline"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {cardsQuery.isFetching ? "Retrying…" : "Retry"}
+            </Button>
+          </div>
+        ) : viewState.kind === "empty" ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
             No cards yet — mint one from an agent’s profile.
           </p>
