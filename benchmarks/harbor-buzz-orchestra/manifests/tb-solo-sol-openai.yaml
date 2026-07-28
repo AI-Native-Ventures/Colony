@@ -41,6 +41,16 @@ prices:
     input_per_million_usd: 5.0
     cached_input_per_million_usd: 0.5
     output_per_million_usd: 30.0
+    # Fallback only; the agent now reports the provider's measured cache split and
+    # the accounting path prices that, recording which it used. 0.0 keeps an
+    # unmeasured run conservative rather than inventing a discount. See
+    # tb-solo-luna-openai.yaml for the full note.
+    #
+    # Because this condition has not run yet, its first sweep will be measured
+    # throughout — unlike A1's completed one. That asymmetry matters: comparing
+    # A1's old upper-bound cost against a measured A2 cost would understate luna's
+    # advantage. Either re-run A1 or compare
+    # `accounting_cost_usd_no_cache_discount` on both.
     cache_read_rate: 0.0
 trial_budget:
   # Identical to tb-solo-luna-openai, and it has to be: the trial budget is a

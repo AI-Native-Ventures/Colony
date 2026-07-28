@@ -54,6 +54,14 @@ prices:
     input_per_million_usd: 1.0
     cached_input_per_million_usd: 0.1
     output_per_million_usd: 6.0
+    # Fallback only; superseded by the provider's measured cache split, with
+    # `accounting_cache_read_tokens_are_measured` recording which was used. 0.0
+    # keeps an unmeasured run conservative. See tb-solo-luna-openai.yaml.
+    #
+    # Caching is load-bearing for this condition in a way it is not for a solo
+    # one: the pair's cost is driven by re-sent context, which is exactly what a
+    # prefix cache serves. A pair-versus-solo cost ratio built from one measured
+    # run and one modelled run measures the accounting change, not the topology.
     cache_read_rate: 0.0
 trial_budget:
   # Matches tb-solo-luna-openai exactly. A pair genuinely needs longer than a

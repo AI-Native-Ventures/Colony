@@ -129,20 +129,23 @@ class Price(StrictModel):
     input_per_million_usd: float = Field(ge=0)
     cached_input_per_million_usd: float = Field(ge=0)
     output_per_million_usd: float = Field(ge=0)
-    # Fraction of input tokens assumed to be cache reads, for cost estimation.
+    # Fraction of input tokens assumed to be cache reads — a **fallback**, used
+    # only when the agent did not report a real cache split.
     #
-    # The upstream token counts are an inclusive input total with no cache
-    # split (see accounting.py), so the discount can only be modelled. Making
-    # the assumption a manifest field rather than a constant means it is frozen
-    # into the condition hash and travels with the result — a cost figure is
-    # only comparable to another under the same assumption.
+    # buzz-acp now emits the provider's own cache-served count on its usage line
+    # and `price_usage` prices that measured number, recording which of the two it
+    # used in `accounting_cache_read_tokens_are_measured`. This field therefore
+    # governs only logs from an agent build that predates that field. It stays in
+    # the manifest — and so in the condition hash — because a job priced by the
+    # model is not comparable to one priced by measurement unless the assumption
+    # travels with it.
     #
-    # Defaults to 0.0, i.e. no discount. That is the correct value for any
-    # endpoint where caching is not actually in effect, which today includes
-    # every Anthropic-route endpoint: buzz-agent never sends `cache_control`,
-    # and Anthropic prompt caching is opt-in. OpenAI-route endpoints cache
-    # automatically, so those have a real non-zero rate — calibrate it from the
-    # gateway's own `cached_tokens` rather than guessing.
+    # Defaults to 0.0, i.e. no discount, which makes a fallback *conservative*:
+    # every input token is billed at the full rate, so an unmeasured run
+    # overstates cost rather than inventing a discount. Prefer leaving it at 0.0
+    # and letting the measurement carry the number. Setting it non-zero is a
+    # deliberate claim about an endpoint's behaviour and should be calibrated
+    # from that endpoint's own reported `cached_tokens`, never guessed.
     cache_read_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
 

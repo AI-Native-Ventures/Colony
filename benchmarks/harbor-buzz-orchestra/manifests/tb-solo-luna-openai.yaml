@@ -38,6 +38,17 @@ prices:
     input_per_million_usd: 1.0
     cached_input_per_million_usd: 0.1
     output_per_million_usd: 6.0
+    # Fallback only, and 0.0 does NOT mean "no caching happened" — it means "do
+    # not model one". The agent now reports the provider's real cache-served
+    # count and the accounting path prices that instead, flagging the choice in
+    # `accounting_cache_read_tokens_are_measured`. This rate applies only to logs
+    # from an agent build predating that field, where 0.0 is the conservative
+    # answer: full rate on every input token, so a fallback overstates cost.
+    #
+    # The completed EC2 sweep of this condition (hash e4ca335f) was recorded
+    # before the measurement landed, so its 0 cached tokens are an artefact of
+    # the old build and its $ figure is an upper bound. A re-run measures the
+    # real split; do not read the two as comparable dollar amounts.
     cache_read_rate: 0.0
 trial_budget:
   # A backstop, not the operative deadline. Harbor already enforces each task's
