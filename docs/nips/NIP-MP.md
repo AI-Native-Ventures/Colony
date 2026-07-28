@@ -269,7 +269,7 @@ Step 1's "to exhaustion" is a guarantee about the result, not a single algorithm
 
 A client that cannot drain a bucket has lost exhaustiveness for that second and MUST keep the collection marked possibly incomplete; it MAY still set `until = oldest - 1` to gather the older events rather than stall, but MUST NOT clear the mark by doing so.
 
-The naive form fails on a page whose oldest second is only partly returned, which a same-`created_at` test on the page as a whole does not see. With `limit = 3` over `(100,a) (99,b) (99,c) (99,d) (98,e)`, the first page is `(100,a) (99,b) (99,c)` — three distinct timestamps, so no all-tied heuristic fires — and advancing to `until = 98` silently drops `(99,d)`. Draining second `99` first retrieves it.
+The naive form fails on a page whose oldest second is only partly returned, which a same-`created_at` test on the page as a whole does not see. With `limit = 3` over `(100,a) (99,b) (99,c) (99,d) (98,e)`, the first page is `(100,a) (99,b) (99,c)` — two distinct timestamps, so no all-tied heuristic fires — and advancing to `until = 98` silently drops `(99,d)`. Draining second `99` first retrieves it.
 
 Enumeration is therefore exhaustive whenever every equal-`created_at` bucket fits in one response, and truncation is detected exactly rather than guessed at. On detecting it, a client MUST mark the collection as possibly incomplete rather than present a partial collection as complete. Silently presenting a truncated collection is the failure this NIP exists to prevent: a repository missing from the list is indistinguishable from one that was never announced.
 
