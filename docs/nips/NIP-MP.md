@@ -107,7 +107,7 @@ Ingest bounds metadata cardinality and length; it interprets no metadata value. 
 
 ### Member coordinates
 
-A member `a` tag follows NIP-01's `a` tag grammar: `["a", "<coordinate>"]` or `["a", "<coordinate>", "<relay-url>"]`. Ingest validates the coordinate — element 1 — and nothing else.
+A member `a` tag follows NIP-01's `a` tag grammar: `["a", "<coordinate>"]` or `["a", "<coordinate>", "<relay-url>"]`. Ingest validates the tag's arity — exactly two or three elements — and the coordinate in element 1. The relay URL is opaque: it is never parsed and never a rejection cause by content. A fourth element has no meaning in this grammar and is rejected rather than ignored, so a writer cannot smuggle unbounded data into a position no consumer reads.
 
 The optional third element is a **relay hint**: a recommended relay where the member announcement may be found. Clients MAY use it when resolving a member that step 6 of [the fold](#the-fold) would otherwise mark unavailable, and MUST treat it as advice rather than authority — a hint is unauthenticated, supplied by the project signer rather than the repository owner, so a resolution through it MUST still verify that the retrieved event is the coordinate's own signed `kind:30617`. A hint MUST NOT be required: a project whose members are all on the reading relay resolves fully without one, and a client that ignores hints entirely is conformant.
 
@@ -173,14 +173,15 @@ A relay accepting `kind:30621` MUST validate the envelope at ingest. The rule na
 1. **`d-cardinality`** — exactly one `d` tag. Zero or several is rejected. Under NIP-01 a missing `d` is treated as empty, which collapses every such event into the `(pubkey, 30621, "")` slot where unrelated projects silently overwrite each other; several `d` tags make the address reader-dependent.
 2. **`d-empty`** — the `d` value is non-empty. Same collapse hazard. Its length is bounded by the relay's existing generic `d`-tag limit (`buzz_db::event::D_TAG_MAX_LEN`, 1024 bytes); this NIP adds no second bound.
 3. **`member-cap`** — at most 64 member `a` tags, counting **every** `a` tag rather than distinct coordinates. Counting distinct coordinates would leave parse volume bounded only by the relay frame limit (512 KiB by default, `crates/buzz-relay/src/config.rs`), since a duplicate-heavy event could carry thousands of tags naming one coordinate. The cap is inclusive: 64 is accepted, 65 is not.
-4. **`member-coordinate-malformed`** — every member `a` tag's coordinate (element 1) parses per [Member coordinates](#member-coordinates). A relay hint in element 3 is not validated and MUST NOT be a rejection cause.
-5. **`member-duplicate`** — no two member `a` tags hold the same coordinate, compared as exact strings on the canonical form. Comparison is on the coordinate alone, so two tags naming one coordinate with different relay hints are duplicates.
-6. **`metadata-cardinality`** — at most one each of `name`, `description`, `buzz-channel`, `buzz-visibility`. Duplicates would make the effective value reader-dependent.
-7. **`metadata-length`** — `name` at most 256 bytes; `description` at most 2048 bytes; `buzz-channel` at most 256 bytes; `buzz-visibility` at most 256 bytes. The two `buzz-` bounds are generous by design: neither value has a semantic length, and the bound exists only so an unbounded string cannot ride into storage on a tag ingest does not interpret.
+4. **`member-tag-arity`** — every member `a` tag has exactly two or three elements, per NIP-01's `a` tag grammar. A one-element tag names no coordinate; a fourth element has no defined meaning, and ignoring it would let a writer park unbounded unvalidated data in a position no consumer reads. This is a separate rule from the next one because the failure is different: the tag's shape is wrong, not the coordinate it holds.
+5. **`member-coordinate-malformed`** — every member `a` tag's coordinate (element 1) parses per [Member coordinates](#member-coordinates). The relay hint in element 3 is not parsed and MUST NOT be a rejection cause by its content.
+6. **`member-duplicate`** — no two member `a` tags hold the same coordinate, compared as exact strings on the canonical form. Comparison is on the coordinate alone, so two tags naming one coordinate with different relay hints are duplicates.
+7. **`metadata-cardinality`** — at most one each of `name`, `description`, `buzz-channel`, `buzz-visibility`. Duplicates would make the effective value reader-dependent.
+8. **`metadata-length`** — `name` at most 256 bytes; `description` at most 2048 bytes; `buzz-channel` at most 256 bytes; `buzz-visibility` at most 256 bytes. The two `buzz-` bounds are generous by design: neither value has a semantic length, and the bound exists only so an unbounded string cannot ride into storage on a tag ingest does not interpret.
 
-Rules 3 through 5 are evaluated in that order, so an oversized tag list is refused on count before any set proportional to it is built.
+Rules 3 through 6 are evaluated in that order, so an oversized tag list is refused on count before any per-tag parse or set proportional to it is built.
 
-The `buzz-channel` and `buzz-visibility` bounds in rule 7 land in the Buzz validator together with the fixture wiring that exercises them; the validator bounds `name` and `description` today.
+Three checks land in the Buzz validator together with the fixture wiring that exercises them: the `buzz-channel` and `buzz-visibility` bounds in rule 8, and rule 4's arity. The validator bounds `name` and `description` today, and reads element 1 of each member `a` tag while ignoring any element past it.
 
 **Duplicates are rejected, never normalized.** A relay cannot dedupe tags inside a signed event: rewriting the tag array changes the event id and invalidates the signature. The choices are reject, or accept and require every present and future consumer to apply a first-wins interpretation rule. Rejecting keeps every stored head canonical and spares all consumers a defensive parse.
 
@@ -231,7 +232,7 @@ Given the set of repositories and projects to render, a client MUST derive the c
 6. **Mark unresolvable members.** A member coordinate that resolves to nothing — never announced, deleted, or not present on this relay — renders inside its project as explicitly unavailable. It MUST NOT become a phantom standalone card, and it MUST NOT be silently dropped: silence makes a project look smaller than its author declared.
 7. **Hiding a container never hides repositories.** Locally hiding a project makes it not listing eligible, so it claims nothing and by step 5 its members return as implicit cards. Hiding a grouping is a statement about the grouping. A repository disappears from the collection only when the viewer hides that repository or it is deleted — and a repository the viewer has hidden is hidden everywhere, including inside every project that lists it, so hiding one cannot be undone by someone else's grouping.
 
-The fold is deterministic: same heads in, same collection out, independent of arrival order or query shape. Every live, unhidden repository renders in at least one place — inside a project that claims it, or as its own card — and no repository renders twice within one container.
+The fold is deterministic: same heads in, same collection out, independent of arrival order or query shape. **Placement, not order, is what the fold fixes** — the collection of containers, the members rendered inside each container, and the implicit cards are all compared as sets, since member order is not significant in the event ([Event Format](#event-format)) and a client is free to sort its own presentation. Every live, unhidden repository renders in at least one place — inside a project that claims it, or as its own card — and no repository renders twice within one container.
 
 ### Required fold cases
 
@@ -259,9 +260,18 @@ Step 1's "to exhaustion" is a guarantee about the result, not a single algorithm
 
 **Mode 1 — composite cursor (exhaustive).** On a relay that exposes a keyset cursor over `(created_at, event id)`, a client MUST page by it. Buzz does: an events query orders by `(created_at DESC, id ASC)` and accepts `until` together with `before_id`, resolving to `created_at < until OR (created_at = until AND id > before_id)` (`crates/buzz-db/src/event.rs:48-52`). Because the pair is unique per event, each page resumes exactly where the last ended, so the loop terminates having seen every matching event regardless of how many share a timestamp.
 
-**Mode 2 — `until` only (bounded, not guaranteed).** A vanilla NIP-01 filter offers no id tiebreak, so the only cursor is `until`. Neither available step is safe on its own: `until = oldest_seen_created_at - 1` skips every unread event in that second, and `until = oldest_seen_created_at` re-requests the whole bucket, which never advances once one `created_at` bucket exceeds the relay's page size. Exhaustive enumeration is therefore guaranteed only when every equal-`created_at` bucket fits in one response.
+**Mode 2 — `until` only (exhaustive per bucket, with exact truncation detection).** A vanilla NIP-01 filter offers no id tiebreak, so the only cursor is `until`. Neither naive step is safe: `until = oldest_seen_created_at - 1` skips every unread event in that second, and `until = oldest_seen_created_at` re-requests the whole bucket, which never advances once one `created_at` bucket exceeds the relay's page size. A mode-2 client MUST therefore drain the boundary second explicitly before stepping past it:
 
-A mode-2 client MUST detect that condition rather than assume it: when a page returns `limit` events that all share one `created_at`, the bucket may be truncated and the collection is possibly incomplete. On detecting it, a client MUST mark the collection as possibly incomplete rather than present a partial collection as complete. Silently presenting a truncated collection is the failure this NIP exists to prevent: a repository missing from the list is indistinguishable from one that was never announced.
+1. A page returning fewer than `limit` events means the query is exhausted — stop.
+2. After a **full** page, let `oldest` be the smallest `created_at` it returned. Query that second exactly — `since = until = oldest` — and merge the result into what is already held, deduplicating by event id.
+3. If that bucket query itself returns `limit` events, second `oldest` may hold more than the relay will return in one response, so the collection MUST be marked possibly incomplete. Count `limit` inclusively: a bucket holding exactly `limit` events is indistinguishable from a larger one, and over-reporting a doubt is the safe direction.
+4. Once the bucket query returns fewer than `limit` events, the second is fully drained. Set `until = oldest - 1` and continue from step 1.
+
+A client that cannot drain a bucket has lost exhaustiveness for that second and MUST keep the collection marked possibly incomplete; it MAY still set `until = oldest - 1` to gather the older events rather than stall, but MUST NOT clear the mark by doing so.
+
+The naive form fails on a page whose oldest second is only partly returned, which a same-`created_at` test on the page as a whole does not see. With `limit = 3` over `(100,a) (99,b) (99,c) (99,d) (98,e)`, the first page is `(100,a) (99,b) (99,c)` — three distinct timestamps, so no all-tied heuristic fires — and advancing to `until = 98` silently drops `(99,d)`. Draining second `99` first retrieves it.
+
+Enumeration is therefore exhaustive whenever every equal-`created_at` bucket fits in one response, and truncation is detected exactly rather than guessed at. On detecting it, a client MUST mark the collection as possibly incomplete rather than present a partial collection as complete. Silently presenting a truncated collection is the failure this NIP exists to prevent: a repository missing from the list is indistinguishable from one that was never announced.
 
 ### Collection growth
 
@@ -281,7 +291,7 @@ Two fixture files carry the machine-checkable contract. Neither has consumers ye
 
 ### Ingest
 
-[`NIP-MP.fixtures.json`](NIP-MP.fixtures.json) holds the shared valid/invalid case set: 11 accepted and 19 rejected events covering minimal and full projects, zero members, the 64-member boundary from both sides, cross-owner and same-`d`-different-owner members, colon-bearing repository `d` values, relay hints, non-empty `content`, and each rejection rule above.
+[`NIP-MP.fixtures.json`](NIP-MP.fixtures.json) holds the shared valid/invalid case set: 11 accepted and 20 rejected events covering minimal and full projects, zero members, the 64-member boundary from both sides, cross-owner and same-`d`-different-owner members, colon-bearing repository `d` values, relay hints, non-empty `content`, and each rejection rule above.
 
 The relay validator, the Rust builder, and the TypeScript builder are required to test against this one file, so a divergence between them is a test failure rather than a production surprise.
 
@@ -291,7 +301,7 @@ Each case carries an **unsigned** template — `kind`, `content`, `tags`. Consum
 
 [`NIP-MP.fold-fixtures.json`](NIP-MP.fold-fixtures.json) holds the oracle for [the fold](#the-fold): 12 cases covering every row of the [required fold cases](#required-fold-cases) table. Every client implementing the fold is required to test against this one file. The fold is where the [claim authority](#claim-authority) rule lives, so without a shared oracle two clients could each satisfy the prose and still render different collections from identical heads.
 
-Its cases are **semantic, not signed envelopes**. A repository or project is named by its coordinate plus the inputs the fold actually reads — signer, members, `maintainers`, visibility, viewer-hidden, deletion. Signing would test the ingest contract a second time and obscure what is under test: this file assumes every input is an already-accepted head and pins only the placement derived from it. Each case gives `expect.containers` (each rendered project with the members rendered inside it) and `expect.implicit_cards` (the repositories that additionally render as their own cards); both are compared as sets, since the fold fixes placement and not order.
+Its cases are **semantic, not signed envelopes**. A repository or project is named by its coordinate plus the inputs the fold actually reads — signer, members, `maintainers`, visibility, viewer-hidden, deletion. Signing would test the ingest contract a second time and obscure what is under test: this file assumes every input is an already-accepted head and pins only the placement derived from it. Each case gives `expect.containers` (each rendered project with the members rendered inside it) and `expect.implicit_cards` (the repositories that additionally render as their own cards). Every collection in `expect` is compared as a set — the containers, each container's `members`, and the implicit cards alike — because the fold fixes placement and not order.
 
 ## Security Considerations
 

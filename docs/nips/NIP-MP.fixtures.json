@@ -462,7 +462,7 @@
     {
       "name": "valid_member_relay_hint",
       "expect": "accept",
-      "note": "Member `a` tag carries NIP-01's optional third element, a relay hint. Ingest validates the coordinate in element 1 only, so the hint is neither validated nor a rejection cause; a client MAY use it to resolve an otherwise unavailable member.",
+      "note": "Member `a` tag carries NIP-01's optional third element, a relay hint. Ingest validates the tag's arity and the coordinate in element 1, so the hint's content is neither parsed nor a rejection cause; a client MAY use it to resolve an otherwise unavailable member.",
       "template": {
         "kind": 30621,
         "content": "",
@@ -1158,6 +1158,30 @@
           [
             "a",
             "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:repo-32"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_member_tag_arity_four_elements",
+      "expect": "reject",
+      "note": "Member `a` tag carries a fourth element past the relay hint. Its coordinate is valid, so this rejects on tag shape rather than on the coordinate: NIP-01's `a` grammar is two or three elements, and a validator that reads element 1 and ignores the rest would accept unbounded unvalidated data in a position no consumer reads.",
+      "reject_rules": [
+        "member-tag-arity"
+      ],
+      "template": {
+        "kind": 30621,
+        "content": "",
+        "tags": [
+          [
+            "d",
+            "platform"
+          ],
+          [
+            "a",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "wss://relay.example.com",
+            "unexpected"
           ]
         ]
       }
