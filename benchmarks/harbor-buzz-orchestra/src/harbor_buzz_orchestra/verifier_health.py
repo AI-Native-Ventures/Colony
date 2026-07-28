@@ -17,11 +17,20 @@ from pathlib import Path
 # differently. A Cloudflare WARP session that connected partway through an
 # 89-task sweep produced 82 of the first and 6 of the second, and the run
 # summarised — wrongly — as a legitimate 0%.
+#
+# `unable to locate package` is the apt spelling of the same event, one step
+# earlier: the verifier's own `apt-get update` failed, so the package index is
+# empty and `apt-get install -y curl binutils` cannot find packages that plainly
+# exist. On the A1 sweep three trials failed exactly this way and were recorded
+# as reward 0. The container-side fix is SYSTEM_CA_BUNDLE in container_runtime,
+# which removes the commonest cause; this marker is the backstop for the rest,
+# because the failure is otherwise shaped precisely like a wrong answer.
 VERIFIER_BROKEN_MARKERS = (
     "invalid peer certificate",
     "certificate verify failed",
     "pytest: command not found",
     "no module named pytest",
+    "unable to locate package",
 )
 
 VERIFIER_STDOUT = Path("verifier") / "test-stdout.txt"

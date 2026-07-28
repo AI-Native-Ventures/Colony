@@ -192,6 +192,35 @@ def test_a_verifier_that_could_not_install_its_tests_is_not_a_failed_agent(tmp_p
     assert "must be re-run, not reported" in table
 
 
+def test_an_empty_apt_index_is_a_broken_verifier_not_a_wrong_answer(tmp_path):
+    """`Unable to locate package` means apt-get update failed, not that the model did.
+
+    The verifier installs its own test dependencies (`apt-get install -y curl
+    binutils`, then uv, then pytest). When its `apt-get update` cannot validate
+    a certificate the index is empty, so apt cannot find packages that plainly
+    exist and the trial is recorded as reward 0.0. Three A1 trials failed this
+    way. container_runtime's SYSTEM_CA_BUNDLE seed removes the usual cause;
+    this marker is the backstop for whatever it does not cover.
+    """
+    write_trial(
+        tmp_path, "job", "apt-index-empty", reward=0.0,
+        verifier_stdout=(
+            "Err:1 https://archive.ubuntu.com/ubuntu noble InRelease\n"
+            "  Certificate verification failed: The certificate is NOT trusted.\n"
+            "E: Unable to locate package curl\n"
+            "E: Unable to locate package binutils\n"
+        ),
+    )
+    # The control that matters for this marker: a task whose own output
+    # mentions packages must not be mistaken for a broken verifier.
+    write_trial(
+        tmp_path, "job", "honest-miss", reward=0.0,
+        verifier_stdout="collected 3 items\n1 failed, 2 passed\n",
+    )
+    (condition,) = summarize.collect(tmp_path)
+    assert condition.verifier_broken == 1
+
+
 def test_a_missing_verifier_log_is_not_evidence_of_anything(tmp_path):
     """Absence of the file must not be read as a broken verifier.
 

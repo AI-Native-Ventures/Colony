@@ -99,6 +99,104 @@ its environment, the bundle is scanned for credential-shaped strings and the
 result is recorded in `summary.json` under `secret_scan`. Check it before
 sharing a bundle.
 
+### Container trust store
+
+Many Terminal-Bench images ship no `ca-certificates` package, so
+`/etc/ssl/certs/ca-certificates.crt` does not exist and **every https client in
+the container fails** — apt, curl, git, pip. `buzz-agent` is the exception: it
+gets `SSL_CERT_FILE=/opt/buzz/ca-certificates.crt`, which nothing else reads.
+
+That asymmetry cost real scores. On the A1 sweep an agent hit a transient apt
+error, rewrote `sources.list` from http to https to work around it, and left
+the container in a state where the **verifier's** own `apt-get update` could
+not validate a certificate. The verifier reported `E: Unable to locate package
+curl`, never installed pytest, and the task was recorded as reward 0.0 —
+identical in `result.json` to a model that got the answer wrong.
+
+So `_install_stack` copies the same bundle to `/etc/ssl/certs/ca-certificates.crt`
+before the agents launch. It is offline (the bundle is already uploaded), so it
+adds no egress dependency, and it **only writes when that path is missing or
+empty** — a task whose subject is certificate handling keeps whatever store its
+image shipped.
+
+The outcome is recorded per trial in `result.json` under
+`agent_result.metadata.container_trust_store`:
+
+| value | meaning |
+|---|---|
+| `present` | the image had its own store; we changed nothing |
+| `seeded` | the image had none and we installed ours |
+| `failed` | the image had none and we could not install ours |
+
+`failed` is deliberately not fatal — the agent still reaches its provider
+through `SSL_CERT_FILE`, and killing a runnable trial would trade a partial
+handicap for a total one. But **read a 0.0 on a `failed` trial as suspect**,
+not as a wrong answer.
+
+### Verifier dependencies
+
+81 of the 89 Terminal-Bench `test.sh` files begin with `apt-get install -y
+curl`, to fetch the uv installer that installs pytest. Only 3 of 12 sampled
+task images ship curl, so most trials do that install at scoring time — the one
+moment when a transient apt failure is unrecoverable and lands as a 0.0.
+
+So the runtime installs `VERIFIER_DEPS` itself, and the timing is the point:
+
+- **After the agents are stopped.** Installing before would hand the agent a
+  tool its task image chose not to ship, which changes the thing being
+  measured. Doing it in teardown changes only what the verifier finds.
+- **Before Harbor's verifier phase**, which is what needs it.
+
+The win is not saving the verifier's apt call — it still makes one. It is that
+with curl already in dpkg's status file, `apt-get install -y curl` resolves
+from the installed version and succeeds *even when `apt-get update` left the
+index empty*. That is exactly the failure that scored `compile-compcert` 0.0.
+
+Recorded as `agent_result.metadata.container_verifier_deps`: `present` (image
+shipped it) | `installed` | `unavailable`. Best-effort, like the trust store —
+measured at ~7s per trial on the EC2 runner, which at `--n-concurrent 16`
+is under a minute across a full 89-task sweep.
+
+The package list is deliberately just `curl`. The rest of the task set's apt
+requests are a long tail no blanket pre-install should chase: git 3, binutils
+1, everything else once.
+
+### Preflight
+
+`benchmark.py` refuses to start a sweep that cannot be scored. Two checks run
+before the stack, the binaries, and the money:
+
+- `check_tls_not_intercepted()` — the **host's** path to PyPI is not being
+  MITM'd. A Cloudflare WARP session once turned a live 89-task sweep into 0/89.
+- `check_container_can_be_scored()` — a **container** can seed its trust store
+  and install curl. The host reaching PyPI says nothing about this: the docker
+  proxy, the image's trust store and apt are a separate path, and it is the one
+  every verifier depends on.
+
+The container check runs the trials' own two setup commands —
+`seed_trust_store_command()` and `install_verifier_deps_command()`, imported
+from `container_runtime`, not reimplemented — against `ubuntu:24.04`, the base
+most task images derive from and which likewise ships neither `ca-certificates`
+nor curl. A preflight that proved something subtly different from what the
+trials do would be worse than none, because it would read as a clean bill of
+health. It costs ~7s.
+
+Both follow the same rule: a check that *cannot see* (no docker, no openssl, a
+pull that timed out) prints `skipping check` and lets the run proceed. Only a
+positive signal of breakage stops it.
+
+### What none of this covers
+
+An agent that switches apt to a mirror the network cannot reach at all.
+`compile-compcert` failed that way — the agent moved apt to
+`https://azure.archive.ubuntu.com`, whose Azure address is unreachable from the
+Square egress path at :443 regardless of trust anchors. Restoring
+`sources.list` before the verifier runs would close it; that is not implemented.
+
+`verifier_health.py` carries `unable to locate package` as the backstop, so a
+verifier that still cannot install its dependencies is reported as broken by
+`summarize.py` rather than averaged in as a zero.
+
 ### Token and cost accounting
 
 `buzz-agent` reports cumulative token counts per turn, `buzz-acp` logs them

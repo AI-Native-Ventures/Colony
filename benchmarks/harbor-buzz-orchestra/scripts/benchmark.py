@@ -36,6 +36,12 @@ import sys
 import time
 from pathlib import Path
 
+from harbor_buzz_orchestra.container_runtime import (
+    REMOTE_CA_BUNDLE,
+    VERIFIER_DEPS,
+    install_verifier_deps_command,
+    seed_trust_store_command,
+)
 from harbor_buzz_orchestra.verifier_health import verifier_broken
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -47,6 +53,10 @@ COMPOSE_FILES = (
     REPO_ROOT / "deploy" / "compose" / "compose.yml",
     PACKAGE_ROOT / "testbed" / "compose.benchmark.yml",
 )
+# Stand-in for a task image in the container preflight: the base most
+# Terminal-Bench images derive from, and like them it ships neither
+# ca-certificates nor curl.
+CANARY_IMAGE = "ubuntu:24.04"
 RELAY_HTTP_PORT = 3600
 PG_HOST_PORT = 5633
 METRICS_HOST_PORT = 9602
@@ -227,6 +237,77 @@ def check_tls_not_intercepted() -> None:
         "reason that has nothing to do with the agent.\n"
         "  Disconnect the interception client (for Cloudflare WARP: "
         "`warp-cli disconnect`) and re-run, or run on a host without it."
+    )
+
+
+class ContainerEgressError(RuntimeError):
+    """A task container cannot install what every verifier needs."""
+
+
+def container_scoring_probe(timeout: float = 180.0) -> tuple[str, str] | None:
+    """Run the trials' own container setup against a canary image.
+
+    Returns ``(trust_store, verifier_deps)`` as the two shells report them, or
+    None when the probe could not be carried out at all — no docker, no image,
+    a pull that timed out. As with the TLS check above, a preflight that cannot
+    see must not block the run.
+
+    ``ubuntu:24.04`` is the canary because it is the base most Terminal-Bench
+    images derive from and it ships neither ``ca-certificates`` nor ``curl`` —
+    the exact starting state that made the A1 sweep lose trials. The docker CLI
+    injects the host's proxy settings into every container it starts, so the
+    canary reaches the network by the same path a trial does.
+    """
+    try:
+        import certifi
+    except ImportError:
+        return None
+    script = f"{seed_trust_store_command()}; {install_verifier_deps_command()}"
+    try:
+        completed = subprocess.run(
+            [
+                "docker", "run", "--rm",
+                "-v", f"{certifi.where()}:{REMOTE_CA_BUNDLE}:ro",
+                "--entrypoint", "sh", CANARY_IMAGE, "-c", script,
+            ],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = (completed.stdout or "").split()
+    if len(lines) < 2:
+        return None
+    return lines[0], lines[1]
+
+
+def check_container_can_be_scored() -> None:
+    """Refuse a sweep whose verifiers will not be able to install pytest.
+
+    81 of the 89 Terminal-Bench ``test.sh`` files run ``apt-get install -y
+    curl`` to fetch the uv installer before they can run a single test. If a
+    fresh container cannot do that, every one of those trials records reward 0
+    for a reason that has nothing to do with the agent — the failure mode that
+    cost the A1 sweep two hours and read as a model collapse.
+
+    This runs the trials' own two setup commands, not an approximation of them,
+    so a pass here means the real thing works.
+    """
+    probe = container_scoring_probe()
+    if probe is None:
+        print("  container scoring probe: could not run (skipping check)")
+        return
+    trust_store, verifier_deps = probe
+    print(f"  container trust store: {trust_store}")
+    print(f"  container {'/'.join(VERIFIER_DEPS)}: {verifier_deps}")
+    if verifier_deps in ("present", "installed"):
+        return
+    raise ContainerEgressError(
+        f"a fresh {CANARY_IMAGE} container cannot install "
+        f"{'/'.join(VERIFIER_DEPS)} (trust store: {trust_store}).\n"
+        "  81 of 89 Terminal-Bench verifiers apt-get curl before they can run "
+        "any test, so they will score 0 for a reason that is not the agent's.\n"
+        "  Check egress from containers: `docker run --rm ubuntu:24.04 sh -c "
+        "'apt-get update'`, and the proxy in ~/.docker/config.json."
     )
 
 
@@ -1064,6 +1145,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             check_tls_not_intercepted()
         except InterceptedTLSError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        # The host reaching PyPI does not mean a container can. Egress from
+        # inside is a separate path -- the docker proxy, the image's trust
+        # store, apt -- and it is the one every verifier actually depends on.
+        try:
+            check_container_can_be_scored()
+        except ContainerEgressError as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
     state = load_state()

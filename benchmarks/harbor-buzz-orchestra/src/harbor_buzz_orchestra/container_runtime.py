@@ -111,6 +111,41 @@ FORWARDER_LOG = f"{REMOTE_LOGS}/relay-forwarder.log"
 # 0.8 honours it, lib.rs:361) fixes this without touching the task image, and
 # without needing the network or a package manager inside the container.
 REMOTE_CA_BUNDLE = f"{REMOTE_ROOT}/ca-certificates.crt"
+# The same anchors, installed where the *rest* of the container looks for them.
+#
+# SSL_CERT_FILE above covers buzz-agent and nothing else. apt (via gnutls),
+# curl, git and pip all read this fixed path instead, so on an image with no
+# ca-certificates package every one of them fails on any https URL. That is not
+# hypothetical: on the A1 sweep an agent hit a transient apt error, "fixed" it
+# by rewriting sources.list from http to https, and left the container in a
+# state where the *verifier's* own `apt-get update` could not validate a
+# certificate. The verifier then reported `E: Unable to locate package curl`,
+# could not install pytest, and the task scored 0.0 — indistinguishable in
+# result.json from a model that got the answer wrong. Seeding this path makes
+# an http->https rewrite harmless instead of fatal.
+#
+# Only ever written when absent: a task whose subject matter *is* certificate
+# handling must keep whatever trust store its image shipped.
+#
+# Debian/Ubuntu path only, which is what Terminal-Bench images are. The RHEL
+# equivalent (/etc/pki/tls/certs/ca-bundle.crt) has never appeared in the task
+# set; add it here if that changes.
+SYSTEM_CA_DIR = "/etc/ssl/certs"
+SYSTEM_CA_BUNDLE = f"{SYSTEM_CA_DIR}/ca-certificates.crt"
+# What the verifier will need from apt, installed for it while the network is
+# known good rather than at scoring time when a hiccup is unrecoverable.
+#
+# `curl` and nothing else because that is what the task set actually asks for:
+# across the 89 Terminal-Bench test.sh files, 81 run `apt-get install -y curl`
+# (to fetch the uv installer), and the rest of the requests are a long tail no
+# blanket pre-install should chase — git 3, binutils 1, everything else once.
+# Only 3 of 12 sampled task images ship curl already.
+#
+# The point is not to save the verifier's apt call; it is to survive it. With
+# curl already in dpkg's status file, `apt-get install -y curl` resolves from
+# the installed version and succeeds even when `apt-get update` left the index
+# empty -- which is the exact failure that scored compile-compcert 0.0.
+VERIFIER_DEPS = ("curl",)
 # How many done-poll iterations between in-container liveness probes.
 LIVENESS_EVERY = 10
 # Messages pulled into the saved transcript. Well above what a trial can
@@ -118,6 +153,42 @@ LIVENESS_EVERY = 10
 # three figures — so hitting it means something pathological happened, which is
 # itself worth seeing. Recorded as ``truncated`` when reached.
 TRANSCRIPT_LIMIT = 1000
+
+
+def seed_trust_store_command() -> str:
+    """Shell that installs our anchors at the path the container's tools read.
+
+    Module-level, and shared verbatim with benchmark.py's container preflight:
+    a preflight that proved something subtly different from what the trials do
+    would be worse than none, because it would read as a clean bill of health.
+    Echoes ``present`` | ``seeded`` | ``failed``.
+    """
+    # -s, not -f: apt-get install ca-certificates can fail partway and leave a
+    # zero-byte file, which validates nothing but would satisfy an existence
+    # check and make us skip the seed.
+    return (
+        f"if [ -s {SYSTEM_CA_BUNDLE} ]; then echo present; "
+        f"elif mkdir -p {SYSTEM_CA_DIR} "
+        f"&& cp {REMOTE_CA_BUNDLE} {SYSTEM_CA_BUNDLE}; then echo seeded; "
+        f"else echo failed; fi"
+    )
+
+
+def install_verifier_deps_command() -> str:
+    """Shell that gives the verifier its apt dependencies up front.
+
+    Shared with the preflight for the same reason as the seed above. Echoes
+    ``present`` | ``installed`` | ``unavailable``.
+    """
+    head = VERIFIER_DEPS[0]
+    packages = " ".join(VERIFIER_DEPS)
+    return (
+        f"if command -v {head} >/dev/null 2>&1; then echo present; "
+        f"elif apt-get update -qq >/dev/null 2>&1 "
+        f"&& apt-get install -y -qq {packages} >/dev/null 2>&1 "
+        f"&& command -v {head} >/dev/null 2>&1; then echo installed; "
+        f"else echo unavailable; fi"
+    )
 
 
 class RuntimeLaunchError(RuntimeError):
@@ -217,8 +288,10 @@ class BuzzContainerRuntime:
 
         agents: list[_Agent] = []
         infra: list[_Agent] = []
+        trust_store = "unknown"
+        verifier_deps = "unknown"
         try:
-            await self._install_stack(environment)
+            trust_store = await self._install_stack(environment)
             forwarder = await self._start_forwarder(environment, trial)
             if forwarder is not None:
                 infra.append(forwarder)
@@ -269,6 +342,9 @@ class BuzzContainerRuntime:
             await self._verify_m1_output(environment, manifest)
         finally:
             await self._stop_agents(environment, agents + infra)
+            # After the agents are stopped, so the tool never reaches them, and
+            # before Harbor's verifier phase, which is what needs it.
+            verifier_deps = await self._preinstall_verifier_deps(environment)
             await self._collect_logs(environment, trial_dir)
             # Before bundle.write, so the transcript is listed in the bundle's
             # file index and covered by its secret scan.
@@ -305,6 +381,15 @@ class BuzzContainerRuntime:
                 # inferred later from an empty message id.
                 "stopped_without_done": final_message is None,
                 "agent_runtime": "in-container",
+                # present | seeded | failed. `failed` means the container had
+                # no usable trust store and could not be given one, so any
+                # https the agent or the verifier attempted was doomed -- read
+                # a 0.0 on such a trial as suspect, not as a wrong answer.
+                "container_trust_store": trust_store,
+                # present | installed | unavailable. `unavailable` means the
+                # verifier had to fetch curl itself over a network that had
+                # just refused us -- another reason to read its 0.0 as suspect.
+                "container_verifier_deps": verifier_deps,
                 "agent_hints_enabled": False,
                 "task_seed": "user-identity-prompt",
                 "agent_max_rounds": {
@@ -363,8 +448,13 @@ class BuzzContainerRuntime:
 
     # -- container setup ------------------------------------------------------
 
-    async def _install_stack(self, environment: BaseEnvironment) -> None:
-        """Upload the pinned Linux binaries into the task container."""
+    async def _install_stack(self, environment: BaseEnvironment) -> str:
+        """Upload the pinned Linux binaries into the task container.
+
+        Returns the trust-store disposition for the trial record: ``present``
+        when the image shipped its own, ``seeded`` when we installed ours,
+        ``failed`` when neither holds.
+        """
         uploads = {
             f"{REMOTE_BIN}/buzz-acp": self.buzz_acp_binary,
             f"{REMOTE_BIN}/buzz-agent": self.buzz_agent_binary,
@@ -390,6 +480,40 @@ class BuzzContainerRuntime:
         if not Path(self.ca_bundle).is_file():
             raise RuntimeLaunchError(f"CA bundle not found: {self.ca_bundle}")
         await environment.upload_file(self.ca_bundle, REMOTE_CA_BUNDLE)
+        return await self._seed_system_trust_store(environment)
+
+    @staticmethod
+    async def _seed_system_trust_store(environment: BaseEnvironment) -> str:
+        """Give apt, curl and pip the anchors buzz-agent already has.
+
+        Not fatal on failure. A read-only /etc costs the container https, but
+        the agent reaches its provider through SSL_CERT_FILE either way, and
+        killing an otherwise-runnable trial over it would trade a partial
+        handicap for a total one. The outcome is returned rather than swallowed
+        so a sweep can tell the two apart afterwards -- silence here is what
+        made the original failure look like a wrong answer for a whole sweep.
+        """
+        result = await environment.exec(seed_trust_store_command())
+        status = (result.stdout or "").strip().splitlines()
+        return status[-1] if status else "failed"
+
+    @staticmethod
+    async def _preinstall_verifier_deps(environment: BaseEnvironment) -> str:
+        """Install what the verifier will need, while the network still works.
+
+        Deliberately run *after* the agents are stopped. Doing it before would
+        hand the agent a tool its task image chose not to ship, which is a
+        change to the thing being measured; doing it here changes only what the
+        verifier finds. Best-effort for the same reason as the trust store: a
+        container that cannot install curl is likely unscoreable, but that is
+        the verifier's verdict to record, not ours to pre-empt by aborting.
+        """
+        try:
+            result = await environment.exec(install_verifier_deps_command())
+        except Exception:  # noqa: BLE001 - teardown must not lose the trial
+            return "unavailable"
+        status = (result.stdout or "").strip().splitlines()
+        return status[-1] if status else "unavailable"
 
     async def _start_forwarder(
         self, environment: BaseEnvironment, trial: TrialHandle

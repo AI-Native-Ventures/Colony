@@ -16,6 +16,7 @@ from harbor_buzz_orchestra.container_runtime import (
     REMOTE_BIN,
     REMOTE_CA_BUNDLE,
     REMOTE_LOGS,
+    SYSTEM_CA_BUNDLE,
     BuzzContainerRuntime,
     EndpointLaunchConfig,
     RuntimeLaunchError,
@@ -250,6 +251,67 @@ async def test_trust_anchors_are_shipped_because_task_images_may_have_none(tmp_p
     # every entry to be an existing directory, so an empty value names one bad
     # path and fails exactly the way this is meant to prevent.
     assert "SSL_CERT_DIR" not in env
+
+
+def _stack_runtime(tmp_path, **kwargs):
+    """A runtime whose binaries and CA bundle all exist on disk."""
+    for name in ("buzz-acp", "buzz-agent", "buzz-dev-mcp"):
+        (tmp_path / name).write_text("#!binary")
+    bundle_path = tmp_path / "cacert.pem"
+    bundle_path.write_text("-----BEGIN CERTIFICATE-----\n")
+    return runtime(
+        tmp_path,
+        buzz_acp_binary=str(tmp_path / "buzz-acp"),
+        buzz_agent_binary=str(tmp_path / "buzz-agent"),
+        buzz_dev_mcp_binary=str(tmp_path / "buzz-dev-mcp"),
+        ca_bundle=str(bundle_path),
+        **kwargs,
+    )
+
+
+async def test_system_trust_store_is_seeded_for_apt_curl_and_pip(tmp_path):
+    """SSL_CERT_FILE covers buzz-agent; nothing else in the container reads it.
+
+    apt, curl and pip all read /etc/ssl/certs/ca-certificates.crt. On an image
+    that ships no ca-certificates package that path is missing, so an agent
+    that rewrites sources.list to https leaves the *verifier* unable to
+    validate anything -- it reports `E: Unable to locate package curl`, never
+    installs pytest, and the task scores 0.0 as if the model were wrong.
+    """
+    rt = _stack_runtime(tmp_path)
+    environment = Environment({SYSTEM_CA_BUNDLE: ExecResult(stdout="seeded", stderr="", return_code=0)})
+    assert await rt._install_stack(environment) == "seeded"
+    seed = [cmd for cmd, _ in environment.commands if SYSTEM_CA_BUNDLE in cmd]
+    assert len(seed) == 1
+    # Copied from the bundle we already uploaded: no network, no package
+    # manager, so this cannot itself become another egress dependency.
+    assert REMOTE_CA_BUNDLE in seed[0]
+    # -s, not -f: a partial `apt-get install ca-certificates` leaves a
+    # zero-byte file that validates nothing but satisfies an existence test.
+    assert f"[ -s {SYSTEM_CA_BUNDLE} ]" in seed[0]
+
+
+async def test_an_images_own_trust_store_is_never_overwritten(tmp_path):
+    """A task about certificate handling must keep the store its image shipped."""
+    rt = _stack_runtime(tmp_path)
+    environment = Environment({SYSTEM_CA_BUNDLE: ExecResult(stdout="present", stderr="", return_code=0)})
+    assert await rt._install_stack(environment) == "present"
+
+
+async def test_an_unseedable_trust_store_is_recorded_not_fatal(tmp_path):
+    """A read-only /etc costs https, but killing the trial would cost everything.
+
+    The agent still reaches its provider through SSL_CERT_FILE, so the trial
+    remains runnable. What must not happen is silence: the disposition is
+    returned so a later 0.0 can be read as suspect rather than as a wrong
+    answer -- exactly the distinction the A1 sweep could not make.
+    """
+    rt = _stack_runtime(tmp_path)
+    environment = Environment({SYSTEM_CA_BUNDLE: ExecResult(stdout="failed", stderr="", return_code=1)})
+    assert await rt._install_stack(environment) == "failed"
+    # An exec that returns nothing at all is a failure too, not a pass.
+    blank = Environment({SYSTEM_CA_BUNDLE: ExecResult(stdout="", stderr="", return_code=0)})
+    assert await rt._install_stack(blank) == "failed"
 
 
 async def test_install_stack_requires_the_ca_bundle_on_disk(tmp_path):
