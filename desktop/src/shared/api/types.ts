@@ -106,16 +106,11 @@ export type AddChannelMembersResult = {
 export type Identity = {
   pubkey: string;
   displayName: string;
-  /** True when the app booted in "identity lost" recovery mode — the OS
-   *  keyring was empty despite a prior successful migration. The frontend
-   *  should route to nsec re-import instead of normal onboarding.
-   *  Mutually exclusive with `locked`. */
+  /** The app booted in identity-lost recovery because migration found no OS keyring key.
+   * Mutually exclusive with `locked`; route to nsec re-import. */
   lost?: boolean;
-  /** True when the app booted with an ephemeral key because the OS keyring
-   *  holding the real identity is UNREACHABLE (e.g. GNOME Keyring / KWallet
-   *  locked). The real key still exists; no in-app recovery is possible —
-   *  the user must unlock the keyring externally and relaunch.
-   *  Mutually exclusive with `lost`. */
+  /** The app is temporarily using an ephemeral key because the OS keyring is unreachable.
+   * The real key still exists; unlock externally and relaunch. Mutually exclusive with `lost`. */
   locked?: boolean;
   /** True when the boot-time Phase 2 reset attempted a wipe but verification
    *  failed. Identity resolution was skipped; the sentinel is preserved so
@@ -126,7 +121,7 @@ export type Identity = {
 export type Profile = {
   pubkey: string;
   displayName: string | null;
-  /** Relay-authoritative corporate display identity bound to this pubkey. */
+  /** Relay-authoritative display identity bound to this pubkey. */
   verifiedName?: string | null;
   avatarUrl: string | null;
   about: string | null;
@@ -141,7 +136,7 @@ export type Profile = {
 
 export type UserProfileSummary = {
   displayName: string | null;
-  /** Relay-authoritative corporate display identity bound to this pubkey. */
+  /** Relay-authoritative display identity bound to this pubkey. */
   verifiedName?: string | null;
   /** Kind-0 `name` field, kept separate from `displayName` so @mention text
    * can be matched against either alias (agents/CLI resolve mentions against
