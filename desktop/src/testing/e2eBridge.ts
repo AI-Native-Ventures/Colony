@@ -7264,6 +7264,7 @@ async function handleInstallAcpRuntime(
     ],
     restarted_count: 0,
     failed_restart_count: 0,
+    log_path: null,
   };
 }
 
