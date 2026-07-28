@@ -843,6 +843,8 @@ pub fn run() {
             card_mint_save_openai_key,
             mint_agent_card,
             save_agent_card,
+            list_agent_cards,
+            load_agent_card,
             preview_agent_snapshot_import,
             confirm_agent_snapshot_import,
             encode_agent_snapshot_for_send,

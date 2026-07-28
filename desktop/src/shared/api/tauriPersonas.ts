@@ -232,6 +232,32 @@ export async function saveAgentCard(
   return invokeTauri<boolean>("save_agent_card", { cardPngBase64, fileName });
 }
 
+/** One archived (previously minted) card, as listed by `list_agent_cards`. */
+export type ArchivedAgentCard = {
+  /** On-disk archive key — pass to `loadAgentCard`. */
+  storedFileName: string;
+  /** Suggested save-as name, e.g. `eva.agent.png`. */
+  fileName: string;
+  agentId: string;
+  agentName: string;
+  designerNotes: string;
+  locked: boolean;
+  /** ISO-8601 mint timestamp. */
+  mintedAt: string;
+  /** Small JPEG grid preview, base64 (absent if the thumb write failed). */
+  thumbJpegBase64: string | null;
+};
+
+/** List all archived cards, newest first. */
+export async function listAgentCards(): Promise<ArchivedAgentCard[]> {
+  return invokeTauri<ArchivedAgentCard[]>("list_agent_cards");
+}
+
+/** Load one archived card's full PNG bytes (base64) by its archive key. */
+export async function loadAgentCard(storedFileName: string): Promise<string> {
+  return invokeTauri<string>("load_agent_card", { storedFileName });
+}
+
 // ── Snapshot import ───────────────────────────────────────────────────────────
 
 /** Preview returned by `preview_agent_snapshot_import` before any write. */
