@@ -70,6 +70,32 @@ def generation(manifest_data, **overrides):
     return ExperimentManifest.load(manifest_data).roster[0].generation
 
 
+def test_a_roster_entry_may_omit_generation_entirely(manifest_data):
+    """Not pinning the window is a legal condition, and the shipped manifests do it.
+
+    Every field in the block is optional, so the block itself has to be. This was
+    briefly not true: the manifests dropped their `generation:` blocks while the
+    schema still required one, which made every manifest in the repo unloadable.
+    """
+    del manifest_data["roster"][0]["generation"]
+    gen = ExperimentManifest.load(manifest_data).roster[0].generation
+    assert gen.max_output_tokens is None
+    assert gen.context_window_tokens is None
+
+
+def test_an_empty_generation_block_hashes_as_an_absent_one(manifest_data):
+    """Two spellings of "pin nothing" must not be two different conditions."""
+    absent = {**manifest_data}
+    absent["roster"] = [{**manifest_data["roster"][0]}, manifest_data["roster"][1]]
+    del absent["roster"][0]["generation"]
+    empty = {**manifest_data}
+    empty["roster"] = [
+        {**manifest_data["roster"][0], "generation": {}},
+        manifest_data["roster"][1],
+    ]
+    assert ExperimentManifest.load(absent).sha256 == ExperimentManifest.load(empty).sha256
+
+
 def test_compaction_is_unset_by_default(manifest_data):
     """Silence means "inherit the agent's defaults", not "pin them here"."""
     gen = generation(manifest_data)

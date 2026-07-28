@@ -147,10 +147,34 @@ class InterceptedTLSError(RuntimeError):
 def pypi_tls_issuer(timeout: float = 10.0) -> str | None:
     """The O=/CN= of whoever signed the certificate PyPI is serving us.
 
-    Returns None when the issuer cannot be determined — no network, no
-    openssl, a malformed handshake. Unknown is not the same as intercepted,
-    and a preflight that cannot see must not block the run.
+    Returns None when the issuer cannot be determined — no network, no client, a
+    malformed handshake. Unknown is not the same as intercepted, and a preflight
+    that cannot see must not block the run.
+
+    ``curl`` first, because it is the only one of the two that goes through an
+    egress proxy. On a host whose only route out is a CONNECT proxy, bare
+    ``openssl s_client`` never reaches PyPI at all: the direct connection is reset
+    at the first payload byte, no certificate is presented, and this returns None
+    — so the guard silently skips on exactly the locked-down runners where a
+    corporate gateway is most likely to be sitting in the path. curl reads
+    ``https_proxy`` from the environment and handles CONNECT and proxy auth, so it
+    inspects the certificate the verifier will actually be shown. openssl stays as
+    the fallback for a host without curl.
     """
+    try:
+        completed = subprocess.run(
+            ["curl", "-sSv", "--max-time", str(int(timeout)), f"https://{PYPI_TLS_HOST}/"],
+            capture_output=True, text=True, timeout=timeout + 5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    else:
+        # curl writes the handshake trace to stderr as "*  issuer: C=..; O=..".
+        for line in completed.stderr.splitlines():
+            stripped = line.lstrip("* ").strip()
+            if stripped.startswith("issuer:"):
+                return stripped[len("issuer:"):].strip()
+
     try:
         completed = subprocess.run(
             [

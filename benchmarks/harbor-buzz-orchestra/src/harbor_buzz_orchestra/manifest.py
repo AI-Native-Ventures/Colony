@@ -39,8 +39,14 @@ class GenerationConfig(StrictModel):
     field without a corresponding ``BUZZ_AGENT_*`` variable to carry it.
     """
 
-    max_output_tokens: int = Field(gt=0)
-    context_window_tokens: int = Field(gt=0)
+    # Both optional: unset means the condition does not pin them and buzz-agent's
+    # own defaults apply, which is the honest default for a study of Buzz as
+    # shipped. Pinning them was an optimization, and an unhelpful one — a window
+    # narrower than the model's real one just buys extra compactions. Same rule as
+    # the compaction fields below: an unset field emits no environment variable, so
+    # a variable's presence in a trial bundle means the experiment chose it.
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    context_window_tokens: int | None = Field(default=None, gt=0)
     # Auto-compaction ("handoff") policy, passed straight through to
     # buzz-agent's BUZZ_AGENT_HANDOFF_PERCENT / BUZZ_AGENT_HANDOFF_AT_TOKENS.
     # The agent fires at whichever binds first. Leave both unset to inherit the
@@ -63,6 +69,12 @@ class GenerationConfig(StrictModel):
         # truncation. "Set it huge so we never think about it" is therefore the
         # one setting that breaks a run outright, and it fails as degraded
         # behaviour rather than as an error — so reject it here instead.
+        #
+        # Only checkable when the manifest pins both. With either unset there is
+        # no manifest-declared relationship to validate: buzz-agent applies its
+        # own paired defaults, which already satisfy this.
+        if self.max_output_tokens is None or self.context_window_tokens is None:
+            return self
         if self.max_output_tokens >= self.context_window_tokens:
             raise ValueError(
                 f"max_output_tokens {self.max_output_tokens} must be less than "
@@ -77,8 +89,14 @@ class GenerationConfig(StrictModel):
         # A ceiling above the window is inert, not wrong — that is exactly the
         # agent's own default at a 200k window — so only the impossible case is
         # rejected: a target the output reservation would override anyway.
+        #
+        # Needs both window and output reservation to compute the headroom, so an
+        # unpinned window leaves nothing to compare against — buzz-agent resolves
+        # the same check at runtime against its real defaults.
         if (
             self.compact_at_tokens is not None
+            and self.context_window_tokens is not None
+            and self.max_output_tokens is not None
             and self.compact_at_tokens
             > self.context_window_tokens - self.max_output_tokens
         ):
@@ -154,7 +172,10 @@ class AgentClass(StrictModel):
     # Defaults to True: production parity is the honest default for a study
     # about Buzz, since it is what a real Buzz agent receives.
     include_platform_prompt: bool = True
-    generation: GenerationConfig
+    # Optional now that every field inside it is: a roster entry that says nothing
+    # about generation inherits buzz-agent's defaults wholesale. An empty block and
+    # an absent one are the same condition, and both hash the same way.
+    generation: GenerationConfig = Field(default_factory=GenerationConfig)
     budget: AgentBudget = AgentBudget()
     concurrency: int = Field(default=1, gt=0)
 

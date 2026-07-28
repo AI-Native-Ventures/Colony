@@ -553,12 +553,7 @@ class BuzzContainerRuntime:
             "BUZZ_AGENT_PROVIDER": endpoint.provider,
             "BUZZ_AGENT_MODEL": credential.llm_endpoint,
             "BUZZ_AGENT_THINKING_EFFORT": THINKING_EFFORT,
-            "BUZZ_AGENT_MAX_OUTPUT_TOKENS": str(
-                agent_class.generation.max_output_tokens
-            ),
-            "BUZZ_AGENT_MAX_CONTEXT_TOKENS": str(
-                agent_class.generation.context_window_tokens
-            ),
+            **self._window_env(agent_class.generation),
             **self._compaction_env(agent_class.generation),
             "BUZZ_AGENT_MAX_ROUNDS": str(
                 agent_class.budget.max_calls or self.max_agent_rounds
@@ -616,6 +611,25 @@ class BuzzContainerRuntime:
         if agent_class.include_platform_prompt:
             return {}
         return {"BUZZ_ACP_NO_BASE_PROMPT": "1"}
+
+    @staticmethod
+    def _window_env(generation: GenerationConfig) -> dict[str, str]:
+        """Output cap and context window, omitted entirely when unpinned.
+
+        Same contract as ``_compaction_env``: silence in the manifest means
+        buzz-agent's own defaults, so passing nothing is what makes the trial
+        bundle an accurate record of the condition. It also matters more here than
+        for compaction — ``str(None)`` would reach the container as the literal
+        ``"None"``, which the agent cannot parse into a token count.
+        """
+        env: dict[str, str] = {}
+        if generation.max_output_tokens is not None:
+            env["BUZZ_AGENT_MAX_OUTPUT_TOKENS"] = str(generation.max_output_tokens)
+        if generation.context_window_tokens is not None:
+            env["BUZZ_AGENT_MAX_CONTEXT_TOKENS"] = str(
+                generation.context_window_tokens
+            )
+        return env
 
     @staticmethod
     def _compaction_env(generation: GenerationConfig) -> dict[str, str]:

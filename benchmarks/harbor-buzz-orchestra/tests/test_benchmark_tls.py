@@ -60,3 +60,47 @@ def test_an_unreadable_issuer_does_not_block_the_run(monkeypatch, capsys):
     issuer(monkeypatch, None)
     benchmark.check_tls_not_intercepted()
     assert "skipping check" in capsys.readouterr().out
+
+
+def test_the_issuer_is_read_through_the_egress_proxy(monkeypatch):
+    """curl, not openssl, or the guard is blind on the hosts that need it most.
+
+    A runner whose only route out is a CONNECT proxy resets a direct connection
+    before any certificate is presented, so `openssl s_client` reports nothing and
+    the check skips itself — on exactly the locked-down network where a corporate
+    gateway is most likely to be intercepting. curl honours https_proxy.
+    """
+    calls = []
+
+    class Completed:
+        stdout = ""
+        stderr = (
+            "* Connected to proxy\n"
+            "*  subject: CN=files.pythonhosted.org\n"
+            "*  issuer: C=BE; O=GlobalSign nv-sa; CN=GlobalSign Atlas R3\n"
+        )
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv[0])
+        return Completed()
+
+    monkeypatch.setattr(benchmark.subprocess, "run", fake_run)
+    assert benchmark.pypi_tls_issuer() == "C=BE; O=GlobalSign nv-sa; CN=GlobalSign Atlas R3"
+    assert calls == ["curl"], "openssl must not be consulted when curl answers"
+
+
+def test_openssl_still_answers_on_a_host_without_curl(monkeypatch):
+    """Fallback, so removing curl degrades to the old behaviour rather than none."""
+
+    class Completed:
+        stdout = "issuer=C=US, O=Zscaler Inc., CN=Zscaler Root CA\n"
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "curl":
+            raise OSError("no curl here")
+        return Completed()
+
+    monkeypatch.setattr(benchmark.subprocess, "run", fake_run)
+    issuer_value = benchmark.pypi_tls_issuer()
+    assert issuer_value is not None and "Zscaler" in issuer_value

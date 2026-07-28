@@ -1105,6 +1105,38 @@ async def test_compaction_policy_reaches_the_agent(tmp_path, overrides, expected
         assert env.get(key) == expected.get(key)
 
 
+async def test_an_unpinned_window_sends_no_window_variables(tmp_path):
+    """An unset field must be absent from the env, not the string "None".
+
+    ``str(None)`` would reach the container as a literal ``"None"`` where a token
+    count belongs — the agent cannot parse that, and the trial bundle would claim
+    the condition pinned a value it did not.
+    """
+    manifest = write_manifest(tmp_path)
+    agent_class = manifest.roster[0]
+    agent_class = agent_class.model_copy(
+        update={
+            "generation": agent_class.generation.model_copy(
+                update={"max_output_tokens": None, "context_window_tokens": None}
+            )
+        }
+    )
+    orch = credential("orch-1", "orchestrator", "orch-model")
+    environment = Environment(
+        responses={"buzz-acp": ExecResult(stdout="4242\n", stderr="", return_code=0)}
+    )
+    await runtime(tmp_path)._launch_agent(
+        environment=environment,
+        trial=trial_handle((orch,)),
+        credential=orch,
+        agent_class=agent_class,
+        trial_dir=tmp_path,
+    )
+    _, env = environment.commands[-1]
+    assert "BUZZ_AGENT_MAX_OUTPUT_TOKENS" not in env
+    assert "BUZZ_AGENT_MAX_CONTEXT_TOKENS" not in env
+
+
 async def test_thinking_effort_is_pinned_for_every_agent(tmp_path):
     """An unset effort is the provider's default: unrecorded and not portable.
 
