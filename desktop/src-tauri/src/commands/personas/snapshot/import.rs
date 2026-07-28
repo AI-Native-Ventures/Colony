@@ -351,7 +351,7 @@ pub async fn preview_agent_snapshot_import(
         let (snapshot, locked) =
             decode_snapshot_for_import(&file_bytes, owner_keys.as_ref(), &records)?;
 
-        Ok(build_agent_snapshot_import_preview(&snapshot, locked)?)
+        build_agent_snapshot_import_preview(&snapshot, locked)
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
