@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 26);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -903,7 +903,7 @@ mod tests {
             "desired-state schema must include join-policy evidence used by invite claims",
         );
 
-        // Corporate identity bindings are additive and community-scoped.
+        // Relay-verified identity bindings are additive and community-scoped.
         assert_eq!(migrations[25].version, 26);
         assert!(migrations[25]
             .sql
@@ -912,7 +912,7 @@ mod tests {
         assert!(migrations[25]
             .sql
             .as_str()
-            .contains("idx_identity_bindings_active_uid"));
+            .contains("idx_identity_bindings_active_principal"));
     }
 
     #[test]
