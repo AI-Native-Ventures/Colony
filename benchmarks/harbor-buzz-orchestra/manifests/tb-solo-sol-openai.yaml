@@ -1,0 +1,52 @@
+# A2 solo baseline: the same single-agent condition as tb-solo-luna-openai, on
+# gpt-5.6-sol instead of gpt-5.6-luna.
+#
+# This is the one comparison in the study that isolates the model. Roster shape,
+# persona bytes, effort, budget, clock and serving stack are all identical to
+# tb-solo-luna-openai — only the endpoint moves — so a score difference between
+# the two is attributable to the model and nothing else. Every multi-agent
+# condition is measured against these two, which is why they have to be built
+# this way round: change one thing.
+#
+# The endpoint name is the literal OpenAI model id, because the runtime sets
+# BUZZ_AGENT_MODEL from the manifest endpoint name and buzz-agent passes that
+# straight through. Provider and key resolve via
+# testbed/endpoints/openai-live.json, which already declares gpt-5.6-sol.
+schema_version: "1"
+condition: tb-solo-sol-openai
+roster:
+  - id: solo
+    kind: orchestrator
+    role: solo
+    count: 1
+    endpoint: gpt-5.6-sol
+    model_revision: gpt-5.6-sol
+    prompt:
+      # Byte-identical to tb-solo-luna-openai. The persona is model-agnostic on
+      # purpose; a prompt tuned per model would make the two incomparable.
+      path: personas/bench/solo.md
+      sha256: 6997ae38384ea4f84bbdc1422a668be089fbfd2709d412392dbbb4911c565596
+prices:
+  # PLACEHOLDER — the Databricks list price for the same model (doc 04 §7, and
+  # the same figures tb-team-sol-luna.yaml carries), reused here so the
+  # accounting path is exercised end to end. These have NOT been checked against
+  # OpenAI's published rates. Replace them before any dollar figure from this
+  # condition is reported anywhere; token counts are measured and trustworthy
+  # regardless.
+  #
+  # Note sol is ~5x luna on input and ~5x on output at these rates, so the
+  # cost comparison between A1 and A2 is the number most sensitive to getting
+  # the real prices in — more so than either score.
+  gpt-5.6-sol:
+    input_per_million_usd: 5.0
+    cached_input_per_million_usd: 0.5
+    output_per_million_usd: 30.0
+    cache_read_rate: 0.0
+trial_budget:
+  # Identical to tb-solo-luna-openai, and it has to be: the trial budget is a
+  # backstop above the longest task in the dataset (12000s) at the 3x timeout
+  # multiplier, so each task's own `[agent] timeout_sec` governs instead of a
+  # flat harness deadline. A different value here would mean the two conditions
+  # ran on different clocks, and benchmark.py's check_budget_clears_clock would
+  # refuse to start if it were smaller than 12000 x 3.
+  timeout_seconds: 36000
