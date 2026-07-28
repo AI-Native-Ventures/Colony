@@ -6,7 +6,7 @@ Multi-Repository Projects
 
 `draft` `optional` `relay`
 
-**Depends on**: NIP-01 (basic event format), NIP-33 (parameterized replaceable events), NIP-34 (git repositories), NIP-09 (event deletion). Interacts with NIP-29 (the channel a project links to) and NIP-OA (owner attestation, for how agents inherit repo push access).
+**Depends on**: NIP-01 (basic event format, addressable events), NIP-34 (git repositories), NIP-09 (event deletion). Interacts with NIP-29 (the channel a project links to) and NIP-OA (owner attestation, for how agents inherit repo push access).
 
 ## Abstract
 
@@ -40,7 +40,7 @@ This document uses MUST, MUST NOT, SHOULD, SHOULD NOT, MAY, and RECOMMENDED as d
 
 - **project**: A `kind:30621` event. Also called the *container*.
 - **member**: A repository referenced by a project, named by an `a` tag holding a repository coordinate.
-- **coordinate**: The NIP-33 address of a repository announcement, `30617:<owner-pubkey-hex>:<repo-d-tag>`.
+- **coordinate**: The NIP-01 address of a repository announcement, `30617:<owner-pubkey-hex>:<repo-d-tag>`.
 - **explicit project**: A project that exists as a `kind:30621` event.
 - **implicit project**: The single-repository card a client renders for a `kind:30617` that no listing-eligible explicit project claims. Not an event — a rendering fallback.
 - **listing eligible**: A project a client is currently rendering in its project collection. See [Listing eligibility](#listing-eligibility).
@@ -49,9 +49,9 @@ This document uses MUST, MUST NOT, SHOULD, SHOULD NOT, MAY, and RECOMMENDED as d
 
 | Kind | Name | Signer | Class | Purpose |
 |------|------|--------|-------|---------|
-| `30621` | Project | user | parameterized replaceable | A named grouping of `kind:30617` repository announcements |
+| `30621` | Project | user | addressable | A named grouping of `kind:30617` repository announcements |
 
-`kind:30621` is parameterized replaceable per NIP-33 (`30000 <= n < 40000`), addressed by `(pubkey, 30621, d)`. Two signers may use the same `d` value; those are two distinct projects.
+`kind:30621` is an addressable event per NIP-01 (`30000 <= n < 40000`), addressed by `(pubkey, 30621, d)`. Two signers may use the same `d` value; those are two distinct projects. Addressable events were formerly specified as "parameterized replaceable events" in NIP-33, which upstream has since folded into NIP-01; this document cites NIP-01 throughout.
 
 ### Kind allocation
 
@@ -86,20 +86,32 @@ Both external registries are advisory, not authoritative allocators: neither res
 
 | Tag | Cardinality | Meaning |
 |-----|-------------|---------|
-| `d` | exactly 1, non-empty | Project slug. The NIP-33 identifier. |
+| `d` | exactly 1, non-empty | Project slug. The NIP-01 addressable identifier. |
 | `name` | 0 or 1 | Human-readable display name. Clients fall back to `d` when absent. |
 | `description` | 0 or 1 | Free text describing the project. |
 | `a` | 0 to 64 | One member repository coordinate each. Order is not significant. |
-| `buzz-channel` | 0 or 1 | UUID of the channel this project's discussion lives in. Metadata only — see [Authority](#authority). |
-| `buzz-visibility` | 0 or 1 | `listed` (default) or `unlisted`. Feeds [listing eligibility](#listing-eligibility). |
+| `buzz-channel` | 0 or 1 | UUID of the channel this project's discussion lives in. Metadata only — see [Authority](#authority). At most 256 bytes. |
+| `buzz-visibility` | 0 or 1 | `listed` (default) or `unlisted`. Feeds [listing eligibility](#listing-eligibility). At most 256 bytes. |
 
-`content` is empty and carries no meaning. Clients and relays MUST NOT parse semantics from it.
+`content` carries no meaning. Writers SHOULD emit the empty string. Readers and relays MUST ignore whatever it holds: a non-empty `content` is not a rejection cause, and no consumer may parse semantics from it. Reserving it costs nothing and keeps a future writer that fills it from invalidating its events for today's readers.
 
 Unrecognized tags MUST be ignored rather than rejected, so a newer writer can add metadata without invalidating its events for older readers.
 
+### Metadata interpretation
+
+Ingest bounds metadata cardinality and length; it interprets no metadata value. `buzz-channel` and `buzz-visibility` are opaque strings to a relay, exactly as they are on `kind:30617`. Interpretation is a client concern, and every client MUST resolve it the same way:
+
+- `name` absent → clients display the `d` value.
+- `buzz-visibility` absent or holding any value other than `listed` or `unlisted` → treated as `listed`. An unrecognized token MUST NOT hide a project: a typo in a metadata field is not a privacy signal, and treating it as one would make a project vanish for reasons its author cannot see.
+- `buzz-channel` absent, or naming a channel the viewer cannot resolve or read → the project renders without a channel link. It MUST NOT be dropped from the collection, and the unresolvable value MUST NOT be surfaced as a broken link.
+
 ### Member coordinates
 
-A member `a` tag value MUST be exactly `30617:<owner>:<repo-d>` where:
+A member `a` tag follows NIP-01's `a` tag grammar: `["a", "<coordinate>"]` or `["a", "<coordinate>", "<relay-url>"]`. Ingest validates the coordinate — element 1 — and nothing else.
+
+The optional third element is a **relay hint**: a recommended relay where the member announcement may be found. Clients MAY use it when resolving a member that step 6 of [the fold](#the-fold) would otherwise mark unavailable, and MUST treat it as advice rather than authority — a hint is unauthenticated, supplied by the project signer rather than the repository owner, so a resolution through it MUST still verify that the retrieved event is the coordinate's own signed `kind:30617`. A hint MUST NOT be required: a project whose members are all on the reading relay resolves fully without one, and a client that ignores hints entirely is conformant.
+
+A member `a` tag coordinate MUST be exactly `30617:<owner>:<repo-d>` where:
 
 - the kind segment is the literal `30617`. A project groups repository *announcements*; a coordinate naming any other kind (notably `30618` repository state) is malformed.
 - `<owner>` is 64 lowercase hex characters. Uppercase is rejected: `#a` filter matching is byte-exact, so an uppercase-owner head would be invisible to the lowercase-coordinate queries every reader issues.
@@ -128,7 +140,7 @@ Clients MUST preserve each member repository's own owner provenance in the UI. A
 
 ### Editing model
 
-Editing is **owner-only**: publish a replacement `kind:30621` with the same `d` and a newer `created_at`. Adding, removing, or reordering members and changing metadata are all one operation — replacing the container. This falls out of the addressable-event model with no relay-side permission machinery; NIP-33 replacement already refuses to let one pubkey overwrite another's coordinate.
+Editing is **owner-only**: publish a replacement `kind:30621` with the same `d` and a newer `created_at`. Adding, removing, or reordering members and changing metadata are all one operation — replacing the container. This falls out of the addressable-event model with no relay-side permission machinery; NIP-01 replacement already refuses to let one pubkey overwrite another's coordinate.
 
 Delegated or maintainer editing is deliberately out of scope for this version. Adding it later needs no change to this event shape — only a new rule about who may replace a coordinate.
 
@@ -148,7 +160,7 @@ Deleting a project (NIP-09 `kind:5` naming the project coordinate) deletes the `
 
 **Who may delete.** The project signer always may. On the Buzz relay, so may the signer's registered NIP-OA owner: `validate_standard_deletion_event` resolves the deletion's effective author and accepts it when that actor is the target pubkey's registered owner (`crates/buzz-relay/src/handlers/side_effects.rs`). This is a **Buzz relay extension to NIP-09**, applied uniformly to every kind rather than specially to projects — it is what lets a human clean up events published by an agent they own. Vanilla NIP-09 relays accept only the signer, so a project deleted through the owner path on Buzz will still be live on a relay that lacks the extension.
 
-Replacement admits no such widening: it is signer-only on every relay, because NIP-33 keys the coordinate on the pubkey itself rather than on a permission check.
+Replacement admits no such widening: it is signer-only on every relay, because NIP-01 keys the coordinate on the pubkey itself rather than on a permission check.
 
 A deletion whose `created_at` precedes the live head does not remove it — see [Relay Processing Algorithm](#relay-processing-algorithm).
 
@@ -158,15 +170,17 @@ There is no cascade, in either direction. Deleting a member repository does not 
 
 A relay accepting `kind:30621` MUST validate the envelope at ingest. The rule names below are the identifiers the shared fixtures use.
 
-1. **`d-cardinality`** — exactly one `d` tag. Zero or several is rejected. Under NIP-33 a missing `d` is treated as empty, which collapses every such event into the `(pubkey, 30621, "")` slot where unrelated projects silently overwrite each other; several `d` tags make the address reader-dependent.
+1. **`d-cardinality`** — exactly one `d` tag. Zero or several is rejected. Under NIP-01 a missing `d` is treated as empty, which collapses every such event into the `(pubkey, 30621, "")` slot where unrelated projects silently overwrite each other; several `d` tags make the address reader-dependent.
 2. **`d-empty`** — the `d` value is non-empty. Same collapse hazard. Its length is bounded by the relay's existing generic `d`-tag limit (`buzz_db::event::D_TAG_MAX_LEN`, 1024 bytes); this NIP adds no second bound.
 3. **`member-cap`** — at most 64 member `a` tags, counting **every** `a` tag rather than distinct coordinates. Counting distinct coordinates would leave parse volume bounded only by the relay frame limit (512 KiB by default, `crates/buzz-relay/src/config.rs`), since a duplicate-heavy event could carry thousands of tags naming one coordinate. The cap is inclusive: 64 is accepted, 65 is not.
-4. **`member-coordinate-malformed`** — every member `a` tag parses per [Member coordinates](#member-coordinates).
-5. **`member-duplicate`** — no two member `a` tags hold the same coordinate, compared as exact strings on the canonical form.
+4. **`member-coordinate-malformed`** — every member `a` tag's coordinate (element 1) parses per [Member coordinates](#member-coordinates). A relay hint in element 3 is not validated and MUST NOT be a rejection cause.
+5. **`member-duplicate`** — no two member `a` tags hold the same coordinate, compared as exact strings on the canonical form. Comparison is on the coordinate alone, so two tags naming one coordinate with different relay hints are duplicates.
 6. **`metadata-cardinality`** — at most one each of `name`, `description`, `buzz-channel`, `buzz-visibility`. Duplicates would make the effective value reader-dependent.
-7. **`metadata-length`** — `name` at most 256 bytes; `description` at most 2048 bytes.
+7. **`metadata-length`** — `name` at most 256 bytes; `description` at most 2048 bytes; `buzz-channel` at most 256 bytes; `buzz-visibility` at most 256 bytes. The two `buzz-` bounds are generous by design: neither value has a semantic length, and the bound exists only so an unbounded string cannot ride into storage on a tag ingest does not interpret.
 
 Rules 3 through 5 are evaluated in that order, so an oversized tag list is refused on count before any set proportional to it is built.
+
+The `buzz-channel` and `buzz-visibility` bounds in rule 7 land in the Buzz validator together with the fixture wiring that exercises them; the validator bounds `name` and `description` today.
 
 **Duplicates are rejected, never normalized.** A relay cannot dedupe tags inside a signed event: rewriting the tag array changes the event id and invalidates the signature. The choices are reject, or accept and require every present and future consumer to apply a first-wins interpretation rule. Rejecting keeps every stored head canonical and spares all consumers a defensive parse.
 
@@ -176,12 +190,12 @@ Rules 3 through 5 are evaluated in that order, so an oversized tag list is refus
 
 **Scope.** Writes require the `repos:write` scope, matching `kind:30617` and `kind:30618`. A project is repository metadata; a client authorized to announce repositories is authorized to group them.
 
-**Replacement** follows NIP-33 with no special cases: newest `created_at` wins per `(pubkey, 30621, d)`, and one pubkey can never overwrite another's coordinate.
+**Replacement** follows NIP-01 with no special cases: newest `created_at` wins per `(pubkey, 30621, d)`, and one pubkey can never overwrite another's coordinate.
 
 **Deletion** follows NIP-09 with two Buzz-wide behaviors that are not project-specific:
 
 - A `kind:5` naming the coordinate deletes it when signed by the project signer **or** by that signer's registered NIP-OA owner ([Deletion](#deletion)).
-- The deletion applies only to versions whose `created_at` is at or before the deletion's own, per NIP-09. A delayed or replayed tombstone signed before the current head MUST NOT remove it; the relay compares timestamps at the coordinate (`soft_delete_by_coordinate`, `crates/buzz-db/src/event.rs`).
+- The deletion applies only to versions whose `created_at` is at or before the deletion's own, per NIP-09. A delayed or replayed tombstone signed before the current head MUST NOT remove it; the relay compares timestamps at the coordinate (`soft_delete_by_coordinate`, `crates/buzz-db/src/event.rs`, whose inclusive `created_at <= <deletion>` bound is introduced alongside this specification in [#3171](https://github.com/block/buzz/pull/3171)).
 
 ## Client Behavior
 
@@ -209,7 +223,7 @@ An unauthorized project still renders, and still renders its members inside itse
 
 Given the set of repositories and projects to render, a client MUST derive the collection as follows.
 
-1. **Enumerate exhaustively.** Retrieve the latest live head of every `kind:30621` and `kind:30617` coordinate, plus the `kind:5` deletions bearing on them, using paginated queries that run to exhaustion. A fixed `limit` MUST NOT be used: with a limit of 200, repository 201 vanishes from the collection, which is precisely the compatibility guarantee this NIP owes existing repositories. Pagination MUST tolerate several events sharing one `created_at` — a timestamp-only cursor silently skips same-second events, so the cursor MUST break ties on event id.
+1. **Enumerate exhaustively.** Retrieve the latest live head of every `kind:30621` and `kind:30617` coordinate, plus the `kind:5` deletions bearing on them, using paginated queries that run to exhaustion. A fixed `limit` MUST NOT be used: with a limit of 200, repository 201 vanishes from the collection, which is precisely the compatibility guarantee this NIP owes existing repositories. What "to exhaustion" costs depends on the cursor the relay offers — see [Pagination](#pagination).
 2. **Resolve members.** For each project, resolve each member coordinate to its repository head, and determine whether the project [claims](#claim-authority) each one.
 3. **Suppress claimed implicit cards.** A live repository claimed by at least one project does not also render as an implicit single-repository card.
 4. **Render multiple membership.** A repository belonging to several listing-eligible projects renders inside each of them, claimed or not.
@@ -221,7 +235,7 @@ The fold is deterministic: same heads in, same collection out, independent of ar
 
 ### Required fold cases
 
-The fold cannot be expressed as accept/reject of a single event, so it is not in the [conformance fixtures](#conformance-fixtures) — those are the ingest contract. A client implementing the fold MUST cover at least these cases, each of which is a distinct branch above:
+The fold cannot be expressed as accept/reject of a single event, so it has its own fixture file rather than living in the ingest [conformance fixtures](#conformance-fixtures). A client implementing the fold MUST cover at least these cases, each of which is a distinct branch above:
 
 | Case | Expected collection |
 |------|---------------------|
@@ -234,7 +248,20 @@ The fold cannot be expressed as accept/reject of a single event, so it is not in
 | Viewer has hidden a member repository | Repository absent from the collection *and* from inside every project listing it |
 | Member coordinate resolves to nothing | Member renders inside its project as unavailable; no standalone card |
 | Project head deleted | Project absent; its members render as implicit cards |
+| One authorized and one unauthorized project both list the same repository | Repository renders inside both projects; no implicit card, because one claim suffices to suppress it |
 | More repositories and projects than one page holds, with several sharing one `created_at` | Every repository and project renders |
+
+[`NIP-MP.fold-fixtures.json`](NIP-MP.fold-fixtures.json) mechanizes this table — see [Conformance Fixtures](#conformance-fixtures).
+
+### Pagination
+
+Step 1's "to exhaustion" is a guarantee about the result, not a single algorithm: what a client must do to reach it depends on the cursor its relay offers. Both modes below are conformant; a client MUST implement whichever its relay supports and MUST NOT present a mode-1 loop's output as complete on a mode-2 relay.
+
+**Mode 1 — composite cursor (exhaustive).** On a relay that exposes a keyset cursor over `(created_at, event id)`, a client MUST page by it. Buzz does: an events query orders by `(created_at DESC, id ASC)` and accepts `until` together with `before_id`, resolving to `created_at < until OR (created_at = until AND id > before_id)` (`crates/buzz-db/src/event.rs:48-52`). Because the pair is unique per event, each page resumes exactly where the last ended, so the loop terminates having seen every matching event regardless of how many share a timestamp.
+
+**Mode 2 — `until` only (bounded, not guaranteed).** A vanilla NIP-01 filter offers no id tiebreak, so the only cursor is `until`. Neither available step is safe on its own: `until = oldest_seen_created_at - 1` skips every unread event in that second, and `until = oldest_seen_created_at` re-requests the whole bucket, which never advances once one `created_at` bucket exceeds the relay's page size. Exhaustive enumeration is therefore guaranteed only when every equal-`created_at` bucket fits in one response.
+
+A mode-2 client MUST detect that condition rather than assume it: when a page returns `limit` events that all share one `created_at`, the bucket may be truncated and the collection is possibly incomplete. On detecting it, a client MUST mark the collection as possibly incomplete rather than present a partial collection as complete. Silently presenting a truncated collection is the failure this NIP exists to prevent: a repository missing from the list is indistinguishable from one that was never announced.
 
 ### Collection growth
 
@@ -250,11 +277,21 @@ Legacy `<owner>:<dtag>` repository routes remain valid and resolve to that repos
 
 ## Conformance Fixtures
 
-[`NIP-MP.fixtures.json`](NIP-MP.fixtures.json) holds the shared valid/invalid case set: 9 accepted and 16 rejected events covering minimal and full projects, zero members, the 64-member boundary from both sides, cross-owner and same-`d`-different-owner members, colon-bearing repository `d` values, and each rejection rule above.
+Two fixture files carry the machine-checkable contract. Neither has consumers yet; each states what its consumers are required to do.
 
-The relay validator, the Rust builder, and the TypeScript builder all test against this one file, so a divergence between them is a test failure rather than a production surprise.
+### Ingest
+
+[`NIP-MP.fixtures.json`](NIP-MP.fixtures.json) holds the shared valid/invalid case set: 11 accepted and 19 rejected events covering minimal and full projects, zero members, the 64-member boundary from both sides, cross-owner and same-`d`-different-owner members, colon-bearing repository `d` values, relay hints, non-empty `content`, and each rejection rule above.
+
+The relay validator, the Rust builder, and the TypeScript builder are required to test against this one file, so a divergence between them is a test failure rather than a production surprise.
 
 Each case carries an **unsigned** template — `kind`, `content`, `tags`. Consumers sign it with their own test key. Signed literals would be inert: the id and signature are fixed by the exact serialization, so any consumer that re-serializes would need to recompute both anyway. Rejection cases name their `reject_rules`, so an implementation cannot pass by rejecting a bad event for an unrelated reason.
+
+### Fold
+
+[`NIP-MP.fold-fixtures.json`](NIP-MP.fold-fixtures.json) holds the oracle for [the fold](#the-fold): 12 cases covering every row of the [required fold cases](#required-fold-cases) table. Every client implementing the fold is required to test against this one file. The fold is where the [claim authority](#claim-authority) rule lives, so without a shared oracle two clients could each satisfy the prose and still render different collections from identical heads.
+
+Its cases are **semantic, not signed envelopes**. A repository or project is named by its coordinate plus the inputs the fold actually reads — signer, members, `maintainers`, visibility, viewer-hidden, deletion. Signing would test the ingest contract a second time and obscure what is under test: this file assumes every input is an already-accepted head and pins only the placement derived from it. Each case gives `expect.containers` (each rendered project with the members rendered inside it) and `expect.implicit_cards` (the repositories that additionally render as their own cards); both are compared as sets, since the fold fixes placement and not order.
 
 ## Security Considerations
 
@@ -267,7 +304,7 @@ Each case carries an **unsigned** template — `kind`, `content`, `tags`. Consum
 ## Relation to Other NIPs
 
 - **NIP-34**: Supplies the member repositories. Members are `kind:30617` announcements referenced by coordinate; a NIP-34 client that does not know `kind:30621` still discovers and renders each repository normally.
-- **NIP-33**: Supplies addressing, replacement, and the owner-only editing model. Owner-only editing is not enforcement code in Buzz — it is what NIP-33 replacement already means.
+- **NIP-01**: Supplies the addressable-event class, the `a` tag grammar, addressing, replacement, and the owner-only editing model. Owner-only editing is not enforcement code in Buzz — it is what NIP-01 replacement already means.
 - **NIP-09**: Supplies container deletion, which deletes the container only. Buzz extends it in two ways that are not project-specific: an agent's registered NIP-OA owner may also delete, and a tombstone applies only at or before its own `created_at` ([Deletion](#deletion)).
 - **NIP-29**: Supplies the channel a project's `buzz-channel` names. The reference is metadata; project state is never channel-scoped.
 - **NIP-51**: The closest existing precedent — a signed, addressable list referencing content the author need not own. Not reused because a project is a shared named forge container with its own channel binding and visibility, not a user's private-or-public bookmark set.

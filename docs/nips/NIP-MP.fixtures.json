@@ -1,5 +1,5 @@
 {
-  "$comment": "NIP-MP conformance fixtures \u2014 the shared contract for the relay ingest validator, the Rust event builder, and the TypeScript event builder. Each case carries an UNSIGNED template: consumers sign it with their own test key, because signing fixes the event id and signature and a stored literal would not survive re-serialization. `expect` is the ingest outcome. `reject_rules` lists the validation rules that may fire; an implementation must reject for one of them, so it cannot pass by rejecting for an unrelated reason. Spec: docs/nips/NIP-MP.md.",
+  "$comment": "NIP-MP conformance fixtures \u2014 the shared ingest contract for the relay validator, the Rust event builder, and the TypeScript event builder. Each case carries an UNSIGNED template: consumers sign it with their own test key, because signing fixes the event id and signature and a stored literal would not survive re-serialization. `expect` is the ingest outcome. `reject_rules` lists the validation rules that may fire; an implementation must reject for one of them, so it cannot pass by rejecting for an unrelated reason. This file covers single-event accept/reject only; the client-side fold has its own oracle in NIP-MP.fold-fixtures.json. Spec: docs/nips/NIP-MP.md.",
   "version": 1,
   "kind": 30621,
   "member_cap": 64,
@@ -420,7 +420,7 @@
     {
       "name": "valid_uninterpreted_metadata_values",
       "expect": "accept",
-      "note": "`buzz-channel` is not a UUID and `buzz-visibility` is an unrecognized token. Ingest bounds metadata cardinality and length but does not interpret these values \u2014 matching how kind:30617 carries the same two tags. A client that cannot resolve the channel renders the project without one; an unrecognized visibility is treated as `listed`.",
+      "note": "`buzz-channel` is not a UUID and `buzz-visibility` is an unrecognized token. Ingest bounds metadata cardinality and length but does not interpret these values \u2014 matching how kind:30617 carries the same two tags. Client-side fallbacks for both are normative in the spec's Metadata interpretation section: an unresolvable channel renders the project without one, and an unrecognized visibility is treated as `listed`.",
       "template": {
         "kind": 30621,
         "content": "",
@@ -455,6 +455,41 @@
           [
             "future-metadata",
             "preserve-me"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "valid_member_relay_hint",
+      "expect": "accept",
+      "note": "Member `a` tag carries NIP-01's optional third element, a relay hint. Ingest validates the coordinate in element 1 only, so the hint is neither validated nor a rejection cause; a client MAY use it to resolve an otherwise unavailable member.",
+      "template": {
+        "kind": 30621,
+        "content": "",
+        "tags": [
+          [
+            "d",
+            "platform"
+          ],
+          [
+            "a",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "wss://relay.example.com"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "valid_non_empty_content",
+      "expect": "accept",
+      "note": "`content` holds a value. Writers should emit the empty string, but readers and relays must ignore whatever is there \u2014 a non-empty `content` is not a rejection cause and carries no semantics.",
+      "template": {
+        "kind": 30621,
+        "content": "ignored by every consumer",
+        "tags": [
+          [
+            "d",
+            "platform"
           ]
         ]
       }
@@ -539,6 +574,34 @@
           [
             "a",
             "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_member_duplicate_differing_relay_hints",
+      "expect": "reject",
+      "note": "The same coordinate twice under different relay hints. Duplicate detection compares the coordinate alone, so differing hints do not make these distinct members; a validator that compares whole tag arrays would wrongly accept this.",
+      "reject_rules": [
+        "member-duplicate"
+      ],
+      "template": {
+        "kind": 30621,
+        "content": "",
+        "tags": [
+          [
+            "d",
+            "platform"
+          ],
+          [
+            "a",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "wss://relay-one.example.com"
+          ],
+          [
+            "a",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "wss://relay-two.example.com"
           ]
         ]
       }
@@ -1323,6 +1386,50 @@
           [
             "description",
             "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_metadata_channel_too_long",
+      "expect": "reject",
+      "note": "`buzz-channel` value exceeds 256 bytes. Paired with `invalid_metadata_visibility_too_long` so each bound is exercised by an event whose other metadata is valid \u2014 neither check can hide behind the other's rejection.",
+      "reject_rules": [
+        "metadata-length"
+      ],
+      "template": {
+        "kind": 30621,
+        "content": "",
+        "tags": [
+          [
+            "d",
+            "platform"
+          ],
+          [
+            "buzz-channel",
+            "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_metadata_visibility_too_long",
+      "expect": "reject",
+      "note": "`buzz-visibility` value exceeds 256 bytes. Ingest does not interpret the token, but it must still bound its length.",
+      "reject_rules": [
+        "metadata-length"
+      ],
+      "template": {
+        "kind": 30621,
+        "content": "",
+        "tags": [
+          [
+            "d",
+            "platform"
+          ],
+          [
+            "buzz-visibility",
+            "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
           ]
         ]
       }
