@@ -6,6 +6,8 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 const SHOTS = "test-results/activity-scope-label";
 
 const AGENT_PUBKEY = TEST_IDENTITIES.tyler.pubkey;
+const LONG_AGENT_NAME =
+  "Observer Agent With An Exceptionally Long Display Name";
 const AGENTS_CHANNEL_ID = "94a444a4-c0a3-5966-ab05-530c6ddc2301"; // #agents
 
 // Open the activity pane via profile → "View activity" (same ingress the
@@ -57,9 +59,20 @@ test.describe("activity panel scope label", () => {
       "channel-agents",
       "agents",
     );
-    await expect(page.getByTestId("agent-session-scope-label")).toHaveText(
-      "#agents",
+    await expect(page.getByTestId("agent-session-agent-name")).toHaveText(
+      "Observer Agent",
     );
+    await expect(page.getByTestId("agent-session-agent-avatar")).toBeVisible();
+    await expect(page.getByTestId("agent-session-scope-label")).toContainText(
+      "Activity · #agents · No updates yet",
+    );
+
+    await page.getByTestId("agent-session-settings-menu-trigger").click();
+    await page.getByTestId("agent-session-toggle-raw-feed").click();
+    await expect(page.getByTestId("agent-session-scope-label")).toContainText(
+      "Raw ACP activity · #agents · No updates yet",
+    );
+    await page.keyboard.press("Escape");
 
     await waitForAnimations(page);
     await panel.screenshot({ path: `${SHOTS}/01-channel-scoped.png` });
@@ -75,9 +88,16 @@ test.describe("activity panel scope label", () => {
       managedAgents: [
         {
           pubkey: AGENT_PUBKEY,
-          name: "Observer Agent",
+          name: LONG_AGENT_NAME,
           status: "running" as const,
           channelNames: ["random"],
+        },
+      ],
+      searchProfiles: [
+        {
+          pubkey: AGENT_PUBKEY,
+          displayName: LONG_AGENT_NAME,
+          isAgent: true,
         },
       ],
     });
@@ -90,8 +110,17 @@ test.describe("activity panel scope label", () => {
 
     const panel = page.getByTestId("agent-session-thread-panel");
     await expect(panel).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId("agent-session-scope-label")).toHaveText(
-      "All channels",
+    await expect(page.getByTestId("agent-session-agent-name")).toHaveText(
+      LONG_AGENT_NAME,
+    );
+    const agentName = page.getByTestId("agent-session-agent-name");
+    expect(
+      await agentName.evaluate((element) => element.scrollWidth),
+    ).toBeGreaterThan(
+      await agentName.evaluate((element) => element.clientWidth),
+    );
+    await expect(page.getByTestId("agent-session-scope-label")).toContainText(
+      "Activity · All channels · No updates yet",
     );
 
     await waitForAnimations(page);
