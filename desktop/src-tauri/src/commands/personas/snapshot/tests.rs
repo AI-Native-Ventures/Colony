@@ -950,6 +950,9 @@ fn test_parse_format_is_png_invalid_returns_error() {
 
 // ── Export: validate_snapshot_encode_size ────────────────────────────────────
 
+#[path = "tests_memory_entries.rs"]
+mod memory_entries;
+
 #[path = "tests_encode_size.rs"]
 mod encode_size;
 

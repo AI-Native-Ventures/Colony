@@ -10,6 +10,7 @@ import {
   startCardMint,
   useCardGalleryOpen,
   useCardViewerState,
+  type CardMintInput,
 } from "@/features/agents/cardMintStore";
 import { agentCardGalleryViewState } from "@/features/agents/lib/agentCardGalleryState";
 import {
@@ -93,12 +94,7 @@ function AgentCardViewerContent({
 }: {
   agentName: string;
   card: MintedAgentCard;
-  remint: {
-    agentId: string;
-    agentName: string;
-    styleNotes?: string;
-    lock?: boolean;
-  } | null;
+  remint: CardMintInput | null;
 }) {
   const [recipients, setRecipients] = React.useState<UserSearchResult[]>([]);
   const [menu, setMenu] = React.useState<MediaContextMenuPosition | null>(null);
@@ -165,7 +161,9 @@ function AgentCardViewerContent({
           <DialogDescription>
             {card.locked
               ? "This card is locked: only you and the agent can import it. Anyone else sees just the image."
-              : "The card carries the agent — anyone who imports this PNG gets a working copy (config only, fresh identity, no memories)."}
+              : card.memoryLevel === "none"
+                ? "The card carries the agent — anyone who imports this PNG gets a working copy (config only, fresh identity, no memories)."
+                : `The card carries the agent — anyone who imports this PNG gets a working copy (fresh identity) including its ${card.memoryLevel === "core" ? "core memory" : "memories"}, stored as plaintext.`}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
@@ -281,6 +279,7 @@ function AgentCardGalleryContent() {
           fileName: entry.fileName,
           designerNotes: entry.designerNotes,
           locked: entry.locked,
+          memoryLevel: entry.memoryLevel,
         },
         remint: null,
       });

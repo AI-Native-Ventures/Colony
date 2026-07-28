@@ -28,6 +28,7 @@ const CARD = {
   fileName: "eva.agent.png",
   designerNotes: "notes",
   locked: false,
+  memoryLevel: "none",
 };
 
 const INPUT = { agentId: "agent-1", agentName: "Eva" };
@@ -35,6 +36,25 @@ const INPUT = { agentId: "agent-1", agentName: "Eva" };
 describe("cardMintStore", () => {
   beforeEach(() => {
     resetCardMintStore();
+  });
+
+  it("forwards the mint input — including memoryLevel — to mintFn", async () => {
+    const seen = [];
+    await runCardMintJob(
+      { ...INPUT, styleNotes: "stormy", lock: true, memoryLevel: "core" },
+      (...args) => {
+        seen.push(args);
+        return Promise.resolve({ ...CARD, memoryLevel: "core" });
+      },
+    );
+    assert.deepEqual(seen, [["agent-1", "stormy", true, "core"]]);
+
+    // Omitted memoryLevel stays undefined so Rust applies its "none" default.
+    await runCardMintJob(INPUT, (...args) => {
+      seen.push(args);
+      return Promise.resolve(CARD);
+    });
+    assert.deepEqual(seen[1], ["agent-1", undefined, undefined, undefined]);
   });
 
   it("tracks a successful mint through minting → done", async () => {

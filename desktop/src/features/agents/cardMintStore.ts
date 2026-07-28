@@ -5,6 +5,7 @@ import {
   mintAgentCard,
   NO_OPENAI_KEY_PREFIX,
   type MintedAgentCard,
+  type SnapshotMemoryLevel,
 } from "@/shared/api/tauriPersonas";
 
 /**
@@ -24,6 +25,8 @@ export type CardMintInput = {
   agentName: string;
   styleNotes?: string;
   lock?: boolean;
+  /** Memory to embed in the card's snapshot. Omitted = "none". */
+  memoryLevel?: SnapshotMemoryLevel;
 };
 
 export type CardMintJob = {
@@ -81,6 +84,7 @@ export async function runCardMintJob(
     id: string,
     styleNotes?: string,
     lock?: boolean,
+    memoryLevel?: SnapshotMemoryLevel,
   ) => Promise<MintedAgentCard>,
 ): Promise<void> {
   const jobId = `card-mint-${nextJobId++}`;
@@ -98,7 +102,12 @@ export async function runCardMintJob(
   emitChange();
 
   try {
-    const card = await mintFn(input.agentId, input.styleNotes, input.lock);
+    const card = await mintFn(
+      input.agentId,
+      input.styleNotes,
+      input.lock,
+      input.memoryLevel,
+    );
     updateJob(jobId, { phase: "done", card });
     toast.success(`${input.agentName}'s card is ready`, {
       action: {

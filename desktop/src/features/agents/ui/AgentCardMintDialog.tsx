@@ -1,5 +1,7 @@
 import * as React from "react";
 import {
+  AlertCircle,
+  Brain,
   ExternalLink,
   GalleryVerticalEnd,
   KeyRound,
@@ -18,6 +20,7 @@ import { globalAgentConfigQueryKey } from "@/features/agents/useGlobalAgentConfi
 import {
   cardMintKeyStatus,
   cardMintSaveOpenaiKey,
+  type SnapshotMemoryLevel,
 } from "@/shared/api/tauriPersonas";
 import { Button } from "@/shared/ui/button";
 import {
@@ -30,8 +33,16 @@ import {
 import { Input } from "@/shared/ui/input";
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
+import { SnapshotOptionMenu } from "./SnapshotOptionMenu";
 
 const OPENAI_KEYS_URL = "https://platform.openai.com/api-keys";
+
+/** Same three levels as snapshot export; "Agent only" is the safe default. */
+const MEMORY_LEVELS: { value: SnapshotMemoryLevel; label: string }[] = [
+  { value: "none", label: "Agent only" },
+  { value: "core", label: "Agent + core memory" },
+  { value: "everything", label: "Agent + all memories" },
+];
 
 /**
  * The free alternative, as an action: ordinary snapshot export shares the
@@ -79,8 +90,9 @@ function FreeSharePathRow({
  * the global `AgentCardViewerDialog` (preview, reroll, save, share).
  *
  * The saved PNG carries the agent's `buzz_agent_snapshot` chunk, so sharing
- * the card shares an importable agent (config only — never memory, never
- * identity). All snapshot construction and verification happens in Rust.
+ * the card shares an importable agent (fresh identity, never secrets; memory
+ * only when the owner opts in below — plaintext unless the card is locked).
+ * All snapshot construction and verification happens in Rust.
  */
 export function AgentCardMintDialog({
   agentId,
@@ -106,9 +118,17 @@ export function AgentCardMintDialog({
 }) {
   const [styleNotes, setStyleNotes] = React.useState("");
   const [lockCard, setLockCard] = React.useState(false);
+  const [memoryLevel, setMemoryLevel] =
+    React.useState<SnapshotMemoryLevel>("none");
   const [keyDraft, setKeyDraft] = React.useState("");
 
   const queryClient = useQueryClient();
+
+  const effectiveLock = canLock && lockCard;
+  // Embedded memory is plaintext in an unlocked card — and unlocked cards
+  // are meant to be shared. A locked card encrypts the whole manifest to the
+  // (owner, agent) pair, so the plaintext warning would be false there.
+  const showMemoryWarning = memoryLevel !== "none" && !effectiveLock;
 
   // Whether a key already resolves through the agent's env layering. While
   // unknown (loading/error) we show the normal mint form — the mint itself
@@ -148,7 +168,8 @@ export function AgentCardMintDialog({
       agentId,
       agentName,
       styleNotes: styleNotes.trim() || undefined,
-      lock: canLock && lockCard,
+      lock: effectiveLock,
+      memoryLevel: canLock ? memoryLevel : "none",
     });
     onOpenChange(false);
   }
@@ -239,6 +260,51 @@ export function AgentCardMintDialog({
                 is designed for you.
               </p>
             </div>
+            <div className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
+              <div className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <Brain className="h-3.5 w-3.5" />
+                  Memories
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {canLock
+                    ? "Choose how much memory the embedded agent carries."
+                    : "Including memory needs a linked agent instance — start this agent once to enable it."}
+                </span>
+              </div>
+              {canLock ? (
+                <SnapshotOptionMenu
+                  ariaLabel="Memories"
+                  className="font-medium text-foreground"
+                  onValueChange={(value) =>
+                    setMemoryLevel(value as SnapshotMemoryLevel)
+                  }
+                  options={MEMORY_LEVELS}
+                  testId="agent-card-memory-trigger"
+                  value={memoryLevel}
+                />
+              ) : (
+                <span
+                  className="inline-flex h-8 w-auto shrink-0 items-center justify-end px-2 text-sm font-medium"
+                  data-testid="agent-card-memory-value"
+                >
+                  Agent only
+                </span>
+              )}
+            </div>
+            {showMemoryWarning ? (
+              <div
+                className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
+                data-testid="agent-card-memory-warning"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  Memory is stored as <strong>plaintext</strong> in the card,
+                  readable by anyone who has the PNG — and cards are made for
+                  sharing. Lock the card or only share it with people you trust.
+                </p>
+              </div>
+            ) : null}
             <div className="flex items-start justify-between gap-3 rounded-md border border-border p-3">
               <div className="flex flex-col gap-0.5">
                 <span className="flex items-center gap-1.5 text-sm font-medium">

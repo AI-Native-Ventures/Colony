@@ -252,6 +252,8 @@ export type MintedAgentCard = {
   designerNotes: string;
   /** True when the embedded manifest is encrypted to the (owner, agent) pair. */
   locked: boolean;
+  /** How much memory is embedded in the card's snapshot. */
+  memoryLevel: SnapshotMemoryLevel;
 };
 
 /** Error prefix Rust returns when no OpenAI key is configured. */
@@ -284,16 +286,23 @@ export async function cardMintSaveOpenaiKey(key: string): Promise<void> {
  * When `lock` is true, the embedded manifest is NIP-44-encrypted to the
  * (owner, agent) pair: only those two keys can import the card. Requires a
  * linked agent instance.
+ *
+ * `memoryLevel` (default `"none"`) embeds the owner's decrypted memory in
+ * the card's snapshot — same levels as snapshot export. Levels other than
+ * `"none"` require a linked agent instance; Rust derives the memory source
+ * from the resolved instance itself.
  */
 export async function mintAgentCard(
   id: string,
   styleNotes?: string,
   lock?: boolean,
+  memoryLevel?: SnapshotMemoryLevel,
 ): Promise<MintedAgentCard> {
   return invokeTauri<MintedAgentCard>("mint_agent_card", {
     id,
     styleNotes: styleNotes || null,
     lock: lock ?? null,
+    memoryLevel: memoryLevel ?? null,
   });
 }
 
@@ -315,6 +324,8 @@ export type ArchivedAgentCard = {
   agentName: string;
   designerNotes: string;
   locked: boolean;
+  /** Memory embedded in the card's snapshot ("none" for pre-field archives). */
+  memoryLevel: SnapshotMemoryLevel;
   /** ISO-8601 mint timestamp. */
   mintedAt: string;
   /** Small JPEG grid preview, base64 (absent if the thumb write failed). */

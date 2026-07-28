@@ -9,8 +9,12 @@
 //! - Snapshot construction/injection reuses `agent_snapshot.rs` — cards
 //!   inherit manifest-v1 behavior, exclusions, and size checks. No card-only
 //!   wire format exists.
-//! - Memory exclusion is structural: the manifest is built with
-//!   `MemoryLevel::None`; the encoder itself rejects `none` + entries.
+//! - Memory inclusion is opt-in and shares the export flow's semantics: the
+//!   same three levels (`none`/`core`/`everything`), the same owner-gated
+//!   `get_agent_memory` fetch, and a memory source DERIVED from the resolved
+//!   instance (never caller-supplied), so cross-agent memory pairing is
+//!   structurally impossible. The default is `none`; the encoder still
+//!   rejects `none` + entries.
 //! - The 10 MiB `.agent.png` ceiling is enforced on the FINAL bytes (after
 //!   resize + chunk injection) via `validate_snapshot_encode_size`.
 //! - Round-trip verification decodes the final bytes and compares the logical
@@ -24,9 +28,13 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use super::super::export_util::save_bytes_with_dialog;
-use super::snapshot::{resolve_from_lists, validate_snapshot_encode_size};
+use super::snapshot::{
+    memory_entries_from_listing, parse_memory_level, resolve_from_lists,
+    validate_snapshot_encode_size,
+};
 use crate::{
     app_state::AppState,
+    commands::engrams::get_agent_memory,
     managed_agents::{
         agent_snapshot::{
             build_snapshot, decode_avatar_data_url, decode_snapshot_png, encode_snapshot_png,
@@ -75,6 +83,9 @@ pub struct MintedCard {
     /// True when the embedded snapshot is NIP-44-encrypted to the
     /// (owner, agent) pair — only their nsecs can import this card.
     pub locked: bool,
+    /// How much memory is embedded in the card's snapshot ("none"/"core"/
+    /// "everything"). The viewer's import disclosure depends on this.
+    pub memory_level: MemoryLevel,
 }
 
 // ── Card archive ──────────────────────────────────────────────────────────────
@@ -95,6 +106,11 @@ pub struct ArchivedCardMeta {
     pub agent_name: String,
     pub designer_notes: String,
     pub locked: bool,
+    /// Memory embedded in this card's snapshot. Defaults to `None` when the
+    /// sidecar predates the field — every pre-field mint was minted with
+    /// `MemoryLevel::None` (it was structural), so the default is honest.
+    #[serde(default)]
+    pub memory_level: MemoryLevel,
     /// ISO-8601 mint timestamp.
     pub minted_at: String,
     /// Small JPEG preview for gallery grids, base64. Populated by
@@ -134,6 +150,7 @@ fn archive_minted_card(
         agent_name: agent_name.to_string(),
         designer_notes: card.designer_notes.clone(),
         locked: card.locked,
+        memory_level: card.memory_level,
         minted_at: crate::util::now_iso(),
         thumb_jpeg_base64: None,
     };
@@ -467,6 +484,12 @@ pub fn card_mint_key_status(
 /// linked agent instance (the second key endpoint); bare definitions cannot
 /// be locked.
 ///
+/// When `memory_level` is `"core"` or `"everything"`, the owner's decrypted
+/// memory for the agent is embedded in the manifest — same levels and fetch
+/// as snapshot export. The memory source is always the resolved instance
+/// itself (derived, never caller-supplied), so it requires a linked instance;
+/// bare definitions can only mint `"none"` (the default).
+///
 /// Returns the final, chunk-injected, round-trip-verified `.agent.png` bytes.
 /// Reroll = call again; the command holds no session state.
 #[tauri::command]
@@ -474,10 +497,12 @@ pub async fn mint_agent_card(
     id: String,
     style_notes: Option<String>,
     lock: Option<bool>,
+    memory_level: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<MintedCard, String> {
     let lock = lock.unwrap_or(false);
+    let memory_level = parse_memory_level(memory_level.as_deref().unwrap_or(""))?;
     // ── Resolve the record + API key under lock ──────────────────────────────
     let (record, is_definition, api_key, base_url) = {
         let _store_guard = state
@@ -552,6 +577,24 @@ pub async fn mint_agent_card(
         None
     };
 
+    // ── Memory needs a keyed instance, resolved up front BEFORE the API
+    //    spend — the memory source is always the resolved instance itself
+    //    (derived, never caller-supplied), so cross-agent pairing cannot be
+    //    expressed. A failed fetch fails the mint here, not after payment.
+    let memory_entries = if memory_level == MemoryLevel::None {
+        Vec::new()
+    } else {
+        if is_definition {
+            return Err(
+                "Cards with memory need a linked agent instance — this persona has never \
+                 been started, so there is no agent memory to include."
+                    .to_string(),
+            );
+        }
+        let listing = get_agent_memory(record.pubkey.clone(), app.clone(), state).await?;
+        memory_entries_from_listing(listing, memory_level)
+    };
+
     let display_name = record
         .display_name
         .clone()
@@ -571,27 +614,32 @@ pub async fn mint_agent_card(
         }
     };
 
-    // ── Build the manifest now (memory NONE, structural) so a broken agent
+    // ── Build the manifest now (with any requested memory) so a broken agent
     //    fails before we spend minutes on the API call. ───────────────────────
     let manifest_avatar = decode_avatar_data_url(record.avatar_url.as_deref().unwrap_or(""));
     let snapshot = build_snapshot(
         &record,
-        MemoryLevel::None,
-        Vec::new(),
+        memory_level,
+        memory_entries,
         manifest_avatar.as_deref(),
     );
 
     // ── One Responses API call ───────────────────────────────────────────────
-    // For locked mints, prove the manifest fits the NIP-44 plaintext cap
-    // BEFORE spending minutes on the API call (same fail-early rule as the
-    // memory guard above).
+    // For locked mints, prove the manifest (including any embedded memory)
+    // fits the NIP-44 plaintext cap BEFORE spending minutes on the API call
+    // (same fail-early rule as the memory guard above).
     if lock_keys.is_some() {
         let json_len =
             crate::managed_agents::agent_snapshot::encode_snapshot_json(&snapshot)?.len();
         if json_len > buzz_core_pkg::engram::NIP44_PLAINTEXT_MAX {
+            let hint = if memory_level == MemoryLevel::None {
+                "Reduce the avatar size or mint an unlocked card."
+            } else {
+                "Include less memory, reduce the avatar size, or mint an unlocked card."
+            };
             return Err(format!(
                 "Agent manifest is too large to lock ({json_len} bytes; the encrypted \
-                 format caps at {}). Reduce the avatar size or mint an unlocked card.",
+                 format caps at {}). {hint}",
                 buzz_core_pkg::engram::NIP44_PLAINTEXT_MAX
             ));
         }
@@ -719,6 +767,7 @@ pub async fn mint_agent_card(
         file_name: format!("{slug}.agent.png"),
         designer_notes,
         locked: lock_keys.is_some(),
+        memory_level,
     };
 
     // Archive best-effort: the mint is already paid for and verified, so a
@@ -810,180 +859,4 @@ pub async fn save_agent_card(
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn archive_file_name_validation_rejects_escapes() {
-        assert!(validate_archive_file_name("eva-1234.agent.png").is_ok());
-        for bad in [
-            "../escape.agent.png",
-            "sub/dir.agent.png",
-            "sub\\dir.agent.png",
-            "not-a-card.png",
-            "plain.json",
-            "",
-        ] {
-            assert!(
-                validate_archive_file_name(bad).is_err(),
-                "expected rejection: {bad:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn card_template_decodes_with_expected_shape() {
-        // The embedded template is generation input only, but a corrupt or
-        // accidentally swapped asset should fail the build's test gate, not a
-        // user's first mint.
-        let img = image::load_from_memory(CARD_TEMPLATE_PNG).expect("template must decode");
-        // 2:3-ish portrait frame.
-        assert!(img.height() > img.width(), "template must be portrait");
-        assert!(img.width() >= 512, "template unexpectedly small");
-    }
-
-    #[test]
-    fn key_resolution_layering_record_wins() {
-        let mut global = BTreeMap::new();
-        global.insert("OPENAI_API_KEY".to_string(), "global".to_string());
-        let mut persona = BTreeMap::new();
-        persona.insert("OPENAI_API_KEY".to_string(), "persona".to_string());
-        let mut record = BTreeMap::new();
-        record.insert("OPENAI_API_KEY".to_string(), "record".to_string());
-
-        assert_eq!(
-            resolve_env_from_layers("OPENAI_API_KEY", &global, &persona, &record, None).as_deref(),
-            Some("record")
-        );
-        record.clear();
-        assert_eq!(
-            resolve_env_from_layers("OPENAI_API_KEY", &global, &persona, &record, None).as_deref(),
-            Some("persona")
-        );
-        persona.clear();
-        assert_eq!(
-            resolve_env_from_layers("OPENAI_API_KEY", &global, &persona, &record, None).as_deref(),
-            Some("global")
-        );
-        global.clear();
-        assert_eq!(
-            resolve_env_from_layers(
-                "OPENAI_API_KEY",
-                &global,
-                &persona,
-                &record,
-                Some("process".to_string())
-            )
-            .as_deref(),
-            Some("process")
-        );
-        assert!(
-            resolve_env_from_layers("OPENAI_API_KEY", &global, &persona, &record, None).is_none()
-        );
-    }
-
-    #[test]
-    fn key_resolution_skips_blank_values() {
-        let mut record = BTreeMap::new();
-        record.insert("OPENAI_API_KEY".to_string(), "   ".to_string());
-        let mut persona = BTreeMap::new();
-        persona.insert("OPENAI_API_KEY".to_string(), "persona".to_string());
-        assert_eq!(
-            resolve_env_from_layers("OPENAI_API_KEY", &BTreeMap::new(), &persona, &record, None)
-                .as_deref(),
-            Some("persona")
-        );
-    }
-
-    #[test]
-    fn responses_url_default_and_override() {
-        assert_eq!(responses_url(None), "https://api.openai.com/v1/responses");
-        // Trailing slashes must not produce a double-slash path.
-        assert_eq!(
-            responses_url(Some("https://proxy.example/v1/".to_string())),
-            "https://proxy.example/v1/responses"
-        );
-        assert_eq!(
-            responses_url(Some("https://proxy.example/v1".to_string())),
-            "https://proxy.example/v1/responses"
-        );
-    }
-
-    #[test]
-    fn instructions_pin_style_match_default_and_owner_primacy() {
-        let base = build_card_instructions("Eva", "leads the team", "");
-        assert!(base.contains("match input image 2's art style EXACTLY"));
-        assert!(base.contains("\"Eva\""));
-        assert!(!base.contains("OWNER'S DIRECTIONS"));
-
-        let directed = build_card_instructions("Eva", "leads the team", "make it stormy");
-        // Owner directions take primacy over style defaults...
-        assert!(directed.contains("OWNER'S DIRECTIONS"));
-        assert!(directed.contains("make it stormy"));
-        assert!(directed.contains("override the default art-style and copy guidance"));
-        // ...but the fixed contract survives: frame, style anchor (as an
-        // overridable default), and text-fidelity requirements stay present.
-        assert!(directed.contains("match input image 2's art style EXACTLY"));
-        assert!(directed.contains("cannot change the frame, layout, or"));
-        assert!(directed.contains("Render all text with perfect fidelity"));
-        // Card-text direction is an explicitly named capability, and the
-        // owner-wording rule acknowledges the fixed 220-char text-box limit
-        // (no mutually impossible "verbatim" vs "under 220 chars" pair).
-        assert!(directed.contains("card text"));
-        assert!(directed.contains("use their wording within the 220-character text-box limit"));
-    }
-
-    #[test]
-    fn extract_card_output_happy_path_and_missing_image() {
-        let ok = serde_json::json!({
-            "output": [
-                {"type": "reasoning"},
-                {"type": "image_generation_call", "result": "aW1n"},
-                {"type": "message", "content": [
-                    {"type": "output_text", "text": "notes here"}
-                ]}
-            ]
-        });
-        let (img, notes) = extract_card_output(&ok).unwrap();
-        assert_eq!(img, "aW1n");
-        assert_eq!(notes, "notes here");
-
-        let missing = serde_json::json!({"output": [{"type": "message", "content": []}]});
-        let err = extract_card_output(&missing).unwrap_err();
-        assert!(err.contains("No image"), "{err}");
-
-        let no_output = serde_json::json!({});
-        assert!(extract_card_output(&no_output).is_err());
-    }
-
-    #[test]
-    fn avatar_cap_rejects_before_appending_crossing_chunk() {
-        // The streaming accumulator must reject a chunk that would cross the
-        // cap BEFORE buffering it — this is what bounds memory when
-        // Content-Length is missing or dishonest.
-        let mut buf = vec![0u8; MAX_AVATAR_FETCH_BYTES - 1];
-        assert!(append_within_avatar_cap(&mut buf, &[0u8]).is_ok());
-        assert_eq!(buf.len(), MAX_AVATAR_FETCH_BYTES);
-        // Exactly at the cap: one more byte must fail and not grow the buffer.
-        assert!(append_within_avatar_cap(&mut buf, &[0u8]).is_err());
-        assert_eq!(buf.len(), MAX_AVATAR_FETCH_BYTES);
-
-        // A single oversized chunk is rejected outright.
-        let mut fresh = Vec::new();
-        let oversized = vec![0u8; MAX_AVATAR_FETCH_BYTES + 1];
-        assert!(append_within_avatar_cap(&mut fresh, &oversized).is_err());
-        assert!(fresh.is_empty());
-    }
-
-    #[test]
-    fn save_rejects_plain_png_without_snapshot_chunk() {
-        // A plain PNG (no buzz_agent_snapshot chunk) must not be saveable as
-        // a card. Exercise the same validation the command runs.
-        let img = image::DynamicImage::new_rgba8(4, 4);
-        let mut png = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        assert!(decode_snapshot_png(&png).is_err());
-    }
-}
+mod tests;
