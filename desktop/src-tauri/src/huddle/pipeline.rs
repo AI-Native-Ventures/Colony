@@ -93,9 +93,10 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
         }
     }
 
-    // Periodically refresh agent_pubkeys from relay membership.
-    // This catches mid-huddle agent additions/removals by other participants,
-    // keeping STT p-tags authoritative throughout the session.
+    // Periodically refresh agent membership from the relay.
+    // This catches mid-huddle additions/removals by other participants, keeps
+    // STT p-tags authoritative, and auto-enables transcription when the first
+    // agent appears unless the user has already chosen a transcription state.
     // Throttled independently from the more frequent hotstart poll.
     //
     // NOTE: The frontend ALSO polls agent membership independently via
