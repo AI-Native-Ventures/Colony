@@ -1,3 +1,4 @@
+import { Shield, UserRound } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -18,9 +19,24 @@ import {
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 
-const ROLE_OPTIONS: Array<{ value: RelayMemberRole; label: string }> = [
-  { value: "member", label: "Member" },
-  { value: "admin", label: "Admin" },
+const ROLE_OPTIONS: Array<{
+  value: RelayMemberRole;
+  label: string;
+  description: string;
+  icon: typeof UserRound;
+}> = [
+  {
+    value: "member",
+    label: "Member",
+    description: "Can join and participate",
+    icon: UserRound,
+  },
+  {
+    value: "admin",
+    label: "Admin",
+    description: "Can manage members and invites",
+    icon: Shield,
+  },
 ];
 
 export function DirectAddMemberForm({
@@ -102,28 +118,54 @@ export function DirectAddMemberForm({
         ) : null}
       </div>
 
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <p className="text-sm font-medium">Role</p>
-        <div className="flex gap-2">
+        <div
+          className={cn(
+            "grid gap-2",
+            isOwner ? "sm:grid-cols-2" : "grid-cols-1",
+          )}
+        >
           {ROLE_OPTIONS.filter(
             (option) => isOwner || option.value === "member",
-          ).map((option) => (
-            <button
-              aria-pressed={role === option.value}
-              className={cn(
-                "rounded-lg border px-3 py-1.5 text-sm transition-colors",
-                role === option.value
-                  ? "border-primary bg-primary/10 text-foreground"
-                  : "border-border/60 text-muted-foreground hover:bg-accent",
-              )}
-              data-testid={`member-role-${option.value}`}
-              key={option.value}
-              onClick={() => setRole(option.value)}
-              type="button"
-            >
-              {option.label}
-            </button>
-          ))}
+          ).map((option) => {
+            const Icon = option.icon;
+            const selected = role === option.value;
+            return (
+              <button
+                aria-pressed={selected}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                  selected
+                    ? "border-foreground/25 bg-muted/70 text-foreground shadow-xs"
+                    : "border-border/60 bg-background text-muted-foreground hover:border-border hover:bg-muted/35",
+                )}
+                data-testid={`member-role-${option.value}`}
+                key={option.value}
+                onClick={() => setRole(option.value)}
+                type="button"
+              >
+                <span
+                  className={cn(
+                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                    selected
+                      ? "bg-foreground text-background"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  <Icon aria-hidden="true" className="h-4 w-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-foreground">
+                    {option.label}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {option.description}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 

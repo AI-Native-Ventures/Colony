@@ -10,10 +10,12 @@ const DIRECT_ADD_HEX =
 const DIRECT_ADD_NPUB =
   "npub1a2d567n60z37xu57245tzntkf4yk90swrus0wjdulrvah0u6jv5qusyp60";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
   await installMockBridge(page, {
     relayRequiresMembership: true,
-    relayRole: "owner",
+    relayRole: testInfo.title.includes("admin can add members")
+      ? "admin"
+      : "owner",
   });
   await page.route("**/api/invites", async (route) => {
     await route.fulfill({
@@ -82,15 +84,13 @@ test("capture: share-style community invite dialog", async ({ page }) => {
   await expect(page.getByTestId("community-invite-email-field")).toHaveCount(0);
   await expect(page.getByPlaceholder("Type an email address")).toHaveCount(0);
   await expect(
-    dialog.getByText(
-      "Add someone directly or share a link they can use to join.",
-    ),
+    dialog.getByText("Add someone now or create a link they can use to join."),
   ).toBeVisible();
   await expect(
     dialog.getByRole("heading", { name: "Add directly", exact: true }),
   ).toBeVisible();
   await expect(
-    dialog.getByText("Or share a link", { exact: true }),
+    dialog.getByText("Share an invite link", { exact: true }),
   ).toBeVisible();
   await expect(page.getByTestId("member-pubkey-input")).toBeVisible();
   await expect(page.getByTestId("member-role-member")).toBeVisible();
@@ -121,8 +121,20 @@ test("capture: share-style community invite dialog", async ({ page }) => {
   ).toBeVisible();
   await page.keyboard.press("Escape");
 
+  await dialog
+    .getByTestId("community-invite-dialog-body")
+    .evaluate((element) => element.scrollTo({ top: 0 }));
   await waitForAnimations(page);
   await dialog.screenshot({ path: `${OUTDIR}/02-invite-dialog.png` });
+});
+
+test("admin can add members but cannot assign the admin role", async ({
+  page,
+}) => {
+  await page.getByTestId("community-invite-dialog-trigger").click();
+
+  await expect(page.getByTestId("member-role-member")).toBeVisible();
+  await expect(page.getByTestId("member-role-admin")).toHaveCount(0);
 });
 
 test("owner can add an admin directly by npub from live Invites UI", async ({
