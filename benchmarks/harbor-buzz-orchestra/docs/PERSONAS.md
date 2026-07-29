@@ -92,7 +92,8 @@ critic condition the implementer and the critic are both `kind: worker`, so a
 table rendered from the kind would print two identical rows and leave the lead
 unable to tell which teammate edits and which only verifies. Keep manifest
 `role` values drawn from the vocabulary the personas use: `solo`, `lead`,
-`implementer`, `critic`, `driver`, `navigator`.
+`implementer`, `critic`, `driver`, `navigator`, and — for the `gt/` generation
+(§2.1) — `scout` and `worker`.
 
 **A misspelled @mention fails silently.** `extract_at_mentions_with_known`
 (`crates/buzz-sdk/src/mentions.rs:107`) resolves names against known members;
@@ -193,6 +194,93 @@ divergent work is exactly where two writers collide.
 `FAIL`), and explicitly told not to write the fix. Read-only matters for a
 reason beyond collisions: the state the critic assesses has to be the state the
 grader sees.
+
+## 2.1 The `gt/` generation — goosetown-derived
+
+`personas/bench/gt/` is a second, self-contained persona family, added
+2026-07-29 after every team cell in the study came in at or below its matching
+solo baseline (B1 0.536 / C1 0.494 against A1's 0.545; C3 0.831 against A2's
+0.843 at 64% more money). It is derived from the `goosetown-*` skill set —
+`goosetown-orchestrator`, `goosetown-worker`, `goosetown-reviewer`, and the
+eight `goosetown-researcher-*` skills, which all share one template.
+
+| File | Slot | Terminal | Ends trial | Used by |
+|------|------|----------|------------|---------|
+| `gt/gt-lead.md` | orchestrator | **read-only** | yes | G0, G1, G1s, G2, G2s |
+| `gt/gt-scout.md` | worker | read-only | no | G0, G1, G1s, G2, G2s |
+| `gt/gt-worker.md` | worker | read+write | no | G0, G1, G1s, G2, G2s |
+
+Three deltas against the `lead-delegate.md` family, each chosen because it maps
+onto something the measured numbers say went wrong. None of them is a style
+edit.
+
+**The lead cannot write.** `lead-delegate.md:40` says "Do the work directly when
+that is the shorter path" and frames delegation as something that must earn its
+round trip. That describes a solo agent with an expensive habit, and it is what
+C3 measured: score at solo-opus level, input tokens at 1.81× solo opus.
+`gt-lead.md` replaces the trade-off with a boundary — reads are the lead's,
+every byte written is a teammate's — and carries **no trivial-write exception**,
+because the exception is the loophole the old persona fell through. Enforcement
+is prose only: there is no per-seat tool gating (`container_runtime.py:297`
+gives every agent the same MCP toolset), so "read-only" in the table above is a
+rule the persona states, not a sandbox.
+
+**A read-only recon seat exists.** This is new to the study. Every previous
+teammate could write, so any two of them were a potential collision and the lead
+had to serialise — which is why the team cells effectively ran in series and
+paid round trips for it. `gt-scout.md` carries a hard read-only boundary, so
+scouts cannot collide with each other or with the worker, and deliberate overlap
+between them costs tokens and nothing else. That is what makes a genuinely
+parallel recon phase safe, and it is the only reason the `count: 2` scout cells
+(G2, G2s) are a different experiment rather than a slower one.
+
+**Reports carry an envelope.** `gt-worker.md` closes with
+`STATUS: complete | partial | blocked` plus `DELIVERABLE` / `EVIDENCE` /
+`NOTES`; `gt-scout.md` closes with either `BRIEF:` +
+`FINDINGS` / `GOTCHAS` / `GAPS` or `VERDICT: pass | pass_with_notes | fail` plus
+per-finding severity. Freeform prose made the lead's next decision expensive and
+left the failure taxonomy hand-labelled; a fixed shape costs the delegate nothing
+and is parseable. All three files also tell the agent to send **the decisive
+output, not the transcript**, because every pasted log line is re-sent on every
+subsequent round of the trial — the cost mechanism doc 02 §2 is built on.
+
+Two ideas kept from the existing family because they are better than the
+goosetown originals. `gt-scout.md`'s verify half keeps `critic.md`'s
+**re-derive, do not re-run** rule — `goosetown-reviewer` has no equivalent, and
+without it two agents run one script, reproduce one mistake, and both certify
+it. And all three files keep the byte-identical "This trial is not a Buzz
+workspace" block, which is load-bearing against `[Base]`.
+
+One idea taken from goosetown that has no precedent here and is a **score**
+lever rather than a safety one: *"A cancelled writer with 8 of 10 sections on
+disk is useful"* (`goosetown-writer/SKILL.md:63`). The grader reads the
+container when the clock stops, so `gt-lead.md` and `gt-worker.md` both say to
+land the simplest thing that passes the task's own check and refine from there,
+rather than assembling the finished answer and writing it once.
+
+### `gt-lead.md` diverges from the shared Messaging block, on purpose
+
+The §2 verification loop globs `personas/bench/*.md` and therefore does not
+reach `gt/`, which is correct: **`gt-lead.md`'s Messaging section is
+deliberately different.** The shared block says "Every turn you take ends with
+exactly one published message". `gt-lead.md` says *at least* one, and adds a
+bullet stating that dispatching two teammates means two messages in the same
+turn.
+
+That is not a drift to be tidied up. A message wakes exactly one agent, so
+"exactly one message per turn" caps a lead at one delegate in flight and
+collapses G2/G2s into serial recon — the whole thing they exist to measure. The
+invariant that actually matters is the anti-freeze one (never end a turn having
+woken nobody), and the reworded bullet preserves it. `gt-scout.md` and
+`gt-worker.md` keep "exactly one", since they only ever report to the lead.
+
+Also inherited rather than re-derived: `gt-lead.md` repeats
+`lead-delegate.md:64`'s claim that teammates cannot read channel history. Per §1
+that is a convention, not a mechanism — `format_context_hints` tells every woken
+agent how to fetch history, and no persona in either family forbids it. The
+statement is kept verbatim so the G1-vs-C3 comparison differs only where
+intended, but read it as an instruction to write self-contained assignments,
+not as a guarantee about what a delegate can see.
 
 ## 3. Condition matrix
 
