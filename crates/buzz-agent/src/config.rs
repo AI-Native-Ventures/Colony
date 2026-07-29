@@ -2207,6 +2207,32 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_effort_wave_endpoints_resolve_high_on_the_openai_route() {
+        // The A1h/B1h/A5h/B3h cells run direct against api.openai.com rather
+        // than through the Databricks gateway, so their endpoint strings are
+        // bare model ids with a dot -- `gpt-5.6-luna`, not
+        // `databricks-gpt-5-6-luna`. Both spellings have to land in the same
+        // capability family, and `terra` is new enough that nothing else in the
+        // tree mentions it.
+        //
+        // The failure this pins is silent: an unrecognised model falls out of
+        // the family match, `high` gets clamped, and four 89-task sweeps report
+        // a null that is plumbing rather than a finding.
+        for model in ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"] {
+            let efforts = openai_efforts_for_model(model)
+                .unwrap_or_else(|| panic!("{model} must resolve to the gpt-5.6 effort table"));
+            assert!(
+                efforts.contains(&ThinkingEffort::High),
+                "{model} must support the `high` level the effort wave pins"
+            );
+        }
+        // Dotted ids are already bare, so the catalog strip must leave them
+        // alone rather than slicing at the first `gpt-` token.
+        assert_eq!(strip_catalog_prefix("gpt-5.6-terra"), "gpt-5.6-terra");
+        assert_eq!(ThinkingEffort::High.openai_effort_str(), "high");
+    }
+
+    #[test]
     fn anthropic_thinking_config_fable_5_xhigh_emits_xhigh() {
         let (thinking, output_config) =
             anthropic_thinking_config("claude-fable-5", ThinkingEffort::XHigh, 32_768);

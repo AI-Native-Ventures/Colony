@@ -1,4 +1,5 @@
 import copy
+import pathlib
 
 import pytest
 import yaml
@@ -46,6 +47,43 @@ def test_pinned_effort_is_part_of_the_condition_hash(manifest_data):
     pinned_manifest = ExperimentManifest.load(pinned)
     assert b"thinking_effort" in pinned_manifest.canonical_bytes()
     assert pinned_manifest.sha256 != baseline.sha256
+
+
+MANIFEST_DIR = pathlib.Path(__file__).resolve().parents[1] / "manifests"
+SHIPPED = sorted(MANIFEST_DIR.glob("*.yaml"))
+
+
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.stem)
+def test_shipped_manifest_loads(path):
+    """Nothing else in the suite reads the files the sweeps actually run.
+
+    Every other test builds a manifest from a fixture, so a typo in a shipped
+    YAML -- a persona hash that moved, a price key that does not match an
+    endpoint name -- surfaces only when a box has been provisioned and a sweep
+    refuses to start.
+    """
+    assert len(ExperimentManifest.load(path).sha256) == 64
+
+
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.stem)
+def test_shipped_manifest_pins_effort_uniformly(path):
+    """Either the whole roster pins an effort or none of it does.
+
+    A multi-agent cell that pins `thinking_effort` on the driver and forgets the
+    navigator is not the condition its filename claims: it is an asymmetric pair,
+    a different and far less interpretable experiment. It fails silently, because
+    the unpinned seat inherits the harness default and runs perfectly well at
+    `medium` while the condition name, the hash and the write-up all say `high`.
+    """
+    roster = ExperimentManifest.load(path).roster
+    pinned = {
+        entry.id: (entry.generation.thinking_effort if entry.generation else None)
+        for entry in roster
+    }
+    levels = set(pinned.values())
+    assert len(levels) == 1, (
+        f"{path.stem} pins reasoning effort on some seats but not all: {pinned}"
+    )
 
 
 def test_hash_changes_when_staffing_changes(manifest_data):
