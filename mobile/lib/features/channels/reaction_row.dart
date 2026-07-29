@@ -12,6 +12,7 @@ import '../../shared/emoji/positive_emoji.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel_management_provider.dart';
+import 'emoji_picker.dart';
 import 'recent_emoji_provider.dart';
 import 'timeline_message.dart';
 
@@ -61,6 +62,26 @@ void armReactionBurst(WidgetRef ref, TimelineMessage message, String emoji) {
   );
   if (alreadyReacted) return;
   ref.read(pendingReactionBurstProvider.notifier).arm(message.id, emoji);
+}
+
+/// Open the emoji picker and add whatever the user chooses as a reaction to
+/// [message].
+///
+/// Shared by the `+` pill in the channel timeline and in the thread view so the
+/// recency bookkeeping and burst arming can't drift apart between them.
+void showAddReactionPicker({
+  required BuildContext context,
+  required WidgetRef ref,
+  required TimelineMessage message,
+}) {
+  showEmojiPicker(
+    context: context,
+    onSelect: (emoji) {
+      ref.read(recentEmojiProvider.notifier).record(emoji);
+      armReactionBurst(ref, message, emoji);
+      ref.read(channelActionsProvider).addReaction(message.id, emoji);
+    },
+  );
 }
 
 class ReactionRow extends StatelessWidget {
@@ -189,6 +210,12 @@ class _ReactionPill extends HookConsumerWidget {
       // Post-frame so the pill has been laid out and can report its centre.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
+        // The same message is mounted on two routes at once when a thread is
+        // pushed over its channel, and the channel's copy builds first. Without
+        // this the channel pill claims the burst and it only becomes visible
+        // after popping back — the burst has to play where the user is looking.
+        final route = ModalRoute.of(context);
+        if (route != null && !route.isCurrent) return;
         if (!ref.read(pendingReactionBurstProvider.notifier).claim(target)) {
           return;
         }

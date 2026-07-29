@@ -299,6 +299,59 @@ void main() {
       expect(container.read(pendingReactionBurstProvider), isNotNull);
     });
 
+    testWidgets(
+      'a pill under a pushed route leaves the burst for the top one',
+      (tester) async {
+        // The channel timeline stays mounted under a pushed thread page and
+        // rebuilds first, so without a route check it claimed the burst and the
+        // user saw nothing until they popped back.
+        final navigatorKey = GlobalKey<NavigatorState>();
+        late ProviderContainer container;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              emojiDatasetOrEmptyProvider.overrideWithValue(_dataset),
+              userCacheProvider.overrideWith(
+                () => _FakeUserCacheNotifier(const {}),
+              ),
+            ],
+            child: MaterialApp(
+              navigatorKey: navigatorKey,
+              home: Scaffold(
+                body: ReactionRow(
+                  messageId: _messageId,
+                  reactions: [_reaction(reactedByCurrentUser: true)],
+                  onToggle: (_) {},
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        container = ProviderScope.containerOf(
+          tester.element(find.byType(ReactionRow)),
+        );
+        final controller = container.read(emojiBurstControllerProvider);
+
+        // Push a route over it, then arm and let the covered pill rebuild.
+        navigatorKey.currentState!.push(
+          MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: Text('thread')),
+          ),
+        );
+        await tester.pumpAndSettle();
+        container
+            .read(pendingReactionBurstProvider.notifier)
+            .arm(_messageId, _fire);
+        await tester.pump();
+
+        expect(controller.hasParticles, isFalse);
+        // Still armed, so the pill on the visible route can claim it.
+        expect(container.read(pendingReactionBurstProvider), isNotNull);
+      },
+    );
+
     testWidgets('reduced motion suppresses the burst', (tester) async {
       await tester.pumpWidget(
         ProviderScope(

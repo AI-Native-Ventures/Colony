@@ -45,26 +45,6 @@ void showEmojiPicker({
   );
 }
 
-/// Which tab of the picker is showing. Frequently-used and custom are pinned
-/// either side of the dataset's own categories.
-sealed class _PickerTab {
-  const _PickerTab();
-}
-
-class _FrequentTab extends _PickerTab {
-  const _FrequentTab();
-}
-
-class _CustomTab extends _PickerTab {
-  const _CustomTab();
-}
-
-class _StandardTab extends _PickerTab {
-  final int categoryIndex;
-
-  const _StandardTab(this.categoryIndex);
-}
-
 class EmojiPickerSheet extends HookConsumerWidget {
   final void Function(String emoji) onSelect;
 
@@ -84,13 +64,54 @@ class EmojiPickerSheet extends HookConsumerWidget {
       return () => searchController.removeListener(onChanged);
     }, [searchController]);
 
-    final tab = useState<_PickerTab>(const _FrequentTab());
     final trimmedQuery = query.value.trim();
     final isSearching = trimmedQuery.isNotEmpty;
 
     void select(String emoji) {
       ref.read(recentEmojiProvider.notifier).record(emoji);
       onSelect(emoji);
+    }
+
+    final sections = useMemoized(
+      () => _buildSections(
+        dataset: dataset,
+        customEmoji: customEmoji,
+        recent: recent,
+        onSelect: select,
+      ),
+      [dataset, customEmoji, recent],
+    );
+    final offsets = useMemoized(() => _sectionOffsets(sections), [sections]);
+
+    final scrollController = useScrollController();
+    // A notifier rather than state: the highlight changes on every scroll frame
+    // and only the rail needs to hear about it. Rebuilding the sheet would
+    // rebuild the grid underneath it.
+    final activeSection = useMemoized(() => ValueNotifier(0), [sections]);
+    useEffect(() => activeSection.dispose, [activeSection]);
+
+    useEffect(() {
+      void onScroll() {
+        if (!scrollController.hasClients) return;
+        activeSection.value = _activeSectionIndex(
+          offsets,
+          scrollController.offset,
+        );
+      }
+
+      scrollController.addListener(onScroll);
+      return () => scrollController.removeListener(onScroll);
+    }, [scrollController, offsets, activeSection]);
+
+    void jumpToSection(int index) {
+      activeSection.value = index;
+      if (!scrollController.hasClients) return;
+      final max = scrollController.position.maxScrollExtent;
+      scrollController.animateTo(
+        offsets[index].clamp(0.0, max),
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+      );
     }
 
     // Recompute only when the query or the underlying sets change — scanning
@@ -118,12 +139,14 @@ class EmojiPickerSheet extends HookConsumerWidget {
       child: Column(
         children: [
           _EmojiSearchField(controller: searchController),
-          if (!isSearching)
-            _CategoryRail(
-              dataset: dataset,
-              hasCustomEmoji: customEmoji.isNotEmpty,
-              selected: tab.value,
-              onSelect: (next) => tab.value = next,
+          if (!isSearching && sections.isNotEmpty)
+            ValueListenableBuilder<int>(
+              valueListenable: activeSection,
+              builder: (context, active, _) => _CategoryRail(
+                sections: sections,
+                activeIndex: active,
+                onSelect: jumpToSection,
+              ),
             ),
           Divider(height: 1, color: context.colors.outlineVariant),
           Expanded(
@@ -135,28 +158,130 @@ class EmojiPickerSheet extends HookConsumerWidget {
                     customEmoji: customResults,
                     onSelect: select,
                   )
-                : switch (tab.value) {
-                    _FrequentTab() => _FrequentGrid(
-                      recent: recent,
-                      customEmoji: customEmoji,
-                      onSelect: select,
-                    ),
-                    _CustomTab() => _CustomEmojiGrid(
-                      emoji: customEmoji,
-                      onSelect: select,
-                    ),
-                    _StandardTab(:final categoryIndex) => _EmojiGrid(
-                      // A community can drop its last custom emoji while the
-                      // sheet is open, shrinking the rail under the selection.
-                      entries: categoryIndex < dataset.categories.length
-                          ? dataset.categories[categoryIndex].emoji
-                          : const [],
-                      onSelect: select,
-                    ),
-                  },
+                : _ContinuousEmojiGrid(
+                    sections: sections,
+                    controller: scrollController,
+                  ),
           ),
         ],
       ),
     );
   }
+}
+
+/// Build the scroll order: frequently-used, the dataset's own categories in
+/// emoji-mart order, then the community's custom emoji.
+///
+/// Frequently-used is omitted rather than shown empty — in a continuous list an
+/// empty section is a gap with a label on it, and the rail entry would lead
+/// nowhere.
+List<_EmojiSection> _buildSections({
+  required EmojiDataset dataset,
+  required List<CustomEmoji> customEmoji,
+  required List<RecentEmojiEntry> recent,
+  required void Function(String emoji) onSelect,
+}) {
+  final sections = <_EmojiSection>[];
+
+  final recentTiles = _resolveRecentTiles(
+    recent: recent,
+    dataset: dataset,
+    customEmoji: customEmoji,
+    onSelect: onSelect,
+  );
+  if (recentTiles.isNotEmpty) {
+    sections.add(
+      _EmojiSection(
+        id: 'frequent',
+        label: 'Frequently used',
+        icon: LucideIcons.clock,
+        itemCount: recentTiles.length,
+        itemBuilder: (context, index) => recentTiles[index],
+      ),
+    );
+  }
+
+  for (final category in dataset.categories) {
+    sections.add(
+      _EmojiSection(
+        id: category.id,
+        label: category.label,
+        icon: _categoryIcon(category.id),
+        itemCount: category.emoji.length,
+        itemBuilder: (context, index) {
+          final entry = category.emoji[index];
+          return _EmojiTile(entry: entry, onTap: () => onSelect(entry.native));
+        },
+      ),
+    );
+  }
+
+  if (customEmoji.isNotEmpty) {
+    sections.add(
+      _EmojiSection(
+        id: 'custom',
+        label: 'Custom',
+        icon: LucideIcons.sparkles,
+        itemCount: customEmoji.length,
+        itemBuilder: (context, index) {
+          final entry = customEmoji[index];
+          return _CustomEmojiTile(
+            emoji: entry,
+            onTap: () => onSelect(':${entry.shortcode}:'),
+          );
+        },
+      ),
+    );
+  }
+
+  return sections;
+}
+
+/// Resolve the recency list back to renderable tiles.
+///
+/// Entries are stored as the selected string, so a standard emoji is a glyph and
+/// a custom one is `:shortcode:` — resolve each against the dataset and the
+/// palette, and drop anything that no longer exists (a custom emoji removed from
+/// the community would otherwise render as literal text).
+List<Widget> _resolveRecentTiles({
+  required List<RecentEmojiEntry> recent,
+  required EmojiDataset dataset,
+  required List<CustomEmoji> customEmoji,
+  required void Function(String emoji) onSelect,
+}) {
+  final customByShortcode = {
+    for (final emoji in customEmoji) emoji.shortcode.toLowerCase(): emoji,
+  };
+  final entriesById = {for (final entry in dataset.all) entry.id: entry};
+
+  final tiles = <Widget>[];
+  for (final item in recent) {
+    final value = item.emoji;
+    if (value.startsWith(':') && value.endsWith(':')) {
+      final custom =
+          customByShortcode[value.substring(1, value.length - 1).toLowerCase()];
+      if (custom == null) continue;
+      tiles.add(
+        _CustomEmojiTile(
+          emoji: custom,
+          onTap: () => onSelect(value),
+          keyPrefix: 'emoji-tile-frequent-custom',
+        ),
+      );
+      continue;
+    }
+    final shortcode = dataset.nativeToShortcode[value];
+    final entry = shortcode == null
+        ? null
+        : entriesById[shortcode.substring(1, shortcode.length - 1)];
+    if (entry == null) continue;
+    tiles.add(
+      _EmojiTile(
+        entry: entry,
+        onTap: () => onSelect(entry.native),
+        keyPrefix: 'emoji-tile-frequent',
+      ),
+    );
+  }
+  return tiles;
 }

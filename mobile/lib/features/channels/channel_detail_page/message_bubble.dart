@@ -166,6 +166,7 @@ class _MessageBubble extends ConsumerWidget {
                         baseStyle: messageBodyTextStyle.copyWith(
                           color: context.colors.onSurface,
                         ),
+                        scaleEmojiOnly: true,
                         mediaCarouselTrailingOverflow: Grid.gutter,
                         onMediaReply: allMessages == null
                             ? null
@@ -215,6 +216,16 @@ class _MessageBubble extends ConsumerWidget {
                           reactions: message.reactions,
                           onToggle: (emoji) =>
                               toggleReaction(ref, message, emoji),
+                          // Desktop puts the picker trigger beside existing
+                          // reactions on every row. The row only renders once a
+                          // message has a reaction, so this doesn't add chrome
+                          // to a quiet timeline.
+                          showAddButton: isMember && !isArchived,
+                          onAddReaction: () => showAddReactionPicker(
+                            context: context,
+                            ref: ref,
+                            message: message,
+                          ),
                         ),
                     ],
                   ),

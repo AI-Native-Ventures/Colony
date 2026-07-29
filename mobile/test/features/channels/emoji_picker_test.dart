@@ -58,6 +58,31 @@ final _dataset = () {
   );
 }();
 
+/// A dataset tall enough that the grid actually scrolls, so rail navigation has
+/// somewhere to go. [_dataset] fits on one screen and clamps to offset 0.
+final _tallDataset = () {
+  final people = [
+    for (var i = 0; i < 200; i++)
+      _entry('people_$i', native: '\u{1F600}', categoryId: 'people'),
+  ];
+  // Nature is tall too, so the People target isn't clamped by the end of the
+  // list — this test is about landing on a header, not about the clamp.
+  final nature = [
+    _entry('fire', native: '\u{1F525}', categoryId: 'nature'),
+    for (var i = 0; i < 200; i++)
+      _entry('nature_$i', native: '\u{1F33F}', categoryId: 'nature'),
+  ];
+  final all = [...people, ...nature];
+  return EmojiDataset(
+    categories: [
+      EmojiCategory(id: 'people', emoji: people),
+      EmojiCategory(id: 'nature', emoji: nature),
+    ],
+    all: all,
+    nativeToShortcode: {for (final entry in all) entry.native: ':${entry.id}:'},
+  );
+}();
+
 const _customEmoji = [
   CustomEmoji(shortcode: 'partyparrot', url: 'https://example.test/parrot.gif'),
 ];
@@ -91,47 +116,125 @@ Future<List<String>> _pumpPicker(
 
 void main() {
   group('EmojiPickerSheet', () {
-    testWidgets('opens on Frequently used, empty until something is picked', (
+    testWidgets('with no history there is no Frequently used section', (
       tester,
     ) async {
       await _pumpPicker(tester, prefs: await _prefs());
 
-      expect(find.text('Emoji you use will show up here.'), findsOneWidget);
-      expect(find.byKey(const ValueKey('emoji-picker-grid')), findsNothing);
+      // An empty section in a continuous list is a labelled gap, and its rail
+      // entry would lead nowhere — so it is omitted until something is picked.
+      expect(find.byTooltip('Frequently used'), findsNothing);
+      expect(find.text('Frequently used'), findsNothing);
+      expect(find.byKey(const ValueKey('emoji-picker-grid')), findsOneWidget);
     });
 
-    testWidgets('rail switches between the dataset categories', (tester) async {
+    testWidgets('every section lives in one continuous scroll view', (
+      tester,
+    ) async {
       await _pumpPicker(tester, prefs: await _prefs());
 
-      await tester.tap(find.byTooltip('Smileys & People'));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('emoji-picker-grid')), findsOneWidget);
-      expect(find.byKey(const ValueKey('emoji-tile-grinning')), findsOneWidget);
-      expect(find.byKey(const ValueKey('emoji-tile-fire')), findsNothing);
+      // The old picker swapped the grid per tab, so only one category's emoji
+      // existed at a time. Now they are all in the same list — the rail is a
+      // shortcut into it, not a page switcher.
+      final grid = find.byKey(const ValueKey('emoji-picker-grid'));
+      expect(grid, findsOneWidget);
+      expect(
+        find.descendant(
+          of: grid,
+          matching: find.byKey(const ValueKey('emoji-tile-grinning')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: grid,
+          matching: find.byKey(const ValueKey('emoji-tile-fire')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: grid,
+          matching: find.byKey(const ValueKey('emoji-tile-custom-partyparrot')),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the rail divides the full tray width evenly', (tester) async {
+      await _pumpPicker(tester, prefs: await _prefs());
+
+      // The rail used to be a short left-aligned strip. Every section now gets
+      // one evenly-sized slot across the same width the search field spans.
+      final searchField = tester.getRect(
+        find.byKey(const ValueKey('emoji-picker-search')),
+      );
+      final people = tester.getRect(find.byTooltip('Smileys & People'));
+      final nature = tester.getRect(find.byTooltip('Animals & Nature'));
+      final custom = tester.getRect(find.byTooltip('Custom'));
+
+      expect(nature.left, greaterThan(people.left));
+      expect(custom.left, greaterThan(nature.left));
+      expect(people.width, closeTo(nature.width, 0.5));
+      expect(people.width, closeTo(custom.width, 0.5));
+      // First slot starts and last slot ends on the search field's edges.
+      expect(people.left, closeTo(searchField.left, 0.5));
+      expect(custom.right, closeTo(searchField.right, 0.5));
+    });
+
+    testWidgets('tapping the rail scrolls the grid instead of replacing it', (
+      tester,
+    ) async {
+      await _pumpPicker(tester, prefs: await _prefs(), dataset: _tallDataset);
+
+      final grid = find.byKey(const ValueKey('emoji-picker-grid'));
+      double offset() =>
+          tester.widget<CustomScrollView>(grid).controller!.offset;
+      expect(offset(), 0);
 
       await tester.tap(find.byTooltip('Animals & Nature'));
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('emoji-tile-fire')), findsOneWidget);
-      expect(find.byKey(const ValueKey('emoji-tile-grinning')), findsNothing);
+
+      // Same scroll view, moved — not a swapped-in second grid.
+      expect(grid, findsOneWidget);
+      expect(offset(), greaterThan(0));
+      // People has 200 emoji at 8 per row: 25 rows of 40px plus a 28px header.
+      expect(offset(), closeTo(28 + 25 * 40, 0.5));
     });
 
-    testWidgets('custom tab only appears when the palette has emoji', (
+    testWidgets('the custom section only exists when the palette has emoji', (
       tester,
     ) async {
       await _pumpPicker(tester, prefs: await _prefs(), customEmoji: const []);
       expect(find.byTooltip('Custom'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('emoji-tile-custom-partyparrot')),
+        findsNothing,
+      );
 
       await _pumpPicker(tester, prefs: await _prefs());
-      await tester.tap(find.byTooltip('Custom'));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('emoji-picker-custom-grid')),
-        findsOneWidget,
-      );
+      expect(find.byTooltip('Custom'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('emoji-tile-custom-partyparrot')),
         findsOneWidget,
       );
+    });
+
+    testWidgets('custom emoji sit in the same cell as native glyphs', (
+      tester,
+    ) async {
+      await _pumpPicker(tester, prefs: await _prefs());
+
+      // A community's own emoji used to get their own looser 6-per-row grid,
+      // which read as a different component bolted onto the sheet.
+      final native = tester.getRect(
+        find.byKey(const ValueKey('emoji-tile-fire')),
+      );
+      final custom = tester.getRect(
+        find.byKey(const ValueKey('emoji-tile-custom-partyparrot')),
+      );
+      expect(custom.width, closeTo(native.width, 0.5));
+      expect(custom.height, closeTo(native.height, 0.5));
     });
 
     testWidgets('typing filters across the standard and custom sets', (
@@ -214,8 +317,6 @@ void main() {
     testWidgets('a standard emoji emits its glyph', (tester) async {
       final selected = await _pumpPicker(tester, prefs: await _prefs());
 
-      await tester.tap(find.byTooltip('Animals & Nature'));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('emoji-tile-fire')));
       await tester.pumpAndSettle();
 
@@ -225,8 +326,6 @@ void main() {
     testWidgets('a custom emoji emits :shortcode:', (tester) async {
       final selected = await _pumpPicker(tester, prefs: await _prefs());
 
-      await tester.tap(find.byTooltip('Custom'));
-      await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('emoji-tile-custom-partyparrot')),
       );
@@ -235,22 +334,30 @@ void main() {
       expect(selected, [':partyparrot:']);
     });
 
-    testWidgets('a selection lands in Frequently used', (tester) async {
+    testWidgets('a selection adds a Frequently used section', (tester) async {
       final prefs = await _prefs();
       await _pumpPicker(tester, prefs: prefs);
 
-      await tester.tap(find.byTooltip('Animals & Nature'));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('emoji-tile-fire')));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('Frequently used'));
-      await tester.pumpAndSettle();
+      // Re-open: the section now exists, at the head of the scroll order, with
+      // its own rail entry.
+      await _pumpPicker(tester, prefs: prefs);
+      expect(find.byTooltip('Frequently used'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('emoji-picker-frequent-grid')),
+        find.byKey(const ValueKey('emoji-tile-frequent-fire')),
         findsOneWidget,
       );
+      // Keyed apart from the copy in Animals & Nature, which is still there.
       expect(find.byKey(const ValueKey('emoji-tile-fire')), findsOneWidget);
+      final frequent = tester.getRect(
+        find.byKey(const ValueKey('emoji-tile-frequent-fire')),
+      );
+      final inCategory = tester.getRect(
+        find.byKey(const ValueKey('emoji-tile-fire')),
+      );
+      expect(frequent.top, lessThan(inCategory.top));
     });
 
     testWidgets('shows a spinner while the dataset is still loading', (

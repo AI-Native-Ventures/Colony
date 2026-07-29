@@ -14,55 +14,46 @@ IconData _categoryIcon(String categoryId) => switch (categoryId) {
   _ => LucideIcons.layoutGrid,
 };
 
-/// Horizontal category selector: Frequently-used, then the dataset's eight
-/// categories in emoji-mart order, then the community's custom emoji.
+/// Height of the rail. Sized to a comfortable tap target rather than to the
+/// 18px icon it holds.
+const _railHeight = 36.0;
+
+/// Category selector: one icon per section of the continuous grid, in scroll
+/// order. Tapping jumps to that section; scrolling moves the highlight.
+///
+/// The icons divide the full content width evenly — the same width the search
+/// field above spans — so the rail reads as a segmented control rather than a
+/// short left-aligned strip.
 class _CategoryRail extends StatelessWidget {
-  final EmojiDataset dataset;
-  final bool hasCustomEmoji;
-  final _PickerTab selected;
-  final ValueChanged<_PickerTab> onSelect;
+  final List<_EmojiSection> sections;
+  final int activeIndex;
+  final ValueChanged<int> onSelect;
 
   const _CategoryRail({
-    required this.dataset,
-    required this.hasCustomEmoji,
-    required this.selected,
+    required this.sections,
+    required this.activeIndex,
     required this.onSelect,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Local binding so the pattern match promotes — a public final field
-    // doesn't.
-    final current = selected;
     return SizedBox(
-      height: Grid.lg,
-      // Ten-plus tabs don't fit a phone width; scroll rather than shrink the
-      // targets below a comfortable tap size.
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
-        children: [
-          _CategoryIcon(
-            icon: LucideIcons.clock,
-            tooltip: 'Frequently used',
-            selected: current is _FrequentTab,
-            onTap: () => onSelect(const _FrequentTab()),
-          ),
-          for (var i = 0; i < dataset.categories.length; i++)
-            _CategoryIcon(
-              icon: _categoryIcon(dataset.categories[i].id),
-              tooltip: dataset.categories[i].label,
-              selected: current is _StandardTab && current.categoryIndex == i,
-              onTap: () => onSelect(_StandardTab(i)),
-            ),
-          if (hasCustomEmoji)
-            _CategoryIcon(
-              icon: LucideIcons.sparkles,
-              tooltip: 'Custom',
-              selected: current is _CustomTab,
-              onTap: () => onSelect(const _CustomTab()),
-            ),
-        ],
+      height: _railHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
+        child: Row(
+          children: [
+            for (var i = 0; i < sections.length; i++)
+              Expanded(
+                child: _CategoryIcon(
+                  icon: sections[i].icon,
+                  tooltip: sections[i].label,
+                  selected: i == activeIndex,
+                  onTap: () => onSelect(i),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -84,19 +75,23 @@ class _CategoryIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return SizedBox(
-      width: Grid.lg,
-      height: Grid.lg,
-      child: IconButton(
-        onPressed: onTap,
-        tooltip: tooltip,
-        icon: Icon(
-          icon,
-          size: 18,
-          color: selected ? colors.primary : colors.onSurfaceVariant,
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(Radii.sm),
+        child: Semantics(
+          button: true,
+          selected: selected,
+          label: tooltip,
+          child: Center(
+            child: Icon(
+              icon,
+              size: 18,
+              color: selected ? colors.primary : colors.onSurfaceVariant,
+            ),
+          ),
         ),
-        padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
       ),
     );
   }

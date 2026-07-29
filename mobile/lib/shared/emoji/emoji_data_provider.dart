@@ -27,3 +27,12 @@ final emojiDatasetProvider = FutureProvider<EmojiDataset>((ref) async {
 final emojiDatasetOrEmptyProvider = Provider<EmojiDataset>((ref) {
   return ref.watch(emojiDatasetProvider).value ?? EmojiDataset.empty;
 });
+
+/// Every glyph in the dataset, as a set for membership tests.
+///
+/// Built once per dataset load rather than per message: `isEmojiOnlyMessage`
+/// runs on every rendered body, and materializing ~1.9k keys there would be a
+/// per-frame cost.
+final nativeEmojiGlyphsProvider = Provider<Set<String>>((ref) {
+  return ref.watch(emojiDatasetOrEmptyProvider).nativeToShortcode.keys.toSet();
+});

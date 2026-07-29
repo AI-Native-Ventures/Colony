@@ -3,41 +3,96 @@ part of '../emoji_picker.dart';
 /// Emoji per row. Matches desktop's `perLine={8}`.
 const _emojiPerLine = 8;
 
-/// Custom emoji are images rather than glyphs and read better a little larger,
-/// so they get their own (looser) grid — same as the old picker did.
-const _customEmojiPerLine = 6;
-
+/// Rendered glyph size. Standard and custom emoji share this so a community's
+/// own emoji sit in the grid at the same weight as the native set.
 const _emojiGlyphSize = 28.0;
-const _customEmojiSize = 32.0;
 
-/// Shared grid delegate so every tab lays out identically.
-SliverGridDelegate _gridDelegate({required int perLine}) {
-  return SliverGridDelegateWithFixedCrossAxisCount(
-    crossAxisCount: perLine,
-    mainAxisSpacing: Grid.half,
-    crossAxisSpacing: Grid.half,
-  );
+/// Height of one grid cell. Fixed rather than derived from the cell width so
+/// section offsets are exact — [_EmojiSection.extent] is what the rail scrolls
+/// to, and a width-dependent row height would make it a guess.
+const _cellExtent = 40.0;
+
+/// Height of a pinned section header, padding included. Also fixed, for the
+/// same reason.
+const _sectionHeaderExtent = 28.0;
+
+/// Cells divide the content width evenly with no gaps, the way emoji-mart lays
+/// its grid out; the space around each glyph comes from the cell being larger
+/// than the glyph.
+SliverGridDelegate get _gridDelegate =>
+    const SliverGridDelegateWithFixedCrossAxisCount(
+      crossAxisCount: _emojiPerLine,
+      mainAxisExtent: _cellExtent,
+    );
+
+/// One labelled run of tiles in the continuous grid.
+///
+/// Sections know their own scroll extent so the rail can jump to them without
+/// the grid having been laid out — with ~1.9k emoji most sections are far
+/// off-screen, so there is no render object to measure or `ensureVisible`.
+class _EmojiSection {
+  final String id;
+  final String label;
+  final IconData icon;
+  final int itemCount;
+  final Widget Function(BuildContext context, int index) itemBuilder;
+
+  const _EmojiSection({
+    required this.id,
+    required this.label,
+    required this.icon,
+    required this.itemCount,
+    required this.itemBuilder,
+  });
+
+  int get rowCount => (itemCount / _emojiPerLine).ceil();
+
+  double get extent => _sectionHeaderExtent + rowCount * _cellExtent;
 }
 
-EdgeInsets _gridPadding(BuildContext context) => EdgeInsets.only(
-  left: Grid.gutter,
-  right: Grid.gutter,
-  top: Grid.xxs,
-  // Clear the home indicator so the last row isn't half-swallowed.
-  bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
-);
+/// Offset of each section's header, in scroll order. Element `i` is where the
+/// rail should land for section `i`.
+List<double> _sectionOffsets(List<_EmojiSection> sections) {
+  final offsets = <double>[];
+  var running = 0.0;
+  for (final section in sections) {
+    offsets.add(running);
+    running += section.extent;
+  }
+  return offsets;
+}
+
+/// Which section owns [offset] — the one whose header is pinned right now.
+int _activeSectionIndex(List<double> offsets, double offset) {
+  var active = 0;
+  for (var i = 0; i < offsets.length; i++) {
+    // Half a header of slack so the highlight flips as a header reaches the
+    // top rather than a pixel before.
+    if (offsets[i] <= offset + _sectionHeaderExtent / 2) active = i;
+  }
+  return active;
+}
 
 /// One tappable standard emoji.
+///
+/// [keyPrefix] exists because the frequently-used section repeats emoji that
+/// also appear in their own category, and both are in the same scroll view — two
+/// widgets keyed `emoji-tile-fire` would be indistinguishable to a test.
 class _EmojiTile extends StatelessWidget {
   final EmojiEntry entry;
   final VoidCallback onTap;
+  final String keyPrefix;
 
-  const _EmojiTile({required this.entry, required this.onTap});
+  const _EmojiTile({
+    required this.entry,
+    required this.onTap,
+    this.keyPrefix = 'emoji-tile',
+  });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      key: ValueKey('emoji-tile-${entry.id}'),
+      key: ValueKey('$keyPrefix-${entry.id}'),
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Semantics(
@@ -54,17 +109,24 @@ class _EmojiTile extends StatelessWidget {
   }
 }
 
-/// One tappable custom (image) emoji.
+/// One tappable custom (image) emoji. Same cell and same glyph size as
+/// [_EmojiTile] — a community's emoji shouldn't be laid out on its own looser
+/// grid, which is what made the custom tab read as a different component.
 class _CustomEmojiTile extends StatelessWidget {
   final CustomEmoji emoji;
   final VoidCallback onTap;
+  final String keyPrefix;
 
-  const _CustomEmojiTile({required this.emoji, required this.onTap});
+  const _CustomEmojiTile({
+    required this.emoji,
+    required this.onTap,
+    this.keyPrefix = 'emoji-tile-custom',
+  });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      key: ValueKey('emoji-tile-custom-${emoji.shortcode}'),
+      key: ValueKey('$keyPrefix-${emoji.shortcode}'),
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Tooltip(
@@ -73,7 +135,7 @@ class _CustomEmojiTile extends StatelessWidget {
           child: CustomEmojiImage(
             shortcode: emoji.shortcode,
             url: emoji.url,
-            size: _customEmojiSize,
+            size: _emojiGlyphSize,
           ),
         ),
       ),
@@ -81,112 +143,52 @@ class _CustomEmojiTile extends StatelessWidget {
   }
 }
 
-/// A flat grid of standard emoji — one dataset category.
-class _EmojiGrid extends StatelessWidget {
-  final List<EmojiEntry> entries;
-  final void Function(String emoji) onSelect;
+/// Every section in one scroll view, headers pinning as they reach the top.
+///
+/// Replaces the old tab-per-category swap: the rail is a shortcut into a single
+/// list, not a set of separate pages, which is how both desktop and every
+/// system emoji keyboard behave.
+class _ContinuousEmojiGrid extends StatelessWidget {
+  final List<_EmojiSection> sections;
+  final ScrollController controller;
 
-  const _EmojiGrid({required this.entries, required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    return GridView.builder(
-      key: const ValueKey('emoji-picker-grid'),
-      padding: _gridPadding(context),
-      gridDelegate: _gridDelegate(perLine: _emojiPerLine),
-      itemCount: entries.length,
-      itemBuilder: (context, index) {
-        final entry = entries[index];
-        return _EmojiTile(entry: entry, onTap: () => onSelect(entry.native));
-      },
-    );
-  }
-}
-
-/// The community's custom-emoji palette.
-class _CustomEmojiGrid extends StatelessWidget {
-  final List<CustomEmoji> emoji;
-  final void Function(String emoji) onSelect;
-
-  const _CustomEmojiGrid({required this.emoji, required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    return GridView.builder(
-      key: const ValueKey('emoji-picker-custom-grid'),
-      padding: _gridPadding(context),
-      gridDelegate: _gridDelegate(perLine: _customEmojiPerLine),
-      itemCount: emoji.length,
-      itemBuilder: (context, index) {
-        final entry = emoji[index];
-        return _CustomEmojiTile(
-          emoji: entry,
-          onTap: () => onSelect(':${entry.shortcode}:'),
-        );
-      },
-    );
-  }
-}
-
-/// Frequently-used tab: the user's ranked history, resolved back to renderable
-/// tiles. Entries are stored as the selected string, so a standard emoji is a
-/// glyph and a custom one is `:shortcode:` — resolve each against the dataset
-/// and the palette, and drop anything that no longer exists (a custom emoji
-/// removed from the community would otherwise render as literal text).
-class _FrequentGrid extends HookConsumerWidget {
-  final List<RecentEmojiEntry> recent;
-  final List<CustomEmoji> customEmoji;
-  final void Function(String emoji) onSelect;
-
-  const _FrequentGrid({
-    required this.recent,
-    required this.customEmoji,
-    required this.onSelect,
+  const _ContinuousEmojiGrid({
+    required this.sections,
+    required this.controller,
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final dataset = ref.watch(emojiDatasetOrEmptyProvider);
-    final customByShortcode = {
-      for (final emoji in customEmoji) emoji.shortcode.toLowerCase(): emoji,
-    };
-    final entriesById = {for (final entry in dataset.all) entry.id: entry};
-
-    final tiles = <Widget>[];
-    for (final item in recent) {
-      final value = item.emoji;
-      if (value.startsWith(':') && value.endsWith(':')) {
-        final custom =
-            customByShortcode[value
-                .substring(1, value.length - 1)
-                .toLowerCase()];
-        if (custom == null) continue;
-        tiles.add(
-          _CustomEmojiTile(emoji: custom, onTap: () => onSelect(value)),
-        );
-        continue;
-      }
-      final shortcode = dataset.nativeToShortcode[value];
-      final entry = shortcode == null
-          ? null
-          : entriesById[shortcode.substring(1, shortcode.length - 1)];
-      if (entry == null) continue;
-      tiles.add(_EmojiTile(entry: entry, onTap: () => onSelect(entry.native)));
-    }
-
-    if (tiles.isEmpty) {
-      return _EmojiEmptyState(
-        icon: LucideIcons.clock,
-        message: 'Emoji you use will show up here.',
-      );
-    }
-
-    return GridView.builder(
-      key: const ValueKey('emoji-picker-frequent-grid'),
-      padding: _gridPadding(context),
-      gridDelegate: _gridDelegate(perLine: _emojiPerLine),
-      itemCount: tiles.length,
-      itemBuilder: (context, index) => tiles[index],
+  Widget build(BuildContext context) {
+    return CustomScrollView(
+      key: const ValueKey('emoji-picker-grid'),
+      controller: controller,
+      slivers: [
+        for (final section in sections)
+          SliverMainAxisGroup(
+            key: ValueKey('emoji-section-${section.id}'),
+            slivers: [
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _SectionHeaderDelegate(section.label),
+              ),
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
+                sliver: SliverGrid.builder(
+                  gridDelegate: _gridDelegate,
+                  itemCount: section.itemCount,
+                  itemBuilder: section.itemBuilder,
+                ),
+              ),
+            ],
+          ),
+        // Clear the home indicator so the last row isn't half-swallowed. Sits
+        // outside the sections so it doesn't skew their offsets.
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -219,9 +221,9 @@ class _EmojiSearchResults extends StatelessWidget {
         if (customEmoji.isNotEmpty) ...[
           const _SectionHeader(label: 'Custom'),
           SliverPadding(
-            padding: EdgeInsets.symmetric(horizontal: Grid.gutter),
+            padding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
             sliver: SliverGrid.builder(
-              gridDelegate: _gridDelegate(perLine: _customEmojiPerLine),
+              gridDelegate: _gridDelegate,
               itemCount: customEmoji.length,
               itemBuilder: (context, index) {
                 final entry = customEmoji[index];
@@ -236,14 +238,9 @@ class _EmojiSearchResults extends StatelessWidget {
         if (entries.isNotEmpty) ...[
           if (customEmoji.isNotEmpty) const _SectionHeader(label: 'Emoji'),
           SliverPadding(
-            padding: EdgeInsets.only(
-              left: Grid.gutter,
-              right: Grid.gutter,
-              top: Grid.xxs,
-              bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
             sliver: SliverGrid.builder(
-              gridDelegate: _gridDelegate(perLine: _emojiPerLine),
+              gridDelegate: _gridDelegate,
               itemCount: entries.length,
               itemBuilder: (context, index) {
                 final entry = entries[index];
@@ -255,11 +252,49 @@ class _EmojiSearchResults extends StatelessWidget {
             ),
           ),
         ],
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
+          ),
+        ),
       ],
     );
   }
 }
 
+/// Pinned header for a section of the continuous grid. Opaque, so rows scroll
+/// under it rather than showing through.
+class _SectionHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final String label;
+
+  const _SectionHeaderDelegate(this.label);
+
+  @override
+  double get minExtent => _sectionHeaderExtent;
+
+  @override
+  double get maxExtent => _sectionHeaderExtent;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return Container(
+      color: context.colors.surfaceContainerHighest,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
+      child: Text(label, style: _sectionLabelStyle(context)),
+    );
+  }
+
+  @override
+  bool shouldRebuild(_SectionHeaderDelegate oldDelegate) =>
+      oldDelegate.label != label;
+}
+
+/// Non-pinned header, for the search results list.
 class _SectionHeader extends StatelessWidget {
   final String label;
 
@@ -268,24 +303,21 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          Grid.gutter,
-          Grid.xxs,
-          Grid.gutter,
-          Grid.half,
-        ),
-        child: Text(
-          label,
-          style: context.textTheme.labelMedium?.copyWith(
-            color: context.colors.onSurfaceVariant,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+      child: Container(
+        height: _sectionHeaderExtent,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
+        child: Text(label, style: _sectionLabelStyle(context)),
       ),
     );
   }
 }
+
+TextStyle? _sectionLabelStyle(BuildContext context) =>
+    context.textTheme.labelMedium?.copyWith(
+      color: context.colors.onSurfaceVariant,
+      fontWeight: FontWeight.w600,
+    );
 
 class _EmojiEmptyState extends StatelessWidget {
   final IconData icon;

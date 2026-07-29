@@ -3,6 +3,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
@@ -12,10 +13,8 @@ import '../../shared/widgets/message_author_meta.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel_link_navigation.dart';
-import 'channel_management_provider.dart';
+import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
-import 'emoji_picker.dart';
-import 'recent_emoji_provider.dart';
 import 'thread_replies_provider.dart';
 import 'channels_provider.dart';
 import 'compose_bar.dart';
@@ -67,16 +66,31 @@ class ThreadDetailPage extends HookConsumerWidget {
         ThreadRepliesArgs(channelId: channelId, rootId: queryRootId),
       ),
     );
+    // The thread query is one-shot and asks only for content kinds, so a
+    // reaction, edit, or deletion that lands while the thread is open never
+    // reaches it — a new pill (and its burst) only showed up after leaving and
+    // re-entering, which refetched. The channel socket already receives those
+    // events, so union the two sources and format once.
+    final liveChannelEvents =
+        ref.watch(channelMessagesProvider(channelId)).value ??
+        const <NostrEvent>[];
     final replyMessages = repliesState.whenData((events) {
-      return formatTimeline(events, currentPubkey: currentPubkey);
+      return formatTimeline(
+        mergeThreadEvents(events, liveChannelEvents),
+        currentPubkey: currentPubkey,
+      );
     });
 
     final fetchedReplies = replyMessages.value;
     final allMsgs = fetchedReplies == null
         ? allMessages
         : [
-            threadHead,
-            ...fetchedReplies.where((message) => message.id != threadHead.id),
+            // Only fall back to the pushed-route snapshot when neither source
+            // carries the head, so its reactions aren't frozen at the moment
+            // the thread was opened.
+            if (!fetchedReplies.any((message) => message.id == threadHead.id))
+              threadHead,
+            ...fetchedReplies,
           ];
 
     // Index all messages by parentId so we can find direct children of any
@@ -240,6 +254,7 @@ class ThreadDetailPage extends HookConsumerWidget {
                             allMessages: allMsgs,
                             isMember: isMember,
                             isArchived: isArchived,
+                            isThreadHead: true,
                           ),
                           Padding(
                             padding: const EdgeInsets.symmetric(
@@ -505,6 +520,10 @@ class _ThreadMessage extends ConsumerWidget {
   final bool isMember;
   final bool isArchived;
 
+  /// Whether this is the message the thread hangs off, which keeps a standing
+  /// "+" where replies only get one once they carry a reaction.
+  final bool isThreadHead;
+
   const _ThreadMessage({
     required this.message,
     required this.channelNames,
@@ -515,6 +534,7 @@ class _ThreadMessage extends ConsumerWidget {
     this.allMessages,
     this.isMember = false,
     this.isArchived = false,
+    this.isThreadHead = false,
   });
 
   @override
@@ -652,6 +672,7 @@ class _ThreadMessage extends ConsumerWidget {
                           baseStyle: messageBodyTextStyle.copyWith(
                             color: context.colors.onSurface,
                           ),
+                          scaleEmojiOnly: true,
                           mediaCarouselTrailingOverflow: Grid.gutter,
                           onMediaReply: allMessages == null
                               ? null
@@ -695,27 +716,24 @@ class _ThreadMessage extends ConsumerWidget {
                           onMentionTap: (pubkey) =>
                               showUserProfileSheet(context, pubkey),
                         ),
-                        // Unlike the channel timeline, every thread message
-                        // shows the row — the "+" is the primary way to react
-                        // once you've opened a thread, so it shouldn't be
-                        // hidden behind a long-press.
+                        // Replies behave like the channel timeline: no chrome
+                        // until a reaction exists, then the "+" sits beside it,
+                        // and long-press is how you add the first one. The head
+                        // is the exception — it's the subject of the thread you
+                        // just opened, so its "+" stands even when bare.
                         ReactionRow(
                           messageId: message.id,
                           reactions: message.reactions,
                           onToggle: (emoji) =>
                               toggleReaction(ref, message, emoji),
-                          showAddButton: isMember && !isArchived,
-                          onAddReaction: () => showEmojiPicker(
+                          showAddButton:
+                              isMember &&
+                              !isArchived &&
+                              (isThreadHead || message.reactions.isNotEmpty),
+                          onAddReaction: () => showAddReactionPicker(
                             context: context,
-                            onSelect: (emoji) {
-                              ref
-                                  .read(recentEmojiProvider.notifier)
-                                  .record(emoji);
-                              armReactionBurst(ref, message, emoji);
-                              ref
-                                  .read(channelActionsProvider)
-                                  .addReaction(message.id, emoji);
-                            },
+                            ref: ref,
+                            message: message,
                           ),
                         ),
                       ],
