@@ -500,9 +500,18 @@ pub fn requeue_tray_actions<R: Runtime>(
         .map_err(|error| error.to_string())
 }
 
-/// Clears community-scoped agent activity from the native tray menu.
+/// Clears community-scoped agent activity and queued channel navigation from
+/// the native tray menu.
 #[tauri::command]
 pub fn clear_tray_agent_activity<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let state = app.state::<TrayMenuState<R>>();
+    let mut pending_actions = state
+        .pending_actions
+        .lock()
+        .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
+    pending_actions.retain(|action| matches!(action, TrayAction::NewChannel));
+    drop(pending_actions);
+
     update_tray_agent_activity(app, Vec::new(), Vec::new())
 }
 

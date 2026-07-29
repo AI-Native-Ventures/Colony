@@ -916,7 +916,7 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         RunEvent::WindowEvent {
             label,
-            event: WindowEvent::CloseRequested { api },
+            event: WindowEvent::CloseRequested { api, .. },
             ..
         } if label == "main" => {
             // Keep the webview alive so Buzz can be reopened from its tray menu.
