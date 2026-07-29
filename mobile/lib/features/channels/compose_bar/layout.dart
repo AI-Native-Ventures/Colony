@@ -265,12 +265,31 @@ class _DragDownToDismissKeyboard extends HookWidget {
     // A ref, not state: pointer travel must not rebuild the composer, which
     // would churn the TextField mid-gesture.
     final downwardTravel = useRef(0.0);
+    final startedInEditable = useRef(false);
 
     return Listener(
-      onPointerDown: (_) => downwardTravel.value = 0,
-      onPointerCancel: (_) => downwardTravel.value = 0,
-      onPointerUp: (_) => downwardTravel.value = 0,
+      onPointerDown: (event) {
+        downwardTravel.value = 0;
+        final hitTest = HitTestResult();
+        RendererBinding.instance.hitTestInView(
+          hitTest,
+          event.position,
+          event.viewId,
+        );
+        startedInEditable.value = hitTest.path.any(
+          (entry) => entry.target is RenderEditable,
+        );
+      },
+      onPointerCancel: (_) {
+        downwardTravel.value = 0;
+        startedInEditable.value = false;
+      },
+      onPointerUp: (_) {
+        downwardTravel.value = 0;
+        startedInEditable.value = false;
+      },
       onPointerMove: (event) {
+        if (startedInEditable.value) return;
         final dy = event.delta.dy;
         if (dy <= 0) {
           downwardTravel.value = 0;

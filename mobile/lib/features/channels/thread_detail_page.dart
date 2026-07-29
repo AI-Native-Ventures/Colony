@@ -164,7 +164,16 @@ class ThreadDetailPage extends HookConsumerWidget {
       final wasAtTail =
           positions.isEmpty ||
           positions.any((position) => position.index >= previousLastIndex);
-      if (!wasAtTail) return null;
+      final localPubkey = currentPubkey?.toLowerCase();
+      final hasNewLocalReply =
+          localPubkey != null &&
+          replies
+              .skip(previous)
+              .any((reply) => reply.pubkey.toLowerCase() == localPubkey);
+      // A reply the current user just sent must be visible even if they were
+      // reading at the head of a long thread. Remote arrivals still respect
+      // the user's scroll position.
+      if (!wasAtTail && !hasNewLocalReply) return null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted || !itemScrollController.isAttached) return;
         itemScrollController.scrollTo(
