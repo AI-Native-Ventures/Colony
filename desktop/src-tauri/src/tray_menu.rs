@@ -11,7 +11,7 @@ use std::{
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2_foundation::NSString;
+use objc2_foundation::{NSProcessInfo, NSString};
 use serde::{Deserialize, Serialize};
 use tauri::{
     image::Image,
@@ -198,7 +198,7 @@ struct TrayMenuState<R: Runtime> {
     pending_actions: Mutex<Vec<TrayAction>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum TrayAction {
     NewChannel,
@@ -245,13 +245,28 @@ fn agent_item_label(activity: &TrayAgentActivity) -> String {
 
     #[cfg(target_os = "macos")]
     {
-        primary
+        if supports_menu_item_subtitles() {
+            primary
+        } else {
+            format!("{primary} — #{}", activity.channel_name)
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         format!("{primary} — #{}", activity.channel_name)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn supports_menu_item_subtitles() -> bool {
+    static SUPPORTS_SUBTITLES: OnceLock<bool> = OnceLock::new();
+    *SUPPORTS_SUBTITLES.get_or_init(|| {
+        NSProcessInfo::processInfo()
+            .operatingSystemVersion()
+            .majorVersion
+            >= 14
+    })
 }
 
 fn channel_item_id(activity: &TrayAgentActivity) -> String {
@@ -346,6 +361,10 @@ fn apply_activity_presentation<R: Runtime>(
     activities: &[TrayAgentActivity],
     recent_activities: &[TrayAgentActivity],
 ) -> Result<(), String> {
+    if !supports_menu_item_subtitles() {
+        return Ok(());
+    }
+
     let subtitles = activities
         .iter()
         .chain(recent_activities)
@@ -461,6 +480,24 @@ pub fn take_tray_actions<R: Runtime>(app: AppHandle<R>) -> Result<Vec<TrayAction
         .lock()
         .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
     Ok(std::mem::take(&mut *actions))
+}
+
+/// Restores actions that were drained as the frontend unmounted.
+#[tauri::command]
+pub fn requeue_tray_actions<R: Runtime>(
+    app: AppHandle<R>,
+    mut actions: Vec<TrayAction>,
+) -> Result<(), String> {
+    let state = app.state::<TrayMenuState<R>>();
+    let mut pending_actions = state
+        .pending_actions
+        .lock()
+        .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
+    actions.append(&mut pending_actions);
+    *pending_actions = actions;
+    drop(pending_actions);
+    app.emit("tray-action-available", ())
+        .map_err(|error| error.to_string())
 }
 
 /// Clears community-scoped agent activity from the native tray menu.

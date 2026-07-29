@@ -123,7 +123,12 @@ export function useTrayMenu({
     const handlePendingActions = async () => {
       if (disposed) return;
       const actions = await invoke<TrayAction[]>("take_tray_actions");
-      if (disposed) return;
+      if (disposed) {
+        if (actions.length > 0) {
+          await invoke("requeue_tray_actions", { actions });
+        }
+        return;
+      }
       for (const action of actions) {
         if (action.kind === "newChannel") {
           openCreateChannel();

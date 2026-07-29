@@ -898,6 +898,7 @@ pub fn run() {
             is_auto_update_supported,
             set_window_vibrancy,
             tray_menu::clear_tray_agent_activity,
+            tray_menu::requeue_tray_actions,
             tray_menu::take_tray_actions,
             tray_menu::update_tray_agent_activity,
         ])
