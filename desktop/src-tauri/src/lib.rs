@@ -64,9 +64,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-#[cfg(target_os = "macos")]
-use tauri::Listener;
 use tauri::{Emitter, Manager, RunEvent};
+#[cfg(target_os = "macos")]
+use tauri::{Listener, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 
 #[cfg(target_os = "macos")]
@@ -913,6 +913,20 @@ pub fn run() {
     let run_shutdown_done = Arc::clone(&shutdown_done);
     let restart_requested = Arc::new(AtomicBool::new(false));
     app.run(move |app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { api },
+            ..
+        } if label == "main" => {
+            // Keep the webview alive so Buzz can be reopened from its tray menu.
+            api.prevent_close();
+            if let Some(window) = app_handle.get_webview_window("main") {
+                if let Err(error) = window.hide() {
+                    eprintln!("buzz-desktop: failed to hide main window: {error}");
+                }
+            }
+        }
         RunEvent::ExitRequested { code, .. } => {
             if is_restart_request(code) {
                 restart_requested.store(true, Ordering::SeqCst);
