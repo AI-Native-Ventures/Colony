@@ -7,15 +7,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { Separator } from "@/shared/ui/separator";
+import { DirectAddMemberForm } from "./AddMemberDialog";
 import {
   DEFAULT_INVITE_TTL_SECS,
   InviteLinkSection,
 } from "./InviteLinkSection";
 
 export function CommunityInviteDialog({
+  isOwner,
   onOpenChange,
   open,
 }: {
+  isOwner: boolean;
   onOpenChange: (open: boolean) => void;
   open: boolean;
 }) {
@@ -36,11 +40,31 @@ export function CommunityInviteDialog({
         <DialogHeader>
           <DialogTitle>Invite to community</DialogTitle>
           <DialogDescription>
-            Anyone with this link can join this community.
+            Add someone directly or share a link they can use to join.
           </DialogDescription>
         </DialogHeader>
 
-        <InviteLinkSection onTtlSecsChange={setTtlSecs} ttlSecs={ttlSecs} />
+        <section className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium">Add directly</h3>
+            <p className="text-sm text-muted-foreground">
+              Enter a person’s public key and choose their community role.
+            </p>
+          </div>
+          <DirectAddMemberForm isOwner={isOwner} submitLabel="Add directly" />
+        </section>
+
+        <Separator className="bg-border/60" />
+
+        <section className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium">Or share a link</h3>
+            <p className="text-sm text-muted-foreground">
+              Anyone with the link can join as a member.
+            </p>
+          </div>
+          <InviteLinkSection onTtlSecsChange={setTtlSecs} ttlSecs={ttlSecs} />
+        </section>
       </DialogContent>
     </Dialog>
   );

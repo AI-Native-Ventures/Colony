@@ -5,6 +5,10 @@ import { installMockBridge } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 
 const OUTDIR = "test-results/invites-settings";
+const DIRECT_ADD_HEX =
+  "ea9b4d7a7a78a3e3729e5568b14d764d4962be0e1f20f749bcf8d9dbbf9a9328";
+const DIRECT_ADD_NPUB =
+  "npub1a2d567n60z37xu57245tzntkf4yk90swrus0wjdulrvah0u6jv5qusyp60";
 
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page, {
@@ -78,8 +82,20 @@ test("capture: share-style community invite dialog", async ({ page }) => {
   await expect(page.getByTestId("community-invite-email-field")).toHaveCount(0);
   await expect(page.getByPlaceholder("Type an email address")).toHaveCount(0);
   await expect(
-    dialog.getByText("Anyone with this link can join this community."),
+    dialog.getByText(
+      "Add someone directly or share a link they can use to join.",
+    ),
   ).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: "Add directly", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByText("Or share a link", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("member-pubkey-input")).toBeVisible();
+  await expect(page.getByTestId("member-role-member")).toBeVisible();
+  await expect(page.getByTestId("member-role-admin")).toBeVisible();
+  await expect(page.getByTestId("confirm-add-member")).toBeDisabled();
   await expect(dialog.getByText("Expires after")).toBeVisible();
   await expect(dialog.getByText("Limit number of uses")).toBeVisible();
   await expect(page.getByTestId("invite-link-max-uses-trigger")).toHaveText(
@@ -107,4 +123,43 @@ test("capture: share-style community invite dialog", async ({ page }) => {
 
   await waitForAnimations(page);
   await dialog.screenshot({ path: `${OUTDIR}/02-invite-dialog.png` });
+});
+
+test("owner can add an admin directly by npub from live Invites UI", async ({
+  page,
+}) => {
+  await page.getByTestId("community-invite-dialog-trigger").click();
+  await page.getByTestId("member-pubkey-input").fill(DIRECT_ADD_NPUB);
+  await page.getByTestId("member-role-admin").click();
+  await page.getByTestId("confirm-add-member").click();
+
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        ({ targetPubkey, role }) =>
+          (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some((entry) => {
+            if (entry.command !== "plugin:websocket|send") return false;
+            const wireMessage = (
+              entry.payload as {
+                message?: { data?: unknown };
+              }
+            )?.message?.data;
+            if (typeof wireMessage !== "string") return false;
+            const message = JSON.parse(wireMessage) as unknown[];
+            if (message[0] !== "EVENT") return false;
+            const event = message[1] as
+              | { kind?: number; tags?: string[][] }
+              | undefined;
+            return (
+              event?.kind === 9030 &&
+              event.tags?.some(
+                (tag) => tag[0] === "p" && tag[1] === targetPubkey,
+              ) &&
+              event.tags.some((tag) => tag[0] === "role" && tag[1] === role)
+            );
+          }),
+        { targetPubkey: DIRECT_ADD_HEX, role: "admin" },
+      ),
+    )
+    .toBe(true);
 });
