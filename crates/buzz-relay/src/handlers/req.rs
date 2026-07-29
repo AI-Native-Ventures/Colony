@@ -22,7 +22,6 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
-const MAX_HISTORICAL_LIMIT: i64 = 2_000;
 const MAX_SUBSCRIPTIONS: usize = 1024;
 
 /// Maximum `query_events` calls in flight per multi-filter REQ / bridge query.
@@ -535,8 +534,8 @@ async fn handle_search_req(
 
         let limit = filter
             .limit
-            .map(|l| (l as u32).min(MAX_HISTORICAL_LIMIT as u32))
-            .unwrap_or(MAX_HISTORICAL_LIMIT as u32);
+            .map(|l| (l as u32).min(buzz_db::DEFAULT_MAX_PAGE_LIMIT as u32))
+            .unwrap_or(buzz_db::DEFAULT_MAX_PAGE_LIMIT as u32);
 
         if limit == 0 {
             continue; // NIP-01: limit 0 means "no results from this filter"
@@ -878,8 +877,8 @@ fn filter_to_query_params(
         .and_then(|u| chrono::DateTime::from_timestamp(u.as_secs() as i64, 0));
     let limit = filter
         .limit
-        .map(|l| (l as i64).min(MAX_HISTORICAL_LIMIT))
-        .unwrap_or(MAX_HISTORICAL_LIMIT);
+        .map(|l| (l as i64).min(buzz_db::DEFAULT_MAX_PAGE_LIMIT))
+        .unwrap_or(buzz_db::DEFAULT_MAX_PAGE_LIMIT);
 
     // Push author filter into SQL. Single-author uses the indexed `pubkey` column;
     // multi-author uses the `authors` IN-list pushdown added in the pure-nostr PR.
@@ -1414,6 +1413,48 @@ mod tests {
             SingleLetterTag::lowercase(Alphabet::H),
             channel_id.to_string(),
         )
+    }
+
+    #[test]
+    fn req_filter_limit_clamps_to_advertised_nip11_max_limit() {
+        let advertised = crate::nip11::RelayInfo::build(
+            None,
+            None,
+            false,
+            crate::config::DEFAULT_MAX_FRAME_BYTES,
+            None,
+        )
+        .limitation
+        .expect("limitation")
+        .max_limit
+        .expect("max_limit") as i64;
+
+        let community = buzz_core::tenant::CommunityId::from_uuid(uuid::Uuid::new_v4());
+
+        // A filter asking for more than the relay advertises is clamped down to
+        // exactly the advertised ceiling — the NIP-11 document is the promise,
+        // this is the enforcement.
+        let greedy = filter_to_query_params(
+            &Filter::new().limit(advertised as usize * 10),
+            None,
+            community,
+        );
+        assert_eq!(greedy.limit, Some(advertised));
+
+        // A filter with no `limit` gets the same ceiling, not something larger.
+        let unbounded = filter_to_query_params(&Filter::new(), None, community);
+        assert_eq!(unbounded.limit, Some(advertised));
+
+        // Neither sets `max_limit`, so `query_events` applies its own default
+        // clamp. That default must equal the advertised value too, or the
+        // clamp above would be undone one layer down.
+        assert_eq!(greedy.max_limit, None);
+        assert_eq!(unbounded.max_limit, None);
+        assert_eq!(buzz_db::DEFAULT_MAX_PAGE_LIMIT, advertised);
+
+        // Under-ceiling requests are honored verbatim.
+        let modest = filter_to_query_params(&Filter::new().limit(10), None, community);
+        assert_eq!(modest.limit, Some(10));
     }
 
     #[test]
