@@ -70,6 +70,7 @@ void showMessageActions({
                   message: message,
                   sheetContext: sheetContext,
                   pageContext: context,
+                  pageRef: ref,
                 ),
                 const SizedBox(height: Grid.xs),
                 if (!message.isSystem) ...[
@@ -599,10 +600,15 @@ class _QuickReactionRow extends ConsumerWidget {
   /// picker opened from "+" isn't torn down with the sheet.
   final BuildContext pageContext;
 
+  /// The long-pressed message's page ref. The picker callback outlives this
+  /// bottom sheet, so it must not read through the sheet's disposed ref.
+  final WidgetRef pageRef;
+
   const _QuickReactionRow({
     required this.message,
     required this.sheetContext,
     required this.pageContext,
+    required this.pageRef,
   });
 
   @override
@@ -622,11 +628,11 @@ class _QuickReactionRow extends ConsumerWidget {
       // The generic picker is also used for composing and statuses. Record
       // recency here, at the reaction call site, so only reactions drive the
       // quick-reaction row.
-      ref.read(recentEmojiProvider.notifier).record(value);
+      pageRef.read(recentEmojiProvider.notifier).record(value);
       // The sheet is on its way out, so the burst can't come from this tile —
       // hand it to the pill that's about to appear in the timeline.
-      armReactionBurst(ref, message, value);
-      ref.read(channelActionsProvider).addReaction(message.id, value);
+      armReactionBurst(pageRef, message, value);
+      pageRef.read(channelActionsProvider).addReaction(message.id, value);
     }
 
     return Row(
