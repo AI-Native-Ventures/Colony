@@ -8,6 +8,7 @@ import {
   getDefaultRelayUrl,
 } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
+import type { RelayConnectionPolicy } from "@/shared/api/tauriRelayPolicy";
 import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
@@ -87,6 +88,7 @@ export function useCommunityInit(
   activeCommunity: Community | null,
   communityKey: string,
   isSharedIdentity: boolean,
+  relayConnectionPolicy: RelayConnectionPolicy,
 ): CommunityInitResult {
   const [result, setResult] = useState<CommunityInitResult>({
     isReady: false,
@@ -122,6 +124,7 @@ export function useCommunityInit(
           // selection even when BUZZ_RELAY_URL is overridden at runtime.
           if (
             isSharedIdentity ||
+            relayConnectionPolicy.lockedToDefaultRelay ||
             (autoConnectDefaultRelay &&
               shouldAutoConnectDefaultRelay(defaultRelayUrl))
           ) {
@@ -281,6 +284,7 @@ export function useCommunityInit(
     activeCommunity?.reposDir,
     isSharedIdentity,
     communityKey,
+    relayConnectionPolicy.lockedToDefaultRelay,
   ]);
 
   return result;

@@ -496,6 +496,7 @@ type BridgeOptions = {
   relayHttpUrl?: string;
   relayWsUrl?: string;
   autoConnectDefaultRelay?: boolean;
+  lockToDefaultRelay?: boolean;
   skipOnboardingSeed?: boolean;
   skipCommunitySeed?: boolean;
   /**
@@ -754,6 +755,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
       relayHttpUrl,
       relayWsUrl,
       autoConnectDefaultRelay,
+      lockToDefaultRelay,
     }) => {
       const notificationLog: Array<{
         body: string | null;
@@ -813,6 +815,8 @@ export async function installBridge(page: Page, options: BridgeOptions) {
         relayWsUrl: relayWsUrl ?? currentConfig.relayWsUrl,
         autoConnectDefaultRelay:
           autoConnectDefaultRelay ?? currentConfig.autoConnectDefaultRelay,
+        lockToDefaultRelay:
+          lockToDefaultRelay ?? currentConfig.lockToDefaultRelay,
       };
       testWindow.__BUZZ_E2E_APP_BADGE_COUNT__ = 0;
       testWindow.__BUZZ_E2E_APP_BADGE_STATE__ = "none";
@@ -836,6 +840,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
       relayHttpUrl: options.relayHttpUrl,
       relayWsUrl: options.relayWsUrl,
       autoConnectDefaultRelay: options.autoConnectDefaultRelay,
+      lockToDefaultRelay: options.lockToDefaultRelay,
     },
   );
 }
@@ -846,6 +851,7 @@ export async function installMockBridge(
   options?: {
     relayWsUrl?: string;
     autoConnectDefaultRelay?: boolean;
+    lockToDefaultRelay?: boolean;
     skipOnboardingSeed?: boolean;
     skipCommunitySeed?: boolean;
     seedPreviewFeatures?: boolean;
@@ -856,6 +862,7 @@ export async function installMockBridge(
     mock,
     relayWsUrl: options?.relayWsUrl,
     autoConnectDefaultRelay: options?.autoConnectDefaultRelay,
+    lockToDefaultRelay: options?.lockToDefaultRelay,
     skipOnboardingSeed: options?.skipOnboardingSeed,
     skipCommunitySeed: options?.skipCommunitySeed,
     seedPreviewFeatures: options?.seedPreviewFeatures,
