@@ -205,31 +205,36 @@ void main() {
       expect(channelWindowThreadSummaries(store)['root']?.replyCount, 2);
     });
 
-    test('an older or equal-time live summary cannot replace a newer one', () {
-      var store = replaceNewestChannelWindow(
-        const ChannelWindowStore.empty(),
-        _page(rows: [_row('root', createdAt: 10)]),
-      );
-      store = mergeLiveChannelWindowEvent(
-        store,
-        _summary('root', replyCount: 3, participants: ['p1'], createdAt: 30),
-        isTimelineRow: false,
-      );
-      final afterOlder = mergeLiveChannelWindowEvent(
-        store,
-        _summary('root', replyCount: 1, participants: ['p1'], createdAt: 29),
-        isTimelineRow: false,
-      );
-      final afterEqual = mergeLiveChannelWindowEvent(
-        afterOlder,
-        _summary('root', replyCount: 2, participants: ['p1'], createdAt: 30),
-        isTimelineRow: false,
-      );
+    test(
+      'an older live summary is ignored but a later same-second summary wins',
+      () {
+        var store = replaceNewestChannelWindow(
+          const ChannelWindowStore.empty(),
+          _page(rows: [_row('root', createdAt: 10)]),
+        );
+        store = mergeLiveChannelWindowEvent(
+          store,
+          _summary('root', replyCount: 3, participants: ['p1'], createdAt: 30),
+          isTimelineRow: false,
+        );
+        final afterOlder = mergeLiveChannelWindowEvent(
+          store,
+          _summary('root', replyCount: 1, participants: ['p1'], createdAt: 29),
+          isTimelineRow: false,
+        );
+        final afterSameSecond = mergeLiveChannelWindowEvent(
+          afterOlder,
+          _summary('root', replyCount: 2, participants: ['p1'], createdAt: 30),
+          isTimelineRow: false,
+        );
 
-      expect(identical(afterOlder, store), isTrue);
-      expect(identical(afterEqual, store), isTrue);
-      expect(channelWindowThreadSummaries(afterEqual)['root']?.replyCount, 3);
-    });
+        expect(identical(afterOlder, store), isTrue);
+        expect(
+          channelWindowThreadSummaries(afterSameSecond)['root']?.replyCount,
+          2,
+        );
+      },
+    );
 
     test('a refetched row outranks the live entry it duplicates', () {
       var store = replaceNewestChannelWindow(

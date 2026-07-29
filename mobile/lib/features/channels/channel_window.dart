@@ -26,7 +26,9 @@ class ChannelWindowThreadSummary {
 /// A thread-summary snapshot received from the live channel subscription.
 ///
 /// [createdAt] is the relay event timestamp used to reject delayed snapshots
-/// after a fresher recount has already been displayed.
+/// after a fresher recount has already been displayed. Recounts created in the
+/// same second retain their live delivery order, because relay timestamps have
+/// second precision.
 class ChannelWindowLiveThreadSummary {
   final ChannelWindowThreadSummary summary;
   final int createdAt;
@@ -279,7 +281,10 @@ ChannelWindowStore mergeLiveChannelWindowEvent(
       return current;
     }
     final existing = current.liveThreadSummaries[rootId];
-    if (existing != null && existing.createdAt >= event.createdAt) {
+    // A newer timestamp wins. Equal timestamps are ordered by live delivery:
+    // two mutations can produce relay-signed recounts in the same second, and
+    // the later delivery is the authoritative snapshot for that root.
+    if (existing != null && existing.createdAt > event.createdAt) {
       return current;
     }
     return ChannelWindowStore(
