@@ -22,8 +22,10 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   bool _reachedOldest = false;
   bool _initInFlight = false;
   bool _usingChannelWindow = false;
+  bool _initialWindowQueryInFlight = false;
   int _initVersion = 0;
   ChannelWindowStore _windowStore = const ChannelWindowStore.empty();
+  final Set<String> _liveSummaryRootsDuringInitialWindowQuery = {};
   final Map<String, NostrEvent> _deepLinkEvents = {};
   final Set<String> _retainedDeepLinkEventIds = {};
 
@@ -53,12 +55,16 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     if (sessionState.status != SessionStatus.connected) {
       _initVersion++;
       _initInFlight = false;
+      _initialWindowQueryInFlight = false;
+      _liveSummaryRootsDuringInitialWindowQuery.clear();
       return AsyncData(_lastKnownMessages ?? const []);
     }
 
     _reachedOldest = false;
     _windowStore = const ChannelWindowStore.empty();
     _usingChannelWindow = false;
+    _initialWindowQueryInFlight = false;
+    _liveSummaryRootsDuringInitialWindowQuery.clear();
     _init();
     if (_lastKnownMessages case final cached? when cached.isNotEmpty) {
       return AsyncData(cached);
@@ -131,12 +137,21 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     RelaySessionNotifier session,
   ) async {
     try {
+      _initialWindowQueryInFlight = true;
       final page = await _fetchWindowPage(session, null);
-      _windowStore = replaceNewestChannelWindow(_windowStore, page);
+      _initialWindowQueryInFlight = false;
+      _windowStore = replaceNewestChannelWindow(
+        _windowStore,
+        page,
+        retainLiveSummaryRootIds: _liveSummaryRootsDuringInitialWindowQuery,
+      );
+      _liveSummaryRootsDuringInitialWindowQuery.clear();
       _usingChannelWindow = true;
       _reachedOldest = !channelWindowHasMore(_windowStore);
       return flattenChannelWindowEvents(_windowStore);
     } catch (error) {
+      _initialWindowQueryInFlight = false;
+      _liveSummaryRootsDuringInitialWindowQuery.clear();
       debugPrint(
         '[ChannelMessagesNotifier] channel window unavailable for $channelId, falling back to WS history: $error',
       );
@@ -177,7 +192,14 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     // the window store even before that query installs its first page, rather
     // than treating metadata as an ordinary websocket timeline event.
     if (event.kind == EventKind.channelThreadSummary && !_usingChannelWindow) {
-      if (_mergeWindowEventIntoStore(event) && !_initInFlight) {
+      final rootId = _initialWindowQueryInFlight
+          ? event.getTagValue('e')
+          : null;
+      if (_mergeWindowEventIntoStore(event)) {
+        if (rootId != null) {
+          _liveSummaryRootsDuringInitialWindowQuery.add(rootId);
+        }
+        if (_initInFlight) return;
         final current =
             state.value ?? _lastKnownMessages ?? const <NostrEvent>[];
         _lastKnownMessages = current;

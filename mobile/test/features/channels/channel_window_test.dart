@@ -236,7 +236,44 @@ void main() {
       },
     );
 
-    test('a buffered live summary wins over the initial page snapshot', () {
+    test(
+      'a summary received during the initial query wins the page snapshot',
+      () {
+        var store = mergeLiveChannelWindowEvent(
+          const ChannelWindowStore.empty(),
+          _summary('root', replyCount: 2, participants: ['p1'], createdAt: 30),
+          isTimelineRow: false,
+        );
+
+        store = replaceNewestChannelWindow(
+          store,
+          ChannelWindowPage(
+            startCursor: null,
+            rows: [
+              ChannelWindowRow(
+                event: _row('root', createdAt: 10),
+                thread: const ChannelWindowThreadSummary(
+                  replyCount: 1,
+                  descendantCount: 1,
+                  lastReplyAt: 12,
+                  participantPubkeys: ['p1'],
+                ),
+                // The page overlay can be signed after its query snapshot.
+                threadSummaryCreatedAt: 31,
+              ),
+            ],
+            aux: const [],
+            nextCursor: null,
+            hasMore: false,
+          ),
+          retainLiveSummaryRootIds: const {'root'},
+        );
+
+        expect(channelWindowThreadSummaries(store)['root']?.replyCount, 2);
+      },
+    );
+
+    test('a replayed summary yields to a newer initial page snapshot', () {
       var store = mergeLiveChannelWindowEvent(
         const ChannelWindowStore.empty(),
         _summary('root', replyCount: 2, participants: ['p1'], createdAt: 30),
@@ -256,7 +293,6 @@ void main() {
                 lastReplyAt: 12,
                 participantPubkeys: ['p1'],
               ),
-              // The page overlay can be signed after its query snapshot.
               threadSummaryCreatedAt: 31,
             ),
           ],
@@ -266,7 +302,7 @@ void main() {
         ),
       );
 
-      expect(channelWindowThreadSummaries(store)['root']?.replyCount, 2);
+      expect(channelWindowThreadSummaries(store)['root']?.replyCount, 1);
     });
 
     test('a newer live summary survives an appended older page', () {

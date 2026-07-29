@@ -163,8 +163,9 @@ ChannelWindowPage parseChannelWindowResponse(
 
 ChannelWindowStore replaceNewestChannelWindow(
   ChannelWindowStore current,
-  ChannelWindowPage page,
-) {
+  ChannelWindowPage page, {
+  Set<String> retainLiveSummaryRootIds = const {},
+}) {
   if (page.startCursor != null) {
     throw Exception('Newest channel page must have a null start cursor.');
   }
@@ -179,15 +180,14 @@ ChannelWindowStore replaceNewestChannelWindow(
     liveAux: current.liveAux
         .where((event) => !auxIds.contains(event.id))
         .toList(),
-    // The first page is fetched after the live subscription starts. Any live
-    // summary buffered before it arrives can describe a mutation after the
-    // query snapshot, even when relay event timestamps are equal (or the page
-    // overlay was signed later), so it remains authoritative during hydration.
-    // Later page loads compare relay timestamps normally.
+    // A summary received while the page query was in flight can describe a
+    // mutation after that query's snapshot. Retain just those summaries even
+    // when the relay timestamp matches the page overlay; subscription replay
+    // received before the query still compares timestamps normally.
     liveThreadSummaries: _retainLiveSummariesAfterPage(
       current,
       page.rows,
-      retainBufferedLiveSummaries: current.pages.isEmpty,
+      retainLiveSummaryRootIds: retainLiveSummaryRootIds,
     ),
   );
 }
@@ -195,12 +195,12 @@ ChannelWindowStore replaceNewestChannelWindow(
 Map<String, ChannelWindowLiveThreadSummary> _retainLiveSummariesAfterPage(
   ChannelWindowStore current,
   List<ChannelWindowRow> rows, {
-  required bool retainBufferedLiveSummaries,
+  required Set<String> retainLiveSummaryRootIds,
 }) {
   final rowsById = {for (final row in rows) row.event.id: row};
   return {
     for (final entry in current.liveThreadSummaries.entries)
-      if (retainBufferedLiveSummaries ||
+      if (retainLiveSummaryRootIds.contains(entry.key) ||
           rowsById[entry.key] == null ||
           rowsById[entry.key]!.thread == null ||
           entry.value.createdAt >
@@ -248,7 +248,7 @@ ChannelWindowStore appendOlderChannelWindow(
     liveThreadSummaries: _retainLiveSummariesAfterPage(
       current,
       page.rows,
-      retainBufferedLiveSummaries: false,
+      retainLiveSummaryRootIds: const {},
     ),
   );
 }
