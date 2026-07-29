@@ -28,6 +28,7 @@ mod reset;
 mod secret_store;
 mod shutdown;
 mod templates;
+mod tray_menu;
 mod util;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
@@ -360,6 +361,7 @@ pub fn run() {
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+            tray_menu::init(&app_handle)?;
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
             // Must run before migrations and identity resolution so the wipe
@@ -895,6 +897,7 @@ pub fn run() {
             archive::read_unindexed_observer_rows,
             is_auto_update_supported,
             set_window_vibrancy,
+            tray_menu::update_tray_agent_activity,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

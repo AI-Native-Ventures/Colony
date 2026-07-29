@@ -96,6 +96,7 @@ import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
 import { RelayConnectionOverlay } from "@/app/RelayConnectionOverlay";
 import { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
+import { useAppShellTrayMenu } from "@/app/useAppShellTrayMenu";
 
 const LazySettingsScreen = React.lazy(async () => {
   const module = await import("@/features/settings/ui/SettingsScreen");
@@ -631,6 +632,7 @@ export function AppShell() {
     () => setIsCreateChannelOpen(true),
     [],
   );
+  useAppShellTrayMenu(channels, goChannel, handleOpenCreateChannel);
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
