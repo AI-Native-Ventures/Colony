@@ -43,10 +43,23 @@ class KeyboardDismissOnDrag extends HookWidget {
         return false;
       }
 
-      if (notification is! ScrollUpdateNotification) return false;
+      // Overscroll counts as much as ordinary scrolling. You focus the composer
+      // at the resting end of the list far more often than not, and there a
+      // downward drag moves the position nowhere — it is pure overscroll, and
+      // reports `OverscrollNotification` instead. Listening only for
+      // `ScrollUpdateNotification` meant the most common dismissal gesture in
+      // both lists produced no notification this saw at all.
+      final DragUpdateDetails? drag;
+      if (notification is ScrollUpdateNotification) {
+        drag = notification.dragDetails;
+      } else if (notification is OverscrollNotification) {
+        drag = notification.dragDetails;
+      } else {
+        return false;
+      }
+
       // Null during a momentum fling — only a finger still on the glass should
       // dismiss, so a fling that coasts downward leaves the keyboard up.
-      final drag = notification.dragDetails;
       if (drag == null) {
         downwardTravel.value = 0;
         return false;
@@ -75,6 +88,11 @@ class KeyboardDismissOnDrag extends HookWidget {
 /// Drop focus so the OS retracts the keyboard. No-op when nothing is focused
 /// or the keyboard is already down, so callers can fire it freely.
 void dismissKeyboard(BuildContext context) {
-  if (MediaQuery.viewInsetsOf(context).bottom <= 0) return;
+  // Read the view's own insets, not MediaQuery's. `Scaffold` strips the bottom
+  // view inset from its body while `resizeToAvoidBottomInset` is on — it has
+  // already resized to account for it — so a MediaQuery read from anywhere
+  // inside the body reports 0 whether the keyboard is up or not, which made
+  // this gate a permanent no-op for both message lists and the compose bar.
+  if (View.of(context).viewInsets.bottom <= 0) return;
   FocusManager.instance.primaryFocus?.unfocus();
 }

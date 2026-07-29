@@ -222,7 +222,12 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       }
       if (!_isBroadcastReply(event)) return false;
     }
+    // Thread summaries are neither a timeline row nor an aux event, but they are
+    // how the root's "N replies" row learns a reply landed — a reply itself
+    // never reaches the main timeline. Dropping them here meant the count only
+    // appeared after leaving the channel and coming back, which refetched.
     if (!isTimelineRow &&
+        event.kind != EventKind.channelThreadSummary &&
         !EventKind.channelAuxEventKinds.contains(event.kind)) {
       return false;
     }

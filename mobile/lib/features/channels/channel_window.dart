@@ -54,8 +54,16 @@ class ChannelWindowStore {
   final List<NostrEvent> liveOverlay;
   final List<NostrEvent> liveAux;
 
+  /// Thread summaries that arrived over the live socket, keyed by root event id.
+  ///
+  /// Kept beside the pages rather than folded into [ChannelWindowRow.thread]
+  /// because a root can be in [liveOverlay] instead — a message you just sent
+  /// has no row yet, and its reply count has to land somewhere.
+  final Map<String, ChannelWindowThreadSummary> liveThreadSummaries;
+
   const ChannelWindowStore({
     required this.pages,
+    this.liveThreadSummaries = const {},
     required this.liveOverlay,
     required this.liveAux,
   });
@@ -63,7 +71,8 @@ class ChannelWindowStore {
   const ChannelWindowStore.empty()
     : pages = const [],
       liveOverlay = const [],
-      liveAux = const [];
+      liveAux = const [],
+      liveThreadSummaries = const {};
 }
 
 ChannelWindowPage parseChannelWindowResponse(
@@ -85,17 +94,8 @@ ChannelWindowPage parseChannelWindowResponse(
     final rootId = event.getTagValue('e');
     final rowIndex = rootId == null ? null : rowIndexesById[rootId];
     if (rowIndex == null) continue;
-    final payload = _parseJsonMap(event, 'thread summary');
-    final participants = payload['participants'];
     rows[rowIndex] = rows[rowIndex].copyWith(
-      thread: ChannelWindowThreadSummary(
-        replyCount: (payload['reply_count'] as num).toInt(),
-        descendantCount: (payload['descendant_count'] as num).toInt(),
-        lastReplyAt: (payload['last_reply_at'] as num?)?.toInt(),
-        participantPubkeys: participants is List
-            ? participants.whereType<String>().toList()
-            : const [],
-      ),
+      thread: parseChannelWindowThreadSummary(event),
     );
   }
 
@@ -150,7 +150,20 @@ ChannelWindowStore replaceNewestChannelWindow(
     liveAux: current.liveAux
         .where((event) => !auxIds.contains(event.id))
         .toList(),
+    // A refetched row carries its own summary and is authoritative, so drop the
+    // live entry for it. Roots still only in the overlay keep theirs.
+    liveThreadSummaries: _retainLiveSummaries(current, rowIds),
   );
+}
+
+Map<String, ChannelWindowThreadSummary> _retainLiveSummaries(
+  ChannelWindowStore current,
+  Set<String> supersededRootIds,
+) {
+  return {
+    for (final entry in current.liveThreadSummaries.entries)
+      if (!supersededRootIds.contains(entry.key)) entry.key: entry.value,
+  };
 }
 
 ChannelWindowStore appendOlderChannelWindow(
@@ -186,6 +199,22 @@ ChannelWindowStore appendOlderChannelWindow(
         .where((event) => !pageIds.contains(event.id))
         .toList(),
     liveAux: current.liveAux,
+    liveThreadSummaries: _retainLiveSummaries(current, pageIds),
+  );
+}
+
+/// Decode a kind-39005 thread summary. Same payload whether it came down as a
+/// channel-window page overlay or over the live socket — one contract, two doors.
+ChannelWindowThreadSummary parseChannelWindowThreadSummary(NostrEvent event) {
+  final payload = _parseJsonMap(event, 'thread summary');
+  final participants = payload['participants'];
+  return ChannelWindowThreadSummary(
+    replyCount: (payload['reply_count'] as num).toInt(),
+    descendantCount: (payload['descendant_count'] as num).toInt(),
+    lastReplyAt: (payload['last_reply_at'] as num?)?.toInt(),
+    participantPubkeys: participants is List
+        ? participants.whereType<String>().toList()
+        : const [],
   );
 }
 
@@ -194,6 +223,27 @@ ChannelWindowStore mergeLiveChannelWindowEvent(
   NostrEvent event, {
   required bool isTimelineRow,
 }) {
+  // A reply doesn't reach the main timeline itself — the root's "N replies" row
+  // comes from this summary event, which the relay re-emits on every reply. It
+  // has to be merged, not stored as an aux event: it is a replaceable snapshot
+  // keyed by root, not another row in the timeline.
+  if (event.kind == EventKind.channelThreadSummary) {
+    final rootId = event.getTagValue('e');
+    if (rootId == null) return current;
+    final ChannelWindowThreadSummary summary;
+    try {
+      summary = parseChannelWindowThreadSummary(event);
+    } catch (_) {
+      return current;
+    }
+    return ChannelWindowStore(
+      pages: current.pages,
+      liveOverlay: current.liveOverlay,
+      liveAux: current.liveAux,
+      liveThreadSummaries: {...current.liveThreadSummaries, rootId: summary},
+    );
+  }
+
   if (!isTimelineRow) {
     final alreadyKnown =
         current.liveAux.any((candidate) => candidate.id == event.id) ||
@@ -205,6 +255,7 @@ ChannelWindowStore mergeLiveChannelWindowEvent(
       pages: current.pages,
       liveOverlay: current.liveOverlay,
       liveAux: [...current.liveAux, event],
+      liveThreadSummaries: current.liveThreadSummaries,
     );
   }
 
@@ -227,6 +278,7 @@ ChannelWindowStore mergeLiveChannelWindowEvent(
     pages: current.pages,
     liveOverlay: overlay,
     liveAux: current.liveAux,
+    liveThreadSummaries: current.liveThreadSummaries,
   );
 }
 
@@ -263,6 +315,8 @@ Map<String, ChannelWindowThreadSummary> channelWindowThreadSummaries(
     for (final page in store.pages)
       for (final row in page.rows)
         if (row.thread != null) row.event.id: row.thread!,
+    // Live entries last: they are the newer snapshot for any root they cover.
+    ...store.liveThreadSummaries,
   };
 }
 

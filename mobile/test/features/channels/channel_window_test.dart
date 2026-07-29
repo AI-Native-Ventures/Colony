@@ -141,6 +141,148 @@ void main() {
       expect(merged.liveOverlay.map((event) => event.id), ['live']);
     });
   });
+
+  group('live thread summaries', () {
+    test('a live summary gives a loaded row its reply count', () {
+      final store = replaceNewestChannelWindow(
+        const ChannelWindowStore.empty(),
+        _page(rows: [_row('root', createdAt: 10)]),
+      );
+      // No summary yet: the row was fetched before anyone replied.
+      expect(channelWindowThreadSummaries(store), isEmpty);
+
+      final merged = mergeLiveChannelWindowEvent(
+        store,
+        _summary('root', replyCount: 1, participants: ['p1']),
+        isTimelineRow: false,
+      );
+
+      expect(channelWindowThreadSummaries(merged)['root']?.replyCount, 1);
+    });
+
+    test('a live summary covers a root that is only in the overlay', () {
+      // A message you just sent has no page row yet, so its count has nowhere
+      // to live except beside the pages.
+      final store = mergeLiveChannelWindowEvent(
+        replaceNewestChannelWindow(
+          const ChannelWindowStore.empty(),
+          _page(rows: [_row('old', createdAt: 10)]),
+        ),
+        _row('mine', createdAt: 11),
+        isTimelineRow: true,
+      );
+
+      final merged = mergeLiveChannelWindowEvent(
+        store,
+        _summary('mine', replyCount: 2, participants: ['p1', 'p2']),
+        isTimelineRow: false,
+      );
+
+      expect(channelWindowThreadSummaries(merged)['mine']?.replyCount, 2);
+    });
+
+    test('a later live summary replaces an earlier one', () {
+      var store = replaceNewestChannelWindow(
+        const ChannelWindowStore.empty(),
+        _page(rows: [_row('root', createdAt: 10)]),
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _summary('root', replyCount: 1, participants: ['p1']),
+        isTimelineRow: false,
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _summary('root', replyCount: 2, participants: ['p1', 'p2']),
+        isTimelineRow: false,
+      );
+
+      expect(channelWindowThreadSummaries(store)['root']?.replyCount, 2);
+    });
+
+    test('a refetched row outranks the live entry it duplicates', () {
+      var store = replaceNewestChannelWindow(
+        const ChannelWindowStore.empty(),
+        _page(rows: [_row('root', createdAt: 10)]),
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _summary('root', replyCount: 1, participants: ['p1']),
+        isTimelineRow: false,
+      );
+
+      // Refetching the head brings down the authoritative count with the row,
+      // so the stale live entry must not shadow it.
+      final refreshed = replaceNewestChannelWindow(
+        store,
+        _pageWithThreads(
+          rows: [_row('root', createdAt: 10)],
+          threads: {
+            'root': const ChannelWindowThreadSummary(
+              replyCount: 5,
+              descendantCount: 5,
+              lastReplyAt: 12,
+              participantPubkeys: ['p1'],
+            ),
+          },
+        ),
+      );
+
+      expect(channelWindowThreadSummaries(refreshed)['root']?.replyCount, 5);
+    });
+
+    test('a summary survives unrelated live events', () {
+      var store = replaceNewestChannelWindow(
+        const ChannelWindowStore.empty(),
+        _page(rows: [_row('root', createdAt: 10)]),
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _summary('root', replyCount: 1, participants: ['p1']),
+        isTimelineRow: false,
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _reaction('reaction'),
+        isTimelineRow: false,
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _row('later', createdAt: 11),
+        isTimelineRow: true,
+      );
+
+      expect(channelWindowThreadSummaries(store)['root']?.replyCount, 1);
+    });
+
+    test('a summary with no root tag or bad content is ignored', () {
+      final store = replaceNewestChannelWindow(
+        const ChannelWindowStore.empty(),
+        _page(rows: [_row('root', createdAt: 10)]),
+      );
+
+      final untagged = mergeLiveChannelWindowEvent(
+        store,
+        _event(id: 'no-e', kind: EventKind.channelThreadSummary, content: '{}'),
+        isTimelineRow: false,
+      );
+      expect(identical(untagged, store), isTrue);
+
+      final malformed = mergeLiveChannelWindowEvent(
+        store,
+        _event(
+          id: 'bad',
+          kind: EventKind.channelThreadSummary,
+          tags: const [
+            ['e', 'root'],
+          ],
+          content: 'not json',
+        ),
+        isTimelineRow: false,
+      );
+      expect(channelWindowThreadSummaries(malformed), isEmpty);
+    });
+  });
 }
 
 const _channelId = 'ABCDEF';
@@ -161,6 +303,24 @@ ChannelWindowPage _page({
           )
         : null,
     hasMore: hasMore,
+  );
+}
+
+/// Like [_page], but with thread summaries attached to named rows — what a
+/// refetched page looks like once replies exist.
+ChannelWindowPage _pageWithThreads({
+  required List<NostrEvent> rows,
+  required Map<String, ChannelWindowThreadSummary> threads,
+}) {
+  return ChannelWindowPage(
+    startCursor: null,
+    rows: [
+      for (final row in rows)
+        ChannelWindowRow(event: row, thread: threads[row.id]),
+    ],
+    aux: const [],
+    nextCursor: null,
+    hasMore: false,
   );
 }
 
