@@ -60,6 +60,9 @@ test("renders authoritative huddle snapshots and sends explicit off once", async
   });
   await expect(transcriptButton).toBeVisible();
   await expect(transcriptButton).toHaveAttribute("aria-pressed", "true");
+  const activeBackground = await transcriptButton.evaluate(
+    (button) => getComputedStyle(button).backgroundColor,
+  );
   await page
     .getByRole("button", { name: "Show huddle participants (2)" })
     .click();
@@ -92,6 +95,16 @@ test("renders authoritative huddle snapshots and sends explicit off once", async
   await expect(
     page.getByRole("button", { name: "Start transcript" }),
   ).toHaveAttribute("aria-pressed", "false");
+  const inactiveTranscriptButton = page.getByRole("button", {
+    name: "Start transcript",
+  });
+  await expect
+    .poll(() =>
+      inactiveTranscriptButton.evaluate(
+        (button) => getComputedStyle(button).backgroundColor,
+      ),
+    )
+    .not.toBe(activeBackground);
 
   const explicitToggleCommands = await page.evaluate(() =>
     (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
