@@ -104,6 +104,19 @@ _HANDOFF_RE = re.compile(r"\bhandoff #(\d+) \(history .*?; (\d+) -> \d+ tokens\)
 # a task-fidelity event worth surfacing next to the cost, not just a log line.
 _TRUNCATION_MARKER = "truncat"
 _HANDOFF_MARKER = "handoff"
+# buzz-acp emits one of these when a turn ends, whatever ended it
+# (pool.rs log_stop_reason). Their presence is the only durable evidence in a
+# downloaded log that the agent was ever woken: an agent nobody @mentioned
+# writes its startup lines and then sits there, which produces a log that looks
+# exactly like one whose usage instrumentation broke. Distinguishing the two is
+# what keeps an idle teammate from failing the trial's reconciliation.
+TURN_ENDED_MARKERS = (
+    "turn complete for",
+    "turn cancelled for",
+    "turn hit max_tokens for",
+    "turn hit max_turn_requests for",
+    "turn refused for",
+)
 # crates/buzz-agent/src/config.rs: HANDOFF_MAX_OUTPUT_TOKENS. The agent clamps
 # this to half the context window, so on a small window the real allowance is
 # lower than this — which keeps the figure below an upper bound, never under it.
@@ -125,6 +138,21 @@ class HandoffUsage:
     input_tokens_upper_bound: int = 0
     output_tokens_upper_bound: int = 0
     truncations: int = 0
+
+
+def count_turns(text: str) -> int:
+    """Count the turns this agent's log shows ending, for any reason.
+
+    Zero means the agent was never woken. That is a real zero for accounting —
+    an idle teammate costs nothing — and it is the only way to tell such an
+    agent apart from one that worked while its usage lines went missing.
+    """
+    stripped = _ANSI_RE.sub("", text)
+    return sum(
+        1
+        for line in stripped.splitlines()
+        if any(marker in line for marker in TURN_ENDED_MARKERS)
+    )
 
 
 def parse_handoffs(text: str) -> HandoffUsage:
@@ -230,6 +258,15 @@ class AgentReceipt:
     handoff_input_tokens_upper_bound: int = 0
     handoff_output_tokens_upper_bound: int = 0
     handoff_cost_usd_upper_bound: float = 0.0
+    # Turns this agent's log shows ending. Zero turns and zero tokens is an
+    # agent nobody woke — a real zero. Turns with zero tokens is instrumentation
+    # that failed, and only the second should ever fail reconciliation.
+    turns: int = 0
+
+    @property
+    def never_woke(self) -> bool:
+        """True when the agent was provisioned, took no turn, and cost nothing."""
+        return self.turns == 0 and self.input_tokens == 0 and self.output_tokens == 0
 
     @property
     def cost_usd_including_handoff_bound(self) -> float:
@@ -258,6 +295,14 @@ class TrialAccounting:
     reconciled: bool = False
     reconciliation_note: str = ""
     warnings: tuple[str, ...] = field(default=())
+    # Agents that were provisioned and never woken. Not an error — it is the
+    # roster's own outcome, and one worth counting: B1's navigator sat out a
+    # third of its trials, which is a finding about the shape, not about the
+    # instrumentation.
+    idle_agents: tuple[str, ...] = field(default=())
+    # Agents that took at least one turn and still reported no usage. This is
+    # the real instrumentation failure, and the only one that undercounts cost.
+    unmeasured_agents: tuple[str, ...] = field(default=())
 
     @property
     def assumes_cache_discount(self) -> bool:
@@ -310,6 +355,12 @@ class TrialAccounting:
             "accounting_cost_usd_including_handoff_bound": (
                 self.cost_usd_including_handoff_bound
             ),
+            # Roster utilisation. A condition whose extra agents mostly never
+            # wake is paying for a shape it is not using, and that only shows
+            # up if idleness is recorded per trial rather than inferred from a
+            # zero row that could equally be a broken log.
+            "accounting_idle_agents": list(self.idle_agents),
+            "accounting_unmeasured_agents": list(self.unmeasured_agents),
             "per_agent_tokens": {
                 receipt.agent_id: {
                     "input": receipt.input_tokens,
@@ -433,11 +484,13 @@ def collect(
     """
     receipts: list[AgentReceipt] = []
     warnings: list[str] = []
-    silent: list[str] = []
+    idle: list[str] = []
+    unmeasured: list[str] = []
 
     for agent_id, role, agent_class in agents:
         log_text = _read_agent_logs(trial_dir, agent_id)
         sessions = parse_usage_log(log_text)
+        turns = count_turns(log_text)
         handoff = parse_handoffs(log_text)
         input_tokens = sum(session.input_tokens for session in sessions)
         output_tokens = sum(session.output_tokens for session in sessions)
@@ -453,7 +506,12 @@ def collect(
             sum(reported) if sessions and len(reported) == len(sessions) else None
         )
         if not sessions:
-            silent.append(agent_id)
+            # An agent with no usage lines is either one nobody @mentioned or
+            # one whose instrumentation failed, and the two have opposite
+            # meanings for the trial's cost. The turn count is what separates
+            # them; without it every idle teammate failed reconciliation and the
+            # flag stopped carrying information.
+            (idle if turns == 0 else unmeasured).append(agent_id)
         price = manifest.prices.get(agent_class.endpoint)
         if price is None:
             # validate_roster guarantees this cannot happen; treat a future
@@ -501,6 +559,7 @@ def collect(
                 handoff_input_tokens_upper_bound=handoff.input_tokens_upper_bound,
                 handoff_output_tokens_upper_bound=handoff.output_tokens_upper_bound,
                 handoff_cost_usd_upper_bound=handoff_cost,
+                turns=turns,
             )
         )
 
@@ -513,24 +572,36 @@ def collect(
 
     # The reconciliation gate. A trial that ran agents but observed no tokens is
     # an instrumentation failure, not a free trial, and must never be averaged
-    # into a cost figure as if it were a real zero.
+    # into a cost figure as if it were a real zero. An agent that was never woken
+    # is the opposite case and must not fail the gate: it really did cost nothing,
+    # and treating it as a measurement gap flagged a third of the team trials for
+    # an undercount that was not there.
     if not receipts:
         reconciled, note = False, "no agents were provisioned"
+    elif unmeasured:
+        reconciled, note = (
+            False,
+            (
+                f"{sorted(unmeasured)} took turns but reported no usage — check that "
+                "RUST_LOG enables the acp::usage target and that the agent logs were "
+                "downloaded; totals undercount this trial"
+            ),
+        )
     elif total_input == 0 and total_output == 0:
         reconciled, note = (
             False,
             (
-                "agents ran but reported no tokens — check that RUST_LOG enables the "
-                "acp::usage target and that the agent logs were downloaded"
+                "no agent was ever woken — the opening @mention never landed, so "
+                "there is nothing to account for and nothing was attempted"
             ),
         )
-    elif silent:
-        reconciled, note = (
-            False,
-            (f"no usage observed for {sorted(silent)}; totals undercount this trial"),
-        )
     else:
-        reconciled, note = True, "every agent reported usage"
+        reconciled, note = True, "every agent that took a turn reported usage"
+        if idle:
+            note = (
+                f"{note}; {len(idle)} of {len(receipts)} agent(s) were never woken "
+                f"({sorted(idle)}) and cost nothing"
+            )
 
     # Handoffs do not fail reconciliation — the metered figures are still exactly
     # what the provider reported. They do make the metered total a floor rather
@@ -559,4 +630,6 @@ def collect(
         reconciled=reconciled,
         reconciliation_note=note,
         warnings=tuple(warnings),
+        idle_agents=tuple(sorted(idle)),
+        unmeasured_agents=tuple(sorted(unmeasured)),
     )

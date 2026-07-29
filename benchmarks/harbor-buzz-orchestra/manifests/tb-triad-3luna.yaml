@@ -52,7 +52,7 @@ roster:
       # rewritten tb-peer-2luna's hash and orphaned B1's results, so the triad
       # gets its own file and the pair keeps its own.
       path: personas/bench/triad-driver.md
-      sha256: 32cd9460082784f7e19bc0aad7d218a33308c63a1877474f5862f0b6c81545b6
+      sha256: b0bff7a8327e52c3ae4ec962b9619b6260e9da3aa2b86188068c732382ad2799
 
   - id: navigator
     kind: worker
@@ -62,7 +62,7 @@ roster:
     model_revision: gpt-5.6-luna
     prompt:
       path: personas/bench/triad-navigator.md
-      sha256: 85b0711e63d83dd3e5a609d4c5ffac4e4e41576c4015a46c1cc3e7e9c2e1b460
+      sha256: 02e0029f25fc80f47fefa12304dff7eb11e0561f9eadcd7a34b1188f11841dc5
 
   - id: critic
     kind: worker
@@ -77,7 +77,7 @@ roster:
       # so it drops into a peer topology unchanged. Keeping it identical means
       # C1-versus-C2 varies the two peer personas and nothing else.
       path: personas/bench/critic.md
-      sha256: b253b735a31ae6eb3c1b8ee318e5e83cef9b6821d49eabff8fe14370ba6b00c6
+      sha256: 4a5c6273c2cbd2cae593ff1a46117334e0cca7bc913a51eedb5e1d39ea755743
 
 prices:
   # Operator-supplied list prices, doc 04 §7, identical to tb-solo-luna's and

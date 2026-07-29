@@ -47,7 +47,7 @@ roster:
       # Byte-identical to the file tb-team-sol-luna.yaml pins, so the lead's
       # instructions are not a variable between the two team conditions.
       path: personas/bench/lead-delegate.md
-      sha256: 82df9751aeb5235f7122adc06bafdde12084181b0be84b91721e0d1b5e4a14f7
+      sha256: 0dae4944765fab10cd5b1d3adcb1ef9c789384e52060acb140ab20f9c3f4686b
 
   - id: worker
     kind: worker
@@ -57,7 +57,7 @@ roster:
     model_revision: gpt-5.6-luna
     prompt:
       path: personas/bench/worker.md
-      sha256: 7b3332e3d3da384a7c242c1aa34e90a063e7152ddf6de69f8a4e7e4a0b710726
+      sha256: 6c8525f48ac71ed875d3de3fc867cc1ddca885d433ad3fc0aba09b3eb2607b45
 
 prices:
   # Operator-supplied list prices, doc 04 §7, identical to every other luna

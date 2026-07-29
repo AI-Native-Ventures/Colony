@@ -22,7 +22,7 @@ import certifi
 from harbor.environments.base import BaseEnvironment
 
 from . import accounting, bundle
-from .accounting import USAGE_MARKER
+from .accounting import TURN_ENDED_MARKERS, USAGE_MARKER
 from .manifest import AgentClass, ExperimentManifest, GenerationConfig
 from .provisioning import AgentCredential, TrialHandle
 from .runtime import RuntimeResult
@@ -64,17 +64,12 @@ DEFAULT_RUST_LOG = ",".join(
         f"{TOOL_LOG_TARGET}=info",
     )
 )
-# Marker for a turn that ended for any reason. Every log_stop_reason branch
-# starts with this, so it matches the clean end_turn and the four failure
-# reasons alike — an agent that stopped because it hit max_tokens is just as
-# finished as one that stopped because it was done.
-TURN_ENDED_MARKERS = (
-    "turn complete for",
-    "turn cancelled for",
-    "turn hit max_tokens for",
-    "turn hit max_turn_requests for",
-    "turn refused for",
-)
+# Markers for a turn that ended for any reason. Every log_stop_reason branch
+# starts with one, so they match the clean end_turn and the four failure reasons
+# alike — an agent that stopped because it hit max_tokens is just as finished as
+# one that stopped because it was done. Defined in `accounting`, which uses the
+# same lines to tell an idle agent from a broken measurement, and imported here
+# so the completion signal and the accounting agree by construction.
 # Reasoning effort, held constant across every agent in every condition.
 #
 # Deliberately a constant rather than a manifest field: per-entry effort is a
@@ -146,6 +141,11 @@ SYSTEM_CA_BUNDLE = f"{SYSTEM_CA_DIR}/ca-certificates.crt"
 # the installed version and succeeds even when `apt-get update` left the index
 # empty -- which is the exact failure that scored compile-compcert 0.0.
 VERIFIER_DEPS = ("curl",)
+# Per-apt-call ceiling for the verifier pre-install, and the outer ceiling on
+# the whole step. Teardown code must be bounded: this runs inside `finally`, so
+# a stall spends the trial's remaining budget rather than its own.
+VERIFIER_DEPS_TIMEOUT_S = 120
+VERIFIER_DEPS_DEADLINE_S = 300
 # How many done-poll iterations between in-container liveness probes.
 LIVENESS_EVERY = 10
 # Messages pulled into the saved transcript. Well above what a trial can
@@ -182,10 +182,19 @@ def install_verifier_deps_command() -> str:
     """
     head = VERIFIER_DEPS[0]
     packages = " ".join(VERIFIER_DEPS)
+    # Every apt call is wrapped in `timeout`. This runs during teardown, so an
+    # unbounded hang here does not merely delay the trial -- it eats the trial's
+    # remaining budget and, before the collection order was fixed, its logs too.
+    # apt's own Acquire timeouts do not bound the whole operation when the proxy
+    # accepts the connection and then stalls, which is the failure actually seen.
+    # `|| true` on update: a stale index still resolves an already-installed
+    # package, and the point is to survive the call, not to succeed at it.
+    up = f"timeout {VERIFIER_DEPS_TIMEOUT_S} apt-get update -qq"
+    inst = f"timeout {VERIFIER_DEPS_TIMEOUT_S} apt-get install -y -qq {packages}"
     return (
         f"if command -v {head} >/dev/null 2>&1; then echo present; "
-        f"elif apt-get update -qq >/dev/null 2>&1 "
-        f"&& apt-get install -y -qq {packages} >/dev/null 2>&1 "
+        f"elif {{ {up} >/dev/null 2>&1 || true; }} "
+        f"&& {inst} >/dev/null 2>&1 "
         f"&& command -v {head} >/dev/null 2>&1; then echo installed; "
         f"else echo unavailable; fi"
     )
@@ -342,10 +351,17 @@ class BuzzContainerRuntime:
             await self._verify_m1_output(environment, manifest)
         finally:
             await self._stop_agents(environment, agents + infra)
+            # Logs first, and ahead of anything that touches the network. The
+            # verifier pre-install below used to run first and, when the proxy
+            # hiccuped, hung long enough to consume the whole trial budget --
+            # taking the agent logs down with it, because they had not been
+            # collected yet. Six of C1's 87 trials landed that way, their
+            # agent/buzz/ holding nothing but the system prompts, which reads
+            # as "the agents never ran" rather than "teardown stalled".
+            await self._collect_logs(environment, trial_dir)
             # After the agents are stopped, so the tool never reaches them, and
             # before Harbor's verifier phase, which is what needs it.
             verifier_deps = await self._preinstall_verifier_deps(environment)
-            await self._collect_logs(environment, trial_dir)
             # Before bundle.write, so the transcript is listed in the bundle's
             # file index and covered by its secret scan.
             await self._collect_transcript(trial, trial_dir)
@@ -507,9 +523,18 @@ class BuzzContainerRuntime:
         verifier finds. Best-effort for the same reason as the trust store: a
         container that cannot install curl is likely unscoreable, but that is
         the verifier's verdict to record, not ours to pre-empt by aborting.
+
+        The shell bounds each apt call; the deadline here bounds the step as a
+        whole, because ``exec`` itself can stall on a wedged docker exec that
+        never delivers the shell's exit. A timeout is reported as
+        ``unavailable`` -- the same verdict as an apt failure, which is what it
+        amounts to from the verifier's side.
         """
         try:
-            result = await environment.exec(install_verifier_deps_command())
+            result = await asyncio.wait_for(
+                environment.exec(install_verifier_deps_command()),
+                timeout=VERIFIER_DEPS_DEADLINE_S,
+            )
         except Exception:  # noqa: BLE001 - teardown must not lose the trial
             return "unavailable"
         status = (result.stdout or "").strip().splitlines()

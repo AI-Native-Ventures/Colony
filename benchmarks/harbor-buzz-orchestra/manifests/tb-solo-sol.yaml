@@ -25,7 +25,7 @@ roster:
       # Byte-identical to tb-solo-luna. The persona is model-agnostic on
       # purpose; a prompt tuned per model would make the two incomparable.
       path: personas/bench/solo.md
-      sha256: 6997ae38384ea4f84bbdc1422a668be089fbfd2709d412392dbbb4911c565596
+      sha256: 61c9ac9dc47cbd3c987a7ee6ceb7397496834df8d3fc284c8fe6980e1d5b4ebe
 prices:
   # Operator-supplied list prices, doc 04 §7 (the same figures tb-team-sol-luna.yaml
   # carries for sol). See tb-solo-luna.yaml for why cache_read_rate is 0.0 (DB10).

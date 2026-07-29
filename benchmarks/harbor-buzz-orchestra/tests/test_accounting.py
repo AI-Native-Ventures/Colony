@@ -14,6 +14,14 @@ def usage_line(session: str, input_tokens: int, output_tokens: int) -> str:
     )
 
 
+def turn_line(label: str = "orchestrator-1", reason: str = "end_turn") -> str:
+    """A buzz-acp turn-ended line (pool.rs log_stop_reason)."""
+    return (
+        "2026-07-26T01:02:03.456789Z  INFO pool::prompt: "
+        f"turn complete for {label}: {reason}"
+    )
+
+
 def test_parse_usage_log_takes_the_high_water_mark_per_session():
     text = "\n".join(
         [
@@ -103,23 +111,50 @@ def test_collect_prices_usage_from_the_manifest(tmp_path, solo_manifest):
     assert result.reconciled is True
 
 
-def test_collect_flags_a_trial_that_reported_no_tokens(tmp_path, solo_manifest):
-    write_log(tmp_path, "opus-orchestrator-1", "no usage here")
+def test_collect_flags_an_agent_that_took_turns_without_reporting_usage(
+    tmp_path, solo_manifest
+):
+    write_log(tmp_path, "opus-orchestrator-1", turn_line())
     result = accounting.collect(
         trial_dir=tmp_path,
         manifest=solo_manifest,
         agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
     )
     assert result.cost_usd == 0.0
-    # The whole point: a zero-token trial must not read as a free trial.
+    # The whole point: work that burned tokens must not read as a free trial.
     assert result.reconciled is False
     assert "RUST_LOG" in result.reconciliation_note
+    assert result.unmeasured_agents == ("opus-orchestrator-1",)
+    assert result.idle_agents == ()
 
 
-def test_collect_flags_a_partially_silent_roster(tmp_path, manifest_data):
+def test_collect_flags_a_trial_where_nothing_was_ever_woken(tmp_path, solo_manifest):
+    write_log(tmp_path, "opus-orchestrator-1", "subscribed to channel c")
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=solo_manifest,
+        agents=[("opus-orchestrator-1", "orchestrator", solo_manifest.roster[0])],
+    )
+    # Still not reconciled -- a solo agent that never took a turn means the
+    # opening @mention never landed -- but the diagnosis is the harness, not the
+    # usage instrumentation, and the note has to say which.
+    assert result.reconciled is False
+    assert "no agent was ever woken" in result.reconciliation_note
+    assert "RUST_LOG" not in result.reconciliation_note
+    assert result.idle_agents == ("opus-orchestrator-1",)
+
+
+def test_collect_reconciles_a_roster_whose_extra_agent_never_woke(
+    tmp_path, manifest_data
+):
     manifest = ExperimentManifest.model_validate(manifest_data)
     orchestrator, workers = manifest.roster
-    write_log(tmp_path, "opus-orchestrator-1", usage_line("s", 500, 50))
+    write_log(
+        tmp_path,
+        "opus-orchestrator-1",
+        "\n".join([turn_line(), usage_line("s", 500, 50)]),
+    )
+    write_log(tmp_path, "qwen-workers-1", "subscribed to channel c")
     result = accounting.collect(
         trial_dir=tmp_path,
         manifest=manifest,
@@ -129,13 +164,56 @@ def test_collect_flags_a_partially_silent_roster(tmp_path, manifest_data):
         ],
     )
     assert result.input_tokens == 500
-    assert result.reconciled is False
-    assert "qwen-workers-1" in result.reconciliation_note
-    # A silent agent is still a row, so the roster is legible from the receipts.
+    # An agent nobody @mentioned really did cost nothing. Failing the trial for
+    # it flagged a third of the team trials for an undercount that was not there.
+    assert result.reconciled is True
+    assert result.idle_agents == ("qwen-workers-1",)
+    assert "never woken" in result.reconciliation_note
+    # An idle agent is still a row, so the roster is legible from the receipts.
     assert [receipt.agent_id for receipt in result.receipts] == [
         "opus-orchestrator-1",
         "qwen-workers-1",
     ]
+    idle = result.receipts[1]
+    assert idle.turns == 0
+    assert idle.never_woke is True
+
+
+def test_collect_fails_a_roster_whose_worker_worked_unmeasured(tmp_path, manifest_data):
+    manifest = ExperimentManifest.model_validate(manifest_data)
+    orchestrator, workers = manifest.roster
+    write_log(
+        tmp_path,
+        "opus-orchestrator-1",
+        "\n".join([turn_line(), usage_line("s", 500, 50)]),
+    )
+    write_log(tmp_path, "qwen-workers-1", turn_line("worker-1"))
+    result = accounting.collect(
+        trial_dir=tmp_path,
+        manifest=manifest,
+        agents=[
+            ("opus-orchestrator-1", "orchestrator", orchestrator),
+            ("qwen-workers-1", "worker", workers),
+        ],
+    )
+    assert result.reconciled is False
+    assert result.unmeasured_agents == ("qwen-workers-1",)
+    assert "qwen-workers-1" in result.reconciliation_note
+
+
+def test_count_turns_matches_every_stop_reason():
+    text = "\n".join(
+        [
+            "2026-07-26T01:02:03Z  INFO pool::prompt: turn complete for a: end_turn",
+            "2026-07-26T01:02:04Z  INFO pool::prompt: turn cancelled for a",
+            "2026-07-26T01:02:05Z  INFO pool::prompt: turn hit max_tokens for a",
+            "2026-07-26T01:02:06Z  INFO pool::prompt: turn refused for a",
+            "2026-07-26T01:02:07Z  INFO buzz_acp: subscribed to channel c",
+        ]
+    )
+    # A turn that ended badly still means the agent was woken and billed.
+    assert accounting.count_turns(text) == 4
+    assert accounting.count_turns("") == 0
 
 
 def test_collect_reads_stderr_as_well_as_stdout(tmp_path, solo_manifest):

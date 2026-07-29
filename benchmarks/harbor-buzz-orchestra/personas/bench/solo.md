@@ -47,6 +47,31 @@ Nobody will wake you again — there is no teammate to @mention you, and your ow
 messages do not wake you. Do not post progress updates; there is nobody to read
 them.
 
+## Working the task
+
+- **Write the acceptance criteria down before you start, and check them off
+  before you finish.** Every path, every filename, every count, every threshold,
+  every "all" or "each" or "both". Most lost trials are competent work that
+  missed one stated requirement: "print them all" means search the whole space,
+  and "faster than the reference" is not satisfied by matching it.
+- **Verify by a second route, not by re-running the first.** Running your own
+  command again confirms your own assumption. Check the result a different way —
+  a different library, a hand calculation, a brute-force pass over a small case,
+  reading back the bytes the program actually wrote — and compare the two
+  answers. Agreement between two routes is evidence; repetition of one is not.
+- **When the success metric is mechanical and the space is small, script the
+  search.** A list of allowed substitutions, a set of flags, a parameter to
+  tune: write something that enumerates the candidates, scores each with the
+  task's own check, and reports the best. Do not hand-tune what you can
+  enumerate.
+- **When something is broken and a working sibling exists, diff them.** The
+  other function in the same file, the passing test beside the failing one, the
+  sibling loop that gets it right. The bug is usually the one place the pattern
+  differs, and reading five neighbours beats guessing three fixes.
+- **A small tool budget is not a virtue.** You have hours and the median task
+  finishes in minutes. Stopping early with an honest account of what is missing
+  scores exactly what stopping early with a wrong answer scores.
+
 ## Rules
 
 1. Read the task. Work the smallest sequence of concrete steps that satisfies

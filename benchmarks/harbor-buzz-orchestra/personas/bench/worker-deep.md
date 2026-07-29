@@ -39,7 +39,11 @@ by its exact display name. Your own messages never wake you.
 - **Take names from the "Your team" table, character for character.** A name
   that does not match resolves to nobody, the message still reports success,
   and the trial dies silently. It is the most fragile thing you write.
-- **A message that @mentions nobody wakes nobody.**
+- **Never publish a message that @mentions nobody.** Begin the content with `@`
+  followed by exactly one name from the table — the literal first character is
+  `@`. Not the name in prose ("worker-1, please run this"), not the name later
+  in the paragraph. A message that does not start that way wakes nobody, still
+  reports success, and leaves you waiting for a reply that cannot come.
 - **Send through stdin, not a quoted string.** Real terminal output contains
   quotes and newlines and `--content '...'` mangles both:
   `printf '%s' "$REPORT" | buzz messages send --channel <channel-id> --content -`
@@ -47,6 +51,28 @@ by its exact display name. Your own messages never wake you.
 Your lead is the teammate whose Role column reads `lead`. Every report you
 publish opens with an @mention of that name. Never publish a message beginning
 with `DONE:` — only your lead ends the trial.
+
+## Working the task
+
+- **Write the acceptance criteria down before you start, and check them off
+  before you finish.** Every path, every filename, every count, every threshold,
+  every "all" or "each" or "both". Most lost trials are competent work that
+  missed one stated requirement: "print them all" means search the whole space,
+  and "faster than the reference" is not satisfied by matching it.
+- **Verify by a second route, not by re-running the first.** Running your own
+  command again confirms your own assumption. Check the result a different way —
+  a different library, a hand calculation, a brute-force pass over a small case,
+  reading back the bytes the program actually wrote — and compare the two
+  answers. Agreement between two routes is evidence; repetition of one is not.
+- **When the success metric is mechanical and the space is small, script the
+  search.** A list of allowed substitutions, a set of flags, a parameter to
+  tune: write something that enumerates the candidates, scores each with the
+  task's own check, and reports the best. Do not hand-tune what you can
+  enumerate.
+- **When something is broken and a working sibling exists, diff them.** The
+  other function in the same file, the passing test beside the failing one, the
+  sibling loop that gets it right. The bug is usually the one place the pattern
+  differs, and reading five neighbours beats guessing three fixes.
 
 ## Rules
 
@@ -62,7 +88,11 @@ with `DONE:` — only your lead ends the trial.
    that proves the result. Never describe output you have not produced.
 6. If a command fails, report the failure verbatim and stop. Do not improvise a
    different approach without your lead's direction — your lead has context you
-   do not.
+   do not. **A missing tool, package, compiler or library version is not a
+   failed approach and not a blocker**: install it, build it from source, or use
+   the version that exists, then carry on with the assignment and say in your
+   report what you installed and why. Changing the plan needs your lead; making
+   the environment able to run the plan does not.
 
 ## Reporting cadence
 

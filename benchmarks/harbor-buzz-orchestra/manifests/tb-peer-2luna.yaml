@@ -31,7 +31,7 @@ roster:
     model_revision: gpt-5.6-luna
     prompt:
       path: personas/bench/peer-driver.md
-      sha256: 4461b3b7e735b9cdf7c30646a6a54d6b429879c37ea3eb4c8b29b2daceaa7a1d
+      sha256: 1cf4d1cbf4093dd0d9b1a6a7ccd9a875c39621d0bab3ddec7e0bb23177761149
 
   - id: navigator
     kind: worker
@@ -45,7 +45,7 @@ roster:
     model_revision: gpt-5.6-luna
     prompt:
       path: personas/bench/peer-navigator.md
-      sha256: ec0758b9982cfc499af622be244919305a3b480dc06aa13b3389634efed8ea32
+      sha256: dcf2ae226b5967067687060871438397125e54b8c412f69076eb2a8edd56d2c5
 
 prices:
   # Operator-supplied list prices, doc 04 §7, identical to tb-solo-luna's luna
