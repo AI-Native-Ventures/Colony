@@ -17,7 +17,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -56,7 +56,7 @@ impl InstallOutcome {
 /// `line: None` is the *start signal*: an attempt is beginning and the displayed
 /// line must clear now. It is emitted unthrottled, because the point is that
 /// stale output stops being shown before the new work prints anything.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub(super) struct InstallOutputEvent {
     pub(super) runtime_id: String,
     pub(super) seq: u64,
@@ -85,6 +85,30 @@ pub(super) struct InstallReporter {
     /// reassembly entirely instead of doing it for no one.
     live: Option<Live>,
     secrets: Secrets,
+}
+
+impl Drop for InstallReporter {
+    /// Serialise deactivation against in-flight publications: take the
+    /// exclusive lifecycle write lock, mark the run as inactive, and return —
+    /// all before the per-runtime concurrency guard releases.
+    ///
+    /// Every drain thread holds the shared read guard from its admission check
+    /// through its `(self.emit)(...)` call, so the write lock here blocks until
+    /// every in-flight publication has finished.  After this returns, `active`
+    /// is `false` under an exclusive write, and any thread that attempts a new
+    /// `offer` will read `false` under a read lock and return without emitting.
+    ///
+    /// The ordering guarantee: `reporter` is declared after `_guard` in
+    /// `install_acp_runtime_blocking` (line 311 vs line 306), so Rust drops
+    /// `reporter` first in reverse-declaration order — deactivation completes
+    /// before the runtime guard releases and a new install can start.
+    fn drop(&mut self) {
+        if let Some(live) = &self.live {
+            if let Ok(mut active) = live.lifecycle.write() {
+                *active = false;
+            }
+        }
+    }
 }
 
 impl InstallReporter {
@@ -123,6 +147,7 @@ impl InstallReporter {
             emit,
             throttle: Arc::new(Throttle::new(LIVE_LINE_INTERVAL)),
             seq: Arc::new(AtomicU64::new(0)),
+            lifecycle: Arc::new(RwLock::new(true)),
             secrets: Arc::clone(&secrets),
         });
         Self { log, live, secrets }
@@ -213,30 +238,76 @@ struct Live {
     emit: EmitEvent,
     throttle: Arc<Throttle>,
     seq: Arc<AtomicU64>,
+    /// Lifecycle lock: `true` while the run is active, `false` once
+    /// `InstallReporter` has been dropped.
+    ///
+    /// Drain threads hold a **shared read guard** from the admission check
+    /// through the `(self.emit)(...)` call, making the admit-and-publish pair
+    /// atomic with respect to deactivation. `InstallReporter::drop` takes the
+    /// **exclusive write guard** and sets the value to `false`; this blocks
+    /// until every in-flight publication finishes, then prevents any new
+    /// publications from starting. The write lock is held only for the flag
+    /// store and is released before the per-runtime concurrency guard drops,
+    /// so its duration is bounded by the time a single `emit` call takes —
+    /// microseconds to low milliseconds for the Tauri IPC broadcast.
+    lifecycle: Arc<RwLock<bool>>,
     secrets: Secrets,
 }
 
 impl Live {
     /// Offer one drained line to the rate limiter, emitting it if the window is
     /// open and holding it as the newest pending line if not.
+    ///
+    /// The read guard is held from the admission check through the emit call so
+    /// that `InstallReporter::drop`'s write lock must wait for any in-flight
+    /// publication to complete before deactivating.  This makes the
+    /// check-then-emit pair atomic with respect to shutdown.
     fn offer(&self, line: &str) {
-        if let Some(line) = self.throttle.offer(line, Instant::now()) {
-            self.publish(Some(line));
+        let Ok(guard) = self.lifecycle.read() else {
+            return;
+        };
+        if !*guard {
+            return;
         }
+        if let Some(line) = self.throttle.offer(line, Instant::now()) {
+            self.publish_under_guard(line);
+        }
+        // `guard` drops here, releasing the read lock after publication.
     }
 
     fn flush_pending(&self) {
-        if let Some(line) = self.throttle.take_pending() {
-            self.publish(Some(line));
+        let Ok(guard) = self.lifecycle.read() else {
+            return;
+        };
+        if !*guard {
+            return;
         }
+        if let Some(line) = self.throttle.take_pending() {
+            self.publish_under_guard(line);
+        }
+        // `guard` drops here, releasing the read lock after publication.
     }
 
-    /// Emit `line` now, bypassing the rate window. `None` clears the display.
+    /// Emit `line` now, bypassing the rate window and the lifecycle lock.
+    ///
+    /// Only called from `InstallReporter` methods that run on the reporter
+    /// itself (never from detached drain threads), so no lifecycle guard is
+    /// needed — the reporter is alive by definition when its own methods run.
     fn publish(&self, line: Option<String>) {
         (self.emit)(InstallOutputEvent {
             runtime_id: self.runtime_id.to_string(),
             seq: self.seq.fetch_add(1, Ordering::Relaxed),
             line: line.map(|line| redact(&line, &self.secrets)),
+        });
+    }
+
+    /// Publish `line` while already holding a read guard on `lifecycle`.  The
+    /// caller is responsible for checking `active` before calling this.
+    fn publish_under_guard(&self, line: String) {
+        (self.emit)(InstallOutputEvent {
+            runtime_id: self.runtime_id.to_string(),
+            seq: self.seq.fetch_add(1, Ordering::Relaxed),
+            line: Some(redact(&line, &self.secrets)),
         });
     }
 }
