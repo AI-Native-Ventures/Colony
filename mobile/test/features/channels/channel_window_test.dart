@@ -236,6 +236,75 @@ void main() {
       },
     );
 
+    test('a buffered live summary wins over the initial page snapshot', () {
+      var store = mergeLiveChannelWindowEvent(
+        const ChannelWindowStore.empty(),
+        _summary('root', replyCount: 2, participants: ['p1'], createdAt: 30),
+        isTimelineRow: false,
+      );
+
+      store = replaceNewestChannelWindow(
+        store,
+        ChannelWindowPage(
+          startCursor: null,
+          rows: [
+            ChannelWindowRow(
+              event: _row('root', createdAt: 10),
+              thread: const ChannelWindowThreadSummary(
+                replyCount: 1,
+                descendantCount: 1,
+                lastReplyAt: 12,
+                participantPubkeys: ['p1'],
+              ),
+              // The page overlay can be signed after its query snapshot.
+              threadSummaryCreatedAt: 31,
+            ),
+          ],
+          aux: const [],
+          nextCursor: null,
+          hasMore: false,
+        ),
+      );
+
+      expect(channelWindowThreadSummaries(store)['root']?.replyCount, 2);
+    });
+
+    test('a newer live summary survives an appended older page', () {
+      var store = replaceNewestChannelWindow(
+        const ChannelWindowStore.empty(),
+        _page(rows: [_row('head', createdAt: 10)], hasMore: true),
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _summary('older', replyCount: 2, participants: ['p1'], createdAt: 30),
+        isTimelineRow: false,
+      );
+
+      store = appendOlderChannelWindow(
+        store,
+        ChannelWindowPage(
+          startCursor: const ChannelPageCursor(createdAt: 10, eventId: 'head'),
+          rows: [
+            ChannelWindowRow(
+              event: _row('older', createdAt: 9),
+              thread: const ChannelWindowThreadSummary(
+                replyCount: 1,
+                descendantCount: 1,
+                lastReplyAt: 12,
+                participantPubkeys: ['p1'],
+              ),
+              threadSummaryCreatedAt: 29,
+            ),
+          ],
+          aux: const [],
+          nextCursor: null,
+          hasMore: false,
+        ),
+      );
+
+      expect(channelWindowThreadSummaries(store)['older']?.replyCount, 2);
+    });
+
     test('a refetched row outranks the live entry it duplicates', () {
       var store = replaceNewestChannelWindow(
         const ChannelWindowStore.empty(),

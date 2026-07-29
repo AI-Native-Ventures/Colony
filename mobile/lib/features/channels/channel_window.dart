@@ -179,34 +179,33 @@ ChannelWindowStore replaceNewestChannelWindow(
     liveAux: current.liveAux
         .where((event) => !auxIds.contains(event.id))
         .toList(),
-    // A page summary supersedes an equal-or-older live recount. A fresher live
-    // recount can race the query response, so retain that one on top.
-    liveThreadSummaries: _retainLiveSummariesAfterPage(current, page.rows),
+    // The first page is fetched after the live subscription starts. Any live
+    // summary buffered before it arrives can describe a mutation after the
+    // query snapshot, even when relay event timestamps are equal (or the page
+    // overlay was signed later), so it remains authoritative during hydration.
+    // Later page loads compare relay timestamps normally.
+    liveThreadSummaries: _retainLiveSummariesAfterPage(
+      current,
+      page.rows,
+      retainBufferedLiveSummaries: current.pages.isEmpty,
+    ),
   );
 }
 
 Map<String, ChannelWindowLiveThreadSummary> _retainLiveSummariesAfterPage(
   ChannelWindowStore current,
-  List<ChannelWindowRow> rows,
-) {
+  List<ChannelWindowRow> rows, {
+  required bool retainBufferedLiveSummaries,
+}) {
   final rowsById = {for (final row in rows) row.event.id: row};
   return {
     for (final entry in current.liveThreadSummaries.entries)
-      if (rowsById[entry.key] == null ||
+      if (retainBufferedLiveSummaries ||
+          rowsById[entry.key] == null ||
           rowsById[entry.key]!.thread == null ||
           entry.value.createdAt >
               (rowsById[entry.key]!.threadSummaryCreatedAt ?? -1))
         entry.key: entry.value,
-  };
-}
-
-Map<String, ChannelWindowLiveThreadSummary> _retainLiveSummaries(
-  ChannelWindowStore current,
-  Set<String> supersededRootIds,
-) {
-  return {
-    for (final entry in current.liveThreadSummaries.entries)
-      if (!supersededRootIds.contains(entry.key)) entry.key: entry.value,
   };
 }
 
@@ -243,7 +242,14 @@ ChannelWindowStore appendOlderChannelWindow(
         .where((event) => !pageIds.contains(event.id))
         .toList(),
     liveAux: current.liveAux,
-    liveThreadSummaries: _retainLiveSummaries(current, pageIds),
+    // A live recount can arrive while this older page is in flight. Keep it
+    // when it is fresher than the page's embedded snapshot, just as a newest
+    // page replacement does.
+    liveThreadSummaries: _retainLiveSummariesAfterPage(
+      current,
+      page.rows,
+      retainBufferedLiveSummaries: false,
+    ),
   );
 }
 
