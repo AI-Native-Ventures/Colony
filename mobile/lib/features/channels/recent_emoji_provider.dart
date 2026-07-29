@@ -29,11 +29,22 @@ const defaultQuickEmojis = <String>[
 /// Desktop's `MAX_STORED_REACTIONS`.
 const _maxStoredEmoji = 24;
 
+/// One persisted frequently-used emoji ranking entry.
+///
+/// [emoji] is the Unicode glyph or custom shortcode, [count] is how many times
+/// it has been selected, and [lastUsedAt] is the most recent selection time in
+/// milliseconds since the Unix epoch.
 class RecentEmojiEntry {
+  /// The Unicode glyph or `:shortcode:` value that was selected.
   final String emoji;
+
+  /// Number of recorded selections for [emoji].
   final int count;
+
+  /// Most recent selection time in milliseconds since the Unix epoch.
   final int lastUsedAt;
 
+  /// Creates a persisted ranking entry for [emoji].
   const RecentEmojiEntry({
     required this.emoji,
     required this.count,

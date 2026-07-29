@@ -39,10 +39,10 @@ void main() {
           .value!;
       expect(messages.map((event) => event.id), ['history', 'live']);
       expect(relaySession.operations, ['subscribe', 'query', 'fetch']);
-      expect(
-        relaySession.liveFilters.single.kinds,
-        EventKind.channelEventKinds,
-      );
+      expect(relaySession.liveFilters.single.kinds, [
+        ...EventKind.channelEventKinds,
+        EventKind.channelThreadSummary,
+      ]);
       expect(relaySession.liveFilters.single.tags['#h'], [_channelId]);
       expect(relaySession.liveFilters.single.limit, 200);
       expect(
@@ -241,6 +241,42 @@ void main() {
       ['history'],
     );
   });
+
+  test(
+    'live thread summary survives rolling back an unrelated local row',
+    () async {
+      final relaySession = _RecordingRelaySessionNotifier(
+        queryResults: [
+          [_event(id: 'root', createdAt: 10), _bounds()],
+        ],
+      );
+      final container = _buildContainer(relaySession);
+      addTearDown(container.dispose);
+
+      container.read(channelMessagesProvider(_channelId));
+      await relaySession.subscribed;
+      await _pumpEventQueue();
+      final notifier = container.read(
+        channelMessagesProvider(_channelId).notifier,
+      );
+      notifier.addLocalMessage(_event(id: 'local', createdAt: 20));
+
+      relaySession.emit(_summary(rootId: 'root', replyCount: 2));
+      await _pumpEventQueue();
+      expect(notifier.threadSummaries['root']?.replyCount, 2);
+
+      notifier.removeLocalMessage('local');
+
+      expect(notifier.threadSummaries['root']?.replyCount, 2);
+      expect(
+        container
+            .read(channelMessagesProvider(_channelId))
+            .value
+            ?.map((event) => event.id),
+        ['root'],
+      );
+    },
+  );
 
   test('reconnect hydration cannot retain a rolled-back local row', () async {
     final relaySession = _RecordingRelaySessionNotifier(
@@ -558,6 +594,26 @@ NostrEvent _event({
       ...extraTags,
     ],
     content: id,
+    sig: 'sig',
+  );
+}
+
+NostrEvent _summary({required String rootId, required int replyCount}) {
+  return NostrEvent(
+    id: 'summary-$rootId-$replyCount',
+    pubkey: 'relay',
+    createdAt: 20,
+    kind: EventKind.channelThreadSummary,
+    tags: [
+      ['h', _channelId],
+      ['e', rootId],
+    ],
+    content: jsonEncode({
+      'reply_count': replyCount,
+      'descendant_count': replyCount,
+      'last_reply_at': 20,
+      'participants': ['alice'],
+    }),
     sig: 'sig',
   );
 }

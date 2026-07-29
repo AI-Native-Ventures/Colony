@@ -63,7 +63,7 @@ class ChannelWindowStore {
 
   const ChannelWindowStore({
     required this.pages,
-    this.liveThreadSummaries = const {},
+    required this.liveThreadSummaries,
     required this.liveOverlay,
     required this.liveAux,
   });

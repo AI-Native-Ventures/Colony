@@ -77,7 +77,6 @@ void showAddReactionPicker({
   showEmojiPicker(
     context: context,
     onSelect: (emoji) {
-      ref.read(recentEmojiProvider.notifier).record(emoji);
       armReactionBurst(ref, message, emoji);
       ref.read(channelActionsProvider).addReaction(message.id, emoji);
     },

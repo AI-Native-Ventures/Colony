@@ -137,8 +137,19 @@ class ThreadDetailPage extends HookConsumerWidget {
     // reversed one did, so follow the tail explicitly: when a reply arrives
     // while the last item is on screen, scroll it into view. If the user has
     // scrolled up to read, leave them where they are.
+    final hasFetchedReplies = fetchedReplies != null;
+    final didEstablishInitialReplies = useRef(hasFetchedReplies);
     final previousReplyCount = useRef(replies.length);
     useEffect(() {
+      // The first authoritative query result is hydration, not a live arrival.
+      // Establish the baseline without moving the user away from the head.
+      if (!hasFetchedReplies) return null;
+      if (!didEstablishInitialReplies.value) {
+        didEstablishInitialReplies.value = true;
+        previousReplyCount.value = replies.length;
+        return null;
+      }
+
       final previous = previousReplyCount.value;
       previousReplyCount.value = replies.length;
       if (replies.length <= previous) return null;
@@ -163,7 +174,7 @@ class ThreadDetailPage extends HookConsumerWidget {
         );
       });
       return null;
-    }, [replies.length]);
+    }, [hasFetchedReplies, replies.length]);
     final readState = ref.watch(readStateProvider);
     final visibleReplyReadKey = replies
         .map((reply) => '${reply.id}:${reply.createdAt}')

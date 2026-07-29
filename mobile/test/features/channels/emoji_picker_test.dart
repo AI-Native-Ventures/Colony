@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:buzz/features/channels/emoji_picker.dart';
 import 'package:buzz/features/channels/recent_emoji_provider.dart';
 import 'package:buzz/shared/custom_emoji/custom_emoji.dart';
@@ -332,6 +334,23 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(selected, [':partyparrot:']);
+    });
+
+    testWidgets('a selection records exactly one use', (tester) async {
+      final prefs = await _prefs();
+      final selected = await _pumpPicker(tester, prefs: prefs);
+
+      await tester.tap(find.byKey(const ValueKey('emoji-tile-fire')));
+      await tester.pumpAndSettle();
+
+      expect(selected, ['\u{1F525}']);
+      final stored = prefs.getString(
+        'buzz.quick-reaction-emojis.v1:http://localhost:3000:self',
+      );
+      final entries = jsonDecode(stored!) as List<dynamic>;
+      expect(entries, hasLength(1));
+      expect(entries.single, containsPair('emoji', '\u{1F525}'));
+      expect(entries.single, containsPair('count', 1));
     });
 
     testWidgets('a selection adds a Frequently used section', (tester) async {

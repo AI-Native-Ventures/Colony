@@ -7,6 +7,11 @@ import 'pending_local_messages_provider.dart';
 import 'channel_window.dart';
 import 'thread_replies_provider.dart';
 
+const _channelLiveEventKinds = [
+  ...EventKind.channelEventKinds,
+  EventKind.channelThreadSummary,
+];
+
 /// Provides the message list for a specific channel. Registers a live
 /// subscription first, then syncs history via the server-assembled channel
 /// window fast path, falling back to the legacy websocket history path when the
@@ -71,7 +76,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       try {
         final unsubscribe = await session.subscribe(
           NostrFilter(
-            kinds: EventKind.channelEventKinds,
+            kinds: _channelLiveEventKinds,
             tags: {
               '#h': [channelId],
             },
@@ -325,6 +330,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
         pages: _windowStore.pages,
         liveOverlay: nextOverlay,
         liveAux: _windowStore.liveAux,
+        liveThreadSummaries: _windowStore.liveThreadSummaries,
       );
     }
 
