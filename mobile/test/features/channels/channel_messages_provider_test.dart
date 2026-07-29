@@ -59,6 +59,47 @@ void main() {
     },
   );
 
+  test(
+    'buffers a live thread summary until the initial window is installed',
+    () async {
+      final window = Completer<List<NostrEvent>>();
+      final relaySession = _RecordingRelaySessionNotifier(
+        queryResults: [window.future],
+      );
+      final container = _buildContainer(relaySession);
+      addTearDown(container.dispose);
+
+      container.read(channelMessagesProvider(_channelId));
+      await relaySession.subscribed;
+      final notifier = container.read(
+        channelMessagesProvider(_channelId).notifier,
+      );
+
+      relaySession.emit(_summary(rootId: 'root', replyCount: 2));
+      await _pumpEventQueue();
+      expect(
+        container.read(channelMessagesProvider(_channelId)).isLoading,
+        isTrue,
+      );
+
+      window.complete([
+        _event(id: 'root', createdAt: 10),
+        _summary(rootId: 'root', replyCount: 1, createdAt: 10),
+        _bounds(),
+      ]);
+      await _pumpEventQueue();
+
+      expect(notifier.threadSummaries['root']?.replyCount, 2);
+      expect(
+        container
+            .read(channelMessagesProvider(_channelId))
+            .value
+            ?.map((event) => event.id),
+        ['root'],
+      );
+    },
+  );
+
   test('still loads history when live subscription fails', () async {
     final relaySession = _RecordingRelaySessionNotifier(failSubscribe: true);
     final container = _buildContainer(relaySession);
@@ -598,11 +639,15 @@ NostrEvent _event({
   );
 }
 
-NostrEvent _summary({required String rootId, required int replyCount}) {
+NostrEvent _summary({
+  required String rootId,
+  required int replyCount,
+  int createdAt = 20,
+}) {
   return NostrEvent(
-    id: 'summary-$rootId-$replyCount',
+    id: 'summary-$rootId-$createdAt-$replyCount',
     pubkey: 'relay',
-    createdAt: 20,
+    createdAt: createdAt,
     kind: EventKind.channelThreadSummary,
     tags: [
       ['h', _channelId],
@@ -685,6 +730,7 @@ class _RecordingRelaySessionNotifier extends RelaySessionNotifier {
     if (_queryResults.isEmpty) throw Exception('unsupported');
     final result = _queryResults.removeFirst();
     if (result is Exception) throw result;
+    if (result is Future<List<NostrEvent>>) return await result;
     return (result as List<NostrEvent>).toList();
   }
 

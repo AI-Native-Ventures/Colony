@@ -173,6 +173,19 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   );
 
   void _handleLiveEvent(NostrEvent event, {bool authoritative = true}) {
+    // A live summary can race the initial channel-window query. Buffer it in
+    // the window store even before that query installs its first page, rather
+    // than treating metadata as an ordinary websocket timeline event.
+    if (event.kind == EventKind.channelThreadSummary && !_usingChannelWindow) {
+      if (_mergeWindowEventIntoStore(event) && !_initInFlight) {
+        final current =
+            state.value ?? _lastKnownMessages ?? const <NostrEvent>[];
+        _lastKnownMessages = current;
+        state = AsyncData(current);
+      }
+      return;
+    }
+
     // Reply ownership and its thread-local overlay must transition together.
     // The authoritative thread query performs both confirmations after it
     // contains the reply; a live echo only triggers that query below.

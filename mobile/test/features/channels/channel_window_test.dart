@@ -188,16 +188,47 @@ void main() {
       );
       store = mergeLiveChannelWindowEvent(
         store,
-        _summary('root', replyCount: 1, participants: ['p1']),
+        _summary('root', replyCount: 1, participants: ['p1'], createdAt: 11),
         isTimelineRow: false,
       );
       store = mergeLiveChannelWindowEvent(
         store,
-        _summary('root', replyCount: 2, participants: ['p1', 'p2']),
+        _summary(
+          'root',
+          replyCount: 2,
+          participants: ['p1', 'p2'],
+          createdAt: 12,
+        ),
         isTimelineRow: false,
       );
 
       expect(channelWindowThreadSummaries(store)['root']?.replyCount, 2);
+    });
+
+    test('an older or equal-time live summary cannot replace a newer one', () {
+      var store = replaceNewestChannelWindow(
+        const ChannelWindowStore.empty(),
+        _page(rows: [_row('root', createdAt: 10)]),
+      );
+      store = mergeLiveChannelWindowEvent(
+        store,
+        _summary('root', replyCount: 3, participants: ['p1'], createdAt: 30),
+        isTimelineRow: false,
+      );
+      final afterOlder = mergeLiveChannelWindowEvent(
+        store,
+        _summary('root', replyCount: 1, participants: ['p1'], createdAt: 29),
+        isTimelineRow: false,
+      );
+      final afterEqual = mergeLiveChannelWindowEvent(
+        afterOlder,
+        _summary('root', replyCount: 2, participants: ['p1'], createdAt: 30),
+        isTimelineRow: false,
+      );
+
+      expect(identical(afterOlder, store), isTrue);
+      expect(identical(afterEqual, store), isTrue);
+      expect(channelWindowThreadSummaries(afterEqual)['root']?.replyCount, 3);
     });
 
     test('a refetched row outranks the live entry it duplicates', () {
@@ -215,16 +246,23 @@ void main() {
       // so the stale live entry must not shadow it.
       final refreshed = replaceNewestChannelWindow(
         store,
-        _pageWithThreads(
-          rows: [_row('root', createdAt: 10)],
-          threads: {
-            'root': const ChannelWindowThreadSummary(
-              replyCount: 5,
-              descendantCount: 5,
-              lastReplyAt: 12,
-              participantPubkeys: ['p1'],
+        ChannelWindowPage(
+          startCursor: null,
+          rows: [
+            ChannelWindowRow(
+              event: _row('root', createdAt: 10),
+              thread: const ChannelWindowThreadSummary(
+                replyCount: 5,
+                descendantCount: 5,
+                lastReplyAt: 12,
+                participantPubkeys: ['p1'],
+              ),
+              threadSummaryCreatedAt: 20,
             ),
-          },
+          ],
+          aux: const [],
+          nextCursor: null,
+          hasMore: false,
         ),
       );
 
@@ -306,24 +344,6 @@ ChannelWindowPage _page({
   );
 }
 
-/// Like [_page], but with thread summaries attached to named rows — what a
-/// refetched page looks like once replies exist.
-ChannelWindowPage _pageWithThreads({
-  required List<NostrEvent> rows,
-  required Map<String, ChannelWindowThreadSummary> threads,
-}) {
-  return ChannelWindowPage(
-    startCursor: null,
-    rows: [
-      for (final row in rows)
-        ChannelWindowRow(event: row, thread: threads[row.id]),
-    ],
-    aux: const [],
-    nextCursor: null,
-    hasMore: false,
-  );
-}
-
 NostrEvent _row(String id, {int createdAt = 10}) => _event(
   id: id,
   createdAt: createdAt,
@@ -345,8 +365,10 @@ NostrEvent _summary(
   String rootId, {
   required int replyCount,
   required List<String> participants,
+  int createdAt = 10,
 }) => _event(
-  id: 'summary-$rootId',
+  id: 'summary-$rootId-$createdAt-$replyCount',
+  createdAt: createdAt,
   kind: EventKind.channelThreadSummary,
   tags: [
     ['e', rootId],
