@@ -84,8 +84,11 @@ class _MessageList extends HookConsumerWidget {
 
     bool latestIsAtBoundary() {
       // In this reversed list, item 0's leading edge is the bottom boundary.
+      // Being merely visible is not enough: a user who has pulled a tall
+      // newest row away from the boundary must not snap back on live updates.
       return itemPositionsListener.itemPositions.value.any(
-        (position) => position.index == 0 && position.itemLeadingEdge >= 0,
+        (position) =>
+            position.index == 0 && position.itemLeadingEdge.abs() < 0.01,
       );
     }
 
