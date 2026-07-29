@@ -111,6 +111,8 @@ export function useTrayMenu({
     void invoke("update_tray_agent_activity", {
       activities,
       recentActivities,
+    }).catch((error) => {
+      console.error("Failed to update the macOS tray menu", error);
     });
   }, [activities, recentActivities]);
 

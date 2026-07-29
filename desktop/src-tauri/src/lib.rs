@@ -28,6 +28,7 @@ mod reset;
 mod secret_store;
 mod shutdown;
 mod templates;
+#[cfg(target_os = "macos")]
 mod tray_menu;
 mod util;
 #[cfg(target_os = "linux")]
@@ -68,6 +69,8 @@ use tauri::{Emitter, Manager, RunEvent};
 #[cfg(target_os = "macos")]
 use tauri::{Listener, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
+#[cfg(target_os = "macos")]
+use tray_menu::show_main_window;
 
 #[cfg(target_os = "macos")]
 const INITIAL_RENDER_READY_EVENT: &str = "initial-render-ready";
@@ -361,6 +364,7 @@ pub fn run() {
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+            #[cfg(target_os = "macos")]
             tray_menu::init(&app_handle)?;
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
@@ -897,9 +901,13 @@ pub fn run() {
             archive::read_unindexed_observer_rows,
             is_auto_update_supported,
             set_window_vibrancy,
+            #[cfg(target_os = "macos")]
             tray_menu::clear_tray_agent_activity,
+            #[cfg(target_os = "macos")]
             tray_menu::requeue_tray_actions,
+            #[cfg(target_os = "macos")]
             tray_menu::take_tray_actions,
+            #[cfg(target_os = "macos")]
             tray_menu::update_tray_agent_activity,
         ])
         .build(tauri::generate_context!())
@@ -913,6 +921,8 @@ pub fn run() {
     let run_shutdown_done = Arc::clone(&shutdown_done);
     let restart_requested = Arc::new(AtomicBool::new(false));
     app.run(move |app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show_main_window(app_handle),
         #[cfg(target_os = "macos")]
         RunEvent::WindowEvent {
             label,

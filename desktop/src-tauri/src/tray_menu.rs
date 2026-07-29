@@ -193,19 +193,27 @@ struct TrayActivityMenuItem<R: Runtime> {
     agent_item: MenuItem<R>,
 }
 
-struct TrayMenuState<R: Runtime> {
-    activity_items: Mutex<Vec<TrayActivityMenuItem<R>>>,
-    pending_actions: Mutex<Vec<TrayAction>>,
+struct TrayActionQueue {
+    community_generation: u64,
+    pending_actions: Vec<TrayAction>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+struct TrayMenuState<R: Runtime> {
+    activity_items: Mutex<Vec<TrayActivityMenuItem<R>>>,
+    action_queue: Mutex<TrayActionQueue>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum TrayAction {
     NewChannel,
-    OpenChannel { channel_id: String },
+    OpenChannel {
+        channel_id: String,
+        community_generation: u64,
+    },
 }
 
-fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -222,14 +230,21 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-fn queue_tray_action<R: Runtime>(app: &AppHandle<R>, action: TrayAction) {
+fn queue_tray_action<R: Runtime>(app: &AppHandle<R>, mut action: TrayAction) {
     let state = app.state::<TrayMenuState<R>>();
-    let Ok(mut actions) = state.pending_actions.lock() else {
+    let Ok(mut queue) = state.action_queue.lock() else {
         eprintln!("buzz-desktop: tray action queue is unavailable");
         return;
     };
-    actions.push(action);
-    drop(actions);
+    if let TrayAction::OpenChannel {
+        community_generation,
+        ..
+    } = &mut action
+    {
+        *community_generation = queue.community_generation;
+    }
+    queue.pending_actions.push(action);
+    drop(queue);
 
     if let Err(error) = app.emit("tray-action-available", ()) {
         eprintln!("buzz-desktop: failed to notify frontend of tray action: {error}");
@@ -443,6 +458,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 app,
                 TrayAction::OpenChannel {
                     channel_id: channel_id.into(),
+                    community_generation: 0,
                 },
             );
         }
@@ -458,7 +474,10 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let (menu, activity_items) = build_menu(app, activities, recent_activities)?;
     app.manage(TrayMenuState {
         activity_items: Mutex::new(activity_items),
-        pending_actions: Mutex::new(Vec::new()),
+        action_queue: Mutex::new(TrayActionQueue {
+            community_generation: 0,
+            pending_actions: Vec::new(),
+        }),
     });
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -466,8 +485,9 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .icon_as_template(true)
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
-    apply_activity_presentation(&tray, activities, recent_activities)
-        .map_err(anyhow::Error::msg)?;
+    if let Err(error) = apply_activity_presentation(&tray, activities, recent_activities) {
+        eprintln!("buzz-desktop: failed to apply tray menu presentation: {error}");
+    }
     Ok(())
 }
 
@@ -475,27 +495,39 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 #[tauri::command]
 pub fn take_tray_actions<R: Runtime>(app: AppHandle<R>) -> Result<Vec<TrayAction>, String> {
     let state = app.state::<TrayMenuState<R>>();
-    let mut actions = state
-        .pending_actions
+    let mut queue = state
+        .action_queue
         .lock()
         .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
-    Ok(std::mem::take(&mut *actions))
+    Ok(std::mem::take(&mut queue.pending_actions))
 }
 
-/// Restores actions that were drained as the frontend unmounted.
+fn requeue_actions(queue: &mut TrayActionQueue, mut actions: Vec<TrayAction>) {
+    actions.retain(|action| match action {
+        TrayAction::NewChannel => true,
+        TrayAction::OpenChannel {
+            community_generation,
+            ..
+        } => *community_generation == queue.community_generation,
+    });
+    actions.append(&mut queue.pending_actions);
+    queue.pending_actions = actions;
+}
+
+/// Restores actions that were drained as the frontend unmounted. Channel
+/// actions from a previous community generation are discarded.
 #[tauri::command]
 pub fn requeue_tray_actions<R: Runtime>(
     app: AppHandle<R>,
-    mut actions: Vec<TrayAction>,
+    actions: Vec<TrayAction>,
 ) -> Result<(), String> {
     let state = app.state::<TrayMenuState<R>>();
-    let mut pending_actions = state
-        .pending_actions
+    let mut queue = state
+        .action_queue
         .lock()
         .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
-    actions.append(&mut pending_actions);
-    *pending_actions = actions;
-    drop(pending_actions);
+    requeue_actions(&mut queue, actions);
+    drop(queue);
     app.emit("tray-action-available", ())
         .map_err(|error| error.to_string())
 }
@@ -505,12 +537,15 @@ pub fn requeue_tray_actions<R: Runtime>(
 #[tauri::command]
 pub fn clear_tray_agent_activity<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let state = app.state::<TrayMenuState<R>>();
-    let mut pending_actions = state
-        .pending_actions
+    let mut queue = state
+        .action_queue
         .lock()
         .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
-    pending_actions.retain(|action| matches!(action, TrayAction::NewChannel));
-    drop(pending_actions);
+    queue.community_generation = queue.community_generation.wrapping_add(1);
+    queue
+        .pending_actions
+        .retain(|action| matches!(action, TrayAction::NewChannel));
+    drop(queue);
 
     update_tray_agent_activity(app, Vec::new(), Vec::new())
 }
@@ -567,4 +602,39 @@ pub fn update_tray_agent_activity<R: Runtime>(
     apply_activity_presentation(&tray, activities, recent_activities)?;
     *activity_items = next_activity_items;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{requeue_actions, TrayAction, TrayActionQueue};
+
+    #[test]
+    fn stale_channel_actions_are_not_requeued_after_community_change() {
+        let mut queue = TrayActionQueue {
+            community_generation: 2,
+            pending_actions: Vec::new(),
+        };
+
+        requeue_actions(
+            &mut queue,
+            vec![TrayAction::OpenChannel {
+                channel_id: "old-channel".into(),
+                community_generation: 1,
+            }],
+        );
+
+        assert!(queue.pending_actions.is_empty());
+    }
+
+    #[test]
+    fn new_channel_actions_survive_community_change() {
+        let mut queue = TrayActionQueue {
+            community_generation: 2,
+            pending_actions: Vec::new(),
+        };
+
+        requeue_actions(&mut queue, vec![TrayAction::NewChannel]);
+
+        assert_eq!(queue.pending_actions, vec![TrayAction::NewChannel]);
+    }
 }
