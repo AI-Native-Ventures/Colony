@@ -720,6 +720,12 @@ fn anthropic_body(
         }
     }
     flush(&mut messages, &mut pending);
+    // Rolling cache breakpoint: mark the tail of the (append-only) conversation
+    // so the next turn re-reads this whole prefix from cache instead of paying
+    // full input price for it. See `stamp_rolling_cache_breakpoint`.
+    if cfg.prompt_caching {
+        stamp_rolling_cache_breakpoint(&mut messages);
+    }
     let tools_json: Vec<Value> = tools
         .iter()
         .map(|t| {
@@ -727,8 +733,19 @@ fn anthropic_body(
         "name": t.name, "description": t.description, "input_schema": t.input_schema })
         })
         .collect();
+    // Static prefix breakpoint: caching the `system` block caches the whole
+    // prefix up to and including it — and the prefix order is
+    // `tools -> system -> messages`, so this single marker caches tools +
+    // system together. Requires the structured (array) form of `system`; skip
+    // it for an empty prompt since Anthropic rejects empty text blocks.
+    let system_value = if cfg.prompt_caching && !system_prompt.is_empty() {
+        json!([{ "type": "text", "text": system_prompt,
+            "cache_control": { "type": "ephemeral" } }])
+    } else {
+        json!(system_prompt)
+    };
     let mut body = json!({ "model": effective_model, "max_tokens": cfg.max_output_tokens,
-        "system": system_prompt, "messages": messages });
+        "system": system_value, "messages": messages });
     if let Some(e) = effort {
         let (thinking, output_config) =
             crate::config::anthropic_thinking_config(effective_model, e, cfg.max_output_tokens);
@@ -743,6 +760,24 @@ fn anthropic_body(
         body["tools"] = Value::Array(tools_json);
     }
     body
+}
+
+/// Attach an ephemeral `cache_control` marker to the last content block of the
+/// last message, if any. Anthropic caches the entire prompt prefix up to and
+/// including the marked block, so on the next turn the append-only history
+/// re-sends that prefix and reads it from cache (~0.1x input price) rather than
+/// re-billing it as fresh input. A no-op when there are no messages, when the
+/// last message has no content blocks, or when the tail block is not an object.
+fn stamp_rolling_cache_breakpoint(messages: &mut [Value]) {
+    if let Some(block) = messages
+        .last_mut()
+        .and_then(|m| m.get_mut("content"))
+        .and_then(Value::as_array_mut)
+        .and_then(|c| c.last_mut())
+        .and_then(Value::as_object_mut)
+    {
+        block.insert("cache_control".into(), json!({ "type": "ephemeral" }));
+    }
 }
 
 fn anthropic_tool_result_content(content: &[ToolResultContent]) -> Vec<Value> {
@@ -1670,6 +1705,7 @@ mod tests {
             prefer_mesh_for_auto: false,
             hints_enabled: true,
             thinking_effort: None,
+            prompt_caching: true,
         }
     }
 
@@ -2666,6 +2702,77 @@ mod tests {
         assert_eq!(imgs.len(), 2);
         assert_eq!(imgs[0]["image_url"]["url"], "data:image/png;base64,aaa");
         assert_eq!(imgs[1]["image_url"]["url"], "data:image/png;base64,bbb");
+    }
+
+    // ---- prompt caching (cache_control) body-shape tests ----
+
+    #[test]
+    fn anthropic_body_stamps_cache_control_when_enabled() {
+        let body = anthropic_body(
+            &cfg(Provider::DatabricksV2),
+            "sys",
+            &[
+                HistoryItem::User("hello".into()),
+                HistoryItem::Assistant {
+                    text: "hi".into(),
+                    tool_calls: vec![],
+                },
+                HistoryItem::User("more".into()),
+            ],
+            &[],
+            "databricks-claude-opus-5",
+            None,
+        );
+        // Static prefix: system promoted to a structured block carrying the marker.
+        assert_eq!(body["system"][0]["type"], "text");
+        assert_eq!(body["system"][0]["text"], "sys");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        // Rolling tail: only the last block of the last message is marked.
+        let msgs = body["messages"].as_array().unwrap();
+        let last = msgs.last().unwrap();
+        let last_block = last["content"].as_array().unwrap().last().unwrap();
+        assert_eq!(last_block["cache_control"]["type"], "ephemeral");
+        assert!(
+            msgs[0]["content"][0].get("cache_control").is_none(),
+            "earlier messages must not carry a breakpoint"
+        );
+    }
+
+    #[test]
+    fn anthropic_body_no_cache_control_when_disabled() {
+        let mut c = cfg(Provider::DatabricksV2);
+        c.prompt_caching = false;
+        let body = anthropic_body(
+            &c,
+            "sys",
+            &[HistoryItem::User("hello".into())],
+            &[],
+            "databricks-claude-opus-5",
+            None,
+        );
+        // system stays a bare string; no marker anywhere.
+        assert_eq!(body["system"], "sys");
+        let last_block = &body["messages"][0]["content"][0];
+        assert!(last_block.get("cache_control").is_none());
+    }
+
+    #[test]
+    fn anthropic_body_empty_system_stays_string_even_when_caching() {
+        // An empty system prompt must not become an empty text block —
+        // Anthropic rejects those. Caching is still applied to the tail.
+        let body = anthropic_body(
+            &cfg(Provider::DatabricksV2),
+            "",
+            &[HistoryItem::User("hello".into())],
+            &[],
+            "databricks-claude-opus-5",
+            None,
+        );
+        assert_eq!(body["system"], "");
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
     }
 
     // ---- ThinkingEffort body-shape tests ----
