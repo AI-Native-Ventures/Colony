@@ -62,8 +62,6 @@ import { getCurrentVerifiedName } from "@/shared/lib/verifiedIdentity";
 
 export { AgentInstructionsFocusedView } from "@/features/profile/ui/UserProfilePanelAgentDetails";
 
-// ── Summary view ─────────────────────────────────────────────────────────────
-
 export type ProfileSummaryViewProps = {
   activityAgent: ProfileActivityAgent | null;
   callerChannelId: string | null;
@@ -465,8 +463,6 @@ export function ProfileSummaryView({
   );
 }
 
-// ── Hero & metadata ──────────────────────────────────────────────────────────
-
 function ProfileHero({
   displayName,
   isBot,
@@ -648,8 +644,6 @@ function ProfileHeroDescription({ about }: { about: string }) {
   );
 }
 
-// ── Primary actions ──────────────────────────────────────────────────────────
-
 function ProfilePrimaryActions({
   agentActionDisabled,
   agentActionLabel,
@@ -822,8 +816,6 @@ function ProfileQuickAction({
     </Tooltip>
   );
 }
-
-// ── Focused views ────────────────────────────────────────────────────────────
 
 export function MemoryFocusedView({
   agentPubkey,
