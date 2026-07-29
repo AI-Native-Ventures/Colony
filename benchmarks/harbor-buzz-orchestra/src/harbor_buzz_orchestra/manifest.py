@@ -57,6 +57,28 @@ class GenerationConfig(StrictModel):
     # condition hash.
     compact_at_percent: int | None = Field(default=None, ge=1, le=100)
     compact_at_tokens: int | None = Field(default=None, gt=0)
+    # Reasoning effort. This is the G2 axis the container-runtime constant was
+    # holding closed; see `container_runtime.THINKING_EFFORT`.
+    #
+    # Unset does NOT mean "inherit the provider default", unlike every sibling
+    # field above. It means "inherit the harness constant", which is `medium`.
+    # The divergence is deliberate: effort already had a harness-level default
+    # that every existing condition was run under, so falling through to the
+    # provider would silently re-define all of them. Existing manifests stay
+    # byte-identical, keep their hashes, and keep running at medium.
+    #
+    # Effort is not one knob across providers -- it reaches the two routes we
+    # use in different shapes, which matters when reading a result:
+    #   * Anthropic (opus): `output_config.effort`, and the thinking budget goes
+    #     8_192 -> 32_768 tokens from medium to xhigh (config.rs:35).
+    #   * OpenAI Responses (sol/luna): `reasoning.effort` as a string.
+    # buzz-agent clamps a level the model cannot honour down to the highest it
+    # can, and only logs a warning (config.rs:206) -- so a condition that asks
+    # for more than the model supports runs *silently* at less. Both benchmark
+    # endpoints were checked to support xhigh before this field was added.
+    thinking_effort: (
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None
+    ) = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -263,6 +285,27 @@ class ExperimentManifest(StrictModel):
     def canonical_bytes(self) -> bytes:
         """Return stable UTF-8 JSON independent of YAML formatting and key order."""
         data = self.model_dump(mode="json", exclude_none=False)
+        # An unpinned `thinking_effort` is dropped rather than serialised as
+        # null, so that opening the effort axis did not re-identify every
+        # condition that does not use it.
+        #
+        # The hash is meant to answer "are these two runs the same experiment?".
+        # A manifest written before this field existed and the same manifest
+        # loaded after it send a byte-identical container environment --
+        # BUZZ_AGENT_THINKING_EFFORT=medium either way, because unset resolves to
+        # the harness default. They *are* the same experiment, so they must hash
+        # the same, or every result measured before the axis opened would stop
+        # pooling with everything measured after it for no behavioural reason.
+        #
+        # Kept narrow on purpose. The blanket fix, `exclude_none=True`, would
+        # also drop the other optional fields that currently serialise as null
+        # and would shift far more hashes than it preserved.
+        for entry in data.get("roster", []):
+            generation = entry.get("generation")
+            if not isinstance(generation, dict):
+                continue
+            if generation.get("thinking_effort") is None:
+                generation.pop("thinking_effort", None)
         return json.dumps(
             data,
             sort_keys=True,

@@ -20,6 +20,34 @@ def test_hash_is_independent_of_mapping_and_yaml_key_order(tmp_path, manifest_da
     assert len(first.sha256) == 64
 
 
+def test_unpinned_effort_is_absent_from_the_condition_hash(manifest_data):
+    """Opening the effort axis must not re-identify conditions that ignore it.
+
+    `canonical_bytes` serialises with ``exclude_none=False``, so a new optional
+    field lands in the hash as an explicit null and shifts every existing
+    manifest -- which would have stopped results measured before the axis
+    existed from pooling with results measured after it, despite both sending
+    exactly the same container environment.
+    """
+    manifest = ExperimentManifest.load(manifest_data)
+    assert b"thinking_effort" not in manifest.canonical_bytes()
+
+
+def test_pinned_effort_is_part_of_the_condition_hash(manifest_data):
+    """The other half: a cell that *does* pin effort is a distinct condition.
+
+    A2x/A3x differ from A2/A3 in this field alone, so if it were excluded
+    unconditionally the two would share an identity and their trials would pool
+    into one meaningless pass rate.
+    """
+    baseline = ExperimentManifest.load(manifest_data)
+    pinned = copy.deepcopy(manifest_data)
+    pinned["roster"][0].setdefault("generation", {})["thinking_effort"] = "xhigh"
+    pinned_manifest = ExperimentManifest.load(pinned)
+    assert b"thinking_effort" in pinned_manifest.canonical_bytes()
+    assert pinned_manifest.sha256 != baseline.sha256
+
+
 def test_hash_changes_when_staffing_changes(manifest_data):
     first = ExperimentManifest.load(manifest_data)
     changed = copy.deepcopy(manifest_data)

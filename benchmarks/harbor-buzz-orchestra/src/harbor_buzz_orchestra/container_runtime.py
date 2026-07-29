@@ -70,14 +70,18 @@ DEFAULT_RUST_LOG = ",".join(
 # one that stopped because it was done. Defined in `accounting`, which uses the
 # same lines to tell an idle agent from a broken measurement, and imported here
 # so the completion signal and the accounting agree by construction.
-# Reasoning effort, held constant across every agent in every condition.
+# Default reasoning effort, used by any roster entry that does not pin one.
 #
-# Deliberately a constant rather than a manifest field: per-entry effort is a
-# real experiment (G2) and needs its own axis in the matrix, but until that
-# axis exists, an unset effort means "whatever the provider defaults to" —
-# which is neither recorded nor stable across endpoints. Pinning it here makes
-# the study's one uniform-effort claim true, and buzz-agent logs a clamp
-# warning if a model cannot honour it (config.rs:223).
+# This was a bare constant while effort was held uniform across the matrix. The
+# G2 axis it was holding closed is now open: `GenerationConfig.thinking_effort`
+# overrides it per roster entry, and the A2x / A3x cells use that to ask whether
+# more thinking is worth its tokens.
+#
+# It stays the *default* rather than becoming a required manifest field so that
+# every condition run before the axis existed keeps its exact behaviour and its
+# exact hash. An unset effort therefore still means "medium", not "whatever the
+# provider defaults to" — the latter is neither recorded nor stable across
+# endpoints, which is why it was pinned in the first place.
 THINKING_EFFORT = "medium"
 # Container-side layout for the uploaded Buzz stack.
 REMOTE_ROOT = "/opt/buzz"
@@ -701,7 +705,9 @@ class BuzzContainerRuntime:
             **self._platform_prompt_env(agent_class),
             "BUZZ_AGENT_PROVIDER": endpoint.provider,
             "BUZZ_AGENT_MODEL": credential.llm_endpoint,
-            "BUZZ_AGENT_THINKING_EFFORT": THINKING_EFFORT,
+            "BUZZ_AGENT_THINKING_EFFORT": (
+                agent_class.generation.thinking_effort or THINKING_EFFORT
+            ),
             **self._window_env(agent_class.generation),
             **self._compaction_env(agent_class.generation),
             "BUZZ_AGENT_MAX_ROUNDS": str(

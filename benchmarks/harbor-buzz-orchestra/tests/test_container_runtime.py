@@ -1229,6 +1229,37 @@ async def test_thinking_effort_is_pinned_for_every_agent(tmp_path):
     assert env["BUZZ_AGENT_THINKING_EFFORT"] == "medium"
 
 
+async def test_thinking_effort_can_be_raised_per_condition(tmp_path):
+    """The G2 axis: a roster entry may pin an effort above the harness default.
+
+    Guards the A2x / A3x cells specifically. Their whole value is that the only
+    difference from A2 / A3 is this one field, so if the manifest value failed
+    to reach the container the cells would still run, still score, and quietly
+    measure nothing -- two full 89-task sweeps whose null result was an artifact.
+    """
+    manifest = write_manifest(tmp_path)
+    entry = manifest.roster[0].model_copy(
+        update={
+            "generation": manifest.roster[0].generation.model_copy(
+                update={"thinking_effort": "xhigh"}
+            )
+        }
+    )
+    environment = Environment(
+        responses={"buzz-acp": ExecResult(stdout="4242\n", stderr="", return_code=0)}
+    )
+    orch = credential("orch-1", "orchestrator", "orch-model")
+    await runtime(tmp_path)._launch_agent(
+        environment=environment,
+        trial=trial_handle((orch,)),
+        credential=orch,
+        agent_class=entry,
+        trial_dir=tmp_path,
+    )
+    _, env = environment.commands[-1]
+    assert env["BUZZ_AGENT_THINKING_EFFORT"] == "xhigh"
+
+
 @pytest.mark.parametrize(
     ("include", "expected"),
     [(True, None), (False, "1")],
