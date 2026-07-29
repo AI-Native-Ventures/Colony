@@ -84,6 +84,12 @@ pub struct HuddleState {
     /// Shared with the STT pipeline for barge-in / echo gating.
     #[serde(skip)]
     pub tts_active: Arc<AtomicBool>,
+    /// Shared flag: true while Pocket synthesis is in flight.
+    ///
+    /// Unlike `tts_active`, this does not gate microphone input. It only keeps
+    /// barge-in armed while a streamed decoder gap has no queued audio.
+    #[serde(skip)]
+    pub tts_synthesizing: Arc<AtomicBool>,
     /// Shared barge-in cancel flag. Set by STT when it detects speech during TTS.
     /// Read by TTS to stop playback. Lives in HuddleState so it survives pipeline
     /// restarts — both STT and TTS reference the same flag for the entire huddle.
@@ -158,6 +164,7 @@ impl Clone for HuddleState {
             tts_enabled: self.tts_enabled,
             transcription_enabled: self.transcription_enabled,
             tts_active: Arc::clone(&self.tts_active),
+            tts_synthesizing: Arc::clone(&self.tts_synthesizing),
             tts_cancel: Arc::clone(&self.tts_cancel),
             tts_starting: Arc::clone(&self.tts_starting),
             stt_starting: Arc::clone(&self.stt_starting),
@@ -185,6 +192,7 @@ impl Default for HuddleState {
             tts_enabled: true,
             transcription_enabled: false,
             tts_active: Arc::new(AtomicBool::new(false)),
+            tts_synthesizing: Arc::new(AtomicBool::new(false)),
             tts_cancel: Arc::new(AtomicBool::new(false)),
             tts_starting: Arc::new(AtomicBool::new(false)),
             stt_starting: Arc::new(AtomicBool::new(false)),
