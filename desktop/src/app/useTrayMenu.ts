@@ -121,6 +121,7 @@ export function useTrayMenu({
     let unlisten: (() => void) | undefined;
 
     const handlePendingActions = async () => {
+      if (disposed) return;
       const actions = await invoke<TrayAction[]>("take_tray_actions");
       if (disposed) return;
       for (const action of actions) {
@@ -133,9 +134,14 @@ export function useTrayMenu({
     };
 
     void (async () => {
-      unlisten = await listen("tray-action-available", () => {
+      const nextUnlisten = await listen("tray-action-available", () => {
         void handlePendingActions();
       });
+      if (disposed) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
       await handlePendingActions();
     })();
 

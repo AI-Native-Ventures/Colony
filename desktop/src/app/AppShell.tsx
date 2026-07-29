@@ -96,7 +96,7 @@ import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
 import { RelayConnectionOverlay } from "@/app/RelayConnectionOverlay";
 import { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
-import { useAppShellTrayMenu } from "@/app/useAppShellTrayMenu";
+import { AppShellTrayMenu } from "@/app/useAppShellTrayMenu";
 
 const LazySettingsScreen = React.lazy(async () => {
   const module = await import("@/features/settings/ui/SettingsScreen");
@@ -614,16 +614,13 @@ export function AppShell() {
     },
     [openSearchHit],
   );
-
   useAppShellLifecycleEffects({
     homeBadgeCountExcludingHighPriority,
     unreadChannelIds,
     unreadChannelNotificationCount,
   });
-
   // Dispatch `buzz://message` deep links into the router.
   useMessageDeepLinks();
-
   const handleOpenNewDm = React.useCallback(
     () => void goNewMessage(),
     [goNewMessage],
@@ -632,7 +629,6 @@ export function AppShell() {
     () => setIsCreateChannelOpen(true),
     [],
   );
-  useAppShellTrayMenu(channels, goChannel, handleOpenCreateChannel);
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
@@ -708,9 +704,13 @@ export function AppShell() {
     markChannelRead,
     selectedView,
   });
-
   return (
     <PreventSleepProvider>
+      <AppShellTrayMenu
+        channels={channels}
+        goChannel={goChannel}
+        openCreateChannel={handleOpenCreateChannel}
+      />
       <ChannelNavigationProvider channels={channels}>
         <AppShellProvider
           value={{
