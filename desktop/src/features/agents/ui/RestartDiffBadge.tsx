@@ -75,16 +75,31 @@ function ChangeDescription({ change }: { change: RestartChange }) {
 
 const TOOLTIP_CAP = 6;
 
+/**
+ * `tooltip` — renders inside the dark `bg-primary` tooltip; uses
+ *   `text-primary-foreground` variants for contrast there.
+ * `inline`  — renders inside the amber Runtime banner or other light
+ *   surfaces; inherits foreground from the container instead.
+ */
 function DiffList({
   entries,
   cap,
+  variant = "tooltip",
 }: {
   entries: RestartDiffEntry[];
   cap?: number;
+  variant?: "tooltip" | "inline";
 }) {
   const visible = cap !== undefined ? entries.slice(0, cap) : entries;
   const overflow =
     cap !== undefined && entries.length > cap ? entries.length - cap : 0;
+
+  const valueClass =
+    variant === "tooltip" ? "text-primary-foreground/80" : "text-foreground";
+  const overflowClass =
+    variant === "tooltip"
+      ? "text-primary-foreground/60"
+      : "text-muted-foreground";
 
   return (
     <ul className="space-y-1">
@@ -93,13 +108,13 @@ function DiffList({
           <span className="shrink-0 font-medium">
             {humaniseFieldId(entry.field)}:
           </span>
-          <span className="text-primary-foreground/80">
+          <span className={valueClass}>
             <ChangeDescription change={entry.change} />
           </span>
         </li>
       ))}
       {overflow > 0 ? (
-        <li className="text-primary-foreground/60">and {overflow} more</li>
+        <li className={overflowClass}>and {overflow} more</li>
       ) : null}
     </ul>
   );
@@ -171,7 +186,7 @@ export function RestartDiffList({
       className="mt-2 text-xs text-muted-foreground"
       data-testid="restart-diff-list"
     >
-      <DiffList entries={restartDiff} />
+      <DiffList entries={restartDiff} variant="inline" />
     </div>
   );
 }

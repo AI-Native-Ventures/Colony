@@ -46,7 +46,16 @@ const DIFF_ENTRIES = [
     field: "parallelism",
     change: { kind: "value" as const, before: 1, after: 4 },
   },
-  // 7th entry — should be truncated to "and 1 more" in tooltip
+  // Array value — args are atomic; rendered via JSON.stringify
+  {
+    field: "agent_args",
+    change: {
+      kind: "value" as const,
+      before: ["acp"],
+      after: ["acp", "--verbose"],
+    },
+  },
+  // 8th entry — should be truncated to "and 2 more" in tooltip (cap is 6)
   {
     field: "args",
     change: { kind: "masked" as const, before: "••••", after: "••••" },
@@ -95,6 +104,21 @@ const SHORT_DIFF_AGENT = {
     },
     { field: "env.MY_TOKEN", change: { kind: "removed" as const } },
   ],
+};
+
+/**
+ * Inactive agent with a friendly error AND a restart diff. Opening its card
+ * forces the panel to open on the Runtime tab (opensRuntimeTab logic).
+ * Used to assert: Runtime tab is active, hero badge visible, uncapped banner.
+ */
+const INACTIVE_FRIENDLY_ERROR_AGENT = {
+  pubkey: TEST_IDENTITIES.outsider.pubkey,
+  name: "Error Restart Agent",
+  status: "stopped" as const,
+  needsRestart: true,
+  restartDiff: DIFF_ENTRIES,
+  lastError: "Agent reported error (code -32002): llm model not found",
+  lastErrorCode: -32002,
 };
 
 async function gotoAgentsView(page: import("@playwright/test").Page) {
@@ -174,21 +198,26 @@ test.describe("restart-diff screenshots", () => {
     });
   });
 
-  // ── Tooltip on list-row badge (B4: sibling of button) ──────────────────────
+  // ── Tooltip on row badge in ManagedAgentRow (B4: sibling of expansion button) ────
 
-  test("03-list-row-tooltip-and-no-button-ancestor", async ({ page }) => {
+  test("03-agent-row-tooltip-and-no-button-ancestor", async ({ page }) => {
     await installMockBridge(page, {
       managedAgents: [STANDALONE_AGENT, NO_DRIFT_AGENT],
     });
 
     await gotoAgentsView(page);
 
-    const agentRow = page.getByTestId(
+    // ManagedAgentRow is rendered in the agent-group-rows section.
+    const rowSection = page.getByTestId("agent-group-rows");
+    await expect(rowSection).toBeVisible({ timeout: 10_000 });
+
+    const agentRow = rowSection.getByTestId(
       `managed-agent-${STANDALONE_AGENT.pubkey}`,
     );
     await expect(agentRow).toBeVisible({ timeout: 10_000 });
 
-    // B4: the tooltip trigger must have no <button> ancestor
+    // B4: the tooltip trigger must have no <button> ancestor — the badge is a
+    // sibling of the expansion button in ManagedAgentRow, not a descendant.
     const badgeLocator = agentRow.getByTestId("restart-diff-badge");
     await expect(badgeLocator).toBeVisible();
 
@@ -207,12 +236,15 @@ test.describe("restart-diff screenshots", () => {
     const tooltip = page.locator("[role=tooltip]");
     await expect(tooltip).toBeVisible({ timeout: 5_000 });
 
-    // Tooltip is capped at 6 entries with "and 1 more" for 7-entry diff
+    // Tooltip is capped at 6 entries with "and 2 more" for 8-entry diff
     await expect(tooltip.getByText("Model:")).toBeVisible();
-    await expect(tooltip.getByText("and 1 more")).toBeVisible();
+    await expect(tooltip.getByText("and 2 more")).toBeVisible();
+
+    // Array value rendered as JSON.stringify in the value slot
+    await expect(tooltip.getByText(/\["acp"\]/)).toBeVisible();
 
     await waitForAnimations(page);
-    await page.screenshot({ path: `${SHOTS}/03-list-row-tooltip.png` });
+    await page.screenshot({ path: `${SHOTS}/03-agent-row-tooltip.png` });
   });
 
   // ── Tooltip with short diff (no truncation) ─────────────────────────────────
@@ -224,7 +256,10 @@ test.describe("restart-diff screenshots", () => {
 
     await gotoAgentsView(page);
 
-    const agentRow = page.getByTestId(
+    const rowSection = page.getByTestId("agent-group-rows");
+    await expect(rowSection).toBeVisible({ timeout: 10_000 });
+
+    const agentRow = rowSection.getByTestId(
       `managed-agent-${SHORT_DIFF_AGENT.pubkey}`,
     );
     const badge = agentRow.getByTestId("restart-diff-badge");
@@ -253,6 +288,7 @@ test.describe("restart-diff screenshots", () => {
     await gotoAgentsView(page);
 
     const badge = page
+      .getByTestId("agent-group-rows")
       .getByTestId(`managed-agent-${STANDALONE_AGENT.pubkey}`)
       .getByTestId("restart-diff-badge");
     await badge.focus();
@@ -387,8 +423,9 @@ test.describe("restart-diff screenshots", () => {
 
     await gotoAgentsView(page);
 
-    // Open profile panel via the Manage button — opens on Info tab by default
+    // Open profile panel via the Manage button in the row section — opens on Info tab by default
     const manageButton = page
+      .getByTestId("agent-group-rows")
       .getByTestId(`managed-agent-${STANDALONE_AGENT.pubkey}`)
       .getByRole("button", { name: "Manage" });
     await expect(manageButton).toBeVisible({ timeout: 10_000 });
@@ -401,12 +438,71 @@ test.describe("restart-diff screenshots", () => {
     const heroBadge = panel.getByTestId("restart-diff-badge");
     await expect(heroBadge).toBeVisible({ timeout: 5_000 });
 
+    // Hero badge tooltip is functional: hover shows the diff list
+    await heroBadge.hover();
+    const heroTooltip = page.locator("[role=tooltip]");
+    await expect(heroTooltip).toBeVisible({ timeout: 5_000 });
+    await expect(heroTooltip.getByText("Model:")).toBeVisible();
+
     // The Runtime tab banner is NOT visible on Info tab
     await expect(panel.getByTestId("needs-restart-banner")).toHaveCount(0);
 
     await waitForAnimations(page);
     await panel.screenshot({
       path: `${SHOTS}/10-panel-badge-default-info-tab.png`,
+    });
+  });
+
+  // ── Inactive + friendly-error: panel opens on Runtime, hero badge + banner ─
+
+  test("11-inactive-friendly-error-panel-opens-runtime-tab", async ({
+    page,
+  }) => {
+    await installMockBridge(page, {
+      managedAgents: [INACTIVE_FRIENDLY_ERROR_AGENT],
+    });
+
+    await gotoAgentsView(page);
+
+    // The card for an inactive agent with a friendly error forces Runtime tab on open.
+    const agentCard = page.getByTestId(
+      `managed-agent-${INACTIVE_FRIENDLY_ERROR_AGENT.pubkey}`,
+    );
+    await expect(agentCard).toBeVisible({ timeout: 10_000 });
+    await agentCard.click();
+
+    const panel = page.getByTestId("user-profile-panel");
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+
+    // Panel opens on Runtime tab (opensRuntimeTab = true for inactive+friendlyError)
+    const runtimeTab = panel.getByRole("tab", { name: "Runtime" });
+    await expect(runtimeTab).toHaveAttribute("aria-selected", "true", {
+      timeout: 5_000,
+    });
+
+    // Hero badge is visible on the Runtime tab (tab-independent)
+    const heroBadge = panel.getByTestId("restart-diff-badge");
+    await expect(heroBadge).toBeVisible({ timeout: 5_000 });
+
+    // Hero badge tooltip works on the Runtime tab too
+    await heroBadge.hover();
+    const heroTooltip = page.locator("[role=tooltip]");
+    await expect(heroTooltip).toBeVisible({ timeout: 5_000 });
+    await expect(heroTooltip.getByText("Model:")).toBeVisible();
+    // Tooltip is capped at 6 + "and 2 more"
+    await expect(heroTooltip.getByText("and 2 more")).toBeVisible();
+
+    // Full uncapped banner also visible on Runtime tab
+    const banner = panel.getByTestId("needs-restart-banner");
+    await expect(banner).toBeVisible({ timeout: 5_000 });
+    const diffList = banner.getByTestId("restart-diff-list");
+    await expect(diffList).toBeVisible();
+    // All 8 entries visible in banner (no cap) — last entry "args" is present
+    await expect(diffList.getByText("Args:")).toBeVisible();
+
+    await waitForAnimations(page);
+    await panel.screenshot({
+      path: `${SHOTS}/11-inactive-error-panel-runtime-tab.png`,
     });
   });
 });
