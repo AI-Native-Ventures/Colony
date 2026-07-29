@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """Run a problem set with a team manifest and produce leaderboard-ready results.
 
-One command wraps ``harbor run``. Resource overrides are never accepted or
-forwarded, and neither is any timeout knob except ``--timeout-multiplier``,
-which is passed through because a study can legitimately want to know what an
-agent scores when the clock is not the constraint. Harbor rejects a submission
-whose ``timeout_multiplier`` is anything but 1.0 (``_check_no_job_overrides`` in
-``harbor/leaderboard/static_validation.py``), so a job produced with it is a
-local measurement, not a leaderboard entry, and this script says so when it runs.
+One command wraps ``harbor run``. Every flag it accepts produces a submittable
+job by default; three deliberate opt-outs do not, and each has to be asked for
+by name:
+
+* ``--timeout-multiplier`` — a study can legitimately want to know what an agent
+  scores when the clock is not the constraint.
+* ``--override-cpus`` / ``--override-memory-mb`` / ``--override-storage-mb`` —
+  Harbor enforces a task's declared resources as hard limits, and when the agent
+  harness runs *inside* the task container a multi-agent roster shares them with
+  the task's own work. Refusing to raise them does not keep a comparison honest;
+  it hides the distortion in the score instead of in the configuration.
+
+Per-phase timeout knobs and ``--override-gpus`` are still never accepted:
+nothing in Terminal-Bench 2.1 asks for a GPU, so that one could only add
+capability rather than remove an artificial constraint.
+
+Harbor rejects a submission carrying any of these
+(``_check_no_job_overrides`` in ``harbor/leaderboard/static_validation.py``), so
+a job produced with them is a local measurement, not a leaderboard entry, and
+this script says so when it runs.
 After the run it writes a ``metadata.yaml`` template derived from the manifest
 and prints the exact upload/submit commands.
 
@@ -107,6 +120,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "by N. Anything but 1.0 makes the job unsubmittable to the "
              "leaderboard; omit it for a submittable run.",
     )
+    # Resource overrides: off unless asked for, and unsubmittable when used.
+    # They exist because the Buzz stack runs *inside* the task container, so a
+    # multi-agent roster shares one task's declared 1 vCPU and 2 GB with three
+    # process groups. Refusing them does not keep a study honest; it just moves
+    # the distortion somewhere it cannot be seen.
+    parser.add_argument(
+        "--override-cpus", type=int, default=None, metavar="N",
+        help="Give every task N CPUs instead of its own declared request. "
+             "Makes the job unsubmittable; omit for a submittable run.",
+    )
+    parser.add_argument(
+        "--override-memory-mb", type=int, default=None, metavar="MB",
+        help="Give every task MB of memory instead of its own declared "
+             "request. Makes the job unsubmittable; omit for a submittable run.",
+    )
+    parser.add_argument(
+        "--override-storage-mb", type=int, default=None, metavar="MB",
+        help="Give every task MB of storage instead of its own declared "
+             "request. Makes the job unsubmittable; omit for a submittable run.",
+    )
     parser.add_argument("--jobs-dir", type=Path, default=Path("jobs"), help="Job output root")
     parser.add_argument("--job-name", default=None, help="Job name (default: lb-<condition>-<UTC>)")
     parser.add_argument(
@@ -154,10 +187,14 @@ def build_command(
 ) -> list[str]:
     """Compose the harbor invocation.
 
-    Standard settings, plus ``--timeout-multiplier`` when asked for. Resource
-    overrides (cpus, memory, storage, gpus) are never forwarded: unlike a clock,
-    they change what the machine can do, so a result produced under them is not
-    a result about the agent.
+    Standard settings, plus the unsubmittable knobs when they are explicitly
+    asked for: ``--timeout-multiplier`` and the cpu/memory/storage overrides.
+    None of them is on by default, so the command this builds is
+    leaderboard-legal unless a caller opted out.
+
+    ``--override-gpus`` is still never accepted. Nothing in Terminal-Bench 2.1
+    requests a GPU, so a flag for it could only ever change what the machine can
+    do rather than remove an artificial constraint.
     """
     command = [
         "harbor", "run", "--yes",
@@ -168,6 +205,13 @@ def build_command(
     ]
     if args.timeout_multiplier is not None:
         command += ["--timeout-multiplier", str(args.timeout_multiplier)]
+    for flag, value in (
+        ("--override-cpus", args.override_cpus),
+        ("--override-memory-mb", args.override_memory_mb),
+        ("--override-storage-mb", args.override_storage_mb),
+    ):
+        if value is not None:
+            command += [flag, str(value)]
     if args.dataset:
         command += ["--dataset", args.dataset]
     else:
@@ -273,16 +317,28 @@ def main(argv: list[str] | None = None) -> int:
         return result.returncode
 
     metadata_path = write_metadata_template(args, job_dir)
-    if args.timeout_multiplier is not None:
+    overrides = [
+        f"{name}={value}"
+        for name, value in (
+            ("timeout_multiplier", args.timeout_multiplier),
+            ("override_cpus", args.override_cpus),
+            ("override_memory_mb", args.override_memory_mb),
+            ("override_storage_mb", args.override_storage_mb),
+        )
+        if value is not None
+    ]
+    if overrides:
         # Said once, at the end, where the submit instructions would otherwise
         # be: printing them for a job Harbor will refuse wastes someone's
-        # afternoon finding out why.
+        # afternoon finding out why. Naming every override matters as much as
+        # naming one — a score reported without them is not comparable to a
+        # leaderboard number, and the reader cannot tell from the score alone.
         print(
             f"\nJob complete: {job_dir}\n"
-            f"  Ran with timeout_multiplier={args.timeout_multiplier}, so Harbor's "
+            f"  Ran with {', '.join(overrides)}, so Harbor's "
             "static validation will reject this job as a leaderboard submission "
             "(no_job_overrides). It is a local measurement — report the score "
-            "with the multiplier stated alongside it."
+            "with those settings stated alongside it."
         )
         return 0
     print("\nLeaderboard-ready job complete.")
