@@ -83,13 +83,19 @@ class ThreadDetailPage extends HookConsumerWidget {
     });
 
     final fetchedReplies = replyMessages.value;
+    final liveDeletionHidesHead = _isDeletedBy(
+      liveChannelEvents,
+      threadHead.id,
+    );
     final allMsgs = fetchedReplies == null
         ? allMessages
         : [
             // Only fall back to the pushed-route snapshot when neither source
-            // carries the head, so its reactions aren't frozen at the moment
-            // the thread was opened.
-            if (!fetchedReplies.any((message) => message.id == threadHead.id))
+            // carries the head, and no live deletion has suppressed it. That
+            // keeps a temporarily unavailable head visible without restoring
+            // a head that was deleted while this page was open.
+            if (!liveDeletionHidesHead &&
+                !fetchedReplies.any((message) => message.id == threadHead.id))
               threadHead,
             ...fetchedReplies,
           ];
@@ -256,6 +262,13 @@ class ThreadDetailPage extends HookConsumerWidget {
                 itemCount: replies.length + 1, // +1 for thread head
                 itemBuilder: (context, index) {
                   if (index == headIndex) {
+                    if (liveDeletionHidesHead) {
+                      return const Padding(
+                        key: ValueKey('thread-message-deleted'),
+                        padding: EdgeInsets.only(bottom: Grid.xs),
+                        child: Text('This message was deleted'),
+                      );
+                    }
                     return Padding(
                       key: ValueKey('thread-message-group-${liveHead.id}'),
                       padding: const EdgeInsets.only(bottom: Grid.xs),
@@ -403,6 +416,21 @@ class ThreadDetailPage extends HookConsumerWidget {
       ),
     );
   }
+}
+
+bool _isDeletedBy(Iterable<NostrEvent> events, String messageId) {
+  for (final event in events) {
+    if (event.kind != EventKind.deletion &&
+        event.kind != EventKind.nip29DeleteEvent) {
+      continue;
+    }
+    if (event.tags.any(
+      (tag) => tag.length >= 2 && tag[0] == 'e' && tag[1] == messageId,
+    )) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// Build a lightweight summary for a nested thread (reply that has its own
