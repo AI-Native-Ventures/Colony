@@ -737,7 +737,6 @@ class ComposeBar extends HookConsumerWidget {
         return;
       }
 
-      focusNode.unfocus();
       unawaited(
         iosAttachmentPopover
             .present(
@@ -768,7 +767,10 @@ class ComposeBar extends HookConsumerWidget {
               }),
             )
             .then((didPresent) {
-              if (!didPresent && context.mounted) toggleAttachments();
+              if (!didPresent && context.mounted) {
+                focusNode.unfocus();
+                toggleAttachments();
+              }
             }),
       );
     }
