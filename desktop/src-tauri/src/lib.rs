@@ -897,6 +897,8 @@ pub fn run() {
             archive::read_unindexed_observer_rows,
             is_auto_update_supported,
             set_window_vibrancy,
+            tray_menu::clear_tray_agent_activity,
+            tray_menu::take_tray_actions,
             tray_menu::update_tray_agent_activity,
         ])
         .build(tauri::generate_context!())

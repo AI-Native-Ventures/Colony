@@ -23,6 +23,10 @@ type TrayAgentActivity = {
   elapsed: string;
 };
 
+type TrayAction =
+  | { kind: "newChannel" }
+  | { kind: "openChannel"; channelId: string };
+
 const MAX_RECENT_TRAY_ACTIVITIES = 5;
 
 /**
@@ -113,16 +117,31 @@ export function useTrayMenu({
   React.useEffect(() => {
     if (!isTauri()) return;
 
-    const unlistenChannel = listen<string>("tray-open-channel", (event) => {
-      void goChannel(event.payload);
-    });
-    const unlistenNewChannel = listen("tray-new-channel", () => {
-      openCreateChannel();
-    });
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    const handlePendingActions = async () => {
+      const actions = await invoke<TrayAction[]>("take_tray_actions");
+      if (disposed) return;
+      for (const action of actions) {
+        if (action.kind === "newChannel") {
+          openCreateChannel();
+        } else {
+          void goChannel(action.channelId);
+        }
+      }
+    };
+
+    void (async () => {
+      unlisten = await listen("tray-action-available", () => {
+        void handlePendingActions();
+      });
+      await handlePendingActions();
+    })();
 
     return () => {
-      void unlistenChannel.then((unlisten) => unlisten());
-      void unlistenNewChannel.then((unlisten) => unlisten());
+      disposed = true;
+      unlisten?.();
     };
   }, [goChannel, openCreateChannel]);
 }

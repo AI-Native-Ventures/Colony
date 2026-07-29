@@ -12,7 +12,7 @@ use std::{
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -195,18 +195,44 @@ struct TrayActivityMenuItem<R: Runtime> {
 
 struct TrayMenuState<R: Runtime> {
     activity_items: Mutex<Vec<TrayActivityMenuItem<R>>>,
+    pending_actions: Mutex<Vec<TrayAction>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum TrayAction {
+    NewChannel,
+    OpenChannel { channel_id: String },
 }
 
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
+    if let Err(error) = window.unminimize() {
+        eprintln!("buzz-desktop: failed to restore main window from tray: {error}");
+        return;
+    }
     if let Err(error) = window.show() {
         eprintln!("buzz-desktop: failed to show main window from tray: {error}");
         return;
     }
     if let Err(error) = window.set_focus() {
         eprintln!("buzz-desktop: failed to focus main window from tray: {error}");
+    }
+}
+
+fn queue_tray_action<R: Runtime>(app: &AppHandle<R>, action: TrayAction) {
+    let state = app.state::<TrayMenuState<R>>();
+    let Ok(mut actions) = state.pending_actions.lock() else {
+        eprintln!("buzz-desktop: tray action queue is unavailable");
+        return;
+    };
+    actions.push(action);
+    drop(actions);
+
+    if let Err(error) = app.emit("tray-action-available", ()) {
+        eprintln!("buzz-desktop: failed to notify frontend of tray action: {error}");
     }
 }
 
@@ -382,7 +408,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
         OPEN_BUZZ_ID => show_main_window(app),
         NEW_CHANNEL_ID => {
             show_main_window(app);
-            let _ = app.emit("tray-new-channel", ());
+            queue_tray_action(app, TrayAction::NewChannel);
         }
         QUIT_ID => app.exit(0),
         _ => {
@@ -394,7 +420,12 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 .split_once(OPEN_CHANNEL_ACTIVITY_SEPARATOR)
                 .map(|(channel_id, _)| channel_id)
                 .unwrap_or(channel_id);
-            let _ = app.emit("tray-open-channel", channel_id);
+            queue_tray_action(
+                app,
+                TrayAction::OpenChannel {
+                    channel_id: channel_id.into(),
+                },
+            );
         }
     }
 }
@@ -408,6 +439,7 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let (menu, activity_items) = build_menu(app, activities, recent_activities)?;
     app.manage(TrayMenuState {
         activity_items: Mutex::new(activity_items),
+        pending_actions: Mutex::new(Vec::new()),
     });
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -418,6 +450,23 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     apply_activity_presentation(&tray, activities, recent_activities)
         .map_err(anyhow::Error::msg)?;
     Ok(())
+}
+
+/// Drains actions selected from the tray while the frontend was unavailable.
+#[tauri::command]
+pub fn take_tray_actions<R: Runtime>(app: AppHandle<R>) -> Result<Vec<TrayAction>, String> {
+    let state = app.state::<TrayMenuState<R>>();
+    let mut actions = state
+        .pending_actions
+        .lock()
+        .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
+    Ok(std::mem::take(&mut *actions))
+}
+
+/// Clears community-scoped agent activity from the native tray menu.
+#[tauri::command]
+pub fn clear_tray_agent_activity<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    update_tray_agent_activity(app, Vec::new(), Vec::new())
 }
 
 /// Replaces the native menu's activity section with the current live work.
