@@ -5,6 +5,7 @@ import { useIdentityQuery } from "@/shared/api/hooks";
 import {
   DEFAULT_COMMUNITY_THEME,
   cacheAndApplyCommunityTheme,
+  communityThemePersistenceAction,
   hasMigratedCommunityTheme,
   markCommunityThemeMigrated,
   readCommunityThemePreference,
@@ -137,8 +138,12 @@ export function CommunityThemeController() {
       accent: theme.accentColor,
       followSystem: theme.followSystem,
     };
-    const expected = expectedAppliedRef.current;
-    if (expected && sameCommunityThemePreference(expected, preference)) {
+    const persistenceAction = communityThemePersistenceAction(
+      expectedAppliedRef.current,
+      preference,
+    );
+    if (persistenceAction === "defer") return;
+    if (persistenceAction === "acknowledge") {
       expectedAppliedRef.current = null;
       return;
     }

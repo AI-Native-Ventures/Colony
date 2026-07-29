@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   DEFAULT_COMMUNITY_THEME,
   cacheAndApplyCommunityTheme,
+  communityThemePersistenceAction,
   communityThemeStorageKey,
   parseCommunityThemePreference,
   readCommunityThemePreference,
@@ -116,4 +117,23 @@ test("remote preference still applies when its local cache write fails", () => {
     },
   );
   assert.deepEqual(applied, DEFAULT_COMMUNITY_THEME);
+});
+
+test("community switch defers stale outgoing appearance persistence", () => {
+  const outgoing = {
+    ...DEFAULT_COMMUNITY_THEME,
+    theme: "houston",
+    followSystem: false,
+  };
+  const incoming = {
+    ...DEFAULT_COMMUNITY_THEME,
+    theme: "catppuccin-latte",
+  };
+
+  assert.equal(communityThemePersistenceAction(incoming, outgoing), "defer");
+  assert.equal(
+    communityThemePersistenceAction(incoming, incoming),
+    "acknowledge",
+  );
+  assert.equal(communityThemePersistenceAction(null, incoming), "persist");
 });

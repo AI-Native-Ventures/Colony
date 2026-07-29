@@ -123,3 +123,18 @@ export function sameCommunityThemePreference(
     left.followSystem === right.followSystem
   );
 }
+
+/**
+ * Decide whether the current context value is safe to persist for this scope.
+ * Applying a scoped preference updates the outer ThemeProvider asynchronously,
+ * so renders that still expose the previous scope must be deferred.
+ */
+export function communityThemePersistenceAction(
+  expectedApplied: CommunityThemePreference | null,
+  current: CommunityThemePreference,
+): "persist" | "defer" | "acknowledge" {
+  if (!expectedApplied) return "persist";
+  return sameCommunityThemePreference(expectedApplied, current)
+    ? "acknowledge"
+    : "defer";
+}
