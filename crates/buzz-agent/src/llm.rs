@@ -762,21 +762,38 @@ fn anthropic_body(
     body
 }
 
-/// Attach an ephemeral `cache_control` marker to the last content block of the
-/// last message, if any. Anthropic caches the entire prompt prefix up to and
-/// including the marked block, so on the next turn the append-only history
-/// re-sends that prefix and reads it from cache (~0.1x input price) rather than
-/// re-billing it as fresh input. A no-op when there are no messages, when the
-/// last message has no content blocks, or when the tail block is not an object.
+/// Attach ephemeral `cache_control` markers to the tail of the conversation so
+/// the next turn re-reads the whole prior prefix from cache (~0.1x input price)
+/// rather than re-billing it as fresh input. Anthropic caches the prefix up to
+/// and including each marked block.
+///
+/// We mark the last content block of the last *two* messages, not just the
+/// final one. Each Anthropic breakpoint walks back at most 20 content blocks to
+/// find a prior cache entry, and one agentic turn can append ~17 blocks at the
+/// default `max_parallel_tools` (1 assistant text + N `tool_use` +
+/// N `tool_result`). With only a tail marker, consecutive breakpoints sit a
+/// full turn apart, which slips past the 20-block window as soon as parallelism
+/// rises or a turn carries extra blocks — and the miss is silent. Marking the
+/// last two messages halves the gap (to ~N+1 blocks), keeping a live cache
+/// entry comfortably within reach. Uses 2 of the 4 allowed breakpoints; the
+/// static `system` marker is the third.
+///
+/// A no-op for messages whose content is empty or whose tail block is not a
+/// JSON object.
 fn stamp_rolling_cache_breakpoint(messages: &mut [Value]) {
-    if let Some(block) = messages
-        .last_mut()
-        .and_then(|m| m.get_mut("content"))
-        .and_then(Value::as_array_mut)
-        .and_then(|c| c.last_mut())
-        .and_then(Value::as_object_mut)
-    {
-        block.insert("cache_control".into(), json!({ "type": "ephemeral" }));
+    let n = messages.len();
+    // The two most-recently-appended messages (the current turn's tool results
+    // and the assistant turn before them). `checked_sub` + `flatten` skips the
+    // second index when there is only one message.
+    for idx in [n.checked_sub(1), n.checked_sub(2)].into_iter().flatten() {
+        if let Some(block) = messages[idx]
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+            .and_then(|c| c.last_mut())
+            .and_then(Value::as_object_mut)
+        {
+            block.insert("cache_control".into(), json!({ "type": "ephemeral" }));
+        }
     }
 }
 
@@ -2727,14 +2744,37 @@ mod tests {
         assert_eq!(body["system"][0]["type"], "text");
         assert_eq!(body["system"][0]["text"], "sys");
         assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
-        // Rolling tail: only the last block of the last message is marked.
+        // Leapfrog: the last block of the last TWO messages is marked; earlier
+        // ones are not. Three distinct user/assistant/user turns → messages[1]
+        // and messages[2] marked, messages[0] clean.
         let msgs = body["messages"].as_array().unwrap();
-        let last = msgs.last().unwrap();
-        let last_block = last["content"].as_array().unwrap().last().unwrap();
-        assert_eq!(last_block["cache_control"]["type"], "ephemeral");
+        assert_eq!(msgs.len(), 3);
+        let tail_block = |m: &Value| m["content"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(tail_block(&msgs[2])["cache_control"]["type"], "ephemeral");
+        assert_eq!(tail_block(&msgs[1])["cache_control"]["type"], "ephemeral");
         assert!(
-            msgs[0]["content"][0].get("cache_control").is_none(),
-            "earlier messages must not carry a breakpoint"
+            tail_block(&msgs[0]).get("cache_control").is_none(),
+            "only the last two messages carry a breakpoint"
+        );
+    }
+
+    #[test]
+    fn anthropic_body_single_message_stamps_only_one_breakpoint() {
+        // With a single message there is no second turn to leapfrog to; the
+        // checked_sub(2) index is skipped rather than panicking.
+        let body = anthropic_body(
+            &cfg(Provider::DatabricksV2),
+            "sys",
+            &[HistoryItem::User("hello".into())],
+            &[],
+            "databricks-claude-opus-5",
+            None,
+        );
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(
+            msgs[0]["content"].as_array().unwrap().last().unwrap()["cache_control"]["type"],
+            "ephemeral"
         );
     }
 
