@@ -558,6 +558,38 @@ def trial_timeout_seconds(manifest: Path) -> int:
         return 900
 
 
+def environment_override_argv(manifest: Path) -> list[str]:
+    """Forward the manifest's container-resource block to Harbor as flags.
+
+    Harbor takes these on the command line, but the study needs them pinned in
+    the manifest: they change what a condition *is*, so a run at 8 GB and a run
+    at 2 GB must not share a hash and pool into one number. Reading them back
+    out here is the seam between the two.
+
+    Only keys the manifest actually sets are forwarded. An absent block emits
+    nothing, so Harbor keeps honouring each task's own declared request and
+    manifests written before this existed behave exactly as they did.
+    """
+    try:
+        import yaml
+
+        block = yaml.safe_load(manifest.read_text()).get("environment") or {}
+    except (OSError, ValueError, AttributeError):
+        # Same contract as trial_timeout_seconds: a malformed manifest must
+        # fail downstream with a real validation message, not here.
+        return []
+    argv: list[str] = []
+    for key, flag in (
+        ("override_cpus", "--override-cpus"),
+        ("override_memory_mb", "--override-memory-mb"),
+        ("override_storage_mb", "--override-storage-mb"),
+    ):
+        value = block.get(key)
+        if value is not None:
+            argv += [flag, str(value)]
+    return argv
+
+
 def check_budget_clears_clock(manifest: Path, multiplier: float) -> None:
     """Refuse a multiplier the harness's own ceiling would silently undo.
 
@@ -1085,6 +1117,7 @@ def leaderboard_argv(
         "--n-concurrent", str(args.n_concurrent),
         "--jobs-dir", str(args.jobs_dir),
     ]
+    argv += environment_override_argv(args.manifest)
     if args.timeout_multiplier != 1.0:
         # Forwarded only when it changes something: Harbor's validator rejects
         # the flag being *set*, not just being non-unity, so a submittable run

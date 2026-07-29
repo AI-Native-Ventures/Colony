@@ -173,3 +173,50 @@ def test_compaction_target_is_part_of_the_condition_hash(manifest_data):
     baseline = ExperimentManifest.load(copy.deepcopy(manifest_data)).sha256
     manifest_data["roster"][0]["generation"]["compact_at_tokens"] = 100_000
     assert ExperimentManifest.load(manifest_data).sha256 != baseline
+
+
+def test_environment_overrides_default_to_leaving_the_task_alone(manifest_data):
+    """Silence must mean "honour each task's own request", not "pick a number".
+
+    Most of Terminal-Bench asks for 1 vCPU and 2 GB, and a manifest that says
+    nothing about resources has not opted into changing that.
+    """
+    env = ExperimentManifest.load(manifest_data).environment
+    assert env.override_cpus is None
+    assert env.override_memory_mb is None
+    assert env.override_storage_mb is None
+
+
+def test_an_empty_environment_block_hashes_as_an_absent_one(manifest_data):
+    """Two spellings of "override nothing" must not be two different conditions."""
+    absent = ExperimentManifest.load(copy.deepcopy(manifest_data))
+    empty = ExperimentManifest.load({**manifest_data, "environment": {}})
+    assert absent.sha256 == empty.sha256
+
+
+def test_container_resources_are_part_of_the_condition_hash(manifest_data):
+    """A team given 8 GB and a team given 2 GB are not the same condition.
+
+    Without this the two would be indistinguishable in the results and could
+    pool into a single pass rate, which is the specific accident the resource
+    override was introduced to avoid.
+    """
+    baseline = ExperimentManifest.load(copy.deepcopy(manifest_data)).sha256
+    manifest_data["environment"] = {"override_cpus": 4, "override_memory_mb": 8192}
+    assert ExperimentManifest.load(manifest_data).sha256 != baseline
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"override_cpus": 0},
+        {"override_memory_mb": 0},
+        {"override_storage_mb": -1},
+        {"override_gpus": 1},
+    ],
+)
+def test_nonsensical_resource_overrides_are_rejected(manifest_data, block):
+    """Zero CPUs is not a smaller container, and a typo must not be silently kept."""
+    manifest_data["environment"] = block
+    with pytest.raises(ManifestError):
+        ExperimentManifest.load(manifest_data)

@@ -196,6 +196,34 @@ class TrialBudget(StrictModel):
     max_cost_usd: float | None = Field(default=None, gt=0)
 
 
+class EnvironmentOverrides(StrictModel):
+    """Container resources granted to a trial, replacing the task's own request.
+
+    Harbor enforces each task's declared ``[environment]`` block as hard Docker
+    limits, and the whole Buzz stack runs *inside* that container. A three-agent
+    roster therefore puts three ``buzz-acp``/``buzz-agent``/``buzz-dev-mcp``
+    process groups plus the task's own work inside whatever the task asked for —
+    typically 1 vCPU and 2 GB. A team that thrashes there has been penalised for
+    memory pressure, not for coordinating badly, which is a confound in the one
+    thing the study measures.
+
+    These belong in the manifest rather than on the command line because they
+    change what a condition *is*. A resource level that varies between cells is
+    a confound; one that varies without being recorded is an invisible confound.
+    Putting them here makes them part of the condition hash, so two runs at
+    different limits can never pool into one number by accident.
+
+    ``None`` means "leave the task's own request alone". Note that Harbor
+    *replaces* rather than raises (``environments/base.py``), so a value below a
+    task's declared request shrinks it — any override must clear the largest
+    request in the dataset or some tasks quietly get less than they do today.
+    """
+
+    override_cpus: int | None = Field(default=None, gt=0)
+    override_memory_mb: int | None = Field(default=None, gt=0)
+    override_storage_mb: int | None = Field(default=None, gt=0)
+
+
 class ExperimentManifest(StrictModel):
     """Complete immutable input defining one benchmark condition."""
 
@@ -204,6 +232,9 @@ class ExperimentManifest(StrictModel):
     roster: tuple[AgentClass, ...] = Field(min_length=1)
     prices: dict[str, Price]
     trial_budget: TrialBudget
+    # Absent and empty are the same condition and hash identically, matching
+    # how ``generation`` behaves on AgentClass.
+    environment: EnvironmentOverrides = Field(default_factory=EnvironmentOverrides)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
