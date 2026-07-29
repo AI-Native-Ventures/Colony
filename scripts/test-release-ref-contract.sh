@@ -12,16 +12,16 @@ git -C "$tmp" config user.email test@example.com
 echo first >"$tmp/file"
 git -C "$tmp" add file
 git -C "$tmp" commit -qm first
-git -C "$tmp" tag -m "desktop release" v1.2.3
+git -C "$tmp" tag -m "desktop release" desktop-v1.2.3
 
 (
   cd "$tmp"
-  GITHUB_REF=refs/tags/v1.2.3 "$verify" v 1.2.3
+  GITHUB_REF=refs/tags/desktop-v1.2.3 "$verify" desktop-v 1.2.3
 )
 
 if (
   cd "$tmp"
-  GITHUB_REF=refs/heads/main "$verify" v 1.2.3
+  GITHUB_REF=refs/heads/main "$verify" desktop-v 1.2.3
 ); then
   echo "branch-backed desktop release was accepted" >&2
   exit 1
@@ -31,7 +31,7 @@ echo second >>"$tmp/file"
 git -C "$tmp" commit -qam second
 if (
   cd "$tmp"
-  GITHUB_REF=refs/tags/v1.2.3 "$verify" v 1.2.3
+  GITHUB_REF=refs/tags/desktop-v1.2.3 "$verify" desktop-v 1.2.3
 ); then
   echo "release accepted HEAD after the tag commit" >&2
   exit 1
@@ -61,6 +61,26 @@ grep -q 'private-key:.*secrets\.BUZZ_RELEASE_TAGGER_PRIVATE_KEY' "$auto_tag"
 grep -q 'permission-contents: write' "$auto_tag"
 grep -q 'GH_TOKEN:.*steps\.release-tagger\.outputs\.token' "$auto_tag"
 grep -Fq 'git/refs' "$auto_tag"
+grep -Fq 'TAG_PREFIX="desktop-v"' "$auto_tag"
+grep -Fq 'target_sha=${{ github.event.pull_request.head.sha }}' "$auto_tag"
+grep -Fq 'scripts/verify-desktop-release-merge.sh' "$auto_tag"
+release_workflow="$repo_root/.github/workflows/release.yml"
+[[ "$(grep -c 'contents: write' "$release_workflow")" -eq 1 ]] || {
+  echo "desktop release must have exactly one GitHub contents writer" >&2; exit 1;
+}
+grep -Fq "needs.release.result == 'success'" "$release_workflow"
+grep -Fq "needs.release-macos-x64.result == 'success'" "$release_workflow"
+grep -Fq "needs.release-linux.result == 'success'" "$release_workflow"
+grep -Fq "needs.release-windows.result == 'success'" "$release_workflow"
+grep -Fq "refs/tags/desktop-v{0}" "$release_workflow"
+grep -Fq "if: \${{ env.already_published != 'true' && !contains(needs.setup.outputs.version, '-') }}" "$release_workflow"
+grep -Fq 'group: desktop-release-${{ github.ref }}' "$release_workflow"
+grep -Fq 'cancel-in-progress: false' "$release_workflow"
+grep -Fq 'release artifact basename collision' "$release_workflow"
+[[ "$(grep -c 'gh release upload' "$release_workflow")" -eq 2 ]] || {
+  echo "only the final writer may upload versioned and rolling release assets" >&2; exit 1;
+}
+grep -Fq 'if: env.already_published' "$release_workflow"
 grep -Fq 'if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then' "$auto_tag"
 if grep -F 'git/ref/tags/$TAG' "$auto_tag" | grep -Fq '|| true'; then
   echo "auto-tag ignores a failed tag lookup, so a 404 body can look like an existing tag" >&2
