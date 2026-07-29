@@ -125,6 +125,8 @@ test("capture: share-style community invite dialog", async ({ page }) => {
     .getByTestId("community-invite-dialog-body")
     .evaluate((element) => element.scrollTo({ top: 0 }));
   await waitForAnimations(page);
+  await expiryTrigger.blur();
+  await page.mouse.move(0, 0);
   await dialog.screenshot({ path: `${OUTDIR}/02-invite-dialog.png` });
 });
 
