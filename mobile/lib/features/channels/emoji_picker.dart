@@ -67,10 +67,7 @@ class EmojiPickerSheet extends HookConsumerWidget {
     final trimmedQuery = query.value.trim();
     final isSearching = trimmedQuery.isNotEmpty;
 
-    void select(String emoji) {
-      ref.read(recentEmojiProvider.notifier).record(emoji);
-      onSelect(emoji);
-    }
+    void select(String emoji) => onSelect(emoji);
 
     final sections = useMemoized(
       () => _buildSections(
@@ -252,7 +249,9 @@ List<Widget> _resolveRecentTiles({
   final customByShortcode = {
     for (final emoji in customEmoji) emoji.shortcode.toLowerCase(): emoji,
   };
-  final entriesById = {for (final entry in dataset.all) entry.id: entry};
+  final entriesByNative = {
+    for (final entry in dataset.all) entry.native: entry,
+  };
 
   final tiles = <Widget>[];
   for (final item in recent) {
@@ -270,10 +269,7 @@ List<Widget> _resolveRecentTiles({
       );
       continue;
     }
-    final shortcode = dataset.nativeToShortcode[value];
-    final entry = shortcode == null
-        ? null
-        : entriesById[shortcode.substring(1, shortcode.length - 1)];
+    final entry = entriesByNative[value];
     if (entry == null) continue;
     tiles.add(
       _EmojiTile(

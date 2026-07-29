@@ -22,6 +22,9 @@ class EmojiEntry {
   /// The default-skin glyph.
   final String native;
 
+  /// Position within emoji-mart's skin list. The default skin is zero.
+  final int skinIndex;
+
   /// Owning category id, e.g. `people`.
   final String categoryId;
 
@@ -31,7 +34,12 @@ class EmojiEntry {
     required this.keywords,
     required this.native,
     required this.categoryId,
+    this.skinIndex = 0,
   });
+
+  /// Unique tile id while preserving the desktop-identical shortcode for the
+  /// default skin.
+  String get tileId => skinIndex == 0 ? id : '$id-$skinIndex';
 }
 
 /// One dataset category, in emoji-mart's own order.
@@ -110,18 +118,28 @@ class EmojiDataset {
         final id = rawId as String;
         final record = (rawEmoji[id] as Map?)?.cast<String, dynamic>();
         if (record == null) continue;
-        final entry = EmojiEntry(
-          id: id,
-          name: record['n'] as String,
-          keywords: (record['k'] as List).cast<String>(),
-          native: record['u'] as String,
-          categoryId: categoryId,
-        );
-        entries.add(entry);
-        all.add(entry);
-        // First writer wins so the earliest category owns a shared glyph,
-        // matching desktop's map build order.
-        nativeToShortcode.putIfAbsent(entry.native, () => ':$id:');
+        // Older committed assets used one string; accept that shape so the
+        // parser remains safe while generated assets move to all skin variants.
+        final natives = switch (record['u']) {
+          final List values => values.cast<String>(),
+          final String value => [value],
+          _ => const <String>[],
+        };
+        for (final (skinIndex, native) in natives.indexed) {
+          final entry = EmojiEntry(
+            id: id,
+            name: record['n'] as String,
+            keywords: (record['k'] as List).cast<String>(),
+            native: native,
+            categoryId: categoryId,
+            skinIndex: skinIndex,
+          );
+          entries.add(entry);
+          all.add(entry);
+          // First writer wins so the earliest category owns a shared glyph,
+          // matching desktop's map build order.
+          nativeToShortcode.putIfAbsent(entry.native, () => ':$id:');
+        }
       }
 
       categories.add(EmojiCategory(id: categoryId, emoji: entries));

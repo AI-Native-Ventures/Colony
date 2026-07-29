@@ -618,10 +618,11 @@ class _QuickReactionRow extends ConsumerWidget {
       for (final entry in customEmoji) entry.shortcode.toLowerCase(): entry,
     };
 
-    void react(String value, {bool recordUse = true}) {
-      // EmojiPickerSheet already records full-picker selections; quick-row
-      // taps still enter through here and need to record their own use.
-      if (recordUse) ref.read(recentEmojiProvider.notifier).record(value);
+    void react(String value) {
+      // The generic picker is also used for composing and statuses. Record
+      // recency here, at the reaction call site, so only reactions drive the
+      // quick-reaction row.
+      ref.read(recentEmojiProvider.notifier).record(value);
       // The sheet is on its way out, so the burst can't come from this tile —
       // hand it to the pill that's about to appear in the timeline.
       armReactionBurst(ref, message, value);
@@ -645,10 +646,7 @@ class _QuickReactionRow extends ConsumerWidget {
         _QuickReactionCircle(
           onTap: () {
             Navigator.of(sheetContext).pop();
-            showEmojiPicker(
-              context: pageContext,
-              onSelect: (value) => react(value, recordUse: false),
-            );
+            showEmojiPicker(context: pageContext, onSelect: react);
           },
           child: Icon(
             LucideIcons.plus,

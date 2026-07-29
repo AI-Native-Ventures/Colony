@@ -51,7 +51,7 @@ const categories = data.categories.map((category) => ({
   id: category.id,
   emoji: category.emojis.filter((id) => {
     const entry = data.emojis[id];
-    return Boolean(entry?.skins?.[0]?.native);
+    return Boolean(entry?.skins?.some((skin) => skin.native));
   }),
 }));
 
@@ -63,7 +63,9 @@ for (const category of categories) {
     const entry = data.emojis[id];
     emoji[id] = {
       n: entry.name,
-      u: entry.skins[0].native,
+      // Keep every skin variation. The app flattens these into selectable
+      // tiles and maps every glyph back to this desktop-identical shortcode.
+      u: entry.skins.map((skin) => skin.native).filter(Boolean),
       k: entry.keywords ?? [],
     };
   }

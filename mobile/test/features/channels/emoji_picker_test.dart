@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:buzz/features/channels/emoji_picker.dart';
 import 'package:buzz/features/channels/recent_emoji_provider.dart';
 import 'package:buzz/shared/custom_emoji/custom_emoji.dart';
@@ -20,12 +18,14 @@ EmojiEntry _entry(
   required String categoryId,
   String? name,
   List<String> keywords = const [],
+  int skinIndex = 0,
 }) => EmojiEntry(
   id: id,
   name: name ?? id,
   keywords: keywords,
   native: native,
   categoryId: categoryId,
+  skinIndex: skinIndex,
 );
 
 /// A miniature stand-in for the generated asset — two categories so the rail
@@ -38,6 +38,13 @@ final _dataset = () {
       native: '\u{261D}\u{FE0F}',
       categoryId: 'people',
       name: 'Index Pointing Up',
+    ),
+    _entry(
+      'point_up',
+      native: '\u{261D}\u{1F3FD}',
+      categoryId: 'people',
+      name: 'Index Pointing Up',
+      skinIndex: 1,
     ),
   ];
   final nature = [
@@ -325,6 +332,15 @@ void main() {
       expect(selected, ['\u{1F525}']);
     });
 
+    testWidgets('a skin-tone variant is selectable', (tester) async {
+      final selected = await _pumpPicker(tester, prefs: await _prefs());
+
+      await tester.tap(find.byKey(const ValueKey('emoji-tile-point_up-1')));
+      await tester.pumpAndSettle();
+
+      expect(selected, ['\u{261D}\u{1F3FD}']);
+    });
+
     testWidgets('a custom emoji emits :shortcode:', (tester) async {
       final selected = await _pumpPicker(tester, prefs: await _prefs());
 
@@ -336,7 +352,9 @@ void main() {
       expect(selected, [':partyparrot:']);
     });
 
-    testWidgets('a selection records exactly one use', (tester) async {
+    testWidgets('a non-reaction selection does not record a quick reaction', (
+      tester,
+    ) async {
       final prefs = await _prefs();
       final selected = await _pumpPicker(tester, prefs: prefs);
 
@@ -344,39 +362,12 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(selected, ['\u{1F525}']);
-      final stored = prefs.getString(
-        'buzz.quick-reaction-emojis.v1:http://localhost:3000:self',
-      );
-      final entries = jsonDecode(stored!) as List<dynamic>;
-      expect(entries, hasLength(1));
-      expect(entries.single, containsPair('emoji', '\u{1F525}'));
-      expect(entries.single, containsPair('count', 1));
-    });
-
-    testWidgets('a selection adds a Frequently used section', (tester) async {
-      final prefs = await _prefs();
-      await _pumpPicker(tester, prefs: prefs);
-
-      await tester.tap(find.byKey(const ValueKey('emoji-tile-fire')));
-      await tester.pumpAndSettle();
-
-      // Re-open: the section now exists, at the head of the scroll order, with
-      // its own rail entry.
-      await _pumpPicker(tester, prefs: prefs);
-      expect(find.byTooltip('Frequently used'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('emoji-tile-frequent-fire')),
-        findsOneWidget,
+        prefs.getString(
+          'buzz.quick-reaction-emojis.v1:http://localhost:3000:self',
+        ),
+        isNull,
       );
-      // Keyed apart from the copy in Animals & Nature, which is still there.
-      expect(find.byKey(const ValueKey('emoji-tile-fire')), findsOneWidget);
-      final frequent = tester.getRect(
-        find.byKey(const ValueKey('emoji-tile-frequent-fire')),
-      );
-      final inCategory = tester.getRect(
-        find.byKey(const ValueKey('emoji-tile-fire')),
-      );
-      expect(frequent.top, lessThan(inCategory.top));
     });
 
     testWidgets('shows a spinner while the dataset is still loading', (

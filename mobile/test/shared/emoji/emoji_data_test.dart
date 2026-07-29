@@ -57,6 +57,13 @@ void main() {
     expect(dataset.nativeToShortcode['💯'], ':100:');
     expect(dataset.nativeToShortcode['🔥'], ':fire:');
     expect(dataset.nativeToShortcode['☝️'], ':point_up:');
+    expect(dataset.nativeToShortcode['👍🏽'], ':+1:');
+    expect(
+      dataset.all
+          .where((entry) => entry.id == '+1')
+          .map((entry) => entry.native),
+      containsAll(['👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿']),
+    );
   });
 
   test('displayName mirrors desktop emojiDisplayName', () {

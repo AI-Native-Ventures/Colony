@@ -92,7 +92,7 @@ class _EmojiTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      key: ValueKey('$keyPrefix-${entry.id}'),
+      key: ValueKey('$keyPrefix-${entry.tileId}'),
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Semantics(
