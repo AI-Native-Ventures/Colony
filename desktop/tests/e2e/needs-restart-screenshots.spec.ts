@@ -212,7 +212,7 @@ test.describe("restart-diff screenshots", () => {
     await expect(rowSection).toBeVisible({ timeout: 10_000 });
 
     const agentRow = rowSection.getByTestId(
-      `managed-agent-${STANDALONE_AGENT.pubkey}`,
+      `managed-agent-row-${STANDALONE_AGENT.pubkey}`,
     );
     await expect(agentRow).toBeVisible({ timeout: 10_000 });
 
@@ -260,7 +260,7 @@ test.describe("restart-diff screenshots", () => {
     await expect(rowSection).toBeVisible({ timeout: 10_000 });
 
     const agentRow = rowSection.getByTestId(
-      `managed-agent-${SHORT_DIFF_AGENT.pubkey}`,
+      `managed-agent-row-${SHORT_DIFF_AGENT.pubkey}`,
     );
     const badge = agentRow.getByTestId("restart-diff-badge");
     await badge.hover();
@@ -289,7 +289,7 @@ test.describe("restart-diff screenshots", () => {
 
     const badge = page
       .getByTestId("agent-group-rows")
-      .getByTestId(`managed-agent-${STANDALONE_AGENT.pubkey}`)
+      .getByTestId(`managed-agent-row-${STANDALONE_AGENT.pubkey}`)
       .getByTestId("restart-diff-badge");
     await badge.focus();
     const tooltip = page.locator("[role=tooltip]");
@@ -426,7 +426,7 @@ test.describe("restart-diff screenshots", () => {
     // Open profile panel via the Manage button in the row section — opens on Info tab by default
     const manageButton = page
       .getByTestId("agent-group-rows")
-      .getByTestId(`managed-agent-${STANDALONE_AGENT.pubkey}`)
+      .getByTestId(`managed-agent-row-${STANDALONE_AGENT.pubkey}`)
       .getByRole("button", { name: "Manage" });
     await expect(manageButton).toBeVisible({ timeout: 10_000 });
     await manageButton.click();

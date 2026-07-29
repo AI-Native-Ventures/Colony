@@ -96,7 +96,7 @@ export function ManagedAgentRow({
         "overflow-hidden transition-colors",
         isLogSelected ? "bg-primary/5" : "hover:bg-muted/20",
       )}
-      data-testid={`managed-agent-${agent.pubkey}`}
+      data-testid={`managed-agent-row-${agent.pubkey}`}
     >
       <div className="flex items-start gap-3 px-4 py-3">
         {isLocal ? (
