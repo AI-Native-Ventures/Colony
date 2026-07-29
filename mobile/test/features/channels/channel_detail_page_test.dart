@@ -1073,7 +1073,11 @@ void main() {
         // Small scrolls that keep the newest message visible, so isAtLatest
         // stays true while the scroll offset becomes non-zero. This lets a
         // later programmatic jumpTo dispatch ScrollEndNotification.
-        for (final dy in const [10.0, 20.0, 30.0]) {
+        //
+        // Each drag must clear `kDragSlopDefault`; below it `tester.drag`
+        // sends a single sub-slop move, which a message bubble now claims as
+        // a tap and pushes the thread page over this list.
+        for (final dy in const [30.0, 30.0, 30.0]) {
           await tester.drag(
             find.byKey(const ValueKey('channel-message-list')),
             Offset(0, dy),
@@ -2192,14 +2196,37 @@ void main() {
       expect(find.byType(DayDivider), findsNWidgets(2));
       expect(find.text(formatDayHeading(rootCreatedAt)), findsOneWidget);
       expect(find.text(formatDayHeading(nextDayCreatedAt)), findsOneWidget);
+      // The list runs top-down (head first), so tail spacing lives on the list
+      // and reply groups carry none.
       final threadList = tester.widget<ScrollablePositionedList>(
         find.byKey(const ValueKey('thread-message-list')),
       );
-      expect(threadList.padding!.bottom, 0);
+      expect(threadList.reverse, isFalse);
+      expect(threadList.padding!.bottom, Grid.xs);
       final newestThreadGroup = tester.widget<Padding>(
         find.byKey(const ValueKey('thread-message-group-reply-next-day')),
       );
-      expect(newestThreadGroup.padding, const EdgeInsets.only(bottom: Grid.xs));
+      expect(newestThreadGroup.padding, EdgeInsets.zero);
+
+      // The head sits above its replies rather than jammed against the
+      // composer, matching desktop's thread panel.
+      final headY = tester
+          .getTopLeft(
+            find.byKey(const ValueKey('thread-message-group-thread-root')),
+          )
+          .dy;
+      final oldestReplyY = tester
+          .getTopLeft(
+            find.byKey(const ValueKey('thread-message-group-reply-same-day')),
+          )
+          .dy;
+      final newestReplyY = tester
+          .getTopLeft(
+            find.byKey(const ValueKey('thread-message-group-reply-next-day')),
+          )
+          .dy;
+      expect(headY, lessThan(oldestReplyY));
+      expect(oldestReplyY, lessThan(newestReplyY));
     });
   });
 }

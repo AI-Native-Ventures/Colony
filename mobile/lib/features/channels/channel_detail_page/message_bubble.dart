@@ -60,6 +60,24 @@ class _MessageBubble extends ConsumerWidget {
         key: ValueKey('message-row-${message.id}'),
         borderRadius: BorderRadius.circular(Radii.md),
         highlightColor: context.colors.primary.withValues(alpha: 0.1),
+        // Tap opens the thread; long-press still opens the action sheet.
+        // MessageContent's mention, channel-link, and media handlers consume
+        // their own taps, so those keep routing to the profile sheet, the
+        // linked channel, and the media viewer respectively.
+        onTap: allMessages == null
+            ? null
+            : () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ThreadDetailPage(
+                    threadHead: message,
+                    allMessages: allMessages!,
+                    channelId: currentChannelId,
+                    currentPubkey: currentPubkey,
+                    isMember: isMember,
+                    isArchived: isArchived,
+                  ),
+                ),
+              ),
         onLongPress: () => showMessageActions(
           context: context,
           ref: ref,
@@ -190,6 +208,7 @@ class _MessageBubble extends ConsumerWidget {
                       ),
                       if (message.reactions.isNotEmpty)
                         ReactionRow(
+                          messageId: message.id,
                           reactions: message.reactions,
                           onToggle: (emoji) =>
                               toggleReaction(ref, message, emoji),
