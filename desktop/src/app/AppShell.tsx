@@ -620,7 +620,6 @@ export function AppShell() {
     unreadChannelIds,
     unreadChannelNotificationCount,
   });
-  // Dispatch `buzz://message` deep links into the router.
   useMessageDeepLinks();
   const handleOpenNewDm = React.useCallback(
     () => void goNewMessage(),
