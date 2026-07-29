@@ -28,6 +28,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import { describeChannelTextFieldChange } from "../lib/systemEventCopy";
 import { MessageAgentOwner } from "./MessageAgentOwner";
 import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
 import { MessageTimestamp } from "./MessageTimestamp";
@@ -522,7 +523,7 @@ function describeSystemEvent(
         title: membershipTitle,
         action: (
           <>
-            was added by{" "}
+            added by{" "}
             <ProfileName pubkey={payload.actor} underlineOnHover>
               {resolveDisplayLabel(payload.actor, currentPubkey, profiles)}
             </ProfileName>
@@ -566,7 +567,7 @@ function describeSystemEvent(
         title: membershipTitle,
         action: (
           <>
-            was added by{" "}
+            added by{" "}
             <ProfileName pubkey={payload.actor} underlineOnHover>
               {resolveDisplayLabel(payload.actor, currentPubkey, profiles)}
             </ProfileName>
@@ -587,12 +588,12 @@ function describeSystemEvent(
     case "topic_changed":
       return {
         title: actorName,
-        action: <>changed the topic to &ldquo;{payload.topic}&rdquo;</>,
+        action: describeChannelTextFieldChange("topic", payload.topic),
       };
     case "purpose_changed":
       return {
         title: actorName,
-        action: <>changed the purpose to &ldquo;{payload.purpose}&rdquo;</>,
+        action: describeChannelTextFieldChange("purpose", payload.purpose),
       };
     case "channel_created":
       return {
