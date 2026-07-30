@@ -36,8 +36,8 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use buzz_core::kind::{
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
-    KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_BLOCK_ACTION, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_STREAM_MESSAGE, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use nostr::EventId;
 use serde::{Deserialize, Serialize};
@@ -409,19 +409,14 @@ pub(crate) async fn run_setup_listener(config: Config, payload: SetupPayload) ->
             continue;
         }
 
-        // Ignore non-message kinds (relay housekeeping, etc.).
-        if kind_u32 != KIND_STREAM_MESSAGE && kind_u32 != KIND_WORKFLOW_APPROVAL_REQUESTED {
+        // Only addressed messages/actions can produce a setup nudge. Block
+        // actions receive the same fail-closed envelope gate as normal mode.
+        if !setup_event_targets_agent(&buzz_event.event, &pubkey_hex) {
             continue;
         }
 
         // ignore_self: don't react to our own messages.
         if buzz_event.event.pubkey.to_hex() == pubkey_hex {
-            continue;
-        }
-
-        // Require an explicit @mention of this agent — setup mode must not
-        // nudge on every channel event even if subscribe_mode is "all".
-        if !event_mentions_agent(&buzz_event.event, &pubkey_hex) {
             continue;
         }
 
@@ -524,7 +519,7 @@ fn build_setup_subscription_rules(config: &Config) -> Vec<filter::SubscriptionRu
     let kinds = config
         .kinds_override
         .clone()
-        .unwrap_or_else(|| vec![KIND_STREAM_MESSAGE, KIND_WORKFLOW_APPROVAL_REQUESTED]);
+        .unwrap_or_else(crate::config::default_channel_kinds);
 
     match &config.subscribe_mode {
         // Config mode: load the actual rules, but they will be filtered by
@@ -540,6 +535,18 @@ fn build_setup_subscription_rules(config: &Config) -> Vec<filter::SubscriptionRu
         },
         _ => vec![mentions_rule(kinds)],
     }
+}
+
+fn setup_event_targets_agent(event: &nostr::Event, agent_pubkey_hex: &str) -> bool {
+    let kind = event.kind.as_u16() as u32;
+    let supported = matches!(
+        kind,
+        KIND_STREAM_MESSAGE | KIND_WORKFLOW_APPROVAL_REQUESTED | KIND_BLOCK_ACTION
+    );
+    supported
+        && event_mentions_agent(event, agent_pubkey_hex)
+        && (kind != KIND_BLOCK_ACTION
+            || crate::queue::block_action_targets_processor(event, agent_pubkey_hex))
 }
 
 fn mentions_rule(kinds: Vec<u32>) -> filter::SubscriptionRule {
@@ -650,6 +657,72 @@ async fn publish_setup_nudge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    fn make_setup_block_action(processor: &Keys, extra_tags: Vec<Tag>) -> nostr::Event {
+        let channel = Uuid::new_v4();
+        let instance_id = Uuid::new_v4();
+        let idempotency_key = Uuid::new_v4();
+        let mut tags = vec![
+            Tag::parse(["h", &channel.to_string()]).expect("h tag"),
+            Tag::parse(["p", &processor.public_key().to_hex()]).expect("p tag"),
+            Tag::parse(["e", &"a".repeat(64), "", "block-instance"]).expect("instance tag"),
+            Tag::parse(["e", &"b".repeat(64), "", "block-manifest"]).expect("manifest tag"),
+            Tag::parse([
+                "block-action",
+                "1",
+                "question.submit",
+                &instance_id.to_string(),
+                &idempotency_key.to_string(),
+            ])
+            .expect("action tag"),
+        ];
+        tags.extend(extra_tags);
+        EventBuilder::new(
+            Kind::Custom(KIND_BLOCK_ACTION as u16),
+            r#"{"selection":["one"]}"#,
+        )
+        .tags(tags)
+        .sign_with_keys(&Keys::generate())
+        .expect("signed action")
+    }
+
+    #[test]
+    fn setup_default_filter_includes_addressed_actions_but_not_receipts() {
+        let rule = mentions_rule(crate::config::default_channel_kinds());
+        assert!(rule.require_mention);
+        assert!(rule.kinds.contains(&KIND_STREAM_MESSAGE));
+        assert!(rule.kinds.contains(&KIND_BLOCK_ACTION));
+        assert!(rule.kinds.contains(&KIND_WORKFLOW_APPROVAL_REQUESTED));
+        assert!(rule.kinds.contains(&buzz_core::kind::KIND_STREAM_REMINDER));
+        assert!(!rule.kinds.contains(&buzz_core::kind::KIND_BLOCK_RECEIPT));
+    }
+
+    #[test]
+    fn setup_listener_accepts_only_valid_action_addressed_to_this_agent() {
+        let agent = Keys::generate();
+        let human_owner = Keys::generate();
+        let addressed = make_setup_block_action(&agent, vec![]);
+        let owner_targeted = make_setup_block_action(&human_owner, vec![]);
+
+        assert!(setup_event_targets_agent(
+            &addressed,
+            &agent.public_key().to_hex()
+        ));
+        assert!(
+            !setup_event_targets_agent(&owner_targeted, &agent.public_key().to_hex()),
+            "owner-targeted Agent Proposal actions belong to the desktop Core broker"
+        );
+
+        let duplicate_p = make_setup_block_action(
+            &agent,
+            vec![Tag::parse(["p", &agent.public_key().to_hex()]).expect("duplicate p tag")],
+        );
+        assert!(
+            !setup_event_targets_agent(&duplicate_p, &agent.public_key().to_hex()),
+            "malformed actions fail closed even though one p tag names the agent"
+        );
+    }
 
     #[test]
     fn setup_payload_from_raw_returns_none_when_absent() {

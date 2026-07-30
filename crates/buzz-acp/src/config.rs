@@ -488,6 +488,19 @@ pub struct ChannelFilter {
     pub require_mention: bool,
 }
 
+/// Event kinds subscribed by default in Mention mode and setup mode.
+///
+/// Receipts are intentionally absent: agents process addressed actions and
+/// publish receipts, but do not subscribe to every other processor's results.
+pub fn default_channel_kinds() -> Vec<u32> {
+    vec![
+        buzz_core::kind::KIND_STREAM_MESSAGE,
+        buzz_core::kind::KIND_BLOCK_ACTION,
+        buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED,
+        buzz_core::kind::KIND_STREAM_REMINDER,
+    ]
+}
+
 #[derive(Debug)]
 pub struct Config {
     pub keys: Keys,
@@ -1235,10 +1248,6 @@ pub fn resolve_channel_filters(
     discovered_channels: &[Uuid],
     rules: &[SubscriptionRule],
 ) -> HashMap<Uuid, ChannelFilter> {
-    use buzz_core::kind::{
-        KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
-    };
-
     let target_channels: Vec<Uuid> = if let Some(ref overrides) = config.channels_override {
         overrides
             .iter()
@@ -1253,13 +1262,10 @@ pub fn resolve_channel_filters(
 
     match config.subscribe_mode {
         SubscribeMode::Mentions => {
-            let kinds = config.kinds_override.clone().unwrap_or_else(|| {
-                vec![
-                    KIND_STREAM_MESSAGE,
-                    KIND_WORKFLOW_APPROVAL_REQUESTED,
-                    KIND_STREAM_REMINDER,
-                ]
-            });
+            let kinds = config
+                .kinds_override
+                .clone()
+                .unwrap_or_else(default_channel_kinds);
             let require_mention = !config.no_mention_filter;
             for ch in &target_channels {
                 result.insert(
@@ -1337,10 +1343,6 @@ pub fn resolve_dynamic_channel_filter(
     channel_id: Uuid,
     rules: &[crate::filter::SubscriptionRule],
 ) -> Option<ChannelFilter> {
-    use buzz_core::kind::{
-        KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
-    };
-
     // In Mentions/All mode, if the operator explicitly constrained channels
     // with --channels, only allow dynamic subscription to channels in that
     // allowlist. Config mode ignores --channels (per CLI contract) and uses
@@ -1358,13 +1360,12 @@ pub fn resolve_dynamic_channel_filter(
 
     match config.subscribe_mode {
         SubscribeMode::Mentions => Some(ChannelFilter {
-            kinds: Some(config.kinds_override.clone().unwrap_or_else(|| {
-                vec![
-                    KIND_STREAM_MESSAGE,
-                    KIND_WORKFLOW_APPROVAL_REQUESTED,
-                    KIND_STREAM_REMINDER,
-                ]
-            })),
+            kinds: Some(
+                config
+                    .kinds_override
+                    .clone()
+                    .unwrap_or_else(default_channel_kinds),
+            ),
             require_mention: !config.no_mention_filter,
         }),
         SubscribeMode::All => Some(ChannelFilter {
@@ -1507,9 +1508,54 @@ mod tests {
             assert!(f.require_mention, "mentions mode requires mention");
             let kinds = f.kinds.as_ref().expect("should have kinds");
             assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_MESSAGE));
+            assert!(kinds.contains(&buzz_core::kind::KIND_BLOCK_ACTION));
             assert!(kinds.contains(&buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED));
             assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_REMINDER));
         }
+    }
+
+    #[test]
+    fn test_dynamic_mentions_mode_default_kinds_include_block_action() {
+        let config = test_config(SubscribeMode::Mentions);
+        let filter = resolve_dynamic_channel_filter(&config, Uuid::new_v4(), &[])
+            .expect("dynamic Mention-mode filter");
+        let kinds = filter
+            .kinds
+            .expect("Mention mode has bounded default kinds");
+
+        assert!(filter.require_mention);
+        assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_MESSAGE));
+        assert!(kinds.contains(&buzz_core::kind::KIND_BLOCK_ACTION));
+        assert!(kinds.contains(&buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED));
+        assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_REMINDER));
+        assert!(!kinds.contains(&buzz_core::kind::KIND_BLOCK_RECEIPT));
+    }
+
+    #[test]
+    fn test_dynamic_all_and_custom_filters_do_not_add_receipts() {
+        let all_config = test_config(SubscribeMode::All);
+        let all_filter = resolve_dynamic_channel_filter(&all_config, Uuid::new_v4(), &[])
+            .expect("dynamic All-mode filter");
+        assert!(
+            all_filter.kinds.is_none(),
+            "All mode remains a subscription wildcard; runtime routing is the safety gate"
+        );
+
+        let config = test_config(SubscribeMode::Config);
+        let channel = Uuid::new_v4();
+        let rules = [make_rule(
+            "custom-actions",
+            ChannelScope::All("all".into()),
+            vec![buzz_core::kind::KIND_BLOCK_ACTION],
+            false,
+        )];
+        let custom_filter = resolve_dynamic_channel_filter(&config, channel, &rules)
+            .expect("dynamic custom filter");
+        assert_eq!(
+            custom_filter.kinds.as_deref(),
+            Some(&[buzz_core::kind::KIND_BLOCK_ACTION][..])
+        );
+        assert!(!custom_filter.require_mention);
     }
 
     #[test]

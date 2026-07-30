@@ -20,6 +20,128 @@ use uuid::Uuid;
 
 use crate::config::DedupMode;
 
+/// Parsed public routing fields for a signed Block action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedBlockAction {
+    pub(crate) instance_event_id: String,
+    pub(crate) manifest_event_id: String,
+    pub(crate) action_id: String,
+    pub(crate) instance_id: Uuid,
+    pub(crate) idempotency_key: Uuid,
+    pub(crate) processor_pubkey: String,
+}
+
+fn is_lower_hex_64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+/// Parse and validate the public envelope an ACP agent relies on for a Block action.
+///
+/// The relay performs the authoritative manifest-aware validation. This second,
+/// deliberately narrow check keeps permissive ACP subscription rules from
+/// forwarding malformed or owner-targeted Core actions to managed agents.
+pub(crate) fn parse_block_action(event: &Event) -> Result<ParsedBlockAction, String> {
+    if event.kind.as_u16() as u32 != buzz_core::kind::KIND_BLOCK_ACTION {
+        return Err("not a Block action".into());
+    }
+
+    let mut channel_count = 0usize;
+    let mut processor: Option<&str> = None;
+    let mut action: Option<(&str, &str, &str)> = None;
+    let mut instance_event_id: Option<&str> = None;
+    let mut manifest_event_id: Option<&str> = None;
+
+    for tag in event.tags.iter() {
+        let parts = tag.as_slice();
+        let Some(kind) = parts.first().map(String::as_str) else {
+            continue;
+        };
+        match kind {
+            "h" => {
+                if parts.len() != 2 || Uuid::parse_str(&parts[1]).is_err() {
+                    return Err("Block action has an invalid h tag".into());
+                }
+                channel_count += 1;
+            }
+            "p" => {
+                if parts.len() != 2 || !is_lower_hex_64(&parts[1]) || processor.is_some() {
+                    return Err("Block action must have exactly one lowercase p tag".into());
+                }
+                processor = Some(&parts[1]);
+            }
+            "block-action" => {
+                if parts.len() != 5 || parts[1] != "1" || action.is_some() {
+                    return Err("Block action has an invalid block-action tag".into());
+                }
+                action = Some((&parts[2], &parts[3], &parts[4]));
+            }
+            "e" if parts.get(3).map(String::as_str) == Some("block-instance") => {
+                if parts.len() != 4 || !is_lower_hex_64(&parts[1]) || instance_event_id.is_some() {
+                    return Err("Block action has an invalid block-instance reference".into());
+                }
+                instance_event_id = Some(&parts[1]);
+            }
+            "e" if parts.get(3).map(String::as_str) == Some("block-manifest") => {
+                if parts.len() != 4 || !is_lower_hex_64(&parts[1]) || manifest_event_id.is_some() {
+                    return Err("Block action has an invalid block-manifest reference".into());
+                }
+                manifest_event_id = Some(&parts[1]);
+            }
+            _ => {}
+        }
+    }
+
+    if channel_count != 1 {
+        return Err("Block action must have exactly one h tag".into());
+    }
+    let processor_pubkey =
+        processor.ok_or_else(|| "Block action is missing its processor p tag".to_string())?;
+    let (action_id, instance_id, idempotency_key) =
+        action.ok_or_else(|| "Block action is missing its block-action tag".to_string())?;
+    let valid_action_id = !action_id.is_empty()
+        && action_id.len() <= 64
+        && action_id
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match byte {
+                b'a'..=b'z' => true,
+                b'0'..=b'9' | b'.' | b'_' | b'-' => index > 0,
+                _ => false,
+            });
+    if !valid_action_id {
+        return Err("Block action action_id must match [a-z][a-z0-9._-]{0,63}".into());
+    }
+    let instance_id = Uuid::parse_str(instance_id)
+        .map_err(|_| "Block action instance_id must be a UUID".to_string())?;
+    let idempotency_key = Uuid::parse_str(idempotency_key)
+        .map_err(|_| "Block action idempotency key must be a UUID".to_string())?;
+    let instance_event_id = instance_event_id
+        .ok_or_else(|| "Block action is missing its block-instance reference".to_string())?;
+    let manifest_event_id = manifest_event_id
+        .ok_or_else(|| "Block action is missing its block-manifest reference".to_string())?;
+    match serde_json::from_str::<serde_json::Value>(&event.content) {
+        Ok(serde_json::Value::Object(_)) => {}
+        _ => return Err("Block action content must be a JSON object".into()),
+    }
+
+    Ok(ParsedBlockAction {
+        instance_event_id: instance_event_id.to_owned(),
+        manifest_event_id: manifest_event_id.to_owned(),
+        action_id: action_id.to_owned(),
+        instance_id,
+        idempotency_key,
+        processor_pubkey: processor_pubkey.to_owned(),
+    })
+}
+
+/// Return true only for a valid Block action explicitly addressed to this agent.
+pub(crate) fn block_action_targets_processor(event: &Event, processor_pubkey: &str) -> bool {
+    parse_block_action(event).is_ok_and(|action| action.processor_pubkey == processor_pubkey)
+}
+
 /// Maximum events queued per channel before oldest events are dropped.
 const MAX_PENDING_PER_CHANNEL: usize = 500;
 
@@ -1115,6 +1237,12 @@ pub(crate) fn format_event_block(
     }
 
     // Parsed structural fields.
+    if let Ok(action) = parse_block_action(&be.event) {
+        block.push_str(&format!(
+            "\nBlock action: instance={} action={} idempotency={}",
+            action.instance_event_id, action.action_id, action.idempotency_key
+        ));
+    }
     let thread = parse_thread_tags(&be.event);
     let mut parsed_parts = Vec::new();
     if let Some(ref p) = thread.parent_event_id {
@@ -1628,7 +1756,7 @@ pub(crate) fn native_steer_framing() -> (&'static str, &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nostr::{EventBuilder, Keys, Kind, Timestamp};
+    use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
     use std::time::Duration;
 
     /// Build a test event with the given content and kind.
@@ -1638,6 +1766,126 @@ mod tests {
             .tags([])
             .sign_with_keys(&keys)
             .unwrap()
+    }
+
+    fn make_block_action(processor: &Keys) -> Event {
+        let signer = Keys::generate();
+        let channel = Uuid::new_v4();
+        let instance_id = Uuid::new_v4();
+        let idempotency_key = Uuid::new_v4();
+        let instance_event_id = "a".repeat(64);
+        let manifest_event_id = "b".repeat(64);
+        let tags = [
+            Tag::parse(["h", &channel.to_string()]).unwrap(),
+            Tag::parse(["p", &processor.public_key().to_hex()]).unwrap(),
+            Tag::parse(["e", instance_event_id.as_str(), "", "block-instance"]).unwrap(),
+            Tag::parse(["e", manifest_event_id.as_str(), "", "block-manifest"]).unwrap(),
+            Tag::parse([
+                "block-action",
+                "1",
+                "submit",
+                &instance_id.to_string(),
+                &idempotency_key.to_string(),
+            ])
+            .unwrap(),
+        ];
+        EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_BLOCK_ACTION as u16),
+            r#"{"selection":["one"]}"#,
+        )
+        .tags(tags)
+        .sign_with_keys(&signer)
+        .unwrap()
+    }
+
+    #[test]
+    fn valid_block_action_targets_only_its_processor_and_formats_structure() {
+        let processor = Keys::generate();
+        let human_owner = Keys::generate();
+        let event = make_block_action(&processor);
+        let parsed = parse_block_action(&event).expect("valid Block action");
+
+        assert_eq!(parsed.action_id, "submit");
+        assert!(block_action_targets_processor(
+            &event,
+            &processor.public_key().to_hex()
+        ));
+        assert!(!block_action_targets_processor(
+            &event,
+            &human_owner.public_key().to_hex()
+        ));
+
+        let block = format_event_block(
+            Uuid::new_v4(),
+            None,
+            &BatchEvent {
+                event,
+                prompt_tag: "block-action".into(),
+                received_at: Instant::now(),
+            },
+            None,
+        );
+        assert!(block.contains("Block action: instance="));
+        assert!(block.contains(" action=submit idempotency="));
+    }
+
+    #[test]
+    fn malformed_block_action_is_rejected_before_queueing() {
+        let processor = Keys::generate();
+        let mut event = make_block_action(&processor);
+        event.tags = event
+            .tags
+            .into_iter()
+            .filter(|tag| tag.as_slice().get(3).map(String::as_str) != Some("block-manifest"))
+            .collect();
+
+        assert!(parse_block_action(&event).is_err());
+        assert!(!block_action_targets_processor(
+            &event,
+            &processor.public_key().to_hex()
+        ));
+    }
+
+    #[test]
+    fn block_action_fail_closed_gate_rejects_duplicate_p_and_invalid_action_id() {
+        let processor = Keys::generate();
+        let mut duplicate_p = make_block_action(&processor);
+        duplicate_p
+            .tags
+            .push(Tag::parse(["p", &processor.public_key().to_hex()]).expect("duplicate p tag"));
+        assert!(!block_action_targets_processor(
+            &duplicate_p,
+            &processor.public_key().to_hex()
+        ));
+
+        let mut invalid_action_id = make_block_action(&processor);
+        let original = invalid_action_id
+            .tags
+            .iter()
+            .find(|tag| tag.as_slice().first().map(String::as_str) == Some("block-action"))
+            .expect("action tag")
+            .as_slice();
+        let instance_id = original[3].clone();
+        let idempotency_key = original[4].clone();
+        invalid_action_id.tags = invalid_action_id
+            .tags
+            .into_iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) != Some("block-action"))
+            .chain(std::iter::once(
+                Tag::parse([
+                    "block-action",
+                    "1",
+                    "Invalid action",
+                    &instance_id,
+                    &idempotency_key,
+                ])
+                .expect("structurally parseable invalid action tag"),
+            ))
+            .collect();
+        assert!(!block_action_targets_processor(
+            &invalid_action_id,
+            &processor.public_key().to_hex()
+        ));
     }
 
     /// Build a QueuedEvent for the given channel.
