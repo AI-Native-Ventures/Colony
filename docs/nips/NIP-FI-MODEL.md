@@ -195,23 +195,47 @@ RotateOrRecover(D, i, k_old, k_new):
   require explicit recovery/admin authorization
   require (i, k_old) ∈ B_D or Q_D(i) = k_old
   require i ∉ X_D
+  require no active binding for k_old other than (i, k_old)
   require k_new ∉ Y_D
   require (i, k_new) ∉ P_D
   require no active binding for k_new
-  if issuer-attested rotation is required, require fresh k_a = k_new
+  if k_a exists, require fresh k_a = k_new
+  if issuer-attested rotation is required, require k_a exists
   atomically:
     remove any active (i, k_old)
     add (i, k_old) to P_D
     add k_old to Y_D
-    create (i, k_new)
+    create (i, k_new, source = k_a exists ? attested-key : provisioned)
     clear Q_D(i)
     append the transition to H_D
   invalidate leases for k_old
 ```
 
-A normal request that presents `i` with `k_new` while `k_old` is active is a conflict. If `i` is pending replacement, it denies `explicit_replacement_required`. Neither path rotates automatically. Base V1 recovery requires a replacement key with no active binding, `k_new ∉ Y_D`, and `(i, k_new) ∉ P_D`; a retired pair with another identity does not globally revoke the key. Same-key reactivation requires an extension with an equivalently explicit privileged transition and retained lifecycle history.
+A normal request that presents `i` with `k_new` while `k_old` is active is a conflict. If `i` is pending replacement, it denies `explicit_replacement_required`. Neither path rotates automatically. Base V1 recovery requires a replacement key with no active binding, `k_new ∉ Y_D`, and `(i, k_new) ∉ P_D`; a retired pair with another identity does not globally revoke the key. If pending `k_old` has since become active for another identity, recovery denies until a separate lifecycle transition resolves that binding. Same-key reactivation requires an extension with an equivalently explicit privileged transition and retained lifecycle history.
 
-The active-pair and pending-replacement preconditions to `RotateOrRecover` are mutually exclusive under the lifecycle invariants: the former removes the active old pair, while the latter has no active pair to remove. Base V1 deliberately adds every replaced `k_old` to `Y_D`, including on voluntary rotation, so that ordinary authorization cannot reuse it for another identity. `DisableIdentity` preserves an existing `Q_D(i)` selector or creates one when it removes an active pair; after any future separately authorized re-enablement, ordinary enrollment therefore remains blocked until explicit replacement succeeds.
+The active-pair and pending-replacement preconditions to `RotateOrRecover` are mutually exclusive under the lifecycle invariants: the former removes the active old pair, while the latter has no active pair to remove. Base V1 deliberately adds every replaced `k_old` to `Y_D`, including on voluntary rotation, so that ordinary authorization cannot reuse it for another identity. `DisableIdentity` preserves an existing `Q_D(i)` selector or creates one when it removes an active pair.
+
+Base V1 re-enablement is also a privileged binding transition, never a standalone removal from `X_D`:
+
+```text
+EnableIdentity(D, i, k_new):
+  require explicit enablement/admin authorization
+  require i ∈ X_D
+  require no active binding for i or k_new
+  require k_new ∉ Y_D and (i, k_new) ∉ P_D
+  if Q_D(i) = k_old, require no active binding for k_old
+  if k_a exists, require fresh k_a = k_new
+  if issuer-attested enablement is required, require k_a exists
+  atomically:
+    if Q_D(i) = k_old, add k_old to Y_D
+    create (i, k_new, source = k_a exists ? attested-key : provisioned)
+    remove i from X_D
+    clear Q_D(i)
+    append the transition to H_D
+  invalidate leases for any prior k_old
+```
+
+For a never-enrolled identity, `Q_D(i)` is absent and there is no prior key to revoke. The new binding is still created in the same transaction that removes `i` from `X_D`, so ordinary enrollment never observes an enabled identity with neither a binding nor a lifecycle gate.
 
 # Delegation
 
@@ -227,7 +251,7 @@ Under the trust assumptions, for direct (non-delegated) authorization:
 4. **Binding consistency:** no two active identities share a key and no identity has two active keys in one domain.
 5. **No implicit rotation:** conflicting assertions or proofs cannot replace an active binding.
 6. **No replayed resurrection:** ordinary authorization cannot recreate a retired pair or replace a key for an identity pending explicit replacement.
-7. **Lifecycle closure:** a disabled identity cannot authorize any key, and a revoked key cannot authorize or bind to any identity.
+7. **Lifecycle closure:** a disabled identity cannot authorize any key, a revoked key cannot authorize or bind to any identity, and disablement cannot be cleared without atomically creating an explicitly authorized binding.
 8. **Lifecycle consistency:** active bindings satisfy the partial-bijection and lifecycle invariants above.
 9. **Rotation atomicity:** observers see either the valid old state or the completed replacement, never a partial transition; lifecycle history is retained.
 10. **Linearizable lifecycle:** authorization racing a lifecycle transition cannot commit a binding that violates the completed transition.
