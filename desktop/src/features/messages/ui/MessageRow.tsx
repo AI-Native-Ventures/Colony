@@ -235,6 +235,23 @@ export const MessageRow = React.memo(
       message.body,
       message.tags,
     );
+    const shouldCenterContinuationTimestamp = React.useMemo(() => {
+      if (!isContinuation) {
+        return false;
+      }
+
+      const normalizedBody = message.body.toLocaleLowerCase();
+      return (
+        /\p{Extended_Pictographic}/u.test(message.body) ||
+        customEmoji?.some((emoji) =>
+          normalizedBody.includes(`:${emoji.shortcode.toLocaleLowerCase()}:`),
+        ) ||
+        mentionNames?.some((name) =>
+          normalizedBody.includes(`@${name.toLocaleLowerCase()}`),
+        ) ||
+        false
+      );
+    }, [customEmoji, isContinuation, mentionNames, message.body]);
     const bodyOffsetClass = emojiOnly ? "mt-1" : "-mt-0.5";
 
     const { nonDmChannelNames: channelNames } = useChannelNavigation();
@@ -420,8 +437,15 @@ export const MessageRow = React.memo(
       <div
         aria-hidden="true"
         className={cn(
-          "flex w-9 shrink-0 items-start justify-end pt-0.5",
-          isThreadReplyLayout ? "min-h-9 self-start" : "self-stretch",
+          "flex w-9 shrink-0 justify-end",
+          shouldCenterContinuationTimestamp
+            ? "items-center self-stretch"
+            : "items-start pt-0.5",
+          isThreadReplyLayout
+            ? shouldCenterContinuationTimestamp
+              ? "min-h-9"
+              : "min-h-9 self-start"
+            : "self-stretch",
         )}
       >
         <MessageTimestamp
@@ -472,7 +496,9 @@ export const MessageRow = React.memo(
         className={cn(
           "absolute right-2 top-1 z-10 sm:pointer-events-none",
           actionBarPlacement === "floating"
-            ? "sm:top-0 sm:-translate-y-1/2"
+            ? isContinuation
+              ? "sm:-top-3 sm:-translate-y-1/2"
+              : "sm:top-0 sm:-translate-y-1/2"
             : "sm:top-1 sm:translate-y-0",
         )}
       >
@@ -771,7 +797,11 @@ export const MessageRow = React.memo(
           className={cn(
             "group/message relative z-10 rounded-2xl transition-colors",
             playEntrance && "motion-enter-conversation",
-            "py-1",
+            isContinuation
+              ? shouldCenterContinuationTimestamp
+                ? "py-0"
+                : "py-0.5"
+              : "py-1",
             hoverBackground
               ? "mx-1 px-2 hover:bg-muted/50 focus-within:bg-muted/50"
               : isThreadReplyLayout
