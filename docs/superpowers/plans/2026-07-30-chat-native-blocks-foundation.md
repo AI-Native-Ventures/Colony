@@ -2,9 +2,19 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make chat the operating canvas by letting agents publish safe, versioned, interactive Blocks inside ordinary message threads, with a visible Blocks catalog for discovery and conversational workshop handoff.
+**Goal:** Make chat the operating canvas by letting agents publish safe,
+versioned, interactive Blocks inside ordinary message threads, including
+persistent Agent Proposals that can always be reopened and resolved.
 
-**Architecture:** Keep every Block instance as a normal kind `9` message with readable fallback text. Add immutable manifest, replaceable catalog-head, action, and receipt events around that message. The relay validates public envelopes, is the sole signer of the one authoritative catalog head per handle, brokers owner/admin-signed catalog actions, and enforces action idempotency. The SDK and CLI own canonical creation; the desktop resolves and validates manifests, renders a closed native primitive grammar, signs interactions, and overlays receipts. Web and mobile remain fallback-only in this phase.
+**Architecture:** Keep every Block instance as a normal kind `9` message with
+readable fallback text. Add immutable manifest, replaceable catalog-head,
+action, receipt, and attention-projection contracts around that message. The
+relay validates public envelopes, is the sole signer of the authoritative
+catalog head per handle, brokers owner/admin-signed catalog actions, and
+enforces action idempotency. The SDK and CLI own canonical creation; the
+desktop resolves and validates manifests, renders a closed native primitive
+grammar, signs interactions, executes trusted Core actions through bounded
+brokers, and overlays receipts. Web and mobile remain fallback-only.
 
 **Tech Stack:** Rust, Nostr events, Postgres, `jsonschema` 0.49.x (Draft 2020-12), Tauri 2, React 19, TypeScript 6, TanStack Query/Router, Zod 4, Ajv 8.20.x, Tailwind CSS, node:test, Playwright, Flutter widget tests.
 
@@ -21,7 +31,9 @@ This plan implements:
 - versioned manifests and catalog heads;
 - ordinary kind `9` Block instances with permanent text fallbacks;
 - Block actions, receipts, and durable idempotency;
-- the eleven native primitives and six starter composites;
+- the eleven native primitives and seven starter composites;
+- persisted `@agent-proposal` create/update requests, explicit resolution, and
+  Inbox Needs action projection;
 - a catalog that returns the user to a conversation rather than becoming a
   workflow UI;
 - typed Block references in the existing `@` picker;
@@ -32,7 +44,8 @@ This plan implements:
 This plan does not implement Company storage, Lead/Client lifecycle, Plugin
 credentials, outbound email or WhatsApp, payments, accounting connectors,
 arbitrary code-backed Blocks, a marketplace, or a technical rename of Buzz
-crate/protocol identifiers.
+crate/protocol identifiers. It does not add a separate agent-request page or
+duplicate request store.
 
 ## Acceptance gates
 
@@ -41,21 +54,27 @@ crate/protocol identifiers.
 Pass only when canonical manifest/instance/action/receipt vectors round-trip
 through core, SDK, relay, and CLI; malformed envelopes are rejected; and two
 different signed actions with the same `(community, instance, idempotency_key)`
-resolve to one stored action.
+resolve to one stored action. Attention markers must be accepted only for
+trusted actionable manifests, and only authorized resolving receipts may clear
+them.
 
 ### Gate B — Desktop experience is proven
 
 Pass only when every native primitive renders in the real desktop build with
 loading, empty, populated, error, disabled, and completed states; unknown or
 invalid Blocks show their fallback; keyboard and screen-reader checks pass; and
-community switching leaks no manifest, payload, action, or receipt state.
+community switching leaks no manifest, payload, action, receipt, pending
+proposal, or Core-broker state. Multiple Agent Proposals must remain
+independently reviewable, and closing review must not resolve one.
 
 ### Gate C — Conversation loop is proven
 
 Pass only when the real relay, CLI, ACP harness, and desktop complete the
-eleven-step proof from the design spec, including a restarted desktop rendering
+fifteen-step proof from the design spec, including a restarted desktop rendering
 an old pinned manifest, a multi-select Brainstorm submission reaching an agent,
-and one Approval result under deliberate double-click/retry.
+one Approval result under deliberate double-click/retry, and an Agent Proposal
+that survives close/restart and creates exactly one agent under replay and
+post-create recovery.
 
 ## Wire contract to pin before UI work
 
@@ -63,9 +82,9 @@ and one Approval result under deliberate double-click/retry.
 |---|---:|---|---|
 | Manifest | `40012` | `["block","1",handle,version]` | Canonical `BlockManifest` JSON |
 | Catalog head | `30178` | `["d",handle]`, `["e",manifest_id,"","block-manifest"]`, `["block-state","active"|"deprecated"]` | Canonical `BlockCatalogEntry` JSON; relay-signed only |
-| Instance | `9` | normal `h/e/p`, `["e",manifest_id,"","block"]`, `["block","1",handle,manifest_id,instance_id]`, exactly one data tag | Human-readable fallback |
-| Action | `40010` | `h`, `p` for responsible agent, instance/manifest `e` tags, `["block-action","1",action_id,instance_id,idempotency_key]` | Canonical action input JSON |
-| Receipt | `40011` | `h`, action/instance `e` tags, `["block-receipt","1",instance_id,idempotency_key,status]` | Canonical result JSON |
+| Instance | `9` | normal `h/e/p`, `["e",manifest_id,"","block"]`, `["block","1",handle,manifest_id,instance_id]`, exactly one data tag; actionable instances add `["block-attention","1","required"]` | Human-readable fallback |
+| Action | `40010` | `h`, `p` for the processor (owner for Core agent management), `["e",instance_event_id,"","block-instance"]`, `["e",manifest_id,"","block-manifest"]`, `["block-action","1",action_id,instance_id,idempotency_key]` | Canonical non-secret action input JSON |
+| Receipt | `40011` | `h`, `["e",action_event_id,"","block-action"]`, `["e",instance_event_id,"","block-instance"]`, `["block-receipt","1",instance_id,idempotency_key,status]`; resolving receipts add `["block-attention","1","resolved"]` | Canonical safe result JSON |
 | Typed Block reference | any conversational kind `9` | `["a","30178:relay_self_pubkey:handle","","block"]` | Ordinary message text containing `@handle` |
 
 Inline instance data uses `["block-data", canonical_json]` and is capped at
@@ -78,6 +97,13 @@ Handles use `^[a-z][a-z0-9-]{0,63}$`. IDs are lowercase 64-hex event IDs except
 `instance_id` and `idempotency_key`, which are UUIDs. Only JSON Schema Draft
 2020-12 is accepted, and external `$ref` values are rejected so validation
 never performs network I/O.
+
+`block-attention` has exact cardinality. An instance may request attention only
+when its trusted pinned manifest declares at least one resolving signed action
+and the instance `p`-tags the decision maker. A receipt may resolve attention
+only when it references that instance and a manifest-declared resolving action,
+has an authorized processor signature, and is not failed or timed out. Read
+markers, dialog dismissal, and presentation-only controls never resolve it.
 
 ### Catalog authority and activation
 
@@ -112,6 +138,7 @@ the workshop conversation or runs the equivalent CLI command with a human key.
 - Create `migrations/0027_block_action_claims.sql`
 - Modify `crates/buzz-db/src/lib.rs`
 - Modify `crates/buzz-db/src/event.rs`
+- Modify `crates/buzz-db/src/feed.rs`
 - Create `crates/buzz-relay/src/blocks.rs`
 - Create `crates/buzz-relay/src/core_blocks.rs`
 - Create `crates/buzz-relay/src/block_broker.rs`
@@ -121,14 +148,18 @@ the workshop conversation or runs the equivalent CLI command with a human key.
 - Modify `crates/buzz-relay/src/main.rs`
 - Modify `crates/buzz-relay/src/handlers/ingest.rs`
 - Modify `crates/buzz-relay/src/handlers/community_provisioning.rs`
+- Create `crates/buzz-relay/tests/block_attention_feed.rs`
 - Modify `crates/buzz-acp/src/config.rs`
 - Modify `crates/buzz-acp/src/setup_mode.rs`
 - Modify `crates/buzz-acp/src/queue.rs`
+- Modify `crates/buzz-acp/src/base_prompt.md`
 
 ### Agent-first CLI
 
 - Modify `crates/buzz-cli/src/lib.rs`
+- Modify `crates/buzz-cli/src/agent_management.rs`
 - Modify `crates/buzz-cli/src/commands/mod.rs`
+- Modify `crates/buzz-cli/src/commands/agents.rs`
 - Create `crates/buzz-cli/src/commands/blocks.rs`
 - Modify `crates/buzz-cli/TESTING.md`
 
@@ -169,6 +200,15 @@ the workshop conversation or runs the equivalent CLI command with a human key.
 - Create `desktop/src/features/blocks/ui/primitives/BlockQuestion.tsx`
 - Create `desktop/src/features/blocks/blockActions.ts`
 - Create `desktop/src/features/blocks/blockActionQueue.ts`
+- Create `desktop/src/features/blocks/agentProposal.ts`
+- Create `desktop/src/features/blocks/useAgentProposalReview.ts`
+- Create `desktop/src/features/blocks/useAgentProposalBroker.ts`
+- Create `desktop/src/features/blocks/agentProposal.test.mjs`
+- Delete `desktop/src/features/agents/agentManagement.ts`
+- Delete `desktop/src/features/agents/useAgentManagement.ts`
+- Modify `desktop/src/features/agents/observerRelayStore.ts`
+- Modify `desktop/src/features/agents/ui/AgentManagementDialogs.tsx`
+- Modify `desktop/src/features/home/lib/inbox.test.mjs`
 - Modify `desktop/src/features/messages/types.ts`
 - Modify `desktop/src/features/messages/lib/formatTimelineMessages.ts`
 - Modify `desktop/src/features/messages/ui/MessageRow.tsx`
@@ -177,6 +217,14 @@ the workshop conversation or runs the equivalent CLI command with a human key.
 - Modify `desktop/src/shared/api/relayClientSession.ts`
 - Modify `desktop/src-tauri/src/events.rs`
 - Modify `desktop/src-tauri/src/commands/messages.rs`
+- Create `desktop/src-tauri/src/commands/agent_proposals.rs`
+- Create `desktop/src-tauri/src/commands/agent_proposals_tests.rs`
+- Modify `desktop/src-tauri/src/commands/personas/create.rs`
+- Modify `desktop/src-tauri/src/commands/agents.rs`
+- Modify `desktop/src-tauri/src/managed_agents/types.rs`
+- Modify `desktop/src-tauri/src/managed_agents/persona_events.rs`
+- Modify `desktop/src-tauri/src/managed_agents/agent_events.rs`
+- Create `desktop/src/shared/api/agentProposals.ts`
 
 ### Catalog, workshop handoff, and typed references
 
@@ -275,6 +323,32 @@ and `validation`. `BlockCatalogEntry` must contain `schema`, `handle`,
 `active_manifest_id`, `status`, `summary`, `origin`, `preview`, `permissions`,
 and optional `workshop`.
 
+Action controls use one closed interaction contract:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum BlockInteraction {
+    Presentation { surface: CorePresentationSurface },
+    Signed {
+        action_id: String,
+        #[serde(default)]
+        resolves_attention: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CorePresentationSurface {
+    AgentReview,
+}
+```
+
+`Presentation` is valid only in a relay-bundled Core manifest and can only open
+the named local surface. It never produces an event. `Signed` must name one
+entry in `manifest.actions`; only `resolves_attention: true` actions may
+produce a resolving receipt.
+
 - [ ] Implement and test these public functions:
 
 ```rust
@@ -290,15 +364,21 @@ Tests must reject duplicate action IDs, unknown primitive versions, more than
 12 nesting levels, more than 200 nodes, remote `$ref`, non-HTTP(S) media URLs,
 credential-looking permission payload fields, invalid examples, an Approval
 without exact destination/content/expiry, and a Question whose selection
-bounds are impossible.
+bounds are impossible. Also reject a presentation surface in a non-Core
+manifest, attention with no resolving action, a resolving action with no
+schema, and any Agent Proposal schema that permits private keys, `envVars`,
+provider credentials, or backend configuration secrets.
 
 The primitive manifest handles are exactly `@section`, `@metric`, `@details`,
 `@table`, `@card`, `@card-list`, `@chart`, `@media`, `@status`, `@actions`, and
 `@question`. The starter composite handles are exactly `@lead-card`,
-`@approval`, `@report`, `@artifact`, `@receipt`, and `@brainstorm`.
+`@approval`, `@agent-proposal`, `@report`, `@artifact`, `@receipt`, and
+`@brainstorm`.
 
 - [ ] Add golden vectors in the test module for canonical key ordering,
-Question single-select/multi-select/custom input, and Approval hash stability.
+  Question single-select/multi-select/custom input, Approval hash stability,
+  Agent Proposal create/update data, required/resolved attention tags, and
+  rejection of secret-looking Agent Proposal fields.
 
 - [ ] Run:
 
@@ -350,9 +430,23 @@ pub fn block_reference_tag(publisher: &PublicKey, handle: &str) -> Result<Tag, S
 
 `build_block_instance` must call `validate_instance` before emitting, require
 non-empty fallback text, emit only one data source, and require `p` for the
-responsible agent when the manifest declares actions. `build_block_action`
-must derive a UUID idempotency key when none is supplied and return it to the
-caller with the builder.
+responsible processor when the manifest declares signed actions. Add:
+
+```rust
+pub enum BlockAttention {
+    None,
+    Required { decision_maker: PublicKey },
+}
+```
+
+`BlockInstanceInput` carries `attention`. `Required` emits exactly one
+`["block-attention","1","required"]` and one matching `p` tag and is rejected
+unless the pinned manifest declares a resolving signed action.
+`build_block_action` must derive a UUID idempotency key when none is supplied
+and return it to the caller with the builder. `BlockReceiptInput` carries
+`resolves_attention`; it may emit
+`["block-attention","1","resolved"]` only for a compatible succeeded or denied
+result whose referenced manifest action declares `resolves_attention`.
 
 - [ ] Add a property-style loop over 100 differently ordered JSON objects and
   assert they produce identical canonical content and event tags.
@@ -438,7 +532,16 @@ trigger ACP a second time.
   five shapes (including kind `9` with a `block` tag). Validators must enforce
   exact cardinality, lowercase hex, UUID syntax, size limits, HTTP(S), MIME
   `application/json`, SHA-256 shape, declared action IDs, and catalog target
-  state. They must never fetch external data.
+  state. For `block-attention`, fetch only the already-stored pinned manifest:
+  require trusted status, a resolving action, and a single decision-maker `p`
+  tag. A resolving receipt must reference that instance and action, be signed
+  by the declared processor, and have a compatible non-failure status. These
+  validators never fetch external URLs or execute Block data.
+
+- [ ] Add the Core Agent Proposal signer gate. For handle `agent-proposal`, the
+  instance signer must be a relay-verified agent whose NIP-OA owner equals the
+  attention `p` tag, and both signer and owner must belong to the `h` channel.
+  A human-authored preview may render but may not carry `block-attention`.
 
 - [ ] Update kind authorization:
 
@@ -460,7 +563,10 @@ for owners.
 - [ ] Add relay tests that reject missing `h`, duplicate data tags, bad markers,
   oversized inline JSON, a client-authored catalog head, a catalog action
   pointing at an untested manifest, a non-owner catalog action, a receipt with
-  no action reference, and an action ID absent from the manifest.
+  no action reference, an action ID absent from the manifest, attention on an
+  untrusted or non-resolving manifest, an unowned Agent Proposal, a
+  target-channel mismatch, and a failed receipt that claims to resolve
+  attention.
 
 - [ ] Run:
 
@@ -499,6 +605,7 @@ git commit -s -m "feat(blocks): validate events and enforce action idempotency"
 - Create: `crates/buzz-relay/src/core_blocks/primitives/question.json`
 - Create: `crates/buzz-relay/src/core_blocks/composites/lead-card.json`
 - Create: `crates/buzz-relay/src/core_blocks/composites/approval.json`
+- Create: `crates/buzz-relay/src/core_blocks/composites/agent-proposal.json`
 - Create: `crates/buzz-relay/src/core_blocks/composites/report.json`
 - Create: `crates/buzz-relay/src/core_blocks/composites/artifact.json`
 - Create: `crates/buzz-relay/src/core_blocks/composites/receipt.json`
@@ -508,10 +615,13 @@ git commit -s -m "feat(blocks): validate events and enforce action idempotency"
 - Modify: `crates/buzz-relay/src/handlers/community_provisioning.rs`
 - Modify: `crates/buzz-db/src/lib.rs`
 
-- [ ] Write failing tests that load all seventeen JSON assets, validate every
+- [ ] Write failing tests that load all eighteen JSON assets, validate every
   example, assert the handles are unique, prove each primitive asset has its
   matching root node, and prove `brainstorm` contains a multi-select Question
-  with optional custom input.
+  with optional custom input. Prove `agent-proposal` uses only Card, Details,
+  Status, and Actions; contains Core `agent-review` presentation; declares
+  `agent.create`, `agent.update`, and `agent.decline` as resolving signed
+  actions; and has no secret-bearing schema fields.
 
 - [ ] Implement:
 
@@ -540,7 +650,7 @@ head selected through the catalog broker.
 cargo test -p buzz-relay core_blocks
 ```
 
-Expected: seventeen valid manifests and seventeen catalog heads; a second seed
+Expected: eighteen valid manifests and eighteen catalog heads; a second seed
 inserts zero; a newer broker-selected head remains untouched.
 
 - [ ] Commit:
@@ -555,9 +665,12 @@ git commit -s -m "feat(blocks): seed native composite catalog"
 **Files:**
 
 - Modify: `crates/buzz-cli/src/lib.rs`
+- Modify: `crates/buzz-cli/src/agent_management.rs`
 - Modify: `crates/buzz-cli/src/commands/mod.rs`
+- Modify: `crates/buzz-cli/src/commands/agents.rs`
 - Create: `crates/buzz-cli/src/commands/blocks.rs`
 - Modify: `crates/buzz-cli/TESTING.md`
+- Modify: `crates/buzz-acp/src/base_prompt.md`
 
 - [ ] Add clap parsing tests for this exact surface:
 
@@ -602,6 +715,39 @@ They publish reserved Block actions `p`-tagged to relay self; they never publish
 kind `30178` directly. The relay rejects these commands when the CLI signer is
 not a human community owner/admin.
 
+- [ ] Replace the observer-frame transport behind the existing
+  `buzz agents draft-create` and `draft-update` commands. Keep their command
+  names and arguments stable, but make `agent_management.rs` build validated
+  `agent-proposal` data, resolve the active Core manifest, and publish a normal
+  kind `9` Block instance with:
+
+```text
+["h",<channel-uuid>]
+["p",<owner-pubkey>]
+["e",<manifest-id>,"","block"]
+["block","1","agent-proposal",<manifest-id>,<request-uuid>]
+["block-attention","1","required"]
+["block-data",<canonical-no-secret-json>]
+```
+
+Use a readable fallback such as
+`Developer proposed hiring Researcher. Review the Agent Proposal in AI Native Office.`
+Publish through the normal stored-event path, never
+`publish_ephemeral_event`. Output stable JSON with `proposal_saved: true`,
+`agent_changed: false`, the instance event ID, and request UUID. If the Core
+manifest cannot be resolved or validated, fail visibly; do not fall back to an
+observer frame.
+
+- [ ] Add CLI tests decrypting/parsing the old fixture inputs and asserting the
+  new events are kind `9`, owner-addressed, channel-scoped, attention-marked,
+  schema-valid, and contain none of `privateKey`, `envVars`, `credentials`, or
+  backend config. Assert no draft-create/update path calls
+  `publish_ephemeral_event`.
+
+- [ ] Update `base_prompt.md` to say these commands post persistent owner-review
+  cards in the current thread. Preserve the rule that no agent is created or
+  changed until the owner explicitly resolves the card.
+
 - [ ] Make `act` print the idempotency key and action event ID. When the relay
   returns `duplicate:idempotency`, print the original event ID and exit `0`.
 
@@ -618,7 +764,7 @@ Expected: tests pass and help shows every command above.
 - [ ] Commit:
 
 ```bash
-git add crates/buzz-cli
+git add crates/buzz-cli crates/buzz-acp/src/base_prompt.md
 git commit -s -m "feat(blocks): add agent-first block commands"
 ```
 
@@ -632,7 +778,9 @@ git commit -s -m "feat(blocks): add agent-first block commands"
 
 - [ ] Add failing tests proving default Mention-mode filters subscribe to both
   kind `9` and `KIND_BLOCK_ACTION`, and that an action only matches the agent
-  named by its `p` tag.
+  named by its `p` tag. An `agent-proposal` action `p`-tagged to the human
+  owner must not enter any managed agent's ACP queue; the desktop Core broker
+  owns it.
 
 - [ ] Add `KIND_BLOCK_ACTION` to default and dynamic channel filters, setup-mode
   defaults, and setup listener acceptance. Do not add receipts: agents create
@@ -670,10 +818,14 @@ git commit -s -m "feat(blocks): route block actions to agents"
 - [ ] Start Postgres/Redis/relay with the repo's normal development commands.
 - [ ] Publish one manifest, activate it, invoke it, submit the same logical
   action twice with different signed events, and query actions.
+- [ ] Publish one valid owned-agent Agent Proposal plus forged, wrong-owner,
+  and wrong-channel variants. Resolve the valid one once and query the stored
+  instance, action, and receipt.
 - [ ] Save the command/output transcript under
   `test-results/blocks/gate-a.txt`.
 - [ ] Do not continue until the second submission returns the first action ID,
-  exactly one action is stored, and every malformed fixture is rejected.
+  exactly one action is stored, every malformed fixture is rejected, and only
+  the authorized processor can publish the resolving receipt.
 
 ## Task 7: Mirror contracts in desktop and load data safely
 
@@ -698,7 +850,9 @@ git commit -s -m "feat(blocks): route block actions to agents"
 
 - [ ] Write failing node tests using the Rust golden vectors. Assert the same
   canonical JSON, handles, primitive discriminators, manifest/data failures,
-  approval hash, and tag extraction.
+  approval hash, presentation-vs-signed interaction model, attention
+  required/resolved markers, Agent Proposal no-secret contract, and tag
+  extraction.
 
 - [ ] Implement strict parsers returning result objects, not thrown render-path
   errors:
@@ -712,6 +866,12 @@ export function parseBlockInstance(tags: string[][]): BlockParseResult<BlockInst
 export function validateBlockManifest(value: unknown): BlockParseResult<BlockManifest>;
 export function validateBlockData(manifest: BlockManifest, value: unknown): BlockParseResult<unknown>;
 ```
+
+`BlockInstanceRef` includes `attentionRequired` and `decisionMakerPubkey`.
+Receipt parsing includes `resolvesAttention`. Reject duplicate attention tags,
+required attention without exactly one decision-maker `p` tag, a presentation
+surface in a non-Core manifest, and failed/timed-out receipts that claim to
+resolve attention.
 
 - [ ] Implement a community-scoped manifest repository with in-flight request
   coalescing and a maximum of 200 entries. It must verify event ID/signature
@@ -839,9 +999,12 @@ git commit -s -m "feat(blocks): render block instances in chat"
   semantic headings, `dl`, `role=status`, and existing `Attachment`, `Card`,
   `Progress`, `Badge`, and `Button` primitives.
 
-- [ ] `BlockActions` may only emit declared Block actions through context. A
-  disabled/untrusted renderer must render controls disabled with an accessible
-  explanation.
+- [ ] `BlockActions` may only invoke interactions declared by the pinned
+  manifest through context. Signed interactions use `submitBlockAction`.
+  Presentation interactions use a closed Core-surface registry and may only
+  reveal local detail; the first registered surface is `agent-review`.
+  Non-Core presentation controls and disabled/untrusted controls render
+  disabled with an accessible explanation.
 
 - [ ] Use only stock rem text classes (`text-base`, `text-sm`, `text-xs`,
   `text-2xs`, `text-3xs`); do not add arbitrary text literals.
@@ -970,6 +1133,7 @@ git commit -s -m "feat(blocks): add chart and media primitives"
 ["block","1",<handle>,<64-hex-manifest>,<uuid>]
 ["block-data",<bounded canonical JSON>]
 ["block-data-ref",<https-url>,"application/json",<sha256>,<size>]
+["block-attention","1","required"]
 ["e",<64-hex-manifest>,"","block"]
 ```
 
@@ -980,7 +1144,9 @@ arguments so no generic arbitrary-tag injection path is introduced.
   responsible agent from the instance, disables the control until relay
   acknowledgement, and reuses the same signed event on transport retry.
   Reserved catalog actions instead `p`-tag relay self and wait for the broker's
-  receipt; desktop never publishes a catalog head itself.
+  receipt; Core Agent Proposal actions `p`-tag the current owner identity and
+  are delivered to the desktop Core broker. Desktop never publishes a catalog
+  head itself.
 
 - [ ] Queue only Question input while offline, scoped by relay URL, identity,
   instance, and manifest. Do not queue Approval grants. Clear the queue during
@@ -992,6 +1158,9 @@ arguments so no generic arbitrary-tag injection path is introduced.
 
 - [ ] Overlay pending, succeeded, denied, failed, and timed-out receipts on the
   originating instance. A later unrelated receipt must not change it.
+  `resolvesAttention` becomes true only for a validated authorized receipt
+  carrying `["block-attention","1","resolved"]`; failed and timed-out receipts
+  keep the instance actionable.
 
 - [ ] Run:
 
@@ -1016,7 +1185,326 @@ git add desktop
 git commit -s -m "feat(blocks): add questions approvals and receipts"
 ```
 
-## Task 13: Add the visible Blocks catalog and conversational workshop handoff
+## Task 13: Project unresolved actionable Blocks into Inbox
+
+**Files:**
+
+- Modify: `crates/buzz-db/src/feed.rs`
+- Modify: `crates/buzz-db/src/lib.rs`
+- Create: `crates/buzz-relay/tests/block_attention_feed.rs`
+
+- [ ] Write failing feed tests for the durable attention lifecycle. Use a
+  persisted kind `9` Agent Proposal `p`-tagged to the owner and assert:
+
+```text
+unresolved proposal                         -> Needs action
+ordinary mentioned kind 9                   -> Mentions only
+failed/timed-out receipt                     -> still Needs action
+authorized resolving receipt                -> no longer Needs action
+resolving receipt from another community    -> still Needs action
+resolving receipt from an inaccessible room -> cannot affect visible result
+```
+
+Run:
+
+```bash
+. ./bin/activate-hermit
+cargo test -p buzz-db block_attention
+cargo test -p buzz-relay --test block_attention_feed
+```
+
+Expected: fail because Needs action only includes kinds `46010` and `40007`.
+
+- [ ] Extend `build_needs_action_query` without adding another request table.
+  Continue using the indexed `event_mentions` owner lookup. Include a kind `9`
+  event only when it contains the exact required-attention tag and no same-
+  community kind `40011` references its event ID with both
+  `block-instance` and resolved-attention tags:
+
+```sql
+(
+  e.kind IN (46010, 40007)
+  OR (
+    e.kind = 9
+    AND e.tags @> '[["block-attention","1","required"]]'::jsonb
+    AND NOT EXISTS (
+      SELECT 1
+      FROM events receipt
+      WHERE receipt.community_id = e.community_id
+        AND receipt.deleted_at IS NULL
+        AND receipt.kind = 40011
+        AND receipt.tags @> jsonb_build_array(
+          jsonb_build_array(
+            'e',
+            encode(e.id, 'hex'),
+            '',
+            'block-instance'
+          )
+        )
+        AND receipt.tags @>
+          '[["block-attention","1","resolved"]]'::jsonb
+    )
+  )
+)
+```
+
+Keep the existing accessible-channel predicate, limit, ordering, and composite
+tenant join. Add SQL-shape and integration tests proving the GIN-backed
+containment predicates and community keys remain present.
+
+- [ ] Run:
+
+```bash
+. ./bin/activate-hermit
+cargo test -p buzz-db block_attention
+cargo test -p buzz-relay --test block_attention_feed
+```
+
+Expected: unresolved actionable Blocks enter Needs action, failed attempts stay,
+authorized resolution clears them, and cross-community or inaccessible-channel
+receipts cannot affect the result.
+
+- [ ] Commit:
+
+```bash
+git add crates/buzz-db crates/buzz-relay/tests/block_attention_feed.rs
+git commit -s -m "feat(blocks): project unresolved actions into inbox"
+```
+
+## Task 14: Replace ephemeral agent-management popups with Agent Proposals
+
+**Files:**
+
+- Create: `desktop/src/features/blocks/agentProposal.ts`
+- Create: `desktop/src/features/blocks/useAgentProposalReview.ts`
+- Create: `desktop/src/features/blocks/useAgentProposalBroker.ts`
+- Delete: `desktop/src/features/agents/agentManagement.ts`
+- Delete: `desktop/src/features/agents/useAgentManagement.ts`
+- Modify: `desktop/src/features/agents/observerRelayStore.ts`
+- Modify: `desktop/src/features/agents/ui/AgentManagementDialogs.tsx`
+- Modify: `desktop/src/features/home/lib/inbox.test.mjs`
+- Modify: `desktop/src/app/AppShell.tsx`
+- Create: `desktop/src/shared/api/agentProposals.ts`
+- Create: `desktop/src-tauri/src/commands/agent_proposals.rs`
+- Modify: `desktop/src-tauri/src/commands/mod.rs`
+- Modify: `desktop/src-tauri/src/lib.rs`
+- Modify: `desktop/src-tauri/src/commands/personas/create.rs`
+- Modify: `desktop/src-tauri/src/commands/agents.rs`
+- Modify: `desktop/src-tauri/src/managed_agents/types.rs`
+- Modify: `desktop/src-tauri/src/managed_agents/persona_events.rs`
+- Modify: `desktop/src-tauri/src/managed_agents/agent_events.rs`
+- Modify: `desktop/src/features/agents/AGENTS.md`
+- Create: `desktop/src/features/blocks/agentProposal.test.mjs`
+- Create: `desktop/src-tauri/src/commands/agent_proposals_tests.rs`
+
+- [ ] Define the strict desktop proposal contract in `agentProposal.ts`:
+
+```ts
+export type AgentProposalData =
+  | {
+      mode: "create";
+      requestId: string;
+      channelId: string;
+      displayName: string;
+      systemPrompt: string;
+    }
+  | {
+      mode: "update";
+      requestId: string;
+      channelId: string;
+      agentName: string;
+      displayName?: string;
+      systemPrompt?: string;
+      runtime?: string;
+      provider?: string;
+      model?: string;
+      respondTo?: "owner-only" | "anyone";
+    };
+
+export type AgentProposalSafeAction = {
+  requestId: string;
+  definition: {
+    id?: string;
+    displayName: string;
+    avatarUrl?: string;
+    systemPrompt: string;
+    runtime?: string;
+    provider?: string;
+    model?: string;
+    behavior?: {
+      respondTo?: "owner-only" | "allowlist" | "anyone";
+      respondToAllowlist?: string[];
+      parallelism?: number;
+    };
+  };
+  runOn:
+    | { type: "local" }
+    | { type: "provider"; id: string };
+};
+```
+
+The parser uses `hasOnlyKeys` at every object level and rejects `envVars`,
+`privateKey`, credentials, provider backend config, unknown keys, create with
+an ID, update without exactly one editable target, and action `requestId`
+mismatch. Proposal data `requestId` must equal the Block instance UUID. Avatar
+input must already be an uploaded HTTP(S) URL or absent; data URIs never enter
+the signed action. Provider ID is safe to sign; provider `config` is not. The
+review controller keeps `BackendIntent.config` only in the existing local
+dialog/IPC path and passes it separately to the Tauri execution command. It
+never enters the action or receipt.
+
+- [ ] Refactor, do not duplicate, the existing proposal logic. Move
+  `createInputFromRequest`, `updateInputFromRequest`, editable-persona
+  resolution, origin checks, runtime checks, avatar resolution, and
+  definition/instance input construction behind `useAgentProposalReview`.
+  `AgentManagementDialogs` receives the selected persisted Block instance and
+  exact signer/channel metadata. Closing it only clears the local selected
+  instance:
+
+```ts
+function closeReview() {
+  setSelectedProposal(null);
+  setError(null);
+}
+```
+
+It must not mark the request seen, publish an action, publish a receipt, or
+change Inbox state. The generic `BlockActions` renderer calls the closed Core
+presentation registry entry `agent-review`; no Agent Proposal-specific renderer
+is allowed. The Inbox detail pane renders the same `MessageRow`, so its Review
+control uses the identical path.
+
+- [ ] Delete the live request trigger after the persisted path is covered.
+  Remove `agentManagementListeners`,
+  `subscribeAgentManagementRequests`, and management-request dispatch from
+  `observerRelayStore.ts`; remove the one-item `request` state,
+  `seenRequestIds`, `pendingRequestId`, and 100-entry startup buffer from
+  `useAgentManagement.ts`. Keep observer telemetry, transcript, control-result,
+  and archive behavior unchanged. Add a static test proving no production
+  agent-management request depends on kind `24200`.
+
+- [ ] Make Core Agent Proposal creation crash-recoverable in Tauri. Add this
+  backward-compatible field only to the local managed-agent record:
+
+```rust
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub creation_request_id: Option<String>,
+```
+
+Add it to every `ManagedAgentRecord` constructor with `None`; do not add it to
+`AgentDefinition`, persona event content, public agent events, snapshots, or
+ACP environment. The broker uses the proposal `requestId` as the deterministic
+new definition ID, and passes the same value as `creation_request_id` when
+creating the managed instance. Refactor private helpers so retries behave:
+
+```rust
+pub enum AgentProposalExecutionOutcome {
+    Applied {
+        definition_id: String,
+        agent_pubkey: String,
+        recovered: bool,
+    },
+    Failed { safe_message: String },
+}
+```
+
+On create: first load definitions and records under
+`managed_agents_store_lock`; if both deterministic definition ID and a record
+with matching `creation_request_id` exist, return them with `recovered: true`.
+If only the definition exists, resume instance creation. If neither exists,
+create the definition with `id = request_id`, save it, then create the instance
+with `creation_request_id = request_id`. A crash after either durable write
+therefore converges on the same definition and pubkey. Hydrate the existing
+record's key through the current secure storage path; never put it in the
+Block receipt.
+
+On update: resolve the exact editable definition ID from the accepted action
+and apply the complete canonical non-secret state. Replaying the same state is
+convergent. Reject built-ins, team definitions, missing IDs, request/data
+mismatch, or any secret-bearing action field before touching the store.
+
+For provider execution, accept `backend_config` only as a separate Tauri IPC
+argument supplied by the currently open trusted review dialog. If replay finds
+an existing record with the same `creation_request_id`, recover it without
+needing config. If no record exists and the provider config is unavailable
+after restart, return a safe failure so the proposal stays pending and the user
+can reopen and retry; never persist the secret in a Block action or broker
+ledger.
+
+- [ ] Implement the owner-side Core broker in `useAgentProposalBroker.ts`.
+  Mount it once in `AppShell`. It accepts only verified kind `40010` events
+  `p`-tagged to the current owner, referencing a valid pending Core
+  `agent-proposal` instance in a channel shared with its owned signer.
+  Immediately after the relay acknowledges `agent.create` or `agent.update`,
+  call `execute_agent_proposal`; on app start/reconnect, query explicit kind
+  `40010` with `#p = self` and replay any accepted action whose proposal still
+  lacks a resolving receipt.
+
+  Publish one receipt:
+
+```ts
+type AgentProposalReceiptResult =
+  | {
+      outcome: "created" | "updated";
+      definitionId: string;
+      agentPubkey?: string;
+      recovered: boolean;
+    }
+  | { outcome: "declined" }
+  | { outcome: "failed"; message: string };
+```
+
+`created`, `updated`, and `declined` receipts carry resolved attention.
+`failed` does not, so Review and retry remain available. `agent.decline` never
+calls Tauri. Before publishing any receipt, query by action event ID and return
+the existing receipt if present.
+
+- [ ] Wire the compact UI and Inbox projection. Pending cards show proposed
+  name, create/update label, requester, role summary, and **Review agent**.
+  Approved/declined cards remain in the thread with their receipt state.
+  Failed cards show a safe message plus **Review and retry**. Multiple cards
+  have state keyed by instance event ID, never a global single slot. Inbox
+  Needs action uses the existing feed row and detail pane; selecting a row
+  returns to the exact thread/message and does not invent an Agent Requests
+  route.
+
+- [ ] Add focused tests:
+
+```bash
+cd desktop
+pnpm test -- --test-name-pattern="agent proposal|block attention"
+pnpm typecheck
+```
+
+```bash
+. ./bin/activate-hermit
+cargo test --manifest-path desktop/src-tauri/Cargo.toml agent_proposal
+cargo test -p buzz-db block_attention
+cargo test -p buzz-relay --test block_attention_feed
+```
+
+Cover two simultaneous proposals, close/reopen, Escape, channel navigation,
+restart hydration, owner/channel forgery, built-in update rejection,
+double-click, duplicate signed action, crash after definition save, crash after
+managed-agent save but before receipt, failed receipt staying in Needs action,
+provider config absent from every signed event, provider replay recovery when a
+record exists, provider replay failure-before-create staying pending, decline
+without creation, community reset, and no secret in any event/receipt.
+
+- [ ] Update `desktop/src/features/agents/AGENTS.md` with the durable invariant:
+  Agent Proposals are kind `9` Blocks; observer frames are never an
+  authorization or persistence surface; closing review does not resolve; and
+  `creation_request_id` is local idempotency metadata excluded from public
+  events and snapshots.
+
+- [ ] Commit:
+
+```bash
+git add desktop
+git commit -s -m "feat(blocks): persist and resolve agent proposals"
+```
+
+## Task 15: Add the visible Blocks catalog and conversational workshop handoff
 
 **Files:**
 
@@ -1078,7 +1566,7 @@ git add desktop
 git commit -s -m "feat(blocks): add catalog and workshop handoff"
 ```
 
-## Task 14: Add typed Block references to the existing `@` picker
+## Task 16: Add typed Block references to the existing `@` picker
 
 **Files:**
 
@@ -1136,7 +1624,7 @@ git add desktop/src/features/messages
 git commit -s -m "feat(blocks): add typed block references"
 ```
 
-## Task 15: Prove every starter composite uses only the native grammar
+## Task 17: Prove every starter composite uses only the native grammar
 
 **Files:**
 
@@ -1144,13 +1632,16 @@ git commit -s -m "feat(blocks): add typed block references"
 - Create: `desktop/src/features/blocks/coreBlockVectors.test.mjs`
 - Create: `desktop/src/features/blocks/ui/StarterBlockGallery.tsx` (test-only export)
 
-- [ ] Render Lead Card, Approval, Report, Artifact, Receipt, and Brainstorm from
-  the exact bundled manifest JSON, not duplicated TypeScript fixtures.
+- [ ] Render Lead Card, Approval, Agent Proposal, Report, Artifact, Receipt, and
+  Brainstorm from the exact bundled manifest JSON, not duplicated TypeScript
+  fixtures.
 
 - [ ] Add assertions:
 
   - Lead Card: Card + Details + Status + evidence action.
   - Approval: exact proposal Details + expiry Status + declared approve/deny.
+  - Agent Proposal: Card + Details + Status + Core agent-review presentation +
+    declared create/update/decline actions, with no secret-bearing fields.
   - Report: Metrics + Chart + Table + source Details.
   - Artifact: Media + Status + Actions.
   - Receipt: Status + Details + immutable references.
@@ -1165,7 +1656,7 @@ pnpm test -- --test-name-pattern="starter block"
 pnpm build:e2e
 ```
 
-Expected: all six render from relay assets and no unknown primitive appears.
+Expected: all seven render from relay assets and no unknown primitive appears.
 
 - [ ] Commit:
 
@@ -1174,7 +1665,7 @@ git add crates/buzz-relay/src/core_blocks desktop/src/features/blocks
 git commit -s -m "test(blocks): pin starter composite rendering"
 ```
 
-## Task 16: Pin web and mobile fallback preservation
+## Task 18: Pin web and mobile fallback preservation
 
 **Files:**
 
@@ -1210,7 +1701,7 @@ git add mobile
 git commit -s -m "test(blocks): preserve mobile fallback messages"
 ```
 
-## Task 17: Add mocked desktop E2E for visuals, accessibility, and faults
+## Task 19: Add mocked desktop E2E for visuals, accessibility, and faults
 
 **Files:**
 
@@ -1225,9 +1716,11 @@ git commit -s -m "test(blocks): preserve mobile fallback messages"
 - [ ] Cover:
 
   - all eleven primitives;
-  - all six starter composites;
+  - all seven starter composites;
   - Question keyboard selection and custom text;
   - exact Approval display;
+  - two pending Agent Proposals, close/reopen review, failed retry, decline, and
+    resolved Inbox removal;
   - action pending and receipt completion;
   - catalog-to-conversation handoff;
   - old manifest after active head changes;
@@ -1271,8 +1764,11 @@ git commit -s -m "test(blocks): cover inline rendering and faults"
 - [ ] Save approved screenshots under `test-results/blocks/gate-b/`.
 - [ ] Do not pass the gate on green checks alone: fallback readability,
   hierarchy, density, and inline-chat fit must be visually acceptable.
+- [ ] Inspect pending, failed/retry, approved, and declined Agent Proposal
+  states inline and through Inbox detail. Reject any result that behaves like a
+  separate Agent Requests product surface.
 
-## Task 18: Add the real relay/CLI/ACP/desktop proof
+## Task 20: Add the real relay/CLI/ACP/desktop proof
 
 **Files:**
 
@@ -1285,7 +1781,7 @@ git commit -s -m "test(blocks): cover inline rendering and faults"
   publish test identities/agents, and print the exact command to launch the
   desktop. Do not hide service logs.
 
-- [ ] The live spec must perform the design's eleven steps in order:
+- [ ] The live spec must perform the design's fifteen steps in order:
 
   1. Scout posts a persisted Lead Card.
   2. User references Lead Card and asks Developer to modify it.
@@ -1297,7 +1793,13 @@ git commit -s -m "test(blocks): cover inline rendering and faults"
   8. New Lead Card uses the active version.
   9. Approval receives deliberate double-click and signed-event retry.
   10. One Receipt updates the original inline experience.
-  11. Invalid, unauthorized, missing, hash-invalid, timeout, and offline cases
+  11. An owned agent posts two persisted Agent Proposals in the same thread.
+  12. User opens one, closes it, restarts desktop, and recovers it inline and
+      in Inbox → Needs action.
+  13. User edits safe config and creates exactly one local agent under
+      double-click, signed-action replay, and post-create/pre-receipt recovery.
+  14. Its receipt clears Needs action; declining the second creates no agent.
+  15. Invalid, unauthorized, missing, hash-invalid, timeout, and offline cases
       show the specified fallback.
 
 - [ ] The Approval processor in this test is a bounded fake Bridge that
@@ -1310,6 +1812,8 @@ git commit -s -m "test(blocks): cover inline rendering and faults"
   - CLI JSON outputs;
   - ACP prompt showing the Block action;
   - database count for the idempotency claim;
+  - Needs action query before/after Agent Proposal resolution;
+  - managed-agent count and stable pubkey across replay/recovery;
   - before/after/restart desktop screenshots.
 
 - [ ] Run:
@@ -1334,7 +1838,7 @@ git add desktop/tests/e2e/blocks-live.spec.ts scripts/prove-blocks.sh docs/testi
 git commit -s -m "test(blocks): prove the live conversation loop"
 ```
 
-## Task 19: Run the repository gate and reconcile documentation
+## Task 21: Run the repository gate and reconcile documentation
 
 **Files:**
 
@@ -1403,5 +1907,11 @@ git commit -s -m "docs(blocks): document contracts and proof runbook"
 - [ ] Every Block has readable fallback text.
 - [ ] Every rendered action is declared by the pinned manifest.
 - [ ] Approval authorization is exact, expiring, hashed, and one-time.
+- [ ] Agent Proposal review survives dismissal and restart; two simultaneous
+  proposals never overwrite each other.
+- [ ] Agent Proposal replay/recovery creates one definition and one managed
+  agent, and no Block payload/action/receipt contains a secret.
+- [ ] Needs action is a derived index that clears only on an authorized
+  resolving receipt.
 - [ ] The original message still renders its old pinned version after restart.
 - [ ] Gate A, Gate B, and Gate C evidence references the final commit SHA.
