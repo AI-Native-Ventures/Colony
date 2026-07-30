@@ -198,27 +198,24 @@ test.describe("restart-diff screenshots", () => {
     });
   });
 
-  // ── Tooltip on row badge in ManagedAgentRow (B4: sibling of expansion button) ────
+  // ── Tooltip on card badge + no-button-ancestor (B4: badge is sibling of the overlay button) ─
 
-  test("03-agent-row-tooltip-and-no-button-ancestor", async ({ page }) => {
+  test("03-card-badge-tooltip-and-no-button-ancestor", async ({ page }) => {
     await installMockBridge(page, {
       managedAgents: [STANDALONE_AGENT, NO_DRIFT_AGENT],
     });
 
     await gotoAgentsView(page);
 
-    // ManagedAgentRow is rendered in the agent-group-rows section.
-    const rowSection = page.getByTestId("agent-group-rows");
-    await expect(rowSection).toBeVisible({ timeout: 10_000 });
-
-    const agentRow = rowSection.getByTestId(
-      `managed-agent-row-${STANDALONE_AGENT.pubkey}`,
+    const agentCard = page.getByTestId(
+      `managed-agent-${STANDALONE_AGENT.pubkey}`,
     );
-    await expect(agentRow).toBeVisible({ timeout: 10_000 });
+    await expect(agentCard).toBeVisible({ timeout: 10_000 });
 
-    // B4: the tooltip trigger must have no <button> ancestor — the badge is a
-    // sibling of the expansion button in ManagedAgentRow, not a descendant.
-    const badgeLocator = agentRow.getByTestId("restart-diff-badge");
+    // B4: the tooltip trigger must have no <button> ancestor.
+    // In AgentIdentityCard the badge lives in a z-30 container that is a
+    // sibling of the z-10 overlay <button> — not a descendant of it.
+    const badgeLocator = agentCard.getByTestId("restart-diff-badge");
     await expect(badgeLocator).toBeVisible();
 
     const hasButtonAncestor = await badgeLocator.evaluate((el) => {
@@ -244,25 +241,23 @@ test.describe("restart-diff screenshots", () => {
     await expect(tooltip.getByText(/\["acp"\]/)).toBeVisible();
 
     await waitForAnimations(page);
-    await page.screenshot({ path: `${SHOTS}/03-agent-row-tooltip.png` });
+    await page.screenshot({ path: `${SHOTS}/03-card-badge-tooltip.png` });
   });
 
   // ── Tooltip with short diff (no truncation) ─────────────────────────────────
 
-  test("04-list-row-tooltip-short-diff-no-truncation", async ({ page }) => {
+  test("04-card-tooltip-short-diff-no-truncation", async ({ page }) => {
     await installMockBridge(page, {
       managedAgents: [SHORT_DIFF_AGENT],
     });
 
     await gotoAgentsView(page);
 
-    const rowSection = page.getByTestId("agent-group-rows");
-    await expect(rowSection).toBeVisible({ timeout: 10_000 });
-
-    const agentRow = rowSection.getByTestId(
-      `managed-agent-row-${SHORT_DIFF_AGENT.pubkey}`,
+    const agentCard = page.getByTestId(
+      `managed-agent-${SHORT_DIFF_AGENT.pubkey}`,
     );
-    const badge = agentRow.getByTestId("restart-diff-badge");
+    const badge = agentCard.getByTestId("restart-diff-badge");
+    await expect(badge).toBeVisible({ timeout: 10_000 });
     await badge.hover();
     const tooltip = page.locator("[role=tooltip]");
     await expect(tooltip).toBeVisible({ timeout: 5_000 });
@@ -280,7 +275,7 @@ test.describe("restart-diff screenshots", () => {
 
   // ── Keyboard focus shows tooltip ──────────────────────────────────────────
 
-  test("05-list-row-tooltip-keyboard-focus", async ({ page }) => {
+  test("05-card-tooltip-keyboard-focus", async ({ page }) => {
     await installMockBridge(page, {
       managedAgents: [STANDALONE_AGENT],
     });
@@ -288,8 +283,7 @@ test.describe("restart-diff screenshots", () => {
     await gotoAgentsView(page);
 
     const badge = page
-      .getByTestId("agent-group-rows")
-      .getByTestId(`managed-agent-row-${STANDALONE_AGENT.pubkey}`)
+      .getByTestId(`managed-agent-${STANDALONE_AGENT.pubkey}`)
       .getByTestId("restart-diff-badge");
     await badge.focus();
     const tooltip = page.locator("[role=tooltip]");
@@ -423,13 +417,12 @@ test.describe("restart-diff screenshots", () => {
 
     await gotoAgentsView(page);
 
-    // Open profile panel via the Manage button in the row section — opens on Info tab by default
-    const manageButton = page
-      .getByTestId("agent-group-rows")
-      .getByTestId(`managed-agent-row-${STANDALONE_AGENT.pubkey}`)
-      .getByRole("button", { name: "Manage" });
-    await expect(manageButton).toBeVisible({ timeout: 10_000 });
-    await manageButton.click();
+    // Open profile panel via the agent card button — opens on Info tab by default
+    const agentButton = page.getByRole("button", {
+      name: `${STANDALONE_AGENT.name} agent profile`,
+    });
+    await expect(agentButton).toBeVisible({ timeout: 10_000 });
+    await agentButton.click();
 
     const panel = page.getByTestId("user-profile-panel");
     await expect(panel).toBeVisible({ timeout: 10_000 });

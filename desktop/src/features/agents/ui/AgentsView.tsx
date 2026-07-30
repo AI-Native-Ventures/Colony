@@ -24,7 +24,6 @@ import {
   AGENT_CARD_GRID_COLUMNS_CLASS,
   UnifiedAgentsSection,
 } from "./UnifiedAgentsSection";
-import { AgentGroupRows } from "./AgentGroupRows";
 import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
@@ -234,28 +233,6 @@ export function AgentsView() {
               personas={personas.libraryPersonas}
               teams={teamActions.teams}
             />
-            {agents.managedAgents.length > 0 ? (
-              <div data-testid="agent-group-rows">
-                <AgentGroupRows
-                  agents={agents.managedAgents}
-                  channelIdToName={agents.channelIdToName}
-                  channelsByPubkey={agents.channelsByPubkey}
-                  logContent={agents.managedAgentLogQuery.data?.content ?? null}
-                  logError={
-                    agents.managedAgentLogQuery.error instanceof Error
-                      ? agents.managedAgentLogQuery.error
-                      : null
-                  }
-                  logLoading={agents.managedAgentLogQuery.isLoading}
-                  personaLabelsById={personas.personaLabelsById}
-                  presenceLoaded={agents.managedPresenceQuery.isSuccess}
-                  presenceLookup={agents.managedPresenceQuery.data ?? {}}
-                  selectedLogAgentPubkey={agents.logAgentPubkey}
-                  onOpenProfile={(pubkey) => openProfilePanel?.(pubkey)}
-                  onSelectLogAgent={agents.setLogAgentPubkey}
-                />
-              </div>
-            ) : null}
           </div>
         </div>
       </div>
