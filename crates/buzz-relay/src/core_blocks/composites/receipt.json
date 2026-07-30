@@ -1,0 +1,77 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "receipt",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Receipt",
+  "description": "A verified outcome with immutable references.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["receipt_id", "status", "summary", "occurred_at", "references"],
+    "properties": {
+      "receipt_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "status": {
+        "type": "string",
+        "enum": ["succeeded", "denied", "failed", "timed-out"]
+      },
+      "summary": { "type": "string", "maxLength": 2000 },
+      "occurred_at": { "type": "integer", "minimum": 1 },
+      "references": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "items": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "Receipt {{receipt_id}}",
+    "description": "{{summary}}",
+    "children": [
+      {
+        "type": "status",
+        "label": "Outcome",
+        "state_path": "/status"
+      },
+      {
+        "type": "details",
+        "items": [
+          { "label": "Occurred", "value": "{{occurred_at}}" },
+          { "label": "Immutable references", "value": "{{references}}" }
+        ]
+      }
+    ]
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "Receipt {{receipt_id}} — {{status}}\n{{summary}}\nOccurred: {{occurred_at}}\nReferences: {{references}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "status": 1,
+    "details": 1
+  },
+  "examples": [
+    {
+      "name": "Delivered",
+      "data": {
+        "receipt_id": "delivery-1042",
+        "status": "succeeded",
+        "summary": "The approved email was delivered to its exact destination.",
+        "occurred_at": 1785412800,
+        "references": [
+          "5555555555555555555555555555555555555555555555555555555555555555",
+          "6666666666666666666666666666666666666666666666666666666666666666"
+        ]
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "status",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Status",
+  "description": "A compact state, progress, success, warning, or failure indicator.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["state"],
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": ["pending", "in-progress", "completed", "warning", "failed"]
+      }
+    }
+  },
+  "tree": {
+    "type": "status",
+    "label": "Status",
+    "state_path": "/state"
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "Status: {{state}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "status": 1 },
+  "examples": [
+    {
+      "name": "Completed",
+      "data": { "state": "completed" }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

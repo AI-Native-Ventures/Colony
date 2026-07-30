@@ -1,0 +1,120 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "report",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Report",
+  "description": "Metrics, visualization, rows, summary, and sources.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["title", "summary", "headline_value", "series", "rows", "sources"],
+    "properties": {
+      "title": { "type": "string", "maxLength": 160 },
+      "summary": { "type": "string", "maxLength": 4000 },
+      "headline_value": { "type": ["string", "number"] },
+      "series": {
+        "type": "array",
+        "maxItems": 100,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "value"],
+          "properties": {
+            "label": { "type": "string", "maxLength": 80 },
+            "value": { "type": "number" }
+          }
+        }
+      },
+      "rows": {
+        "type": "array",
+        "maxItems": 200,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "value"],
+          "properties": {
+            "label": { "type": "string", "maxLength": 160 },
+            "value": { "type": ["string", "number"] }
+          }
+        }
+      },
+      "sources": {
+        "type": "array",
+        "maxItems": 50,
+        "items": { "type": "string", "maxLength": 500 }
+      }
+    }
+  },
+  "tree": {
+    "type": "stack",
+    "gap": "medium",
+    "children": [
+      {
+        "type": "section",
+        "title": "{{title}}",
+        "text": "{{summary}}"
+      },
+      {
+        "type": "metric",
+        "label": "Headline",
+        "value": "{{headline_value}}"
+      },
+      {
+        "type": "chart",
+        "kind": "line",
+        "data_path": "/series",
+        "label_key": "label",
+        "value_key": "value"
+      },
+      {
+        "type": "table",
+        "columns": [
+          { "key": "label", "label": "Item" },
+          { "key": "value", "label": "Value" }
+        ],
+        "rows_path": "/rows"
+      },
+      {
+        "type": "details",
+        "items": [
+          { "label": "Sources", "value": "{{sources}}" }
+        ]
+      }
+    ]
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "## {{title}}\n\n{{summary}}\nHeadline: {{headline_value}}\n{{rows}}\nSources: {{sources}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "section": 1,
+    "metric": 1,
+    "chart": 1,
+    "table": 1,
+    "details": 1
+  },
+  "examples": [
+    {
+      "name": "Revenue report",
+      "data": {
+        "title": "July revenue",
+        "summary": "Revenue grew as qualified website opportunities converted.",
+        "headline_value": "$42,800",
+        "series": [
+          { "label": "May", "value": 28000 },
+          { "label": "June", "value": 34000 },
+          { "label": "July", "value": 42800 }
+        ],
+        "rows": [
+          { "label": "Website projects", "value": 36800 },
+          { "label": "Retainers", "value": 6000 }
+        ],
+        "sources": ["Signed client agreements", "Accounting ledger"]
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

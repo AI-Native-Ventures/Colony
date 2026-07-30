@@ -1,0 +1,55 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "table",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Table",
+  "description": "Typed rows and columns with an accessible fallback.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["rows"],
+    "properties": {
+      "rows": {
+        "type": "array",
+        "maxItems": 200,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "value"],
+          "properties": {
+            "name": { "type": "string", "maxLength": 160 },
+            "value": { "type": ["string", "number"] }
+          }
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "table",
+    "columns": [
+      { "key": "name", "label": "Name" },
+      { "key": "value", "label": "Value" }
+    ],
+    "rows_path": "/rows"
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "{{rows}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "table": 1 },
+  "examples": [
+    {
+      "name": "Pipeline",
+      "data": {
+        "rows": [
+          { "name": "Qualified", "value": 12 },
+          { "name": "Proposal", "value": 4 }
+        ]
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}
