@@ -1,0 +1,396 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "agent-proposal",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Agent Proposal",
+  "description": "A persistent request to create or update an owned company agent.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "requestId",
+          "channelId",
+          "displayName",
+          "systemPrompt"
+        ],
+        "properties": {
+          "mode": { "const": "create" },
+          "requestId": { "type": "string", "format": "uuid" },
+          "channelId": { "type": "string", "format": "uuid" },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "systemPrompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          }
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "requestId", "channelId", "agentName"],
+        "properties": {
+          "mode": { "const": "update" },
+          "requestId": { "type": "string", "format": "uuid" },
+          "channelId": { "type": "string", "format": "uuid" },
+          "agentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "systemPrompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "runtime": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "provider": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "model": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "respondTo": {
+            "type": "string",
+            "enum": ["owner-only", "anyone"]
+          }
+        },
+        "anyOf": [
+          { "required": ["displayName"] },
+          { "required": ["systemPrompt"] },
+          { "required": ["runtime"] },
+          { "required": ["provider"] },
+          { "required": ["model"] },
+          { "required": ["respondTo"] }
+        ]
+      }
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "title": "Agent proposal",
+    "description": "{{mode}} agent request",
+    "children": [
+      {
+        "type": "details",
+        "items": [
+          { "label": "Change", "value": "{{mode}}" },
+          { "label": "Proposed agent", "value": "{{displayName}}" },
+          { "label": "Existing agent", "value": "{{agentName}}" },
+          { "label": "Purpose", "value": "{{systemPrompt}}" },
+          { "label": "Conversation", "value": "{{channelId}}" }
+        ]
+      },
+      {
+        "type": "status",
+        "label": "Pending review"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Review agent",
+            "interaction": {
+              "type": "presentation",
+              "surface": "agent-review"
+            }
+          },
+          {
+            "label": "Create agent",
+            "interaction": {
+              "type": "signed",
+              "action_id": "agent.create",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Save changes",
+            "interaction": {
+              "type": "signed",
+              "action_id": "agent.update",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Decline",
+            "interaction": {
+              "type": "signed",
+              "action_id": "agent.decline",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "agent.review",
+      "label": "Review agent",
+      "interaction": {
+        "type": "presentation",
+        "surface": "agent-review"
+      },
+      "permissions": []
+    },
+    {
+      "id": "agent.create",
+      "label": "Create agent",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "definition", "runOn"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "definition": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["displayName", "systemPrompt"],
+            "properties": {
+              "displayName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "avatarUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://"
+              },
+              "systemPrompt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20000
+              },
+              "runtime": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "behavior": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "respondTo": {
+                    "type": "string",
+                    "enum": ["owner-only", "allowlist", "anyone"]
+                  },
+                  "respondToAllowlist": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "parallelism": { "type": "number" }
+                }
+              }
+            }
+          },
+          "runOn": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type"],
+                "properties": { "type": { "const": "local" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "id"],
+                "properties": {
+                  "type": { "const": "provider" },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "agent.create",
+        "resolves_attention": true
+      },
+      "permissions": ["agent.manage"]
+    },
+    {
+      "id": "agent.update",
+      "label": "Save changes",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "definition", "runOn"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "definition": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "displayName", "systemPrompt"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "displayName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "avatarUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://"
+              },
+              "systemPrompt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20000
+              },
+              "runtime": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "behavior": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "respondTo": {
+                    "type": "string",
+                    "enum": ["owner-only", "allowlist", "anyone"]
+                  },
+                  "respondToAllowlist": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "parallelism": { "type": "number" }
+                }
+              }
+            }
+          },
+          "runOn": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type"],
+                "properties": { "type": { "const": "local" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "id"],
+                "properties": {
+                  "type": { "const": "provider" },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "agent.update",
+        "resolves_attention": true
+      },
+      "permissions": ["agent.manage"]
+    },
+    {
+      "id": "agent.decline",
+      "label": "Decline",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "agent.decline",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [
+    {
+      "capability": "agent.manage",
+      "constraints": { "owner_only": true }
+    }
+  ],
+  "fallback_template": "An agent proposed an agent {{mode}} request. Review the Agent Proposal in AI Native Office.",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "details": 1,
+    "status": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Create developer",
+      "data": {
+        "mode": "create",
+        "requestId": "8797229a-3c2c-4bd0-8e2e-48e13f9bcc6f",
+        "channelId": "7c07e659-3610-42f4-9a5e-1e9973c09da9",
+        "displayName": "Developer",
+        "systemPrompt": "Build premium client websites from the approved brief and hand completed work to QA."
+      }
+    },
+    {
+      "name": "Update researcher",
+      "data": {
+        "mode": "update",
+        "requestId": "5b0907aa-aa18-4db7-b721-04c90492b9e0",
+        "channelId": "7c07e659-3610-42f4-9a5e-1e9973c09da9",
+        "agentName": "Researcher",
+        "systemPrompt": "Qualify matching US businesses and preserve source evidence."
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": true }
+}

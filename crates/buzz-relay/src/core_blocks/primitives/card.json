@@ -1,0 +1,40 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "card",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Card",
+  "description": "One structured object with content and metadata.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["title"],
+    "properties": {
+      "title": { "type": "string", "maxLength": 160 },
+      "description": { "type": "string", "maxLength": 2000 }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "{{title}}",
+    "description": "{{description}}",
+    "children": []
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "**{{title}}**\n\n{{description}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "card": 1 },
+  "examples": [
+    {
+      "name": "Opportunity",
+      "data": {
+        "title": "Tennant Group",
+        "description": "Website rebuild opportunity."
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

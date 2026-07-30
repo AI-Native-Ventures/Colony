@@ -1,0 +1,55 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "actions",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Actions",
+  "description": "Bounded controls declared by a pinned manifest.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false
+  },
+  "tree": {
+    "type": "actions",
+    "controls": [
+      {
+        "label": "Continue",
+        "interaction": {
+          "type": "signed",
+          "action_id": "action.continue",
+          "resolves_attention": false
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "action.continue",
+      "label": "Continue",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "action.continue",
+        "resolves_attention": false
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "Action available: Continue",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "actions": 1 },
+  "examples": [
+    {
+      "name": "Continue",
+      "data": {}
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

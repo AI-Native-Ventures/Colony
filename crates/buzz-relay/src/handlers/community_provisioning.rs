@@ -66,6 +66,10 @@ pub struct ProvisionCommunityResponse {
     /// Echoes the validated owner pubkey when an owner bootstrap/rotation ran.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_pubkey: Option<String>,
+    /// Non-fatal post-provisioning warning. The community exists even when
+    /// relay-owned catalog seeding needs a later retry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 pub(crate) fn validate_pubkey_hex(value: &str) -> Option<String> {
@@ -229,6 +233,37 @@ async fn publish_membership_snapshot_if_required(
     }
 }
 
+async fn seed_core_blocks_warning(
+    state: &Arc<AppState>,
+    community: buzz_core::CommunityId,
+    host: &str,
+) -> Option<String> {
+    match crate::core_blocks::ensure_core_blocks(state, community).await {
+        Ok(count) => {
+            info!(
+                community = %community,
+                host,
+                count,
+                "Core Block catalog reconciled after community provisioning"
+            );
+            None
+        }
+        Err(error) => {
+            warn!(
+                community = %community,
+                host,
+                error = %error,
+                "community provisioned but Core Block catalog seeding failed"
+            );
+            Some(
+                "community provisioned, but the Core Block catalog could not be seeded; \
+                 retry provisioning or restart the relay"
+                    .to_owned(),
+            )
+        }
+    }
+}
+
 /// Validate and execute a relay-operator community provisioning request.
 ///
 /// The caller is an HTTP operator endpoint, not the Nostr event ingest path.
@@ -307,11 +342,13 @@ pub async fn provision_community(
             "community created via operator endpoint"
         );
         publish_membership_snapshot_if_required(state, record.id, &record.host).await;
+        let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
         return Ok(ProvisionCommunityResponse {
             community_id: record.id.to_string(),
             host: record.host,
             status: "created",
             owner_pubkey: initial_owner,
+            warning,
         });
     }
 
@@ -342,11 +379,13 @@ pub async fn provision_community(
         "community provisioned via operator endpoint"
     );
 
+    let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
     Ok(ProvisionCommunityResponse {
         community_id: record.id.to_string(),
         host: record.host,
         status: if record.created { "created" } else { "existed" },
         owner_pubkey: initial_owner,
+        warning,
     })
 }
 
@@ -441,5 +480,22 @@ mod tests {
         assert!(normalize_candidate_host("https://acme.example").is_err());
         assert!(normalize_candidate_host("acme.example/path").is_err());
         assert!(normalize_candidate_host("acme .example").is_err());
+    }
+
+    #[test]
+    fn provisioning_response_serializes_non_fatal_seed_warning_explicitly() {
+        let response = ProvisionCommunityResponse {
+            community_id: "00000000-0000-0000-0000-000000000000".to_owned(),
+            host: "acme.example".to_owned(),
+            status: "created",
+            owner_pubkey: None,
+            warning: Some("Core Block catalog needs retry".to_owned()),
+        };
+        let value = serde_json::to_value(response).expect("response JSON");
+
+        assert_eq!(
+            value.get("warning").and_then(serde_json::Value::as_str),
+            Some("Core Block catalog needs retry")
+        );
     }
 }

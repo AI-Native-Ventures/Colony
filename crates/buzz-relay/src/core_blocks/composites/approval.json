@@ -1,0 +1,139 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "approval",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Approval",
+  "description": "An exact proposed external action awaiting an explicit decision.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["action", "destination", "content", "expires_at", "status"],
+    "properties": {
+      "action": { "type": "string", "minLength": 1, "maxLength": 500 },
+      "destination": { "type": "string", "minLength": 1, "maxLength": 500 },
+      "content": { "type": "string", "minLength": 1, "maxLength": 20000 },
+      "expires_at": { "type": "integer", "minimum": 1 },
+      "status": {
+        "type": "string",
+        "enum": ["pending", "approved", "denied", "expired"]
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "Approval required",
+    "description": "{{action}}",
+    "children": [
+      {
+        "type": "details",
+        "items": [
+          { "label": "Destination", "value": "{{destination}}" },
+          { "label": "Exact content", "value": "{{content}}" },
+          { "label": "Expires", "value": "{{expires_at}}" }
+        ]
+      },
+      {
+        "type": "status",
+        "label": "Decision",
+        "state_path": "/status"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Approve",
+            "interaction": {
+              "type": "signed",
+              "action_id": "approval.approve",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Deny",
+            "interaction": {
+              "type": "signed",
+              "action_id": "approval.deny",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "approval.approve",
+      "label": "Approve",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["approval_hash"],
+        "properties": {
+          "approval_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "approval.approve",
+        "resolves_attention": true
+      },
+      "permissions": ["external-action.approve"]
+    },
+    {
+      "id": "approval.deny",
+      "label": "Deny",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "approval.deny",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [
+    {
+      "capability": "external-action.approve",
+      "constraints": {
+        "exact_destination": true,
+        "exact_content": true,
+        "expires": true
+      }
+    }
+  ],
+  "fallback_template": "Approval required: {{action}}\nDestination: {{destination}}\nContent: {{content}}\nExpires: {{expires_at}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "details": 1,
+    "status": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Outbound email",
+      "data": {
+        "action": "Send the prepared introduction email",
+        "destination": "hello@example.com",
+        "content": "Hi Morgan, I noticed your current website no longer reflects the quality of your work.",
+        "expires_at": 1785456000,
+        "status": "pending"
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": true }
+}

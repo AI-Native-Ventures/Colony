@@ -1,0 +1,44 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "metric",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Metric",
+  "description": "A headline value with unit and supporting comparison.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["label", "value"],
+    "properties": {
+      "label": { "type": "string", "maxLength": 120 },
+      "value": { "type": ["string", "number"] },
+      "unit": { "type": "string", "maxLength": 32 },
+      "comparison": { "type": "string", "maxLength": 160 }
+    }
+  },
+  "tree": {
+    "type": "metric",
+    "label": "{{label}}",
+    "value": "{{value}}",
+    "unit": "{{unit}}"
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "{{label}}: {{value}} {{unit}} — {{comparison}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "metric": 1 },
+  "examples": [
+    {
+      "name": "Revenue",
+      "data": {
+        "label": "Revenue",
+        "value": "42,800",
+        "unit": "USD",
+        "comparison": "Up 18% month over month"
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

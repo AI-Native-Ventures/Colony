@@ -1,0 +1,94 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "artifact",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Artifact",
+  "description": "A delivered website, image, video, document, or file.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["title", "description", "url", "alt", "status"],
+    "properties": {
+      "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "description": { "type": "string", "maxLength": 2000 },
+      "url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+      "alt": { "type": "string", "minLength": 1, "maxLength": 500 },
+      "status": {
+        "type": "string",
+        "enum": ["draft", "ready-for-review", "approved", "superseded"]
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "{{title}}",
+    "description": "{{description}}",
+    "children": [
+      {
+        "type": "media",
+        "url_path": "/url",
+        "alt": "{{alt}}"
+      },
+      {
+        "type": "status",
+        "label": "Artifact",
+        "state_path": "/status"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Download",
+            "interaction": {
+              "type": "signed",
+              "action_id": "artifact.download",
+              "resolves_attention": false
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "artifact.download",
+      "label": "Download",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "artifact.download",
+        "resolves_attention": false
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "**{{title}}** — {{status}}\n{{description}}\n[{{alt}}]({{url}})",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "media": 1,
+    "status": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Website preview",
+      "data": {
+        "title": "Tennant Group website",
+        "description": "Premium responsive homepage ready for review.",
+        "url": "https://example.com/tennant-preview.png",
+        "alt": "Desktop and mobile homepage preview",
+        "status": "ready-for-review"
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}
