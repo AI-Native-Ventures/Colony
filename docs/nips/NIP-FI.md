@@ -30,6 +30,10 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 - **federated identity** (`i`): the tuple `(iss, sub)` from a validated assertion. The `iss` value MUST be the exact validated issuer identifier and `sub` the exact non-empty subject string. A username, email, display name, or bare `sub` MUST NOT be used as a federated identity.
 - **authorization domain** (`D`): the scope within which bindings apply, chosen by the service (an entire relay, or one tenant of a multi-tenant relay). Bindings MUST NOT cross domains implicitly.
 - **binding**: an active record associating exactly one federated identity with exactly one 32-byte Nostr public key within a domain.
+- **retired pair**: a durable denial selector recording that one exact `(identity, key)` pair MUST NOT be recreated by ordinary authorization.
+- **disabled identity**: a durable denial selector preventing an identity from authorizing or enrolling any key.
+- **revoked key**: a durable denial selector preventing a key from authorizing or binding to any identity.
+- **pending replacement**: lifecycle state recording that an identity whose prior key was retired MUST use a separately authorized recovery or rotation transition before another key can become active.
 - **enrollment mode**: the domain's policy for creating bindings — `attested-key`, `provisioned`, or `tofu` (defined below).
 - **Nostr proof**: a valid NIP-42 AUTH event (WebSocket) or NIP-98 event (HTTP) proving control of a key on the current connection or request.
 - **lease**: a cached authorization decision for one `(domain, identity, key)`, bounded by the assertion's expiry.
@@ -74,19 +78,29 @@ Given a validated assertion yielding identity `i`, optional asserted key `k_a`, 
 Authorize(D, i, k_a?, k):
   if k_a exists and k_a != k:            DENY (key mismatch)
 
-  b_i := active binding for i in D, if any
-  b_k := active binding for k in D, if any
+  atomically read:
+    b_i := active binding for i in D, if any
+    b_k := active binding for k in D, if any
+    p   := whether (i, k) is a retired pair in D
+    x   := whether i is disabled in D
+    y   := whether k is revoked in D
+    q   := whether i is pending explicit replacement in D
 
-  if b_i = (i, k) and b_k = (i, k):      ALLOW (existing binding)
+  if b_i = (i, k) and b_k = (i, k)
+     and not (p or x or y or q):           ALLOW (existing binding)
   if b_i exists or b_k exists:           DENY (binding conflict)
+  if x:                                   DENY (identity disabled)
+  if y:                                   DENY (key revoked)
+  if p:                                   DENY (pair retired)
+  if q:                                   DENY (explicit replacement required)
 
-  # no active binding on either side: enrollment
+  # no active binding or applicable lifecycle gate: first enrollment
   attested-key:  k_a required, else DENY; create (i, k); ALLOW
   provisioned:   DENY (binding must be pre-created by an operator)
   tofu:          create (i, k); ALLOW
 ```
 
-The check and any insertion MUST be atomic for `(D, i, k)`: under concurrent first use of the same identity or key, at most one binding is created and every other attempt observes it (allow on exact match, deny on conflict). Storage failure or a race whose committed result cannot be read MUST deny — never fall back to an unchecked allow.
+The active-binding and lifecycle-gate reads, and any insertion, MUST be one linearizable transition for `(D, i)` and `(D, k)`. They MUST serialize with pair retirement, identity disablement, key revocation, recovery, and rotation affecting those selectors. Under concurrent first use of the same identity or key, at most one binding is created and every other attempt observes it (allow on exact match, deny on conflict). Missing lifecycle state, storage failure, or a race whose committed result cannot be read MUST deny — never fall back to an unchecked allow.
 
 ### Enrollment modes
 
@@ -96,7 +110,7 @@ The check and any insertion MUST be atomic for `(D, i, k)`: under concurrent fir
 
 ### Binding invariant
 
-Within a domain, active bindings form a partial bijection: an identity has at most one active key and a key has at most one active identity. Every state transition in this NIP preserves this invariant.
+Within a domain, active bindings form a partial bijection: an identity has at most one active key and a key has at most one active identity. An active binding MUST NOT overlap a retired pair, disabled identity, revoked key, or pending-replacement identity. Every state transition in this NIP preserves these invariants.
 
 ## Session semantics
 
@@ -108,9 +122,17 @@ When multiple keys authenticate on one connection (NIP-42 permits this), authori
 
 ## Revocation and rotation
 
-Revocation is an explicit administrative or policy transition: the binding is removed from the active set and a durable revocation record is retained. A subsequent valid assertion — including one whose key claim matches the revoked key — MUST NOT reactivate a revoked binding unless the domain's documented recovery policy explicitly authorizes that transition. This prevents a replayed, still-valid assertion from silently undoing revocation.
+Revocation and recovery are explicit administrative or policy transitions, never side effects of `Authorize`. Their storage representation is implementation-defined, but their denial selectors and active-binding changes MUST be atomic and durable:
 
-Key rotation is likewise explicit, never a side effect of authorization: rotating `i` from `k_old` to `k_new` requires administrative or documented recovery authorization, an active `(i, k_old)` binding, no active binding for `k_new`, and — where the domain requires issuer attestation — a fresh assertion whose key claim equals `k_new`. The old binding is revoked and the new one created atomically, and leases for `k_old` are invalidated. A routine request presenting `i` with a new key while `(i, k_old)` is active is a binding conflict and MUST be denied.
+- **Retire pair**: remove an active `(i, k)`, retain an exact-pair tombstone, mark `i` pending explicit replacement, and invalidate matching leases.
+- **Disable identity**: record the identity selector even when `i` has never enrolled. If `i` has an active binding, remove it, retire the pair, and invalidate direct and dependent delegated leases.
+- **Revoke key**: record the key selector even when `k` is not active. If `k` has an active binding, remove it, retire the pair, mark its identity pending explicit replacement, and invalidate every direct or delegated lease that depends on `k`.
+
+A subsequent valid assertion — including one whose key claim matches a retired key — cannot clear these selectors or create a replacement binding. This prevents a replayed, still-valid assertion and a routine login with a different key from silently undoing revocation.
+
+Rotation or recovery requires a separate privileged transition. Replacing `k_old` with `k_new` requires explicit administrative or documented recovery authorization, an active `(i, k_old)` binding or pending-replacement record for that pair, no active binding or lifecycle gate for `k_new`, and — where the domain requires issuer attestation — a fresh assertion whose key claim equals `k_new`. The transition atomically retires the old pair and key, creates `(i, k_new)`, clears the pending-replacement state, records durable lifecycle history, and invalidates leases for `k_old`. A routine request presenting a new key is either a binding conflict or `explicit replacement required` and MUST be denied without mutation.
+
+Base V1 recovery uses a fresh, non-retired key. A deployment that permits same-key reactivation is an extension and MUST provide an equivalently explicit privileged transition while retaining the original lifecycle history; ordinary `Authorize` can never perform it.
 
 ## Delegation
 

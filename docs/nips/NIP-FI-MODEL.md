@@ -13,15 +13,21 @@ The model is transport-independent. A concrete NIP must separately define how an
 - `P`: Nostr proof authenticating key `k`, such as a valid NIP-42 AUTH event or NIP-98 event.
 - `now`: verifier time.
 - `B_D`: active binding relation in domain `D`, a partial bijection between `I` and `K`.
-- `R_D`: durable history of revoked bindings.
+- `P_D`: durable set of retired exact pairs `(i, k)`.
+- `X_D`: durable set of disabled identities `i`.
+- `Y_D`: durable set of revoked keys `k`.
+- `Q_D`: pending explicit replacements, mapping an identity `i` to its retired key `k_old`.
+- `H_D`: immutable lifecycle audit history; it is not an authorization input by itself.
 - `mode(D)`: enrollment policy, either `attested-key`, `provisioned`, or `tofu`.
 
 A binding record is:
 
 ```text
-Binding = (domain, identity, key, source, created_at, revoked_at?)
+Binding = (domain, identity, key, source, created_at)
 source  = attested-key | provisioned | tofu
 ```
+
+`P_D`, `X_D`, `Y_D`, and `Q_D` are semantic authorization state, not a required database schema. A conforming implementation may derive them from immutable lifecycle records as long as `Authorize` can read their effective values atomically with `B_D`.
 
 `display_name`, email, and similar values may be stored as mutable metadata but are never part of binding identity or an authorization decision.
 
@@ -73,6 +79,16 @@ For every domain `D`, active bindings are one-to-one:
 
 Equivalently, an active identity has at most one key and an active key has at most one identity in a domain.
 
+Active bindings also satisfy the lifecycle invariants:
+
+```text
+(i, k) ∈ B_D ⇒ (i, k) ∉ P_D
+(i, k) ∈ B_D ⇒ i ∉ X_D
+(i, k) ∈ B_D ⇒ k ∉ Y_D
+(i, k) ∈ B_D ⇒ i ∉ dom(Q_D)
+i ∈ dom(Q_D) ⇒ no active binding exists for i
+```
+
 # Authorization and enrollment transition
 
 Given domain `D`, assertion result `(i, k_a?, exp)`, and proof result `k`, evaluate one atomic transaction:
@@ -82,14 +98,24 @@ Authorize(D, i, k_a?, k):
   if k_a exists and k_a != k:
       DENY(key_mismatch)
 
-  b_i := active binding in B_D for i, if any
-  b_k := active binding in B_D for k, if any
+  atomically read:
+    b_i := active binding in B_D for i, if any
+    b_k := active binding in B_D for k, if any
+    p   := (i, k) ∈ P_D
+    x   := i ∈ X_D
+    y   := k ∈ Y_D
+    q   := i ∈ dom(Q_D)
 
-  if b_i = (i, k) and b_k = (i, k):
+  if b_i = (i, k) and b_k = (i, k) and not (p or x or y or q):
       ALLOW(existing)
 
   if b_i exists or b_k exists:
       DENY(binding_conflict)
+
+  if x: DENY(identity_disabled)
+  if y: DENY(key_revoked)
+  if p: DENY(pair_retired)
+  if q: DENY(explicit_replacement_required)
 
   switch mode(D):
     attested-key:
@@ -103,7 +129,7 @@ Authorize(D, i, k_a?, k):
       ALLOW(created)
 ```
 
-If a concurrent attempt finds the identical committed binding, it allows as `existing`; if the committed outcome cannot be read or storage is unavailable, deny — never fall back to an unchecked allow. The check and possible insertion must be linearizable for `(D, i, k)`.
+If a concurrent attempt finds the identical committed binding, it allows as `existing`; if the committed outcome cannot be read or active or lifecycle storage is unavailable, deny — never fall back to an unchecked allow. The active-binding and lifecycle-gate reads and possible insertion must be linearizable for `(D, i)` and `(D, k)` and serialize with every lifecycle transition affecting them.
 
 The resulting authorization lease is:
 
@@ -124,31 +150,59 @@ If multiple keys authenticate on one NIP-42 connection, authorization is tracked
 
 # Revocation and rotation
 
-Revocation is an explicit administrative transition:
+Pair retirement is an explicit administrative transition:
 
 ```text
-Revoke(D, i, k):
+RetirePair(D, i, k):
   require (i, k) ∈ B_D
-  atomically remove (i, k) from B_D
-  append immutable revocation record to R_D
+  atomically:
+    remove (i, k) from B_D
+    add (i, k) to P_D
+    set Q_D(i) = k
+    append the transition to H_D
   invalidate cached leases for the binding as soon as observed
 ```
 
-An assertion, including one with `k_a = k`, must not silently reactivate the same revoked binding unless the domain's explicit recovery policy authorizes that transition. This prevents replay of a still-valid assertion from undoing revocation.
-
-Key rotation is not an authorization side effect:
+Identity disablement and key revocation may occur before enrollment and are independent of pair retirement:
 
 ```text
-Rotate(D, i, k_old, k_new):
+DisableIdentity(D, i):
+  atomically:
+    add i to X_D
+    if (i, k) ∈ B_D:
+      remove (i, k), add (i, k) to P_D, and clear Q_D(i)
+    append the transition to H_D
+  invalidate direct and dependent delegated leases for i
+
+RevokeKey(D, k):
+  atomically:
+    add k to Y_D
+    if (i, k) ∈ B_D:
+      remove (i, k), add (i, k) to P_D, and set Q_D(i) = k
+    append the transition to H_D
+  invalidate every direct or delegated lease that depends on k
+```
+
+An assertion, including one with `k_a = k`, cannot clear `P_D`, `X_D`, `Y_D`, or `Q_D` and cannot invoke a recovery transition. This prevents replay of a still-valid assertion and presentation of an unbound replacement key from undoing revocation.
+
+Rotation or recovery is a separate privileged transition, not an authorization side effect:
+
+```text
+RotateOrRecover(D, i, k_old, k_new):
   require explicit recovery/admin authorization
-  require (i, k_old) ∈ B_D
+  require (i, k_old) ∈ B_D or Q_D(i) = k_old
+  require i ∉ X_D
+  require k_new ∉ Y_D
+  require (i, k_new) ∉ P_D
   require no active binding for k_new
   if issuer-attested rotation is required, require fresh k_a = k_new
-  atomically revoke (i, k_old) and create (i, k_new)
+  atomically remove any active (i, k_old), add (i, k_old) to P_D,
+    add k_old to Y_D, create (i, k_new), and clear Q_D(i)
+  append the transition to H_D
   invalidate leases for k_old
 ```
 
-A normal request that presents `i` with `k_new` while `k_old` is active is a conflict and must not rotate automatically.
+A normal request that presents `i` with `k_new` while `k_old` is active is a conflict. If `i` is pending replacement, it denies `explicit_replacement_required`. Neither path rotates automatically. Base V1 recovery uses a fresh, non-retired key; same-key reactivation requires an extension with an equivalently explicit privileged transition and retained lifecycle history.
 
 # Delegation
 
@@ -163,20 +217,25 @@ Under the trust assumptions, for direct (non-delegated) authorization:
 3. **Agreement:** if the issuer supplies a key claim, the asserted key, proven key, and bound key are equal.
 4. **Binding consistency:** no two active identities share a key and no identity has two active keys in one domain.
 5. **No implicit rotation:** conflicting assertions or proofs cannot replace an active binding.
-6. **Domain separation:** authorization in one domain does not imply authorization in another.
-7. **Lease boundedness:** no cached authorization survives assertion expiry; after revocation is observed, no matching cached authorization remains valid.
-8. **Fail-closed storage and verification:** validation, key retrieval, or binding-state failures never produce allow.
-9. **Privacy:** conforming protocol behavior need not publish `iss`, `sub`, JWTs, email, or display names in Nostr events or relay-visible event history.
+6. **No replayed resurrection:** ordinary authorization cannot recreate a retired pair or replace a key for an identity pending explicit replacement.
+7. **Lifecycle closure:** a disabled identity cannot authorize any key, and a revoked key cannot authorize or bind to any identity.
+8. **Lifecycle consistency:** active bindings satisfy the partial-bijection and lifecycle invariants above.
+9. **Rotation atomicity:** observers see either the valid old state or the completed replacement, never a partial transition; lifecycle history is retained.
+10. **Linearizable lifecycle:** authorization racing a lifecycle transition cannot commit a binding that violates the completed transition.
+11. **Domain separation:** authorization in one domain does not imply authorization in another.
+12. **Lease boundedness:** no cached authorization survives assertion expiry; after revocation is observed, no matching cached authorization remains valid.
+13. **Fail-closed storage and verification:** validation, key retrieval, or binding-state failures never produce allow.
+14. **Privacy:** conforming protocol behavior need not publish `iss`, `sub`, JWTs, email, or display names in Nostr events or relay-visible event history.
 
 # Liveness properties
 
 Assuming the issuer, key source, binding store, and network are available:
 
-1. a valid assertion and matching proof for an existing active binding are eventually authorized;
-2. an unbound pair is eventually authorized exactly once when the configured enrollment mode permits it;
-3. after an authorized revocation/rotation and bounded cache invalidation, the old key is denied and the new valid binding can be authorized.
+1. a valid assertion and matching proof for an eligible existing active binding are eventually authorized;
+2. a never-retired pair with no applicable identity, key, or pending-replacement gate is eventually authorized exactly once when the configured enrollment mode permits it;
+3. after `RotateOrRecover` commits and bounded cache invalidation completes, the replacement binding is eventually authorized and the old pair and key remain denied.
 
-Liveness is intentionally not guaranteed during issuer/JWKS/storage outage; availability must not override identity safety.
+No authorization liveness is promised while identity disablement, key revocation, pair retirement, or pending replacement blocks a request. Liveness is also intentionally not guaranteed during issuer/JWKS/storage outage; availability must not override identity safety.
 
 # Representative attack traces
 
@@ -190,7 +249,16 @@ Liveness is intentionally not guaranteed during issuer/JWKS/storage outage; avai
 | Assertion has wrong audience, expired `exp`, unknown algorithm/key, malformed subject/key | Deny without binding mutation |
 | Concurrent first use of `(i,k1)` and `(i,k2)` | At most one commits; the other denies conflict |
 | Reuse of valid WebSocket authorization after assertion expiry | Deny protected operation or reauthenticate/close |
-| Fresh assertion for a revoked pair | Deny unless explicit recovery transition authorizes reactivation |
+| Retire `(i,k)`, then replay a matching assertion and proof in TOFU | Deny `pair_retired` without mutation |
+| Retire `(i,k)`, then replay an issuer key claim matching `k` | Deny `pair_retired` without mutation |
+| Disable never-enrolled `i`, then present any valid assertion and proof | Deny `identity_disabled` without mutation |
+| Revoke `k`, then present it for another identity | Deny `key_revoked` without mutation |
+| Revoke active `k`, then present fresh `k_new` for the same identity | Deny `explicit_replacement_required`; require privileged replacement |
+| `Authorize` races pair retirement or key revocation | Serialize; no binding that violates the completed transition survives |
+| Rotate to an active, revoked, or previously retired replacement | Deny without partial mutation |
+| Two concurrent replacements for one identity | At most one commits; the other denies after observing committed state |
+| Successful explicit replacement | Old pair and key remain denied; new active pair authorizes |
+| Lifecycle-state lookup fails | Deny without enrollment mutation |
 | New key presented for bound identity | Deny; require explicit rotation |
 | Display name/email changes while `(iss,sub)` is stable | May update metadata; binding identity is unchanged |
 | One NIP-42 connection authenticates `k1` and `k2`, only `k1` is bound | Only operations attributed to `k1` receive its lease |
