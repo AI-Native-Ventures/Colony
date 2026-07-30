@@ -120,7 +120,13 @@ test("capture: share-style community invite dialog", async ({ page }) => {
   const inviteButton = page.getByTestId("confirm-add-member");
   await expect(inviteButton).toHaveText("Invite");
   await waitForAnimations(page);
-  await expect(inviteButton).toHaveCSS("height", "40px");
+  await expect(inviteButton).toHaveCSS("height", "44px");
+  await expect(inviteButton).toHaveJSProperty(
+    "offsetHeight",
+    await page
+      .getByTestId("member-recipient-field")
+      .evaluate((field) => Math.round(field.getBoundingClientRect().height)),
+  );
   const selectedChipRemoveIcon = selectedChip.locator("span.absolute");
   await expect(selectedChipRemoveIcon).toHaveCSS("opacity", "0");
   await selectedChip.hover();

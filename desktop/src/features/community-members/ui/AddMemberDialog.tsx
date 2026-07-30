@@ -214,7 +214,10 @@ export function DirectAddMemberForm({
             open={isPickerOpen && deferredQuery.length > 0}
           >
             <PopoverAnchor asChild>
-              <div className="min-w-0 flex-1 rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring">
+              <div
+                className="min-w-0 flex-1 rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring"
+                data-testid="member-recipient-field"
+              >
                 <div
                   className={`grid min-h-10 min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 p-1.5 ${selectedUsers.length > 1 ? "items-start" : "items-center"}`}
                 >
@@ -382,7 +385,7 @@ export function DirectAddMemberForm({
                 transition={actionTransition}
               >
                 <Button
-                  className="h-10"
+                  className="h-11"
                   data-testid="confirm-add-member"
                   disabled={!canAdd}
                   size="sm"
