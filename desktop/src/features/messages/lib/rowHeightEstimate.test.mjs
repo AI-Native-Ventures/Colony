@@ -23,11 +23,11 @@ test("estimateRowHeight: short text is near the floor", () => {
   assert.ok(h >= 60 && h < 120, `expected small, got ${h}`);
 });
 
-test("estimateRowHeight: continuation reserves its compact height", () => {
+test("estimateRowHeight: continuation reserves its uniform padding", () => {
   const h = estimateRowHeight(msg({ body: "hello" }), {
     isContinuation: true,
   });
-  assert.equal(h, 26);
+  assert.equal(h, 28);
 });
 
 test("estimateRowHeight: many lines reserve more", () => {
