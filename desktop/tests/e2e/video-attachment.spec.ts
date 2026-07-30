@@ -786,8 +786,16 @@ test("video replies in threads open the review comments view", async ({
     "general",
     "Can you review this cut?",
   )) as { id: string };
-  await emitMockMessage(page, "general", `![video](${VIDEO_URL})`, {
-    parentEventId: root.id,
+  const videoReply = (await emitMockMessage(
+    page,
+    "general",
+    `![video](${VIDEO_URL})`,
+    {
+      parentEventId: root.id,
+    },
+  )) as { id: string };
+  await emitMockMessage(page, "general", "[00:01] Tighten this transition.", {
+    parentEventId: videoReply.id,
   });
 
   const threadSummary = page.locator(`[data-thread-head-id="${root.id}"]`);
@@ -807,6 +815,9 @@ test("video replies in threads open the review comments view", async ({
     reviewDialog.getByTestId("video-review-comments-panel"),
   ).toBeVisible();
   await expect(reviewDialog.getByTestId("message-composer")).toBeVisible();
+  await expect(reviewDialog.getByTestId("video-review-comments")).toContainText(
+    "Tighten this transition.",
+  );
 });
 
 test("narrow inline videos hide playback speed control", async ({ page }) => {

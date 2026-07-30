@@ -147,6 +147,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   profilePanelTab,
   profilePanelView,
   targetMessageId,
+  threadAllMessages,
   threadHeadMessage,
   threadMessages,
   threadMessagesPending = false,
@@ -479,8 +480,8 @@ export const ChannelPane = React.memo(function ChannelPane({
     if (threadHeadMessage) {
       messagesById.set(threadHeadMessage.id, threadHeadMessage);
     }
-    for (const entry of threadMessages) {
-      messagesById.set(entry.message.id, entry.message);
+    for (const message of threadAllMessages) {
+      messagesById.set(message.id, message);
     }
 
     return buildVideoReviewContextsByMessageId({
@@ -500,8 +501,8 @@ export const ChannelPane = React.memo(function ChannelPane({
     messages,
     onToggleReaction,
     profiles,
+    threadAllMessages,
     threadHeadMessage,
-    threadMessages,
   ]);
 
   const isOverlay = useIsThreadPanelOverlay();
