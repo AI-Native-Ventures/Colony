@@ -42,11 +42,7 @@ const DIFF_ENTRIES = [
     field: "relay_url",
     change: { kind: "masked" as const, before: "••••", after: "••••" },
   },
-  {
-    field: "parallelism",
-    change: { kind: "value" as const, before: 1, after: 4 },
-  },
-  // Array value — args are atomic; rendered via JSON.stringify
+  // Array value — args are atomic; rendered via JSON.stringify (position 6: last visible in tooltip)
   {
     field: "agent_args",
     change: {
@@ -55,7 +51,12 @@ const DIFF_ENTRIES = [
       after: ["acp", "--verbose"],
     },
   },
-  // 8th entry — should be truncated to "and 2 more" in tooltip (cap is 6)
+  // 7th entry — truncated in tooltip (cap is 6); visible in uncapped banner
+  {
+    field: "parallelism",
+    change: { kind: "value" as const, before: 1, after: 4 },
+  },
+  // 8th entry — truncated in tooltip; visible in uncapped banner
   {
     field: "args",
     change: { kind: "masked" as const, before: "••••", after: "••••" },
@@ -337,10 +338,10 @@ test.describe("restart-diff screenshots", () => {
     const banner = panel.getByTestId("needs-restart-banner");
     await expect(banner).toBeVisible({ timeout: 10_000 });
 
-    // Banner shows the full uncapped diff list (7 entries, no "and N more")
+    // Banner shows the full uncapped diff list (8 entries, no "and N more")
     const diffList = banner.getByTestId("restart-diff-list");
     await expect(diffList).toBeVisible();
-    // All 7 entries visible in banner (no cap)
+    // All 8 entries visible in banner (no cap)
     await expect(diffList.getByText("Args:")).toBeVisible();
 
     await waitForAnimations(page);
