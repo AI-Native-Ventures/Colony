@@ -47,6 +47,7 @@ export function AgentsView() {
   const personas = usePersonaActions();
   const teamImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const fullAiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const compactActionsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [isAiDefaultsOpen, setIsAiDefaultsOpen] = React.useState(false);
   // Exclusivity: create never sets `personaDialogState` (edit/dup/import do),
@@ -57,6 +58,22 @@ export function AgentsView() {
     personas.prepareCreate();
     setIsCreateDialogOpen(true);
   }
+
+  function openAiDefaults(trigger: HTMLButtonElement | null) {
+    aiDefaultsTriggerRef.current = trigger;
+    setIsAiDefaultsOpen(true);
+  }
+
+  function setAiDefaultsDialogOpen(open: boolean) {
+    if (!open) {
+      aiDefaultsTriggerRef.current =
+        fullAiDefaultsTriggerRef.current?.offsetParent !== null
+          ? fullAiDefaultsTriggerRef.current
+          : compactActionsTriggerRef.current;
+    }
+    setIsAiDefaultsOpen(open);
+  }
+
   const teamActions = useTeamActions(
     {
       setActionNoticeMessage: agents.setActionNoticeMessage,
@@ -126,8 +143,8 @@ export function AgentsView() {
                 <div className="flex flex-wrap justify-end gap-2 [@container(max-width:40rem)]:hidden">
                   <Button
                     data-testid="agent-defaults-button"
-                    ref={aiDefaultsTriggerRef}
-                    onClick={() => setIsAiDefaultsOpen(true)}
+                    ref={fullAiDefaultsTriggerRef}
+                    onClick={(event) => openAiDefaults(event.currentTarget)}
                     size="sm"
                     variant="outline"
                   >
@@ -168,9 +185,7 @@ export function AgentsView() {
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem
                       onSelect={() => {
-                        aiDefaultsTriggerRef.current =
-                          compactActionsTriggerRef.current;
-                        setIsAiDefaultsOpen(true);
+                        openAiDefaults(compactActionsTriggerRef.current);
                       }}
                     >
                       <Settings2 />
@@ -285,7 +300,7 @@ export function AgentsView() {
       </div>
 
       <AgentDefaultsDialog
-        onOpenChange={setIsAiDefaultsOpen}
+        onOpenChange={setAiDefaultsDialogOpen}
         open={isAiDefaultsOpen}
         returnFocusRef={aiDefaultsTriggerRef}
       />

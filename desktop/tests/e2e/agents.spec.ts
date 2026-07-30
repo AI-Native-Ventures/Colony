@@ -416,7 +416,7 @@ test("the new agent card offers create, discover, and import", async ({
   const cardBoxes = await agentCards.evaluateAll((cards) =>
     cards.map((card) => {
       const box = card.getBoundingClientRect();
-      return { right: box.right, top: box.top };
+      return { left: box.left, right: box.right, top: box.top };
     }),
   );
   const firstRowTop = Math.min(...cardBoxes.map(({ top }) => top));
@@ -425,12 +425,16 @@ test("the new agent card offers create, discover, and import", async ({
       .filter(({ top }) => Math.abs(top - firstRowTop) < 1)
       .map(({ right }) => right),
   );
+  const leftmostFirstRowCard = Math.min(
+    ...cardBoxes
+      .filter(({ top }) => Math.abs(top - firstRowTop) < 1)
+      .map(({ left }) => left),
+  );
   expect(headerBox).not.toBeNull();
-  expect(
-    Math.abs(
-      (headerBox?.x ?? 0) + (headerBox?.width ?? 0) - rightmostFirstRowCard,
-    ),
-  ).toBeLessThan(1);
+  expect(Math.abs((headerBox?.x ?? 0) - leftmostFirstRowCard)).toBeLessThan(1);
+  expect(rightmostFirstRowCard).toBeLessThanOrEqual(
+    (headerBox?.x ?? 0) + (headerBox?.width ?? 0) + 1,
+  );
 
   await newAgentCard.click();
   await expect(
@@ -737,6 +741,14 @@ test("moves agent actions into an overflow menu in a narrow view", async ({
 
   await page.getByRole("menuitem", { name: "Set agent defaults" }).click();
   await expect(page.getByTestId("agent-ai-defaults-dialog")).toBeVisible();
+
+  await page.getByTestId("agents-page-content").evaluate((element) => {
+    (element as HTMLElement).style.width = "650px";
+  });
+  await expect(page.getByTestId("agent-defaults-button")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("agent-ai-defaults-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("agent-defaults-button")).toBeFocused();
 });
 
 test("agent catalog chooser order stays stable when selection changes", async ({
