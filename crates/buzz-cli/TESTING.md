@@ -484,7 +484,51 @@ buzz notes rm --name does-not-exist   # exits non-zero
 
 ---
 
-## 7. Error Path Testing
+## 7. Chat-native Blocks
+
+Block reads always use explicit kind filters. Manifest and data files are
+validated locally before a write is signed.
+
+```bash
+# Catalog and immutable manifests
+buzz blocks list | jq .
+buzz blocks get --handle lead-card | jq .
+buzz blocks draft --manifest manifest.json | jq .
+buzz blocks test --manifest manifest.json --data data.json | jq .
+
+# Publish an ordinary kind:9 message with a pinned manifest
+buzz blocks invoke \
+  --channel "$CHANNEL_ID" \
+  --handle lead-card \
+  --data data.json \
+  --fallback fallback.md | jq .
+
+# Inspect and answer actions
+buzz blocks actions --channel "$CHANNEL_ID" --instance "$INSTANCE_EVENT_ID" | jq .
+buzz blocks act \
+  --channel "$CHANNEL_ID" \
+  --instance "$INSTANCE_EVENT_ID" \
+  --action submit \
+  --input input.json \
+  --idempotency-key "$IDEMPOTENCY_KEY" | jq .
+buzz blocks receipt \
+  --channel "$CHANNEL_ID" \
+  --action "$ACTION_EVENT_ID" \
+  --instance "$INSTANCE_EVENT_ID" \
+  --status succeeded \
+  --result result.json | jq .
+```
+
+`buzz agents draft-create` and `buzz agents draft-update` now publish persisted
+`agent-proposal` Block messages. Verify the returned JSON contains
+`proposal_saved:true` and `agent_changed:false`, and verify the stored event is
+kind `9`, channel-scoped, owner-addressed, attention-marked, and contains no
+credential or backend configuration fields. Posting a proposal never means the
+agent was created or changed.
+
+---
+
+## 8. Error Path Testing
 
 Verify the CLI produces correct JSON on stderr and correct exit codes.
 
@@ -527,7 +571,7 @@ buzz channels get --channel "00000000-0000-0000-0000-000000000000"
 
 ---
 
-## 8. Auth Testing
+## 9. Auth Testing
 
 Test authentication.
 
@@ -545,7 +589,7 @@ env -u BUZZ_PRIVATE_KEY \
 
 ---
 
-## 9. Cleanup
+## 10. Cleanup
 
 ```bash
 # Delete test channels
@@ -555,7 +599,7 @@ buzz channels delete --channel "$FORUM_ID" | jq .
 
 ---
 
-## 10. Checklist
+## 11. Checklist
 
 | # | Command | Tested | Notes |
 |---|---------|:------:|-------|
