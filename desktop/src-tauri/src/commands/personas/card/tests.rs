@@ -146,6 +146,68 @@ fn extract_card_output_happy_path_and_missing_image() {
 }
 
 #[test]
+fn kind0_picture_wins_over_record_avatar_unless_blank() {
+    let some = |s: &str| Some(s.to_string());
+    // Published picture wins.
+    assert_eq!(
+        preferred_avatar_url(some("https://relay/media/k0.png"), some("data:image/png;x")),
+        some("https://relay/media/k0.png")
+    );
+    // No profile / no picture: record avatar survives.
+    assert_eq!(
+        preferred_avatar_url(None, some("data:image/png;x")),
+        some("data:image/png;x")
+    );
+    // Blank or whitespace picture must not shadow a real avatar.
+    assert_eq!(
+        preferred_avatar_url(some(""), some("data:image/png;x")),
+        some("data:image/png;x")
+    );
+    assert_eq!(
+        preferred_avatar_url(some("  "), some("data:image/png;x")),
+        some("data:image/png;x")
+    );
+    // Nothing anywhere: None (caller surfaces the "no avatar" error).
+    assert_eq!(preferred_avatar_url(None, None), None);
+}
+
+#[test]
+fn media_get_auth_gate_is_same_origin_only() {
+    // The minted Blossom get-auth header may only travel to the relay's own
+    // origin — scheme, host, and port all count (same contract as
+    // `validate_download_url` in `media_download.rs`).
+    let relay = "https://relay.example.com";
+    assert!(is_same_origin(
+        "https://relay.example.com/media/abc.png",
+        relay
+    ));
+    // Different host, scheme, or port: no auth.
+    assert!(!is_same_origin(
+        "https://evil.example.com/media/abc.png",
+        relay
+    ));
+    assert!(!is_same_origin(
+        "http://relay.example.com/media/abc.png",
+        relay
+    ));
+    assert!(!is_same_origin(
+        "https://relay.example.com:8443/media/abc.png",
+        relay
+    ));
+    // Unparseable inputs fail closed.
+    assert!(!is_same_origin("not a url", relay));
+    assert!(!is_same_origin(
+        "https://relay.example.com/x",
+        "also not a url"
+    ));
+    // Explicit port on both sides matches.
+    assert!(is_same_origin(
+        "http://localhost:3100/media/abc.png",
+        "http://localhost:3100"
+    ));
+}
+
+#[test]
 fn avatar_cap_rejects_before_appending_crossing_chunk() {
     // The streaming accumulator must reject a chunk that would cross the
     // cap BEFORE buffering it — this is what bounds memory when

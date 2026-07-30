@@ -504,7 +504,7 @@ pub async fn mint_agent_card(
     let lock = lock.unwrap_or(false);
     let memory_level = parse_memory_level(memory_level.as_deref().unwrap_or(""))?;
     // ── Resolve the record + API key under lock ──────────────────────────────
-    let (record, is_definition, api_key, base_url) = {
+    let (mut record, is_definition, api_key, base_url) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -591,7 +591,7 @@ pub async fn mint_agent_card(
                     .to_string(),
             );
         }
-        let listing = get_agent_memory(record.pubkey.clone(), app.clone(), state).await?;
+        let listing = get_agent_memory(record.pubkey.clone(), app.clone(), state.clone()).await?;
         memory_entries_from_listing(listing, memory_level)
     };
 
@@ -600,12 +600,43 @@ pub async fn mint_agent_card(
         .clone()
         .unwrap_or_else(|| record.name.clone());
 
+    // ── Prefer the agent's own kind:0 profile picture ────────────────────────
+    // The record's `avatar_url` is a stale presentation snapshot: with
+    // agent-managed profiles the agent updates its own kind:0 `picture` and
+    // desktop reconciliation is disabled (`agent_settings.rs`), so the relay
+    // profile — not the local record — is the live source of truth for how the
+    // agent looks. Definitions have no keypair and thus no kind:0; they keep
+    // the record's avatar. A relay error fails the mint here, BEFORE the API
+    // spend (same fail-early rule as the key/memory guards above) — minting
+    // with the wrong face wastes the spend it was supposed to protect.
+    if !is_definition {
+        let relay_url = crate::relay::effective_agent_relay_url(
+            &record.relay_url,
+            &crate::relay::relay_ws_url_with_override(&state),
+        );
+        let profile = crate::relay::query_agent_profile(&state, &relay_url, &record.pubkey)
+            .await
+            .map_err(|e| format!("Could not read the agent's profile for its avatar: {e}"))?;
+        record.avatar_url = preferred_avatar_url(
+            profile.and_then(|info| info.picture),
+            record.avatar_url.take(),
+        );
+    }
+
     // ── Resolve avatar bytes (data URL, else fetch) ──────────────────────────
     let avatar_bytes = match record.avatar_url.as_deref() {
         Some(url) if url.starts_with("data:") => decode_avatar_data_url(url)
             .ok_or_else(|| "Agent avatar data URL could not be decoded.".to_string())?,
         Some(url) if url.starts_with("http://") || url.starts_with("https://") => {
-            fetch_avatar(url).await?
+            // Relay-hosted avatars (kind:0 pictures under the relay's /media/)
+            // may require Blossom get-auth (`require_media_get_auth`). Mint the
+            // header ONLY for same-origin URLs so the token never leaves the
+            // relay (same contract as `media_download.rs`).
+            let relay_base = crate::relay::relay_api_base_url_with_override(&state);
+            let auth = is_same_origin(url, &relay_base)
+                .then(|| crate::commands::media::mint_media_get_auth(&state, &relay_base))
+                .flatten();
+            fetch_avatar(url, auth.as_deref()).await?
         }
         _ => {
             return Err(
@@ -779,21 +810,60 @@ pub async fn mint_agent_card(
     Ok(minted)
 }
 
+/// The avatar the mint should use: the agent's kind:0 `picture` when one is
+/// published and non-blank, else the local record's `avatar_url`.
+///
+/// Pure so the precedence is unit-testable without a relay: a blank or
+/// whitespace-only `picture` must NOT shadow a real record avatar.
+fn preferred_avatar_url(
+    kind0_picture: Option<String>,
+    record_avatar_url: Option<String>,
+) -> Option<String> {
+    kind0_picture
+        .filter(|p| !p.trim().is_empty())
+        .or(record_avatar_url)
+}
+
+/// True when `url` shares an origin (scheme, host, port) with `relay_base`.
+///
+/// Gate for attaching the minted media get-auth header — the token must never
+/// be sent to a non-relay origin (same contract as `validate_download_url` in
+/// `media_download.rs`, but non-fatal: a foreign origin just fetches
+/// unauthenticated instead of failing the mint).
+fn is_same_origin(url: &str, relay_base: &str) -> bool {
+    match (url::Url::parse(url), url::Url::parse(relay_base)) {
+        (Ok(u), Ok(b)) => u.origin() == b.origin(),
+        _ => false,
+    }
+}
+
 /// Fetch an avatar over HTTP with a hard size cap.
+///
+/// `auth` is an optional pre-minted Blossom get-auth header value, attached
+/// verbatim — the caller is responsible for only supplying it for
+/// relay-origin URLs. Redirects are not followed when auth is present
+/// (redirect-hop guard, same rule as `media_download.rs`).
 ///
 /// The cap bounds network and memory, not just the final buffer: the
 /// Content-Length header is checked before any body bytes are read, and the
 /// body is streamed with a running count so a missing or dishonest header
 /// still cannot exceed the cap (same contract as `media_download.rs`).
-async fn fetch_avatar(url: &str) -> Result<Vec<u8>, String> {
+async fn fetch_avatar(url: &str, auth: Option<&str>) -> Result<Vec<u8>, String> {
     use futures_util::StreamExt;
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
+    if auth.is_some() {
+        // Never let a relay 3xx forward the auth header across origins.
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-    let resp = client
-        .get(url)
+    let mut req = client.get(url);
+    if let Some(auth) = auth {
+        req = req.header("authorization", auth);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Failed to fetch agent avatar: {e}"))?;
