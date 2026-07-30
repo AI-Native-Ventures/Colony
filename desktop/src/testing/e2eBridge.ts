@@ -1517,6 +1517,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     last_error: agent.last_error,
     last_error_code: agent.last_error_code,
     needs_restart: agent.needs_restart ?? false,
+    restart_diff: agent.restart_diff ? [...agent.restart_diff] : [],
     log_path: agent.log_path,
     start_on_app_launch: agent.start_on_app_launch,
     auto_restart_on_config_change: agent.auto_restart_on_config_change ?? true,
