@@ -16,7 +16,9 @@ timeline is the operating canvas.
 Agents place rich, structured experiences directly into threads. A lead can
 appear as a card, a set of prospects as a table, a website as an artifact
 preview, a consequential outbound message as an approval, and company
-performance as a report. These experiences are called **Blocks**.
+performance as a report. A proposed hire appears as a persistent Agent
+Proposal that can be reviewed, closed, reopened, approved, or declined without
+leaving the conversation. These experiences are called **Blocks**.
 
 Blocks are also visible in a dedicated catalog because they form the reusable
 visual language of the product. The catalog answers what exists, which version
@@ -64,6 +66,12 @@ Buzz already contains the architectural seed of Blocks:
   agent emits structured data with a fallback, the desktop validates the
   payload and signer, and an authenticated interactive card replaces the raw
   representation.
+- `buzz agents draft-create` and `draft-update` already open the existing agent
+  create/edit dialogs with agent-authored values, but the request travels as an
+  ephemeral kind `24200` observer frame. The relay never stores that event, the
+  desktop holds only one request in memory, and dismissal clears it permanently.
+  This is reusable form and authorization logic, not an acceptable persistence
+  model.
 - A reusable `Attachment` component family already provides content, media,
   actions, state, triggers, and grouped attachments.
 - Threads, agent mentions, ACP agent execution, teams, handoffs, MCP tools, Git
@@ -195,7 +203,7 @@ The first native grammar is:
 | `@chart` | Bar, line, area, or donut visualization with an accessible tabular fallback |
 | `@media` | Image, video, file, gallery, document, or external preview |
 | `@status` | State, progress, steps, timeline, success, warning, or failure |
-| `@actions` | Buttons, menus, confirmation, and bounded action controls |
+| `@actions` | Buttons, menus, local review/disclosure controls, confirmation, and bounded signed actions |
 | `@question` | Single-select, multi-select, and free-form input with structured submission |
 
 Stack, grid, spacing, divider, and responsive layout nodes are part of the
@@ -232,6 +240,8 @@ The initial out-of-box composites are:
 
 - `@lead-card` — Company opportunity summary and evidence.
 - `@approval` — exact proposed action, destination, content, and authorization.
+- `@agent-proposal` — a persistent request to create or change an agent,
+  including review, explicit resolution, and an auditable receipt.
 - `@report` — metrics, chart, table, summary, and sources.
 - `@artifact` — website, image, video, document, code, or other delivered work.
 - `@receipt` — verified outcome of an action, delivery, or payment.
@@ -242,6 +252,69 @@ For example:
 
 > @accountant show July using @metric, @chart, and @table. If it works, save the
 > composition as @monthly-finance-report.
+
+### Agent Proposal behavior
+
+`@agent-proposal` is a Core composite assembled from Card, Details, Status, and
+Actions. It is built in and trusted, but it is not another low-level native
+primitive. The same schema supports `create` and `update`; the first
+end-to-end acceptance proof covers creating and starting a new agent.
+
+The proposal instance is a normal persisted kind `9` message in the originating
+thread. It is independently addressable, survives restart and history reload,
+and may coexist with any number of other pending proposals. Its compact state
+shows:
+
+- proposed agent name and role summary;
+- whether this creates a new agent or changes an existing one;
+- the requesting agent and originating conversation;
+- `Pending review`, `Approved`, `Declined`, `Failed`, or `Superseded` status;
+- a **Review agent** control while the proposal remains pending.
+
+Reviewing is a reversible, presentation-only interaction. It opens the existing
+agent create or edit dialog with the proposal prefilled and produces no signed
+action by itself. Closing the dialog, pressing Escape, changing conversations,
+or restarting the app leaves the proposal pending and reopenable.
+
+Only an explicit **Create agent**, **Save changes**, or **Decline** decision
+resolves the proposal. Before signing, the dialog shows the exact effective
+non-secret configuration that will be applied; user edits replace the
+corresponding proposed values. The resulting Block action references the
+proposal instance, targets the owner-side agent-management broker, and carries
+the final schema-valid non-secret input.
+
+The broker reuses the existing persona and managed-agent creation/update paths
+after the relay accepts the signed action. Creation is idempotent by proposal
+instance and action idempotency key: replay, double-click, reconnect, or a crash
+recovery must resolve to the same definition and managed-agent identity rather
+than creating a second hire. A receipt records the definition ID, agent pubkey,
+terminal status, and safe error details, then updates the original inline card.
+
+Agent Proposal data, actions, and receipts never contain private keys,
+environment-variable values, provider credentials, or backend secrets. Existing
+local configuration resolves those values at execution time; missing required
+configuration leaves the proposal pending with a safe error and retry path.
+
+Only an agent verified as owned by the current user and sharing the originating
+channel may publish an actionable Agent Proposal for that owner. The desktop
+rechecks ownership, channel membership, target editability, manifest trust, and
+current proposal state immediately before execution.
+
+### Persistent attention projection
+
+The persisted Block instance is the source of truth. The existing **Inbox →
+Needs action** filter is a secondary projection of unresolved actionable Blocks,
+including Agent Proposals and Approvals; it does not duplicate the request or
+introduce another workflow page.
+
+An actionable instance carries a validated `block-attention` tag and a `p` tag
+for the person whose decision is required. Selecting its Inbox row returns to
+the exact message and opens the same review surface. Marking the conversation
+read, closing a dialog, or visiting the Inbox never resolves the request.
+Only a validated receipt from an action that the manifest declares as resolving
+attention removes it from the unresolved projection. Failed and timed-out
+attempt receipts leave it pending and retryable. The original Block and every
+outcome remain in thread history.
 
 ## Version and publication lifecycle
 
@@ -308,6 +381,10 @@ continues to work.
 - an `e` tag with a `block` marker references the immutable manifest.
 - a `block` tag carries schema version, stable handle, manifest event ID, and
   instance ID.
+- actionable instances may carry one
+  `["block-attention","1","required"]` tag and must `p`-tag the person whose
+  decision is required. The relay accepts this attention marker only for a
+  trusted manifest whose declared actions require that person's decision.
 - a `block-data` tag carries canonical JSON instance data when it fits inside
   the bounded event size.
 - larger payloads use a content-addressed `block-data-ref` tag with URL, MIME,
@@ -328,6 +405,13 @@ includes a unique idempotency key.
 instance and contains the terminal or current result. Receipts overlay the
 instance state in the renderer and remain independently auditable.
 
+A receipt that resolves an actionable instance carries
+`["block-attention","1","resolved"]`. The relay accepts that marker only when
+the referenced instance requires attention, the referenced manifest declares
+the action as resolving, the receipt signer is the authorized processor, and
+the receipt status is compatible with resolution. Failed and timed-out receipts
+cannot carry it.
+
 A Question submission is a Block action. An Approval grant is also a Block
 action, but requires the stronger authorization rules below.
 
@@ -340,10 +424,15 @@ action, but requires the stronger authorization rules below.
 4. The relay validates the public envelope and stores the event.
 5. The desktop loads the referenced manifest and data, validates both, then
    renders the primitive tree in the message row.
-6. The user replies naturally or invokes a declared inline action.
-7. The desktop signs a Block action referencing the original instance.
-8. The responsible agent or permission-aware Bridge processes the action.
-9. Processing publishes a receipt. The timeline materializes the receipt onto
+6. The user replies naturally, invokes a presentation-only local control, or
+   invokes a declared state-changing action.
+7. A presentation-only control may reveal detail or open a review surface but
+   cannot resolve the instance or perform an external effect.
+8. For a state-changing action, the desktop signs a Block action referencing
+   the original instance.
+9. The responsible agent, permission-aware Bridge, or trusted Core broker
+   processes the accepted action.
+10. Processing publishes a receipt. The timeline materializes the receipt onto
    the original instance and may also show a concise conversational result.
 
 No Block renderer performs the external side effect directly.
@@ -366,6 +455,11 @@ Native renderers never expose credentials to agents or Block payloads. Plugin
 credentials remain inside the connection or Bridge. Actions declare required
 capabilities, and a broker checks the user, instance, action declaration,
 permission, destination, payload hash, expiry, and idempotency key.
+
+Presentation-only controls are restricted to local disclosure and navigation.
+They cannot mutate durable state, resolve an attention item, invoke a Plugin,
+or access a credential. Any control crossing that boundary must use the signed
+action and receipt flow.
 
 An Approval is stronger than a Question. It must show the exact consequential
 action, destination, relevant content, and expiry. The resulting grant
@@ -394,6 +488,11 @@ limits, and no direct DOM, network, filesystem, secret, or Tauri access.
   timeout receipt with a conversational retry path.
 - **Duplicate action or retry:** return the original receipt using the
   idempotency key; never repeat the side effect.
+- **Dismissed Agent Proposal review:** leave the original proposal pending and
+  keep it in the Needs action projection.
+- **Agent Proposal execution failure:** attach a failed attempt receipt with a
+  safe explanation, retain a retry control on the original proposal, and never
+  publish secret-bearing diagnostics.
 - **Permission denial:** attach a denied receipt explaining the missing
   capability without exposing secrets.
 - **New version regression:** activation is rejected unless required tests pass;
@@ -413,8 +512,13 @@ The first implementation phase includes:
 - typed Block mention candidates and tags;
 - desktop manifest loading, schema validation, caching, and renderer registry;
 - the eleven native presentation primitives;
-- the six initial composite Blocks;
+- the seven initial composite Blocks, including persistent Agent Proposals;
 - visible Blocks catalog and Block workshop conversation;
+- migration of `buzz agents draft-create` and `draft-update` from ephemeral
+  observer frames to persisted `@agent-proposal` instances while reusing the
+  current agent dialogs and owner-side validation;
+- projection of unresolved actionable Blocks into the existing Inbox Needs
+  action filter;
 - version pinning, activation, rollback, and fallback behavior;
 - desktop interaction, accessibility, security, and E2E coverage.
 
@@ -427,6 +531,7 @@ This phase excludes:
 - arbitrary or sandboxed code packages;
 - a public Block marketplace;
 - a separate operational CRM or pipeline;
+- a separate agent-request administration page or duplicate request store;
 - Company storage and lifecycle implementation;
 - Plugin credential and connection implementation;
 - email, WhatsApp, payment, or accounting Bridges;
@@ -445,6 +550,8 @@ This phase excludes:
 - fallback generation and preservation;
 - Question single-select, multi-select, custom input, and validation;
 - Approval grant hashing, expiry, and one-time scope;
+- Agent Proposal create/update schemas, no-secret serialization, attention
+  projection, explicit resolution, and idempotent execution;
 - action and receipt idempotency.
 
 ### Renderer tests
@@ -457,6 +564,8 @@ This phase excludes:
 - charts with accessible table fallback;
 - Card Lists in list, grid, and carousel modes;
 - invalid or unknown payload fallback;
+- multiple simultaneous Agent Proposals, close-and-reopen review, terminal
+  receipts, and Inbox-to-thread navigation;
 - old manifest rendering after active-version change.
 
 ### Security and fault tests
@@ -466,6 +575,9 @@ This phase excludes:
 - replay, rapid double submission, reordered receipt, stale approval, expired
   grant, and offline retry;
 - attempts to request undeclared capabilities or place credentials in payloads;
+- forged or unowned Agent Proposals, target-channel mismatch, duplicate hire,
+  dismissal, restart, reconnect, execution crash recovery, and terminal Inbox
+  removal;
 - external data hash mismatch and unavailable source;
 - community switch with no manifest, payload, or permission leakage.
 
@@ -487,7 +599,17 @@ agent runtime demonstrate:
 9. An Approval produces exactly one action under deliberate retry and
    double-click conditions.
 10. A Receipt records the result and updates the original inline experience.
-11. Invalid, unauthorized, missing-version, hash-invalid, timeout, and offline
+11. An owned agent publishes two persisted `@agent-proposal` instances in the
+    originating thread; both remain independently visible and actionable.
+12. The user opens one proposal, closes it without deciding, restarts the
+    desktop, and finds it both inline and in Inbox → Needs action.
+13. The user reopens it, edits the proposed non-secret configuration, and
+    creates and starts exactly one agent under deliberate double-click, signed
+    action replay, and simulated post-create/pre-receipt recovery.
+14. The resulting receipt updates the original proposal and removes it from the
+    unresolved Inbox projection; explicitly declining the second proposal
+    resolves it without creating an agent.
+15. Invalid, unauthorized, missing-version, hash-invalid, timeout, and offline
     cases degrade according to this specification.
 
 A standalone component demo, mocked-only timeline, passing unit test, or
