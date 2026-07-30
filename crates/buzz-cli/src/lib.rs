@@ -176,6 +176,9 @@ enum Cmd {
     /// Draft owner-reviewed agent creation and updates
     #[command(subcommand)]
     Agents(AgentsCmd),
+    /// Create, inspect, invoke, and act on chat-native Blocks
+    #[command(subcommand)]
+    Blocks(BlocksCmd),
     /// Send, read, search, and manage messages
     #[command(subcommand)]
     Messages(MessagesCmd),
@@ -269,6 +272,9 @@ pub enum AgentsCmd {
         /// Proposed instructions; use '-' to read from stdin
         #[arg(long)]
         system_prompt: String,
+        /// Reply anchor from the current conversation context
+        #[arg(long)]
+        reply_to: Option<String>,
     },
     /// Open a prefilled edit-agent form in the owner's Buzz Desktop
     DraftUpdate {
@@ -291,6 +297,9 @@ pub enum AgentsCmd {
         model: Option<String>,
         #[arg(long, value_enum)]
         respond_to: Option<RespondToArg>,
+        /// Reply anchor from the current conversation context
+        #[arg(long)]
+        reply_to: Option<String>,
     },
     /// Submit a NIP-IA archive request for an identity (kind 9035)
     #[command(
@@ -342,6 +351,114 @@ Examples:\n  \
 buzz agents archived"
     )]
     Archived,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum BlockReceiptStatusArg {
+    #[value(name = "succeeded")]
+    Succeeded,
+    #[value(name = "denied")]
+    Denied,
+    #[value(name = "failed")]
+    Failed,
+    #[value(name = "timed-out")]
+    TimedOut,
+}
+
+#[derive(Subcommand)]
+pub enum BlocksCmd {
+    /// List relay-authored Block catalog heads
+    List,
+    /// Get one catalog head by stable handle
+    Get {
+        #[arg(long)]
+        handle: String,
+        #[arg(long)]
+        author: Option<String>,
+    },
+    /// Publish an immutable draft manifest
+    Draft {
+        #[arg(long)]
+        manifest: String,
+    },
+    /// Validate a manifest and its examples locally
+    Test {
+        #[arg(long)]
+        manifest: String,
+        #[arg(long)]
+        data: Option<String>,
+    },
+    /// Ask the relay catalog broker to activate a tested manifest
+    Activate {
+        #[arg(long)]
+        handle: String,
+        #[arg(long)]
+        manifest: String,
+    },
+    /// Ask the relay catalog broker to roll back to a tested manifest
+    Rollback {
+        #[arg(long)]
+        handle: String,
+        #[arg(long)]
+        manifest: String,
+    },
+    /// Ask the relay catalog broker to deprecate a handle
+    Deprecate {
+        #[arg(long)]
+        handle: String,
+        #[arg(long)]
+        manifest: String,
+    },
+    /// Publish a Block instance as an ordinary kind 9 message
+    Invoke {
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        handle: String,
+        #[arg(long)]
+        data: String,
+        #[arg(long)]
+        fallback: Option<String>,
+        #[arg(long)]
+        manifest: Option<String>,
+        #[arg(long)]
+        reply_to: Option<String>,
+    },
+    /// Read accepted Block actions
+    Actions {
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        instance: Option<String>,
+        #[arg(long)]
+        since: Option<u64>,
+    },
+    /// Submit one declared Block action
+    Act {
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        instance: String,
+        #[arg(long)]
+        action: String,
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Publish a safe action receipt
+    Receipt {
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        action: String,
+        #[arg(long)]
+        instance: String,
+        #[arg(long, value_enum)]
+        status: BlockReceiptStatusArg,
+        #[arg(long)]
+        result: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1807,6 +1924,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 
     match cli.command {
         Cmd::Agents(sub) => commands::agents::dispatch(sub, &client).await,
+        Cmd::Blocks(sub) => commands::blocks::dispatch(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
@@ -1842,6 +1960,163 @@ mod tests {
     }
 
     #[test]
+    fn blocks_command_surface_parses() {
+        let event_id = "a".repeat(64);
+        let channel = "7c07e659-3610-42f4-9a5e-1e9973c09da9";
+        let idempotency_key = "8797229a-3c2c-4bd0-8e2e-48e13f9bcc6f";
+        let cases = vec![
+            vec!["buzz", "blocks", "list"],
+            vec!["buzz", "blocks", "get", "--handle", "lead-card"],
+            vec![
+                "buzz",
+                "blocks",
+                "get",
+                "--handle",
+                "lead-card",
+                "--author",
+                &event_id,
+            ],
+            vec!["buzz", "blocks", "draft", "--manifest", "manifest.json"],
+            vec![
+                "buzz",
+                "blocks",
+                "test",
+                "--manifest",
+                "manifest.json",
+                "--data",
+                "data.json",
+            ],
+            vec![
+                "buzz",
+                "blocks",
+                "activate",
+                "--handle",
+                "lead-card",
+                "--manifest",
+                &event_id,
+            ],
+            vec![
+                "buzz",
+                "blocks",
+                "rollback",
+                "--handle",
+                "lead-card",
+                "--manifest",
+                &event_id,
+            ],
+            vec![
+                "buzz",
+                "blocks",
+                "deprecate",
+                "--handle",
+                "lead-card",
+                "--manifest",
+                &event_id,
+            ],
+            vec![
+                "buzz",
+                "blocks",
+                "invoke",
+                "--channel",
+                channel,
+                "--handle",
+                "lead-card",
+                "--data",
+                "data.json",
+                "--fallback",
+                "fallback.md",
+                "--manifest",
+                &event_id,
+                "--reply-to",
+                &event_id,
+            ],
+            vec![
+                "buzz",
+                "blocks",
+                "actions",
+                "--channel",
+                channel,
+                "--instance",
+                &event_id,
+                "--since",
+                "1785369600",
+            ],
+            vec![
+                "buzz",
+                "blocks",
+                "act",
+                "--channel",
+                channel,
+                "--instance",
+                &event_id,
+                "--action",
+                "submit",
+                "--input",
+                "input.json",
+                "--idempotency-key",
+                idempotency_key,
+            ],
+            vec![
+                "buzz",
+                "blocks",
+                "receipt",
+                "--channel",
+                channel,
+                "--action",
+                &event_id,
+                "--instance",
+                &event_id,
+                "--status",
+                "succeeded",
+                "--result",
+                "result.json",
+            ],
+        ];
+
+        for args in cases {
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "failed to parse {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn agent_draft_commands_accept_optional_reply_anchor() {
+        let event_id = "a".repeat(64);
+        let channel = "7c07e659-3610-42f4-9a5e-1e9973c09da9";
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "agents",
+            "draft-create",
+            "--channel",
+            channel,
+            "--display-name",
+            "Researcher",
+            "--system-prompt",
+            "Find cited prospects.",
+            "--reply-to",
+            &event_id,
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "agents",
+            "draft-update",
+            "--channel",
+            channel,
+            "--agent-name",
+            "Researcher",
+            "--model",
+            "model-id",
+            "--reply-to",
+            &event_id,
+        ])
+        .is_ok());
+    }
+
+    #[test]
     fn set_status_clear_rejects_text_and_emoji() {
         for extra in [["--text", "busy"], ["--emoji", "🎶"]] {
             let args = ["buzz", "users", "set-status", "--clear"]
@@ -1869,6 +2144,7 @@ mod tests {
     fn command_inventory_is_stable() {
         let expected_groups: Vec<&str> = vec![
             "agents",
+            "blocks",
             "canvas",
             "channels",
             "dms",
@@ -1938,6 +2214,22 @@ mod tests {
                 "draft-create",
                 "draft-update",
                 "unarchive"
+            ]
+        );
+        assert_eq!(
+            names(&cmd, "blocks"),
+            vec![
+                "act",
+                "actions",
+                "activate",
+                "deprecate",
+                "draft",
+                "get",
+                "invoke",
+                "list",
+                "receipt",
+                "rollback",
+                "test"
             ]
         );
         assert_eq!(
@@ -2064,6 +2356,7 @@ mod tests {
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
             ("agents", 5),
+            ("blocks", 11),
             ("canvas", 2),
             ("channels", 16),
             ("dms", 4),
