@@ -2127,7 +2127,7 @@ function VideoReviewCommentBody({
       <button
         aria-label={`Jump to ${item.timecode}`}
         className={cn(
-          "inline-flex h-5 shrink-0 items-center rounded px-1.5 align-middle font-mono text-2xs font-semibold outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-white/60",
+          "inline-flex h-5 shrink-0 items-center rounded px-1.5 font-mono text-2xs font-semibold outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-white/60",
           TIMECODE_ACCENT_CLASS,
           TIMECODE_ACCENT_HOVER_CLASS,
         )}
