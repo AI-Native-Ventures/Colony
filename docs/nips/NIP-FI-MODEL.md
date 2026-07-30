@@ -23,7 +23,7 @@ The model is transport-independent. A concrete NIP must separately define how an
 A binding record is:
 
 ```text
-Binding = (domain, identity, key, source, created_at)
+Binding = (domain, identity, key, source, created_at, expires_at?)
 source  = attested-key | provisioned | tofu
 ```
 
@@ -172,7 +172,7 @@ DisableIdentity(D, i):
   atomically:
     add i to X_D
     if (i, k) ∈ B_D:
-      remove (i, k), add (i, k) to P_D, and clear Q_D(i)
+      remove (i, k) and add (i, k) to P_D
     append the transition to H_D
   invalidate direct and dependent delegated leases for i
 
@@ -210,6 +210,8 @@ RotateOrRecover(D, i, k_old, k_new):
 
 A normal request that presents `i` with `k_new` while `k_old` is active is a conflict. If `i` is pending replacement, it denies `explicit_replacement_required`. Neither path rotates automatically. Base V1 recovery uses a fresh, non-retired key; same-key reactivation requires an extension with an equivalently explicit privileged transition and retained lifecycle history.
 
+The active-pair and pending-replacement preconditions to `RotateOrRecover` are mutually exclusive under the lifecycle invariants: the former removes the active old pair, while the latter has no active pair to remove. Base V1 deliberately adds every replaced `k_old` to `Y_D`, including on voluntary rotation, so that ordinary authorization cannot reuse it for another identity. `DisableIdentity` preserves any existing `Q_D(i)` selector; the disabled-identity selector independently blocks recovery until a separately authorized enablement policy removes it.
+
 # Delegation
 
 Delegation is outside the base identity-binding primitive. A separate delegation standard may allow a bound owner key to authorize a delegate key. If supported, the verifier must first validate the delegation proof and derive the owner key, then require an active owner binding; a cached owner lease is not alternative authority when that binding is absent. It must not create the owner's federated identity binding for the delegate. The delegated decision retains the active owner-binding dependency, intersects the delegation's operations and conditions, expires at the earliest known owner-binding, delegation, policy, or implementation bound, and is invalidated when the owner binding is retired or revoked. The delegate presents no assertion, so its lease has no independent assertion-expiry bound; a deployment that additionally requires a current owner assertion or direct lease includes that bound too. A deployment may add a stronger current-provider admission requirement for the owner without changing this base primitive.
@@ -231,7 +233,7 @@ Under the trust assumptions, for direct (non-delegated) authorization:
 11. **Domain separation:** authorization in one domain does not imply authorization in another.
 12. **Lease boundedness:** no cached authorization survives its earliest applicable assertion, binding, policy, delegation, or implementation bound; after a dependency change is observed, no matching direct or delegated lease remains valid.
 13. **Fail-closed storage and verification:** validation, key retrieval, or binding-state failures never produce allow.
-14. **Privacy:** NIP-FI protocol behavior never publishes `iss`, `sub`, JWTs, or mutable profile claims in Nostr events or relay-visible event history. A separate opt-in relay-signed projection may publish an approved label, but never `iss`, `sub`, bearer material, or another unapproved private claim, and never as authorization evidence.
+14. **Privacy:** NIP-FI protocol behavior never publishes `iss`, `sub`, JWTs, or mutable profile claims in Nostr events or relay-visible event history, and operational logs never retain their unredacted values. Access-controlled binding and lifecycle state may retain identifiers required for enforcement and audit. A separate opt-in relay-signed projection may publish an approved label, but never `iss`, `sub`, bearer material, or another unapproved private claim, and never as authorization evidence.
 
 # Liveness properties
 

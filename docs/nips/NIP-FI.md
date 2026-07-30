@@ -29,7 +29,7 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 - **assertion**: a JWT issued by a configured identity provider, presented alongside (never instead of) Nostr authentication.
 - **federated identity** (`i`): the tuple `(iss, sub)` from a validated assertion. The `iss` value MUST be the exact validated issuer identifier and `sub` the exact non-empty subject string. A username, email, display name, or bare `sub` MUST NOT be used as a federated identity.
 - **authorization domain** (`D`): the scope within which bindings apply, resolved by the verifier from authenticated server routing or configuration (an entire relay, or one tenant of a multi-tenant relay). An assertion, proof, header value, or other untrusted request input MUST NOT select or rewrite `D`, and bindings MUST NOT cross domains implicitly.
-- **binding**: an active record associating exactly one federated identity with exactly one 32-byte Nostr public key within a domain.
+- **binding**: an active record associating exactly one federated identity with exactly one 32-byte Nostr public key within a domain. A binding MAY carry an authoritative expiry.
 - **retired pair**: a durable denial selector recording that one exact `(identity, key)` pair MUST NOT be recreated by ordinary authorization.
 - **disabled identity**: a durable denial selector preventing an identity from authorizing or enrolling any key.
 - **revoked key**: a durable denial selector preventing a key from authorizing or binding to any identity.
@@ -37,6 +37,7 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 - **enrollment mode**: the domain's policy for creating bindings — `attested-key`, `provisioned`, or `tofu` (defined below).
 - **Nostr proof**: a valid NIP-42 AUTH event (WebSocket) or NIP-98 event (HTTP) proving control of a key on the current connection or request.
 - **direct lease**: a cached direct authorization decision for one `(domain, identity, key)`, bounded by the assertion's expiry and every shorter known binding, policy, or implementation limit.
+- **delegated lease**: a cached delegated authorization decision for a delegate key, dependent on an active owner binding and bounded by every shorter known owner-binding, delegation, policy, or implementation limit. It has no independent assertion-expiry bound unless a stronger deployment policy requires a current owner assertion or direct lease.
 
 ## Assertion transport
 
@@ -126,7 +127,7 @@ When multiple keys authenticate on one connection (NIP-42 permits this), authori
 
 ## Revocation and rotation
 
-Revocation and recovery are explicit administrative or policy transitions, never side effects of `Authorize`. Their storage representation is implementation-defined, but their denial selectors and active-binding changes MUST be atomic and durable:
+Revocation and recovery are explicit administrative or policy transitions, never side effects of `Authorize`. Their storage representation is implementation-defined, but their denial selectors, active-binding changes, and durable lifecycle-history append MUST commit atomically:
 
 - **Retire pair**: remove an active `(i, k)`, retain an exact-pair tombstone, mark `i` pending explicit replacement, and invalidate matching leases.
 - **Disable identity**: record the identity selector even when `i` has never enrolled. If `i` has an active binding, remove it, retire the pair, and invalidate direct and dependent delegated leases.
@@ -136,7 +137,7 @@ A subsequent valid assertion — including one whose key claim matches a retired
 
 Rotation or recovery requires a separate privileged transition. Replacing `k_old` with `k_new` requires explicit administrative or documented recovery authorization, an active `(i, k_old)` binding or pending-replacement record for that pair, an identity `i` that is not disabled, no active binding or lifecycle gate for `k_new`, and — where the domain requires issuer attestation — a fresh assertion whose key claim equals `k_new`. The transition atomically retires the old pair and key, creates `(i, k_new)`, clears the pending-replacement state, records durable lifecycle history, and invalidates leases for `k_old`. A routine request presenting a new key is either a binding conflict or `explicit replacement required` and MUST be denied without mutation.
 
-Base V1 recovery uses a fresh, non-retired key. A deployment that permits same-key reactivation is an extension and MUST provide an equivalently explicit privileged transition while retaining the original lifecycle history; ordinary `Authorize` can never perform it.
+Base V1 recovery uses a fresh, non-retired key and treats every replaced old key as revoked throughout the domain, including for a voluntary rotation. A deployment that permits old-key reuse or same-key reactivation is an extension and MUST provide an equivalently explicit privileged transition while retaining the original lifecycle history; ordinary `Authorize` can never perform it.
 
 ## Delegation
 
@@ -169,7 +170,7 @@ A relay SHOULD advertise support in its NIP-11 document under `limitation` as `"
 
 ## Privacy
 
-Federated identities are typically personal data (employee identifiers). NIP-FI itself MUST NOT publish `iss`, `sub`, assertion contents, or display-name claims in Nostr events or tags, and a conforming service MUST NOT expose another user's binding state through rejection messages. Binding records, audit logs, and metrics are service-internal, and logs MUST NOT record raw bearer assertions.
+Federated identities are typically personal data (employee identifiers). NIP-FI itself MUST NOT publish `iss`, `sub`, assertion contents, or display-name claims in Nostr events or tags, and a conforming service MUST NOT expose another user's binding state through rejection messages. Access-controlled binding and lifecycle records are service-internal and MAY retain the identifiers needed to enforce and audit the state machine. Operational logs and metrics MUST NOT record raw bearer assertions or unredacted `iss`, `sub`, display-name, email, or other private assertion claims; redacted or pseudonymous security records are allowed.
 
 A separate, opt-in relay-signed projection protocol such as NIP-85 MAY publish an approved label. Such a projection MUST NOT contain `iss`, `sub`, bearer material, or other unapproved private claims, and it MUST NOT be accepted as NIP-FI authorization evidence.
 
