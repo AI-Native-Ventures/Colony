@@ -3608,6 +3608,11 @@ impl Db {
     }
 
     /// Find events that require action from the given pubkey.
+    ///
+    /// Includes unresolved attention-bearing Block instances alongside legacy
+    /// workflow approvals and reminders. The feed query preserves community
+    /// and accessible-channel scope; receipts only resolve their originating
+    /// Block instance inside that same boundary.
     pub async fn query_feed_needs_action(
         &self,
         community: CommunityId,

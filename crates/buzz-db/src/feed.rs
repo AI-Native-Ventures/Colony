@@ -34,10 +34,11 @@ use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use buzz_core::kind::{
-    KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_GIT_ISSUE, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
-    KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
-    KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT, KIND_STREAM_MESSAGE,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_BLOCK_RECEIPT, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_GIT_ISSUE, KIND_GIT_PR_UPDATE,
+    KIND_GIT_PULL_REQUEST, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED,
+    KIND_GIT_STATUS_OPEN, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
+    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
+    KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use buzz_core::{CommunityId, StoredEvent};
 
@@ -188,7 +189,31 @@ fn build_needs_action_query(
     qb.push(" AND m.pubkey_hex = ").push_bind(pubkey_hex);
     qb.push(" AND e.deleted_at IS NULL");
     qb.push(format!(
-        " AND e.kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER})"
+        " AND ( \
+            e.kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER}) \
+            OR ( \
+                e.kind = {KIND_STREAM_MESSAGE} \
+                AND e.tags @> '[[\"block-attention\",\"1\",\"required\"]]'::jsonb \
+                AND NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM events receipt \
+                    WHERE receipt.community_id = e.community_id \
+                      AND receipt.deleted_at IS NULL \
+                      AND receipt.kind = {KIND_BLOCK_RECEIPT} \
+                      AND receipt.channel_id IS NOT DISTINCT FROM e.channel_id \
+                      AND receipt.tags @> jsonb_build_array( \
+                          jsonb_build_array( \
+                              'e', \
+                              encode(e.id, 'hex'), \
+                              '', \
+                              'block-instance' \
+                          ) \
+                      ) \
+                      AND receipt.tags @> \
+                          '[[\"block-attention\",\"1\",\"resolved\"]]'::jsonb \
+                ) \
+            ) \
+        )"
     ));
     push_visible_channel_filter(&mut qb, "e.channel_id", accessible_channel_ids);
     if let Some(s) = since {
@@ -202,6 +227,7 @@ fn build_needs_action_query(
 /// Find events that require action from the given pubkey:
 /// - [`KIND_WORKFLOW_APPROVAL_REQUESTED`] (workflow approval requested, tagged with user pubkey)
 /// - [`KIND_STREAM_REMINDER`] (reminder, tagged with user pubkey)
+/// - unresolved [`KIND_STREAM_MESSAGE`] Block instances carrying required attention
 ///
 /// Only returns community-global events and events from channels the user has access to
 /// (`accessible_channel_ids`). This prevents surfacing approval requests from channels
@@ -469,6 +495,167 @@ mod tests {
         assert!(
             rows.iter().all(|row| row.event.id != event_b.id),
             "community B needs_action item must not appear in community A feed"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn block_attention_lifecycle_is_durable_and_scope_safe() {
+        let pool = setup_pool().await;
+        let community_a = CommunityId::from_uuid(make_test_community(&pool).await);
+        let community_b = CommunityId::from_uuid(make_test_community(&pool).await);
+        let visible_channel = insert_test_channel(&pool, community_a).await;
+        let inaccessible_channel = insert_test_channel(&pool, community_a).await;
+        let other_community_channel = insert_test_channel(&pool, community_b).await;
+        let owner_hex = "42".repeat(32);
+        let owner_bytes = hex::decode(&owner_hex).expect("owner pubkey");
+
+        let actionable = store_feed_event(
+            &pool,
+            community_a,
+            KIND_STREAM_MESSAGE,
+            "Agent proposed hiring Researcher",
+            Some(visible_channel),
+            vec![
+                Tag::parse(["p", owner_hex.as_str()]).expect("owner tag"),
+                Tag::parse(["block-attention", "1", "required"]).expect("attention tag"),
+            ],
+        )
+        .await;
+        let ordinary = store_feed_event(
+            &pool,
+            community_a,
+            KIND_STREAM_MESSAGE,
+            "ordinary mention",
+            Some(visible_channel),
+            vec![Tag::parse(["p", owner_hex.as_str()]).expect("owner tag")],
+        )
+        .await;
+
+        let mentions = query_mentions(
+            &pool,
+            community_a,
+            &owner_bytes,
+            &[visible_channel],
+            None,
+            50,
+        )
+        .await
+        .expect("query mentions");
+        assert!(mentions.iter().any(|row| row.event.id == actionable.id));
+        assert!(mentions.iter().any(|row| row.event.id == ordinary.id));
+
+        let needs_action = || async {
+            query_needs_action(
+                &pool,
+                community_a,
+                &owner_bytes,
+                &[visible_channel],
+                None,
+                50,
+            )
+            .await
+            .expect("query needs action")
+        };
+        let initial = needs_action().await;
+        assert!(initial.iter().any(|row| row.event.id == actionable.id));
+        assert!(
+            initial.iter().all(|row| row.event.id != ordinary.id),
+            "an ordinary mentioned kind 9 belongs in Mentions, not Needs action"
+        );
+
+        let instance_id = actionable.id.to_hex();
+        for status in ["failed", "timed-out"] {
+            store_feed_event(
+                &pool,
+                community_a,
+                KIND_BLOCK_RECEIPT,
+                "{}",
+                Some(visible_channel),
+                vec![
+                    Tag::parse(["e", instance_id.as_str(), "", "block-instance"])
+                        .expect("instance reference"),
+                    Tag::parse([
+                        "block-receipt",
+                        "1",
+                        &Uuid::new_v4().to_string(),
+                        &Uuid::new_v4().to_string(),
+                        status,
+                    ])
+                    .expect("receipt status"),
+                ],
+            )
+            .await;
+            assert!(
+                needs_action()
+                    .await
+                    .iter()
+                    .any(|row| row.event.id == actionable.id),
+                "{status} receipt must leave attention unresolved"
+            );
+        }
+
+        store_feed_event(
+            &pool,
+            community_b,
+            KIND_BLOCK_RECEIPT,
+            "{}",
+            Some(other_community_channel),
+            vec![
+                Tag::parse(["e", instance_id.as_str(), "", "block-instance"])
+                    .expect("cross-community instance reference"),
+                Tag::parse(["block-attention", "1", "resolved"]).expect("resolved tag"),
+            ],
+        )
+        .await;
+        assert!(
+            needs_action()
+                .await
+                .iter()
+                .any(|row| row.event.id == actionable.id),
+            "a receipt from another community cannot resolve visible attention"
+        );
+
+        store_feed_event(
+            &pool,
+            community_a,
+            KIND_BLOCK_RECEIPT,
+            "{}",
+            Some(inaccessible_channel),
+            vec![
+                Tag::parse(["e", instance_id.as_str(), "", "block-instance"])
+                    .expect("inaccessible instance reference"),
+                Tag::parse(["block-attention", "1", "resolved"]).expect("resolved tag"),
+            ],
+        )
+        .await;
+        assert!(
+            needs_action()
+                .await
+                .iter()
+                .any(|row| row.event.id == actionable.id),
+            "a receipt from another channel cannot resolve the visible instance"
+        );
+
+        store_feed_event(
+            &pool,
+            community_a,
+            KIND_BLOCK_RECEIPT,
+            "{}",
+            Some(visible_channel),
+            vec![
+                Tag::parse(["e", instance_id.as_str(), "", "block-instance"])
+                    .expect("authorized instance reference"),
+                Tag::parse(["block-attention", "1", "resolved"]).expect("resolved tag"),
+            ],
+        )
+        .await;
+        assert!(
+            needs_action()
+                .await
+                .iter()
+                .all(|row| row.event.id != actionable.id),
+            "same-community resolution in the instance channel must clear Needs action"
         );
     }
 
@@ -865,6 +1052,25 @@ mod tests {
         assert!(
             sql.contains("AND m.community_id = "),
             "needs_action feed must also bind event_mentions.community_id: {sql}"
+        );
+        assert!(
+            sql.contains("e.kind = 9")
+                && sql.contains("e.tags @> '[[\"block-attention\",\"1\",\"required\"]]'::jsonb"),
+            "needs_action must use the GIN-backed exact required-attention containment: {sql}"
+        );
+        assert!(
+            sql.contains("receipt.community_id = e.community_id")
+                && sql.contains("receipt.kind = 40011")
+                && sql.contains("receipt.channel_id IS NOT DISTINCT FROM e.channel_id"),
+            "receipt resolution must retain community and originating-channel keys: {sql}"
+        );
+        assert!(
+            sql.contains("receipt.tags @> jsonb_build_array")
+                && sql.contains("encode(e.id, 'hex')")
+                && sql.contains(
+                    "receipt.tags @> '[[\"block-attention\",\"1\",\"resolved\"]]'::jsonb"
+                ),
+            "receipt resolution must use indexed block-instance and resolved-attention containment: {sql}"
         );
     }
 
