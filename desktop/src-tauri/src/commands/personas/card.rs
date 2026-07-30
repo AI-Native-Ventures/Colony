@@ -60,6 +60,10 @@ const DESIGNER_MODEL: &str = "gpt-5.6-sol";
 const IMAGE_MODEL: &str = "gpt-image-2";
 /// Final card width in pixels (2:3 portrait → 1500x2250).
 const CARD_WIDTH: u32 = 1500;
+/// Longest edge for the real avatar inlined into an unlocked card's manifest.
+/// Kind:0 pictures render small; 512px keeps the doubly-base64-encoded
+/// manifest chunk modest next to the 1500-wide card body.
+const MANIFEST_AVATAR_MAX_DIM: u32 = 512;
 /// Upper bound for a fetched avatar (pre-resize input to the model).
 const MAX_AVATAR_FETCH_BYTES: usize = 10 * 1024 * 1024;
 /// One mint is a single long API call (~2–3 minutes observed).
@@ -338,6 +342,14 @@ Render all text with perfect fidelity."#
 /// Encode raw image bytes as a `data:image/png;base64,` URL, downscaling to
 /// `max_dim` on the longest edge so request payloads stay small.
 fn image_data_url(bytes: &[u8], max_dim: u32) -> Result<String, String> {
+    Ok(format!(
+        "data:image/png;base64,{}",
+        STANDARD.encode(png_bytes_resized(bytes, max_dim)?)
+    ))
+}
+
+/// Re-encode an image as PNG, downscaling so neither side exceeds `max_dim`.
+fn png_bytes_resized(bytes: &[u8], max_dim: u32) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("Failed to decode image: {e}"))?;
     let img = if img.width().max(img.height()) > max_dim {
         img.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3)
@@ -347,7 +359,7 @@ fn image_data_url(bytes: &[u8], max_dim: u32) -> Result<String, String> {
     let mut png = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|e| format!("Failed to encode image: {e}"))?;
-    Ok(format!("data:image/png;base64,{}", STANDARD.encode(&png)))
+    Ok(png)
 }
 
 // ── Response parsing ──────────────────────────────────────────────────────────
@@ -647,7 +659,11 @@ pub async fn mint_agent_card(
 
     // ── Build the manifest now (with any requested memory) so a broken agent
     //    fails before we spend minutes on the API call. ───────────────────────
-    let manifest_avatar = decode_avatar_data_url(record.avatar_url.as_deref().unwrap_or(""));
+    let manifest_avatar = manifest_avatar_bytes(
+        lock_keys.is_some(),
+        &avatar_bytes,
+        record.avatar_url.as_deref(),
+    )?;
     let snapshot = build_snapshot(
         &record,
         memory_level,
@@ -822,6 +838,30 @@ fn preferred_avatar_url(
     kind0_picture
         .filter(|p| !p.trim().is_empty())
         .or(record_avatar_url)
+}
+
+/// The avatar bytes the card manifest should inline.
+///
+/// Unlocked cards must carry the agent's REAL avatar inline: the PNG body is
+/// the generated card artwork, and the importer only adopts the body as the
+/// avatar when the manifest carries no inline bytes (`import.rs`) — without
+/// these bytes an imported agent would wear the card as its face. Downscaled
+/// to [`MANIFEST_AVATAR_MAX_DIM`] so the manifest tEXt chunk stays small.
+///
+/// Locked cards keep the data-URL-only behavior: the whole manifest must fit
+/// the NIP-44 plaintext cap (65 KB), which cannot carry inline pixels, and a
+/// locked envelope never reaches the import body override anyway.
+fn manifest_avatar_bytes(
+    locked: bool,
+    avatar_bytes: &[u8],
+    record_avatar_url: Option<&str>,
+) -> Result<Option<Vec<u8>>, String> {
+    if locked {
+        return Ok(decode_avatar_data_url(record_avatar_url.unwrap_or("")));
+    }
+    png_bytes_resized(avatar_bytes, MANIFEST_AVATAR_MAX_DIM)
+        .map(Some)
+        .map_err(|e| format!("Failed to inline the agent avatar into the card manifest: {e}"))
 }
 
 /// True when `url` shares an origin (scheme, host, port) with `relay_base`.

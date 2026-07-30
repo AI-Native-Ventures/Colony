@@ -240,15 +240,23 @@ pub(crate) fn parse_snapshot_payload_from_bytes(file_bytes: &[u8]) -> Result<Chu
         let chunk_json = extract_chunk_payload_png(file_bytes)?;
         let mut payload = parse_chunk_payload(&chunk_json)?;
         // The PNG image body is the portable avatar. It deliberately wins over
-        // manifest avatar fields, whose URL may only be reachable by the
-        // sender. A 1×1 export placeholder leaves the manifest fallback intact.
+        // a manifest avatar *URL*, which may only be reachable by the sender.
+        // A 1×1 export placeholder leaves the manifest fallback intact.
+        // Inline manifest avatar *bytes* are authoritative and never
+        // overridden: trading cards supply the generated card artwork as the
+        // PNG body and carry the agent's real avatar inline — adopting the
+        // body there would import the card as the agent's face.
         // Locked envelopes stay opaque here — there is no manifest to override
         // until the unlock path decrypts one.
         if let ChunkPayload::Plain(snapshot) = &mut payload {
-            if let Some(avatar_data_url) =
-                crate::managed_agents::snapshot_avatar::snapshot_png_avatar_data_url(file_bytes)?
-            {
-                snapshot.profile.avatar_data_url = Some(avatar_data_url);
+            if snapshot.profile.avatar_data_url.is_none() {
+                if let Some(avatar_data_url) =
+                    crate::managed_agents::snapshot_avatar::snapshot_png_avatar_data_url(
+                        file_bytes,
+                    )?
+                {
+                    snapshot.profile.avatar_data_url = Some(avatar_data_url);
+                }
             }
         }
         payload

@@ -172,6 +172,52 @@ fn kind0_picture_wins_over_record_avatar_unless_blank() {
 }
 
 #[test]
+fn unlocked_manifest_inlines_real_avatar_bytes_downscaled() {
+    // 700px source (over MANIFEST_AVATAR_MAX_DIM) in a solid color.
+    let avatar = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        700,
+        700,
+        image::Rgba([9, 120, 33, 255]),
+    ));
+    let mut avatar_png = std::io::Cursor::new(Vec::new());
+    avatar
+        .write_to(&mut avatar_png, image::ImageFormat::Png)
+        .unwrap();
+
+    let inlined = manifest_avatar_bytes(false, avatar_png.get_ref(), None)
+        .unwrap()
+        .expect("unlocked mints must inline the real avatar");
+    let img = image::load_from_memory(&inlined).unwrap();
+    assert_eq!(
+        (img.width(), img.height()),
+        (MANIFEST_AVATAR_MAX_DIM, MANIFEST_AVATAR_MAX_DIM)
+    );
+    assert_eq!(img.to_rgba8().get_pixel(0, 0).0, [9, 120, 33, 255]);
+
+    // Undecodable avatar bytes fail the mint (pre-spend), never silently
+    // produce a card whose import would wear the artwork as a face.
+    assert!(manifest_avatar_bytes(false, b"not a png", None).is_err());
+}
+
+#[test]
+fn locked_manifest_keeps_data_url_only_avatar() {
+    // Locked mints must not inline fetched bytes (NIP-44 cap): only a record
+    // data URL carries over, exactly as before.
+    let unused = [0u8; 4];
+    assert_eq!(
+        manifest_avatar_bytes(true, &unused, Some("data:image/png;base64,aGk="))
+            .unwrap()
+            .as_deref(),
+        Some(b"hi".as_slice())
+    );
+    assert_eq!(
+        manifest_avatar_bytes(true, &unused, Some("https://relay/media/a.png")).unwrap(),
+        None
+    );
+    assert_eq!(manifest_avatar_bytes(true, &unused, None).unwrap(), None);
+}
+
+#[test]
 fn media_get_auth_gate_is_same_origin_only() {
     // The minted Blossom get-auth header may only travel to the relay's own
     // origin — scheme, host, and port all count (same contract as
