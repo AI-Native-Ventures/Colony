@@ -51,7 +51,7 @@ It succeeds only if all of the following hold:
 1. the signature validates under a currently trusted key and an explicitly allowed asymmetric algorithm;
 2. `A.iss` exactly equals the configured issuer identifier used to select that key;
 3. at least one `A.aud` value exactly equals an audience configured for this service;
-4. `exp` exists and `now < exp`, allowing only a bounded configured clock skew;
+4. `exp` exists and `now < exp`;
 5. if present, `nbf <= now + configured_skew` and `iat <= now + configured_skew`;
 6. `A.sub` is an unambiguous non-empty string;
 7. `i = (A.iss, A.sub)`; and
@@ -137,7 +137,7 @@ The resulting authorization lease is:
 
 ```text
 L = (D, i, k, expires_at)
-expires_at <= min(assertion.exp, policy_expiry?, delegation_expiry?, implementation_limit?)
+expires_at <= min(assertion.exp, binding_expiry?, policy_expiry?, implementation_limit?)
 ```
 
 Unknown optional bounds are omitted from the minimum. A lease authorizes only policy-selected operations in `D`; it does not authorize signing and does not imply that event authors may differ from `k`. Its continued eligibility also depends on every binding and lifecycle selector read by the decision.
@@ -198,9 +198,13 @@ RotateOrRecover(D, i, k_old, k_new):
   require (i, k_new) ∉ P_D
   require no active binding for k_new
   if issuer-attested rotation is required, require fresh k_a = k_new
-  atomically remove any active (i, k_old), add (i, k_old) to P_D,
-    add k_old to Y_D, create (i, k_new), and clear Q_D(i)
-  append the transition to H_D
+  atomically:
+    remove any active (i, k_old)
+    add (i, k_old) to P_D
+    add k_old to Y_D
+    create (i, k_new)
+    clear Q_D(i)
+    append the transition to H_D
   invalidate leases for k_old
 ```
 
@@ -208,7 +212,7 @@ A normal request that presents `i` with `k_new` while `k_old` is active is a con
 
 # Delegation
 
-Delegation is outside the base identity-binding primitive. A separate delegation standard may allow a bound owner key to authorize a delegate key. If supported, the verifier must first validate the delegation proof and derive the owner key, then require an active owner binding or unexpired owner authorization lease. It must not create the owner's federated identity binding for the delegate. The delegated decision retains the owner dependency, intersects the delegation's operations and conditions, expires at the earliest owner, delegation, policy, or implementation bound, and is invalidated when the owner binding is retired or revoked. A deployment may add a stronger current-provider admission requirement for the owner without changing this base primitive.
+Delegation is outside the base identity-binding primitive. A separate delegation standard may allow a bound owner key to authorize a delegate key. If supported, the verifier must first validate the delegation proof and derive the owner key, then require an active owner binding; a cached owner lease is not alternative authority when that binding is absent. It must not create the owner's federated identity binding for the delegate. The delegated decision retains the active owner-binding dependency, intersects the delegation's operations and conditions, expires at the earliest known owner-binding, delegation, policy, or implementation bound, and is invalidated when the owner binding is retired or revoked. The delegate presents no assertion, so its lease has no independent assertion-expiry bound; a deployment that additionally requires a current owner assertion or direct lease includes that bound too. A deployment may add a stronger current-provider admission requirement for the owner without changing this base primitive.
 
 # Safety properties
 
@@ -225,9 +229,9 @@ Under the trust assumptions, for direct (non-delegated) authorization:
 9. **Rotation atomicity:** observers see either the valid old state or the completed replacement, never a partial transition; lifecycle history is retained.
 10. **Linearizable lifecycle:** authorization racing a lifecycle transition cannot commit a binding that violates the completed transition.
 11. **Domain separation:** authorization in one domain does not imply authorization in another.
-12. **Lease boundedness:** no cached authorization survives its earliest assertion, policy, delegation, or implementation bound; after a dependency change is observed, no matching direct or delegated lease remains valid.
+12. **Lease boundedness:** no cached authorization survives its earliest applicable assertion, binding, policy, delegation, or implementation bound; after a dependency change is observed, no matching direct or delegated lease remains valid.
 13. **Fail-closed storage and verification:** validation, key retrieval, or binding-state failures never produce allow.
-14. **Privacy:** NIP-FI protocol behavior never publishes `iss`, `sub`, JWTs, email, or display names in Nostr events or relay-visible event history. A separate opt-in relay-signed projection may publish an approved label, but never those private values and never as authorization evidence.
+14. **Privacy:** NIP-FI protocol behavior never publishes `iss`, `sub`, JWTs, or mutable profile claims in Nostr events or relay-visible event history. A separate opt-in relay-signed projection may publish an approved label, but never `iss`, `sub`, bearer material, or another unapproved private claim, and never as authorization evidence.
 
 # Liveness properties
 

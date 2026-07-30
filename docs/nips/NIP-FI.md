@@ -36,7 +36,7 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 - **pending replacement**: lifecycle state recording that an identity whose prior key was retired MUST use a separately authorized recovery or rotation transition before another key can become active.
 - **enrollment mode**: the domain's policy for creating bindings — `attested-key`, `provisioned`, or `tofu` (defined below).
 - **Nostr proof**: a valid NIP-42 AUTH event (WebSocket) or NIP-98 event (HTTP) proving control of a key on the current connection or request.
-- **lease**: a cached authorization decision for one `(domain, identity, key)`, bounded by the assertion's expiry and every shorter authoritative policy, delegation, or implementation limit.
+- **direct lease**: a cached direct authorization decision for one `(domain, identity, key)`, bounded by the assertion's expiry and every shorter known binding, policy, or implementation limit.
 
 ## Assertion transport
 
@@ -64,7 +64,7 @@ The verifier is configured, per accepted issuer, with: the issuer identifier, a 
 5. The JWT `sub` claim is present, a non-empty string, and unambiguously a single value. Base V1 always defines `i = (iss, sub)`; mapping another claim into a local principal is a deployment extension and MUST NOT be advertised as base V1 conformance.
 6. If a key claim is configured and present, it parses to exactly one 32-byte Nostr public key. Lowercase hex is the canonical encoding; `npub` bech32 MAY be accepted as a documented input normalization.
 
-A display-name claim MAY be extracted as mutable metadata. It MUST NOT participate in any authorization decision.
+Display-name, email, and similar profile claims MAY be extracted as mutable metadata. They MUST NOT participate in any authorization decision.
 
 Signing-key retrieval failures MUST fail closed. Verifiers SHOULD cache the key set with a bounded lifetime and SHOULD NOT refetch it in response to an unknown `kid` that was absent from a freshly fetched set, so that forged tokens cannot drive request floods to the identity provider.
 
@@ -120,7 +120,7 @@ Base V1 therefore has one active principal key per domain. Multiple devices eith
 
 For HTTP requests, the decision applies to that request only.
 
-For a NIP-42 WebSocket connection, the relay MAY cache the decision as a lease. Its expiry MUST be no later than the assertion's `exp` and every shorter policy, delegation, or configured implementation bound known to the verifier. At expiry the relay MUST reject protected operations or close the connection. Renewal requires a new WebSocket connection carrying a fresh assertion on its upgrade request, followed by fresh NIP-42 proof; base V1 defines no in-connection renewal message. When a relay learns that a binding, identity, key, policy decision, or delegation on which a lease depends is no longer valid, it MUST invalidate every matching direct and delegated lease. A relay that detects revocation by polling MUST NOT claim immediate revocation and SHOULD document its maximum detection latency.
+For a NIP-42 WebSocket connection, the relay MAY cache the decision as a direct lease. Its expiry MUST be no later than the assertion's `exp` and every shorter known binding-expiry, policy, or configured implementation bound. At expiry the relay MUST reject protected operations or close the connection. Renewal requires a new WebSocket connection carrying a fresh assertion on its upgrade request, followed by fresh NIP-42 proof; base V1 defines no in-connection renewal message. When a relay learns that a binding, identity, key, policy decision, or delegation on which a lease depends is no longer valid, it MUST invalidate every matching direct and delegated lease. A relay that detects revocation by polling MUST NOT claim immediate revocation and SHOULD document its maximum detection latency.
 
 When multiple keys authenticate on one connection (NIP-42 permits this), authorization is tracked per key. A lease for one key MUST NOT authorize operations attributed to another.
 
@@ -134,13 +134,13 @@ Revocation and recovery are explicit administrative or policy transitions, never
 
 A subsequent valid assertion — including one whose key claim matches a retired key — cannot clear these selectors or create a replacement binding. This prevents a replayed, still-valid assertion and a routine login with a different key from silently undoing revocation.
 
-Rotation or recovery requires a separate privileged transition. Replacing `k_old` with `k_new` requires explicit administrative or documented recovery authorization, an active `(i, k_old)` binding or pending-replacement record for that pair, no active binding or lifecycle gate for `k_new`, and — where the domain requires issuer attestation — a fresh assertion whose key claim equals `k_new`. The transition atomically retires the old pair and key, creates `(i, k_new)`, clears the pending-replacement state, records durable lifecycle history, and invalidates leases for `k_old`. A routine request presenting a new key is either a binding conflict or `explicit replacement required` and MUST be denied without mutation.
+Rotation or recovery requires a separate privileged transition. Replacing `k_old` with `k_new` requires explicit administrative or documented recovery authorization, an active `(i, k_old)` binding or pending-replacement record for that pair, an identity `i` that is not disabled, no active binding or lifecycle gate for `k_new`, and — where the domain requires issuer attestation — a fresh assertion whose key claim equals `k_new`. The transition atomically retires the old pair and key, creates `(i, k_new)`, clears the pending-replacement state, records durable lifecycle history, and invalidates leases for `k_old`. A routine request presenting a new key is either a binding conflict or `explicit replacement required` and MUST be denied without mutation.
 
 Base V1 recovery uses a fresh, non-retired key. A deployment that permits same-key reactivation is an extension and MUST provide an equivalently explicit privileged transition while retaining the original lifecycle history; ordinary `Authorize` can never perform it.
 
 ## Delegation
 
-Delegation is outside the base primitive but composes with it. A service MAY admit a key that presents no assertion when a separately validated delegation proof (for example a NIP-OA `auth` tag) establishes an owner key that holds an active binding in the domain. The delegate key MUST NOT acquire the owner's federated identity binding through this path. Its authorization retains an explicit dependency on the owner binding, intersects the delegated operations and conditions, and expires at the earliest owner, delegation, policy, or implementation bound. Revoking or retiring the owner binding invalidates dependent delegated leases on the same detection schedule as the owner's own leases. A deployment MAY require a stronger current-provider admission decision for the owner, but that is an additional authorization layer rather than part of this base binding primitive.
+Delegation is outside the base primitive but composes with it. A service MAY admit a key that presents no assertion when a separately validated delegation proof (for example a NIP-OA `auth` tag) establishes an owner key that holds an active binding in the domain. A cached owner lease MUST NOT substitute for that active binding. The delegate key MUST NOT acquire the owner's federated identity binding through this path. The delegated decision retains an explicit dependency on the active owner binding, intersects the delegated operations and conditions, and expires at the earliest known owner-binding, delegation, policy, or implementation bound. Because the delegate presents no assertion, its lease has no independent assertion-expiry bound; if a deployment additionally requires a current owner assertion or direct lease, that bound is included too. Revoking or retiring the owner binding invalidates dependent delegated leases on the same detection schedule as the owner's own leases. A deployment MAY require a stronger current-provider admission decision for the owner, but that is an additional authorization layer rather than part of this base binding primitive.
 
 ## Rejection semantics
 
