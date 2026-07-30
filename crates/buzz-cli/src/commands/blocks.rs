@@ -69,6 +69,7 @@ pub async fn dispatch(command: BlocksCmd, client: &BuzzClient) -> Result<(), Cli
             data,
             fallback,
             manifest,
+            processor,
             reply_to,
         } => {
             invoke(
@@ -78,6 +79,7 @@ pub async fn dispatch(command: BlocksCmd, client: &BuzzClient) -> Result<(), Cli
                 &data,
                 fallback.as_deref(),
                 manifest.as_deref(),
+                processor.as_deref(),
                 reply_to.as_deref(),
             )
             .await
@@ -293,6 +295,7 @@ async fn invoke(
     data_path: &str,
     fallback_path: Option<&str>,
     raw_manifest_id: Option<&str>,
+    raw_processor: Option<&str>,
     raw_reply_to: Option<&str>,
 ) -> Result<(), CliError> {
     let channel_id = parse_uuid(raw_channel)?;
@@ -323,12 +326,7 @@ async fn invoke(
             root_event_id: event_id,
             parent_event_id: event_id,
         });
-    let processor = resolved
-        .manifest
-        .actions
-        .iter()
-        .any(|action| matches!(action.interaction, BlockInteraction::Signed { .. }))
-        .then(|| client.keys().public_key());
+    let processor = resolve_instance_processor(&resolved.manifest, raw_processor)?;
     let instance_id = Uuid::new_v4();
     let builder = build_block_instance(&BlockInstanceInput {
         channel_id,
@@ -358,6 +356,25 @@ async fn invoke(
         )
     );
     Ok(())
+}
+
+fn resolve_instance_processor(
+    manifest: &BlockManifest,
+    raw_processor: Option<&str>,
+) -> Result<Option<PublicKey>, CliError> {
+    let has_signed_actions = manifest
+        .actions
+        .iter()
+        .any(|action| matches!(action.interaction, BlockInteraction::Signed { .. }));
+    match raw_processor {
+        Some(value) => PublicKey::parse(value)
+            .map(Some)
+            .map_err(|error| CliError::Usage(format!("invalid processor pubkey: {error}"))),
+        None if has_signed_actions => Err(CliError::Usage(
+            "--processor is required when the Block declares signed actions".to_owned(),
+        )),
+        None => Ok(None),
+    }
 }
 
 async fn actions(
@@ -744,9 +761,10 @@ fn sdk_error(error: buzz_sdk::SdkError) -> CliError {
 mod tests {
     use super::{
         build_catalog_action_request, normalize_action_write_response, render_fallback,
-        require_tested_validation, CATALOG_ACTION_SCHEMA, CATALOG_ACTION_TTL_SECONDS,
+        require_tested_validation, resolve_instance_processor, CATALOG_ACTION_SCHEMA,
+        CATALOG_ACTION_TTL_SECONDS,
     };
-    use buzz_core::block::{BlockValidation, BlockValidationState};
+    use buzz_core::block::{parse_manifest, BlockValidation, BlockValidationState};
     use nostr::{EventId, Keys};
     use serde_json::json;
 
@@ -894,5 +912,24 @@ mod tests {
             serde_json::from_value(json!({"state": "tested", "requires_attention": false}))
                 .expect("tested validation");
         require_tested_validation(&tested).expect("tested manifest");
+    }
+
+    #[test]
+    fn signed_action_instances_require_an_explicit_processor() {
+        let manifest = parse_manifest(include_str!(
+            "../../../buzz-relay/src/core_blocks/composites/agent-proposal.json"
+        ))
+        .expect("signed-action manifest");
+
+        assert!(resolve_instance_processor(&manifest, None)
+            .expect_err("signed actions need a processor")
+            .to_string()
+            .contains("--processor is required"));
+        let processor = Keys::generate().public_key();
+        assert_eq!(
+            resolve_instance_processor(&manifest, Some(&processor.to_hex()))
+                .expect("valid processor"),
+            Some(processor)
+        );
     }
 }
