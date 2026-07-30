@@ -37,7 +37,7 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 - **enrollment mode**: the domain's policy for creating bindings — `attested-key`, `provisioned`, or `tofu` (defined below).
 - **Nostr proof**: a valid NIP-42 AUTH event (WebSocket) or NIP-98 event (HTTP) proving control of a key on the current connection or request.
 - **direct lease**: a cached direct authorization decision for one `(domain, identity, key)`, bounded by the assertion's expiry and every shorter known binding, policy, or implementation limit.
-- **delegated lease**: a cached delegated authorization decision for a delegate key, dependent on an active owner binding and bounded by every shorter known owner-binding, delegation, policy, or implementation limit. It has no independent assertion-expiry bound unless a stronger deployment policy requires a current owner assertion or direct lease.
+- **delegated lease**: a cached delegated authorization decision for a delegate key, dependent on an active owner binding and bounded by a mandatory finite configured implementation limit and every shorter known owner-binding, delegation, or policy limit. It has no independent assertion-expiry bound unless a stronger deployment policy requires a current owner assertion or direct lease.
 
 ## Assertion transport
 
@@ -90,7 +90,7 @@ Authorize(D, i, k_a?, k):
     q   := whether i is pending explicit replacement in D
 
   if b_i = (i, k) and b_k = (i, k)
-     and not (p or x or y or q):           ALLOW (existing binding)
+     and not (p or x or y or q):           preserve source; ALLOW (existing binding)
   if b_i exists or b_k exists:           DENY (binding conflict)
   if x:                                   DENY (identity disabled)
   if y:                                   DENY (key revoked)
@@ -98,9 +98,9 @@ Authorize(D, i, k_a?, k):
   if q:                                   DENY (explicit replacement required)
 
   # no active binding or applicable lifecycle gate: first enrollment
-  attested-key:  k_a required, else DENY; create (i, k); ALLOW
+  attested-key:  k_a required, else DENY; create (i, k, source=attested-key); ALLOW
   provisioned:   DENY (binding must be pre-created by an operator)
-  tofu:          create (i, k); ALLOW
+  tofu:          create (i, k, source=(k_a exists ? attested-key : tofu)); ALLOW
 ```
 
 The active-binding and lifecycle-gate reads, and any insertion, MUST be one linearizable transition for `(D, i)` and `(D, k)`. They MUST serialize with pair retirement, identity disablement, key revocation, recovery, and rotation affecting those selectors. Under concurrent first use of the same identity or key, at most one binding is created and every other attempt observes it (allow on exact match, deny on conflict). Missing lifecycle state, storage failure, or a race whose committed result cannot be read MUST deny — never fall back to an unchecked allow.
@@ -130,18 +130,18 @@ When multiple keys authenticate on one connection (NIP-42 permits this), authori
 Revocation and recovery are explicit administrative or policy transitions, never side effects of `Authorize`. Their storage representation is implementation-defined, but their denial selectors, active-binding changes, and durable lifecycle-history append MUST commit atomically:
 
 - **Retire pair**: remove an active `(i, k)`, retain an exact-pair tombstone, mark `i` pending explicit replacement, and invalidate matching leases.
-- **Disable identity**: record the identity selector even when `i` has never enrolled. If `i` has an active binding, remove it, retire the pair, and invalidate direct and dependent delegated leases.
+- **Disable identity**: record the identity selector even when `i` has never enrolled. If `i` has an active binding, remove it, add an exact-pair tombstone, mark `i` pending explicit replacement, and invalidate direct and dependent delegated leases. If `i` was already pending replacement, preserve that state.
 - **Revoke key**: record the key selector even when `k` is not active. If `k` has an active binding, remove it, retire the pair, mark its identity pending explicit replacement, and invalidate every direct or delegated lease that depends on `k`.
 
 A subsequent valid assertion — including one whose key claim matches a retired key — cannot clear these selectors or create a replacement binding. This prevents a replayed, still-valid assertion and a routine login with a different key from silently undoing revocation.
 
 Rotation or recovery requires a separate privileged transition. Replacing `k_old` with `k_new` requires explicit administrative or documented recovery authorization, an active `(i, k_old)` binding or pending-replacement record for that pair, an identity `i` that is not disabled, no active binding or lifecycle gate for `k_new`, and — where the domain requires issuer attestation — a fresh assertion whose key claim equals `k_new`. The transition atomically retires the old pair and key, creates `(i, k_new)`, clears the pending-replacement state, records durable lifecycle history, and invalidates leases for `k_old`. A routine request presenting a new key is either a binding conflict or `explicit replacement required` and MUST be denied without mutation.
 
-Base V1 recovery uses a fresh, non-retired key and treats every replaced old key as revoked throughout the domain, including for a voluntary rotation. A deployment that permits old-key reuse or same-key reactivation is an extension and MUST provide an equivalently explicit privileged transition while retaining the original lifecycle history; ordinary `Authorize` can never perform it.
+Base V1 recovery uses a replacement key that has no active binding, is not globally revoked, and has never formed a retired pair with `i`. A retired pair with another identity does not by itself revoke the key globally; `Y_D` does. Base V1 treats every replaced old key as globally revoked throughout the domain, including for a voluntary rotation. A deployment that permits old-key reuse or same-key reactivation is an extension and MUST provide an equivalently explicit privileged transition while retaining the original lifecycle history; ordinary `Authorize` can never perform it.
 
 ## Delegation
 
-Delegation is outside the base primitive but composes with it. A service MAY admit a key that presents no assertion when a separately validated delegation proof (for example a NIP-OA `auth` tag) establishes an owner key that holds an active binding in the domain. A cached owner lease MUST NOT substitute for that active binding. The delegate key MUST NOT acquire the owner's federated identity binding through this path. The delegated decision retains an explicit dependency on the active owner binding, intersects the delegated operations and conditions, and expires at the earliest known owner-binding, delegation, policy, or implementation bound. Because the delegate presents no assertion, its lease has no independent assertion-expiry bound; if a deployment additionally requires a current owner assertion or direct lease, that bound is included too. Revoking or retiring the owner binding invalidates dependent delegated leases on the same detection schedule as the owner's own leases. A deployment MAY require a stronger current-provider admission decision for the owner, but that is an additional authorization layer rather than part of this base binding primitive.
+Delegation is outside the base primitive but composes with it. A service MAY admit a key that presents no assertion when a separately validated delegation proof (for example a NIP-OA `auth` tag) establishes an owner key that holds an active binding in the domain. A cached owner lease MUST NOT substitute for that active binding. The delegate key MUST NOT acquire the owner's federated identity binding through this path. The delegated decision retains an explicit dependency on the active owner binding, intersects the delegated operations and conditions, and expires no later than a mandatory finite configured implementation limit and every shorter known owner-binding, delegation, or policy bound. A service without that finite maximum MUST NOT issue delegated leases or advertise delegation support. Because the delegate presents no assertion, its lease has no independent assertion-expiry bound; if a deployment additionally requires a current owner assertion or direct lease, that bound is included too. Revoking or retiring the owner binding invalidates dependent delegated leases on the same detection schedule as the owner's own leases. A deployment MAY require a stronger current-provider admission decision for the owner, but that is an additional authorization layer rather than part of this base binding primitive.
 
 ## Rejection semantics
 
@@ -166,7 +166,7 @@ A relay SHOULD advertise support in its NIP-11 document under `limitation` as `"
 }
 ```
 
-`transports` contains the supported profile names from this NIP, `enrollment` is exactly one enrollment mode, and `delegation` states whether separately validated delegation may be honored. Unknown fields MUST be ignored. A relay MUST NOT publish issuer-internal detail (tenant URLs, claim names, audiences) that is not already public.
+`transports` contains the supported profile names from this NIP, `enrollment` is exactly one enrollment mode, and `delegation` states whether separately validated delegation may be honored. `delegation` MUST NOT be `true` unless a finite delegated-lease maximum is configured. Unknown fields MUST be ignored. A relay MUST NOT publish issuer-internal detail (tenant URLs, claim names, audiences) that is not already public.
 
 ## Privacy
 
@@ -187,4 +187,4 @@ The companion [formal model](NIP-FI-MODEL.md) defines the state machine and safe
 
 ## Implementation relationship
 
-Buzz PR [#1476](https://github.com/block/buzz/pull/1476), reviewed at `1e9822de8dbe0ae91c00c0ce0ed8ff583915692f`, is a disabled partial foundation from which this provider-neutral contract was generalized. It is not a complete NIP-FI implementation: future-`iat` rejection, NIP-11 discovery, and additional lifecycle and lease conformance remain additive implementation work. NIP-FI compatibility does not require changing that frozen PR.
+Buzz PR [#1476](https://github.com/block/buzz/pull/1476), reviewed at `1e9822de8dbe0ae91c00c0ce0ed8ff583915692f`, is a disabled partial foundation from which this provider-neutral contract was generalized. It is not a complete NIP-FI implementation: literal-`sub` identity, future-`iat` rejection, NIP-11 discovery, and additional lifecycle and lease conformance remain additive implementation work. NIP-FI compatibility does not require changing that frozen PR.

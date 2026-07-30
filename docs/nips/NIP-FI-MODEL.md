@@ -109,6 +109,7 @@ Authorize(D, i, k_a?, k):
     q   := i ∈ dom(Q_D)
 
   if b_i = (i, k) and b_k = (i, k) and not (p or x or y or q):
+      preserve the binding's recorded source
       ALLOW(existing)
 
   if b_i exists or b_k exists:
@@ -172,7 +173,7 @@ DisableIdentity(D, i):
   atomically:
     add i to X_D
     if (i, k) ∈ B_D:
-      remove (i, k) and add (i, k) to P_D
+      remove (i, k), add (i, k) to P_D, and set Q_D(i) = k
     append the transition to H_D
   invalidate direct and dependent delegated leases for i
 
@@ -208,13 +209,13 @@ RotateOrRecover(D, i, k_old, k_new):
   invalidate leases for k_old
 ```
 
-A normal request that presents `i` with `k_new` while `k_old` is active is a conflict. If `i` is pending replacement, it denies `explicit_replacement_required`. Neither path rotates automatically. Base V1 recovery uses a fresh, non-retired key; same-key reactivation requires an extension with an equivalently explicit privileged transition and retained lifecycle history.
+A normal request that presents `i` with `k_new` while `k_old` is active is a conflict. If `i` is pending replacement, it denies `explicit_replacement_required`. Neither path rotates automatically. Base V1 recovery requires a replacement key with no active binding, `k_new ∉ Y_D`, and `(i, k_new) ∉ P_D`; a retired pair with another identity does not globally revoke the key. Same-key reactivation requires an extension with an equivalently explicit privileged transition and retained lifecycle history.
 
-The active-pair and pending-replacement preconditions to `RotateOrRecover` are mutually exclusive under the lifecycle invariants: the former removes the active old pair, while the latter has no active pair to remove. Base V1 deliberately adds every replaced `k_old` to `Y_D`, including on voluntary rotation, so that ordinary authorization cannot reuse it for another identity. `DisableIdentity` preserves any existing `Q_D(i)` selector; the disabled-identity selector independently blocks recovery until a separately authorized enablement policy removes it.
+The active-pair and pending-replacement preconditions to `RotateOrRecover` are mutually exclusive under the lifecycle invariants: the former removes the active old pair, while the latter has no active pair to remove. Base V1 deliberately adds every replaced `k_old` to `Y_D`, including on voluntary rotation, so that ordinary authorization cannot reuse it for another identity. `DisableIdentity` preserves an existing `Q_D(i)` selector or creates one when it removes an active pair; after any future separately authorized re-enablement, ordinary enrollment therefore remains blocked until explicit replacement succeeds.
 
 # Delegation
 
-Delegation is outside the base identity-binding primitive. A separate delegation standard may allow a bound owner key to authorize a delegate key. If supported, the verifier must first validate the delegation proof and derive the owner key, then require an active owner binding; a cached owner lease is not alternative authority when that binding is absent. It must not create the owner's federated identity binding for the delegate. The delegated decision retains the active owner-binding dependency, intersects the delegation's operations and conditions, expires at the earliest known owner-binding, delegation, policy, or implementation bound, and is invalidated when the owner binding is retired or revoked. The delegate presents no assertion, so its lease has no independent assertion-expiry bound; a deployment that additionally requires a current owner assertion or direct lease includes that bound too. A deployment may add a stronger current-provider admission requirement for the owner without changing this base primitive.
+Delegation is outside the base identity-binding primitive. A separate delegation standard may allow a bound owner key to authorize a delegate key. If supported, the verifier must first validate the delegation proof and derive the owner key, then require an active owner binding; a cached owner lease is not alternative authority when that binding is absent. It must not create the owner's federated identity binding for the delegate. The delegated decision retains the active owner-binding dependency, intersects the delegation's operations and conditions, and expires no later than a mandatory finite configured implementation limit and every shorter known owner-binding, delegation, or policy bound. A service without that finite maximum cannot issue delegated leases or advertise delegation support. The decision is invalidated when the owner binding is retired or revoked. The delegate presents no assertion, so its lease has no independent assertion-expiry bound; a deployment that additionally requires a current owner assertion or direct lease includes that bound too. A deployment may add a stronger current-provider admission requirement for the owner without changing this base primitive.
 
 # Safety properties
 
@@ -231,7 +232,7 @@ Under the trust assumptions, for direct (non-delegated) authorization:
 9. **Rotation atomicity:** observers see either the valid old state or the completed replacement, never a partial transition; lifecycle history is retained.
 10. **Linearizable lifecycle:** authorization racing a lifecycle transition cannot commit a binding that violates the completed transition.
 11. **Domain separation:** authorization in one domain does not imply authorization in another.
-12. **Lease boundedness:** no cached authorization survives its earliest applicable assertion, binding, policy, delegation, or implementation bound; after a dependency change is observed, no matching direct or delegated lease remains valid.
+12. **Lease boundedness:** no cached authorization survives its earliest applicable assertion, binding, policy, delegation, or implementation bound; every delegated lease has a mandatory finite configured implementation bound; after a dependency change is observed, no matching direct or delegated lease remains valid.
 13. **Fail-closed storage and verification:** validation, key retrieval, or binding-state failures never produce allow.
 14. **Privacy:** NIP-FI protocol behavior never publishes `iss`, `sub`, JWTs, or mutable profile claims in Nostr events or relay-visible event history, and operational logs never retain their unredacted values. Access-controlled binding and lifecycle state may retain identifiers required for enforcement and audit. A separate opt-in relay-signed projection may publish an approved label, but never `iss`, `sub`, bearer material, or another unapproved private claim, and never as authorization evidence.
 
@@ -258,6 +259,7 @@ The normative NIP should expose enough information for clients and operators to 
 - whether a key claim is required;
 - enrollment mode (`attested-key`, `provisioned`, or explicitly risk-labeled `tofu`);
 - authorization lease/re-authentication behavior;
+- the finite delegated-lease maximum when delegation is supported;
 - machine-readable rejection classes using existing NIP-42 `auth-required:` and `restricted:` prefixes where applicable;
 - privacy requirements and trusted-proxy deployment requirements.
 
@@ -271,4 +273,4 @@ It should not standardize database schema, lock mechanism, Okta-specific claims,
 - NIP-46 external auth challenge precedent: https://github.com/nostr-protocol/nips/blob/8f8444d05a8842c40211ded5d10af3521541f865/46.md
 - Companion protocol specification: [`NIP-FI.md`](NIP-FI.md)
 - Companion conformance matrix: [`NIP-FI-CONFORMANCE.md`](NIP-FI-CONFORMANCE.md)
-- Buzz PR #1476 at `1e9822de8dbe0ae91c00c0ce0ed8ff583915692f` is a disabled partial foundation, not a complete NIP-FI implementation; future-`iat`, discovery, lifecycle, and lease conformance remain additive work.
+- Buzz PR #1476 at `1e9822de8dbe0ae91c00c0ce0ed8ff583915692f` is a disabled partial foundation, not a complete NIP-FI implementation; literal-`sub` identity, future-`iat`, discovery, lifecycle, and lease conformance remain additive work.
