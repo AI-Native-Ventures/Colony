@@ -21,8 +21,8 @@ use std::time::Duration;
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::Result;
 use buzz_core::kind::{
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
-    KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_BLOCK_ACTION, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_STREAM_MESSAGE,
 };
 use buzz_core::observer::{
     decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY,
@@ -1439,13 +1439,10 @@ async fn tokio_main() -> Result<()> {
             vec![SubscriptionRule {
                 name: "mentions".into(),
                 channels: filter::ChannelScope::All("all".into()),
-                kinds: config.kinds_override.clone().unwrap_or_else(|| {
-                    vec![
-                        KIND_STREAM_MESSAGE,
-                        KIND_WORKFLOW_APPROVAL_REQUESTED,
-                        KIND_STREAM_REMINDER,
-                    ]
-                }),
+                kinds: config
+                    .kinds_override
+                    .clone()
+                    .unwrap_or_else(config::default_channel_kinds),
                 require_mention: !config.no_mention_filter,
                 filter: None,
                 compiled_filter: None,
@@ -2129,6 +2126,25 @@ async fn tokio_main() -> Result<()> {
                                     }
                                 }
                                 // Not from owner — fall through to normal prompt handling.
+                            }
+
+                            // Block actions are routed by their processor `p` tag.
+                            // Keep this gate outside subscription-rule handling so
+                            // even `all` mode and permissive custom rules cannot
+                            // deliver malformed or owner-targeted Core actions to
+                            // a managed agent.
+                            if kind_u32 == KIND_BLOCK_ACTION
+                                && !queue::block_action_targets_processor(
+                                    &buzz_event.event,
+                                    &pubkey_hex,
+                                )
+                            {
+                                tracing::debug!(
+                                    channel_id = %buzz_event.channel_id,
+                                    event_id = %buzz_event.event.id,
+                                    "dropping malformed or differently addressed Block action"
+                                );
+                                continue;
                             }
 
                             // Coarse security policy: drop events from disallowed
