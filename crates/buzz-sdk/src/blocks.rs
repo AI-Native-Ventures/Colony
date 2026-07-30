@@ -311,7 +311,9 @@ pub fn build_block_instance(input: &BlockInstanceInput<'_>) -> Result<EventBuild
         }
     }
 
-    Ok(EventBuilder::new(Kind::Custom(9), &input.fallback).tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(9), &input.fallback)
+        .allow_self_tagging()
+        .tags(tags))
 }
 
 /// Build a signed Block action and return its effective idempotency key.
@@ -355,6 +357,7 @@ pub fn build_block_action(input: &BlockActionInput<'_>) -> Result<BuiltBlockActi
             Kind::Custom(KIND_BLOCK_ACTION as u16),
             canonical_json(&input.data).map_err(block_error)?,
         )
+        .allow_self_tagging()
         .tags(tags),
         idempotency_key,
     })
@@ -781,6 +784,56 @@ mod tests {
         })
         .expect("generated action key");
         assert_ne!(generated.idempotency_key, Uuid::nil());
+    }
+
+    #[test]
+    fn blocks_preserve_self_processor_tags_for_decision_maker_actions() {
+        let manifest = manifest();
+        let decision_maker = Keys::generate();
+        let processor = decision_maker.public_key();
+        let channel_id = Uuid::new_v4();
+        let manifest_id = event_id(0x39);
+        let instance_event_id = event_id(0x3a);
+        let instance_id = Uuid::new_v4();
+
+        let instance = build_block_instance(&BlockInstanceInput {
+            channel_id,
+            manifest_id,
+            instance_id,
+            manifest: &manifest,
+            fallback: "Review required".to_owned(),
+            data: BlockInstanceData::Inline(json!({})),
+            processor: Some(processor),
+            thread: None,
+            attention: BlockAttention::Required {
+                decision_maker: processor,
+            },
+        })
+        .expect("instance builder")
+        .sign_with_keys(&decision_maker)
+        .expect("sign self-processed instance");
+        assert!(tag_values(&instance)
+            .iter()
+            .any(|tag| tag == &["p".to_owned(), processor.to_hex()]));
+
+        let action = build_block_action(&BlockActionInput {
+            channel_id,
+            processor,
+            instance_event_id,
+            manifest_id,
+            instance_id,
+            manifest: &manifest,
+            action_id: "test.submit".to_owned(),
+            data: json!({"value": "yes"}),
+            idempotency_key: Some(Uuid::new_v4()),
+        })
+        .expect("action builder")
+        .builder
+        .sign_with_keys(&decision_maker)
+        .expect("sign decision-maker action");
+        assert!(tag_values(&action)
+            .iter()
+            .any(|tag| tag == &["p".to_owned(), processor.to_hex()]));
     }
 
     #[test]
