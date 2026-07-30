@@ -182,6 +182,18 @@ pub const P_GATED_KINDS: &[u32] = &[
 /// or more than one `shared` tag) so no ambiguous heads can exist.
 pub const KIND_PERSONA: u32 = 30175;
 
+/// Chat-native Block catalog head (parameterized replaceable, relay-authored).
+pub const KIND_BLOCK_CATALOG_ENTRY: u32 = 30178;
+
+/// A signed interaction with a chat-native Block instance.
+pub const KIND_BLOCK_ACTION: u32 = 40010;
+
+/// An auditable result for a chat-native Block action.
+pub const KIND_BLOCK_RECEIPT: u32 = 40011;
+
+/// An immutable chat-native Block manifest.
+pub const KIND_BLOCK_MANIFEST: u32 = 40012;
+
 /// Returns `true` if `kind` uses the author-only-unless-shared read model
 /// (currently only `KIND_PERSONA` / 30175).
 ///
@@ -584,6 +596,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_AGENT_ENGRAM,
     KIND_EVENT_REMINDER,
     KIND_PERSONA,
+    KIND_BLOCK_CATALOG_ENTRY,
+    KIND_BLOCK_ACTION,
+    KIND_BLOCK_RECEIPT,
+    KIND_BLOCK_MANIFEST,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_REPORT,
@@ -764,6 +780,7 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_DM_VISIBILITY
             | KIND_THREAD_SUMMARY
             | KIND_WINDOW_BOUNDS
+            | KIND_BLOCK_CATALOG_ENTRY
     )
 }
 
@@ -782,6 +799,7 @@ pub fn event_kind_i32(event: &nostr::Event) -> i32 {
 // Compile-time: new kinds are in the expected ranges.
 const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–19999
 const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_BLOCK_CATALOG_ENTRY)); // 30178 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
@@ -830,6 +848,31 @@ mod tests {
         for &k in ALL_KINDS {
             assert!(seen.insert(k), "duplicate kind value: {k}");
         }
+    }
+
+    #[test]
+    fn block_kinds() {
+        assert_eq!(KIND_BLOCK_ACTION, 40010);
+        assert_eq!(KIND_BLOCK_RECEIPT, 40011);
+        assert_eq!(KIND_BLOCK_MANIFEST, 40012);
+        assert_eq!(KIND_BLOCK_CATALOG_ENTRY, 30178);
+
+        for kind in [
+            KIND_BLOCK_ACTION,
+            KIND_BLOCK_RECEIPT,
+            KIND_BLOCK_MANIFEST,
+            KIND_BLOCK_CATALOG_ENTRY,
+        ] {
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        assert!(is_parameterized_replaceable(KIND_BLOCK_CATALOG_ENTRY));
+        assert!(!is_parameterized_replaceable(KIND_BLOCK_ACTION));
+        assert!(!is_parameterized_replaceable(KIND_BLOCK_RECEIPT));
+        assert!(!is_parameterized_replaceable(KIND_BLOCK_MANIFEST));
+        assert!(!is_replaceable(KIND_BLOCK_ACTION));
+        assert!(!is_replaceable(KIND_BLOCK_RECEIPT));
+        assert!(!is_replaceable(KIND_BLOCK_MANIFEST));
     }
 
     #[test]
