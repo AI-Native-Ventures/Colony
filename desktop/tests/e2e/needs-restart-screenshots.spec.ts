@@ -341,8 +341,9 @@ test.describe("restart-diff screenshots", () => {
     // Banner shows the full uncapped diff list (8 entries, no "and N more")
     const diffList = banner.getByTestId("restart-diff-list");
     await expect(diffList).toBeVisible();
-    // All 8 entries visible in banner (no cap)
-    await expect(diffList.getByText("Args:")).toBeVisible();
+    // All 8 entries visible in banner (no cap).
+    // exact: true prevents substring collision with "Agent args:" label.
+    await expect(diffList.getByText("Args:", { exact: true })).toBeVisible();
 
     await waitForAnimations(page);
     await banner.screenshot({
@@ -491,8 +492,9 @@ test.describe("restart-diff screenshots", () => {
     await expect(banner).toBeVisible({ timeout: 5_000 });
     const diffList = banner.getByTestId("restart-diff-list");
     await expect(diffList).toBeVisible();
-    // All 8 entries visible in banner (no cap) — last entry "args" is present
-    await expect(diffList.getByText("Args:")).toBeVisible();
+    // All 8 entries visible in banner (no cap) — last entry "args" is present.
+    // exact: true prevents substring collision with "Agent args:" label.
+    await expect(diffList.getByText("Args:", { exact: true })).toBeVisible();
 
     await waitForAnimations(page);
     await panel.screenshot({
