@@ -421,6 +421,9 @@ pub enum BlocksCmd {
         fallback: Option<String>,
         #[arg(long)]
         manifest: Option<String>,
+        /// Pubkey responsible for processing signed actions declared by this Block
+        #[arg(long)]
+        processor: Option<String>,
         #[arg(long)]
         reply_to: Option<String>,
     },
