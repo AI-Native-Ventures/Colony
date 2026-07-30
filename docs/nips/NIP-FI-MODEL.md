@@ -6,7 +6,7 @@ The model is transport-independent. A concrete NIP must separately define how an
 
 # Terms and domains
 
-- `D`: authorization domain chosen by the service (for example one relay tenant). Bindings never cross domains implicitly.
+- `D`: authorization domain resolved by the verifier from authenticated server routing or configuration (for example one relay tenant). An assertion, proof, header, or other untrusted request input cannot select or rewrite it, and bindings never cross domains implicitly.
 - `I`: federated principal, the tuple `(iss, sub)`. `iss` is the assertion's exact validated issuer identifier and `sub` is its exact non-empty subject string. A username, email, display name, or bare `sub` is not an identity key.
 - `K`: 32-byte Nostr public key.
 - `A`: federated assertion.
@@ -33,7 +33,7 @@ source  = attested-key | provisioned | tofu
 
 # Trust assumptions
 
-1. The verifier has an authenticated configuration for each accepted issuer: issuer identifier, allowed signing algorithms, key source, accepted audience(s), and claim mapping.
+1. The verifier has an authenticated configuration for each accepted issuer: issuer identifier, allowed signing algorithms, key source, accepted audience(s), and optional Nostr-key and display-name claim mappings.
 2. TLS and/or a trusted ingress boundary prevents attackers from injecting or replacing assertions. A reverse-proxy assertion header is trusted only when untrusted clients cannot reach the verifier directly and all inbound copies of that header are stripped before the trusted proxy sets it.
 3. The issuer protects its signing keys and assigns stable, non-reassignable `sub` values within an issuer. If an issuer reassigns a subject, the model cannot distinguish the people.
 4. The Nostr signature primitive is unforgeable and the concrete Nostr proof is fresh and bound to the target relay or HTTP request.
@@ -52,9 +52,9 @@ It succeeds only if all of the following hold:
 2. `A.iss` exactly equals the configured issuer identifier used to select that key;
 3. at least one `A.aud` value exactly equals an audience configured for this service;
 4. `exp` exists and `now < exp`, allowing only a bounded configured clock skew;
-5. if present, `nbf <= now` and `iat` is not unreasonably in the future;
-6. the configured subject claim is a non-empty string;
-7. `i = (A.iss, A.subject)`; and
+5. if present, `nbf <= now + configured_skew` and `iat <= now + configured_skew`;
+6. `A.sub` is an unambiguous non-empty string;
+7. `i = (A.iss, A.sub)`; and
 8. if a configured Nostr-key claim is present, it parses to exactly one 32-byte key `k_a` (hex on the wire; bech32 may be accepted only as an explicitly documented input normalization).
 
 Unknown issuers, key IDs, algorithms, claims, and validation failures fail closed. Key retrieval failure also fails closed. A verifier must bound key-cache lifetime and refresh behavior; it must not accept a token merely because parsing succeeded.
@@ -79,6 +79,8 @@ For every domain `D`, active bindings are one-to-one:
 
 Equivalently, an active identity has at most one key and an active key has at most one identity in a domain.
 
+Base V1 therefore represents one active principal key per domain. Multiple devices share that key or use bounded delegation; a simultaneous active key set requires a future protocol extension.
+
 Active bindings also satisfy the lifecycle invariants:
 
 ```text
@@ -91,7 +93,7 @@ i ∈ dom(Q_D) ⇒ no active binding exists for i
 
 # Authorization and enrollment transition
 
-Given domain `D`, assertion result `(i, k_a?, exp)`, and proof result `k`, evaluate one atomic transaction:
+Given trusted server-resolved domain `D`, assertion result `(i, k_a?, exp)`, and proof result `k`, evaluate one atomic transaction:
 
 ```text
 Authorize(D, i, k_a?, k):
@@ -134,17 +136,17 @@ If a concurrent attempt finds the identical committed binding, it allows as `exi
 The resulting authorization lease is:
 
 ```text
-L = (D, i, k, binding_version, expires_at)
-expires_at <= assertion.exp
+L = (D, i, k, expires_at)
+expires_at <= min(assertion.exp, policy_expiry?, delegation_expiry?, implementation_limit?)
 ```
 
-An implementation may impose a shorter maximum lease. A lease authorizes only policy-selected operations in `D`; it does not authorize signing and does not imply that event authors may differ from `k`.
+Unknown optional bounds are omitted from the minimum. A lease authorizes only policy-selected operations in `D`; it does not authorize signing and does not imply that event authors may differ from `k`. Its continued eligibility also depends on every binding and lifecycle selector read by the decision.
 
 # Session behavior
 
 For a single HTTP request, the assertion, Nostr proof, and authorization decision apply only to that request.
 
-For a NIP-42 WebSocket connection, a relay may cache `L`, but it must not use the lease after `expires_at`. It must reject protected operations or terminate the connection; obtaining a fresh assertion and proof requires a new connection under this transport profile. A relay that learns that the binding or federated session was revoked must invalidate matching leases. Implementations must document their maximum revocation-detection latency; they cannot claim immediate revocation if they only poll.
+For a NIP-42 WebSocket connection, a relay may cache `L`, but it must not use the lease after `expires_at`. It must reject protected operations or terminate the connection. Renewal requires a new WebSocket connection carrying a fresh assertion on its upgrade request, followed by fresh NIP-42 proof; base V1 has no in-connection renewal transition. A relay that learns that a binding, identity, key, policy decision, or delegation dependency is no longer valid must invalidate every matching direct and delegated lease. Implementations must document their maximum revocation-detection latency; they cannot claim immediate revocation if they only poll.
 
 If multiple keys authenticate on one NIP-42 connection, authorization is tracked independently per key. A lease for one `(i, k)` must not authorize another authenticated key.
 
@@ -206,7 +208,7 @@ A normal request that presents `i` with `k_new` while `k_old` is active is a con
 
 # Delegation
 
-Delegation is outside the base identity-binding primitive. A separate delegation standard may allow a bound owner key to authorize a delegate key. If supported, the verifier must first validate the delegation proof and derive the owner key, then require an active, unexpired authorization lease or binding for that owner. It must not create a federated identity binding for the delegate unless explicitly specified. Delegation expiry/revocation and allowed operations remain bounded by both the owner identity authorization and the delegation.
+Delegation is outside the base identity-binding primitive. A separate delegation standard may allow a bound owner key to authorize a delegate key. If supported, the verifier must first validate the delegation proof and derive the owner key, then require an active owner binding or unexpired owner authorization lease. It must not create the owner's federated identity binding for the delegate. The delegated decision retains the owner dependency, intersects the delegation's operations and conditions, expires at the earliest owner, delegation, policy, or implementation bound, and is invalidated when the owner binding is retired or revoked. A deployment may add a stronger current-provider admission requirement for the owner without changing this base primitive.
 
 # Safety properties
 
@@ -223,9 +225,9 @@ Under the trust assumptions, for direct (non-delegated) authorization:
 9. **Rotation atomicity:** observers see either the valid old state or the completed replacement, never a partial transition; lifecycle history is retained.
 10. **Linearizable lifecycle:** authorization racing a lifecycle transition cannot commit a binding that violates the completed transition.
 11. **Domain separation:** authorization in one domain does not imply authorization in another.
-12. **Lease boundedness:** no cached authorization survives assertion expiry; after revocation is observed, no matching cached authorization remains valid.
+12. **Lease boundedness:** no cached authorization survives its earliest assertion, policy, delegation, or implementation bound; after a dependency change is observed, no matching direct or delegated lease remains valid.
 13. **Fail-closed storage and verification:** validation, key retrieval, or binding-state failures never produce allow.
-14. **Privacy:** conforming protocol behavior need not publish `iss`, `sub`, JWTs, email, or display names in Nostr events or relay-visible event history.
+14. **Privacy:** NIP-FI protocol behavior never publishes `iss`, `sub`, JWTs, email, or display names in Nostr events or relay-visible event history. A separate opt-in relay-signed projection may publish an approved label, but never those private values and never as authorization evidence.
 
 # Liveness properties
 
@@ -285,4 +287,4 @@ It should not standardize database schema, lock mechanism, Okta-specific claims,
 - NIP-05 issuer-controlled identifier mapping precedent: https://github.com/nostr-protocol/nips/blob/8f8444d05a8842c40211ded5d10af3521541f865/05.md
 - NIP-46 external auth challenge precedent: https://github.com/nostr-protocol/nips/blob/8f8444d05a8842c40211ded5d10af3521541f865/46.md
 - Companion protocol specification: [`NIP-FI.md`](NIP-FI.md)
-- Buzz implementation semantics reviewed at `bd822f3ea8fc04b449501fd4738097c32d3da950` (PR #1476)
+- Buzz PR #1476 at `1e9822de8dbe0ae91c00c0ce0ed8ff583915692f` is a disabled partial foundation, not a complete NIP-FI implementation; future-`iat`, discovery, lifecycle, and lease conformance remain additive work.

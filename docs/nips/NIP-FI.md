@@ -28,7 +28,7 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 
 - **assertion**: a JWT issued by a configured identity provider, presented alongside (never instead of) Nostr authentication.
 - **federated identity** (`i`): the tuple `(iss, sub)` from a validated assertion. The `iss` value MUST be the exact validated issuer identifier and `sub` the exact non-empty subject string. A username, email, display name, or bare `sub` MUST NOT be used as a federated identity.
-- **authorization domain** (`D`): the scope within which bindings apply, chosen by the service (an entire relay, or one tenant of a multi-tenant relay). Bindings MUST NOT cross domains implicitly.
+- **authorization domain** (`D`): the scope within which bindings apply, resolved by the verifier from authenticated server routing or configuration (an entire relay, or one tenant of a multi-tenant relay). An assertion, proof, header value, or other untrusted request input MUST NOT select or rewrite `D`, and bindings MUST NOT cross domains implicitly.
 - **binding**: an active record associating exactly one federated identity with exactly one 32-byte Nostr public key within a domain.
 - **retired pair**: a durable denial selector recording that one exact `(identity, key)` pair MUST NOT be recreated by ordinary authorization.
 - **disabled identity**: a durable denial selector preventing an identity from authorizing or enrolling any key.
@@ -36,7 +36,7 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 - **pending replacement**: lifecycle state recording that an identity whose prior key was retired MUST use a separately authorized recovery or rotation transition before another key can become active.
 - **enrollment mode**: the domain's policy for creating bindings — `attested-key`, `provisioned`, or `tofu` (defined below).
 - **Nostr proof**: a valid NIP-42 AUTH event (WebSocket) or NIP-98 event (HTTP) proving control of a key on the current connection or request.
-- **lease**: a cached authorization decision for one `(domain, identity, key)`, bounded by the assertion's expiry.
+- **lease**: a cached authorization decision for one `(domain, identity, key)`, bounded by the assertion's expiry and every shorter authoritative policy, delegation, or implementation limit.
 
 ## Assertion transport
 
@@ -47,19 +47,21 @@ An assertion reaches the verifier in an HTTP header on the request being authori
 
 Assertion acquisition and interactive OIDC login are outside this NIP. A client-attached assertion value MUST use the `Bearer` scheme; after removing that scheme, the value MUST contain exactly one JWT and no comma-separated alternatives.
 
+Normal browser WebSocket APIs cannot attach the client-attached header. Browser deployments therefore require the trusted-proxy profile or a separately standardized assertion transport. Bearer assertions MUST NOT be placed in WebSocket URLs or query strings.
+
 On a WebSocket connection, the assertion captured at upgrade is evaluated when a key performs NIP-42 AUTH — each authenticating key is authorized against that assertion independently. On HTTP, the assertion and the NIP-98 proof MUST arrive on the same request they authorize.
 
 Assertions MUST NOT be carried inside Nostr events, event tags, or subscription filters, and MUST NOT be written to relay-visible event history.
 
 ## Assertion validation
 
-The verifier is configured, per accepted issuer, with: the issuer identifier, a signing-key source (a JWKS endpoint, discoverable via OIDC `/.well-known/openid-configuration`), accepted audience values, and a claim mapping. Validation MUST enforce all of the following; any failure MUST reject the assertion:
+The verifier is configured, per accepted issuer, with: the issuer identifier, a signing-key source (a JWKS endpoint, discoverable via OIDC `/.well-known/openid-configuration`), accepted audience values, and optional Nostr-key and display-name claim mappings. Validation MUST enforce all of the following; any failure MUST reject the assertion:
 
 1. The JWT signature verifies under a currently trusted key for an explicitly allowed **asymmetric** algorithm. Symmetric (HS*) and `none` algorithms MUST be rejected before any key lookup.
 2. `iss` exactly equals the configured issuer identifier used to select the verification key.
 3. At least one `aud` value exactly equals a configured audience.
-4. `exp` is present and in the future; `nbf` and `iat`, when present, are not in the future — each within a bounded, configured clock skew.
-5. The configured subject claim is present and a non-empty string. A configured claim that is absent when required, not of its expected type, or not unambiguously a single value MUST be rejected.
+4. `exp` is present and in the future; `nbf` and `iat`, when present, are no later than verifier time plus a bounded, configured clock skew.
+5. The JWT `sub` claim is present, a non-empty string, and unambiguously a single value. Base V1 always defines `i = (iss, sub)`; mapping another claim into a local principal is a deployment extension and MUST NOT be advertised as base V1 conformance.
 6. If a key claim is configured and present, it parses to exactly one 32-byte Nostr public key. Lowercase hex is the canonical encoding; `npub` bech32 MAY be accepted as a documented input normalization.
 
 A display-name claim MAY be extracted as mutable metadata. It MUST NOT participate in any authorization decision.
@@ -72,7 +74,7 @@ The key being authorized is always the key returned by Nostr proof validation �
 
 ## Authorization
 
-Given a validated assertion yielding identity `i`, optional asserted key `k_a`, and expiry `exp`, and a Nostr proof yielding key `k`, the verifier evaluates one atomic decision in domain `D`:
+Given a validated assertion yielding identity `i`, optional asserted key `k_a`, and expiry `exp`, and a Nostr proof yielding key `k`, the verifier evaluates one atomic decision in the trusted server-resolved domain `D`:
 
 ```text
 Authorize(D, i, k_a?, k):
@@ -112,11 +114,13 @@ The active-binding and lifecycle-gate reads, and any insertion, MUST be one line
 
 Within a domain, active bindings form a partial bijection: an identity has at most one active key and a key has at most one active identity. An active binding MUST NOT overlap a retired pair, disabled identity, revoked key, or pending-replacement identity. Every state transition in this NIP preserves these invariants.
 
+Base V1 therefore has one active principal key per domain. Multiple devices either share that principal key or use bounded delegation. Supporting multiple simultaneously active principal keys requires a future protocol extension.
+
 ## Session semantics
 
 For HTTP requests, the decision applies to that request only.
 
-For a NIP-42 WebSocket connection, the relay MAY cache the decision as a lease. A lease MUST NOT be honored past the assertion's `exp` (implementations MAY enforce a shorter maximum). At expiry the relay MUST reject protected operations or close the connection; a fresh assertion arrives only on a new connection's upgrade request. When a relay learns a binding was revoked, it MUST invalidate matching leases; a relay that detects revocation by polling MUST NOT claim immediate revocation and SHOULD document its detection latency.
+For a NIP-42 WebSocket connection, the relay MAY cache the decision as a lease. Its expiry MUST be no later than the assertion's `exp` and every shorter policy, delegation, or configured implementation bound known to the verifier. At expiry the relay MUST reject protected operations or close the connection. Renewal requires a new WebSocket connection carrying a fresh assertion on its upgrade request, followed by fresh NIP-42 proof; base V1 defines no in-connection renewal message. When a relay learns that a binding, identity, key, policy decision, or delegation on which a lease depends is no longer valid, it MUST invalidate every matching direct and delegated lease. A relay that detects revocation by polling MUST NOT claim immediate revocation and SHOULD document its maximum detection latency.
 
 When multiple keys authenticate on one connection (NIP-42 permits this), authorization is tracked per key. A lease for one key MUST NOT authorize operations attributed to another.
 
@@ -136,7 +140,7 @@ Base V1 recovery uses a fresh, non-retired key. A deployment that permits same-k
 
 ## Delegation
 
-Delegation is outside the base primitive but composes with it. A service MAY admit a key that presents no assertion when a separately validated delegation proof (for example a NIP-OA `auth` tag) establishes an owner key that holds an active binding in the domain. The delegate key MUST NOT acquire a federated identity binding of its own through this path, and the delegate's authorization is bounded by both the owner's binding state and the delegation's own conditions. Revoking the owner's binding revokes the delegate's admission on the same schedule as the owner's own leases.
+Delegation is outside the base primitive but composes with it. A service MAY admit a key that presents no assertion when a separately validated delegation proof (for example a NIP-OA `auth` tag) establishes an owner key that holds an active binding in the domain. The delegate key MUST NOT acquire the owner's federated identity binding through this path. Its authorization retains an explicit dependency on the owner binding, intersects the delegated operations and conditions, and expires at the earliest owner, delegation, policy, or implementation bound. Revoking or retiring the owner binding invalidates dependent delegated leases on the same detection schedule as the owner's own leases. A deployment MAY require a stronger current-provider admission decision for the owner, but that is an additional authorization layer rather than part of this base binding primitive.
 
 ## Rejection semantics
 
@@ -165,7 +169,9 @@ A relay SHOULD advertise support in its NIP-11 document under `limitation` as `"
 
 ## Privacy
 
-Federated identities are typically personal data (employee identifiers). A conforming service MUST NOT publish `iss`, `sub`, assertion contents, or display-name claims in Nostr events or tags, and MUST NOT expose another user's binding state through rejection messages. Binding records, audit logs, and metrics are service-internal, and logs MUST NOT record raw bearer assertions.
+Federated identities are typically personal data (employee identifiers). NIP-FI itself MUST NOT publish `iss`, `sub`, assertion contents, or display-name claims in Nostr events or tags, and a conforming service MUST NOT expose another user's binding state through rejection messages. Binding records, audit logs, and metrics are service-internal, and logs MUST NOT record raw bearer assertions.
+
+A separate, opt-in relay-signed projection protocol such as NIP-85 MAY publish an approved label. Such a projection MUST NOT contain `iss`, `sub`, bearer material, or other unapproved private claims, and it MUST NOT be accepted as NIP-FI authorization evidence.
 
 ## Security considerations
 
@@ -178,6 +184,6 @@ Federated identities are typically personal data (employee identifiers). A confo
 
 A companion formal model of this protocol — state machine, safety and liveness properties, and attack traces — accompanies this specification.
 
-## Reference implementation
+## Implementation relationship
 
-Buzz relay: corporate identity enforcement layered above NIP-42/NIP-98/media/git/audio ingress, with JWKS validation, TOFU and attested-key enrollment, atomic binding with conflict detection, and NIP-OA delegation composition.
+Buzz PR [#1476](https://github.com/block/buzz/pull/1476), reviewed at `1e9822de8dbe0ae91c00c0ce0ed8ff583915692f`, is a disabled partial foundation from which this provider-neutral contract was generalized. It is not a complete NIP-FI implementation: future-`iat` rejection, NIP-11 discovery, and additional lifecycle and lease conformance remain additive implementation work. NIP-FI compatibility does not require changing that frozen PR.
