@@ -670,21 +670,45 @@ test("non-local default auto-connects when the release flag is enabled", async (
       page.evaluate(() => {
         const raw = window.localStorage.getItem("buzz-communities");
         const communities = raw
-          ? (JSON.parse(raw) as Array<{ id: string; relayUrl: string }>)
+          ? (JSON.parse(raw) as Array<{
+              id: string;
+              relayUrl: string;
+              pubkey?: string;
+              nsec?: string;
+            }>)
           : [];
+        const community = communities[0];
         return {
           activeMatchesCommunity:
             communities.length === 1 &&
             window.localStorage.getItem("buzz-active-community-id") ===
-              communities[0]?.id,
-          relayUrl: communities[0]?.relayUrl ?? null,
+              community?.id,
+          relayUrl: community?.relayUrl ?? null,
+          pubkey: community?.pubkey ?? null,
+          hasNsec: community ? Object.hasOwn(community, "nsec") : null,
         };
       }),
     )
     .toEqual({
       activeMatchesCommunity: true,
       relayUrl: "wss://default.example.com",
+      pubkey: BLANK_TYLER_IDENTITY.pubkey,
+      hasNsec: false,
     });
+  await expect(
+    page.getByRole("button", { name: /Join a community/ }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("community-choice-create")).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__BUZZ_E2E_COMMANDS__?.filter((command) =>
+            command.includes("builderlab"),
+          ) ?? [],
+      ),
+    )
+    .toEqual([]);
 });
 
 test("first-community choices route join, create, owner, and member intents", async ({
