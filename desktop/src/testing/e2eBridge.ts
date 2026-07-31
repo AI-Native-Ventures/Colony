@@ -138,6 +138,7 @@ type MockTeamSeed = {
   name: string;
   description?: string | null;
   personaIds: string[];
+  leadPersonaId?: string | null;
 };
 
 type MockSearchProfileSeed = {
@@ -871,6 +872,7 @@ type RawTeam = {
   name: string;
   description: string | null;
   persona_ids: string[];
+  lead_persona_id: string | null;
   is_builtin: boolean;
   source_dir: string | null;
   is_symlink: boolean;
@@ -2270,6 +2272,7 @@ function resetMockTeams(config?: E2eConfig) {
       name: "Engineering",
       description: "Core engineering personas",
       persona_ids: [],
+      lead_persona_id: null,
       is_builtin: false,
       source_dir: null,
       is_symlink: false,
@@ -2283,6 +2286,7 @@ function resetMockTeams(config?: E2eConfig) {
       name: "Research Agents",
       description: "Directory-backed research team",
       persona_ids: [],
+      lead_persona_id: null,
       is_builtin: false,
       source_dir: "/Users/dev/agents/research",
       is_symlink: false,
@@ -2296,6 +2300,7 @@ function resetMockTeams(config?: E2eConfig) {
       name: "Platform Tools",
       description: "Symlinked platform team",
       persona_ids: [],
+      lead_persona_id: null,
       is_builtin: false,
       source_dir: "/Users/dev/agents/platform",
       is_symlink: true,
@@ -2312,6 +2317,7 @@ function resetMockTeams(config?: E2eConfig) {
       name: team.name,
       description: team.description ?? null,
       persona_ids: [...team.personaIds],
+      lead_persona_id: team.leadPersonaId ?? null,
       is_builtin: false,
       source_dir: null,
       is_symlink: false,
@@ -7699,7 +7705,12 @@ async function handleDeletePersona(args: { id: string }): Promise<void> {
   if (persona.is_builtin) {
     throw new Error("Built-in agents cannot be deleted.");
   }
-  if (mockTeams.some((team) => team.persona_ids.includes(args.id))) {
+  if (
+    mockTeams.some(
+      (team) =>
+        team.lead_persona_id === args.id || team.persona_ids.includes(args.id),
+    )
+  ) {
     throw new Error(
       `${persona.display_name} is still referenced by a team. Remove it from those teams first.`,
     );
@@ -7738,7 +7749,10 @@ async function handleSetPersonaActive(args: {
   }
   if (
     !args.active &&
-    mockTeams.some((team) => team.persona_ids.includes(args.id))
+    mockTeams.some(
+      (team) =>
+        team.lead_persona_id === args.id || team.persona_ids.includes(args.id),
+    )
   ) {
     throw new Error(
       `${persona.display_name} is still referenced by a team. Remove it from those teams first.`,
@@ -7868,6 +7882,26 @@ function ensureMockPersonaIdsAreActive(personaIds: string[]) {
   }
 }
 
+function validateMockTeamMembership(
+  personaIds: string[],
+  leadPersonaId: string | null | undefined,
+) {
+  const unique = new Set<string>();
+  for (const personaId of personaIds) {
+    if (unique.has(personaId)) {
+      throw new Error(`agent ${personaId} can only appear once in a team`);
+    }
+    unique.add(personaId);
+  }
+  if (
+    leadPersonaId !== undefined &&
+    leadPersonaId !== null &&
+    !unique.has(leadPersonaId)
+  ) {
+    throw new Error("Team lead must also be a member of the team.");
+  }
+}
+
 async function handleListTeams(): Promise<RawTeam[]> {
   return mockTeams.map((team) => ({
     ...team,
@@ -7880,8 +7914,10 @@ async function handleCreateTeam(args: {
     name: string;
     description?: string;
     personaIds: string[];
+    leadPersonaId?: string | null;
   };
 }): Promise<RawTeam> {
+  validateMockTeamMembership(args.input.personaIds, args.input.leadPersonaId);
   ensureMockPersonaIdsAreActive(args.input.personaIds);
   const now = new Date().toISOString();
   const team: RawTeam = {
@@ -7889,6 +7925,7 @@ async function handleCreateTeam(args: {
     name: args.input.name.trim(),
     description: args.input.description?.trim() || null,
     persona_ids: [...args.input.personaIds],
+    lead_persona_id: args.input.leadPersonaId ?? null,
     is_builtin: false,
     source_dir: null,
     is_symlink: false,
@@ -7907,6 +7944,7 @@ async function handleUpdateTeam(args: {
     name: string;
     description?: string;
     personaIds: string[];
+    leadPersonaId?: string | null;
   };
 }): Promise<RawTeam> {
   const team = mockTeams.find((candidate) => candidate.id === args.input.id);
@@ -7914,10 +7952,18 @@ async function handleUpdateTeam(args: {
     throw new Error(`Team ${args.input.id} not found.`);
   }
 
+  const effectiveLeadPersonaId =
+    args.input.leadPersonaId === undefined
+      ? team.lead_persona_id
+      : args.input.leadPersonaId;
+  validateMockTeamMembership(args.input.personaIds, effectiveLeadPersonaId);
   ensureMockPersonaIdsAreActive(args.input.personaIds);
   team.name = args.input.name.trim();
   team.description = args.input.description?.trim() || null;
   team.persona_ids = [...args.input.personaIds];
+  if (args.input.leadPersonaId !== undefined) {
+    team.lead_persona_id = args.input.leadPersonaId;
+  }
   team.updated_at = new Date().toISOString();
 
   return { ...team, persona_ids: [...team.persona_ids] };
@@ -7964,6 +8010,7 @@ async function handleInstallTeamFromDirectory(args: {
     name: "Installed Team",
     description: null,
     persona_ids: [],
+    lead_persona_id: null,
     is_builtin: false,
     source_dir: args.path,
     is_symlink: args.symlink,
@@ -11117,6 +11164,7 @@ export function maybeInstallE2eTauriMocks() {
             name: "Imported Team",
             description: null,
             persona_ids: [`e2e-persona-${importTs}`],
+            lead_persona_id: null,
             instructions: null,
             is_builtin: false,
             source_dir: null,

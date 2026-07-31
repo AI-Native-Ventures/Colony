@@ -754,6 +754,7 @@ export type AgentTeam = {
   description: string | null;
   instructions: string | null;
   personaIds: string[];
+  leadPersonaId: string | null;
   isBuiltin: boolean;
   /** Absolute path to the team's backing directory (if directory-backed). */
   sourceDir: string | null;
@@ -772,6 +773,7 @@ export type CreateTeamInput = {
   description?: string;
   instructions?: string;
   personaIds: string[];
+  leadPersonaId?: string;
 };
 
 export type UpdateTeamInput = {
@@ -780,6 +782,8 @@ export type UpdateTeamInput = {
   description?: string;
   instructions?: string;
   personaIds: string[];
+  /** Omit to preserve the current lead; null clears it. */
+  leadPersonaId?: string | null;
 };
 // ── Channel Template types ─────────────────────────────────────────────────────
 

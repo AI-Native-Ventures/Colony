@@ -172,6 +172,10 @@ pub(crate) fn build_import_team(
         name: name.to_string(),
         description: snapshot.team.description.clone(),
         persona_ids,
+        // Snapshot v1 has no stable way to map a lead after member persona IDs
+        // are regenerated. A future schema must identify the lead by member
+        // position or another portable identity, never by the source ID.
+        lead_persona_id: None,
         instructions: snapshot.team.instructions.clone(),
         is_builtin: false,
         source_dir: None,

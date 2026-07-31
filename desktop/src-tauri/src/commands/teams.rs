@@ -5,7 +5,8 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         delete_team_with_cascade, ensure_persona_ids_are_active, load_personas, load_teams,
-        save_teams, try_regenerate_nest, CreateTeamRequest, TeamRecord, UpdateTeamRequest,
+        save_teams, try_regenerate_nest, validate_team_membership, CreateTeamRequest, TeamRecord,
+        UpdateTeamRequest,
     },
     util::now_iso,
 };
@@ -154,6 +155,7 @@ pub async fn create_team(input: CreateTeamRequest, app: AppHandle) -> Result<Tea
             .managed_agents_store_lock
             .lock()
             .map_err(|error| error.to_string())?;
+        validate_team_membership(&input.persona_ids, input.lead_persona_id.as_deref())?;
         let personas = load_personas(&app)?;
         ensure_persona_ids_are_active(&personas, &input.persona_ids)?;
         let mut teams = load_teams(&app)?;
@@ -163,6 +165,7 @@ pub async fn create_team(input: CreateTeamRequest, app: AppHandle) -> Result<Tea
             description,
             instructions,
             persona_ids: input.persona_ids,
+            lead_persona_id: input.lead_persona_id,
             is_builtin: false,
             source_dir: None,
             is_symlink: false,
@@ -194,18 +197,29 @@ pub async fn update_team(input: UpdateTeamRequest, app: AppHandle) -> Result<Tea
             .managed_agents_store_lock
             .lock()
             .map_err(|error| error.to_string())?;
+        let mut teams = load_teams(&app)?;
+        let team_index = teams
+            .iter()
+            .position(|record| record.id == input.id)
+            .ok_or_else(|| format!("team {} not found", input.id))?;
+
+        let effective_lead = match input.lead_persona_id.as_ref() {
+            Some(lead_persona_id) => lead_persona_id.as_deref(),
+            None => teams[team_index].lead_persona_id.as_deref(),
+        };
+        validate_team_membership(&input.persona_ids, effective_lead)?;
         let personas = load_personas(&app)?;
         ensure_persona_ids_are_active(&personas, &input.persona_ids)?;
-        let mut teams = load_teams(&app)?;
-        let team = teams
-            .iter_mut()
-            .find(|record| record.id == input.id)
-            .ok_or_else(|| format!("team {} not found", input.id))?;
+
+        let team = &mut teams[team_index];
 
         team.name = name;
         team.description = description;
         team.instructions = instructions;
         team.persona_ids = input.persona_ids;
+        if let Some(lead_persona_id) = input.lead_persona_id {
+            team.lead_persona_id = lead_persona_id;
+        }
         team.updated_at = now_iso();
 
         let updated = team.clone();

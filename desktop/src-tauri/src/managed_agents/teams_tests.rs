@@ -4,10 +4,11 @@
 //! `#[path]`-included from there.
 
 use super::{
-    agents_referencing_team, load_teams_readonly, merge_teams, merge_teams_impl, sort_teams,
-    validate_team_deletion, BuiltInTeam,
+    agents_referencing_personas, agents_referencing_team, load_teams_readonly, merge_teams,
+    merge_teams_impl, other_teams_referencing_personas, sort_teams, team_references_persona,
+    validate_team_deletion, validate_team_membership, BuiltInTeam,
 };
-use crate::managed_agents::{ManagedAgentRecord, TeamRecord};
+use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
 fn team(id: &str, name: &str) -> TeamRecord {
     TeamRecord {
@@ -16,6 +17,7 @@ fn team(id: &str, name: &str) -> TeamRecord {
         description: None,
         instructions: None,
         persona_ids: Vec::new(),
+        lead_persona_id: None,
         is_builtin: false,
         source_dir: None,
         is_symlink: false,
@@ -58,6 +60,7 @@ fn merge_teams_adds_missing_built_ins() {
         name: "Test Team",
         description: Some("A synthetic test team."),
         persona_ids: &["builtin:test-persona"],
+        lead_persona_id: None,
     };
 
     let (records, changed) =
@@ -76,6 +79,7 @@ fn merge_teams_preserves_user_customizations_to_builtin() {
         name: "Test Team",
         description: None,
         persona_ids: &["builtin:test-persona"],
+        lead_persona_id: None,
     };
     let mut customized = team("builtin-team:test", "Test Team (mine)");
     customized.is_builtin = true;
@@ -100,6 +104,7 @@ fn merge_teams_preserves_unrelated_user_teams() {
         name: "Test Team",
         description: None,
         persona_ids: &[],
+        lead_persona_id: None,
     };
     let user_team = team("user-uuid", "My Team");
 
@@ -135,6 +140,7 @@ fn merge_teams_repromotes_existing_builtin_marked_as_custom() {
         name: "Test Team",
         description: None,
         persona_ids: &[],
+        lead_persona_id: None,
     };
     let mut downgraded = team("builtin-team:test", "Test Team");
     downgraded.is_builtin = false;
@@ -157,6 +163,74 @@ fn validate_team_deletion_rejects_built_ins() {
 
     let err = validate_team_deletion(&built_in).unwrap_err();
     assert_eq!(err, "Built-in teams cannot be deleted.");
+}
+
+#[test]
+fn old_team_json_without_lead_parses_none() {
+    let mut value = serde_json::to_value(team("legacy", "Legacy Team")).unwrap();
+    value
+        .as_object_mut()
+        .expect("team serializes as an object")
+        .remove("lead_persona_id");
+
+    let parsed: TeamRecord = serde_json::from_value(value).unwrap();
+
+    assert_eq!(parsed.lead_persona_id, None);
+}
+
+fn update_request_json(lead_fragment: &str) -> String {
+    format!(
+        r#"{{"id":"team","name":"Team","description":null,"instructions":null,"personaIds":["persona:lead"]{lead_fragment}}}"#
+    )
+}
+
+#[test]
+fn update_team_lead_wire_is_absent_preserve_null_clear_value_set() {
+    let preserve: UpdateTeamRequest = serde_json::from_str(&update_request_json("")).unwrap();
+    let clear: UpdateTeamRequest =
+        serde_json::from_str(&update_request_json(r#", "leadPersonaId":null"#)).unwrap();
+    let set: UpdateTeamRequest =
+        serde_json::from_str(&update_request_json(r#", "leadPersonaId":"persona:lead""#)).unwrap();
+
+    assert_eq!(preserve.lead_persona_id, None);
+    assert_eq!(clear.lead_persona_id, Some(None));
+    assert_eq!(set.lead_persona_id, Some(Some("persona:lead".to_string())));
+}
+
+#[test]
+fn team_lead_must_also_be_a_member() {
+    let members = vec!["persona:builder".to_string()];
+
+    let error = validate_team_membership(&members, Some("persona:lead")).unwrap_err();
+
+    assert_eq!(error, "Team lead must also be a member of the team.");
+}
+
+#[test]
+fn duplicate_members_inside_one_team_are_rejected() {
+    let members = vec!["persona:lead".to_string(), "persona:lead".to_string()];
+
+    let error = validate_team_membership(&members, Some("persona:lead")).unwrap_err();
+
+    assert_eq!(error, "agent persona:lead can only appear once in a team");
+}
+
+#[test]
+fn the_same_persona_may_belong_to_multiple_teams() {
+    let marketing = vec!["persona:shared".to_string()];
+    let engineering = vec!["persona:shared".to_string()];
+
+    assert!(validate_team_membership(&marketing, Some("persona:shared")).is_ok());
+    assert!(validate_team_membership(&engineering, None).is_ok());
+}
+
+#[test]
+fn persona_reference_check_includes_defensive_lead_only_records() {
+    let mut t = team("legacy", "Legacy Team");
+    t.lead_persona_id = Some("persona:lead".to_string());
+
+    assert!(team_references_persona(&t, "persona:lead"));
+    assert!(!team_references_persona(&t, "persona:other"));
 }
 
 // ── agents_referencing_team ─────────────────────────────────────────────
@@ -264,6 +338,39 @@ fn agents_referencing_team_empty_when_no_matches() {
     assert!(agents_referencing_team(&agents, &t).is_empty());
 }
 
+#[test]
+fn source_team_delete_guard_finds_other_team_members_and_leads() {
+    let mut member_team = team("marketing", "Marketing");
+    member_team.persona_ids = vec!["persona:shared-member".to_string()];
+    let mut lead_team = team("sales", "Sales");
+    lead_team.lead_persona_id = Some("persona:shared-lead".to_string());
+    let source_team = team("source", "Source");
+    let persona_ids = [
+        "persona:shared-member".to_string(),
+        "persona:shared-lead".to_string(),
+    ]
+    .into_iter()
+    .collect();
+    let teams = vec![source_team, member_team, lead_team];
+
+    let references = other_teams_referencing_personas(&teams, "source", &persona_ids);
+
+    assert_eq!(references, vec!["Marketing", "Sales"]);
+}
+
+#[test]
+fn source_team_delete_guard_finds_instances_deployed_through_another_team() {
+    let mut agent = managed_agent("Shared Specialist");
+    agent.persona_id = Some("persona:shared".to_string());
+    agent.team_id = Some("other-team".to_string());
+    let persona_ids = ["persona:shared".to_string()].into_iter().collect();
+    let agents = vec![agent];
+
+    let references = agents_referencing_personas(&agents, &persona_ids);
+
+    assert_eq!(references, vec!["Shared Specialist"]);
+}
+
 // Migration pins — exercise the real merge_teams wrapper (with production consts).
 
 #[test]
@@ -276,6 +383,7 @@ fn migration_pristine_fizz_is_purged() {
         description: Some("Fizz works carefully and collaboratively.".to_string()),
         instructions: None,
         persona_ids: vec!["builtin:fizz".to_string()],
+        lead_persona_id: None,
         is_builtin: true,
         source_dir: None,
         is_symlink: false,
@@ -301,6 +409,7 @@ fn migration_customized_fizz_is_demoted_to_user_team() {
         description: Some("Fizz works carefully and collaboratively.".to_string()),
         instructions: None,
         persona_ids: vec!["builtin:fizz".to_string(), "extra:persona".to_string()],
+        lead_persona_id: None,
         is_builtin: true,
         source_dir: None,
         is_symlink: false,
@@ -319,6 +428,25 @@ fn migration_customized_fizz_is_demoted_to_user_team() {
         .expect("customized fizz should be retained as a user-owned team");
     assert!(!demoted.is_builtin);
     assert_eq!(demoted.updated_at, "2026-07-01T00:00:00Z");
+}
+
+#[test]
+fn migration_fizz_with_a_custom_lead_is_not_purged() {
+    let mut customized = team("builtin-team:fizz", "Fizz");
+    customized.description = Some("Fizz works carefully and collaboratively.".to_string());
+    customized.persona_ids = vec!["builtin:fizz".to_string()];
+    customized.lead_persona_id = Some("builtin:fizz".to_string());
+    customized.is_builtin = true;
+
+    let (records, changed) = merge_teams(vec![customized], "2026-07-01T00:00:00Z");
+
+    assert!(changed);
+    let retained = records
+        .iter()
+        .find(|team| team.id == "builtin-team:fizz")
+        .expect("custom lead makes the retired team user-owned");
+    assert!(!retained.is_builtin);
+    assert_eq!(retained.lead_persona_id.as_deref(), Some("builtin:fizz"));
 }
 
 #[test]
