@@ -58,6 +58,8 @@ async function setRelayConnectionState(
 const HOME_SEEN_STORAGE_KEY_PREFIX = "buzz-home-feed-seen.v1:";
 const COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY =
   "buzz-community-onboarding-transaction.v1";
+const RETAINED_E2E_COMMANDS_STORAGE_KEY =
+  "buzz-e2e-retained-command-history.v1";
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
@@ -79,6 +81,60 @@ const FIRST_RUN_ALICE = {
   ...TEST_IDENTITIES.alice,
   username: "",
 };
+
+async function retainE2eCommandHistoryAcrossReloads(page: Page) {
+  await page.addInitScript((storageKey) => {
+    const retainCurrentCommands = () => {
+      const retainedRaw = window.sessionStorage.getItem(storageKey);
+      let retainedCommands: string[] = [];
+      if (retainedRaw) {
+        try {
+          const parsed = JSON.parse(retainedRaw);
+          if (Array.isArray(parsed)) {
+            retainedCommands = parsed.filter(
+              (command): command is string => typeof command === "string",
+            );
+          }
+        } catch {
+          retainedCommands = [];
+        }
+      }
+
+      window.sessionStorage.setItem(
+        storageKey,
+        JSON.stringify([
+          ...new Set([
+            ...retainedCommands,
+            ...(window.__BUZZ_E2E_COMMANDS__ ?? []),
+          ]),
+        ]),
+      );
+    };
+
+    // beforeunload captures the normal reload path; pagehide runs later and
+    // refreshes the same de-duplicated snapshot if teardown logged more work.
+    window.addEventListener("beforeunload", retainCurrentCommands);
+    window.addEventListener("pagehide", retainCurrentCommands);
+  }, RETAINED_E2E_COMMANDS_STORAGE_KEY);
+}
+
+async function readE2eCommandHistory(page: Page) {
+  return page.evaluate((storageKey) => {
+    const retainedRaw = window.sessionStorage.getItem(storageKey);
+    const parsed = retainedRaw ? JSON.parse(retainedRaw) : [];
+    const retainedCommands = Array.isArray(parsed)
+      ? parsed.filter(
+          (command): command is string => typeof command === "string",
+        )
+      : [];
+    const currentCommands = window.__BUZZ_E2E_COMMANDS__ ?? [];
+    return {
+      retainedCommands,
+      currentCommands,
+      allCommands: [...retainedCommands, ...currentCommands],
+    };
+  }, RETAINED_E2E_COMMANDS_STORAGE_KEY);
+}
 
 async function seedOnboardingCompletion(page: Page, pubkey: string) {
   await page.addInitScript(
@@ -656,6 +712,7 @@ test("non-local default auto-connects when the release flag is enabled", async (
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
+  await retainE2eCommandHistoryAcrossReloads(page);
   await installMockBridge(page, undefined, {
     relayWsUrl: "wss://default.example.com",
     autoConnectDefaultRelay: true,
@@ -700,15 +757,21 @@ test("non-local default auto-connects when the release flag is enabled", async (
   ).toHaveCount(0);
   await expect(page.getByTestId("community-choice-create")).toHaveCount(0);
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          window.__BUZZ_E2E_COMMANDS__?.filter((command) =>
-            command.includes("builderlab"),
-          ) ?? [],
-      ),
+    .poll(
+      async () => (await readE2eCommandHistory(page)).retainedCommands.length,
     )
-    .toEqual([]);
+    .toBeGreaterThan(0);
+
+  // Observe the settled owned path briefly so a late optional-service call
+  // cannot slip past an immediately resolved negative assertion.
+  await page.waitForTimeout(250);
+  const commandHistory = await readE2eCommandHistory(page);
+  expect(commandHistory.currentCommands.length).toBeGreaterThan(0);
+  expect(
+    commandHistory.allCommands.filter((command) =>
+      command.includes("builderlab"),
+    ),
+  ).toEqual([]);
 });
 
 test("first-community choices route join, create, owner, and member intents", async ({
