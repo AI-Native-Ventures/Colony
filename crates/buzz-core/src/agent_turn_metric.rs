@@ -9,6 +9,7 @@
 use nostr::{Event, Keys, PublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::company::AgentWorkContext;
 use crate::observer::{decrypt_observer_payload, encrypt_observer_payload, ObserverPayloadError};
 
 // Re-export for callers that only need the error type.
@@ -125,6 +126,10 @@ pub struct AgentTurnMetricPayload {
 
     /// Why the turn ended. Unrecognized values MUST be treated as `Unknown`.
     pub stop_reason: Option<StopReason>,
+
+    /// Optional encrypted snapshot linking this paid turn to canonical work.
+    #[serde(default)]
+    pub work_context: Option<AgentWorkContext>,
 }
 
 fn default_delta_reliable() -> bool {
@@ -153,6 +158,11 @@ impl AgentTurnMetricPayload {
         }
         if let Some(c) = &self.cumulative {
             check_cost(c.cost_usd, "cumulative.costUsd")?;
+        }
+        if let Some(work_context) = &self.work_context {
+            work_context
+                .validate()
+                .map_err(|error| ObserverPayloadError::InvalidPayload(error.to_string()))?;
         }
         Ok(())
     }
