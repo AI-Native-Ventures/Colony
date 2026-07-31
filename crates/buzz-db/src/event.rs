@@ -168,6 +168,53 @@ pub enum BlockCatalogActionApply {
     },
 }
 
+/// Result of atomically applying one owner-authorized Colony Company Action.
+///
+/// Every non-`Applied` variant leaves the database untouched: the transaction
+/// rolls back before any event is stored, so a rejected action can never
+/// partially replace a canonical head.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Preserve direct StoredEvent handoff for relay fan-out.
+pub enum CompanyActionApply {
+    /// The action, relay-authored head, and receipt committed together.
+    Applied {
+        /// Stored owner-signed action.
+        action: StoredEvent,
+        /// Stored relay-authored canonical head.
+        head: StoredEvent,
+        /// Stored relay-signed receipt.
+        receipt: StoredEvent,
+    },
+    /// Another batch already owns this community-local retry key.
+    Duplicate {
+        /// Raw event ID of the action that originally won the claim.
+        original_action_event_id: Vec<u8>,
+    },
+    /// The action author is not the community's current human owner.
+    ///
+    /// Decided while holding `FOR UPDATE` on the owner rows, so an action
+    /// queued before an ownership transfer is rejected after it lands rather
+    /// than committing against stale authority.
+    NotOwner,
+    /// Compare-and-set failed: the stored head is not the one the action
+    /// expected to replace.
+    StaleHead {
+        /// Raw event ID of the head that is actually stored, if any.
+        current_head_event_id: Option<Vec<u8>>,
+    },
+}
+
+impl CompanyActionApply {
+    /// Panic unless the batch committed. Test helper for arranging a head.
+    #[cfg(test)]
+    pub(crate) fn applied_or_panic(self) {
+        assert!(
+            matches!(self, Self::Applied { .. }),
+            "expected the batch to commit, got {self:?}"
+        );
+    }
+}
+
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
 /// anything beyond this is either a bug or abuse.
 pub const D_TAG_MAX_LEN: usize = 1024;
