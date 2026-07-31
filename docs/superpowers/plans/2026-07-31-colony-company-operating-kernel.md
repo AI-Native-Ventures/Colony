@@ -10,17 +10,21 @@ agents by personal name or role, group one agent into multiple teams, represent
 single-team Tasks inside cross-team Initiatives, and attribute every paid agent
 turn to a deterministic work and accounting context.
 
-**Architecture:** Model Company, Initiative, and Task as company-owner-authored
-Nostr parameterized-replaceable events. One author is required because the
-author pubkey is part of every NIP-33 coordinate; allowing agents or admins to
-write the same logical ID directly would create competing heads. Agents and
-other humans read the records and request mutations through chat; the owner
-desktop signs the authoritative replacement. Extend the existing NIP-AP Persona and
-Team projections rather than creating a second employee directory. Put work
-context identifiers on the triggering chat event, hydrate the canonical records
-before an ACP turn, and snapshot the result into the owner-encrypted NIP-AM turn
-metric. Expose the contracts through `buzz-cli` first and build only chat
-autocomplete/status integration in desktop—no Company, Task, or Initiative page.
+**Architecture:** Model Company, Initiative, and Task as relay-authored Nostr
+parameterized-replaceable canonical heads. The tenant relay pubkey is the one
+stable NIP-33 author, so desktop identities, agents, and future administrators
+cannot create competing coordinates for the same logical record. A company
+owner signs a regular `KIND_COMPANY_ACTION` request; the relay authenticates the
+actor, validates the referenced Persona and Team state, applies the exact
+transition against the current head, signs the replacement head, and emits a
+`KIND_COMPANY_RECEIPT`. Agents and other humans may request mutations through
+chat, but they never sign canonical heads. Extend the existing NIP-AP Persona
+and Team projections rather than creating a second employee directory. Put
+work context identifiers on the triggering chat event, hydrate the canonical
+records before an ACP turn, and snapshot the result into the owner-encrypted
+NIP-AM turn metric. Expose the contracts through `buzz-cli` first and build only
+chat autocomplete/status integration in desktop—no Company, Task, or Initiative
+page.
 
 **Tech Stack:** Rust, Nostr/NIP-33, serde, clap, `buzz-core`, `buzz-sdk`,
 `buzz-relay`, `buzz-cli`, `buzz-acp`, Tauri 2, React 19, TypeScript, TanStack
@@ -47,18 +51,28 @@ Query, node:test, Playwright.
   events.
 - Do not classify costs with an LLM. Classification comes from the Task's
   explicit commercial purpose and deterministic rule.
-- Do not allow multiple authors to create competing NIP-33 heads for one
-  Company, Initiative, or Task ID. This phase uses the company owner as the
-  single canonical author.
+- Do not allow clients to author Company, Initiative, or Task heads. The tenant
+  relay is the only canonical author; owners authorize mutations with signed
+  Company Action events and receive relay-signed receipts.
+
+## Required execution order
+
+Implement Tasks 1–2, then Tasks 6–8 (role identity, team leads, and mention
+resolution), then Tasks 3–5 and 9–12. Relay admission is deliberately blocked
+until the Persona and Team projections required to validate initiative
+ownership, task ownership, and QA membership exist. Do not weaken those checks
+to preserve the numeric task order.
 
 ## Acceptance gates
 
 ### Gate A — Protocol and authorization
 
-Pass only when Company, Initiative, and Task builders round-trip across core,
-SDK, relay, and CLI; malformed content, unknown fields, missing `d` tags,
-duplicate identity tags, invalid status transitions, invalid team ownership,
-and Task/Initiative coordinate mismatches are rejected.
+Pass only when owner-signed Company Actions and relay-authored Company,
+Initiative, and Task heads round-trip across core, SDK, relay, and CLI;
+malformed content, unknown fields, missing `d` tags, duplicate identity tags,
+stale expected heads, invalid status transitions, invalid team ownership, and
+Task/Initiative coordinate mismatches are rejected. Every accepted or rejected
+action produces one linkable relay-signed receipt.
 
 ### Gate B — Identity and team semantics
 
@@ -91,13 +105,36 @@ background Task before the paid turn starts.
 
 ## Wire contracts
 
-Reserve the adjacent NIP-33 kinds:
+Reserve the adjacent NIP-33 head kinds and regular action/receipt kinds:
 
 | Entity | Kind | Coordinate | Required tags |
 |---|---:|---|---|
-| Company | `30179` | owner + kind + `company_id` | `d`, `company` |
-| Initiative | `30180` | owner + kind + `initiative_id` | `d`, `company`, optional `cost-centre`, optional `client` |
-| Task | `30181` | owner + kind + `task_id` | `d`, `company`, `team`, optional `initiative`, `cost-centre`, optional `client` |
+| Company head | `30179` | relay + kind + `company_id` | `d`, `company` |
+| Initiative head | `30180` | relay + kind + `initiative_id` | `d`, `company`, optional `cost-centre`, optional `client` |
+| Task head | `30181` | relay + kind + `task_id` | `d`, `company`, `team`, optional `initiative`, `cost-centre`, optional `client` |
+| Company Action | `40013` | immutable owner-signed request | `action`, `company`, `entity-kind`, `entity-id`, optional `expected-head` |
+| Company Receipt | `40014` | immutable relay-signed result | `action`, `p`, `company`, `entity-kind`, `entity-id`, `status`, optional `head` |
+
+The action content contains the requested complete entity payload and operation.
+The relay does not trust client-supplied head tags: it rebuilds canonical tags
+from validated content. `expected-head` is required for replacement operations
+and provides compare-and-set conflict detection. The receipt links the exact
+action event, actor, outcome, and resulting head without echoing confidential
+content.
+
+Canonical replacement validation keeps `id`, `companyId` (where present), and
+`createdAt` immutable and requires `updatedAt` to strictly increase. Same-status
+edits are allowed. The exact transition graphs are:
+
+- Company: `draft -> approved` only.
+- Initiative: `proposed -> approved -> active`; `active <-> blocked`;
+  `active -> completed`; any nonterminal state may become `cancelled`.
+- Task: `proposed -> ready`; `ready -> inProgress|blocked`;
+  `inProgress -> inReview|blocked`;
+  `inReview -> inProgress|completed|blocked`;
+  `blocked -> ready|inProgress`; any nonterminal state may become `cancelled`.
+
+Completed and cancelled records are terminal except for same-status edits.
 
 The content schema names are:
 
@@ -248,6 +285,8 @@ pub struct CompanyTeamRef {
 
 - [ ] Add failing tests in `crates/buzz-core/src/kind.rs` asserting:
   - `30179`, `30180`, and `30181` are parameterized replaceable;
+  - `30179`, `30180`, and `30181` are relay-only;
+  - `40013` is a client-authored command and `40014` is relay-only;
   - none are ephemeral;
   - all fit in `u16`;
   - the three numbers are distinct from Persona, Team, Managed Agent, and Block
@@ -290,6 +329,10 @@ fn company_work_kinds_are_addressable_and_distinct() {
   - `clientDelivery` without `clientOrganizationId` becomes `needsReview`;
   - `clientDelivery` with a client becomes `cogs`;
   - all other known purposes become `opex`.
+  - every pair in the Company, Initiative, and Task transition matrices matches
+    the exact graph above;
+  - replacement keeps stable coordinates and `createdAt` immutable;
+  - replacement requires `updatedAt` to strictly increase.
 
 ### Step 3: Add red metric compatibility tests
 
@@ -341,9 +384,14 @@ git commit -s -m "test(core): pin Colony company work contracts"
 pub const KIND_COMPANY_PROFILE: u32 = 30179;
 pub const KIND_INITIATIVE: u32 = 30180;
 pub const KIND_TASK: u32 = 30181;
+pub const KIND_COMPANY_ACTION: u32 = 40013;
+pub const KIND_COMPANY_RECEIPT: u32 = 40014;
 ```
 
 - [ ] Export `pub mod company;` from `crates/buzz-core/src/lib.rs`.
+- [ ] Classify the three heads and Company Receipt as relay-only and Company
+  Action as a transactional command. Do not classify receipts or heads as
+  commands.
 
 ### Step 2: Implement exact serde contracts
 
@@ -382,10 +430,22 @@ pub fn classify_cost(
     purpose: CommercialPurpose,
     client_organization_id: Option<&str>,
 ) -> CostClassification;
+pub const fn is_company_status_transition_allowed(
+    from: CompanyOnboardingStatus,
+    to: CompanyOnboardingStatus,
+) -> bool;
+pub const fn is_initiative_status_transition_allowed(
+    from: InitiativeStatus,
+    to: InitiativeStatus,
+) -> bool;
+pub const fn is_task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool;
 ```
 
 - [ ] Return typed, display-safe validation errors without echoing full
   confidential content.
+- [ ] Add replacement validators that reject changed stable coordinates or
+  `createdAt`, non-increasing `updatedAt`, and transitions outside the exact
+  graphs. Run normal cross-record validation before accepting a replacement.
 
 ### Step 4: Extend NIP-AM
 
@@ -419,7 +479,7 @@ git commit -s -m "feat(core): add Colony company work contracts"
 
 ---
 
-## Task 3: Add SDK builders and parser vectors
+## Task 3: Add Company Action builders and canonical-head parser vectors
 
 **Files:**
 
@@ -429,11 +489,14 @@ git commit -s -m "feat(core): add Colony company work contracts"
 ### Step 1: Write failing builder tests
 
 - [ ] Add tests for:
-  - Company event tags: one `d`, one `company`;
-  - Initiative tags: one `d`, one `company`, one `cost-centre`, optional
-    `client`;
-  - Task tags: one `d`, one `company`, one `team`, optional `initiative`,
-    `cost-centre`, and `client`;
+  - owner-signed Company Action tags and content for create/update/transition;
+  - required `expected-head` on replacements and its absence on creates;
+  - relay-authored Company head tags: one `d`, one `company`;
+  - relay-authored Initiative head tags: one `d`, one `company`, one
+    `cost-centre`, optional `client`;
+  - relay-authored Task head tags: one `d`, one `company`, one `team`, optional
+    `initiative`, `cost-centre`, and `client`;
+  - relay-signed receipt links to action, actor, outcome, and optional head;
   - canonical JSON content;
   - duplicate/stray contract tags rejected by parsers;
   - coordinate ID equals content ID;
@@ -450,20 +513,21 @@ cargo test -p buzz-sdk company --no-fail-fast
 
 Expected: module/builders are missing.
 
-### Step 3: Implement builders
+### Step 3: Implement action builders and read-only parsers
 
 - [ ] Add:
 
 ```rust
-pub fn build_company_profile(profile: &CompanyProfile) -> Result<EventBuilder, CompanySdkError>;
-pub fn build_initiative(initiative: &Initiative) -> Result<EventBuilder, CompanySdkError>;
-pub fn build_task(task: &CompanyTask) -> Result<EventBuilder, CompanySdkError>;
+pub fn build_company_action(action: &CompanyAction) -> Result<EventBuilder, CompanySdkError>;
 pub fn parse_company_event(event: &Event) -> Result<CompanyProfile, CompanySdkError>;
 pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkError>;
 pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError>;
+pub fn parse_company_receipt(event: &Event) -> Result<CompanyReceipt, CompanySdkError>;
 ```
 
 - [ ] Reuse one strict helper for exact tag cardinality.
+- [ ] Do not expose client-side builders for kinds `30179`–`30181` or `40014`;
+  only the relay broker may construct and sign canonical heads and receipts.
 - [ ] Do not add an `h` tag; these definitions are community-global.
 
 ### Step 4: Prove and commit
@@ -485,26 +549,36 @@ git commit -s -m "feat(sdk): build Colony company work events"
 
 ---
 
-## Task 4: Admit and validate company/work events at the relay
+## Task 4: Broker owner actions into relay-authored company/work heads
 
 **Files:**
 
 - Modify: `crates/buzz-relay/src/handlers/ingest.rs`
 - Create: `crates/buzz-relay/src/company_events.rs`
+- Create: `crates/buzz-relay/src/company_broker.rs`
 - Modify: `crates/buzz-relay/src/lib.rs`
 - Modify: `crates/buzz-search/tests/fts_integration.rs`
 
+> **Prerequisite:** Tasks 6–8 are green. The broker must validate against real
+> role and team projections rather than provisional IDs.
+
 ### Step 1: Write failing relay tests
 
-- [ ] Add unit tests proving the three kinds:
-  - require `UsersWrite`;
-  - are global-only;
+- [ ] Add unit tests proving Company Action:
+  - requires `UsersWrite`;
+  - is global-only;
   - never require `h`;
-  - reject malformed JSON and tag/content mismatches;
-  - allow all three writes only when the event author is the current company
-    owner;
-  - reject admins, ordinary members, owned managed agents, unmanaged bots, and
-    foreign managed agents as direct head authors.
+  - rejects malformed JSON and tag/content mismatches;
+  - is accepted only when the event author is the current company owner;
+  - rejects admins, ordinary members, owned managed agents, unmanaged bots, and
+    foreign managed agents as mutation actors.
+- [ ] Prove direct client submissions of Company, Initiative, Task, and Company
+  Receipt kinds are rejected as relay-only.
+- [ ] Prove an accepted action produces exactly one relay-authored head and one
+  relay-signed receipt, while a rejected action produces no head and one
+  failure receipt.
+- [ ] Prove replaying an action ID is idempotent and a stale `expected-head`
+  returns a conflict receipt without replacing the head.
 
 - [ ] Add an integration test proving replacing Task `task-1` does not replace
   `task-2` and an older `task-1` event cannot win.
@@ -518,25 +592,30 @@ git commit -s -m "feat(sdk): build Colony company work events"
 cargo test -p buzz-relay company_events --no-fail-fast
 ```
 
-Expected: kinds are unknown/rejected.
+Expected: Company Action is unknown and no broker exists.
 
 ### Step 3: Add scope/routing entries
 
 - [ ] Import the new constants into `ingest.rs`.
-- [ ] Add them to `required_scope_for_kind` as `Scope::UsersWrite`.
-- [ ] Add them to `is_global_only_kind`.
-- [ ] Do not add them to `requires_h_channel_scope`.
+- [ ] Add Company Action to `required_scope_for_kind` as `Scope::UsersWrite`
+  and to `is_global_only_kind`.
+- [ ] Route Company Action through the transactional command path; do not store
+  it through the generic client event path.
+- [ ] Keep Company, Initiative, Task, and Company Receipt relay-only.
+- [ ] Do not add any of these kinds to `requires_h_channel_scope`.
 
 ### Step 4: Add semantic authorization
 
-- [ ] In `company_events.rs`, validate:
-  - signature and exact SDK envelope;
-  - current tenant membership;
-  - current company owner for Company, Initiative, and Task;
-  - Initiative/Task author matches the author of the referenced Company;
-  - the author cannot claim a different owner or create a second head under a
-    different author.
-- [ ] Call the validator before the generic insert/replace path.
+- [ ] In `company_broker.rs`, validate:
+  - action signature and exact SDK envelope;
+  - current tenant membership and current company owner;
+  - action idempotency and `expected-head` compare-and-set;
+  - referenced Persona, role, Team, lead, company, Initiative, cost centre, and
+    exact lifecycle transition;
+  - immutable coordinates/`createdAt` and strictly increasing `updatedAt`.
+- [ ] Rebuild tags from validated content, sign the head with the tenant relay
+  key, commit head plus action journal atomically, then emit one signed receipt.
+- [ ] Never accept a client signature as the canonical head author.
 - [ ] Keep rejection messages generic enough not to reveal private company
   state.
 
@@ -562,9 +641,10 @@ cargo test -p buzz-search company_work_kinds_have_storage_null_tsvector --no-fai
 
 ```bash
 git add crates/buzz-relay/src/handlers/ingest.rs \
-  crates/buzz-relay/src/company_events.rs crates/buzz-relay/src/lib.rs \
+  crates/buzz-relay/src/company_events.rs crates/buzz-relay/src/company_broker.rs \
+  crates/buzz-relay/src/lib.rs \
   crates/buzz-search/tests/fts_integration.rs
-git commit -s -m "feat(relay): validate Colony company work events"
+git commit -s -m "feat(relay): broker Colony company work actions"
 ```
 
 ---
@@ -610,14 +690,17 @@ cargo test -p buzz-cli company_command_surface_parses --no-fail-fast
 
 Expected: subcommands do not exist.
 
-### Step 3: Implement reads and writes
+### Step 3: Implement reads and owner-authorized actions
 
-- [ ] Use the SDK builders and `BuzzClient::query_paginated`.
+- [ ] Use canonical-head parsers, the Company Action builder, and
+  `BuzzClient::query_paginated`.
 - [ ] Require explicit kinds on every query.
-- [ ] Resolve the company owner from the current NIP-OA auth tag for reads.
+- [ ] Resolve the relay signer for head reads and the company owner from the
+  current NIP-OA auth tag for action authorization.
 - [ ] Permit `put`/`complete` only when the CLI signing key is the company
-  owner. Managed agents may `list`/`get`; mutations must be requested through
-  chat for the owner desktop to sign.
+  owner, publish a Company Action, and wait for its linked relay receipt.
+  Managed agents may `list`/`get`; mutations must be requested through chat for
+  an owner identity to authorize.
 - [ ] Return one stable JSON envelope:
 
 ```json
@@ -630,8 +713,9 @@ Expected: subcommands do not exist.
 ```
 
 - [ ] `complete` must first read the current Task, preserve all immutable
-  identity/ownership fields, set `status=completed`, set `updatedAt`, and publish
-  a replacement.
+  identity/ownership fields, set `status=completed`, set `updatedAt`, include
+  the current event as `expected-head`, and publish an action. It never signs a
+  Task head directly.
 - [ ] Exit with write-conflict code `5` if a newer head wins.
 
 ### Step 4: Add the live runbook
@@ -929,7 +1013,7 @@ git commit -s -m "feat(chat): mention agents by name role or team"
 
 ---
 
-## Task 9: Add desktop relay repositories for Company, Initiative, and Task
+## Task 9: Add desktop relay repositories and Company Action broker client
 
 **Files:**
 
@@ -948,8 +1032,9 @@ git commit -s -m "feat(chat): mention agents by name role or team"
 - [ ] Pin TypeScript mirror constants `30179`, `30180`, `30181`.
 - [ ] Pin the same three constants in Flutter `EventKind`; mobile remains
   fallback-only and does not gain company UI in this phase.
-- [ ] Test strict parsing, exact tags, newest-head selection, stale replacement,
-  relay failure, empty results, and community-switch cancellation.
+- [ ] Test strict parsing, exact tags, newest-head selection, owner action
+  publication, linked receipt resolution, stale expected-head conflict, relay
+  failure, empty results, and community-switch cancellation.
 - [ ] Test that no Task content is placed in localStorage.
 
 ### Step 2: Run red
@@ -962,10 +1047,13 @@ pnpm exec tsx --test src/features/company/companyRepository.test.mjs
 cd ../mobile && flutter test test/shared/relay/nostr_models_test.dart
 ```
 
-### Step 3: Implement relay-only repositories
+### Step 3: Implement relay-read/action-write repositories
 
 - [ ] Query with explicit kinds and `#d`.
-- [ ] Sign writes with the current identity through `signRelayEvent`.
+- [ ] Parse heads only when authored by the active tenant relay signer.
+- [ ] Sign Company Actions with the current owner identity through
+  `signRelayEvent`, then resolve the relay-signed receipt and resulting head.
+- [ ] Never sign kinds `30179`–`30181` directly from desktop.
 - [ ] Validate the same exact wire shapes before returning records.
 - [ ] Add React Query keys that include the active community ID.
 - [ ] Add `resetCompanyRepositoryState()` only if a module-level cache is
@@ -1034,8 +1122,15 @@ git commit -s -m "feat(desktop): sync Colony company work context"
     delivery context;
   - derive the Task ID as UUID v5 from
     `(company_id, channel_id, root_event_or_local_send_id)`;
-  - publish the Task once before sending the paid instruction.
-- [ ] On retry, reuse the same Task ID and replacement coordinate.
+  - derive a stable Company Action ID from the same local send identity;
+  - publish one owner-signed `KIND_COMPANY_ACTION` (`40013`) requesting Task
+    creation before sending the paid instruction;
+  - await the linked relay-signed `KIND_COMPANY_RECEIPT` (`40014`), require a
+    successful outcome, and resolve its relay-authored `KIND_TASK` (`30181`)
+    head before attaching work context.
+- [ ] On retry, reuse the same Task ID and Company Action ID. The relay broker
+  must return the existing receipt/head for a replay rather than create another
+  Task or replacement.
 
 ### Step 3: Run red
 
@@ -1051,18 +1146,26 @@ pnpm exec tsx --test src/features/company/workContext.test.mjs
 - [ ] Extend the mention send flow:
   1. resolve/provision the target managed agents;
   2. resolve or create work context;
-  3. wait for accepted Task write;
-  4. merge the three reference tags;
-  5. send the message;
-  6. start the agent only after the message is accepted.
-- [ ] If Task creation fails, do not start the agent and show a retryable
-  error preserving the draft.
+  3. sign and publish the Task-create Company Action with the active owner
+     identity;
+  4. wait for its relay-signed receipt and resolve the referenced canonical
+     Task head;
+  5. merge the three reference tags from that canonical head;
+  6. send the message;
+  7. start the agent only after the message is accepted.
+- [ ] If action signing, receipt resolution, or Task creation fails, do not
+  start the agent and show a retryable error preserving the draft. A retry
+  reuses the action ID and cannot duplicate the Task.
+- [ ] Never publish a client-authored `30181` Task event from the send flow.
 - [ ] Do not create Tasks for ordinary human-only chat.
 
 ### Step 5: Prove and commit
 
-- [ ] Run the unit test and a focused E2E that asserts Task publication precedes
-  managed-agent start.
+- [ ] Run the unit test and a focused E2E that asserts the owner-signed `40013`
+  action precedes the relay-signed `40014` receipt, the receipt resolves one
+  relay-authored `30181` Task head, and all three precede managed-agent start.
+- [ ] Retry the same send identity and prove the same receipt/head is reused and
+  no second Task is created.
 - [ ] Commit:
 
 ```bash
@@ -1182,11 +1285,15 @@ git commit -s -m "feat(acp): attribute every Colony agent turn"
 ### Step 1: Add real relay protocol proof
 
 - [ ] Start Postgres, Redis, and relay using the repository test harness.
-- [ ] Publish a Company, Initiative, and two Tasks.
-- [ ] Replace one Task and prove the other remains.
-- [ ] Prove a non-owner cannot replace Company, Initiative, or Task.
-- [ ] Prove owner replacement succeeds and an owned managed agent reads the
-  resulting Task but cannot create a competing head.
+- [ ] Publish owner-signed actions that create a Company, Initiative, and two
+  Tasks; assert relay-authored heads and linked success receipts.
+- [ ] Replace one Task through an action and prove the other remains.
+- [ ] Prove a non-owner action cannot replace Company, Initiative, or Task.
+- [ ] Prove direct client-authored head and receipt submissions are rejected.
+- [ ] Prove an owner action succeeds and an owned managed agent reads the
+  resulting relay-authored Task but cannot create a competing head.
+- [ ] Prove a stale expected head, illegal transition, and replayed action have
+  deterministic conflict/failure/idempotent receipts.
 
 ### Step 2: Add real desktop interaction proof
 

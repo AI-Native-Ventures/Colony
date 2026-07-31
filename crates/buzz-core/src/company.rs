@@ -61,7 +61,7 @@ pub enum CompanyOnboardingStatus {
     Approved,
 }
 
-/// Owner-authored company operating profile.
+/// Relay-authored canonical company operating profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompanyProfile {
@@ -333,9 +333,187 @@ pub enum CompanyContractError {
     /// The snapshotted cost classification differs from the deterministic rule.
     #[error("work context cost classification is inconsistent")]
     CostClassificationMismatch,
+    /// A field that identifies a canonical record changed during replacement.
+    #[error("{0} is immutable")]
+    ImmutableField(&'static str),
+    /// A replacement did not advance the canonical record timestamp.
+    #[error("updatedAt must strictly increase")]
+    UpdatedAtNotMonotonic,
+    /// A lifecycle state change is outside the exact transition graph.
+    #[error("invalid {0} status transition")]
+    InvalidStatusTransition(&'static str),
 }
 
-/// Validate one owner-authored company profile.
+/// Return whether a company lifecycle transition is allowed.
+///
+/// Same-status replacements are allowed for content edits. Approval is
+/// irreversible: the only state change is `Draft -> Approved`.
+pub const fn is_company_status_transition_allowed(
+    from: CompanyOnboardingStatus,
+    to: CompanyOnboardingStatus,
+) -> bool {
+    matches!(
+        (from, to),
+        (
+            CompanyOnboardingStatus::Draft,
+            CompanyOnboardingStatus::Draft
+        ) | (
+            CompanyOnboardingStatus::Draft,
+            CompanyOnboardingStatus::Approved
+        ) | (
+            CompanyOnboardingStatus::Approved,
+            CompanyOnboardingStatus::Approved
+        )
+    )
+}
+
+/// Return whether an initiative lifecycle transition is allowed.
+///
+/// Same-status replacements are allowed. Completed and cancelled initiatives
+/// cannot transition to another status.
+pub const fn is_initiative_status_transition_allowed(
+    from: InitiativeStatus,
+    to: InitiativeStatus,
+) -> bool {
+    if from as u8 == to as u8 {
+        return true;
+    }
+    matches!(
+        (from, to),
+        (InitiativeStatus::Proposed, InitiativeStatus::Approved)
+            | (InitiativeStatus::Approved, InitiativeStatus::Active)
+            | (InitiativeStatus::Active, InitiativeStatus::Blocked)
+            | (InitiativeStatus::Blocked, InitiativeStatus::Active)
+            | (InitiativeStatus::Active, InitiativeStatus::Completed)
+            | (
+                InitiativeStatus::Proposed
+                    | InitiativeStatus::Approved
+                    | InitiativeStatus::Active
+                    | InitiativeStatus::Blocked,
+                InitiativeStatus::Cancelled
+            )
+    )
+}
+
+/// Return whether a task lifecycle transition is allowed.
+///
+/// Same-status replacements are allowed. Completed and cancelled tasks cannot
+/// transition to another status.
+pub const fn is_task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool {
+    if from as u8 == to as u8 {
+        return true;
+    }
+    matches!(
+        (from, to),
+        (TaskStatus::Proposed, TaskStatus::Ready)
+            | (
+                TaskStatus::Ready,
+                TaskStatus::InProgress | TaskStatus::Blocked
+            )
+            | (
+                TaskStatus::InProgress,
+                TaskStatus::InReview | TaskStatus::Blocked
+            )
+            | (
+                TaskStatus::InReview,
+                TaskStatus::InProgress | TaskStatus::Completed | TaskStatus::Blocked
+            )
+            | (
+                TaskStatus::Blocked,
+                TaskStatus::Ready | TaskStatus::InProgress
+            )
+            | (
+                TaskStatus::Proposed
+                    | TaskStatus::Ready
+                    | TaskStatus::InProgress
+                    | TaskStatus::InReview
+                    | TaskStatus::Blocked,
+                TaskStatus::Cancelled
+            )
+    )
+}
+
+/// Validate immutable coordinates, timestamps, and lifecycle state for a
+/// replacement company head.
+pub fn validate_company_update(
+    previous: &CompanyProfile,
+    replacement: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_company(replacement)?;
+    validate_immutable(&previous.schema, &replacement.schema, "company.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "company.id")?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    if !is_company_status_transition_allowed(
+        previous.onboarding_status,
+        replacement.onboarding_status,
+    ) {
+        return Err(CompanyContractError::InvalidStatusTransition("company"));
+    }
+    Ok(())
+}
+
+/// Validate immutable coordinates, timestamps, and lifecycle state for a
+/// replacement initiative head.
+pub fn validate_initiative_update(
+    previous: &Initiative,
+    replacement: &Initiative,
+    company: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_initiative(replacement, company)?;
+    validate_immutable(&previous.schema, &replacement.schema, "initiative.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "initiative.id")?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "initiative.companyId",
+    )?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    if !is_initiative_status_transition_allowed(previous.status, replacement.status) {
+        return Err(CompanyContractError::InvalidStatusTransition("initiative"));
+    }
+    Ok(())
+}
+
+/// Validate immutable coordinates, timestamps, and lifecycle state for a
+/// replacement task head.
+pub fn validate_task_update(
+    previous: &CompanyTask,
+    replacement: &CompanyTask,
+    company: &CompanyProfile,
+    initiative: Option<&Initiative>,
+    teams: &[CompanyTeamRef],
+) -> Result<(), CompanyContractError> {
+    validate_task(replacement, company, initiative, teams)?;
+    validate_immutable(&previous.schema, &replacement.schema, "task.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "task.id")?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "task.companyId",
+    )?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    if !is_task_status_transition_allowed(previous.status, replacement.status) {
+        return Err(CompanyContractError::InvalidStatusTransition("task"));
+    }
+    Ok(())
+}
+
+/// Validate one relay-authored canonical company profile.
 pub fn validate_company(profile: &CompanyProfile) -> Result<(), CompanyContractError> {
     validate_schema(&profile.schema, COMPANY_SCHEMA, "company")?;
     validate_id(&profile.id, "company.id")?;
@@ -625,6 +803,33 @@ fn validate_schema(
     } else {
         Err(CompanyContractError::InvalidSchema(entity))
     }
+}
+
+fn validate_immutable<T: PartialEq>(
+    previous: &T,
+    replacement: &T,
+    field: &'static str,
+) -> Result<(), CompanyContractError> {
+    if previous == replacement {
+        Ok(())
+    } else {
+        Err(CompanyContractError::ImmutableField(field))
+    }
+}
+
+fn validate_replacement_timestamps(
+    previous_created_at: i64,
+    previous_updated_at: i64,
+    replacement_created_at: i64,
+    replacement_updated_at: i64,
+) -> Result<(), CompanyContractError> {
+    if previous_created_at != replacement_created_at {
+        return Err(CompanyContractError::ImmutableField("createdAt"));
+    }
+    if replacement_updated_at <= previous_updated_at {
+        return Err(CompanyContractError::UpdatedAtNotMonotonic);
+    }
+    Ok(())
 }
 
 fn validate_id(value: &str, field: &'static str) -> Result<(), CompanyContractError> {
@@ -1033,6 +1238,245 @@ mod tests {
             .assignee_persona_ids
             .contains(&"content-specialist".to_string()));
         assert!(validate_task(&task, &company, Some(&initiative), &teams).is_ok());
+    }
+
+    #[test]
+    fn company_status_transition_graph_is_exhaustive() {
+        let statuses = [
+            CompanyOnboardingStatus::Draft,
+            CompanyOnboardingStatus::Approved,
+        ];
+        let allowed = [
+            (
+                CompanyOnboardingStatus::Draft,
+                CompanyOnboardingStatus::Draft,
+            ),
+            (
+                CompanyOnboardingStatus::Draft,
+                CompanyOnboardingStatus::Approved,
+            ),
+            (
+                CompanyOnboardingStatus::Approved,
+                CompanyOnboardingStatus::Approved,
+            ),
+        ];
+
+        for from in statuses {
+            for to in statuses {
+                assert_eq!(
+                    is_company_status_transition_allowed(from, to),
+                    allowed.contains(&(from, to)),
+                    "unexpected company transition result: {from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn initiative_status_transition_graph_is_exhaustive() {
+        let statuses = [
+            InitiativeStatus::Proposed,
+            InitiativeStatus::Approved,
+            InitiativeStatus::Active,
+            InitiativeStatus::Blocked,
+            InitiativeStatus::Completed,
+            InitiativeStatus::Cancelled,
+        ];
+        let allowed_changes = [
+            (InitiativeStatus::Proposed, InitiativeStatus::Approved),
+            (InitiativeStatus::Approved, InitiativeStatus::Active),
+            (InitiativeStatus::Active, InitiativeStatus::Blocked),
+            (InitiativeStatus::Blocked, InitiativeStatus::Active),
+            (InitiativeStatus::Active, InitiativeStatus::Completed),
+            (InitiativeStatus::Proposed, InitiativeStatus::Cancelled),
+            (InitiativeStatus::Approved, InitiativeStatus::Cancelled),
+            (InitiativeStatus::Active, InitiativeStatus::Cancelled),
+            (InitiativeStatus::Blocked, InitiativeStatus::Cancelled),
+        ];
+
+        for from in statuses {
+            for to in statuses {
+                let expected = from == to || allowed_changes.contains(&(from, to));
+                assert_eq!(
+                    is_initiative_status_transition_allowed(from, to),
+                    expected,
+                    "unexpected initiative transition result: {from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn task_status_transition_graph_is_exhaustive() {
+        let statuses = [
+            TaskStatus::Proposed,
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+            TaskStatus::Blocked,
+            TaskStatus::Completed,
+            TaskStatus::Cancelled,
+        ];
+        let allowed_changes = [
+            (TaskStatus::Proposed, TaskStatus::Ready),
+            (TaskStatus::Ready, TaskStatus::InProgress),
+            (TaskStatus::Ready, TaskStatus::Blocked),
+            (TaskStatus::InProgress, TaskStatus::InReview),
+            (TaskStatus::InProgress, TaskStatus::Blocked),
+            (TaskStatus::InReview, TaskStatus::InProgress),
+            (TaskStatus::InReview, TaskStatus::Completed),
+            (TaskStatus::InReview, TaskStatus::Blocked),
+            (TaskStatus::Blocked, TaskStatus::Ready),
+            (TaskStatus::Blocked, TaskStatus::InProgress),
+            (TaskStatus::Proposed, TaskStatus::Cancelled),
+            (TaskStatus::Ready, TaskStatus::Cancelled),
+            (TaskStatus::InProgress, TaskStatus::Cancelled),
+            (TaskStatus::InReview, TaskStatus::Cancelled),
+            (TaskStatus::Blocked, TaskStatus::Cancelled),
+        ];
+
+        for from in statuses {
+            for to in statuses {
+                let expected = from == to || allowed_changes.contains(&(from, to));
+                assert_eq!(
+                    is_task_status_transition_allowed(from, to),
+                    expected,
+                    "unexpected task transition result: {from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn company_replacement_requires_immutable_identity_and_monotonic_time() {
+        let previous = company_fixture();
+        let mut replacement = previous.clone();
+        replacement.summary = "An updated summary.".to_string();
+        replacement.updated_at += 1;
+        assert!(validate_company_update(&previous, &replacement).is_ok());
+
+        let mut approved_to_draft = replacement.clone();
+        approved_to_draft.onboarding_status = CompanyOnboardingStatus::Draft;
+        assert_eq!(
+            validate_company_update(&previous, &approved_to_draft),
+            Err(CompanyContractError::InvalidStatusTransition("company"))
+        );
+
+        let mut changed_id = replacement.clone();
+        changed_id.id = "different-company".to_string();
+        assert_eq!(
+            validate_company_update(&previous, &changed_id),
+            Err(CompanyContractError::ImmutableField("company.id"))
+        );
+
+        let mut changed_created_at = replacement.clone();
+        changed_created_at.created_at += 1;
+        assert_eq!(
+            validate_company_update(&previous, &changed_created_at),
+            Err(CompanyContractError::ImmutableField("createdAt"))
+        );
+
+        let mut stale = replacement;
+        stale.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_company_update(&previous, &stale),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    #[test]
+    fn initiative_replacement_requires_immutable_identity_and_monotonic_time() {
+        let company = company_fixture();
+        let previous = initiative_fixture();
+        let mut replacement = previous.clone();
+        replacement.summary = "An updated initiative summary.".to_string();
+        replacement.updated_at += 1;
+        assert!(validate_initiative_update(&previous, &replacement, &company).is_ok());
+
+        let mut invalid_transition = replacement.clone();
+        invalid_transition.status = InitiativeStatus::Approved;
+        assert_eq!(
+            validate_initiative_update(&previous, &invalid_transition, &company),
+            Err(CompanyContractError::InvalidStatusTransition("initiative"))
+        );
+
+        let mut changed_company = replacement.clone();
+        changed_company.company_id = "different-company".to_string();
+        let mut different_company = company.clone();
+        different_company.id = changed_company.company_id.clone();
+        assert_eq!(
+            validate_initiative_update(&previous, &changed_company, &different_company),
+            Err(CompanyContractError::ImmutableField("initiative.companyId"))
+        );
+
+        let mut changed_id = replacement.clone();
+        changed_id.id = "different-initiative".to_string();
+        assert_eq!(
+            validate_initiative_update(&previous, &changed_id, &company),
+            Err(CompanyContractError::ImmutableField("initiative.id"))
+        );
+
+        let mut stale = replacement;
+        stale.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_initiative_update(&previous, &stale, &company),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    #[test]
+    fn task_replacement_requires_immutable_identity_and_monotonic_time() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let previous = task_fixtures().remove(0);
+        let mut replacement = previous.clone();
+        replacement.title = "Build and launch the Tennant Group website".to_string();
+        replacement.updated_at += 1;
+        assert!(
+            validate_task_update(&previous, &replacement, &company, Some(&initiative), &teams)
+                .is_ok()
+        );
+
+        let mut invalid_transition = replacement.clone();
+        invalid_transition.status = TaskStatus::Ready;
+        assert_eq!(
+            validate_task_update(
+                &previous,
+                &invalid_transition,
+                &company,
+                Some(&initiative),
+                &teams
+            ),
+            Err(CompanyContractError::InvalidStatusTransition("task"))
+        );
+
+        let mut changed_created_at = replacement.clone();
+        changed_created_at.created_at += 1;
+        assert_eq!(
+            validate_task_update(
+                &previous,
+                &changed_created_at,
+                &company,
+                Some(&initiative),
+                &teams
+            ),
+            Err(CompanyContractError::ImmutableField("createdAt"))
+        );
+
+        let mut changed_id = replacement.clone();
+        changed_id.id = "different-task".to_string();
+        assert_eq!(
+            validate_task_update(&previous, &changed_id, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::ImmutableField("task.id"))
+        );
+
+        let mut stale = replacement;
+        stale.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_task_update(&previous, &stale, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
     }
 
     #[test]

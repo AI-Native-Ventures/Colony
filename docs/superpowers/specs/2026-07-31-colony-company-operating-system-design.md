@@ -531,6 +531,16 @@ The owned relay remains authoritative for:
 - task instructions and user decisions;
 - durable evidence of what agents proposed and what users authorized.
 
+Company, Initiative, and Task state uses one relay-authored canonical head per
+stable ID. An owner authorizes a mutation by signing a Company Action; the
+relay validates tenant ownership, current Persona and Team projections,
+compare-and-set head identity, immutable fields, and the exact lifecycle
+transition before signing a replacement head. It then emits a signed receipt
+linked to the action and resulting head. Desktop clients, agents, and
+administrators do not sign canonical heads directly. This prevents split
+NIP-33 coordinates when identities or administrators change while preserving
+cryptographic evidence of who requested each mutation.
+
 ### Owned structured cores
 
 Structured services remain authoritative for high-volume operational records:
@@ -606,6 +616,9 @@ approved.
 - An opt-out applies before future scheduling and across all relevant programs.
 - Legal and compliance outputs distinguish preparation from licensed advice.
 - Agent and user actions remain attributable to signed identities.
+- Company/work mutation authority remains attributable to the owner-signed
+  action, while canonical state and mutation outcomes are attributable to the
+  tenant relay signer.
 
 ## Acceptance gates
 

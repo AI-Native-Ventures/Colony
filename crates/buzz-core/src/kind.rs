@@ -185,13 +185,13 @@ pub const KIND_PERSONA: u32 = 30175;
 /// Chat-native Block catalog head (parameterized replaceable, relay-authored).
 pub const KIND_BLOCK_CATALOG_ENTRY: u32 = 30178;
 
-/// Colony company profile (parameterized replaceable, company-owner-authored).
+/// Colony company profile (parameterized replaceable, relay-authored canonical head).
 pub const KIND_COMPANY_PROFILE: u32 = 30179;
 
-/// Colony cross-team initiative (parameterized replaceable, company-owner-authored).
+/// Colony cross-team initiative (parameterized replaceable, relay-authored canonical head).
 pub const KIND_INITIATIVE: u32 = 30180;
 
-/// Colony single-team task (parameterized replaceable, company-owner-authored).
+/// Colony single-team task (parameterized replaceable, relay-authored canonical head).
 pub const KIND_TASK: u32 = 30181;
 
 /// A signed interaction with a chat-native Block instance.
@@ -202,6 +202,12 @@ pub const KIND_BLOCK_RECEIPT: u32 = 40011;
 
 /// An immutable chat-native Block manifest.
 pub const KIND_BLOCK_MANIFEST: u32 = 40012;
+
+/// Owner-signed request to create or mutate canonical Colony company state.
+pub const KIND_COMPANY_ACTION: u32 = 40013;
+
+/// Relay-signed auditable result of a Colony company action.
+pub const KIND_COMPANY_RECEIPT: u32 = 40014;
 
 /// Returns `true` if `kind` uses the author-only-unless-shared read model
 /// (currently only `KIND_PERSONA` / 30175).
@@ -612,6 +618,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_BLOCK_ACTION,
     KIND_BLOCK_RECEIPT,
     KIND_BLOCK_MANIFEST,
+    KIND_COMPANY_ACTION,
+    KIND_COMPANY_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_REPORT,
@@ -778,6 +786,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_WORKFLOW_TRIGGER
             | KIND_APPROVAL_GRANT
             | KIND_APPROVAL_DENY
+            | KIND_COMPANY_ACTION
     )
 }
 
@@ -793,6 +802,10 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_THREAD_SUMMARY
             | KIND_WINDOW_BOUNDS
             | KIND_BLOCK_CATALOG_ENTRY
+            | KIND_COMPANY_PROFILE
+            | KIND_INITIATIVE
+            | KIND_TASK
+            | KIND_COMPANY_RECEIPT
     )
 }
 
@@ -840,6 +853,8 @@ const _: () = assert!(KIND_HUDDLE_GUIDELINES <= u16::MAX as u32);
 const _: () = assert!(KIND_COMPANY_PROFILE <= u16::MAX as u32);
 const _: () = assert!(KIND_INITIATIVE <= u16::MAX as u32);
 const _: () = assert!(KIND_TASK <= u16::MAX as u32);
+const _: () = assert!(KIND_COMPANY_ACTION <= u16::MAX as u32);
+const _: () = assert!(KIND_COMPANY_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_COMPANY_PROFILE));
 const _: () = assert!(!is_ephemeral(KIND_INITIATIVE));
 const _: () = assert!(!is_ephemeral(KIND_TASK));
@@ -885,6 +900,33 @@ mod tests {
         ] {
             assert!(!unique.contains(&existing));
         }
+    }
+
+    #[test]
+    fn company_authority_kinds_have_exact_classifications() {
+        assert_eq!(KIND_COMPANY_ACTION, 40013);
+        assert_eq!(KIND_COMPANY_RECEIPT, 40014);
+
+        for kind in [
+            KIND_COMPANY_PROFILE,
+            KIND_INITIATIVE,
+            KIND_TASK,
+            KIND_COMPANY_ACTION,
+            KIND_COMPANY_RECEIPT,
+        ] {
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        for head in [KIND_COMPANY_PROFILE, KIND_INITIATIVE, KIND_TASK] {
+            assert!(is_relay_only_kind(head));
+            assert!(!is_command_kind(head));
+        }
+        assert!(is_command_kind(KIND_COMPANY_ACTION));
+        assert!(!is_relay_only_kind(KIND_COMPANY_ACTION));
+        assert!(is_relay_only_kind(KIND_COMPANY_RECEIPT));
+        assert!(!is_command_kind(KIND_COMPANY_RECEIPT));
+        assert!(!is_parameterized_replaceable(KIND_COMPANY_ACTION));
+        assert!(!is_parameterized_replaceable(KIND_COMPANY_RECEIPT));
     }
 
     #[test]
