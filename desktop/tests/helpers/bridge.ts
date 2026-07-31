@@ -148,6 +148,11 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  ttsSettings?: {
+    version: number;
+    agentTextToSpeech: boolean;
+    voicePreferences: string[];
+  };
   /** Device-local Discovery credential state returned by the Tauri mock. */
   discoveryCredentialStatus?: "configured" | "missing" | "unavailable";
   discoveryCredentialStatuses?: Partial<
