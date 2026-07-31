@@ -102,6 +102,7 @@ impl AgentDefinition {
             pubkey: String::new(),
             name: self.display_name.clone(),
             persona_id: None,
+            creation_request_id: None,
             private_key_nsec: String::new(),
             auth_tag: None,
             relay_url: String::new(),
@@ -214,6 +215,9 @@ pub struct ManagedAgentRecord {
     pub name: String,
     #[serde(default)]
     pub persona_id: Option<String>,
+    /// Local-only idempotency key; excluded from projections, snapshots, and ACP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_request_id: Option<String>,
     /// Team this instance was deployed from. Resolves runtime team instructions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_id: Option<String>,

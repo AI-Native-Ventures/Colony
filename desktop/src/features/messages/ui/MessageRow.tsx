@@ -2,6 +2,7 @@ import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 
 import {
+  blockStateEqual,
   depthGuideActionsEqual,
   numberArrayEqual,
   reactionsEqual,
@@ -10,6 +11,7 @@ import {
 import type { TimelineMessage } from "@/features/messages/types";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
+import { BlockFallback } from "@/features/blocks/ui/BlockFallback";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -26,6 +28,7 @@ import {
 } from "@/features/messages/lib/threadTreeLayout";
 import {
   KIND_HUDDLE_STARTED,
+  KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_DIFF,
 } from "@/shared/constants/kinds";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
@@ -49,6 +52,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
+const BlockMessage = React.lazy(
+  () => import("@/features/blocks/ui/BlockMessage"),
+);
 
 export type ThreadDepthGuideAction = {
   active?: boolean;
@@ -336,6 +342,18 @@ export const MessageRow = React.memo(
             />
           );
         default:
+          if (
+            message.kind === KIND_STREAM_MESSAGE &&
+            message.tags?.some((tag) => tag[0] === "block")
+          ) {
+            return (
+              <React.Suspense
+                fallback={<BlockFallback state="loading" text={message.body} />}
+              >
+                <BlockMessage message={message} />
+              </React.Suspense>
+            );
+          }
           {
             const waveMessage = parseWaveMessageContent(message.body);
             if (waveMessage) {
@@ -843,6 +861,7 @@ export const MessageRow = React.memo(
     // thread (see messageRowEquality.ts).
     reactionsEqual(prev.message.reactions, next.message.reactions) &&
     tagsEqual(prev.message.tags, next.message.tags) &&
+    blockStateEqual(prev.message.blockState, next.message.blockState) &&
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     depthGuideActionsEqual(

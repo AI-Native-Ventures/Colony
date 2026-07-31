@@ -40,6 +40,10 @@ type AgentDialogCreateProps = {
     intent: AgentCreateIntent,
     backendIntent: BackendIntent | null,
   ) => Promise<boolean>;
+  secondaryAction?: {
+    label: string;
+    onSelect: () => void;
+  };
 };
 
 type AgentDialogInstanceEditProps = {
@@ -75,6 +79,10 @@ type AgentDialogDefinitionEditProps = {
     options: AgentDefinitionSubmitOptions,
   ) => Promise<unknown>;
   publishCatalogUpdatesOnSave?: boolean;
+  secondaryAction?: {
+    label: string;
+    onSelect: () => void;
+  };
 };
 
 type AgentDialogProps =
@@ -127,6 +135,7 @@ function AgentCreateDialogRouter({
   runtimes,
   runtimesLoading,
   onSubmitDefinition,
+  secondaryAction,
 }: AgentDialogCreateProps) {
   const [runDraft, setRunDraft] = React.useState(emptyWhereToRunDraft);
   const initialValues = React.useMemo(
@@ -167,6 +176,7 @@ function AgentCreateDialogRouter({
         open
         runtimes={runtimes}
         runtimesLoading={runtimesLoading}
+        secondaryAction={secondaryAction}
         submitLabel={copy.submitLabel}
         title={copy.title}
       />

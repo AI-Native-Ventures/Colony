@@ -4,6 +4,7 @@ import type { DraftMentionRef } from "./useDrafts";
 
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import {
+  type BlockMentionReference,
   replaceWithDraftMentionRefs,
   snapshotDraftMentionRefs,
 } from "./draftMentionRefs";
@@ -11,6 +12,9 @@ import {
 export function useDraftMentionRouting(params: {
   mentionMapRef: React.MutableRefObject<Map<string, string>>;
   personaMentionMapRef: React.MutableRefObject<Map<string, string>>;
+  blockMentionMapRef: React.MutableRefObject<
+    Map<string, BlockMentionReference>
+  >;
   selectedAgentNamesRef: React.MutableRefObject<string[]>;
   cancelAutocomplete: () => void;
   setSelectedNames: (names: string[]) => void;
@@ -25,8 +29,13 @@ export function useDraftMentionRouting(params: {
         content,
         params.mentionMapRef.current,
         params.selectedAgentNamesRef.current,
+        params.blockMentionMapRef.current,
       ),
-    [params.mentionMapRef, params.selectedAgentNamesRef],
+    [
+      params.blockMentionMapRef,
+      params.mentionMapRef,
+      params.selectedAgentNamesRef,
+    ],
   );
   const restoreDraftMentionRefs = React.useCallback(
     (refs: readonly DraftMentionRef[]) => {
@@ -35,8 +44,10 @@ export function useDraftMentionRouting(params: {
         refs,
         params.mentionMapRef.current,
         params.personaMentionMapRef.current,
+        params.blockMentionMapRef.current,
       );
       trimMapToSize(params.mentionMapRef.current, 200);
+      trimMapToSize(params.blockMentionMapRef.current, 200);
       params.selectedAgentNamesRef.current = agentNames;
       params.setSelectedNames(names);
       params.setSelectedAgentNames(agentNames);

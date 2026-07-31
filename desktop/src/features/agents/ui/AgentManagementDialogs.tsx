@@ -1,14 +1,19 @@
-import { useAgentManagement } from "@/features/agents/useAgentManagement";
+import { useAgentProposalReview } from "@/features/blocks/useAgentProposalReview";
 import { AgentDialog } from "./AgentDialog";
-import { SecretRevealDialog } from "./SecretRevealDialog";
 
-/** Global review surfaces opened by owned agents through the Buzz harness. */
+/** Global review surface for persisted Core Agent Proposal Blocks. */
 export function AgentManagementDialogs() {
-  const management = useAgentManagement();
+  const management = useAgentProposalReview();
+  const secondaryAction = {
+    label: "Decline",
+    onSelect: () => {
+      void management.decline();
+    },
+  };
 
   return (
     <>
-      {management.request?.action === "create" ? (
+      {management.selectedProposal?.data.mode === "create" ? (
         <AgentDialog
           definitionError={
             management.error ? new Error(management.error) : null
@@ -17,27 +22,15 @@ export function AgentManagementDialogs() {
           isDefinitionPending={management.isPending}
           mode="definition"
           onOpenChange={(open) => {
-            if (!open) management.dismiss();
+            if (!open) management.closeReview();
           }}
           onSubmitDefinition={management.submitCreate}
           runtimes={management.runtimes}
           runtimesLoading={management.runtimesLoading}
+          secondaryAction={secondaryAction}
         />
       ) : null}
-      {management.createdAgent ? (
-        <SecretRevealDialog
-          attachmentFailure={management.attachmentFailure}
-          created={management.createdAgent}
-          isRetryingAttachment={management.isRetryingAttachment}
-          onOpenChange={(open) => {
-            if (!open) management.dismissCreatedAgent();
-          }}
-          onRetryAttachment={() => {
-            void management.retryAttachment();
-          }}
-        />
-      ) : null}
-      {management.request?.action === "update" ? (
+      {management.selectedProposal?.data.mode === "update" ? (
         <AgentDialog
           description=""
           error={management.editError ? new Error(management.editError) : null}
@@ -45,12 +38,13 @@ export function AgentManagementDialogs() {
           isPending={management.isPending}
           mode="definition-edit"
           onOpenChange={(open) => {
-            if (!open) management.dismiss();
+            if (!open) management.closeReview();
           }}
           onSubmit={management.submitUpdate}
           open
           runtimes={management.runtimes}
           runtimesLoading={management.runtimesLoading}
+          secondaryAction={secondaryAction}
           submitLabel="Save changes"
           title="Edit agent"
         />

@@ -22,6 +22,14 @@ export type MessageComposerProps = {
   layoutMode?: "dock" | "standalone";
   disabled?: boolean;
   draftKey?: string;
+  /** Optional one-time text seed used when no persisted draft exists. */
+  initialContent?: string;
+  /** Typed Block reference paired with an initial `@handle` seed. */
+  initialBlockReference?: {
+    displayName: string;
+    blockAddress: string;
+    manifestId: string;
+  };
   /**
    * When provided, the composer fires `submitMessage` once on mount after
    * the draft matching this key has been loaded into the editor. This powers

@@ -1,4 +1,57 @@
 use super::*;
+use std::{sync::Arc, time::Duration};
+
+#[test]
+fn needs_action_feed_uses_the_durable_block_attention_projection() {
+    let filter = build_feed_projection_filter(
+        "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+        "needs_action",
+        50,
+        Some(1_700_000_000),
+    );
+
+    assert_eq!(
+        filter["#p"],
+        serde_json::json!(["aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"])
+    );
+    assert_eq!(filter["feed_types"], serde_json::json!(["needs_action"]));
+    assert_eq!(filter["limit"], serde_json::json!(50));
+    assert_eq!(filter["since"], serde_json::json!(1_700_000_000));
+    assert!(
+        filter.get("kinds").is_none(),
+        "a desktop kind allowlist would drop new durable attention projections"
+    );
+}
+
+#[tokio::test]
+async fn message_send_community_lease_blocks_workspace_switch_until_release() {
+    let state = Arc::new(crate::app_state::build_app_state());
+    let send_lease = state.community_operation_lock.read().await;
+    let concurrent_send = tokio::time::timeout(
+        Duration::from_secs(1),
+        state.community_operation_lock.read(),
+    )
+    .await
+    .expect("community-bound operations should remain concurrent");
+    drop(concurrent_send);
+    let switch_state = Arc::clone(&state);
+    let switch = tokio::spawn(async move {
+        let _switch_lease = switch_state.community_operation_lock.write().await;
+        true
+    });
+
+    tokio::task::yield_now().await;
+    assert!(
+        !switch.is_finished(),
+        "workspace switching must wait while message resolution and publish hold the lease"
+    );
+
+    drop(send_lease);
+    assert!(tokio::time::timeout(Duration::from_secs(1), switch)
+        .await
+        .expect("workspace switch should acquire the released lease")
+        .expect("workspace switch task should complete"));
+}
 
 #[test]
 fn marker_author_scope_validates_scope_and_required_pubkey() {

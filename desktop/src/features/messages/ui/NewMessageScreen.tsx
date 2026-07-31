@@ -21,12 +21,24 @@ import {
   useNewMessageRecipients,
 } from "./useNewMessageRecipients";
 
+type NewMessageScreenProps = {
+  initialBlockReference?: {
+    blockAddress: string;
+    displayName: string;
+    manifestId: string;
+  };
+  initialContent?: string;
+};
+
 /**
  * Conversation-shaped compose surface for starting a direct message. The
  * normal chat header becomes an inline "To:" field, while recipient discovery
  * lives in an attached popover instead of taking over the message area.
  */
-export function NewMessageScreen() {
+export function NewMessageScreen({
+  initialBlockReference,
+  initialContent,
+}: NewMessageScreenProps = {}) {
   const identityQuery = useIdentityQuery();
   const currentPubkey = identityQuery.data?.pubkey;
   const openDmMutation = useOpenDmMutation();
@@ -598,6 +610,8 @@ export function NewMessageScreen() {
         channelType="dm"
         containerClassName="px-5"
         disabled={isPending || selectedUsers.length === 0}
+        initialBlockReference={initialBlockReference}
+        initialContent={initialContent}
         isSending={isPending}
         onPrepareSendChannel={prepareSendChannel}
         onPreparingMentionSendChange={setIsPreparingMentionSend}

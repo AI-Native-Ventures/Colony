@@ -9,7 +9,9 @@ export type TeamMentionMember = {
   pubkey?: string;
 };
 
-export type MentionCandidate = {
+export type MentionKind = "identity" | "persona" | "team" | "block";
+
+export type ActorMentionCandidate = {
   kind: "identity" | "persona" | "team";
   pubkey?: string;
   personaId?: string;
@@ -27,7 +29,31 @@ export type MentionCandidate = {
   isGlobalSearchResult?: boolean;
 };
 
+export type BlockMentionCandidate = {
+  kind: "block";
+  blockHandle: string;
+  blockAddress: string;
+  manifestId: string;
+  displayName: string;
+};
+
+export type MentionCandidate = ActorMentionCandidate | BlockMentionCandidate;
+
+export type BlockCatalogMentionSource = {
+  handle: string;
+  name: string;
+  blockAddress: string;
+  manifestId: string;
+  status: "active" | "deprecated";
+};
+
+const BLOCK_HANDLE_RE = /^[a-z][a-z0-9-]{0,63}$/;
+const LOWER_HEX_64_RE = /^[0-9a-f]{64}$/;
+
 export function mentionCandidateLabel(candidate: MentionCandidate) {
+  if (candidate.kind === "block") {
+    return candidate.displayName;
+  }
   return (
     candidate.displayName ??
     (candidate.pubkey ? truncatePubkey(candidate.pubkey) : "agent")
@@ -36,6 +62,7 @@ export function mentionCandidateLabel(candidate: MentionCandidate) {
 
 export function globalSearchIdentityKey(candidate: MentionCandidate) {
   if (
+    candidate.kind === "block" ||
     !candidate.isGlobalSearchResult ||
     candidate.isMember ||
     candidate.isAgent
@@ -50,17 +77,52 @@ export function globalSearchIdentityKey(candidate: MentionCandidate) {
   return `global-person:${label}:${secondaryLabel}`;
 }
 
+/** Build strict, deduplicated Block entries from active catalog projections. */
+export function buildBlockMentionCandidates(
+  sources: readonly BlockCatalogMentionSource[],
+): BlockMentionCandidate[] {
+  const byAddress = new Map<string, BlockMentionCandidate>();
+  for (const source of sources) {
+    if (source.status !== "active") continue;
+    const blockHandle = source.handle.trim().toLowerCase();
+    const displayName = source.name.trim();
+    const blockAddress = source.blockAddress.trim();
+    const manifestId = source.manifestId.trim();
+    const coordinate = blockAddress.split(":");
+    if (
+      !BLOCK_HANDLE_RE.test(blockHandle) ||
+      !displayName ||
+      coordinate.length !== 3 ||
+      coordinate[0] !== "30178" ||
+      !LOWER_HEX_64_RE.test(coordinate[1] ?? "") ||
+      coordinate[2] !== blockHandle ||
+      !LOWER_HEX_64_RE.test(manifestId)
+    ) {
+      continue;
+    }
+    byAddress.set(blockAddress, {
+      kind: "block",
+      blockHandle,
+      blockAddress,
+      manifestId,
+      displayName,
+    });
+  }
+  return [...byAddress.values()];
+}
+
 function findTeamMemberTarget(
   persona: AgentPersona,
-  candidates: readonly MentionCandidate[],
+  candidates: readonly ActorMentionCandidate[],
 ): TeamMentionMember | null {
   const linked = candidates
     .filter(
       (candidate) =>
-        candidate.kind !== "team" && candidate.personaId === persona.id,
+        (candidate.kind === "identity" || candidate.kind === "persona") &&
+        candidate.personaId === persona.id,
     )
     .sort((left, right) => {
-      const rank = (candidate: MentionCandidate) => {
+      const rank = (candidate: ActorMentionCandidate) => {
         if (candidate.kind === "identity" && candidate.isMember) return 0;
         if (candidate.kind === "identity" && candidate.isManagedAgent) return 1;
         if (candidate.kind === "identity") return 2;
@@ -91,8 +153,8 @@ function findTeamMemberTarget(
 export function buildTeamMentionCandidates(
   teams: readonly AgentTeam[],
   personas: AgentPersona[],
-  candidates: readonly MentionCandidate[],
-): MentionCandidate[] {
+  candidates: readonly ActorMentionCandidate[],
+): ActorMentionCandidate[] {
   return teams.flatMap((team) => {
     if (team.isBuiltin || !team.name.trim()) return [];
 
@@ -129,4 +191,8 @@ export function formatTeamMention(
   members: readonly TeamMentionMember[],
 ) {
   return `${teamName}(${members.map((member) => `@${member.displayName}`).join(" ")}) `;
+}
+
+export function formatBlockMention(blockHandle: string) {
+  return `@${blockHandle} `;
 }

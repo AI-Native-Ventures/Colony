@@ -416,6 +416,52 @@ test("strictmode_draft_no_draft_cleanup_persists_empty_imeta", async () => {
   await handle.unmount();
 });
 
+test("no saved draft seeds typed Block content and reference together", async () => {
+  const DRAFT_KEY = "chan-block-seed";
+  const BLOCK_REF = {
+    displayName: "lead-card",
+    blockAddress: `30178:${"a".repeat(64)}:lead-card`,
+    manifestId: "b".repeat(64),
+  };
+  setupStore("pubkey-block-seed");
+  let editorContent = "";
+  let activeRefs = [];
+  const spoileredRef = { current: new Set() };
+
+  function HarnessComposer() {
+    useDraftPersistLifecycle({
+      effectiveDraftKey: DRAFT_KEY,
+      channelId: DRAFT_KEY,
+      initialContent: "Work on @lead-card ",
+      initialBlockReference: BLOCK_REF,
+      loadDraft: loadDraftEntry,
+      persistDraft: persistDraftEntry,
+      getMentionRefs: () => activeRefs,
+      restoreMentionRefs: (refs) => {
+        activeRefs = [...refs];
+      },
+      livePendingImeta: [],
+      setPendingImeta: () => {},
+      setContent: (content) => {
+        editorContent = content;
+      },
+      clearContent: () => {
+        editorContent = "";
+      },
+      setSpoileredAttachmentUrls: () => {},
+      spoileredAttachmentUrlsRef: spoileredRef,
+      syncComposerContentFromEditor: () => editorContent,
+    });
+    return null;
+  }
+
+  const handle = await mountStrictMode(HarnessComposer);
+  assert.equal(editorContent, "Work on @lead-card ");
+  assert.deepEqual(activeRefs, [BLOCK_REF]);
+  assert.deepEqual(loadDraftEntry(DRAFT_KEY)?.mentionRefs, [BLOCK_REF]);
+  await handle.unmount();
+});
+
 test("draft_lifecycle_restores_and_repersists_mention_routing_refs", async () => {
   const DRAFT_KEY = "chan-lifecycle-mentions";
   const MENTION_REFS = [

@@ -1,15 +1,20 @@
 mod agent_auth;
 mod agent_config;
+mod agent_creation;
 mod agent_discovery;
 mod agent_logs;
 mod agent_metric_archive;
 mod agent_model_process;
 mod agent_models;
 mod agent_models_env;
+mod agent_proposals;
+#[cfg(test)]
+mod agent_proposals_tests;
 mod agent_providers;
 mod agent_settings;
 mod agent_update_rollback;
 mod agents;
+mod block_data;
 mod canvas;
 mod channel_templates;
 mod channel_window;
@@ -63,13 +68,16 @@ mod workspace;
 
 pub use agent_auth::*;
 pub use agent_config::*;
+pub use agent_creation::*;
 pub use agent_discovery::*;
 pub use agent_logs::*;
 pub use agent_metric_archive::*;
 pub use agent_models::*;
+pub use agent_proposals::*;
 pub use agent_providers::*;
 pub use agent_settings::*;
 pub use agents::*;
+pub use block_data::*;
 pub use canvas::*;
 pub use channel_templates::*;
 pub use channel_window::*;

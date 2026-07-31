@@ -39,11 +39,19 @@ function getStoreSnapshot(): number {
  */
 export { subscribeToStore, getStoreSnapshot };
 
-export type DraftMentionRef = {
+export type DraftActorMentionRef = {
   displayName: string;
   pubkey: string;
   isAgent: boolean;
 };
+
+export type DraftBlockMentionRef = {
+  displayName: string;
+  blockAddress: string;
+  manifestId: string;
+};
+
+export type DraftMentionRef = DraftActorMentionRef | DraftBlockMentionRef;
 
 export type DraftState = {
   content: string;
@@ -225,16 +233,7 @@ function isValidDraftState(v: unknown): v is DraftState {
     (d as DraftState).mentionRefs = [];
   } else if (
     !Array.isArray(d.mentionRefs) ||
-    d.mentionRefs.some(
-      (ref) =>
-        typeof ref !== "object" ||
-        ref === null ||
-        typeof ref.displayName !== "string" ||
-        ref.displayName.trim().length === 0 ||
-        typeof ref.pubkey !== "string" ||
-        ref.pubkey.trim().length === 0 ||
-        typeof ref.isAgent !== "boolean",
-    )
+    d.mentionRefs.some(isInvalidRef)
   ) {
     return false;
   }
@@ -249,6 +248,38 @@ function isValidDraftState(v: unknown): v is DraftState {
     return false;
   }
   return true;
+}
+
+const BLOCK_ADDRESS_RE = /^30178:[0-9a-f]{64}:[a-z][a-z0-9-]{0,63}$/;
+const EVENT_ID_RE = /^[0-9a-f]{64}$/;
+
+function isInvalidRef(ref: unknown): boolean {
+  if (
+    typeof ref !== "object" ||
+    ref === null ||
+    !("displayName" in ref) ||
+    typeof ref.displayName !== "string" ||
+    ref.displayName.trim().length === 0
+  ) {
+    return true;
+  }
+  if ("pubkey" in ref || "isAgent" in ref) {
+    return (
+      !("pubkey" in ref) ||
+      typeof ref.pubkey !== "string" ||
+      ref.pubkey.trim().length === 0 ||
+      !("isAgent" in ref) ||
+      typeof ref.isAgent !== "boolean"
+    );
+  }
+  return (
+    !("blockAddress" in ref) ||
+    typeof ref.blockAddress !== "string" ||
+    !BLOCK_ADDRESS_RE.test(ref.blockAddress) ||
+    !("manifestId" in ref) ||
+    typeof ref.manifestId !== "string" ||
+    !EVENT_ID_RE.test(ref.manifestId)
+  );
 }
 
 function flushStore(map: Map<string, DraftState>): boolean {
@@ -352,10 +383,21 @@ function draftStatesEqual(a: DraftState, b: DraftState): boolean {
   for (let i = 0; i < aMentionRefs.length; i++) {
     const ar = aMentionRefs[i];
     const br = bMentionRefs[i];
-    if (
-      ar.displayName !== br.displayName ||
-      ar.pubkey !== br.pubkey ||
-      ar.isAgent !== br.isAgent
+    if (ar.displayName !== br.displayName) {
+      return false;
+    }
+    if ("pubkey" in ar) {
+      if (
+        !("pubkey" in br) ||
+        ar.pubkey !== br.pubkey ||
+        ar.isAgent !== br.isAgent
+      ) {
+        return false;
+      }
+    } else if (
+      "pubkey" in br ||
+      ar.blockAddress !== br.blockAddress ||
+      ar.manifestId !== br.manifestId
     ) {
       return false;
     }

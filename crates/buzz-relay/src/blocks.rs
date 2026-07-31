@@ -193,6 +193,23 @@ fn exact_pubkey(event: &Event) -> Result<Vec<u8>, String> {
         .ok_or_else(|| "Block event must include exactly one processor `p` tag".into())
 }
 
+fn optional_instance_processor(event: &Event) -> Result<Option<Vec<u8>>, String> {
+    let tags = tags_named(event, "block-processor");
+    if tags.len() > 1 {
+        return Err(format!(
+            "Block instance must include at most one `block-processor` tag (got {})",
+            tags.len()
+        ));
+    }
+    let Some(tag) = tags.first() else {
+        return Ok(None);
+    };
+    if tag.len() != 3 || tag[1] != "1" {
+        return Err("Block processor tag must be `[\"block-processor\",\"1\",pubkey]`".into());
+    }
+    lowercase_event_id(&tag[2], "Block processor pubkey").map(Some)
+}
+
 fn exact_event_reference(
     event: &Event,
     expected_id: &str,
@@ -414,8 +431,8 @@ fn parse_instance_data(event: &Event) -> Result<InstanceData, String> {
     }
     let parsed_url =
         url::Url::parse(&tag[1]).map_err(|_| "Block external data URL is invalid".to_string())?;
-    if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
-        return Err("Block external data URL must use HTTP(S) and include a host".into());
+    if parsed_url.scheme() != "https" || parsed_url.host_str().is_none() {
+        return Err("Block external data URL must use HTTPS and include a host".into());
     }
     if tag[2] != "application/json" {
         return Err("Block external data MIME must be `application/json`".into());
@@ -466,17 +483,19 @@ fn parse_instance(event: &Event) -> Result<InstanceEnvelope, String> {
     let instance_id =
         Uuid::parse_str(&block[4]).map_err(|_| "Block instance ID must be a UUID".to_string())?;
     let data = parse_instance_data(event)?;
-    let processor_pubkey = optional_pubkey(event)?;
+    let audience_pubkey = optional_pubkey(event)?;
+    let explicit_processor = optional_instance_processor(event)?;
     let requires_attention = parse_attention(event, "required")?;
     let attention_pubkey = if requires_attention {
         Some(
-            processor_pubkey
+            audience_pubkey
                 .clone()
                 .ok_or("Block attention requires exactly one decision-maker `p` tag")?,
         )
     } else {
         None
     };
+    let processor_pubkey = explicit_processor.or_else(|| audience_pubkey.clone());
 
     Ok(InstanceEnvelope {
         channel_id,
@@ -642,9 +661,15 @@ pub(crate) fn parse_public_envelope(event: &Event) -> Result<Option<ValidatedBlo
             .map(ValidatedBlockEvent::Receipt)
             .map(Some),
         KIND_STREAM_MESSAGE => {
-            let has_block_shape = ["block", "block-data", "block-data-ref", "block-attention"]
-                .iter()
-                .any(|name| !tags_named(event, name).is_empty())
+            let has_block_shape = [
+                "block",
+                "block-data",
+                "block-data-ref",
+                "block-attention",
+                "block-processor",
+            ]
+            .iter()
+            .any(|name| !tags_named(event, name).is_empty())
                 || tags_named(event, "e").iter().any(|tag| {
                     tag.get(3)
                         .is_some_and(|marker| marker == "block" || marker.starts_with("block-"))
@@ -715,12 +740,8 @@ fn validate_instance_processor_contract(
             "Block instances with signed actions require exactly one processor `p` tag".into(),
         );
     }
-    if let Some(decision_maker) = &instance.attention_pubkey {
-        if instance.processor_pubkey.as_deref() != Some(decision_maker.as_slice()) {
-            return Err(
-                "Block attention decision maker must equal the pinned instance processor".into(),
-            );
-        }
+    if instance.attention_pubkey.is_some() && instance.processor_pubkey.is_none() {
+        return Err("Block attention requires a pinned instance processor".into());
     }
     Ok(())
 }
@@ -869,11 +890,10 @@ async fn validate_instance_against_manifest(
         return Err("Block instance handle does not match its pinned manifest".into());
     }
     if let InstanceData::Inline(data) = &instance.data {
-        let schema = manifest
-            .content
-            .get("input_schema")
-            .ok_or_else(|| "Block manifest is missing its input schema".to_string())?;
-        buzz_core::block::validate_instance(schema, data)
+        let typed_manifest =
+            serde_json::from_value::<buzz_core::block::BlockManifest>(manifest.content.clone())
+                .map_err(|error| format!("stored Block manifest is malformed: {error}"))?;
+        buzz_core::block::validate_manifest_instance(&typed_manifest, data)
             .map_err(|error| format!("Block instance data does not match its manifest: {error}"))?;
     }
     validate_instance_processor_contract(&manifest, instance)?;
@@ -1184,6 +1204,45 @@ mod tests {
     }
 
     #[test]
+    fn block_instance_external_data_requires_https() {
+        let mut tags = instance_tags();
+        tags[4] = tag(&[
+            "block-data-ref",
+            "http://cdn.example.com/block.json",
+            "application/json",
+            &"ab".repeat(32),
+            "123",
+        ]);
+        let event = signed(9, tags, "fallback");
+        assert!(parse_public_envelope(&event)
+            .expect_err("insecure external data URL must fail")
+            .contains("must use HTTPS"));
+    }
+
+    #[test]
+    fn block_instance_separates_attention_owner_from_processor() {
+        let mut tags = instance_tags();
+        let decision_maker = "34".repeat(32);
+        let processor = "56".repeat(32);
+        tags[3] = tag(&["p", &decision_maker]);
+        tags.insert(4, tag(&["block-processor", "1", &processor]));
+        tags.insert(5, tag(&["block-attention", "1", "required"]));
+        let event = signed(9, tags, "fallback");
+        let parsed = parse_public_envelope(&event).expect("valid split-role instance");
+        let Some(ValidatedBlockEvent::Instance(instance)) = parsed else {
+            panic!("expected Block instance");
+        };
+        assert_eq!(
+            instance.attention_pubkey,
+            Some(hex::decode(decision_maker).expect("decision-maker hex"))
+        );
+        assert_eq!(
+            instance.processor_pubkey,
+            Some(hex::decode(processor).expect("processor hex"))
+        );
+    }
+
+    #[test]
     fn signed_action_instance_requires_one_processor() {
         let manifest = signed_action_manifest();
         let missing = instance_envelope(None, None);
@@ -1233,15 +1292,15 @@ mod tests {
     #[test]
     fn attention_action_requires_decision_maker_signature() {
         let decision_maker = vec![0x44; 32];
+        let processor = vec![0x66; 32];
         let other_user = [0x55; 32];
-        let instance =
-            instance_envelope(Some(decision_maker.clone()), Some(decision_maker.clone()));
-        let action = action_envelope(&instance, decision_maker.clone());
+        let instance = instance_envelope(Some(processor.clone()), Some(decision_maker.clone()));
+        let action = action_envelope(&instance, processor.clone());
 
         validate_action_authority(&decision_maker, &action, &instance)
             .expect("the decision maker may submit the attention action");
-        validate_receipt_authority(&decision_maker, &decision_maker, &action, &instance)
-            .expect("the pinned decision-maker processor may receipt the action");
+        validate_receipt_authority(&processor, &decision_maker, &action, &instance)
+            .expect("the pinned processor may receipt the decision-maker action");
         assert!(validate_action_authority(&other_user, &action, &instance)
             .expect_err("another user cannot decide")
             .contains("decision maker"));

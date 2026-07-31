@@ -226,6 +226,35 @@ void main() {
         // Should not crash.
         expect(find.byType(MessageContent), findsOneWidget);
       });
+
+      testWidgets('renders a Block fallback without exposing block-data JSON', (
+        tester,
+      ) async {
+        await tester.pumpWidget(
+          _testable(
+            const MessageContent(
+              content: 'Tennant Group is a qualified website lead.',
+              tags: [
+                ['h', 'channel-id'],
+                ['e', 'manifest-id', '', 'block'],
+                [
+                  'block',
+                  '1',
+                  'lead-card',
+                  'manifest-id',
+                  '11111111-1111-4111-8111-111111111111',
+                ],
+                ['block-data', '{"company":"Tennant Group","fitScore":87}'],
+              ],
+            ),
+          ),
+        );
+
+        final allText = _allRichText(tester);
+        expect(allText, contains('Tennant Group is a qualified website lead.'));
+        expect(allText, isNot(contains('"fitScore"')));
+        expect(allText, isNot(contains('block-data')));
+      });
     });
 
     group('custom emoji', () {

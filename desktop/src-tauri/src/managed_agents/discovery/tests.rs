@@ -306,8 +306,7 @@ fn effective_agent_command_explicit_override_wins() {
     );
 }
 
-/// Minimal record for `record_agent_command` tests. Only the resolution
-/// inputs (runtime / persona_id / agent_command_override) vary.
+/// Minimal record for `record_agent_command` resolution tests.
 fn record_with(
     runtime: Option<&str>,
     persona_id: Option<&str>,
@@ -317,6 +316,7 @@ fn record_with(
         pubkey: String::new(),
         name: "r".to_string(),
         persona_id: persona_id.map(str::to_string),
+        creation_request_id: None,
         private_key_nsec: String::new(),
         auth_tag: None,
         relay_url: String::new(),

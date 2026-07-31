@@ -88,8 +88,7 @@
           { "label": "Change", "value": "{{mode}}" },
           { "label": "Proposed agent", "value": "{{displayName}}" },
           { "label": "Existing agent", "value": "{{agentName}}" },
-          { "label": "Purpose", "value": "{{systemPrompt}}" },
-          { "label": "Conversation", "value": "{{channelId}}" }
+          { "label": "Purpose", "value": "{{systemPrompt}}" }
         ]
       },
       {

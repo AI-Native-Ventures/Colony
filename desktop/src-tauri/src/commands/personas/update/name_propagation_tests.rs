@@ -8,6 +8,7 @@ fn agent(persona_id: &str, name: &str, display_name: Option<&str>) -> ManagedAge
         pubkey: format!("pubkey-{name}"),
         name: name.to_string(),
         persona_id: Some(persona_id.to_string()),
+        creation_request_id: None,
         private_key_nsec: String::new(),
         auth_tag: None,
         relay_url: String::new(),

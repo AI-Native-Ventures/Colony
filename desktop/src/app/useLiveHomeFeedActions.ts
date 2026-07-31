@@ -5,13 +5,41 @@ import { remindersQueryKey } from "@/features/reminders/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   KIND_APPROVAL_REQUEST,
+  KIND_BLOCK_RECEIPT,
   KIND_EVENT_REMINDER,
   KIND_REMINDER,
+  KIND_STREAM_MESSAGE,
 } from "@/shared/constants/kinds";
 
-const HOME_FEED_ACTION_KINDS = [KIND_APPROVAL_REQUEST, KIND_REMINDER] as const;
+const HOME_FEED_ACTION_KINDS = [
+  KIND_APPROVAL_REQUEST,
+  KIND_REMINDER,
+  KIND_STREAM_MESSAGE,
+] as const;
 const LIVE_HOME_FEED_RETRY_BASE_MS = 1_000;
 const LIVE_HOME_FEED_RETRY_MAX_MS = 30_000;
+
+export function homeFeedLiveFilters(pubkey: string, since: number) {
+  return {
+    action: {
+      kinds: [...HOME_FEED_ACTION_KINDS],
+      "#p": [pubkey],
+      limit: 50,
+      since,
+    },
+    receipt: {
+      kinds: [KIND_BLOCK_RECEIPT],
+      limit: 50,
+      since,
+    },
+    reminder: {
+      authors: [pubkey],
+      kinds: [KIND_EVENT_REMINDER],
+      limit: 50,
+      since,
+    },
+  };
+}
 
 export function useLiveHomeFeedActions(
   pubkey: string | undefined,
@@ -61,28 +89,14 @@ export function useLiveHomeFeedActions(
       if (isCancelled) {
         return;
       }
+      const filters = homeFeedLiveFilters(normalizedPubkey, since);
 
       void Promise.allSettled([
-        relayClient.subscribeLive(
-          {
-            kinds: [...HOME_FEED_ACTION_KINDS],
-            "#p": [normalizedPubkey],
-            limit: 50,
-            since,
-          },
-          handleLiveHomeFeedEvent,
-        ),
-        relayClient.subscribeLive(
-          {
-            authors: [normalizedPubkey],
-            kinds: [KIND_EVENT_REMINDER],
-            limit: 50,
-            since,
-          },
-          () => {
-            handleLiveReminderEvent(normalizedPubkey);
-          },
-        ),
+        relayClient.subscribeLive(filters.action, handleLiveHomeFeedEvent),
+        relayClient.subscribeLive(filters.reminder, () => {
+          handleLiveReminderEvent(normalizedPubkey);
+        }),
+        relayClient.subscribeLive(filters.receipt, handleLiveHomeFeedEvent),
       ]).then((results) => {
         const nextDisposers = results.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : [],

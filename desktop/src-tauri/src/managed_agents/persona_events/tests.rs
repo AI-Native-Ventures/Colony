@@ -8,6 +8,7 @@ fn sample_record() -> ManagedAgentRecord {
         pubkey: "p".repeat(64),
         name: "agent".into(),
         persona_id: Some("test-persona".into()),
+        creation_request_id: Some("local-only-request-id".into()),
         private_key_nsec: "nsec1fake".into(),
         auth_tag: None,
         relay_url: "ws://localhost:3000".into(),

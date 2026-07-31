@@ -546,7 +546,6 @@ export async function getThreadReplies(
       : null,
   };
 }
-
 export async function sendChannelMessage(
   channelId: string,
   content: string,
@@ -556,6 +555,7 @@ export async function sendChannelMessage(
   kind?: number,
   emojiTags?: string[][],
   mentionTags?: string[][],
+  referenceTags?: string[][],
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -566,11 +566,11 @@ export async function sendChannelMessage(
       mediaTags: mediaTags ?? null,
       emojiTags: emojiTags ?? null,
       mentionTags: mentionTags ?? null,
+      referenceTags: referenceTags ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,
     },
   );
-
   return {
     eventId: response.event_id,
     parentEventId: response.parent_event_id,

@@ -639,12 +639,12 @@ mod tests {
             auth_probe_args: None,
         }
     }
-
     fn agent_record() -> ManagedAgentRecord {
         ManagedAgentRecord {
             pubkey: "agent".to_string(),
             name: "Agent".to_string(),
             persona_id: Some("persona-1".to_string()),
+            creation_request_id: None,
             private_key_nsec: "".to_string(),
             auth_tag: None,
             relay_url: "ws://localhost:3000".to_string(),

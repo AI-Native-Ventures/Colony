@@ -1,6 +1,7 @@
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, State};
 
+use super::agent_creation::ensure_unique_creation_request;
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -561,11 +562,11 @@ pub async fn list_managed_agents(app: AppHandle) -> Result<Vec<ManagedAgentSumma
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
-#[tauri::command]
-pub async fn create_managed_agent(
+pub(crate) async fn create_managed_agent_with_creation_request(
     input: CreateManagedAgentRequest,
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: &AppState,
+    creation_request_id: Option<String>,
 ) -> Result<CreateManagedAgentResponse, String> {
     let name = input.name.trim().to_string();
     if name.is_empty() {
@@ -603,9 +604,8 @@ pub async fn create_managed_agent(
 
     // Snapshot the workspace owner pubkey for the legacy-record auth_tag
     // fallback. Computed outside the records lock to keep lock ordering simple.
-    let owner_hex = workspace_owner_hex(&state)?;
+    let owner_hex = workspace_owner_hex(state)?;
 
-    // ── Phase 1: generate keys (sync lock) ────────────────────────────────────
     let (agent_keys, private_key_nsec, pubkey, resolved_relay_url, input) = {
         let _store_guard = state
             .managed_agents_store_lock
@@ -616,6 +616,8 @@ pub async fn create_managed_agent(
             .managed_agent_processes
             .lock()
             .map_err(|error| error.to_string())?;
+
+        ensure_unique_creation_request(&records, creation_request_id.as_deref())?;
 
         let (sync_changed, exited_pubkeys) =
             sync_managed_agent_processes(&mut records, &mut runtimes, &current_instance_id(&app));
@@ -652,7 +654,6 @@ pub async fn create_managed_agent(
         (keys, private_key_nsec, pubkey, resolved_relay_url, input)
     };
 
-    // ── Pre-Phase 2: validate provider config BEFORE any side effects ────────
     if let BackendKind::Provider { ref config, ref id } = input.backend {
         validate_provider_config(config)?;
         // Validate via discovered candidates — not raw resolve_command.
@@ -661,7 +662,6 @@ pub async fn create_managed_agent(
 
     let relay_mesh = normalize_relay_mesh(input.relay_mesh.as_ref(), &input.backend)?;
 
-    // ── Phase 2: compute NIP-OA auth tag (sync) ──────────────────────────────
     // Agents authenticate via the auth tag in their kind:0 profile event.
     // No tokens are minted. Fail closed: bad auth tag → don't create agent.
     let auth_tag = {
@@ -676,7 +676,6 @@ pub async fn create_managed_agent(
         Some(tag)
     };
 
-    // ── Phase 3: save record (sync lock) ───────────────────────────────────────
     let (agent, resolved_avatar_url) = {
         let _store_guard = state
             .managed_agents_store_lock
@@ -696,6 +695,9 @@ pub async fn create_managed_agent(
         for pubkey in &exited_pubkeys {
             state.clear_agent_session_caches(pubkey);
         }
+
+        // Repeat under the final durable-write lock to close concurrent replay.
+        ensure_unique_creation_request(&records, creation_request_id.as_deref())?;
 
         // Guard against a duplicate pubkey appearing between phase 1 and phase 3
         // (extremely unlikely but safe to check).
@@ -833,6 +835,7 @@ pub async fn create_managed_agent(
             pubkey: pubkey.clone(),
             name: name.clone(),
             persona_id: requested_persona_id.clone(),
+            creation_request_id: creation_request_id.clone(),
             team_id,
             private_key_nsec: private_key_nsec.clone(),
             auth_tag: auth_tag.clone(),
@@ -926,7 +929,7 @@ pub async fn create_managed_agent(
         // Publish the agent to the relay. Inside the Phase-3 lock, after save,
         // before any .await — owner-authored, every agent (Will's ruling: no
         // is_builtin/persona-membership gate).
-        retain_managed_agent_pending(&app, &state, record);
+        retain_managed_agent_pending(&app, state, record);
         let personas = load_personas(&app).unwrap_or_default();
         (
             build_managed_agent_summary(
@@ -940,10 +943,9 @@ pub async fn create_managed_agent(
         )
     };
 
-    // ── Phase 3b: local spawn (async preflight outside store lock) ───────────
     let mut spawn_error = None;
     let agent = if input.spawn_after_create && input.backend == BackendKind::Local {
-        match start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex, true).await {
+        match start_local_agent_with_preflight(&app, state, &pubkey, &owner_hex, true).await {
             Ok(agent) => agent,
             Err(error) => {
                 let _store_guard = state
@@ -980,15 +982,14 @@ pub async fn create_managed_agent(
 
     try_regenerate_nest(&app);
 
-    // ── Phase 4: sync agent profile on relay (async, outside lock) ───────────
     // Use the avatar persisted on the record so the published profile and any
     // later reconciliation agree on the same value.
     let profile_relay_url = crate::relay::effective_agent_relay_url(
         &resolved_relay_url,
-        &relay_ws_url_with_override(&state),
+        &relay_ws_url_with_override(state),
     );
     let profile_sync_error = (sync_managed_agent_profile(
-        &state,
+        state,
         &profile_relay_url,
         &agent_keys,
         &name,
@@ -998,7 +999,6 @@ pub async fn create_managed_agent(
     .await)
         .err();
 
-    // ── Phase 5: provider deploy (async, outside lock) ───────────────────────
     let spawn_error = if input.spawn_after_create && input.backend != BackendKind::Local {
         if let BackendKind::Provider { ref id, ref config } = input.backend {
             // Read the saved record to build the deploy payload (record has the
@@ -1013,9 +1013,9 @@ pub async fn create_managed_agent(
                     .iter()
                     .find(|r| r.pubkey == pubkey)
                     .ok_or_else(|| "agent disappeared".to_string())?;
-                build_deploy_payload(&app, &state, rec)?
+                build_deploy_payload(&app, state, rec)?
             };
-            match deploy_to_provider(&app, &state, &pubkey, id, config, agent_json, None).await {
+            match deploy_to_provider(&app, state, &pubkey, id, config, agent_json, None).await {
                 Ok(()) => spawn_error,
                 Err(e) => Some(e),
             }

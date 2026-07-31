@@ -82,7 +82,7 @@ post-create recovery.
 |---|---:|---|---|
 | Manifest | `40012` | `["block","1",handle,version]` | Canonical `BlockManifest` JSON |
 | Catalog head | `30178` | `["d",handle]`, `["e",manifest_id,"","block-manifest"]`, `["block-state","active"|"deprecated"]` | Canonical `BlockCatalogEntry` JSON; relay-signed only |
-| Instance | `9` | normal `h/e/p`, `["e",manifest_id,"","block"]`, `["block","1",handle,manifest_id,instance_id]`, exactly one data tag; actionable instances add `["block-attention","1","required"]` | Human-readable fallback |
+| Instance | `9` | normal `h/e/p`, `["e",manifest_id,"","block"]`, `["block","1",handle,manifest_id,instance_id]`, exactly one data tag; actionable instances add `["block-attention","1","required"]`; when processor and decision maker differ add `["block-processor","1",processor_pubkey]` | Human-readable fallback |
 | Action | `40010` | `h`, `p` for the processor (owner for Core agent management), `["e",instance_event_id,"","block-instance"]`, `["e",manifest_id,"","block-manifest"]`, `["block-action","1",action_id,instance_id,idempotency_key]` | Canonical non-secret action input JSON |
 | Receipt | `40011` | `h`, `["e",action_event_id,"","block-action"]`, `["e",instance_event_id,"","block-instance"]`, `["block-receipt","1",instance_id,idempotency_key,status]`; resolving receipts add `["block-attention","1","resolved"]` | Canonical safe result JSON |
 | Typed Block reference | any conversational kind `9` | `["a","30178:relay_self_pubkey:handle","","block"]` | Ordinary message text containing `@handle` |
@@ -100,10 +100,15 @@ never performs network I/O.
 
 `block-attention` has exact cardinality. An instance may request attention only
 when its trusted pinned manifest declares at least one resolving signed action
-and the instance `p`-tags the decision maker. A receipt may resolve attention
-only when it references that instance and a manifest-declared resolving action,
-has an authorized processor signature, and is not failed or timed out. Read
-markers, dialog dismissal, and presentation-only controls never resolve it.
+and the instance `p`-tags the decision maker. The same `p` tag also identifies
+the processor when both roles are the same, preserving the original compact
+wire shape. When the responsible processor differs, the instance pins it in
+exactly one `["block-processor","1",processor_pubkey]` tag. The action `p`-tags
+that pinned processor but must be signed by the decision maker; the resolving
+receipt must be signed by the pinned processor. A receipt may resolve attention
+only when it references that instance and a manifest-declared resolving action
+and is not failed or timed out. Read markers, dialog dismissal, and
+presentation-only controls never resolve it.
 
 ### Catalog authority and activation
 
