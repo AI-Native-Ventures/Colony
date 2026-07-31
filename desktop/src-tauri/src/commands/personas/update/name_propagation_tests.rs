@@ -7,6 +7,8 @@ fn agent(persona_id: &str, name: &str, display_name: Option<&str>) -> ManagedAge
     ManagedAgentRecord {
         pubkey: format!("pubkey-{name}"),
         name: name.to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: Some(persona_id.to_string()),
         creation_request_id: None,
         private_key_nsec: String::new(),

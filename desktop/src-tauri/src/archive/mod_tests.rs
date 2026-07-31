@@ -8,7 +8,6 @@ use super::*;
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use rusqlite::Connection;
 use uuid::Uuid;
-
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 fn in_memory() -> Connection {

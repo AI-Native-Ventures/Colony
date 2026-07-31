@@ -484,6 +484,8 @@ mod tests {
         ManagedAgentRecord {
             pubkey: "deadbeef".to_string(),
             name: "Test Agent".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: Some("Test Agent Display".to_string()),
             persona_id: Some("SENTINEL_PERSONA_ID".to_string()),
             creation_request_id: Some("SENTINEL_CREATION_REQUEST_ID".to_string()),

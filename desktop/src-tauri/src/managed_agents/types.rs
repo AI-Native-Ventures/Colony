@@ -1,20 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf, process::Child};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum BackendKind {
-    #[default]
-    Local,
-    Provider {
-        id: String,
-        config: serde_json::Value,
-    },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDefinition {
     pub id: String,
+    /// Stable company role identifier, independent of the persona's personal
+    /// display name (for example `chief-of-staff` while the person is `Fizz`).
+    /// Role ID and title are always both present or both absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
+    /// Human-readable title paired with `role_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_title: Option<String>,
     pub display_name: String,
     pub avatar_url: Option<String>,
     pub system_prompt: String,
@@ -141,6 +138,8 @@ impl AgentDefinition {
             respond_to_allowlist: Vec::new(),
             display_name: Some(self.display_name),
             slug: Some(self.id),
+            role_id: self.role_id,
+            role_title: self.role_title,
             runtime: self.runtime,
             name_pool: self.name_pool,
             is_builtin: self.is_builtin,
@@ -167,6 +166,8 @@ impl ManagedAgentRecord {
         let slug = self.slug.clone()?;
         Some(AgentDefinition {
             id: slug,
+            role_id: self.role_id.clone(),
+            role_title: self.role_title.clone(),
             display_name: self
                 .display_name
                 .clone()
@@ -366,6 +367,14 @@ pub struct ManagedAgentRecord {
     /// agents created directly (never persona-backed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
+    /// Stable company role identifier for definition records. This is
+    /// definition metadata only: it never overwrites the deployed employee's
+    /// personal `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
+    /// Human-readable title paired with `role_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_title: Option<String>,
     /// Absorbed from `AgentDefinition.runtime` — the preferred ACP runtime ID
     /// (e.g. 'goose', 'claude'). Record-first command resolution reads this
     /// before falling back to legacy persona lookup; populated by the store
@@ -442,24 +451,6 @@ pub struct ManagedAgentRecord {
     /// deserialize as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_mesh: Option<RelayMeshConfig>,
-}
-
-/// Typed relay-mesh configuration carried on a [`ManagedAgentRecord`].
-///
-/// Feature-independent on purpose: the field is always present in the record
-/// schema so saved agents round-trip identically whether or not the `mesh-llm`
-/// feature is compiled in.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RelayMeshConfig {
-    /// The served model id this agent routes to (e.g. "Qwen3").
-    ///
-    /// `alias` because this struct crosses two boundaries with different
-    /// casing conventions: the TS create request sends camelCase
-    /// (`relayMesh: { modelRef }` — `rename_all` on the request does not
-    /// recurse into nested structs), while persisted records use snake_case.
-    /// Serialization stays `model_ref` so saved records are stable.
-    #[serde(alias = "modelRef")]
-    pub model_ref: String,
 }
 
 #[derive(Debug)]
@@ -991,6 +982,8 @@ pub fn resolve_mint_behavioral_defaults(
 
 mod catalog_source;
 pub use catalog_source::CatalogSource;
+mod backend_types;
+pub use backend_types::*;
 mod requests;
 pub use requests::*;
 

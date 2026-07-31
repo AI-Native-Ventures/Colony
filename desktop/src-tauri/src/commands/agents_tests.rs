@@ -11,6 +11,8 @@ fn bare_agent_record(
     ManagedAgentRecord {
         pubkey: "agent".to_string(),
         name: "Agent".to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: persona_id.map(str::to_string),
         creation_request_id: None,
         private_key_nsec: "".to_string(),
@@ -69,6 +71,8 @@ fn persona_record(id: &str, model: Option<&str>, provider: Option<&str>) -> Agen
     use std::collections::BTreeMap;
     AgentDefinition {
         id: id.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Test Persona".to_string(),
         avatar_url: None,
         system_prompt: "".to_string(),

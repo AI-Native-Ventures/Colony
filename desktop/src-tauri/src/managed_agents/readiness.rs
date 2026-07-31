@@ -1467,9 +1467,7 @@ mod tests {
 
     #[test]
     fn resolve_effective_agent_env_user_env_wins_over_structured_fields() {
-        // A record whose env_vars explicitly set provider/model must win over
-        // any baked defaults. In OSS test builds the baked map is empty, so
-        // this test validates the user-env layer is present in the output.
+        // Explicit provider/model env vars beat baked defaults and reach output.
         let mut env_vars = BTreeMap::new();
         env_vars.insert("BUZZ_AGENT_PROVIDER".to_string(), "anthropic".to_string());
         env_vars.insert(
@@ -1480,6 +1478,8 @@ mod tests {
         let record = crate::managed_agents::types::ManagedAgentRecord {
             pubkey: "test-pubkey".to_string(),
             name: "test-agent".to_string(),
+            role_id: None,
+            role_title: None,
             persona_id: None,
             creation_request_id: None,
             private_key_nsec: String::new(),

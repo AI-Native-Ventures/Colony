@@ -90,6 +90,12 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
         move || -> Result<(AgentDefinition, R, ProfileSyncParams), String> {
             let state = app.state::<AppState>();
             let display_name = trim_required(&input.display_name, "Display name")?;
+            let role = match (input.role_id, input.role_title) {
+                (None, None) => None,
+                (role_id, role_title) => Some(crate::managed_agents::normalize_persona_role(
+                    role_id, role_title,
+                )?),
+            };
             let system_prompt = input.system_prompt.clone();
             let avatar_url = trim_optional(input.avatar_url);
             let runtime = trim_optional(input.runtime);
@@ -113,6 +119,10 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
             let old_display_name = persona.display_name.clone();
 
             persona.display_name = display_name;
+            if let Some((role_id, role_title)) = role {
+                persona.role_id = role_id;
+                persona.role_title = role_title;
+            }
             persona.avatar_url = avatar_url;
             persona.system_prompt = system_prompt;
             persona.runtime = runtime;

@@ -160,6 +160,8 @@ mod tests {
         ManagedAgentRecord {
             pubkey: "agentpubkeyhex".to_string(),
             name: "Test Agent".to_string(),
+            role_id: None,
+            role_title: None,
             persona_id: Some("persona-1".to_string()),
             creation_request_id: Some("local-only-request-id".to_string()),
             private_key_nsec: "nsec1secretdonotpublish".to_string(),

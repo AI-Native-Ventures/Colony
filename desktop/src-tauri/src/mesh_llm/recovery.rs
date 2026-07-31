@@ -401,6 +401,8 @@ mod tests {
     ) -> crate::managed_agents::ManagedAgentRecord {
         let mut record = crate::managed_agents::AgentDefinition {
             id: pubkey.to_string(),
+            role_id: None,
+            role_title: None,
             display_name: pubkey.to_string(),
             avatar_url: None,
             system_prompt: String::new(),

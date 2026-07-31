@@ -267,6 +267,8 @@ fn create_persona_input(
 ) -> Result<CreatePersonaRequest, String> {
     Ok(CreatePersonaRequest {
         display_name: trim_required(&definition.display_name, "Display name")?,
+        role_id: None,
+        role_title: None,
         avatar_url: trim_optional(&definition.avatar_url),
         system_prompt: definition.system_prompt.clone(),
         runtime: trim_optional(&definition.runtime),
@@ -338,6 +340,8 @@ fn update_persona_input(
     Ok(UpdatePersonaRequest {
         id: current.id.clone(),
         display_name: trim_required(&definition.display_name, "Display name")?,
+        role_id: None,
+        role_title: None,
         avatar_url: trim_optional(&definition.avatar_url),
         system_prompt: definition.system_prompt.clone(),
         runtime: trim_optional(&definition.runtime),
@@ -576,6 +580,8 @@ mod tests {
     fn definition(action: &AgentProposalSafeAction) -> AgentDefinition {
         AgentDefinition {
             id: action.request_id.clone(),
+            role_id: None,
+            role_title: None,
             display_name: action.definition.display_name.clone(),
             avatar_url: None,
             system_prompt: action.definition.system_prompt.clone(),

@@ -56,6 +56,8 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
     let definitions = vec![
         AgentDefinition {
             id: "alice".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: "Alice".to_string(),
             avatar_url: None,
             system_prompt: "Alice prompt".to_string(),
@@ -78,6 +80,8 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
         },
         AgentDefinition {
             id: "bob".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: "Bob".to_string(),
             avatar_url: None,
             system_prompt: "Bob prompt".to_string(),
@@ -141,6 +145,8 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
 fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
     let definitions = vec![AgentDefinition {
         id: "alice".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Alice".to_string(),
         avatar_url: None,
         system_prompt: "Alice prompt".to_string(),
@@ -180,6 +186,8 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
     let instance = ManagedAgentRecord {
         pubkey: "a".repeat(64),
         name: "Alice".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: None,
         slug: None,
         persona_id: Some("alice".to_string()),
