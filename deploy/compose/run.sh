@@ -40,7 +40,7 @@ backup_hint() {
 Back up these before upgrades and on a regular schedule:
 
 - deploy/compose/.env, especially BUZZ_RELAY_PRIVATE_KEY, DB/Redis/S3 secrets, and BUZZ_GIT_HOOK_HMAC_SECRET
-- The owner private key if bootstrap generated one for RELAY_OWNER_PUBKEY
+- The owner private key and recovery backup held outside this deployment
 - Postgres data (prefer pg_dump or a quiesced volume snapshot)
 - MinIO/S3 bucket contents for media and git objects
 - buzz-git-data volume (BUZZ_GIT_REPO_PATH=/data/git)
