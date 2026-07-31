@@ -391,6 +391,16 @@ pub(crate) async fn derive_reaction_channel(
     }
 }
 
+/// Whether a command kind is handled by the generic command executor.
+///
+/// Company Actions are command kinds but are deliberately excluded: this branch
+/// returns BEFORE the ban/timeout write-block, so routing them here would let a
+/// banned or timed-out owner mutate company state. They are brokered further
+/// down, past that gate.
+pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
+    buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION
+}
+
 /// Kinds that are always global (`channel_id = NULL`).
 ///
 /// If a client includes a stray `h` tag on these kinds, the ingest pipeline
@@ -402,16 +412,6 @@ pub(crate) async fn derive_reaction_channel(
 /// which means a stray `h` tag can still match `#h` queries. This is a known
 /// limitation affecting all global-only kinds and should be addressed in the
 /// filter layer as a follow-up.
-/// Whether a command kind is handled by the generic command executor.
-///
-/// Company Actions are command kinds but are deliberately excluded: this branch
-/// returns BEFORE the ban/timeout write-block, so routing them here would let a
-/// banned or timed-out owner mutate company state. They are brokered further
-/// down, past that gate.
-pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
-    buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION
-}
-
 pub(crate) fn is_global_only_kind(kind: u32) -> bool {
     matches!(
         kind,

@@ -725,24 +725,38 @@ pub fn validate_task(
     Ok(())
 }
 
+/// Validate one team reference in isolation.
+///
+/// Exported so callers that must FILTER teams before validation — the relay
+/// broker projects arbitrary stored Team events into `CompanyTeamRef` — can
+/// test the exact same conditions `validate_teams` rejects on. Duplicating the
+/// rules in two crates lets the skip set drift from the reject set, and any
+/// gap between them turns one unusable team into a whole-list failure.
+///
+/// Cross-team rules (duplicate ids across the list) stay in `validate_teams`.
+pub fn validate_team_ref(team: &CompanyTeamRef) -> Result<(), CompanyContractError> {
+    validate_id(&team.id, "team.id")?;
+    validate_id(&team.lead_persona_id, "team.leadPersonaId")?;
+
+    let mut persona_ids = HashSet::new();
+    for persona_id in &team.persona_ids {
+        validate_id(persona_id, "team.personaIds")?;
+        if !persona_ids.insert(persona_id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier("team.personaIds"));
+        }
+    }
+    if !persona_ids.contains(team.lead_persona_id.as_str()) {
+        return Err(CompanyContractError::TeamLeadNotMember);
+    }
+    Ok(())
+}
+
 fn validate_teams(teams: &[CompanyTeamRef]) -> Result<(), CompanyContractError> {
     let mut team_ids = HashSet::new();
     for team in teams {
-        validate_id(&team.id, "team.id")?;
-        validate_id(&team.lead_persona_id, "team.leadPersonaId")?;
+        validate_team_ref(team)?;
         if !team_ids.insert(team.id.as_str()) {
             return Err(CompanyContractError::DuplicateIdentifier("teams.id"));
-        }
-
-        let mut persona_ids = HashSet::new();
-        for persona_id in &team.persona_ids {
-            validate_id(persona_id, "team.personaIds")?;
-            if !persona_ids.insert(persona_id.as_str()) {
-                return Err(CompanyContractError::DuplicateIdentifier("team.personaIds"));
-            }
-        }
-        if !persona_ids.contains(team.lead_persona_id.as_str()) {
-            return Err(CompanyContractError::TeamLeadNotMember);
         }
     }
     Ok(())
@@ -898,6 +912,61 @@ fn ensure_cardinality<T>(
         return Err(CompanyContractError::TooManyItems { field, max });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod team_ref_tests {
+    use super::*;
+
+    fn team(lead: &str, members: &[&str]) -> CompanyTeamRef {
+        CompanyTeamRef {
+            id: "team-marketing".to_string(),
+            lead_persona_id: lead.to_string(),
+            persona_ids: members.iter().map(|m| (*m).to_string()).collect(),
+        }
+    }
+
+    /// The relay broker filters stored teams with `validate_team_ref` before
+    /// handing them to `validate_teams`. If the two ever disagree, one unusable
+    /// team fails the whole list and breaks every Task action in a community.
+    #[test]
+    fn a_team_ref_the_single_validator_accepts_is_accepted_in_a_list() {
+        let good = team("p-lead", &["p-lead", "p-member"]);
+        assert!(validate_team_ref(&good).is_ok());
+        assert!(validate_teams(std::slice::from_ref(&good)).is_ok());
+    }
+
+    #[test]
+    fn every_single_team_rejection_is_also_a_list_rejection() {
+        let cases = [
+            team("", &["p-member"]),               // blank lead
+            team("p-lead", &["p-member"]),         // lead not a member
+            team("p-lead", &["p-lead", "p-lead"]), // duplicate member
+            team("p-lead", &["p-lead", ""]),       // blank member id
+        ];
+        for candidate in cases {
+            assert!(
+                validate_team_ref(&candidate).is_err(),
+                "single validator must reject {candidate:?}"
+            );
+            assert!(
+                validate_teams(std::slice::from_ref(&candidate)).is_err(),
+                "list validator must reject the same team {candidate:?}"
+            );
+        }
+    }
+
+    /// Duplicate ids ACROSS teams stay a list-level rule, so the broker's
+    /// per-team filter cannot be expected to catch them — its author scoping is
+    /// what prevents a foreign duplicate from ever entering the list.
+    #[test]
+    fn duplicate_ids_across_teams_remain_a_list_level_rule() {
+        let one = team("p-lead", &["p-lead"]);
+        let two = team("p-lead", &["p-lead"]);
+        assert!(validate_team_ref(&one).is_ok());
+        assert!(validate_team_ref(&two).is_ok());
+        assert!(validate_teams(&[one, two]).is_err());
+    }
 }
 
 #[cfg(test)]

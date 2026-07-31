@@ -190,6 +190,13 @@ pub enum CompanyActionApply {
         /// Raw event ID of the action that originally won the claim.
         original_action_event_id: Vec<u8>,
     },
+    /// This exact action event is already stored, so it cannot be applied.
+    ///
+    /// Distinct from `Duplicate`: no batch won a claim here. The refuse path
+    /// stores an action alongside its failure receipt, so a byte-identical
+    /// retry of a previously refused action lands here. The signature is
+    /// spent — applying it requires a newly signed request.
+    ActionAlreadyStored,
     /// The action author is not the community's current human owner.
     ///
     /// Decided while holding `FOR UPDATE` on the owner rows, so an action

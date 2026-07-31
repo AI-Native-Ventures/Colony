@@ -156,21 +156,29 @@ fn build_receipt(
         .map_err(|error| format!("failed to sign company receipt: {error}"))
 }
 
-/// Load one relay-authored head by coordinate, if it exists.
-async fn load_head(
+/// Load one head by coordinate under an explicit author.
+async fn load_head_authored_by(
     tenant: &TenantContext,
     state: &AppState,
     kind: u32,
     d_tag: &str,
+    author: &nostr::PublicKey,
+    reader: Option<&nostr::PublicKey>,
 ) -> Result<Option<Event>, String> {
     let rows = state
         .db
         .query_events(&buzz_db::event::EventQuery {
             kinds: Some(vec![kind as i32]),
-            pubkey: Some(state.relay_keypair.public_key().to_bytes().to_vec()),
+            pubkey: Some(author.to_bytes().to_vec()),
             d_tag: Some(d_tag.to_owned()),
             global_only: true,
             limit: Some(1),
+            // Reference resolution can name a client-authored Persona under an
+            // arbitrary author, so it must honour the same unshared-persona
+            // visibility gate every other read path enforces. Without it the
+            // owner gains an existence-and-version oracle on other members'
+            // private personas.
+            persona_reader: reader.map(|key| key.to_bytes().to_vec()),
             ..buzz_db::event::EventQuery::for_community(tenant.community())
         })
         .await
@@ -178,17 +186,61 @@ async fn load_head(
     Ok(rows.into_iter().next().map(|stored| stored.event))
 }
 
-/// Project the relay's stored Team events into the validation-only shape
-/// `buzz-core` uses to check Task ownership and QA membership.
+/// Load one relay-authored canonical head by coordinate, if it exists.
+async fn load_head(
+    tenant: &TenantContext,
+    state: &AppState,
+    kind: u32,
+    d_tag: &str,
+) -> Result<Option<Event>, String> {
+    // Canonical heads are relay-authored and never persona-gated.
+    load_head_authored_by(
+        tenant,
+        state,
+        kind,
+        d_tag,
+        &state.relay_keypair.public_key(),
+        None,
+    )
+    .await
+}
+
+/// Upper bound on team rows considered when validating one Task.
+///
+/// The query is already scoped to a single author, so this only guards against
+/// a pathological store. Without a bound the DB's silent 1000-row clamp would
+/// apply under `ORDER BY created_at DESC` and could push the real owning team
+/// out of the window, turning a valid Task into `MissingReference`.
+const MAX_TEAM_REFS: usize = 500;
+
+/// Project stored Team events into the validation-only shape `buzz-core` uses
+/// to check Task ownership and QA membership.
+///
+/// Scoped to the ACTING OWNER's own Team events. Kind 30176 is client-authored
+/// with no content validation at ingest, so an unscoped read would let any
+/// ordinary member publish a Team at an existing `d` tag and inject a duplicate
+/// id — `validate_teams` rejects duplicates, which would break every Task
+/// action in the community from an unprivileged account.
+///
+/// Teams that cannot satisfy the Task contract are skipped rather than passed
+/// through as invalid entries, using `buzz-core`'s own `validate_team_ref` so
+/// the two sets cannot diverge. `validate_teams` requires a lead that is also a
+/// member, so a lead-less team — which the desktop ships for both built-in
+/// teams — has no valid representation here. Passing one through would fail
+/// validation for the WHOLE list, breaking every Task action in the community;
+/// skipping keeps the failure scoped to a Task that actually names such a team.
 async fn load_team_refs(
     tenant: &TenantContext,
     state: &AppState,
+    owner_pubkey: &nostr::PublicKey,
 ) -> Result<Vec<CompanyTeamRef>, String> {
     let rows = state
         .db
         .query_events(&buzz_db::event::EventQuery {
             kinds: Some(vec![KIND_TEAM as i32]),
+            pubkey: Some(owner_pubkey.to_bytes().to_vec()),
             global_only: true,
+            limit: Some(MAX_TEAM_REFS as i64),
             ..buzz_db::event::EventQuery::for_community(tenant.community())
         })
         .await
@@ -202,7 +254,8 @@ async fn load_team_refs(
         lead_persona_id: Option<String>,
     }
 
-    let mut teams = Vec::new();
+    let mut teams: Vec<CompanyTeamRef> = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
     for stored in rows {
         let Some(id) = stored.event.tags.iter().find_map(|tag| {
             let parts = tag.as_slice();
@@ -210,16 +263,34 @@ async fn load_team_refs(
         }) else {
             continue;
         };
-        // A team whose content will not parse cannot authorize ownership; skip
-        // it rather than failing every company action in the community.
+        // Rows arrive newest-first, so the first row for a `d` tag is the live
+        // NIP-33 head; ignore anything superseded.
+        if !seen_ids.insert(id.clone()) {
+            continue;
+        }
+        // Content that will not parse cannot authorize ownership; skip it
+        // rather than failing every company action in the community.
         let Ok(content) = serde_json::from_str::<TeamContent>(&stored.event.content) else {
             continue;
         };
-        teams.push(CompanyTeamRef {
+        let (Some(lead_persona_id), Some(persona_ids)) =
+            (content.lead_persona_id, content.persona_ids)
+        else {
+            continue;
+        };
+        let candidate = CompanyTeamRef {
             id,
-            lead_persona_id: content.lead_persona_id.unwrap_or_default(),
-            persona_ids: content.persona_ids.unwrap_or_default(),
-        });
+            lead_persona_id,
+            persona_ids,
+        };
+        // Filter on exactly the conditions `validate_teams` rejects on, using
+        // its own single-team validator, so the skip set cannot drift from the
+        // reject set. Any gap between them turns one unusable team into a
+        // whole-list failure for every Task action in the community.
+        if buzz_core::company::validate_team_ref(&candidate).is_err() {
+            continue;
+        }
+        teams.push(candidate);
     }
     Ok(teams)
 }
@@ -232,6 +303,7 @@ async fn validate_payload_against_state(
     tenant: &TenantContext,
     state: &AppState,
     action: &CompanyAction,
+    action_author: nostr::PublicKey,
     previous_head: Option<&Event>,
 ) -> Result<(), String> {
     match &action.payload {
@@ -266,7 +338,7 @@ async fn validate_payload_against_state(
                 }
                 None => None,
             };
-            let teams = load_team_refs(tenant, state).await?;
+            let teams = load_team_refs(tenant, state, &action_author).await?;
             validate_task(task, &company, initiative.as_ref(), &teams)
                 .map_err(|error| error.to_string())?;
             if let Some(previous) = previous_head {
@@ -293,10 +365,18 @@ async fn load_company(
 }
 
 /// Verify every compare-and-set reference the action declared still resolves.
+///
+/// References may name relay-authored company heads OR client-authored Persona
+/// and Team coordinates — checking that a Task's team membership has not
+/// changed underneath the request is the main reason the field exists. So the
+/// author comes from the coordinate itself rather than being pinned to the
+/// relay key; pinning it would make every Persona/Team reference unresolvable
+/// and silently kill the feature.
 async fn validate_expected_references(
     tenant: &TenantContext,
     state: &AppState,
     action: &CompanyAction,
+    action_author: nostr::PublicKey,
 ) -> Result<(), String> {
     for reference in &action.expected_references {
         let mut parts = reference.target.splitn(3, ':');
@@ -304,11 +384,14 @@ async fn validate_expected_references(
             .next()
             .and_then(|raw| raw.parse::<u32>().ok())
             .ok_or_else(|| "expected reference has an invalid coordinate".to_owned())?;
-        let _author = parts.next();
+        let author = parts
+            .next()
+            .and_then(|raw| nostr::PublicKey::from_hex(raw).ok())
+            .ok_or_else(|| "expected reference has an invalid coordinate".to_owned())?;
         let d_tag = parts
             .next()
             .ok_or_else(|| "expected reference has an invalid coordinate".to_owned())?;
-        let head = load_head(tenant, state, kind, d_tag)
+        let head = load_head_authored_by(tenant, state, kind, d_tag, &author, Some(&action_author))
             .await?
             .ok_or_else(|| "an expected reference no longer resolves".to_owned())?;
         if head.id.to_hex() != reference.event_id {
@@ -332,6 +415,17 @@ pub(crate) async fn handle_company_action(
     if action.relay_pubkey != state.relay_keypair.public_key().to_hex() {
         return Err("company action `p` tag must target this relay".into());
     }
+
+    // Leaving the generic command branch also left behind its `ensure_user`.
+    // `create_community_with_owner` writes only `relay_members`, so a brand-new
+    // community's owner has no `users` row and both humanity checks would refuse
+    // their very first Company Action — which is exactly the onboarding path.
+    state
+        .db
+        .ensure_user(tenant.community(), &action_event.pubkey.to_bytes())
+        .await
+        .map_err(|error| format!("database error registering company actor: {error}"))?;
+
     authorize_company_actor(tenant, state, action_event).await?;
 
     let payload_kind = match &action.payload {
@@ -351,11 +445,19 @@ pub(crate) async fn handle_company_action(
     if let Err(message) = check_expectations(&action, previous_head.as_ref()) {
         return refuse(state, tenant, action_event, &action, message).await;
     }
-    if let Err(message) = validate_expected_references(tenant, state, &action).await {
+    if let Err(message) =
+        validate_expected_references(tenant, state, &action, action_event.pubkey).await
+    {
         return refuse(state, tenant, action_event, &action, message).await;
     }
-    if let Err(message) =
-        validate_payload_against_state(tenant, state, &action, previous_head.as_ref()).await
+    if let Err(message) = validate_payload_against_state(
+        tenant,
+        state,
+        &action,
+        action_event.pubkey,
+        previous_head.as_ref(),
+    )
+    .await
     {
         return refuse(state, tenant, action_event, &action, message).await;
     }
@@ -427,10 +529,25 @@ pub(crate) async fn handle_company_action(
         } => Ok(CompanyBrokerOutcome::Duplicate {
             original_action_event_id,
         }),
-        // Authority can change between the pre-check and the commit; the
-        // transaction is the authority of record, so trust its verdict.
+        // Authority can change between the pre-check and the commit. The
+        // transaction re-checks both halves — an owner row AND a non-agent
+        // identity — under `FOR UPDATE`, so it really is the authority of
+        // record and its verdict stands.
         CompanyActionApply::NotOwner => {
             Err("company actions require the current community owner".into())
+        }
+        // The signature is spent: this exact action was already stored, which
+        // only happens after it was refused. `refuse` is idempotent here — the
+        // action insert fails, so it stores nothing and re-reports the loss.
+        CompanyActionApply::ActionAlreadyStored => {
+            refuse(
+                state,
+                tenant,
+                action_event,
+                &action,
+                "this request was already processed; sign a new one to retry".to_owned(),
+            )
+            .await
         }
         CompanyActionApply::StaleHead { .. } => {
             refuse(
@@ -511,8 +628,10 @@ async fn refuse(
 /// Deliberately stricter than the Block catalog broker, which also accepts
 /// admins: company state carries commercial and accounting authority, and the
 /// corrected design makes owner identity the single authorization anchor.
-/// This is a fast pre-check for a clear error message — the binding decision is
-/// made under `FOR UPDATE` inside the mutation transaction.
+/// This is a fast pre-check for a clear error message. The binding decision is
+/// made under `FOR UPDATE` inside the mutation transaction, which enforces the
+/// same owner-and-human pair, so removing this pre-check would degrade the
+/// error message but not the authorization.
 async fn authorize_company_actor(
     tenant: &TenantContext,
     state: &AppState,
@@ -634,6 +753,118 @@ mod tests {
             check_expectations(&action, Some(&head)).is_err(),
             "a replacement naming the wrong head must lose"
         );
+    }
+
+    fn sample_initiative() -> buzz_core::company::Initiative {
+        buzz_core::company::Initiative {
+            schema: "colony.initiative/v1".to_string(),
+            id: "init-homepage".to_string(),
+            company_id: "horizon-labs".to_string(),
+            title: "Homepage refresh".to_string(),
+            summary: "Rebuild the marketing site".to_string(),
+            status: buzz_core::company::InitiativeStatus::Proposed,
+            owner_persona_id: "builtin:fizz".to_string(),
+            cost_centre_id: "internal".to_string(),
+            commercial_purpose: buzz_core::company::CommercialPurpose::Marketing,
+            client_organization_id: None,
+            expected_cost_usd: Some(120.0),
+            source_channel_id: "general".to_string(),
+            source_event_id: None,
+            created_at: 1_000,
+            updated_at: 1_000,
+        }
+    }
+
+    fn sample_task() -> buzz_core::company::CompanyTask {
+        buzz_core::company::CompanyTask {
+            schema: "colony.task/v1".to_string(),
+            id: "task-copy".to_string(),
+            company_id: "horizon-labs".to_string(),
+            initiative_id: Some("init-homepage".to_string()),
+            title: "Write homepage copy".to_string(),
+            status: buzz_core::company::TaskStatus::Proposed,
+            owning_team_id: "team-marketing".to_string(),
+            assignee_persona_ids: vec!["builtin:content".to_string()],
+            qa_persona_id: "builtin:marketing-lead".to_string(),
+            cost_centre_id: "internal".to_string(),
+            commercial_purpose: buzz_core::company::CommercialPurpose::Marketing,
+            client_organization_id: Some("acme-corp".to_string()),
+            source_channel_id: "general".to_string(),
+            source_event_id: None,
+            implicit: false,
+            created_at: 1_000,
+            updated_at: 1_000,
+        }
+    }
+
+    /// The relay signs these heads; if their tag sets do not match what the
+    /// strict parsers require, the relay commits a head no client can read —
+    /// and the damage only surfaces on the NEXT update, which has to parse it.
+    #[test]
+    fn relay_authored_initiative_and_task_heads_round_trip() {
+        let relay = Keys::generate();
+
+        let initiative_head = build_head(
+            &relay,
+            &CompanyActionPayload::Initiative(sample_initiative()),
+        )
+        .expect("build initiative head");
+        assert_eq!(initiative_head.kind.as_u16() as u32, KIND_INITIATIVE);
+        assert!(!initiative_head
+            .tags
+            .iter()
+            .any(|tag| tag.as_slice()[0] == "h"));
+        let parsed = parse_initiative_event(&initiative_head).expect("parse initiative head");
+        assert_eq!(parsed.id, "init-homepage");
+        assert_eq!(parsed.cost_centre_id, "internal");
+        // No client on this initiative, so the optional tag must be absent.
+        assert!(!initiative_head
+            .tags
+            .iter()
+            .any(|tag| tag.as_slice()[0] == "client"));
+
+        let task_head = build_head(&relay, &CompanyActionPayload::Task(sample_task()))
+            .expect("build task head");
+        assert_eq!(task_head.kind.as_u16() as u32, KIND_TASK);
+        assert!(!task_head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
+        let parsed = parse_task_event(&task_head).expect("parse task head");
+        assert_eq!(parsed.owning_team_id, "team-marketing");
+        assert_eq!(parsed.initiative_id.as_deref(), Some("init-homepage"));
+        assert_eq!(parsed.client_organization_id.as_deref(), Some("acme-corp"));
+
+        // Both optional tags present exactly once when the payload carries them.
+        for name in ["initiative", "client"] {
+            assert_eq!(
+                task_head
+                    .tags
+                    .iter()
+                    .filter(|tag| tag.as_slice()[0] == name)
+                    .count(),
+                1,
+                "task head must carry exactly one `{name}` tag"
+            );
+        }
+    }
+
+    /// A Task with no initiative and no client must omit both optional tags;
+    /// emitting them empty would fail the strict parser.
+    #[test]
+    fn task_head_omits_absent_optional_coordinates() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.initiative_id = None;
+        task.client_organization_id = None;
+
+        let head = build_head(&relay, &CompanyActionPayload::Task(task)).expect("build task head");
+        for name in ["initiative", "client"] {
+            assert!(
+                !head.tags.iter().any(|tag| tag.as_slice()[0] == name),
+                "absent `{name}` must not produce a tag"
+            );
+        }
+        let parsed = parse_task_event(&head).expect("parse task head");
+        assert_eq!(parsed.initiative_id, None);
+        assert_eq!(parsed.client_organization_id, None);
     }
 
     #[test]
