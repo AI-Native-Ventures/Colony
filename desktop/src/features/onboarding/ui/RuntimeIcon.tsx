@@ -3,7 +3,7 @@ import { TerminalSquare } from "lucide-react";
 
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { AntMark } from "@/shared/ui/colony-logo/AntMark";
 import claudeLogoUrl from "../assets/harness-logos/claude.png?inline";
 import { RUNTIME_MARKS } from "./HarnessMarks";
 
@@ -58,7 +58,7 @@ export function RuntimeIcon({
   if (isBuzzRuntime(runtime)) {
     // The mark's wide viewBox letterboxes inside a square box, so honoring
     // the caller's size keeps it optically in line with the square logos.
-    return <BuzzMark className={cn(className, "text-foreground")} />;
+    return <AntMark className={cn(className, "text-foreground")} />;
   }
 
   if (Mark) {

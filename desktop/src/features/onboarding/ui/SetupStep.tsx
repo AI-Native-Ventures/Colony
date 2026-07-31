@@ -14,7 +14,7 @@ import { getInstallErrorMessage } from "@/shared/lib/installError";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
-import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
+import { WalkingAnt } from "@/shared/ui/colony-logo/WalkingAnt";
 import { Spinner } from "@/shared/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import {
@@ -578,7 +578,7 @@ function RuntimeProvidersLoadingState() {
       role="status"
     >
       <div className="flex flex-col items-center text-foreground opacity-35">
-        <FlappingBee className="h-auto w-16" />
+        <WalkingAnt className="h-auto w-16" />
         <p className="mt-5 text-2xl font-normal leading-8">
           Finding your providers...
         </p>
