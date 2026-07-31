@@ -62,14 +62,22 @@ via direct DB access. Use this for testing admin operations (archive,
 delete-channel, add/remove-channel-member).
 
 ```bash
-DATABASE_URL="${DATABASE_URL:?set DATABASE_URL for the local Buzz database}" \
-cargo run -p buzz-admin -- mint-token \
-  --name "cli-test" \
-  --scopes "messages:read,messages:write,channels:read,channels:write,users:read,users:write,files:read,files:write,admin:channels"
+cargo run -p buzz-admin -- generate-key
 ```
 
-This generates a keypair and prints:
-- **Private key (nsec)** — save for `BUZZ_PRIVATE_KEY` testing
+This prints a public/secret keypair. Save the secret for `BUZZ_PRIVATE_KEY`.
+
+To make that identity a relay **member** or **admin**:
+
+```bash
+DATABASE_URL="${DATABASE_URL:?set DATABASE_URL for the local Buzz database}" \
+cargo run -p buzz-admin -- add-member --pubkey <hex-or-npub> --role admin
+```
+
+`add-member` deliberately refuses `--role owner`. The community owner is set
+by `RELAY_OWNER_PUBKEY` on the relay process and bootstrapped at startup — the
+owner is deployment configuration, not something an admin command can grant.
+This matters for company commands, which require the owner specifically.
 
 Export:
 
