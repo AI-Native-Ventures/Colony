@@ -219,7 +219,10 @@ pub struct ManagedAgentRecord {
     /// Local-only idempotency key; excluded from projections, snapshots, and ACP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creation_request_id: Option<String>,
-    /// Team this instance was deployed from. Resolves runtime team instructions.
+    /// Deployment-time team hint used to resolve runtime instructions.
+    ///
+    /// This is not exclusive membership or work ownership: one persona may
+    /// belong to several teams, while Task context owns operational work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_id: Option<String>,
     /// nsec private key. Held in memory but persisted to the OS keyring (keyed
@@ -759,6 +762,10 @@ pub struct TeamRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     pub persona_ids: Vec<String>,
+    /// Persona responsible for delegation and QA. A lead is always also a
+    /// member; every write path validates that invariant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_persona_id: Option<String>,
     #[serde(default)]
     pub is_builtin: bool,
     /// Absolute path to the team's backing directory (if directory-backed).
@@ -775,27 +782,6 @@ pub struct TeamRecord {
     pub version: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateTeamRequest {
-    pub name: String,
-    pub description: Option<String>,
-    pub instructions: Option<String>,
-    #[serde(default)]
-    pub persona_ids: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateTeamRequest {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub instructions: Option<String>,
-    #[serde(default)]
-    pub persona_ids: Vec<String>,
 }
 
 pub const DEFAULT_ACP_COMMAND: &str = "buzz-acp";

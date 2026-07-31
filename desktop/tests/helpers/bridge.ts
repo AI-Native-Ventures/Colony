@@ -114,6 +114,7 @@ type MockTeamSeed = {
   name: string;
   description?: string | null;
   personaIds: string[];
+  leadPersonaId?: string | null;
 };
 
 export type MockEngramEntry = {

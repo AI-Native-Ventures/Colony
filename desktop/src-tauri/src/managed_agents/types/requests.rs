@@ -176,6 +176,33 @@ pub struct UpdatePersonaRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateTeamRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub persona_ids: Vec<String>,
+    #[serde(default)]
+    pub lead_persona_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTeamRequest {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub persona_ids: Vec<String>,
+    /// Absent preserves the current lead, `null` clears it, and a string sets
+    /// a new lead. The tri-state prevents older callers from erasing leaders.
+    #[serde(default, deserialize_with = "crate::util::double_option")]
+    pub lead_persona_id: Option<Option<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateManagedAgentRequest {
     pub name: String,
     #[serde(default)]

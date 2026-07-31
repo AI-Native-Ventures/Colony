@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{collections::HashSet, fs, path::PathBuf};
 
 use tauri::AppHandle;
 
@@ -29,6 +29,7 @@ struct BuiltInTeam {
     name: &'static str,
     description: Option<&'static str>,
     persona_ids: &'static [&'static str],
+    lead_persona_id: Option<&'static str>,
 }
 
 const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
@@ -36,6 +37,7 @@ const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
     name: "Welcome Team",
     description: Some("A friendly starter trio ready to help you plan, create, and ship."),
     persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
+    lead_persona_id: None,
 }];
 
 // Built-in teams that have been retired. A stored copy that still exactly
@@ -47,6 +49,7 @@ const RETIRED_BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
     name: "Fizz",
     description: Some("Fizz works carefully and collaboratively."),
     persona_ids: &["builtin:fizz"],
+    lead_persona_id: None,
 }];
 
 fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord> {
@@ -58,6 +61,7 @@ fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord
             description: team.description.map(|s| s.to_string()),
             instructions: None,
             persona_ids: team.persona_ids.iter().map(|s| s.to_string()).collect(),
+            lead_persona_id: team.lead_persona_id.map(str::to_string),
             is_builtin: true,
             source_dir: None,
             is_symlink: false,
@@ -117,6 +121,7 @@ fn merge_teams_impl(
                     .iter()
                     .map(String::as_str)
                     .eq(seed.persona_ids.iter().copied())
+                && record.lead_persona_id.as_deref() == seed.lead_persona_id
                 && record.source_dir.is_none()
                 && !record.is_symlink
         })
@@ -149,6 +154,43 @@ pub fn validate_team_deletion(team: &TeamRecord) -> Result<(), String> {
         return Err("Built-in teams cannot be deleted.".to_string());
     }
     Ok(())
+}
+
+/// Validate the invariants held by one team definition.
+///
+/// Membership is deliberately scoped to this one team: the same persona may
+/// appear in any number of other teams. Within a team each member is unique,
+/// and an optional delegation/QA lead must also be a member.
+pub fn validate_team_membership(
+    persona_ids: &[String],
+    lead_persona_id: Option<&str>,
+) -> Result<(), String> {
+    let mut unique = HashSet::with_capacity(persona_ids.len());
+    for persona_id in persona_ids {
+        if !unique.insert(persona_id.as_str()) {
+            return Err(format!("agent {persona_id} can only appear once in a team"));
+        }
+    }
+
+    if let Some(lead_persona_id) = lead_persona_id {
+        if !unique.contains(lead_persona_id) {
+            return Err("Team lead must also be a member of the team.".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+/// Whether a team depends on a persona as either a member or its lead.
+///
+/// Checking both fields is intentionally defensive: valid new records always
+/// include the lead in `persona_ids`, but an older or hand-edited store may not.
+pub fn team_references_persona(team: &TeamRecord, persona_id: &str) -> bool {
+    team.lead_persona_id.as_deref() == Some(persona_id)
+        || team
+            .persona_ids
+            .iter()
+            .any(|candidate| candidate == persona_id)
 }
 
 /// Read and merge built-in teams without persisting changes.
@@ -229,6 +271,39 @@ fn agents_referencing_team<'a>(
         .collect()
 }
 
+fn other_teams_referencing_personas<'a>(
+    teams: &'a [TeamRecord],
+    excluded_team_id: &str,
+    persona_ids: &HashSet<String>,
+) -> Vec<&'a str> {
+    teams
+        .iter()
+        .filter(|team| team.id != excluded_team_id)
+        .filter(|team| {
+            persona_ids
+                .iter()
+                .any(|persona_id| team_references_persona(team, persona_id))
+        })
+        .map(|team| team.name.as_str())
+        .collect()
+}
+
+fn agents_referencing_personas<'a>(
+    agents: &'a [ManagedAgentRecord],
+    persona_ids: &HashSet<String>,
+) -> Vec<&'a str> {
+    agents
+        .iter()
+        .filter(|agent| {
+            agent
+                .persona_id
+                .as_ref()
+                .is_some_and(|persona_id| persona_ids.contains(persona_id))
+        })
+        .map(|agent| agent.name.as_str())
+        .collect()
+}
+
 /// Delete a team, cascading removal of its sourced personas and backing dir.
 ///
 /// Returns the d-tags of the personas removed by the cascade so the caller can
@@ -264,8 +339,33 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<Vec<St
         // still cascade correctly.
         let persona_key = team_persona_key(team).to_string();
 
-        // 1. Remove all PersonaRecords sourced from this team
+        // Resolve the complete cascade before mutating anything. A persona
+        // sourced by this directory may also participate in other teams; team
+        // deletion must never strand those memberships or deployed instances.
         let mut personas = super::load_personas(app)?;
+        let sourced_persona_ids: HashSet<String> = personas
+            .iter()
+            .filter(|p| p.source_team.as_deref() == Some(persona_key.as_str()))
+            .map(|p| p.id.clone())
+            .collect();
+        let referencing_teams =
+            other_teams_referencing_personas(&teams, team_id, &sourced_persona_ids);
+        if !referencing_teams.is_empty() {
+            return Err(format!(
+                "Cannot delete team \"{team_id}\": its agents are still used by other teams ({}). Remove them from those teams first.",
+                referencing_teams.join(", ")
+            ));
+        }
+        let referencing_agents = agents_referencing_personas(&agents, &sourced_persona_ids);
+        if !referencing_agents.is_empty() {
+            return Err(format!(
+                "Cannot delete team \"{team_id}\": {} deployed agent instance(s) still use its personas ({}). Delete or reconfigure them first.",
+                referencing_agents.len(),
+                referencing_agents.join(", ")
+            ));
+        }
+
+        // 1. Remove all PersonaRecords sourced from this team.
         // Capture the d-tag of each cascaded persona BEFORE removal so the
         // caller can tombstone its kind:30175 coordinate on the relay.
         cascaded_persona_d_tags = personas
