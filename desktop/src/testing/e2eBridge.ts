@@ -1919,7 +1919,7 @@ function buildMockConfigSurface(pubkey: string): {
   };
 
   // Mixed-provenance showcase — top-level rows carry different origins so the
-  // panel witnesses distinct provenance labels in one frame: "Set in Buzz",
+  // panel witnesses distinct provenance labels in one frame: "Set in Colony",
   // "Inherited from template", "From config file (...)" and
   // "From environment variable (...)".
   const multiOriginSurface = {
@@ -8036,7 +8036,7 @@ async function handleStartManagedAgent(
         mockMeshState.models.some((model) => model.id === modelId));
     if (!hasLiveTarget) {
       throw new Error(
-        "Buzz shared compute cannot start because no live member is serving this model.",
+        "Colony shared compute cannot start because no live member is serving this model.",
       );
     }
   }
@@ -10908,7 +10908,7 @@ export function maybeInstallE2eTauriMocks() {
           }
           if (mockMeshState.models.length === 0) {
             throw new Error(
-              "no Buzz shared compute serving members are available",
+              "no Colony shared compute serving members are available",
             );
           }
         }

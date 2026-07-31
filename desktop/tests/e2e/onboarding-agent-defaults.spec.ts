@@ -860,7 +860,7 @@ test("Finish stays disabled until a provider-required harness is fully configure
   // buzz-agent auto-selects as the only ready harness, but with no provider
   // configured the default is not launchable — Finish must be gated.
   await expect(page.getByTestId("global-agent-default-harness")).toHaveText(
-    "Buzz",
+    "Colony",
   );
   const finish = page.getByTestId("onboarding-finish");
   await expect(finish).toBeDisabled();
@@ -911,7 +911,7 @@ test("baked build config keeps Finish enabled without manual provider setup", as
   // Internal builds bake provider/model/credentials — the gate must treat
   // baked config as complete and never block Finish.
   await expect(page.getByTestId("global-agent-default-harness")).toHaveText(
-    "Buzz",
+    "Colony",
   );
   await expect(page.getByTestId("onboarding-finish")).toBeEnabled();
 });

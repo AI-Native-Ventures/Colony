@@ -34,7 +34,7 @@ test("Share compute has a clear empty state and starts and stops sharing", async
 
   await model.fill("hf://demo/SmolLM2-135M-Instruct-GGUF:Q4_K_M");
   await expect(card).toContainText(
-    "Buzz downloads remote models when sharing starts",
+    "Colony downloads remote models when sharing starts",
   );
   await expect(toggle).toBeEnabled();
 
@@ -92,7 +92,7 @@ test("a consuming client can switch to sharing its saved local model", async ({
   await expect(card).toContainText(
     "This machine is currently using another member's shared compute",
   );
-  await expect(card).toContainText("Buzz may briefly restart");
+  await expect(card).toContainText("Colony may briefly restart");
   await expect(toggle).not.toBeChecked();
   await expect(model).toBeEnabled();
   await expect(model).toHaveValue(localModel);

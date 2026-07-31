@@ -73,7 +73,7 @@ const LOADING_TEXT = "Setting up your community...";
 
 // Minimum time the cold-boot splash stays on screen. A real boot resolves the
 // community in well under 100ms, and the native window setup plus first paint
-// can take longer than that — without a hold, the bee is unmounted before it is
+// can take longer than that — without a hold, the ant is unmounted before it is
 // ever visible. The hold runs as an overlay above the already-mounted app, so
 // time-to-interactive is unchanged; only the reveal waits.
 const BOOT_SPLASH_MIN_VISIBLE_MS = 1_200;

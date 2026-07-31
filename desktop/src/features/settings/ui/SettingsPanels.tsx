@@ -233,6 +233,12 @@ export const settingsSections: SettingsSectionDescriptor[] = [
 ];
 
 function formatThemeLabel(name: string): string {
+  // The first-party theme's stored id stays "buzz" / "buzz-dark" for
+  // backward compatibility with existing persisted preferences, but its
+  // display label follows the Colony rebrand like every other user-visible
+  // string.
+  if (name === "buzz") return "Colony";
+  if (name === "buzz-dark") return "Colony Dark";
   return name
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -517,7 +523,7 @@ function ThemeSettingsCard() {
     >
       <SettingsSectionHeader
         title="Appearance"
-        description="Choose a theme for Buzz."
+        description="Choose a theme for Colony."
       />
 
       {/* Mode selector: System / Light / Dark */}

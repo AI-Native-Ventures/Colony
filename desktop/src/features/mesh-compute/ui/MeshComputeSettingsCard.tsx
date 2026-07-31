@@ -295,7 +295,7 @@ export function MeshComputeSettingsCard() {
             />
             <p className="text-sm font-normal text-muted-foreground">
               Choose a suggested model below, or enter a model reference or
-              local file. Buzz downloads remote models when sharing starts.
+              local file. Colony downloads remote models when sharing starts.
             </p>
             {catalog && catalog.entries.length > 0 ? (
               <CatalogPicker
@@ -568,7 +568,8 @@ function StatusLine({
     return (
       <p className="text-sm text-muted-foreground">
         This machine is currently using another member's shared compute. Turn on
-        sharing to switch to the selected local model; Buzz may briefly restart.
+        sharing to switch to the selected local model; Colony may briefly
+        restart.
       </p>
     );
   }
