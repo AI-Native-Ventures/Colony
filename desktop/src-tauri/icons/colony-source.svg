@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="224" fill="hsl(258 90% 66%)"/>
+  <g transform="translate(73 180) scale(1.9)">
+    <defs>
+      <mask id="colony-icon-eye" x="-80" y="-80" width="626" height="469" maskUnits="userSpaceOnUse">
+        <rect x="-80" y="-80" width="626" height="469" fill="#fff"/>
+        <circle cx="335" cy="136" r="11" fill="#000"/>
+      </mask>
+    </defs>
+    <g fill="none" stroke="#fff" stroke-width="26" stroke-linecap="round">
+      <path d="M202 203 L136 292"/>
+      <path d="M220 210 L196 298"/>
+      <path d="M235 209 L246 300"/>
+      <path d="M247 205 L294 294"/>
+      <path d="M257 198 L336 282"/>
+      <path d="M164 215 L112 272"/>
+      <path d="M327 114 Q345 64 397 50"/>
+      <path d="M343 126 Q377 86 427 80"/>
+    </g>
+    <g fill="#fff" mask="url(#colony-icon-eye)">
+      <circle cx="104" cy="172" r="80"/>
+      <circle cx="226" cy="164" r="52"/>
+      <circle cx="313" cy="148" r="46"/>
+    </g>
+  </g>
+</svg>
