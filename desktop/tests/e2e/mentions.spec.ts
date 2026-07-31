@@ -2111,3 +2111,124 @@ test("delayed inaccessible agent profile keeps all actions hidden", async ({
     ),
   ).toHaveCount(0);
 });
+
+const ROLE_AGENT_PUBKEY =
+  "7777777777777777777777777777777777777777777777777777777777777777";
+
+/** One deployed employee: personal name Jason, stable role cto / CTO. */
+const ROLE_AGENT_SEED = {
+  personas: [
+    {
+      id: "persona-cto",
+      displayName: "Jason",
+      systemPrompt: "You are the CTO.",
+      roleId: "cto",
+      roleTitle: "CTO",
+    },
+  ],
+  managedAgents: [
+    {
+      pubkey: ROLE_AGENT_PUBKEY,
+      name: "Jason",
+      personaId: "persona-cto",
+      status: "stopped" as const,
+      channelNames: ["general"],
+    },
+  ],
+};
+
+test("role mention: typing @cto offers the agent by role and personal name", async ({
+  page,
+}) => {
+  await installMockBridge(page, ROLE_AGENT_SEED);
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Ping @cto");
+
+  const dropdown = autocomplete(page);
+  const roleRow = dropdown.locator("button", { hasText: "CTO" });
+  await expect(roleRow).toBeVisible();
+  // Both aliases stay visible, so a name/role collision is never resolved by
+  // the typed text alone.
+  await expect(roleRow.getByTestId("mention-alias-label")).toHaveText("Jason");
+  await expect(roleRow.getByTestId("mention-agent-icon")).toBeVisible();
+});
+
+test("role mention: selecting @cto inserts the role title and targets the same agent", async ({
+  page,
+}) => {
+  await installMockBridge(page, ROLE_AGENT_SEED);
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Ping @cto");
+
+  const dropdown = autocomplete(page);
+  await expect(dropdown.locator("button", { hasText: "CTO" })).toBeVisible();
+  await input.press("Enter");
+  await page.keyboard.type(" please review this");
+
+  // The visible token is the role title, not the personal name.
+  await expect(input).toHaveText("Ping @CTO  please review this");
+
+  const baseline = await readCommandLog(page);
+  const baselineStartCount = commandCount(baseline, "start_managed_agent");
+  const baselineCreateCount = commandCount(baseline, "create_managed_agent");
+
+  await page.getByTestId("send-message").click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+  // The role-keyed mention still resolves to the existing agent: it is started
+  // exactly once and no second agent is provisioned. If the authoritative
+  // mention map were keyed by "Jason" while the draft said "@CTO", the send
+  // would silently lose the target and neither would happen.
+  await expect
+    .poll(async () =>
+      commandCount(await readCommandLog(page), "start_managed_agent"),
+    )
+    .toBe(baselineStartCount + 1);
+  expect(commandCount(await readCommandLog(page), "create_managed_agent")).toBe(
+    baselineCreateCount,
+  );
+
+  // The sent message keeps the role token the user chose.
+  await expect(page.getByTestId("message-row").last()).toContainText("@CTO");
+
+  // KNOWN GAP: the history chip does NOT render for a role token.
+  // `resolveMentionProps` builds chips from the mentioned pubkey's relay
+  // profile aliases (displayName / name / NIP-05 local part), and the role
+  // lives on the local Persona, so `@CTO` renders as plain text even though
+  // its `p` tag resolved correctly and started the right agent. Targeting and
+  // notification are unaffected; only the visual chip is missing. Fixing it
+  // means feeding persona role aliases into the renderer, which is a
+  // perf-sensitive hot path (see MessageRow memoization notes), so it is
+  // deliberately out of scope here.
+  // Deliberately not asserted either way: pinning `toHaveCount(0)` would make
+  // this test fail the day someone fixes the renderer.
+});
+
+test("role mention: the personal name still inserts the personal name", async ({
+  page,
+}) => {
+  await installMockBridge(page, ROLE_AGENT_SEED);
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Ping @jas");
+
+  const dropdown = autocomplete(page);
+  const nameRow = dropdown.locator("button", { hasText: "Jason" });
+  await expect(nameRow).toBeVisible();
+  // The role is the alias here, so it is what the row surfaces.
+  await expect(nameRow.getByTestId("mention-alias-label")).toHaveText("CTO");
+  await input.press("Enter");
+
+  await expect(input).toHaveText("Ping @Jason ");
+});

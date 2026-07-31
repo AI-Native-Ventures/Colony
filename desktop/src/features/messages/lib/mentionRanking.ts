@@ -9,6 +9,10 @@ export type MentionCandidateForRanking =
       personaId?: string | null;
       personaName?: string | null;
       pubkey?: string;
+      /** Stable lowercase role slug, e.g. `cto`. Never displayed. */
+      roleId?: string | null;
+      /** Human role title, e.g. `CTO`. Inserted when a role alias wins. */
+      roleTitle?: string | null;
       secondaryLabel?: string | null;
     }
   | {
@@ -20,7 +24,19 @@ export type MentionCandidateForRanking =
 export type RankedMentionCandidate<T extends MentionCandidateForRanking> = {
   candidate: T;
   groupRank: number;
+  /**
+   * The text the editor inserts and keys its authoritative mention maps by.
+   * A role alias win makes this the role title, so the visible `@CTO` and the
+   * stored pubkey reference can never disagree.
+   */
   label: string;
+  /** The label this candidate would carry with no role alias involved. */
+  personalLabel: string;
+  /**
+   * True when a role ID/title alias produced the winning score AND that role
+   * title uniquely identifies this candidate among the ranked results.
+   */
+  matchedRole: boolean;
   order: number;
   score: number;
 };
@@ -65,7 +81,7 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
 ): RankedMentionCandidate<T>[] {
   const lowerQuery = query.toLowerCase();
 
-  return candidates
+  const ranked = candidates
     .map((candidate, order) => {
       const pubkeyLower =
         candidate.kind !== "block" && candidate.pubkey
@@ -81,7 +97,10 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
         activePersonaIds,
       );
 
-      const labelScores = [
+      const roleId = candidate.kind === "block" ? null : candidate.roleId;
+      const roleTitle = candidate.kind === "block" ? null : candidate.roleTitle;
+
+      const personalScores = [
         candidate.displayName,
         candidate.kind === "block"
           ? candidate.blockHandle
@@ -92,8 +111,32 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
           value ? scoreMentionCandidateLabel(value, lowerQuery) : null,
         )
         .filter((score): score is number => score !== null);
+      const personalScore =
+        personalScores.length > 0 ? Math.min(...personalScores) : null;
+
+      const roleScores = [roleId, roleTitle]
+        .map((value) =>
+          value ? scoreMentionCandidateLabel(value, lowerQuery) : null,
+        )
+        .filter((score): score is number => score !== null);
+      const roleScore = roleScores.length > 0 ? Math.min(...roleScores) : null;
+
+      // Ties go to the personal name: it is the identity the user chose, and a
+      // role alias should only take over the inserted token when it is the
+      // strictly better match for what was typed. A blank title has nothing to
+      // insert, so it can never be the winning alias.
+      // Trimmed, because this string becomes both the inserted token and the
+      // mention-map key. A padded title would insert "@  CTO  " while a draft
+      // round-trip trims the key, dropping the reference.
+      const insertableRoleTitle = roleTitle?.trim() || null;
+      const matchedRole =
+        roleScore !== null &&
+        insertableRoleTitle !== null &&
+        (personalScore === null || roleScore < personalScore);
       const labelScore =
-        labelScores.length > 0 ? Math.min(...labelScores) : null;
+        personalScore !== null && roleScore !== null
+          ? Math.min(personalScore, roleScore)
+          : (personalScore ?? roleScore);
 
       const pubkeyScore =
         candidate.kind !== "block" && candidate.pubkey
@@ -105,11 +148,50 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
           : null;
       const score = labelScore !== null ? labelScore : pubkeyScore;
 
-      return { candidate, groupRank, label, order, score };
+      return {
+        candidate,
+        groupRank,
+        label: matchedRole ? (insertableRoleTitle as string) : label,
+        personalLabel: label,
+        matchedRole,
+        order,
+        score,
+      };
     })
     .filter((item): item is RankedMentionCandidate<T> => item.score !== null)
     .sort(
       (a, b) =>
         a.groupRank - b.groupRank || a.score - b.score || a.order - b.order,
     );
+
+  return resolveCollidingRoleLabels(ranked);
+}
+
+/**
+ * Stop a shared role title from collapsing two targets onto one mention token.
+ *
+ * Nothing stops two personas holding the same role, and the draft's mention
+ * maps are keyed by the visible token. Two rows both labelled `CTO` would let
+ * a draft read `@CTO @CTO` while only one pubkey survived in the map — one
+ * target silently lost on send, which is the exact failure this feature exists
+ * to prevent. A role title is only worth inserting when it identifies exactly
+ * one candidate, so a colliding role match reverts to its personal name.
+ *
+ * Colliding *personal* names are left alone: that collision predates roles, and
+ * the picker already discloses it by showing each candidate's npub.
+ */
+function resolveCollidingRoleLabels<T extends MentionCandidateForRanking>(
+  ranked: RankedMentionCandidate<T>[],
+): RankedMentionCandidate<T>[] {
+  const labelCounts = new Map<string, number>();
+  for (const item of ranked) {
+    const key = item.label.toLowerCase();
+    labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
+  }
+
+  return ranked.map((item) => {
+    if (!item.matchedRole) return item;
+    if ((labelCounts.get(item.label.toLowerCase()) ?? 0) <= 1) return item;
+    return { ...item, label: item.personalLabel, matchedRole: false };
+  });
 }

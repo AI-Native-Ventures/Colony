@@ -22,7 +22,12 @@ export type MentionSuggestion = {
   blockAddress?: string;
   manifestId?: string;
   kind?: "identity" | "persona" | "team" | "block";
+  /** The token inserted into the draft and used to key the mention maps. */
   displayName: string;
+  /** The alias not being inserted (role title, or personal name for a role match). */
+  aliasLabel?: string | null;
+  personalName?: string | null;
+  roleTitle?: string | null;
   avatarUrl?: string | null;
   isAgent?: boolean;
   notInChannel?: boolean;
@@ -160,6 +165,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                 suggestion.kind === "team" ||
                 suggestion.isAgent ||
                 suggestion.role ||
+                suggestion.aliasLabel ||
                 suggestion.ownerLabel ||
                 suggestion.notInChannel ? (
                   <span
@@ -196,6 +202,15 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                       >
                         {suggestion.role}
                       </Badge>
+                    ) : null}
+                    {suggestion.aliasLabel ? (
+                      <span
+                        className="min-w-0 truncate"
+                        data-testid="mention-alias-label"
+                        title={suggestion.aliasLabel}
+                      >
+                        {suggestion.aliasLabel}
+                      </span>
                     ) : null}
                     {suggestion.ownerLabel || suggestion.notInChannel ? (
                       <span

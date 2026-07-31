@@ -86,6 +86,10 @@ type MockRelayAgentSeed = {
 type MockPersonaSeed = {
   id?: string;
   displayName: string;
+  /** Stable lowercase role slug; must be seeded together with `roleTitle`. */
+  roleId?: string;
+  /** Human role title an `@role` match inserts. */
+  roleTitle?: string;
   avatarUrl?: string | null;
   systemPrompt: string;
   updatedAt?: string;

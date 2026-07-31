@@ -15,9 +15,12 @@ type ActorMentionSuggestionCandidate = {
   teamId?: string;
   teamMembers?: TeamMentionMember[];
   avatarUrl?: string | null;
+  displayName?: string | null;
   isAgent: boolean;
   isMember: boolean;
   role?: ChannelRole | null;
+  roleId?: string | null;
+  roleTitle?: string | null;
   ownerPubkey?: string | null;
 };
 
@@ -28,6 +31,8 @@ export type MentionSuggestionCandidate =
 export function mapMentionCandidateToSuggestion(opts: {
   candidate: MentionSuggestionCandidate;
   label: string;
+  /** True when a role alias produced `label`; drives the alias hint shown. */
+  matchedRole?: boolean;
   channelType?: ChannelType | null;
   currentPubkey?: string | null;
   ownerProfiles?: UserProfileLookup;
@@ -38,6 +43,7 @@ export function mapMentionCandidateToSuggestion(opts: {
     channelType,
     currentPubkey,
     label,
+    matchedRole,
     ownerProfiles,
     profiles,
   } = opts;
@@ -55,6 +61,12 @@ export function mapMentionCandidateToSuggestion(opts: {
     ? formatOwnerLabel(candidate.ownerPubkey, currentPubkey, ownerProfiles)
     : null;
 
+  // Always surface the alias that is *not* being inserted, so a name/role
+  // collision can never be resolved by the visible token alone.
+  const personalName = candidate.displayName?.trim() || null;
+  const roleTitle = candidate.roleTitle?.trim() || null;
+  const aliasLabel = matchedRole ? personalName : roleTitle;
+
   return {
     pubkey: candidate.pubkey,
     personaId: candidate.personaId ?? undefined,
@@ -62,6 +74,9 @@ export function mapMentionCandidateToSuggestion(opts: {
     teamMembers: candidate.teamMembers,
     kind: candidate.kind,
     displayName: label,
+    aliasLabel: aliasLabel && aliasLabel !== label ? aliasLabel : null,
+    personalName,
+    roleTitle,
     avatarUrl:
       candidate.avatarUrl ??
       (candidate.pubkey
