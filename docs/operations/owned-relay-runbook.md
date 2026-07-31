@@ -10,7 +10,8 @@ app, and declaring the product live are separate states.
 The target is one company on one relay we operate:
 
 - the Buzz relay is the company's host-bound community and source of truth;
-- the desktop keeps the human's Nostr identity in the existing OS keyring;
+- the desktop prefers the existing OS keyring for the human's Nostr identity
+  and retains the existing mode-`600` `identity.key` availability fallback;
 - managed agents have independent Nostr identities and use owner-signed NIP-OA
   delegation;
 - a fresh owned desktop build connects directly to the reviewed relay; and
@@ -34,7 +35,7 @@ relay until the owner has approved all of the following:
 | Owner identity | One stable 64-character hex Nostr public key |
 | Edge | DNS owner and whether Cloudflare is DNS-only or proxied |
 | Relay image | An immutable `sha-...` tag or image digest |
-| Recovery | Who controls encrypted owner-key and service-state backups |
+| Recovery | Provider-specific, write-consistent backup and restore commands, recovery-point identity, storage owner, and a completed restore drill |
 | Distribution | Test audience and macOS signing/notarization status |
 
 The approved domain and owner public key are public identifiers, not secret
@@ -46,7 +47,10 @@ remain confidential.
 
 Establish or restore the owner's identity on the approved owner device before
 configuring the relay. The owner public key is infrastructure input; the
-matching private key is not.
+matching private key is not. The desktop stores the identity in the OS keyring
+when available and uses its existing mode-`600` `identity.key` fallback when a
+keyring write is unavailable. Both locations are device-side secret stores;
+neither belongs on the relay host.
 
 1. Confirm that the desktop can load the intended identity from the OS keyring.
 2. Copy the public ID from the desktop and verify it through a second trusted
@@ -78,7 +82,10 @@ Before copying production configuration to the origin, prove:
 - database, Redis, MinIO, admin, and direct relay ports are not publicly
   exposed; and
 - the approved backup destination is reachable without placing backup
-  credentials in the repository.
+  credentials in the repository; and
+- exact provider-specific commands exist for a write-consistent backup and
+  restore of Postgres, object/media data, git data, deployment secrets, and any
+  Redis state required at that recovery point.
 
 Use `deploy/compose/compose.yml` with
 `deploy/compose/compose.caddy.yml`. Do not enable
@@ -88,7 +95,13 @@ state-service and admin ports.
 The Compose bundle runs the relay, Postgres, Redis, MinIO, and persistent git
 storage on the origin. Single-node Compose is appropriate for the first owned
 company, but it is not high availability. A host or disk failure remains an
-availability event and must be covered by tested backups.
+availability event.
+
+**Deployment is blocked** until the approved provider-specific backup and
+restore commands are recorded outside the repository, use one named recovery
+point across all required state, and have completed a restore drill. The
+repository's `run.sh backup-hint` command is only an inventory reminder. It is
+not a backup implementation, a restore procedure, or evidence of recoverability.
 
 ## DNS, TLS, and WebSocket proxying
 
@@ -97,9 +110,10 @@ Choose one approved edge pattern:
 1. **DNS-only Cloudflare:** Cloudflare supplies DNS; bundled Caddy obtains and
    serves the public certificate and proxies HTTPS/WebSockets to the relay.
 2. **Proxied Cloudflare:** Cloudflare proxies the public connection. Keep
-   end-to-end TLS to bundled Caddy, use Full (strict) origin validation, and
-   confirm WebSocket support, upload limits, and cache bypass behavior for
-   relay/API traffic.
+   end-to-end TLS to bundled Caddy. Record account-level evidence that the zone
+   uses Full (strict) SSL/TLS mode, then independently verify the origin
+   certificate by connecting to the authorized origin IP with the public
+   hostname as SNI.
 
 In both patterns:
 
@@ -114,44 +128,39 @@ Cloudflare may provide DNS, edge TLS, and WebSocket proxying. It does not run th
 Buzz relay or its state. This architecture is not a Cloudflare Worker
 deployment.
 
-Do not proceed until the DNS record, origin target, TLS mode, and proxy setting
-match the approved deployment record.
+The certificate visible at `https://${OWNED_DOMAIN}` is the Cloudflare edge
+certificate when proxying is enabled. That public check does not prove
+Cloudflare-to-origin TLS. For a proxied zone, both Full (strict) configuration
+evidence and an authorized direct-origin certificate check are mandatory. For a
+DNS-only zone, record Full (strict) as not applicable and retain the direct
+origin certificate check.
+
+Do not proceed until the DNS record, origin target, edge mode, origin TLS mode,
+WebSocket support, upload limits, cache bypass behavior, and proxy setting match
+the approved deployment record.
 
 ## Compose bootstrap and configuration validation
 
-Work from the repository root at the reviewed commit. These are the exact
-local preparation commands for validating the bootstrap boundary:
+Work from the repository root at the reviewed commit. Production bootstrap
+requires the approved immutable image on the first invocation:
 
 ```bash
 : "${OWNED_DOMAIN:?Set the approved public relay domain}"
 : "${OWNER_PUBKEY:?Set the approved 64-character hex Nostr public key}"
-
-./deploy/compose/bootstrap.sh \
-  --domain "${OWNED_DOMAIN}" \
-  --owner-pubkey "${OWNER_PUBKEY}"
-
-BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh config
-```
-
-The default image is a pre-release convenience and is not eligible for public
-release. For the production `.env`, use the approved immutable image on the
-first invocation instead:
-
-```bash
-: "${OWNED_IMAGE:?Set an approved immutable image tag or digest}"
+: "${OWNED_IMAGE:?Set the approved immutable image tag or digest}"
 
 ./deploy/compose/bootstrap.sh \
   --domain "${OWNED_DOMAIN}" \
   --owner-pubkey "${OWNER_PUBKEY}" \
   --image "${OWNED_IMAGE}"
+
+BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh config >/dev/null
 ```
 
-Choose one bootstrap invocation for a given checkout. The script refuses to
-overwrite an existing `.env`. If the default-image validation flow created an
-unstarted `.env`, remove it only after confirming it contains no production
-state, then rerun bootstrap with `--image`. Never remove an `.env` belonging to
-a started deployment; restore or edit that file through the approved secret
-recovery process.
+The script refuses to overwrite an existing `.env`. Never remove an `.env`
+belonging to a started deployment; restore or edit that file through the
+approved secret recovery process. A non-TLS Compose start is permitted only for
+an isolated local/pre-edge check, never for the public origin.
 
 Before first start:
 
@@ -173,16 +182,23 @@ BUZZ_ALLOW_NIP_OA_AUTH=true
 BUZZ_AUTO_MIGRATE=true
 ```
 
-`run.sh config` renders secret-bearing Compose configuration. Review it only in
-the protected operator terminal. Redirect it when recording a pass, and never
-attach its full output to a ticket, chat, screenshot, or CI artifact. Copy the
-generated `.env` to the approved encrypted secret store before first start.
+`run.sh config` renders secret-bearing Compose configuration. Validate it with
+output redirected to `/dev/null`, or create it under `umask 077`, keep it
+mode-`600`, review it only in the protected operator terminal, and securely
+remove it immediately afterward. Never attach its full output to a ticket,
+chat, screenshot, or CI artifact. Copy the generated `.env` to the approved
+encrypted secret store before first start.
 
 ## First deployment
 
 Starting the public stack is an external change. Reconfirm origin cost, DNS,
 owner public key, immutable image, and backup ownership immediately before this
 gate.
+
+**Do not run `start`** until the provider-specific backup and restore commands
+are recorded and a restore drill has proved one write-consistent recovery point
+for Postgres, object/media data, git data, `.env`/service secrets, and any Redis
+state required by the chosen procedure.
 
 Run from the repository root on the approved origin:
 
@@ -205,12 +221,14 @@ evidence.
 ## Relay acceptance checks
 
 Capture redacted evidence for every check below. The
-[buzz-cli live testing guide](../../crates/buzz-cli/TESTING.md) defines the
-supported client commands and their expected wire behavior. Use the existing
-`run.sh add-member`, `remove-member`, and `list-members` operator commands;
-do not invent an administrative HTTP endpoint.
+[buzz-cli live testing guide](../../crates/buzz-cli/TESTING.md) is a broader
+command reference, but portions of its credential setup may lag the current
+binary. For this gate, confirm commands against `buzz --help` and
+`buzz users set-presence --help` from the same built commit. Use the existing
+`run.sh add-member`, `remove-member`, and `list-members` operator commands; do
+not invent an administrative HTTP endpoint.
 
-### Public DNS, certificate, and WebSocket
+### Public DNS, edge certificate, and WebSocket
 
 ```bash
 dig +short "${OWNED_DOMAIN}"
@@ -233,13 +251,61 @@ ws_status="$(
 test "${ws_status}" = "101"
 ```
 
-Record the resolved address, certificate subject/issuer/expiry, both health
-statuses, and the `101` result. The `curl` timeout after a successful upgrade is
-expected; the asserted HTTP status is the evidence.
+Record the resolved edge address, edge certificate
+subject/issuer/expiry/fingerprint, both health statuses, and the `101` result.
+The `curl` timeout after a successful upgrade is expected; the asserted HTTP
+status is the evidence. With Cloudflare proxying enabled, these checks prove the
+Cloudflare edge only.
 
-Then authenticate through the public `wss://` URL using the packaged desktop or
-the authenticated CLI flow. A bare `101` proves proxy transport only; the
-signed NIP-42 exchange proves relay authentication.
+### Origin certificate and edge-to-origin TLS
+
+Run this only from an authorized operator workstation that is allowed to reach
+the origin directly. Do not publish `ORIGIN_IP`.
+
+```bash
+: "${ORIGIN_IP:?Set the approved origin IP in the protected operator shell}"
+openssl s_client \
+  -connect "${ORIGIN_IP}:443" \
+  -servername "${OWNED_DOMAIN}" \
+  -verify_hostname "${OWNED_DOMAIN}" \
+  -verify_return_error </dev/null
+```
+
+The command must complete with `Verify return code: 0 (ok)`. Record a redacted
+origin certificate fingerprint and expiry. For a Cloudflare-proxied zone,
+attach separate account-level evidence that SSL/TLS mode is Full (strict).
+Neither the public edge certificate nor a Cloudflare setting alone proves the
+other half.
+
+### NIP-42 authentication through the public host
+
+Use a disposable identity whose public key is either already admitted or is
+intentionally left unprovisioned for the negative control. Supply its private
+key only from the protected operator workstation; disable shell tracing, avoid
+command-line arguments and shell history, and unset the variable immediately:
+
+```bash
+. ./bin/activate-hermit
+cargo build --release -p buzz-cli
+
+set +x
+IFS= read -r -s -p "Disposable Nostr private key: " BUZZ_PRIVATE_KEY
+printf '\n'
+export BUZZ_PRIVATE_KEY
+export BUZZ_RELAY_URL="wss://${OWNED_DOMAIN}"
+./target/release/buzz users set-presence --status online
+unset BUZZ_PRIVATE_KEY
+```
+
+`users set-presence` publishes ephemeral kind `20001` over WebSocket and
+performs NIP-42. It does not use the NIP-98 HTTP bridge. Other CLI commands that
+call `/events`, `/query`, or `/count` use NIP-98 and are not substitutes for
+this NIP-42 gate.
+
+For an admitted disposable identity, the command must return an accepted event.
+For an unprovisioned disposable identity, the same command must fail closed.
+The private key must never enter the origin, a screenshot, a log bundle, or a
+shared terminal transcript.
 
 ### Host-to-community binding
 
@@ -277,22 +343,26 @@ The response must remain generic and must not reveal another host or community.
 
 ### Human membership
 
-1. Connect with the approved owner identity through
-   `wss://${OWNED_DOMAIN}` and complete NIP-42 authentication.
+1. Connect from the approved owner device through `wss://${OWNED_DOMAIN}` and
+   complete the real desktop NIP-42 flow.
 2. Confirm `./deploy/compose/run.sh list-members` shows the same public key with
    role `owner`.
-3. Attempt the same connection with an unprovisioned test identity. It must be
+3. Run `buzz users set-presence --status online` as an unprovisioned disposable
+   identity using the secure environment-variable procedure above. It must be
    rejected by closed-relay membership.
-4. Admit one approved second-human test key through the existing invitation
-   flow or:
+4. Admit one approved disposable second-human public key through the existing
+   invitation flow or:
 
    ```bash
    ./deploy/compose/run.sh add-member "${SECOND_HUMAN_NPUB:?Set the approved test public key}"
    ```
 
-5. Confirm the test human can authenticate only on this host and appears once
-   as `member`.
-6. Remove the temporary member after the evidence is complete:
+5. Supply the matching disposable private key securely and rerun
+   `buzz users set-presence --status online`. It must now succeed through
+   NIP-42, and `list-members` must show the identity exactly once as `member`.
+6. Confirm the active host-map query still contains only `OWNED_DOMAIN`; the
+   member operation must not provision another community.
+7. Remove the temporary member after the evidence is complete:
 
    ```bash
    ./deploy/compose/run.sh remove-member "${SECOND_HUMAN_NPUB}"
@@ -310,9 +380,14 @@ restores the agent key and owner-signed NIP-OA credential:
 2. Confirm the agent authenticates to `wss://${OWNED_DOMAIN}` without adding
    the agent pubkey directly to the human membership roster.
 3. Record the owner and agent public keys and a redacted acceptance log line.
-4. In an isolated test agent only, retry with `BUZZ_AUTH_TAG` absent.
-5. Retry with a deliberately invalid test auth tag.
-6. Confirm both negative cases are rejected and do not create membership.
+4. Treat missing- and tampered-delegation rejection as a separate low-level
+   protocol gate. Run it only with a supported harness that constructs the
+   WebSocket AUTH event, attaches the selected NIP-OA tag, and records whether
+   the relay accepted or rejected that exact exchange.
+5. If no such harness is available, record both negative cases as **unproven**.
+   Do not infer relay rejection by deleting or editing `BUZZ_AUTH_TAG` in a
+   local CLI process; that does not by itself prove which credential reached
+   the relay.
 
 Never paste the valid auth tag, agent private key, owner private key, or signed
 AUTH event into evidence.
@@ -359,9 +434,22 @@ Use a clean macOS test account, a dedicated test machine, or a separately
 identified canary bundle. Never wipe or move the user's normal app data or
 keyring entries as a test shortcut.
 
+Closed membership means an arbitrary identity generated by a fresh profile
+cannot enter. Use exactly one approved admission path:
+
+- launch on the approved owner device with its existing owner identity; or
+- create a disposable identity off-origin, admit its public key first, then
+  import the matching private key into the isolated desktop profile.
+
+Import a disposable private key only on the isolated test device, from approved
+encrypted recovery material. The desktop must persist it to the OS keyring or
+its existing mode-`600` `identity.key` fallback. Never add the private key to
+relay configuration, localStorage, evidence, or shell history.
+
 Against the public relay, capture redacted screenshots and logs proving:
 
-1. A fresh launch creates exactly one local community for the owned relay.
+1. A fresh profile using one of the admitted identity paths creates exactly one
+   local community for the owned relay.
 2. No Builderlab browser login, Builderlab command, or community chooser
    appears in the default journey.
 3. The relay-local profile/welcome sequence reaches chat.
@@ -370,7 +458,8 @@ Against the public relay, capture redacted screenshots and logs proving:
 6. The agent runtime starts without a missing-private-key error.
 7. The agent receives a chat instruction and responds in the same chat.
 8. Quitting and relaunching the desktop preserves the same human public key,
-   relay URL, and agent public key.
+   relay URL, and agent public key, whether the human key is in the OS keyring
+   or the valid mode-`600` fallback.
 9. Restarting the relay preserves membership, messages, media, and agent
    authorization.
 
@@ -381,30 +470,51 @@ evidence. None substitutes for this packaged-app path.
 
 ### Backups
 
-Before launch, before every upgrade, and on the approved schedule:
+This command prints the current state inventory:
 
 ```bash
 ./deploy/compose/run.sh backup-hint
 ```
 
-Back up:
+It does not back up or restore anything. It is not sufficient to pass the
+deployment gate.
 
-- `deploy/compose/.env` in an encrypted secret store;
-- the owner recovery material outside the origin and outside `.env`;
-- Postgres with `pg_dump` or a quiesced volume snapshot;
-- MinIO bucket contents;
-- persistent git data;
-- Redis persistence if it is part of the chosen recovery point; and
-- Caddy data/config when bundled Caddy owns origin certificates.
+Before first deployment, an infrastructure owner must record exact,
+provider-specific commands for all of the following in the protected operations
+record:
 
-Take Postgres and object/git snapshots in the same maintenance window. Encrypt
-backups, restrict restore authority, define retention, and run a restore drill
-before calling backup coverage proven.
+1. Entering a write-quiescent state or using a provider mechanism that
+   guarantees cross-service write consistency.
+2. Creating a named recovery point containing:
+   - `deploy/compose/.env` and service secrets in an encrypted secret store;
+   - owner recovery material stored separately from the origin and `.env`;
+   - Postgres;
+   - MinIO/object media;
+   - persistent git data;
+   - Redis AOF/snapshot state if required by the chosen recovery contract; and
+   - Caddy data/config if it is required to restore origin TLS.
+3. Verifying checksums, encryption, retention, access control, and backup
+   completion for that recovery-point identifier.
+4. Restoring every required component into an isolated environment using the
+   exact recorded restore commands.
+5. Starting the restored relay and proving the same host mapping, membership,
+   messages, media, git content, relay/service identity from restored secrets,
+   and required Redis-backed behavior.
+
+The restore drill must use one recovery-point identifier across Postgres,
+object/media, git, secrets, and any required Redis state. Independent snapshots
+from unrelated times are not a proven recovery set. Until this drill passes,
+mark `Deployed` and `Live-proven` as fail and do not start the public relay.
+
+Repeat the write-consistent procedure on the approved schedule and before every
+upgrade. Encrypt backups, restrict restore authority, and test restores on the
+defined cadence.
 
 ### Upgrades
 
 1. Record the current source commit and running image digest.
-2. Complete and verify a current backup.
+2. Complete and verify a current write-consistent recovery point using the
+   provider-specific commands.
 3. Review migrations and release notes.
 4. Change only `BUZZ_IMAGE` to the newly approved immutable reference.
 5. Validate with
@@ -423,16 +533,25 @@ Keep the previous immutable image digest in the change record. To roll back:
 3. If it is compatible, run
    `BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh restart`.
 4. If it is not compatible, stop and use the approved database/object/git
-   restore procedure for the same recovery point.
+   and required-Redis restore commands for the same write-consistent recovery
+   point.
 5. Repeat the relay and packaged-app acceptance checks.
 
 Never use `docker compose down -v`, delete named volumes, generate a replacement
 owner identity, or point an existing user's build at an unreviewed relay as
 rollback.
 
-The desktop rollback is a new reviewed build with auto-connect disabled or with
-the previous reviewed relay URL. It must not erase the user's Nostr identity or
-local community record.
+Application-version rollback means reinstalling the previous reviewed desktop
+artifact. It does not retarget an existing profile: the embedded default relay
+and auto-connect flag are consulted only when the profile has no stored
+community. An old or differently configured build continues to use the
+existing stored community.
+
+Moving an existing profile to another relay is a separate relay/community
+migration. Use only a supported community-switching or migration flow with
+explicit user approval and its own identity, membership, data, and rollback
+proof. Do not edit local storage, delete the community, or assume that
+installing a build with a different default URL migrates it.
 
 ### Incidents
 
@@ -463,4 +582,5 @@ local community record.
 | Locally tested | pass/fail | contract, unit, and E2E commands |
 | Packaged | pass/fail | artifact path, version, embedded relay |
 | Deployed | pass/fail | image digest, public host, health checks |
+| Recovery-proven | pass/fail | recovery-point ID, exact protected procedure, restore-drill evidence |
 | Live-proven | pass/fail | fresh-install, chat, agent, restart evidence |
