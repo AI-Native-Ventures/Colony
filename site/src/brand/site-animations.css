@@ -78,4 +78,26 @@
       animation: none;
     }
   }
+
+  /* ── Pheromone trail ────────────────────────────────────────────────────
+     Dashed path behind the Story section columns, animated by scrolling the
+     dash pattern along the path. Reduced motion shows the static dashed
+     path: CSS `animation: none` is sufficient here since this is a plain
+     CSS animation (no SMIL), unlike the gait above where SMIL would need a
+     separate per-mechanism gate. */
+  .pheromone-trail__path {
+    animation: pheromone-flow 2.4s linear infinite;
+  }
+
+  @keyframes pheromone-flow {
+    to {
+      stroke-dashoffset: -64;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pheromone-trail__path {
+      animation: none;
+    }
+  }
 }
