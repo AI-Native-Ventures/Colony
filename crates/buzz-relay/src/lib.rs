@@ -6,6 +6,7 @@ mod admission;
 mod block_broker;
 /// Validation for chat-native Block event envelopes.
 pub mod blocks;
+mod company_broker;
 
 /// REST API route handlers.
 pub mod api;

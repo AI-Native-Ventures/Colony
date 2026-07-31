@@ -1263,6 +1263,101 @@ async fn excluded_kinds_are_storage_level_unsearchable() {
 /// those private hits before the relay post-filter rejects them. Catch that
 /// drift here by inserting one row per author-only kind and proving only the
 /// public kind:9 control is searchable.
+/// Colony company records carry private commercial and accounting state:
+/// what the business sells, who its clients are, expected costs, and the
+/// accounting treatment of each task. None of it may surface through NIP-50
+/// full-text search.
+///
+/// Note what this test can and cannot prove. `setup()` builds an EMPTY schema,
+/// so migration 0008 takes its emptiness branch and installs the positive
+/// allowlist, which 0014 then wraps — company kinds are already NULL there by
+/// construction. So this is a DRIFT TRIPWIRE against a future migration that
+/// widens the allowlist or reverts to a denylist, not evidence about installs
+/// that predate 0008. Populated legacy databases still carry the 0001/0005
+/// denylist form, where these kinds ARE tokenized, and are only fixed by an
+/// operator running `scripts/maintenance/nip_rs_search_allowlist.sql`.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn company_work_kinds_have_storage_null_tsvector() {
+    let (pool, schema) = setup().await;
+
+    let c = mk_community(&pool, "company-work-tripwire.example").await;
+    let token = "companywork_tripwire_marker_qwerty";
+
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        9,
+        &format!("public control — {token}"),
+        None,
+        1_700_000_000,
+    )
+    .await;
+
+    const COMPANY_WORK_KINDS: [u32; 5] = [
+        buzz_core::kind::KIND_COMPANY_PROFILE,
+        buzz_core::kind::KIND_INITIATIVE,
+        buzz_core::kind::KIND_TASK,
+        buzz_core::kind::KIND_COMPANY_ACTION,
+        buzz_core::kind::KIND_COMPANY_RECEIPT,
+    ];
+
+    for (i, &kind) in COMPANY_WORK_KINDS.iter().enumerate() {
+        insert_event(
+            &pool,
+            c,
+            rand_bytes32(),
+            rand_bytes32(),
+            kind as i32,
+            &format!("company kind:{kind} — {token}"),
+            None,
+            1_700_000_200 + i as i64,
+        )
+        .await;
+    }
+
+    let svc = SearchService::new(pool.clone());
+    let result = svc
+        .search(&SearchQuery {
+            community: c,
+            q: token.into(),
+            channel_scope: ChannelScope::Any,
+            kinds: None,
+            authors: None,
+            since: None,
+            until: None,
+            page: 1,
+            per_page: 100,
+            mode: buzz_search::SearchMode::FullText,
+        })
+        .await
+        .expect("search ok");
+
+    let kinds: Vec<i32> = result.hits.iter().map(|h| h.kind).collect();
+    assert!(
+        kinds.contains(&9),
+        "kind:9 control row MUST be searchable, got kinds={kinds:?}",
+    );
+    for &kind in &COMPANY_WORK_KINDS {
+        assert!(
+            !kinds.contains(&(kind as i32)),
+            "Colony company kind:{kind} MUST NOT be searchable — the search \
+             expression installed by the migration chain is indexing private \
+             company state. hits={kinds:?}",
+        );
+    }
+    assert_eq!(
+        result.hits.len(),
+        1,
+        "expected exactly 1 hit (the kind:9 control), got {} (kinds={kinds:?})",
+        result.hits.len(),
+    );
+
+    teardown(pool, &schema).await;
+}
+
 #[tokio::test]
 #[ignore = "requires Postgres"]
 async fn author_only_kinds_are_storage_level_unsearchable() {
