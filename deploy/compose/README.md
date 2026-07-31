@@ -7,8 +7,10 @@ the root `docker-compose.yml`, which remains local development infrastructure.
 
 ```bash
 cd deploy/compose
-cp .env.example .env
-$EDITOR .env       # replace every CHANGE_ME value
+./bootstrap.sh \
+  --domain "${OWNED_DOMAIN:?Set the approved public relay domain}" \
+  --owner-pubkey "${OWNER_PUBKEY:?Set the approved owner public key}"
+./run.sh config
 ./run.sh start
 ```
 
@@ -16,12 +18,18 @@ For a public VPS with automatic Let's Encrypt certificates:
 
 ```bash
 cd deploy/compose
+BUZZ_COMPOSE_TLS=true ./run.sh config
 BUZZ_COMPOSE_TLS=true ./run.sh start
 ```
 
-The bootstrap script should eventually replace manual `.env` editing for normal
-users. It is responsible for generating stable secrets and, optionally, an owner
-keypair.
+`bootstrap.sh` validates the public host and owner public key, generates stable
+service secrets, and writes a mode-`600` `.env`. It never generates or stores
+the human owner's private key. Use `--image` with an immutable `sha-...` tag or
+image digest before public release.
+
+For the authority gates, public-host checks, packaged-app test, backup procedure,
+and proof-state template, follow the
+[owned relay operations runbook](../../docs/operations/owned-relay-runbook.md).
 
 ## Production notes
 
@@ -46,14 +54,36 @@ keypair.
 
 Run `./run.sh backup-hint` for the backup checklist.
 
-## Validation
+## Advanced or recovery configuration
 
-Before sharing an install link publicly, verify a fresh install with:
+Manual `.env` editing is reserved for advanced deployments and recovery from an
+approved encrypted configuration backup. For a new normal deployment, use
+`bootstrap.sh`.
 
 ```bash
 cd deploy/compose
 cp .env.example .env
 $EDITOR .env
+chmod 600 .env
+! grep -q "CHANGE_ME" .env
+./run.sh config
+```
+
+Keep `RELAY_OWNER_PUBKEY` as the existing owner's 64-character hex public key.
+Keep the owner private key outside this deployment. Preserve all stable service
+secrets when reconstructing an existing environment; regenerating them changes
+relay or storage identity and is not a routine recovery action.
+
+## Local validation
+
+The direct-port path below is only for an isolated local or pre-edge check. A
+public deployment must use the complete operations runbook.
+
+```bash
+cd deploy/compose
+./bootstrap.sh \
+  --domain "${OWNED_DOMAIN:?Set the reviewed test domain}" \
+  --owner-pubkey "${OWNER_PUBKEY:?Set the reviewed test owner public key}"
 ./run.sh config
 ./run.sh start
 curl -fsS "http://127.0.0.1:$(grep -E '^BUZZ_HTTP_PORT=' .env | cut -d= -f2-)/_liveness"
