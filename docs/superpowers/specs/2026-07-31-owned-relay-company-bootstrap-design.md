@@ -1,7 +1,7 @@
 # Owned Relay Company Bootstrap Design
 
 **Date:** 2026-07-31  
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved
 
 ## Purpose
 
