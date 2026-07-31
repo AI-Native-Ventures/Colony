@@ -27,6 +27,8 @@ import {
   KIND_JOB_REQUEST,
   KIND_JOB_RESULT,
   KIND_HUDDLE_STARTED,
+  KIND_BLOCK_ACTION,
+  KIND_BLOCK_RECEIPT,
   KIND_DELETION,
   KIND_NIP29_DELETE_EVENT,
   KIND_REACTION,
@@ -43,6 +45,12 @@ import { formatTime } from "@/features/messages/lib/dateFormatters";
 // can exercise the exact same source the renderer uses.
 import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay.mjs";
 import { truncatePubkey } from "@/shared/lib/pubkey";
+import {
+  isAuthorizedBlockReceipt,
+  parseBlockAction,
+  parseBlockInstance,
+  parseBlockReceipt,
+} from "@/features/blocks/blockTags";
 
 const HEX_RE = /^[0-9a-f]+$/i;
 
@@ -129,6 +137,83 @@ function getReactionTargetId(tags: string[][]) {
   }
 
   return null;
+}
+
+function compareEventOrder(left: RelayEvent, right: RelayEvent) {
+  return left.created_at - right.created_at || left.id.localeCompare(right.id);
+}
+
+function buildBlockStateByInstance(events: RelayEvent[]) {
+  const instanceById = new Map<string, RelayEvent>();
+  const actionsByInstance = new Map<string, RelayEvent[]>();
+  const actionInstanceById = new Map<string, string>();
+  const actionById = new Map<string, RelayEvent>();
+
+  for (const event of events) {
+    if (parseBlockInstance(event.tags).ok) {
+      instanceById.set(event.id.toLowerCase(), event);
+    }
+  }
+
+  for (const event of events) {
+    if (event.kind !== KIND_BLOCK_ACTION) {
+      continue;
+    }
+    const action = parseBlockAction(event.tags);
+    if (!action.ok) {
+      continue;
+    }
+    const instanceId = action.value.instanceEventId;
+    const actions = actionsByInstance.get(instanceId) ?? [];
+    actions.push(event);
+    actionsByInstance.set(instanceId, actions);
+    actionInstanceById.set(event.id.toLowerCase(), instanceId);
+    actionById.set(event.id.toLowerCase(), event);
+  }
+
+  const newestReceiptByAction = new Map<string, RelayEvent>();
+  for (const event of events) {
+    if (event.kind !== KIND_BLOCK_RECEIPT) {
+      continue;
+    }
+    const receipt = parseBlockReceipt(event.tags);
+    if (!receipt.ok) {
+      continue;
+    }
+    const actionId = receipt.value.actionEventId;
+    const instanceId = receipt.value.instanceEventId;
+    const action = actionById.get(actionId);
+    if (
+      !action ||
+      actionInstanceById.get(actionId) !== instanceId ||
+      !isAuthorizedBlockReceipt(action, event, instanceById.get(instanceId))
+    ) {
+      continue;
+    }
+    const current = newestReceiptByAction.get(actionId);
+    if (!current || compareEventOrder(current, event) < 0) {
+      newestReceiptByAction.set(actionId, event);
+    }
+  }
+
+  const receiptsByInstance = new Map<string, RelayEvent[]>();
+  for (const [actionId, receipt] of newestReceiptByAction) {
+    const instanceId = actionInstanceById.get(actionId);
+    if (!instanceId) {
+      continue;
+    }
+    const receipts = receiptsByInstance.get(instanceId) ?? [];
+    receipts.push(receipt);
+    receiptsByInstance.set(instanceId, receipts);
+  }
+
+  for (const actions of actionsByInstance.values()) {
+    actions.sort(compareEventOrder);
+  }
+  for (const receipts of receiptsByInstance.values()) {
+    receipts.sort(compareEventOrder);
+  }
+  return { actionsByInstance, receiptsByInstance };
 }
 
 function formatMessageAuthor(
@@ -254,6 +339,8 @@ export function formatTimelineMessages(
   const visibleEvents = events.filter(
     (event) => isTimelineContentEvent(event) && !deletedEventIds.has(event.id),
   );
+  const { actionsByInstance, receiptsByInstance } =
+    buildBlockStateByInstance(events);
   const eventsById = new Map(visibleEvents.map((event) => [event.id, event]));
   const reactionPresence = new Map<
     string,
@@ -470,6 +557,16 @@ export function formatTimelineMessages(
       // Logic lives in `applyEditTagOverlay.mjs` so prod and tests share
       // a single source.
       tags: applyEditTagOverlay(event.tags, edit?.tags),
+      blockState: (() => {
+        const actions = actionsByInstance.get(event.id.toLowerCase()) ?? [];
+        const receipts = receiptsByInstance.get(event.id.toLowerCase()) ?? [];
+        return actions.length > 0 || receipts.length > 0
+          ? { actions, receipts }
+          : undefined;
+      })(),
+      blockEvent: event.tags.some((tag) => tag[0] === "block")
+        ? event
+        : undefined,
       reactions: (() => {
         const reactions = reactionsByEventId.get(event.id);
         if (!reactions) return undefined;

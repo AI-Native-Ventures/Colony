@@ -3,8 +3,8 @@
 use buzz_core::{
     block::{
         canonical_json, normalize_block_handle, validate_instance, validate_manifest,
-        BlockCatalogEntry, BlockCatalogStatus, BlockInteraction, BlockManifest,
-        BLOCK_ATTENTION_REQUIRED_TAG, BLOCK_ATTENTION_RESOLVED_TAG,
+        validate_manifest_instance, BlockCatalogEntry, BlockCatalogStatus, BlockInteraction,
+        BlockManifest, BLOCK_ATTENTION_REQUIRED_TAG, BLOCK_ATTENTION_RESOLVED_TAG,
     },
     kind::{KIND_BLOCK_ACTION, KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST, KIND_BLOCK_RECEIPT},
 };
@@ -46,7 +46,7 @@ pub enum BlockInstanceData {
     Inline(Value),
     /// Content-addressed JSON downloaded and verified by the client.
     External {
-        /// Public HTTP(S) URL.
+        /// Public HTTPS URL.
         url: String,
         /// Declared MIME type.
         mime: String,
@@ -234,17 +234,10 @@ pub fn build_block_instance(input: &BlockInstanceInput<'_>) -> Result<EventBuild
             }
         )
     });
-    if let BlockAttention::Required { decision_maker } = &input.attention {
-        if !resolves_attention {
-            return Err(SdkError::InvalidInput(
-                "attention requires a manifest-declared resolving action".to_owned(),
-            ));
-        }
-        if input.processor.as_ref() != Some(decision_maker) {
-            return Err(SdkError::InvalidInput(
-                "the attention decision maker must match the responsible processor".to_owned(),
-            ));
-        }
+    if matches!(&input.attention, BlockAttention::Required { .. }) && !resolves_attention {
+        return Err(SdkError::InvalidInput(
+            "attention requires a manifest-declared resolving action".to_owned(),
+        ));
     }
 
     let mut tags = vec![
@@ -273,15 +266,27 @@ pub fn build_block_instance(input: &BlockInstanceInput<'_>) -> Result<EventBuild
             tags.push(tag(&["e", &thread.parent_event_id.to_hex(), "", "reply"])?);
         }
     }
-    if let Some(processor) = &input.processor {
-        tags.push(tag(&["p", &processor.to_hex()])?);
-    }
-    if matches!(input.attention, BlockAttention::Required { .. }) {
-        tags.push(tag(&BLOCK_ATTENTION_REQUIRED_TAG)?);
+    match (&input.processor, &input.attention) {
+        (Some(processor), BlockAttention::Required { decision_maker }) => {
+            tags.push(tag(&["p", &decision_maker.to_hex()])?);
+            if processor != decision_maker {
+                tags.push(tag(&["block-processor", "1", &processor.to_hex()])?);
+            }
+            tags.push(tag(&BLOCK_ATTENTION_REQUIRED_TAG)?);
+        }
+        (Some(processor), BlockAttention::None) => {
+            tags.push(tag(&["p", &processor.to_hex()])?);
+        }
+        (None, BlockAttention::Required { .. }) => {
+            return Err(SdkError::InvalidInput(
+                "attention requires a responsible processor".to_owned(),
+            ));
+        }
+        (None, BlockAttention::None) => {}
     }
     match &input.data {
         BlockInstanceData::Inline(data) => {
-            validate_instance(&input.manifest.input_schema, data).map_err(block_error)?;
+            validate_manifest_instance(input.manifest, data).map_err(block_error)?;
             let data = canonical_json(data).map_err(block_error)?;
             if data.len() > INLINE_DATA_MAX_BYTES {
                 return Err(SdkError::ContentTooLarge {
@@ -298,8 +303,7 @@ pub fn build_block_instance(input: &BlockInstanceInput<'_>) -> Result<EventBuild
             byte_size,
             validation_data,
         } => {
-            validate_instance(&input.manifest.input_schema, validation_data)
-                .map_err(block_error)?;
+            validate_manifest_instance(input.manifest, validation_data).map_err(block_error)?;
             validate_external_data(url, mime, sha256, *byte_size)?;
             tags.push(tag(&[
                 "block-data-ref",
@@ -427,9 +431,9 @@ fn validate_external_data(
 ) -> Result<(), SdkError> {
     let url = Url::parse(raw_url)
         .map_err(|error| SdkError::InvalidInput(format!("invalid data URL: {error}")))?;
-    if !matches!(url.scheme(), "http" | "https") {
+    if url.scheme() != "https" || url.host_str().is_none() {
         return Err(SdkError::InvalidInput(
-            "external Block data URL must use HTTP(S)".to_owned(),
+            "external Block data URL must use HTTPS and include a host".to_owned(),
         ));
     }
     if mime.trim().is_empty() {
@@ -468,7 +472,8 @@ mod tests {
 
     use buzz_core::block::{
         BlockActionDeclaration, BlockCatalogEntry, BlockCatalogStatus, BlockExample, BlockGap,
-        BlockNode, BlockOrigin, BlockValidation, SectionNode, JSON_SCHEMA_DRAFT_2020_12,
+        BlockNode, BlockOrigin, BlockValidation, QuestionMode, QuestionNode, SectionNode,
+        JSON_SCHEMA_DRAFT_2020_12,
     };
     use nostr::{Event, Keys};
     use serde_json::{json, Map};
@@ -670,6 +675,72 @@ mod tests {
     }
 
     #[test]
+    fn blocks_instance_validates_data_backed_question_options() {
+        let mut manifest = manifest();
+        manifest.input_schema = json!({
+            "$schema": JSON_SCHEMA_DRAFT_2020_12,
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["choices"],
+            "properties": {
+                "choices": {"type": "array"}
+            }
+        });
+        manifest.tree = BlockNode::Question(QuestionNode {
+            prompt: "Choose directions".to_owned(),
+            mode: QuestionMode::MultiSelect,
+            options: vec![],
+            options_path: Some("/choices".to_owned()),
+            min_selections: 1,
+            max_selections: 12,
+            allow_custom: true,
+            require_custom_input: false,
+            submit_action: "test.submit".to_owned(),
+        });
+        manifest.primitive_versions = BTreeMap::from([("question".to_owned(), 1)]);
+        manifest.examples = vec![BlockExample {
+            name: "Directions".to_owned(),
+            data: json!({
+                "choices": [{
+                    "id": "premium",
+                    "label": "Premium editorial",
+                    "description": "Restrained typography and art direction."
+                }]
+            }),
+        }];
+        let processor = Keys::generate().public_key();
+        let build = |data| {
+            build_block_instance(&BlockInstanceInput {
+                channel_id: Uuid::nil(),
+                manifest_id: event_id(0x25),
+                instance_id: Uuid::nil(),
+                manifest: &manifest,
+                fallback: "Choose directions".to_owned(),
+                data: BlockInstanceData::Inline(data),
+                processor: Some(processor),
+                thread: None,
+                attention: BlockAttention::None,
+            })
+        };
+
+        assert!(build(json!({
+            "choices": [{
+                "id": "motion",
+                "label": "Cinematic motion",
+                "description": "Purposeful transitions and pacing."
+            }]
+        }))
+        .is_ok());
+        assert!(build(json!({
+            "choices": [{
+                "id": "motion",
+                "label": "Missing strict description"
+            }]
+        }))
+        .is_err());
+    }
+
+    #[test]
     fn blocks_external_instance_has_one_content_addressed_data_source() {
         let manifest = manifest();
         let manifest_id = event_id(0x23);
@@ -716,6 +787,25 @@ mod tests {
                 "1024".to_owned(),
             ]
         );
+
+        assert!(build_block_instance(&BlockInstanceInput {
+            channel_id: Uuid::nil(),
+            manifest_id: event_id(0x24),
+            instance_id: Uuid::nil(),
+            manifest: &manifest,
+            fallback: "Insecure external fallback".to_owned(),
+            data: BlockInstanceData::External {
+                url: "http://cdn.example.com/block.json".to_owned(),
+                mime: "application/json".to_owned(),
+                sha256: "ab".repeat(32),
+                byte_size: 1_024,
+                validation_data: json!({"title": "External"}),
+            },
+            processor: Some(Keys::generate().public_key()),
+            thread: None,
+            attention: BlockAttention::None,
+        })
+        .is_err());
     }
 
     #[test]
@@ -837,6 +927,38 @@ mod tests {
     }
 
     #[test]
+    fn blocks_separate_attention_decision_maker_from_responsible_processor() {
+        let manifest = manifest();
+        let decision_maker = Keys::generate().public_key();
+        let processor = Keys::generate().public_key();
+        let event = event(
+            build_block_instance(&BlockInstanceInput {
+                channel_id: Uuid::new_v4(),
+                manifest_id: event_id(0x3b),
+                instance_id: Uuid::new_v4(),
+                manifest: &manifest,
+                fallback: "Owner approval required".to_owned(),
+                data: BlockInstanceData::Inline(json!({})),
+                processor: Some(processor),
+                thread: None,
+                attention: BlockAttention::Required { decision_maker },
+            })
+            .expect("delegated approval instance"),
+        );
+        let tags = tag_values(&event);
+        assert!(tags
+            .iter()
+            .any(|tag| tag == &["p".to_owned(), decision_maker.to_hex()]));
+        assert!(tags.iter().any(|tag| {
+            tag == &[
+                "block-processor".to_owned(),
+                "1".to_owned(),
+                processor.to_hex(),
+            ]
+        }));
+    }
+
+    #[test]
     fn blocks_receipt_emits_resolved_attention_only_for_compatible_outcomes() {
         let manifest = manifest();
         let action_event_id = event_id(0x41);
@@ -945,20 +1067,20 @@ mod tests {
         });
         assert!(missing_fallback.is_err());
 
-        let wrong_processor = build_block_instance(&BlockInstanceInput {
+        let missing_processor = build_block_instance(&BlockInstanceInput {
             channel_id: Uuid::nil(),
             manifest_id: event_id(0x52),
             instance_id: Uuid::nil(),
             manifest: &manifest,
             fallback: "Fallback".to_owned(),
             data: BlockInstanceData::Inline(json!({})),
-            processor: Some(processor),
+            processor: None,
             thread: None,
             attention: BlockAttention::Required {
                 decision_maker: Keys::generate().public_key(),
             },
         });
-        assert!(wrong_processor.is_err());
+        assert!(missing_processor.is_err());
     }
 
     #[test]

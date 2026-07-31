@@ -693,25 +693,36 @@ export function useMentionSendFlow({
         const createdPersonaAgentPubkeySet = new Set(
           createdPersonaAgentPubkeys.map(normalizePubkey),
         );
-        const explicitMentionPubkeys = uniqueNormalizedPubkeys([
+        const selectedActorPubkeys = uniqueNormalizedPubkeys([
           ...mentions.extractMentionPubkeys(trimmed),
           ...createdPersonaAgentPubkeys,
         ]);
+        const { content: finalContent, mediaTags } = buildOutgoingMessage(
+          trimmed,
+          pendingImeta,
+          spoileredAttachmentUrls,
+        );
+        const {
+          actorPubkeys: explicitMentionPubkeys,
+          referenceTags: blockReferenceTags,
+        } = mentions.routeTypedMentionReferences(
+          finalContent,
+          selectedActorPubkeys,
+        );
         const explicitAgentPubkeys = explicitMentionPubkeys.filter(
           (pubkey) =>
             mentions.isAgentPubkey(pubkey) ||
             createdPersonaAgentPubkeySet.has(pubkey),
         );
         const pubkeys = explicitMentionPubkeys;
-        const { content: finalContent, mediaTags } = buildOutgoingMessage(
-          trimmed,
-          pendingImeta,
-          spoileredAttachmentUrls,
-        );
-        const outgoingTags = mergeOutgoingTags(
+        const ordinaryOutgoingTags = mergeOutgoingTags(
           mediaTags,
           buildCustomEmojiTags(finalContent, customEmoji),
         );
+        const outgoingTags =
+          ordinaryOutgoingTags || blockReferenceTags.length > 0
+            ? [...(ordinaryOutgoingTags ?? []), ...blockReferenceTags]
+            : undefined;
         const nonMemberPubkeys = getNonMemberMentionPubkeys(pubkeys);
         let promptNonMemberPubkeys = nonMemberPubkeys.filter(
           (pubkey) =>
@@ -775,6 +786,7 @@ export function useMentionSendFlow({
       mentions.extractMentionPubkeys,
       mentions.isAgentPubkey,
       mentions.isManagedAgentPubkey,
+      mentions.routeTypedMentionReferences,
       onPrepareSendChannel,
     ],
   );

@@ -162,6 +162,7 @@ fn local_agent() -> ManagedAgentRecord {
         pubkey: AGENT_PUBKEY.to_string(),
         name: "Local Agent".to_string(),
         persona_id: Some("persona-local".to_string()),
+        creation_request_id: None,
         private_key_nsec: "nsec1localsecret".to_string(),
         auth_tag: Some("localauthtag".to_string()),
         relay_url: "wss://relay.local".to_string(),

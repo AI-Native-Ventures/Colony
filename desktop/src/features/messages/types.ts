@@ -11,6 +11,8 @@ export type TimelineReaction = {
   }>;
 };
 
+import type { RelayEvent } from "@/shared/api/types";
+
 export type TimelineMessage = {
   id: string;
   /** Stable local key used to avoid remounting optimistic rows on send ack. */
@@ -48,5 +50,11 @@ export type TimelineMessage = {
   highlighted?: boolean;
   kind?: number;
   tags?: string[][];
+  blockState?: {
+    actions: RelayEvent[];
+    receipts: RelayEvent[];
+  };
+  /** Original signed event retained only for inline Block review surfaces. */
+  blockEvent?: RelayEvent;
   reactions?: TimelineReaction[];
 };

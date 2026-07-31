@@ -1,15 +1,21 @@
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
-export type MentionCandidateForRanking = {
-  displayName: string | null;
-  isAgent: boolean;
-  isMember: boolean;
-  kind: "identity" | "persona" | "team";
-  personaId?: string | null;
-  personaName?: string | null;
-  pubkey?: string;
-  secondaryLabel?: string | null;
-};
+export type MentionCandidateForRanking =
+  | {
+      displayName: string | null;
+      isAgent: boolean;
+      isMember: boolean;
+      kind: "identity" | "persona" | "team";
+      personaId?: string | null;
+      personaName?: string | null;
+      pubkey?: string;
+      secondaryLabel?: string | null;
+    }
+  | {
+      blockHandle: string;
+      displayName: string;
+      kind: "block";
+    };
 
 export type RankedMentionCandidate<T extends MentionCandidateForRanking> = {
   candidate: T;
@@ -23,6 +29,7 @@ function getMentionCandidateGroupRank(
   candidate: MentionCandidateForRanking,
   activePersonaIds: ReadonlySet<string>,
 ) {
+  if (candidate.kind === "block") return 2;
   if (candidate.isMember) return 0;
 
   const isRunnablePersona =
@@ -60,12 +67,15 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
 
   return candidates
     .map((candidate, order) => {
-      const pubkeyLower = candidate.pubkey
-        ? normalizePubkey(candidate.pubkey)
-        : "";
+      const pubkeyLower =
+        candidate.kind !== "block" && candidate.pubkey
+          ? normalizePubkey(candidate.pubkey)
+          : "";
       const label =
         candidate.displayName ??
-        (candidate.pubkey ? truncatePubkey(candidate.pubkey) : "agent");
+        (candidate.kind !== "block" && candidate.pubkey
+          ? truncatePubkey(candidate.pubkey)
+          : "agent");
       const groupRank = getMentionCandidateGroupRank(
         candidate,
         activePersonaIds,
@@ -73,8 +83,10 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
 
       const labelScores = [
         candidate.displayName,
-        candidate.personaName,
-        candidate.secondaryLabel,
+        candidate.kind === "block"
+          ? candidate.blockHandle
+          : candidate.personaName,
+        candidate.kind === "block" ? null : candidate.secondaryLabel,
       ]
         .map((value) =>
           value ? scoreMentionCandidateLabel(value, lowerQuery) : null,
@@ -83,13 +95,14 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
       const labelScore =
         labelScores.length > 0 ? Math.min(...labelScores) : null;
 
-      const pubkeyScore = candidate.pubkey
-        ? pubkeyLower.startsWith(lowerQuery)
-          ? 4
-          : pubkeyLower.includes(lowerQuery)
-            ? 5
-            : null
-        : null;
+      const pubkeyScore =
+        candidate.kind !== "block" && candidate.pubkey
+          ? pubkeyLower.startsWith(lowerQuery)
+            ? 4
+            : pubkeyLower.includes(lowerQuery)
+              ? 5
+              : null
+          : null;
       const score = labelScore !== null ? labelScore : pubkeyScore;
 
       return { candidate, groupRank, label, order, score };

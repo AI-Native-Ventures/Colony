@@ -327,6 +327,16 @@ async fn invoke(
             parent_event_id: event_id,
         });
     let processor = resolve_instance_processor(&resolved.manifest, raw_processor)?;
+    let attention = if resolved.manifest.validation.requires_attention {
+        let decision_maker = match client.auth_tag_owner_hex() {
+            Some(owner) => PublicKey::parse(&owner)
+                .map_err(|error| CliError::Usage(format!("invalid auth-tag owner: {error}")))?,
+            None => client.keys().public_key(),
+        };
+        BlockAttention::Required { decision_maker }
+    } else {
+        BlockAttention::None
+    };
     let instance_id = Uuid::new_v4();
     let builder = build_block_instance(&BlockInstanceInput {
         channel_id,
@@ -337,7 +347,7 @@ async fn invoke(
         data: BlockInstanceData::Inline(data),
         processor,
         thread,
-        attention: BlockAttention::None,
+        attention,
     })
     .map_err(sdk_error)?;
     let event = client.sign_event(builder)?;
@@ -602,12 +612,37 @@ fn instance_coordinates(event: &Event) -> Result<InstanceCoordinates, CliError> 
     }
     let manifest_id = parse_event_id(&block[3])?;
     let instance_id = parse_uuid(&block[4])?;
-    let processor = event
+    let explicit_processors = event
+        .tags
+        .iter()
+        .map(Tag::as_slice)
+        .filter(|tag| tag.first().map(String::as_str) == Some("block-processor"))
+        .collect::<Vec<_>>();
+    if explicit_processors.len() > 1 {
+        return Err(CliError::Usage(
+            "Block instance has duplicate processor tags".to_owned(),
+        ));
+    }
+    let explicit_processor = explicit_processors
+        .first()
+        .map(|tag| {
+            if tag.len() != 3 || tag.get(1).map(String::as_str) != Some("1") {
+                return Err(CliError::Usage(
+                    "Block instance has a malformed processor tag".to_owned(),
+                ));
+            }
+            tag.get(2)
+                .ok_or_else(|| CliError::Usage("Block instance has no processor".to_owned()))
+        })
+        .transpose()?;
+    let legacy_processor = event
         .tags
         .iter()
         .map(Tag::as_slice)
         .find(|tag| tag.first().map(String::as_str) == Some("p"))
-        .and_then(|tag| tag.get(1))
+        .and_then(|tag| tag.get(1));
+    let processor = explicit_processor
+        .or(legacy_processor)
         .ok_or_else(|| CliError::Usage("Block instance has no processor".to_owned()))
         .and_then(|value| {
             PublicKey::parse(value)
@@ -760,12 +795,12 @@ fn sdk_error(error: buzz_sdk::SdkError) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_catalog_action_request, normalize_action_write_response, render_fallback,
-        require_tested_validation, resolve_instance_processor, CATALOG_ACTION_SCHEMA,
-        CATALOG_ACTION_TTL_SECONDS,
+        build_catalog_action_request, instance_coordinates, normalize_action_write_response,
+        render_fallback, require_tested_validation, resolve_instance_processor,
+        CATALOG_ACTION_SCHEMA, CATALOG_ACTION_TTL_SECONDS,
     };
     use buzz_core::block::{parse_manifest, BlockValidation, BlockValidationState};
-    use nostr::{EventId, Keys};
+    use nostr::{EventBuilder, EventId, Keys, Kind, Tag};
     use serde_json::json;
 
     #[test]
@@ -931,5 +966,33 @@ mod tests {
                 .expect("valid processor"),
             Some(processor)
         );
+    }
+
+    #[test]
+    fn instance_coordinates_prefer_the_explicit_processor_over_attention_owner() {
+        let owner = Keys::generate().public_key();
+        let processor = Keys::generate().public_key();
+        let manifest_id = EventId::parse(&"ab".repeat(32)).expect("manifest ID");
+        let instance_id = uuid::Uuid::new_v4();
+        let event = EventBuilder::new(Kind::Custom(9), "approval")
+            .tags([
+                Tag::parse([
+                    "block",
+                    "1",
+                    "approval",
+                    &manifest_id.to_hex(),
+                    &instance_id.to_string(),
+                ])
+                .expect("block tag"),
+                Tag::parse(["p", &owner.to_hex()]).expect("owner tag"),
+                Tag::parse(["block-processor", "1", &processor.to_hex()]).expect("processor tag"),
+            ])
+            .sign_with_keys(&Keys::generate())
+            .expect("signed instance");
+
+        let coordinates = instance_coordinates(&event).expect("instance coordinates");
+        assert_eq!(coordinates.processor, processor);
+        assert_eq!(coordinates.manifest_id, manifest_id);
+        assert_eq!(coordinates.instance_id, instance_id);
     }
 }

@@ -114,17 +114,7 @@ pub async fn sign_event(
     let keys = state.signing_keys()?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let nostr_tags = tags
-            .into_iter()
-            .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let mut builder = EventBuilder::new(Kind::Custom(kind), content).tags(nostr_tags);
-        if let Some(created_at) = created_at {
-            builder = builder.custom_created_at(Timestamp::from(created_at));
-        }
-
-        let event = builder
+        let event = build_signable_event(kind, content, created_at, tags)?
             .sign_with_keys(&keys)
             .map_err(|error| format!("sign failed: {error}"))?;
 
@@ -132,6 +122,28 @@ pub async fn sign_event(
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
+}
+
+fn build_signable_event(
+    kind: u16,
+    content: String,
+    created_at: Option<u64>,
+    tags: Vec<Vec<String>>,
+) -> Result<EventBuilder, String> {
+    let nostr_tags = tags
+        .into_iter()
+        .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Block decision actions deliberately p-tag the current identity. nostr
+    // otherwise silently strips that self tag, making the relay's authority
+    // contract impossible to satisfy.
+    let mut builder = EventBuilder::new(Kind::Custom(kind), content)
+        .allow_self_tagging()
+        .tags(nostr_tags);
+    if let Some(created_at) = created_at {
+        builder = builder.custom_created_at(Timestamp::from(created_at));
+    }
+    Ok(builder)
 }
 
 #[tauri::command]
@@ -507,7 +519,7 @@ pub async fn nip44_decrypt_from_self(
 
 #[cfg(test)]
 mod nostr_identity_binding_tests {
-    use super::build_nostr_identity_binding_event;
+    use super::{build_nostr_identity_binding_event, build_signable_event};
     use crate::nostr_bind;
     use nostr::{JsonUtil, Keys};
 
@@ -517,6 +529,23 @@ mod nostr_identity_binding_tests {
             .iter()
             .map(|tag| tag.as_slice().to_vec())
             .collect()
+    }
+
+    #[test]
+    fn generic_signing_preserves_a_block_decision_makers_self_p_tag() {
+        let keys = Keys::generate();
+        let pubkey = keys.public_key().to_hex();
+        let event = build_signable_event(
+            40010,
+            "{}".to_owned(),
+            Some(1_000),
+            vec![vec!["p".to_owned(), pubkey.clone()]],
+        )
+        .expect("builder")
+        .sign_with_keys(&keys)
+        .expect("signed action");
+
+        assert!(tag_values(&event).contains(&vec!["p".to_owned(), pubkey]));
     }
 
     #[test]

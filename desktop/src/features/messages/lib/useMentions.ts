@@ -25,55 +25,39 @@ import {
 } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { AutocompleteEdit } from "./useRichTextEditor";
-import type {
-  AgentPersona,
-  ChannelMember,
-  ChannelType,
-  UserSearchResult,
-} from "@/shared/api/types";
+import type { ChannelMember, ChannelType } from "@/shared/api/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
+import {
+  deleteMentionName,
+  extractTypedActorPubkeys,
+} from "./draftMentionRefs";
 import { flushMentionDebounce } from "./flushMentionDebounce";
-import { hasMention } from "./hasMention";
 import { useDraftMentionRouting } from "./useDraftMentionRouting";
 import { rankMentionCandidates } from "./mentionRanking";
 import { mapMentionCandidateToSuggestion } from "./mentionSuggestionMapping";
 import {
+  appendUniqueMentionName,
+  extractPersonaMentionTargets,
+  formatSearchUserDisplayName,
+  formatSearchUserSecondaryLabel,
+} from "./mentionHelpers";
+import {
   buildTeamMentionCandidates,
   formatTeamMention,
   globalSearchIdentityKey,
-  type MentionCandidate,
+  type ActorMentionCandidate,
   mentionCandidateLabel,
 } from "./mentionCandidates";
+import { useBlockMentions } from "./useBlockMentions";
 const MENTION_DEBOUNCE_MS = 120;
 const MENTION_SUGGESTION_LIMIT = 50;
-export type PersonaMentionTarget = {
-  displayName: string;
-  persona: AgentPersona;
-};
+export type { PersonaMentionTarget } from "./mentionHelpers";
 type UseMentionsOptions = {
   channelType?: ChannelType | null;
 };
-function formatSearchUserDisplayName(user: UserSearchResult) {
-  return user.displayName?.trim() || user.nip05Handle?.trim() || null;
-}
-function formatSearchUserSecondaryLabel(user: UserSearchResult) {
-  const displayName = user.displayName?.trim();
-  const nip05Handle = user.nip05Handle?.trim();
-  if (displayName && nip05Handle) {
-    return nip05Handle;
-  }
-  return null;
-}
-function appendUniqueName(current: string[], name: string): string[] {
-  return current.some(
-    (candidate) => candidate.toLowerCase() === name.toLowerCase(),
-  )
-    ? current
-    : [...current, name];
-}
 export function useMentions(
   channelId: string | null,
   externalMembers?: ChannelMember[],
@@ -106,6 +90,23 @@ export function useMentions(
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
   const channelsQuery = useChannelsQuery();
+  const claimBlockMentionName = React.useCallback((displayName: string) => {
+    deleteMentionName(mentionMapRef.current, displayName);
+    deleteMentionName(personaMentionMapRef.current, displayName);
+    setSelectedAgentMentionNames((current) => {
+      const normalizedName = displayName.trim().toLowerCase();
+      const next = current.filter(
+        (name) => name.trim().toLowerCase() !== normalizedName,
+      );
+      selectedAgentMentionNamesRef.current = next;
+      return next;
+    });
+  }, []);
+  const blockMentions = useBlockMentions({
+    channels: channelsQuery.data,
+    onSelectBlockName: claimBlockMentionName,
+    setSelectedNames: setSelectedMentionNames,
+  });
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
   const managedAgentDirectoryReady =
@@ -238,10 +239,12 @@ export function useMentions(
       new Set((members ?? []).map((member) => normalizePubkey(member.pubkey))),
     [members],
   );
-  const mentionCandidates = React.useMemo<MentionCandidate[]>(() => {
-    const candidatesByPubkey = new Map<string, MentionCandidate>();
+  const mentionCandidates = React.useMemo<ActorMentionCandidate[]>(() => {
+    const candidatesByPubkey = new Map<string, ActorMentionCandidate>();
 
-    const addCandidate = (candidate: MentionCandidate & { pubkey: string }) => {
+    const addCandidate = (
+      candidate: ActorMentionCandidate & { pubkey: string },
+    ) => {
       const pubkey = normalizePubkey(candidate.pubkey);
       if (isArchivedDiscovery(pubkey)) {
         return;
@@ -386,7 +389,7 @@ export function useMentions(
       }
     }
 
-    const personaCandidates: MentionCandidate[] = activePersonas
+    const personaCandidates: ActorMentionCandidate[] = activePersonas
       .filter((persona) => !managedAgentPersonaIds.has(persona.id))
       .map((persona) => ({
         kind: "persona" as const,
@@ -439,8 +442,14 @@ export function useMentions(
         personasQuery.data ?? [],
         mentionCandidates,
       ),
+      ...blockMentions.candidates,
     ],
-    [mentionCandidates, personasQuery.data, teamsQuery.data],
+    [
+      blockMentions.candidates,
+      mentionCandidates,
+      personasQuery.data,
+      teamsQuery.data,
+    ],
   );
 
   const ownerPubkeys = React.useMemo(
@@ -464,8 +473,9 @@ export function useMentions(
     for (const candidate of mentionCandidatesWithTeams) {
       for (const name of [
         candidate.displayName,
-        candidate.personaName,
-        candidate.secondaryLabel,
+        candidate.kind === "block" ? candidate.blockHandle : null,
+        candidate.kind === "block" ? null : candidate.personaName,
+        candidate.kind === "block" ? null : candidate.secondaryLabel,
       ]) {
         const trimmed = name?.trim();
         if (trimmed && !seen.has(trimmed.toLowerCase())) {
@@ -615,6 +625,19 @@ export function useMentions(
       }
 
       const displayName = suggestion.displayName;
+      const startIndex =
+        flushedMentionStartIndexRef.current ?? mentionStartIndex;
+      flushedMentionStartIndexRef.current = null;
+      const blockInsertion = blockMentions.insertSuggestion(suggestion);
+      if (blockInsertion.isBlock) {
+        setMentionQuery(null);
+        setMentionSelectedIndex(0);
+        return {
+          replaceFromOffset: startIndex,
+          replaceToOffset: selectionEnd,
+          insertText: blockInsertion.insertText,
+        };
+      }
       const teamMembers =
         suggestion.kind === "team" ? suggestion.teamMembers : null;
       const insertText = teamMembers
@@ -625,6 +648,10 @@ export function useMentions(
       const personaMentions = personaMentionMapRef.current;
       const selectedMentions = teamMembers ?? [suggestion];
       for (const selected of selectedMentions) {
+        deleteMentionName(
+          blockMentions.blockMentionMapRef.current,
+          selected.displayName,
+        );
         if (selected.kind === "persona" && selected.personaId) {
           personaMentions.set(selected.displayName, selected.personaId);
           mentions.delete(selected.displayName);
@@ -667,16 +694,18 @@ export function useMentions(
       setMentionQuery(null);
       setMentionSelectedIndex(0);
 
-      const startIndex =
-        flushedMentionStartIndexRef.current ?? mentionStartIndex;
-      flushedMentionStartIndexRef.current = null;
       return {
         replaceFromOffset: startIndex,
         replaceToOffset: selectionEnd,
         insertText,
       };
     },
-    [knownAgentPubkeys, mentionStartIndex],
+    [
+      blockMentions.blockMentionMapRef,
+      blockMentions.insertSuggestion,
+      knownAgentPubkeys,
+      mentionStartIndex,
+    ],
   );
 
   const registerMentionPubkey = React.useCallback(
@@ -686,23 +715,24 @@ export function useMentions(
         return;
       }
 
+      deleteMentionName(blockMentions.blockMentionMapRef.current, trimmedName);
       mentionMapRef.current.set(trimmedName, pubkey);
       personaMentionMapRef.current.delete(trimmedName);
       trimMapToSize(mentionMapRef.current, 200);
 
       setSelectedMentionNames((current) =>
-        appendUniqueName(current, trimmedName),
+        appendUniqueMentionName(current, trimmedName),
       );
 
       if (options?.isAgent) {
         setSelectedAgentMentionNames((current) => {
-          const next = appendUniqueName(current, trimmedName);
+          const next = appendUniqueMentionName(current, trimmedName);
           selectedAgentMentionNamesRef.current = next;
           return next;
         });
       }
     },
-    [],
+    [blockMentions.blockMentionMapRef],
   );
 
   const insertResolvedMention = React.useCallback(
@@ -792,66 +822,24 @@ export function useMentions(
   );
 
   const extractMentionPubkeys = React.useCallback(
-    (text: string): string[] => {
-      const pubkeys: string[] = [];
-      const selectedDisplayNames = new Set(
-        [
-          ...mentionMapRef.current.keys(),
-          ...personaMentionMapRef.current.keys(),
-        ].map((name) => name.trim().toLowerCase()),
-      );
-
-      for (const [displayName, pubkey] of mentionMapRef.current) {
-        if (hasMention(text, displayName)) {
-          pubkeys.push(pubkey);
-        }
-      }
-
-      for (const candidate of mentionCandidates) {
-        if (!candidate.pubkey) {
-          continue;
-        }
-        if (!candidate.isMember) {
-          continue;
-        }
-        if (pubkeys.includes(candidate.pubkey)) {
-          continue;
-        }
-        const name = candidate.displayName;
-        if (name && selectedDisplayNames.has(name.trim().toLowerCase())) {
-          continue;
-        }
-        if (name && hasMention(text, name)) {
-          pubkeys.push(candidate.pubkey);
-        }
-      }
-
-      return [...new Set(pubkeys)];
-    },
-    [mentionCandidates],
+    (text: string): string[] =>
+      extractTypedActorPubkeys(
+        text,
+        mentionMapRef.current,
+        mentionCandidates,
+        blockMentions.blockMentionMapRef.current,
+        personaMentionMapRef.current.keys(),
+      ),
+    [blockMentions.blockMentionMapRef, mentionCandidates],
   );
 
   const extractMentionPersonas = React.useCallback(
-    (text: string): PersonaMentionTarget[] => {
-      const targets: PersonaMentionTarget[] = [];
-      const seen = new Set<string>();
-
-      for (const [displayName, personaId] of personaMentionMapRef.current) {
-        if (seen.has(personaId) || !hasMention(text, displayName)) {
-          continue;
-        }
-
-        const persona = activePersonaById.get(personaId);
-        if (!persona) {
-          continue;
-        }
-
-        targets.push({ displayName, persona });
-        seen.add(personaId);
-      }
-
-      return targets;
-    },
+    (text: string) =>
+      extractPersonaMentionTargets(
+        text,
+        personaMentionMapRef.current,
+        activePersonaById,
+      ),
     [activePersonaById],
   );
 
@@ -870,15 +858,17 @@ export function useMentions(
     cancelMentionAutocomplete();
     mentionMapRef.current.clear();
     personaMentionMapRef.current.clear();
+    blockMentions.clear();
     selectedAgentMentionNamesRef.current = [];
     setSelectedMentionNames([]);
     setSelectedAgentMentionNames([]);
-  }, [cancelMentionAutocomplete]);
+  }, [blockMentions.clear, cancelMentionAutocomplete]);
 
   const { getDraftMentionRefs, restoreDraftMentionRefs } =
     useDraftMentionRouting({
       mentionMapRef,
       personaMentionMapRef,
+      blockMentionMapRef: blockMentions.blockMentionMapRef,
       selectedAgentNamesRef: selectedAgentMentionNamesRef,
       cancelAutocomplete: cancelMentionAutocomplete,
       setSelectedNames: setSelectedMentionNames,
@@ -971,6 +961,8 @@ export function useMentions(
   return {
     cancelMentionAutocomplete,
     clearMentions,
+    extractBlockReferenceTags: blockMentions.extractReferenceTags,
+    routeTypedMentionReferences: blockMentions.routeReferences,
     extractMentionPersonas,
     extractMentionPubkeys,
     getDraftMentionRefs,

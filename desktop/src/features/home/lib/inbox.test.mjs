@@ -594,3 +594,41 @@ test("nested-anchor: old selected event stays resolvable by conversationId after
   // The new representative is the latest reply.
   assert.equal(inboxItem.id, LATEST_EVENT_ID);
 });
+
+test("persisted Agent Proposals remain exact actionable conversation rows", () => {
+  const proposalEventId = "a".repeat(64);
+  const proposal = item({
+    id: proposalEventId,
+    content: "Developer proposed hiring Researcher.",
+    tags: [
+      ["h", CHANNEL_ID],
+      ["p", "owner"],
+      ["block", "1", "agent-proposal", "b".repeat(64), "request-id"],
+      ["block-attention", "1", "required"],
+    ],
+  });
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({
+      // The production projection intentionally returns an actionable kind-9
+      // owner mention in both sections. Needs Action must win when the desktop
+      // collapses those two copies into one conversation row.
+      mentions: [proposal],
+      needsAction: [proposal],
+    }),
+  });
+
+  assert.equal(inboxItem.id, proposalEventId);
+  assert.equal(inboxItem.conversationId, proposalEventId);
+  assert.equal(inboxItem.item.id, proposalEventId);
+  assert.equal(inboxItem.item.category, "needs_action");
+  assert.deepEqual(inboxItem.categories, ["needs_action", "mention"]);
+  assert.equal(inboxItem.groupItems.length, 1);
+  assert.equal(inboxItem.isActionRequired, true);
+  assert.equal(inboxItem.categoryLabel, "Needs Action");
+  assert.equal(inboxItem.preview, "Developer proposed hiring Researcher.");
+  assert.deepEqual(getInboxTypeLabel(inboxItem), {
+    text: "Needs action in",
+    channelLabel: "buzz-bugs",
+  });
+});

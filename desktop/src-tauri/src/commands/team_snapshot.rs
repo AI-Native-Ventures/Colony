@@ -555,6 +555,7 @@ pub async fn confirm_team_snapshot_import(
             display_name: None,
             slug: None,
             persona_id: Some(definition.id.clone()),
+            creation_request_id: None,
             private_key_nsec: private_key_nsec.clone(),
             auth_tag: auth_tag.clone(),
             relay_url: String::new(),

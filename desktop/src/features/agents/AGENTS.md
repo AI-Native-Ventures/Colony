@@ -147,6 +147,26 @@ with a TypeScript lookup table or an id comparison in a component.
    themselves. Never synthesize a run location a surface doesn't have. Don't
    expose `respond-to`, `allowlist`, Nostr, or harness jargon in primary UI
    copy.
+12. **Agent Proposals are durable chat Blocks, never observer-frame
+    authorization.** An agent proposes creation or an update as a persisted
+    kind-9 `agent-proposal` Block with required attention; the owner responds
+    with a signed kind-40010 action, and the owner-side Core broker publishes a
+    kind-40011 receipt. Kind 24200 observer frames remain telemetry/archive
+    input only and must not open or authorize an agent-management dialog.
+    Closing a proposal review is local presentation state: only the explicit
+    Decline action resolves it. Proposal data, signed actions, receipts, and
+    public agent projections never contain secrets. Provider credentials cross
+    only the separate local IPC argument. `creation_request_id` is a local
+    managed-agent recovery marker and must stay out of relay events, team
+    snapshots, and ACP-visible output. The broker must replay pending
+    owner-targeted actions after startup/reconnect, deduplicate by action
+    receipt, and leave failed outcomes unresolved so an explicit retry can
+    recover deterministic create state.
+    Single-flight execution is process-lifetime and keyed by owner plus action
+    event; React cleanup must never clear a still-running action. The
+    `creation_request_id` uniqueness check is repeated under the same managed
+    agent store lock as the final record push and save — an earlier recovery
+    read alone is not a concurrency boundary.
 
 ## The tests that enforce this
 
@@ -167,12 +187,20 @@ with a TypeScript lookup table or an id comparison in a component.
 - `lib/agentAccessWarning.test.mjs` — every mode × run-location copy variant
   plus both resolvers, including unknown-reads-as-local and
   blank-`runOn`-is-not-a-provider.
+- `../blocks/agentProposal.test.mjs` — strict no-secret proposal/action
+  contracts, persisted-review selection, signed owner/signer/channel authority,
+  and the observer-frame authorization regression.
+- `../home/lib/inbox.test.mjs` — persisted Agent Proposals remain exact
+  conversation rows in Needs Action.
 - `desktop/tests/e2e/onboarding-agent-defaults.spec.ts` — onboarding behavior
   acceptance coverage for readiness, failure states, defaults, navigation,
   successful-empty vs failed optional-model discovery, and persistence races.
 - Rust: `runtime_metadata_env_vars` tests pin spawn-time key application.
 - Rust: persona sharing/retention tests pin relay+owner scoping, durable
   enqueue errors, relay rejection/unavailability, and accepted publication.
+- Rust: `commands::agent_proposals` tests pin strict no-secret parsing,
+  deterministic crash recovery, separate provider config, and local-only
+  `creation_request_id` projection.
 
 ## Keep this file true
 

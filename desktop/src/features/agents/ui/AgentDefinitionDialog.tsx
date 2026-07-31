@@ -105,12 +105,10 @@ type AgentDefinitionDialogProps = {
     input: CreatePersonaInput | UpdatePersonaInput,
     options: AgentDefinitionSubmitOptions,
   ) => Promise<unknown>;
-  /** Publishes saved changes when the edited agent is shared in the catalog. */
   publishCatalogUpdatesOnSave?: boolean;
-  /** Rendered below the form fields in create mode only ("Where to run"). */
   createRunSection?: React.ReactNode;
-  /** Extra create-mode submit gate (e.g. incomplete provider config). */
   createSubmitBlocked?: boolean;
+  secondaryAction?: { label: string; onSelect: () => void };
 };
 
 export type AgentDefinitionSubmitOptions = {
@@ -137,6 +135,7 @@ export function AgentDefinitionDialog({
   publishCatalogUpdatesOnSave = false,
   createRunSection,
   createSubmitBlocked = false,
+  secondaryAction,
 }: AgentDefinitionDialogProps) {
   const [displayName, setDisplayName] = React.useState("");
   const [aiDefaultsOpen, setAiDefaultsOpen] = React.useState(false);
@@ -756,6 +755,7 @@ export function AgentDefinitionDialog({
             publishesCatalogUpdates={
               publishCatalogUpdatesOnSave && hasUserChanges
             }
+            secondaryAction={secondaryAction}
             submitBlockReason={null}
             submitLabel={submitLabel}
           />

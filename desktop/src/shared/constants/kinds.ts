@@ -20,6 +20,10 @@ export const KIND_STREAM_MESSAGE_EDIT = 40003;
 export const KIND_CHANNEL_THREAD_SUMMARY = 39005;
 export const KIND_CHANNEL_WINDOW_BOUNDS = 39006;
 export const KIND_STREAM_MESSAGE_DIFF = 40008;
+export const KIND_BLOCK_ACTION = 40010;
+export const KIND_BLOCK_RECEIPT = 40011;
+export const KIND_BLOCK_MANIFEST = 40012;
+export const KIND_BLOCK_CATALOG_ENTRY = 30178;
 export const KIND_REMINDER = 40007;
 export const KIND_SYSTEM_MESSAGE = 40099;
 export const KIND_JOB_REQUEST = 43001;
@@ -92,6 +96,8 @@ export const CHANNEL_EVENT_KINDS = [
   ...CHANNEL_MESSAGE_EVENT_KINDS,
   40001, // legacy: pre-migration stream messages
   KIND_STREAM_MESSAGE_EDIT, // 40003 — message edits
+  KIND_BLOCK_ACTION, // 40010 — signed Block actions overlay their instance
+  KIND_BLOCK_RECEIPT, // 40011 — verified Block outcomes overlay their instance
   KIND_STREAM_MESSAGE_DIFF, // 40008 — message diffs
   KIND_SYSTEM_MESSAGE, // 40099 — system messages (join, leave, etc.)
   KIND_HUDDLE_STARTED, // 48100 — visible huddle session card
@@ -114,6 +120,8 @@ export const CHANNEL_AUX_EVENT_KINDS = [
   KIND_REACTION, // 7 — NIP-25 reactions
   KIND_NIP29_DELETE_EVENT, // 9005 — NIP-29 / Buzz-native deletions
   KIND_STREAM_MESSAGE_EDIT, // 40003 — message edits
+  KIND_BLOCK_ACTION, // 40010 — signed Block actions
+  KIND_BLOCK_RECEIPT, // 40011 — Block action receipts
 ] as const;
 
 // Visible content kinds the main timeline renders as their own rows. Mirrors

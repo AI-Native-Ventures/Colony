@@ -2,6 +2,7 @@ import * as React from "react";
 
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import type {
+  DraftBlockMentionRef,
   DraftMentionRef,
   DraftState,
 } from "@/features/messages/lib/useDrafts";
@@ -9,6 +10,10 @@ import type {
 type UseDraftPersistLifecycleParams = {
   effectiveDraftKey: string | null | undefined;
   channelId: string | null | undefined;
+  /** Used only when this key has no saved draft. */
+  initialContent?: string;
+  /** Typed references paired with `initialContent`. */
+  initialBlockReference?: DraftBlockMentionRef;
   /** Load a saved draft from the store. */
   loadDraft: (draftKey: string) => DraftState | undefined;
   /** Persist the current draft to the store (called in effect cleanup). */
@@ -74,6 +79,8 @@ type UseDraftPersistLifecycleParams = {
 export function useDraftPersistLifecycle({
   effectiveDraftKey,
   channelId,
+  initialContent,
+  initialBlockReference,
   loadDraft,
   persistDraft,
   getMentionRefs,
@@ -111,8 +118,15 @@ export function useDraftPersistLifecycle({
       setPendingImeta(saved.pendingImeta);
       setSpoileredAttachmentUrls(new Set(saved.spoileredAttachmentUrls));
     } else {
-      clearContent();
-      restoreMentionRefs([]);
+      if (initialContent !== undefined || initialBlockReference) {
+        setContent(initialContent ?? "");
+        restoreMentionRefs(
+          initialBlockReference ? [initialBlockReference] : [],
+        );
+      } else {
+        clearContent();
+        restoreMentionRefs([]);
+      }
       // Same synchronous snapshot on the empty path.
       pendingImetaForPersistRef.current = [];
       setPendingImeta([]);

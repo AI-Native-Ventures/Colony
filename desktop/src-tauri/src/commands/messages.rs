@@ -1,8 +1,10 @@
 use nostr::{Event, EventId, Keys, PublicKey};
 use tauri::{AppHandle, State};
 
+mod feed;
 mod forum;
 
+use feed::build_feed_projection_filter;
 use forum::{forum_message_from_event, forum_reply_from_event};
 
 use crate::{
@@ -66,37 +68,11 @@ pub async fn get_feed(
         keys.public_key().to_hex()
     };
 
-    // Mentions: messages that reference me via #p.
-    let mut mention_filter = serde_json::json!({
-        "kinds": [
-            9,
-            40002,
-            1,
-            45001,
-            45003,
-            buzz_core_pkg::kind::KIND_GIT_PULL_REQUEST,
-            buzz_core_pkg::kind::KIND_GIT_PR_UPDATE,
-            buzz_core_pkg::kind::KIND_GIT_ISSUE,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_OPEN,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_MERGED,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_CLOSED,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_DRAFT,
-        ],
-        "#p": [my_pubkey],
-        "limit": cap,
-    });
-    if let Some(s) = since {
-        mention_filter["since"] = serde_json::json!(s);
-    }
-    // Needs-action: workflow approval-request events sent to me.
-    let mut approval_filter = serde_json::json!({
-        "kinds": [46010, 46011, 46012],
-        "#p": [my_pubkey],
-        "limit": 20,
-    });
-    if let Some(s) = since {
-        approval_filter["since"] = serde_json::json!(s);
-    }
+    // Use the relay's durable feed projection instead of reconstructing it
+    // from a kind allowlist. `needs_action` includes unresolved kind-9 Block
+    // attention and excludes it only after a valid resolving receipt.
+    let mention_filter = build_feed_projection_filter(&my_pubkey, "mentions", cap, since);
+    let needs_action_filter = build_feed_projection_filter(&my_pubkey, "needs_action", cap, since);
 
     let mention_events = if want_mentions {
         query_relay(&state, &[mention_filter])
@@ -106,7 +82,7 @@ pub async fn get_feed(
         Vec::new()
     };
     let approval_events = if want_needs_action {
-        query_relay(&state, &[approval_filter])
+        query_relay(&state, &[needs_action_filter])
             .await
             .unwrap_or_default()
     } else {
@@ -535,17 +511,23 @@ pub async fn send_channel_message(
     media_tags: Option<Vec<Vec<String>>>,
     emoji_tags: Option<Vec<Vec<String>>>,
     mention_tags: Option<Vec<Vec<String>>>,
+    reference_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<SendChannelMessageResponse, String> {
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
+    // Thread resolution and submission must observe one community. Without
+    // this lease, `apply_workspace` could swap the relay and signing identity
+    // after the parent lookup but before the reply is published.
+    let _community_operation_guard = state.community_operation_lock.read().await;
     let mentions = mention_pubkeys.unwrap_or_default();
     let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
     let media = media_tags.unwrap_or_default();
     let emoji = emoji_tags.unwrap_or_default();
     let mention_refs_only = mention_tags.unwrap_or_default();
+    let block_references = reference_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
 
     let mut resolved_root: Option<String> = None;
@@ -557,7 +539,14 @@ pub async fn send_channel_message(
             &mention_refs,
             &media,
             &mention_refs_only,
-        )?,
+        )
+        .and_then(|builder| {
+            if block_references.is_empty() {
+                Ok(builder)
+            } else {
+                Err("Block reference tags are only supported on stream messages".to_owned())
+            }
+        })?,
         buzz_core_pkg::kind::KIND_FORUM_COMMENT => {
             let parent_id = parent_event_id
                 .as_deref()
@@ -571,7 +560,14 @@ pub async fn send_channel_message(
                 &mention_refs,
                 &media,
                 &mention_refs_only,
-            )?
+            )
+            .and_then(|builder| {
+                if block_references.is_empty() {
+                    Ok(builder)
+                } else {
+                    Err("Block reference tags are only supported on stream messages".to_owned())
+                }
+            })?
         }
         _ => {
             let thread_ref = match parent_event_id.as_deref() {
@@ -582,7 +578,7 @@ pub async fn send_channel_message(
                 }
                 None => None,
             };
-            events::build_message(
+            events::build_message_with_reference_tags(
                 channel_uuid,
                 content.trim(),
                 thread_ref.as_ref(),
@@ -590,6 +586,7 @@ pub async fn send_channel_message(
                 &media,
                 &emoji,
                 &mention_refs_only,
+                &block_references,
             )?
         }
     };

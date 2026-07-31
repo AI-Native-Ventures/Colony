@@ -43,6 +43,7 @@ import { usePersonaSync } from "@/features/agents/lib/usePersonaSync";
 import { useAgentObserverIngestion } from "@/features/agents/useAgentObserverIngestion";
 import { AgentManagementDialogs } from "@/features/agents/ui/AgentManagementDialogs";
 import { RequestedAgentCreateDialogs } from "@/features/agents/ui/RequestedAgentCreateDialogs";
+import { useAgentProposalBrokerForCommunity } from "@/features/blocks/useAgentProposalBroker";
 import {
   usePresenceSession,
   usePresenceSubscription,
@@ -124,6 +125,7 @@ export function AppShell() {
   useManagedAgentRuntimeReconciliation(communitiesHook.communities); // sync storage snapshot
   const {
     goAgents,
+    goBlocks,
     goChannel,
     goHome,
     goNewMessage,
@@ -159,7 +161,6 @@ export function AppShell() {
     ? locationSearchSection
     : DEFAULT_SETTINGS_SECTION;
   const startupReady = useDeferredStartup();
-
   const identityQuery = useIdentityQuery();
   const { mutedChannelIds, muteChannel, unmuteChannel } = useChannelMutes(
     identityQuery.data?.pubkey,
@@ -182,6 +183,7 @@ export function AppShell() {
   // relay-owned agents join automatically once identity arrives. Adding a
   // guard here would drop managed-agent coverage during startup.
   useAgentObserverIngestion();
+  useAgentProposalBrokerForCommunity(communitiesHook);
   // Kind 24200 is relay-ephemeral, so reconciliation runs eagerly (not
   // deferred) and unconditionally repairs the DB subscription on internal
   // builds — otherwise frames emitted before the listener opens are lost.
@@ -253,7 +255,6 @@ export function AppShell() {
       return;
     }
     hasRestoredCommunityDestinationRef.current = true;
-
     // Restoration belongs to an explicit community transition. Cold boot and
     // reconnect remounts must preserve the route the user explicitly opened.
     if (!consumePendingCommunityRestore(activeCommunityId)) {
@@ -620,7 +621,6 @@ export function AppShell() {
     unreadChannelIds,
     unreadChannelNotificationCount,
   });
-
   // Dispatch `buzz://message` deep links into the router.
   useMessageDeepLinks();
 
@@ -876,6 +876,7 @@ export function AppShell() {
                             await goChannel(directMessage.id);
                           }}
                           onSelectAgents={() => void goAgents()}
+                          onSelectBlocks={() => void goBlocks()}
                           onSelectChannel={(channelId) =>
                             void goChannel(channelId)
                           }

@@ -25,6 +25,8 @@ import {
 } from "@/shared/api/customEmoji";
 import {
   KIND_AGENT_OBSERVER_FRAME,
+  KIND_BLOCK_ACTION,
+  KIND_BLOCK_RECEIPT,
   KIND_CHANNEL_THREAD_SUMMARY,
   KIND_CHANNEL_WINDOW_BOUNDS,
   KIND_DM_VISIBILITY,
@@ -58,6 +60,11 @@ import type {
   RuntimeFileConfigSubset,
 } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import {
+  isAuthorizedBlockReceipt,
+  parseBlockInstance,
+  parseBlockReceipt,
+} from "@/features/blocks/blockTags";
 
 type TestIdentity = {
   privateKey: string;
@@ -146,6 +153,34 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /** Signed Block manifests/catalog events served by the mock relay. */
+    blockEvents?: RelayEvent[];
+    /** Signed Block timeline events seeded before the app subscribes. */
+    blockTimelineEvents?: Array<{
+      channelName: string;
+      event: RelayEvent;
+    }>;
+    /** Native external-Block fetch outcomes keyed by exact HTTPS URL. */
+    blockDataResponses?: Record<
+      string,
+      { body?: string; bytes?: number[]; error?: string }
+    >;
+    /** Reject successive kind-40010 publications, then resume. */
+    blockActionPublishErrors?: string[];
+    /** Delay kind-40010 relay acknowledgements after live delivery. */
+    blockActionPublishDelayMs?: number;
+    /** Outcomes for successive trusted local Agent Proposal executions. */
+    agentProposalExecutionOutcomes?: Array<
+      | {
+          status: "applied";
+          definition_id: string;
+          agent_pubkey: string;
+          recovered: boolean;
+        }
+      | { status: "failed"; safe_message: string }
+    >;
+    /** Use the active real E2E identity in the standard mock channels. */
+    activeIdentityInDefaultChannels?: boolean;
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -1021,6 +1056,11 @@ declare global {
       /** 64-hex id required for the event to be a valid reaction target. */
       id?: string;
     }) => RelayEvent;
+    /** Insert an already-signed event into a channel and live-deliver it. */
+    __BUZZ_E2E_EMIT_MOCK_EVENT__?: (input: {
+      channelName: string;
+      event: RelayEvent;
+    }) => RelayEvent;
     /** Prepend `count` synthetic older messages to a channel's mock store so
      *  an older-history fetch has something to paginate. Mirrors how the real
      *  relay backfills history. Returns the created events. */
@@ -1048,6 +1088,9 @@ declare global {
       oldId: string,
       item: RawFeedItem,
     ) => RawFeedItem;
+    __BUZZ_E2E_REPLACE_MOCK_BLOCK_EVENTS__?: (events: RelayEvent[]) => number;
+    __BUZZ_E2E_CLEAR_MOCK_CHANNEL__?: (channelName: string) => boolean;
+    __BUZZ_E2E_PUBLISHED_EVENTS__?: RelayEvent[];
     __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
       content: string;
       createdAt?: number;
@@ -1208,6 +1251,8 @@ const CHANNEL_WINDOW_AUX_KINDS = new Set([
   KIND_DELETION,
   KIND_NIP29_DELETION,
   KIND_STREAM_MESSAGE_EDIT,
+  KIND_BLOCK_ACTION,
+  KIND_BLOCK_RECEIPT,
 ]);
 const CHANNEL_WINDOW_AUX_DELETION_KINDS = new Set([
   KIND_DELETION,
@@ -2803,6 +2848,7 @@ const mockChannels: MockChannel[] = [
 ];
 
 const mockMessages = new Map<string, RelayEvent[]>();
+const mockBlockEvents: RelayEvent[] = [];
 const mockUserStatuses: RelayEvent[] = [];
 const mockReminderEvents: RelayEvent[] = [];
 const mockPersonaEvents: RelayEvent[] = [];
@@ -2813,6 +2859,57 @@ let mockClosedChannelLiveSubscription = false;
 const realSockets = new Map<number, WebSocket>();
 let mockManagedAgents: MockManagedAgent[] = [];
 let mockManagedAgentRuntimes: MockManagedAgentRuntimeRow[] = [];
+
+function resetMockBlockEvents(config: E2eConfig | undefined) {
+  mockBlockEvents.length = 0;
+  for (const event of config?.mock?.blockEvents ?? []) {
+    mockBlockEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
+}
+
+function mockEventMatchesFilter(
+  event: RelayEvent,
+  filter: MockFilter,
+): boolean {
+  const authors = filter.authors?.map((author) => author.toLowerCase());
+  if (filter.ids && !filter.ids.includes(event.id)) return false;
+  if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
+  if (authors && !authors.includes(event.pubkey.toLowerCase())) return false;
+  if (filter.since !== undefined && event.created_at < filter.since) {
+    return false;
+  }
+  if (filter.until !== undefined && event.created_at > filter.until) {
+    return false;
+  }
+  for (const [tagName, values] of [
+    ["a", filter["#a"]],
+    ["d", filter["#d"]],
+    ["e", filter["#e"]],
+    ["h", filter["#h"]],
+    ["p", filter["#p"]],
+  ] as const) {
+    if (
+      values &&
+      !event.tags.some((tag) => tag[0] === tagName && values.includes(tag[1]))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function filterMockBlockEvents(filter: MockFilter): RelayEvent[] {
+  return mockBlockEvents
+    .filter((event) => mockEventMatchesFilter(event, filter))
+    .sort(
+      (left, right) =>
+        right.created_at - left.created_at || left.id.localeCompare(right.id),
+    )
+    .slice(0, filter.limit ?? 500);
+}
 
 // Mutable `save_subscriptions` table mirror — TEST-ONLY.
 //
@@ -3944,6 +4041,59 @@ function recordMockMessage(channelId: string, event: RelayEvent) {
 
   channel.last_message_at = new Date(event.created_at * 1_000).toISOString();
   touchMockChannel(channel);
+}
+
+function mockTimelineEventsById(): Map<string, RelayEvent> {
+  const events = new Map<string, RelayEvent>();
+  for (const history of mockMessages.values()) {
+    for (const event of history) {
+      events.set(event.id.toLowerCase(), event);
+    }
+  }
+  return events;
+}
+
+/**
+ * Mirror the relay's durable Block-attention projection instead of deleting
+ * E2E feed fixtures imperatively. A needs-action instance is resolved only by
+ * a signed, resolving receipt whose exact action/instance/channel/processor
+ * relationship passes the same UI authority check used by the timeline.
+ */
+function hasResolvingBlockReceipt(item: RawFeedItem): boolean {
+  if (item.kind !== 9) return false;
+
+  const events = mockTimelineEventsById();
+  const instance = events.get(item.id.toLowerCase());
+  if (instance?.kind !== 9) return false;
+
+  const parsedInstance = parseBlockInstance(instance.tags);
+  if (
+    !parsedInstance.ok ||
+    !parsedInstance.value.attentionRequired ||
+    parsedInstance.value.decisionMakerPubkey === null
+  ) {
+    return false;
+  }
+
+  for (const receipt of events.values()) {
+    if (receipt.kind !== KIND_BLOCK_RECEIPT) continue;
+    const parsedReceipt = parseBlockReceipt(receipt.tags);
+    if (
+      !parsedReceipt.ok ||
+      !parsedReceipt.value.resolvesAttention ||
+      (parsedReceipt.value.status !== "succeeded" &&
+        parsedReceipt.value.status !== "denied") ||
+      parsedReceipt.value.instanceEventId !== instance.id.toLowerCase()
+    ) {
+      continue;
+    }
+    const action = events.get(parsedReceipt.value.actionEventId);
+    if (isAuthorizedBlockReceipt(action, receipt, instance)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function resetMockUserStatuses() {
@@ -5363,6 +5513,10 @@ async function handleGetChannels(config: E2eConfig | undefined) {
         topic: getTag("topic") ?? null,
         purpose: getTag("purpose") ?? null,
         member_count: pTags.length,
+        // The native command returns both fields. `member_pubkeys` powers
+        // channel-authority checks while `participant_pubkeys` powers display.
+        // Omitting the former made relay-mode tests erase real co-members.
+        member_pubkeys: pTags,
         last_message_at: null,
         archived_at: isArchived ? new Date().toISOString() : null,
         participants: pTags,
@@ -6844,12 +6998,20 @@ async function handleGetFeed(
 
     const mergeFeedCategory = (
       category: keyof RawHomeFeedResponse["feed"],
-    ): RawFeedItem[] =>
-      includeType(category)
-        ? [...mockFeedOverrides[category], ...defaultFeed[category]]
-            .sort((left, right) => right.created_at - left.created_at)
-            .slice(0, limit)
-        : [];
+    ): RawFeedItem[] => {
+      if (!includeType(category)) return [];
+      const candidates = [
+        ...mockFeedOverrides[category],
+        ...defaultFeed[category],
+      ];
+      return candidates
+        .filter(
+          (item) =>
+            category !== "needs_action" || !hasResolvingBlockReceipt(item),
+        )
+        .sort((left, right) => right.created_at - left.created_at)
+        .slice(0, limit);
+    };
 
     const mentions = mergeFeedCategory("mentions");
     const needsAction = mergeFeedCategory("needs_action");
@@ -6875,34 +7037,35 @@ async function handleGetFeed(
     };
   }
 
-  // Feed is composed of multiple queries: mentions (#p), activity, approvals.
-  // For e2e, return a minimal feed structure with mentions.
   const limit = args.limit ?? 50;
-  const mentionEvents = await relayQuery(config, [
-    {
-      kinds: [
-        9,
-        40002,
-        1,
-        45001,
-        45003,
-        KIND_GIT_PULL_REQUEST,
-        KIND_GIT_PR_UPDATE,
-        KIND_GIT_ISSUE,
-        KIND_GIT_STATUS_OPEN,
-        KIND_GIT_STATUS_MERGED,
-        KIND_GIT_STATUS_CLOSED,
-        KIND_GIT_STATUS_DRAFT,
-      ],
-      "#p": [identity.pubkey],
-      limit,
-    },
-  ]);
+  const wantedTypes =
+    args.types
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0) ?? [];
+  const includesType = (type: string) =>
+    wantedTypes.length === 0 || wantedTypes.includes(type);
+  const projectionFilter = (feedType: "mentions" | "needs_action") => ({
+    "#p": [identity.pubkey],
+    feed_types: [feedType],
+    limit,
+    ...(args.since === undefined ? {} : { since: args.since }),
+  });
+
+  // Match the native get_feed command: use the relay's durable feed projection
+  // for both sections. In particular, unresolved kind-9 Block attention belongs
+  // in needs_action and disappears only after a valid resolving receipt.
+  const mentionEvents = includesType("mentions")
+    ? await relayQuery(config, [projectionFilter("mentions")])
+    : [];
+  const needsActionEvents = includesType("needs_action")
+    ? await relayQuery(config, [projectionFilter("needs_action")])
+    : [];
 
   // Look up channel names for feed items
   const channelIdsInFeed = [
     ...new Set(
-      mentionEvents
+      [...mentionEvents, ...needsActionEvents]
         .map(
           (ev) =>
             ((ev.tags ?? []) as string[][]).find((t) => t[0] === "h")?.[1],
@@ -6928,36 +7091,42 @@ async function handleGetFeed(
     }
   }
 
-  const items = mentionEvents.map((ev) => {
-    const chId =
-      ((ev.tags ?? []) as string[][]).find((t) => t[0] === "h")?.[1] ?? null;
-    return {
-      id: ev.id ?? "",
-      pubkey: ev.pubkey ?? "",
-      content: ev.content ?? "",
-      created_at: ev.created_at ?? 0,
-      kind: ev.kind ?? 9,
-      tags: (ev.tags ?? []) as string[][],
-      channel_id: chId,
-      channel_name: chId ? (channelNameMap.get(chId) ?? "") : "",
-      // Native-shaped: get_feed emits channel_type: null (Option<String>),
-      // never omits the key. Keeping the bridge faithful here is what lets
-      // the DM dedupe e2e catch null-vs-undefined regressions at the API
-      // conversion seam.
-      channel_type: null,
-      category: "mention" as const,
-    };
-  });
+  const toItems = (
+    events: RelayEvent[],
+    category: "mention" | "needs_action",
+  ): RawFeedItem[] =>
+    events.map((ev) => {
+      const chId =
+        ((ev.tags ?? []) as string[][]).find((t) => t[0] === "h")?.[1] ?? null;
+      return {
+        id: ev.id ?? "",
+        pubkey: ev.pubkey ?? "",
+        content: ev.content ?? "",
+        created_at: ev.created_at ?? 0,
+        kind: ev.kind ?? 9,
+        tags: (ev.tags ?? []) as string[][],
+        channel_id: chId,
+        channel_name: chId ? (channelNameMap.get(chId) ?? "") : "",
+        // Native-shaped: get_feed emits channel_type: null (Option<String>),
+        // never omits the key. Keeping the bridge faithful here is what lets
+        // the DM dedupe e2e catch null-vs-undefined regressions at the API
+        // conversion seam.
+        channel_type: null,
+        category,
+      };
+    });
+  const mentions = toItems(mentionEvents, "mention");
+  const needsAction = toItems(needsActionEvents, "needs_action");
   return {
     feed: {
-      mentions: items,
-      needs_action: [],
+      mentions,
+      needs_action: needsAction,
       activity: [],
       agent_activity: [],
     },
     meta: {
-      since: Math.floor(Date.now() / 1000) - 7 * 86400,
-      total: items.length,
+      since: args.since ?? 0,
+      total: mentions.length + needsAction.length,
       generated_at: Math.floor(Date.now() / 1000),
     },
   };
@@ -8443,6 +8612,7 @@ async function handleSendChannelMessage(
     mentionPubkeys?: string[];
     mediaTags?: string[][] | null;
     emojiTags?: string[][] | null;
+    referenceTags?: string[][] | null;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
@@ -8462,24 +8632,40 @@ async function handleSendChannelMessage(
   // relay echoes them back on the stored event too, so mirror that here so the
   // emoji renderer keeps resolving `:shortcode:` after the round-trip.
   const emojiTags = args.emojiTags ?? [];
+  // Typed references (`a` tags for Blocks, plus any future reference kind)
+  // are validated by the native command before signing. Mirror the accepted
+  // tag set in mock mode so E2E tests exercise the actual send contract.
+  const referenceTags = args.referenceTags ?? [];
   // Both kinds end up on the stored event's tag set, just like the real relay.
-  const extraTags = [...mediaTags, ...emojiTags];
+  const extraTags = [...mediaTags, ...emojiTags, ...referenceTags];
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
     const mockPubkey = getMockMemberPubkey(config);
+    const mockSigningIdentity = config?.mock?.activeIdentityInDefaultChannels
+      ? getActiveIdentity(config)
+      : undefined;
 
     if (!args.parentEventId) {
-      const event = createMockEvent(kind, args.content, [
+      const tags = [
         ...buildTopLevelMessageTags(
           args.channelId,
           args.mentionPubkeys,
           mockPubkey,
         ),
         ...extraTags,
-      ]);
+      ];
+      const event = mockSigningIdentity
+        ? await signWithIdentity(mockSigningIdentity, {
+            kind,
+            content: args.content.trim(),
+            createdAt,
+            tags,
+          })
+        : createMockEvent(kind, args.content, tags);
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
+      window.__BUZZ_E2E_PUBLISHED_EVENTS__?.push(event);
 
       return {
         event_id: event.id,
@@ -8522,27 +8708,36 @@ async function handleSendChannelMessage(
         })()
       : 1;
 
-    const event: RelayEvent = {
-      id: mockEventId(),
-      pubkey: mockPubkey,
-      created_at: createdAt,
-      kind,
-      tags: [
-        ...buildReplyMessageTags(
-          args.channelId,
-          mockPubkey,
-          args.parentEventId,
-          rootEventId,
-          args.mentionPubkeys,
-        ),
-        ...extraTags,
-      ],
-      content: args.content.trim(),
-      sig: "mocksig".repeat(20).slice(0, 128),
-    };
+    const tags = [
+      ...buildReplyMessageTags(
+        args.channelId,
+        mockPubkey,
+        args.parentEventId,
+        rootEventId,
+        args.mentionPubkeys,
+      ),
+      ...extraTags,
+    ];
+    const event: RelayEvent = mockSigningIdentity
+      ? await signWithIdentity(mockSigningIdentity, {
+          kind,
+          content: args.content.trim(),
+          createdAt,
+          tags,
+        })
+      : {
+          id: mockEventId(),
+          pubkey: mockPubkey,
+          created_at: createdAt,
+          kind,
+          tags,
+          content: args.content.trim(),
+          sig: "mocksig".repeat(20).slice(0, 128),
+        };
 
     recordMockMessage(args.channelId, event);
     emitMockLiveEvent(args.channelId, event);
+    window.__BUZZ_E2E_PUBLISHED_EVENTS__?.push(event);
 
     return {
       event_id: event.id,
@@ -9078,6 +9273,18 @@ function sendToMockSocket(args: {
     }
 
     const filter = rest[1] as MockFilter;
+    if (
+      filter.kinds?.some((kind) =>
+        mockBlockEvents.some((event) => event.kind === kind),
+      ) ||
+      filter.ids?.some((id) => mockBlockEvents.some((event) => event.id === id))
+    ) {
+      for (const event of filterMockBlockEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     if (filter.kinds?.includes(13534)) {
       sendWsText(socket.handler, [
         "EVENT",
@@ -9173,12 +9380,28 @@ function sendToMockSocket(args: {
       return;
     }
 
-    const channelId = filter["#h"]?.[0];
-    if (!channelId) {
+    const channelIds = filter["#h"] ?? [];
+    if (channelIds.length !== 1) {
+      const matchingEvents = [...mockMessages.values()]
+        .flat()
+        .filter((event) => mockEventMatchesFilter(event, filter))
+        .sort(
+          (left, right) =>
+            right.created_at - left.created_at ||
+            left.id.localeCompare(right.id),
+        )
+        .slice(0, filter.limit ?? 500);
+      for (const event of matchingEvents) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
       // Aux-backfill filters (reactions/deletions) are `#e`-keyed with no
       // channel tag — serve them across all channel stores like the relay.
       const referencedIds = filter["#e"];
-      if (referencedIds && referencedIds.length > 0) {
+      if (
+        matchingEvents.length === 0 &&
+        referencedIds &&
+        referencedIds.length > 0
+      ) {
         const targets = new Set(referencedIds);
         for (const events of mockMessages.values()) {
           for (const event of events) {
@@ -9199,7 +9422,7 @@ function sendToMockSocket(args: {
       return;
     }
 
-    emitMockHistory(socket, subId, channelId, filter);
+    emitMockHistory(socket, subId, channelIds[0], filter);
     return;
   }
 
@@ -9357,10 +9580,30 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["OK", event.id, false, sendMessageError]);
       return;
     }
+    const blockActionError =
+      event.kind === KIND_BLOCK_ACTION
+        ? getConfig()?.mock?.blockActionPublishErrors?.shift()
+        : null;
+    if (blockActionError) {
+      sendWsText(socket.handler, ["OK", event.id, false, blockActionError]);
+      return;
+    }
 
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
-    sendWsText(socket.handler, ["OK", event.id, true, ""]);
+    window.__BUZZ_E2E_PUBLISHED_EVENTS__?.push(event);
+    const blockActionDelayMs =
+      event.kind === KIND_BLOCK_ACTION
+        ? (getConfig()?.mock?.blockActionPublishDelayMs ?? 0)
+        : 0;
+    if (blockActionDelayMs > 0) {
+      window.setTimeout(
+        () => sendWsText(socket.handler, ["OK", event.id, true, ""]),
+        blockActionDelayMs,
+      );
+    } else {
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+    }
   }
 }
 
@@ -9385,10 +9628,29 @@ export function maybeInstallE2eTauriMocks() {
   }
 
   mockClosedChannelLiveSubscription = false;
+  if (config.mock?.activeIdentityInDefaultChannels) {
+    const activeIdentity = getActiveIdentity(config);
+    if (activeIdentity) {
+      for (const channel of mockChannels) {
+        for (const member of channel.members) {
+          if (member.pubkey === MOCK_IDENTITY_PUBKEY) {
+            member.pubkey = activeIdentity.pubkey;
+            member.display_name = activeIdentity.username;
+          }
+        }
+        channel.participant_pubkeys = channel.participant_pubkeys.map(
+          (pubkey) =>
+            pubkey === MOCK_IDENTITY_PUBKEY ? activeIdentity.pubkey : pubkey,
+        );
+        syncMockChannel(channel);
+      }
+    }
+  }
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
     ? { ...config.mock.globalAgentConfig }
     : null;
   resetMockRelayMembers(config);
+  resetMockBlockEvents(config);
   resetMockRelayAgents(config);
   resetMockManagedAgents(config);
   resetMockPersonas(config);
@@ -9406,7 +9668,20 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
+  window.__BUZZ_E2E_PUBLISHED_EVENTS__ = [];
   window.__BUZZ_E2E_WEBVIEW_ZOOM__ = 1;
+  for (const fixture of config.mock?.blockTimelineEvents ?? []) {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === fixture.channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${fixture.channelName} not found.`);
+    }
+    recordMockMessage(channel.id, {
+      ...fixture.event,
+      tags: fixture.event.tags.map((tag) => [...tag]),
+    });
+  }
   window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
@@ -9436,6 +9711,21 @@ export function maybeInstallE2eTauriMocks() {
       createdAt,
       id,
     );
+  };
+  window.__BUZZ_E2E_EMIT_MOCK_EVENT__ = ({ channelName, event }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+    const stored = {
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    };
+    recordMockMessage(channel.id, stored);
+    emitMockLiveEvent(channel.id, stored);
+    return stored;
   };
   window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ = prependMockHistory;
   window.__BUZZ_E2E_EMIT_MOCK_TYPING__ = ({
@@ -9493,6 +9783,24 @@ export function maybeInstallE2eTauriMocks() {
     mockFeedOverrides[category].unshift(item);
     window.dispatchEvent(new CustomEvent("buzz:e2e-home-feed-updated"));
     return item;
+  };
+  window.__BUZZ_E2E_REPLACE_MOCK_BLOCK_EVENTS__ = (events) => {
+    mockBlockEvents.length = 0;
+    for (const event of events) {
+      mockBlockEvents.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+    }
+    return mockBlockEvents.length;
+  };
+  window.__BUZZ_E2E_CLEAR_MOCK_CHANNEL__ = (channelName) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) return false;
+    mockMessages.set(channel.id, []);
+    return true;
   };
   window.__BUZZ_E2E_MD_PARSE_COUNT__ = getMarkdownParseCount;
   window.__BUZZ_E2E_ACTIVATE_TIMEOUT__ = (expiresAtMs: number) => {
@@ -10447,6 +10755,31 @@ export function maybeInstallE2eTauriMocks() {
         return [];
       case "probe_backend_provider":
         return { ok: false, error: "mock: no providers available" };
+      case "fetch_block_data": {
+        const url = (payload as { url?: string } | null)?.url ?? "";
+        const response = activeConfig?.mock?.blockDataResponses?.[url];
+        if (!response) {
+          throw new Error(`mock Block data is unavailable for ${url}`);
+        }
+        if (response.error) {
+          throw new Error(response.error);
+        }
+        const bytes =
+          response.bytes ??
+          Array.from(new TextEncoder().encode(response.body ?? ""));
+        return bytes;
+      }
+      case "execute_agent_proposal": {
+        const outcomes =
+          activeConfig?.mock?.agentProposalExecutionOutcomes ?? [];
+        const outcome = outcomes.shift();
+        return (
+          outcome ?? {
+            status: "failed",
+            safe_message: "No mocked Agent Proposal outcome was configured.",
+          }
+        );
+      }
       case "discover_managed_agent_prereqs":
         return handleDiscoverManagedAgentPrereqs(
           payload as Parameters<typeof handleDiscoverManagedAgentPrereqs>[0],

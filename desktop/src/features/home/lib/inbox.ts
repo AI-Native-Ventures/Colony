@@ -244,12 +244,17 @@ function isThreadReplyItem(item: FeedItem) {
 }
 
 function uniqueItemsById(items: readonly FeedItem[]) {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (seen.has(item.id)) return false;
-    seen.add(item.id);
-    return true;
-  });
+  const unique = new Map<string, FeedItem>();
+  for (const item of items) {
+    const existing = unique.get(item.id);
+    if (
+      !existing ||
+      categoryPriority(item.category) < categoryPriority(existing.category)
+    ) {
+      unique.set(item.id, item);
+    }
+  }
+  return [...unique.values()];
 }
 
 function isItemUnread(
@@ -588,9 +593,15 @@ export function buildInboxItems({
         group.items[0],
         channelById,
       );
-      const latestItem = group.items.reduce((latest, current) =>
-        current.createdAt > latest.createdAt ? current : latest,
-      );
+      const latestItem = group.items.reduce((latest, current) => {
+        if (current.createdAt !== latest.createdAt) {
+          return current.createdAt > latest.createdAt ? current : latest;
+        }
+        return categoryPriority(current.category) <
+          categoryPriority(latest.category)
+          ? current
+          : latest;
+      });
       const groupChannel = resolveGroupChannel(
         latestItem,
         group.items,
@@ -659,7 +670,7 @@ export function buildInboxItems({
         categoryLabel,
         channelLabel,
         fullTimestampLabel: formatInboxFullTimestamp(item.createdAt),
-        groupItems: group.items,
+        groupItems: uniqueGroupItems,
         isActionRequired: categories.includes("needs_action"),
         latestActivityAt: group.latestActivityAt,
         mentionNames: mentionNames ?? [],

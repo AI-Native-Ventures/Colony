@@ -31,6 +31,7 @@ pub(in crate::commands) use pending::retain_persona_pending;
 pub(super) use pending::tombstone_persona_pending;
 mod create;
 pub use create::create_persona;
+pub(crate) use create::create_persona_with_id;
 mod sharing;
 pub use sharing::set_persona_shared;
 pub use sharing::update_persona_and_publish;

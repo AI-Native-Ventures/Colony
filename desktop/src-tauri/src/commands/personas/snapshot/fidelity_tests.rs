@@ -16,6 +16,7 @@ fn make_definition(slug: &str) -> ManagedAgentRecord {
         name: slug.to_string(),
         display_name: None,
         persona_id: None,
+        creation_request_id: None,
         private_key_nsec: String::new(),
         auth_tag: None,
         relay_url: String::new(),

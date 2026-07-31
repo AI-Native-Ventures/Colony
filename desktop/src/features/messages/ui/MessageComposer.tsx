@@ -67,6 +67,8 @@ function MessageComposerImpl({
   layoutMode = "standalone",
   disabled = false,
   draftKey,
+  initialBlockReference,
+  initialContent,
   autoSubmitDraftKey = null,
   onAutoSubmitComplete,
   editTarget = null,
@@ -142,18 +144,15 @@ function MessageComposerImpl({
     typingRootEventId,
   );
 
-  // We pass a custom setter that both updates React state AND inserts
-  // markdown into the Tiptap editor when media upload completes.
   const internalMedia = useMediaUpload();
   const media = mediaController ?? internalMedia;
   const ownsDropZone = mediaController === undefined;
 
-  // Draft-persist lifecycle: restore/clear content + imeta + spoilered urls on
-  // key change, and persist the outgoing draft in the cleanup. The StrictMode
-  // fix lives inside this hook — see useDraftPersistSnapshot.ts.
   useDraftPersistLifecycle({
     effectiveDraftKey,
     channelId,
+    initialContent,
+    initialBlockReference,
     loadDraft: drafts.loadDraft,
     persistDraft: drafts.persistDraft,
     getMentionRefs: mentions.getDraftMentionRefs,

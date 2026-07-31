@@ -3,9 +3,12 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { formatOwnerLabel } from "@/features/profile/lib/identity";
 import type { ChannelRole, ChannelType } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import type { TeamMentionMember } from "./mentionCandidates";
+import type {
+  BlockMentionCandidate,
+  TeamMentionMember,
+} from "./mentionCandidates";
 
-export type MentionSuggestionCandidate = {
+type ActorMentionSuggestionCandidate = {
   kind: "identity" | "persona" | "team";
   pubkey?: string;
   personaId?: string | null;
@@ -17,6 +20,10 @@ export type MentionSuggestionCandidate = {
   role?: ChannelRole | null;
   ownerPubkey?: string | null;
 };
+
+export type MentionSuggestionCandidate =
+  | ActorMentionSuggestionCandidate
+  | BlockMentionCandidate;
 
 export function mapMentionCandidateToSuggestion(opts: {
   candidate: MentionSuggestionCandidate;
@@ -34,6 +41,16 @@ export function mapMentionCandidateToSuggestion(opts: {
     ownerProfiles,
     profiles,
   } = opts;
+  if (candidate.kind === "block") {
+    return {
+      kind: "block",
+      blockHandle: candidate.blockHandle,
+      blockAddress: candidate.blockAddress,
+      manifestId: candidate.manifestId,
+      displayName: candidate.displayName,
+    };
+  }
+
   const ownerLabel = candidate.isAgent
     ? formatOwnerLabel(candidate.ownerPubkey, currentPubkey, ownerProfiles)
     : null;

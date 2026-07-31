@@ -387,12 +387,31 @@ mod tests {
             .get("max_selections")
             .and_then(Value::as_u64)
             .is_some_and(|maximum| maximum > 1));
+        assert_eq!(
+            question.get("options_path").and_then(Value::as_str),
+            Some("/choices")
+        );
+        assert!(question.get("options").is_none());
+        let mut card_list_count = 0;
+        visit_nodes(&manifest["tree"], &mut |node| {
+            if node.get("type").and_then(Value::as_str) == Some("card-list") {
+                card_list_count += 1;
+            }
+        });
+        assert_eq!(
+            card_list_count, 0,
+            "Brainstorm choices must render only as selectable Question cards"
+        );
     }
 
     #[test]
     fn agent_proposal_is_a_safe_native_composite() {
         let assets = raw_assets();
         let manifest = manifest_for_handle(&assets, "agent-proposal");
+        assert!(
+            !manifest["tree"].to_string().contains("channelId"),
+            "agent-proposal presentation must not expose the internal channel UUID"
+        );
 
         let mut node_types = BTreeSet::new();
         let mut has_review_presentation = false;

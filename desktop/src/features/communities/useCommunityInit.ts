@@ -23,6 +23,10 @@ import {
 } from "@/features/agents/activeAgentTurnsStore";
 import { resetAgentWorkingSignal } from "@/features/agents/agentWorkingSignal";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
+import { resetAgentProposalReview } from "@/features/blocks/agentProposal";
+import { resetBlockActionQueue } from "@/features/blocks/blockActionQueue";
+import { resetInFlightBlockActions } from "@/features/blocks/blockActions";
+import { resetBlockRepository } from "@/features/blocks/blockRepository";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
@@ -53,6 +57,10 @@ function resetCommunityState({
   resetAgentObserverStore();
   resetActiveAgentTurnsStore();
   resetAgentWorkingSignal();
+  resetAgentProposalReview();
+  resetInFlightBlockActions();
+  resetBlockActionQueue();
+  resetBlockRepository();
   if (resetAvatarState) {
     resetAvatarProfileSync();
     resetAvatarPresentations();

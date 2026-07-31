@@ -16,6 +16,8 @@ pub const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-
 pub const MAX_BLOCK_DEPTH: usize = 12;
 /// Maximum number of nodes in one composition tree.
 pub const MAX_BLOCK_NODES: usize = 200;
+/// Maximum number of choices exposed by one native Question.
+pub const MAX_QUESTION_OPTIONS: usize = 12;
 /// Native primitive handles shipped by the product.
 pub const BLOCK_PRIMITIVE_HANDLES: &[&str] = &[
     "section",
@@ -213,6 +215,9 @@ pub struct QuestionOption {
     pub id: String,
     /// Visible option label.
     pub label: String,
+    /// Optional supporting copy shown inside the selectable card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Question selection mode.
@@ -373,7 +378,11 @@ pub struct QuestionNode {
     /// Selection mode.
     pub mode: QuestionMode,
     /// Bounded choices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<QuestionOption>,
+    /// JSON Pointer to strict `{id,label,description}` choices in instance data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options_path: Option<String>,
     /// Minimum option selections.
     pub min_selections: u8,
     /// Maximum option selections.
@@ -717,7 +726,7 @@ pub fn validate_manifest(manifest: &BlockManifest) -> Result<(), BlockError> {
                 "example names must not be empty".to_owned(),
             ));
         }
-        validate_instance(&manifest.input_schema, &example.data).map_err(|error| {
+        validate_manifest_instance(manifest, &example.data).map_err(|error| {
             BlockError::InvalidManifest(format!("example {} is invalid: {error}", example.name))
         })?;
     }
@@ -742,6 +751,15 @@ pub fn validate_instance(schema: &Value, data: &Value) -> Result<(), BlockError>
     validator
         .validate(data)
         .map_err(|error| BlockError::InvalidInstance(error.to_string()))
+}
+
+/// Validate instance data against its schema and any data-backed native nodes.
+pub fn validate_manifest_instance(
+    manifest: &BlockManifest,
+    data: &Value,
+) -> Result<(), BlockError> {
+    validate_instance(&manifest.input_schema, data)?;
+    validate_dynamic_question_options(&manifest.tree, data)
 }
 
 /// Compute the stable lowercase SHA-256 hash of an exact Approval proposal.
@@ -894,10 +912,33 @@ fn validate_node(
             }
         }
         BlockNode::Question(question) => {
-            let option_count = u8::try_from(question.options.len()).unwrap_or(u8::MAX);
-            if question.max_selections == 0
+            let has_static_options = !question.options.is_empty();
+            let has_data_options = question.options_path.is_some();
+            let option_count = if has_static_options {
+                question.options.len()
+            } else {
+                MAX_QUESTION_OPTIONS
+            };
+            let mut option_ids = HashSet::new();
+            let static_options_invalid = question.options.len() > MAX_QUESTION_OPTIONS
+                || question.options.iter().any(|option| {
+                    !valid_question_option(
+                        &option.id,
+                        &option.label,
+                        option.description.as_deref(),
+                        false,
+                    ) || !option_ids.insert(option.id.as_str())
+                });
+            let data_path_invalid = question
+                .options_path
+                .as_deref()
+                .is_some_and(|path| !valid_json_pointer(path));
+            if has_static_options == has_data_options
+                || static_options_invalid
+                || data_path_invalid
+                || question.max_selections == 0
                 || question.min_selections > question.max_selections
-                || question.max_selections > option_count
+                || usize::from(question.max_selections) > option_count
                 || (question.mode == QuestionMode::SingleSelect
                     && (question.min_selections > 1 || question.max_selections != 1))
                 || (question.require_custom_input && !question.allow_custom)
@@ -914,6 +955,120 @@ fn validate_node(
         | BlockNode::Table(_)
         | BlockNode::Chart(_)
         | BlockNode::Status(_) => {}
+    }
+    Ok(())
+}
+
+fn valid_json_pointer(path: &str) -> bool {
+    if path.is_empty() || path.len() > 256 || !path.starts_with('/') {
+        return false;
+    }
+    let bytes = path.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'~' {
+            if index + 1 >= bytes.len() || !matches!(bytes[index + 1], b'0' | b'1') {
+                return false;
+            }
+            index += 1;
+        }
+        index += 1;
+    }
+    true
+}
+
+fn valid_question_option(
+    id: &str,
+    label: &str,
+    description: Option<&str>,
+    require_description: bool,
+) -> bool {
+    let mut id_chars = id.chars();
+    let valid_id = id_chars
+        .next()
+        .is_some_and(|character| character.is_ascii_lowercase())
+        && id.len() <= 64
+        && id_chars.all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+    let valid_label = !label.trim().is_empty() && label.chars().count() <= 120;
+    let valid_description = match description {
+        Some(value) => !value.trim().is_empty() && value.chars().count() <= 500,
+        None => !require_description,
+    };
+    valid_id && valid_label && valid_description
+}
+
+fn validate_dynamic_question_options(node: &BlockNode, data: &Value) -> Result<(), BlockError> {
+    match node {
+        BlockNode::Stack { children, .. } | BlockNode::Grid { children, .. } => {
+            for child in children {
+                validate_dynamic_question_options(child, data)?;
+            }
+        }
+        BlockNode::Card(card) => {
+            for child in &card.children {
+                validate_dynamic_question_options(child, data)?;
+            }
+        }
+        BlockNode::CardList(list) => validate_dynamic_question_options(&list.card, data)?,
+        BlockNode::Question(question) => {
+            if let Some(path) = &question.options_path {
+                let options = data
+                    .pointer(path)
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        BlockError::InvalidInstance(
+                            "Question options_path must resolve to an array".to_owned(),
+                        )
+                    })?;
+                if options.is_empty() || options.len() > MAX_QUESTION_OPTIONS {
+                    return Err(BlockError::InvalidInstance(format!(
+                        "Question options must contain between 1 and {MAX_QUESTION_OPTIONS} items"
+                    )));
+                }
+                if usize::from(question.min_selections) > options.len() {
+                    return Err(BlockError::InvalidInstance(
+                        "Question minimum selections exceed resolved options".to_owned(),
+                    ));
+                }
+                let mut ids = HashSet::new();
+                for option in options {
+                    let object = option.as_object().ok_or_else(|| {
+                        BlockError::InvalidInstance(
+                            "Question options must be strict objects".to_owned(),
+                        )
+                    })?;
+                    let exact_fields = object.len() == 3
+                        && object.contains_key("id")
+                        && object.contains_key("label")
+                        && object.contains_key("description");
+                    let id = object.get("id").and_then(Value::as_str).unwrap_or_default();
+                    let label = object
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let description = object.get("description").and_then(Value::as_str);
+                    if !exact_fields
+                        || !valid_question_option(id, label, description, true)
+                        || !ids.insert(id)
+                    {
+                        return Err(BlockError::InvalidInstance(
+                            "Question options must have unique, bounded id, label, and description fields"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+        }
+        BlockNode::Section(_)
+        | BlockNode::Metric(_)
+        | BlockNode::Details(_)
+        | BlockNode::Table(_)
+        | BlockNode::Chart(_)
+        | BlockNode::Media(_)
+        | BlockNode::Status(_)
+        | BlockNode::Actions(_) => {}
     }
     Ok(())
 }
@@ -957,11 +1112,11 @@ mod tests {
 
     use super::{
         canonical_json, compute_approval_hash, is_manifest_activation_eligible, validate_instance,
-        validate_manifest, AgentProposalData, ApprovalProposal, BlockActionDeclaration, BlockError,
-        BlockExample, BlockGap, BlockInteraction, BlockManifest, BlockNode, BlockOrigin,
-        BlockValidation, BlockValidationState, CorePresentationSurface, QuestionMode, QuestionNode,
-        QuestionOption, SectionNode, BLOCK_PRIMITIVE_HANDLES, BLOCK_STARTER_COMPOSITE_HANDLES,
-        JSON_SCHEMA_DRAFT_2020_12,
+        validate_manifest, validate_manifest_instance, AgentProposalData, ApprovalProposal,
+        BlockActionDeclaration, BlockError, BlockExample, BlockGap, BlockInteraction,
+        BlockManifest, BlockNode, BlockOrigin, BlockValidation, BlockValidationState,
+        CorePresentationSurface, QuestionMode, QuestionNode, QuestionOption, SectionNode,
+        BLOCK_PRIMITIVE_HANDLES, BLOCK_STARTER_COMPOSITE_HANDLES, JSON_SCHEMA_DRAFT_2020_12,
     };
 
     fn empty_object_schema() -> Value {
@@ -1037,6 +1192,7 @@ mod tests {
             .map(|index| QuestionOption {
                 id: format!("option-{index}"),
                 label: format!("Option {index}"),
+                description: None,
             })
             .collect()
     }
@@ -1216,6 +1372,7 @@ mod tests {
             prompt: "Choose one".to_owned(),
             mode: QuestionMode::SingleSelect,
             options: options(2),
+            options_path: None,
             min_selections: 1,
             max_selections: 1,
             allow_custom: false,
@@ -1228,6 +1385,7 @@ mod tests {
             prompt: "Choose several".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(3),
+            options_path: None,
             min_selections: 1,
             max_selections: 3,
             allow_custom: false,
@@ -1240,6 +1398,7 @@ mod tests {
             prompt: "Choose or add your own".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(3),
+            options_path: None,
             min_selections: 1,
             max_selections: 3,
             allow_custom: true,
@@ -1255,6 +1414,7 @@ mod tests {
             prompt: "Impossible".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(2),
+            options_path: None,
             min_selections: 2,
             max_selections: 1,
             allow_custom: false,
@@ -1267,6 +1427,122 @@ mod tests {
             Err(BlockError::InvalidManifest(message))
                 if message.contains("Question selection bounds")
         ));
+    }
+
+    #[test]
+    fn question_accepts_one_closed_data_backed_option_source() {
+        let static_manifest = question_manifest(QuestionNode {
+            prompt: "Choose several".to_owned(),
+            mode: QuestionMode::MultiSelect,
+            options: options(3),
+            options_path: None,
+            min_selections: 1,
+            max_selections: 3,
+            allow_custom: false,
+            require_custom_input: false,
+            submit_action: "question.submit".to_owned(),
+        });
+        let mut value = serde_json::to_value(static_manifest).expect("manifest JSON");
+        let question = value
+            .pointer_mut("/tree")
+            .and_then(Value::as_object_mut)
+            .expect("Question node");
+        question.remove("options");
+        question.insert("options_path".to_owned(), json!("/choices"));
+        question.insert("max_selections".to_owned(), json!(12));
+
+        let mut dynamic: BlockManifest =
+            serde_json::from_value(value).expect("data-backed Question contract");
+        dynamic.input_schema = json!({
+            "$schema": JSON_SCHEMA_DRAFT_2020_12,
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["choices"],
+            "properties": {
+                "choices": {
+                    "type": "array"
+                }
+            }
+        });
+        dynamic.examples = vec![BlockExample {
+            name: "Directions".to_owned(),
+            data: json!({
+                "choices": [{
+                    "id": "premium",
+                    "label": "Premium editorial",
+                    "description": "Restrained typography and art direction."
+                }]
+            }),
+        }];
+        validate_manifest(&dynamic).expect("one bounded data-backed source should validate");
+        validate_manifest_instance(
+            &dynamic,
+            &json!({
+                "choices": [{
+                    "id": "motion",
+                    "label": "Cinematic motion",
+                    "description": "Purposeful transitions and pacing."
+                }]
+            }),
+        )
+        .expect("strict runtime options should validate");
+        assert!(validate_manifest_instance(
+            &dynamic,
+            &json!({
+                "choices": [{
+                    "id": "motion",
+                    "label": "Missing strict description"
+                }]
+            }),
+        )
+        .is_err());
+        let oversized = (1..=13)
+            .map(|index| {
+                json!({
+                    "id": format!("option-{index}"),
+                    "label": format!("Option {index}"),
+                    "description": "Too many options."
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(validate_manifest_instance(&dynamic, &json!({"choices": oversized})).is_err());
+    }
+
+    #[test]
+    fn question_rejects_ambiguous_or_oversized_option_sources() {
+        let too_many = question_manifest(QuestionNode {
+            prompt: "Too many".to_owned(),
+            mode: QuestionMode::MultiSelect,
+            options: options(13),
+            options_path: None,
+            min_selections: 1,
+            max_selections: 12,
+            allow_custom: false,
+            require_custom_input: false,
+            submit_action: "question.submit".to_owned(),
+        });
+        assert!(validate_manifest(&too_many).is_err());
+
+        let static_manifest = question_manifest(QuestionNode {
+            prompt: "Ambiguous".to_owned(),
+            mode: QuestionMode::MultiSelect,
+            options: options(2),
+            options_path: None,
+            min_selections: 1,
+            max_selections: 2,
+            allow_custom: false,
+            require_custom_input: false,
+            submit_action: "question.submit".to_owned(),
+        });
+        let mut value = serde_json::to_value(static_manifest).expect("manifest JSON");
+        value
+            .pointer_mut("/tree")
+            .and_then(Value::as_object_mut)
+            .expect("Question node")
+            .insert("options_path".to_owned(), json!("/choices"));
+        assert!(serde_json::from_value::<BlockManifest>(value)
+            .map(|manifest| validate_manifest(&manifest).is_err())
+            .unwrap_or(true));
     }
 
     #[test]
