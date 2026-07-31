@@ -151,8 +151,8 @@ impl RelayInfo {
         }
 
         Self {
-            name: "Buzz Relay".to_string(),
-            description: "Buzz — private team communication relay".to_string(),
+            name: "Colony Relay".to_string(),
+            description: "Colony, private team communication relay".to_string(),
             icon: icon.filter(|s| !s.is_empty()).map(|s| s.to_string()),
             pubkey: None,
             contact: None,

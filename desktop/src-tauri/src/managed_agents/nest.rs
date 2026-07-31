@@ -46,7 +46,7 @@ const BUZZ_CLI_SKILL_MD: &str = include_str!("nest_skill.md");
 /// Template content version for AGENTS.md static content (above managed markers).
 /// Bump this when changing `nest_agents.md` to trigger refresh on existing installs.
 /// Version 1 is implicitly "before this mechanism existed" (no version file).
-const NEST_AGENTS_VERSION: u32 = 4;
+const NEST_AGENTS_VERSION: u32 = 5;
 
 /// Template content version for SKILL.md.
 /// Bump this when changing `nest_skill.md` to trigger refresh on existing installs.
@@ -554,7 +554,7 @@ pub fn render_dynamic_section(
     relay_url: &str,
 ) -> String {
     let active_agents = if agents.is_empty() {
-        "## Active Agents\n\n*(No agents deployed yet. Add agents in the Buzz desktop app.)*"
+        "## Active Agents\n\n*(No agents deployed yet. Add agents in the Colony desktop app.)*"
             .to_string()
     } else {
         let mut table =
@@ -631,7 +631,7 @@ pub fn upsert_managed_section(file_path: &Path, new_section_content: &str) -> io
     let current = fs::read_to_string(file_path)?;
 
     let replacement = format!(
-        "{BEGIN_MARKER} — regenerated automatically, do not edit below -->\n{new_section_content}\n{END_MARKER}\n"
+        "{BEGIN_MARKER}, regenerated automatically, do not edit below -->\n{new_section_content}\n{END_MARKER}\n"
     );
 
     let new_content = match find_managed_markers(&current) {

@@ -33,7 +33,7 @@ function isBuzzRuntime(runtime: AcpRuntimeCatalogEntry): boolean {
 export function getRuntimeDisplayLabel(
   runtime: AcpRuntimeCatalogEntry,
 ): string {
-  return isBuzzRuntime(runtime) ? "Colony" : runtime.label;
+  return runtime.label;
 }
 
 function getRuntimeLogoUrl(runtime: AcpRuntimeCatalogEntry): string | null {

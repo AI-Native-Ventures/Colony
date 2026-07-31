@@ -25,7 +25,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Buzz authentication complete</title>
+  <title>Colony authentication complete</title>
   <style>
     :root {
       color-scheme: light;
@@ -59,7 +59,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
       box-shadow: 8px 8px 0 #231e1e;
     }
 
-    .bee {
+    .ant {
       display: block;
       width: 72px;
       height: auto;
@@ -108,7 +108,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
         box-shadow: 6px 6px 0 #231e1e;
       }
 
-      .bee {
+      .ant {
         width: 60px;
         margin-bottom: 32px;
       }
@@ -117,24 +117,34 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 </head>
 <body>
   <main>
-    <svg class="bee" viewBox="0 0 466 309" role="img" aria-label="Buzz">
+    <svg class="ant" viewBox="0 0 466 309" role="img" aria-label="Colony" fill="currentColor">
       <defs>
-        <mask id="bee-mask">
-          <rect width="466" height="309" fill="black"/>
-          <circle cx="91.7" cy="154.5" r="91.7" fill="white"/>
-          <circle cx="374.3" cy="154.5" r="91.7" fill="white"/>
-          <rect x="128" width="210" height="309" rx="34" fill="white"/>
-          <ellipse cx="193.3" cy="84.4" rx="27" ry="27" fill="black"/>
-          <ellipse cx="276" cy="84.4" rx="27" ry="27" fill="black"/>
-          <rect x="166.3" y="157.2" width="136.9" height="38.3" rx="5" fill="black"/>
-          <rect x="166.9" y="235.1" width="136.2" height="37.6" rx="5" fill="black"/>
+        <mask id="ant-mask" x="-80" y="-80" width="626" height="469" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse">
+          <rect x="-80" y="-80" width="626" height="469" fill="white"/>
+          <circle cx="335" cy="136" r="11" fill="black"/>
         </mask>
       </defs>
-      <rect width="466" height="309" fill="currentColor" mask="url(#bee-mask)"/>
+      <g fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round">
+        <path d="M202 203 L136 292"/>
+        <path d="M220 210 L196 298"/>
+        <path d="M235 209 L246 300"/>
+        <path d="M247 205 L294 294"/>
+        <path d="M257 198 L336 282"/>
+        <path d="M164 215 L112 272"/>
+      </g>
+      <g fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round">
+        <path d="M327 114 Q345 64 397 50"/>
+        <path d="M343 126 Q377 86 427 80"/>
+      </g>
+      <g mask="url(#ant-mask)">
+        <circle cx="104" cy="172" r="80"/>
+        <circle cx="226" cy="164" r="52"/>
+        <circle cx="313" cy="148" r="46"/>
+      </g>
     </svg>
     <div class="eyebrow">Authentication complete</div>
     <h1>You&rsquo;re signed in.</h1>
-    <p>You can close this window and return to Buzz.</p>
+    <p>You can close this window and return to Colony.</p>
   </main>
 </body>
 </html>"#;
@@ -647,12 +657,12 @@ mod tests {
     #[test]
     fn auth_complete_page_uses_buzz_brand() {
         for expected in [
-            "<title>Buzz authentication complete</title>",
+            "<title>Colony authentication complete</title>",
             "#d7d72e",
             "#231e1e",
             "#d7e7f6",
-            "aria-label=\"Buzz\"",
-            "return to Buzz",
+            "aria-label=\"Colony\"",
+            "return to Colony",
         ] {
             assert!(
                 AUTH_COMPLETE_HTML.contains(expected),

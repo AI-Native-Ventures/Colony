@@ -86,9 +86,9 @@ with a TypeScript lookup table or an id comparison in a component.
    harness has empty discovery` (and the failed-discovery counterpart) in
    `onboarding-agent-defaults.spec.ts`.
 9. **The defaults modal is progressively disclosed.** An unset global config
-   starts on the Buzz Agent-first deployment fallback and carries that visible
+   starts on the Colony Agent-first deployment fallback and carries that visible
    harness into the next saved edit. The `progressive-defaults` disclosure
-   preset therefore begins at Provider for Buzz Agent, then reveals Model,
+   preset therefore begins at Provider for Colony Agent, then reveals Model,
    Effort, and Advanced only after a provider is configured. Harnesses whose
    runtime metadata has no provider field skip that gate. Reveals animate their
    height through Motion and become immediate when reduced motion is requested.

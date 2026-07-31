@@ -86,7 +86,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_commands: &[],
         cli_install_instructions_url: "https://goose-docs.ai/docs/getting-started/installation/",
         adapter_install_instructions_url: "",
-        cli_install_hint: "Buzz talks to Goose through the Goose CLI.",
+        cli_install_hint: "Colony talks to Goose through the Goose CLI.",
         adapter_install_hint: "",
         skill_dir: Some(".goose/skills"),
         supports_acp_model_switching: false,
@@ -118,8 +118,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_commands: &["npm install -g @agentclientprotocol/claude-agent-acp"],
         cli_install_instructions_url: "https://code.claude.com/docs/en/getting-started",
         adapter_install_instructions_url: "https://github.com/agentclientprotocol/claude-agent-acp",
-        cli_install_hint: "Buzz talks to Claude Code through the Claude Code CLI.",
-        adapter_install_hint: "Buzz talks to the Claude Code CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/claude-agent-acp.",
+        cli_install_hint: "Colony talks to Claude Code through the Claude Code CLI.",
+        adapter_install_hint: "Colony talks to the Claude Code CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/claude-agent-acp.",
         skill_dir: Some(".claude/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -150,8 +150,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_commands: &["npm install -g @agentclientprotocol/codex-acp"],
         cli_install_instructions_url: "https://developers.openai.com/codex/cli/",
         adapter_install_instructions_url: "https://github.com/agentclientprotocol/codex-acp",
-        cli_install_hint: "Buzz talks to Codex through the Codex CLI.",
-        adapter_install_hint: "Buzz talks to the Codex CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/codex-acp.",
+        cli_install_hint: "Colony talks to Codex through the Codex CLI.",
+        adapter_install_hint: "Colony talks to the Codex CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/codex-acp.",
         skill_dir: Some(".codex/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -171,7 +171,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
     },
     KnownAcpRuntime {
         id: "buzz-agent",
-        label: "Buzz Agent",
+        label: "Colony Agent",
         commands: &["buzz-agent"],
         aliases: &[],
         avatar_url: BUZZ_AGENT_AVATAR_URL,
@@ -183,7 +183,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_commands: &[],
         cli_install_instructions_url: "https://github.com/block/buzz",
         adapter_install_instructions_url: "https://github.com/block/buzz",
-        cli_install_hint: "Ships with the Buzz desktop app.",
+        cli_install_hint: "Ships with the Colony desktop app.",
         adapter_install_hint: "",
         skill_dir: None,
         supports_acp_model_switching: true,
@@ -1544,7 +1544,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "cursor-agent",
         args: &["acp"],
         install_instructions_url: "https://cursor.com/downloads",
-        install_hint: "Buzz talks to Cursor through the cursor-agent CLI's ACP mode.",
+        install_hint: "Colony talks to Cursor through the cursor-agent CLI's ACP mode.",
         underlying_cli: None,
     },
     PresetHarness {
@@ -1553,7 +1553,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "omp",
         args: &["acp"],
         install_instructions_url: "https://github.com/can1357/oh-my-pi",
-        install_hint: "Buzz talks to Oh My Pi through its CLI's ACP mode (omp acp).",
+        install_hint: "Colony talks to Oh My Pi through its CLI's ACP mode (omp acp).",
         underlying_cli: None,
     },
     PresetHarness {
@@ -1562,7 +1562,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "grok",
         args: &["agent", "--always-approve", "stdio"],
         install_instructions_url: "https://build.x.ai/docs",
-        install_hint: "Buzz talks to Grok Build through its CLI's agent stdio mode.",
+        install_hint: "Colony talks to Grok Build through its CLI's agent stdio mode.",
         underlying_cli: None,
     },
     PresetHarness {
@@ -1571,7 +1571,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "opencode",
         args: &["acp"],
         install_instructions_url: "https://opencode.ai/docs",
-        install_hint: "Buzz talks to OpenCode through its CLI's ACP mode (opencode acp).",
+        install_hint: "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
         underlying_cli: None,
     },
     PresetHarness {
@@ -1580,7 +1580,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "kimi",
         args: &["acp"],
         install_instructions_url: "https://kimi.ai/download",
-        install_hint: "Buzz talks to Kimi Code through its CLI's ACP mode (kimi acp).",
+        install_hint: "Colony talks to Kimi Code through its CLI's ACP mode (kimi acp).",
         underlying_cli: None,
     },
     PresetHarness {
@@ -1589,7 +1589,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "amp-acp",
         args: &[],
         install_instructions_url: "https://github.com/tao12345666333/amp-acp",
-        install_hint: "Buzz talks to the Amp CLI through the amp-acp adapter. Follow the setup guide to install the adapter so the amp-acp command is on your PATH.",
+        install_hint: "Colony talks to the Amp CLI through the amp-acp adapter. Follow the setup guide to install the adapter so the amp-acp command is on your PATH.",
         underlying_cli: Some("amp"),
     },
     PresetHarness {
@@ -1598,7 +1598,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "hermes-acp",
         args: &[],
         install_instructions_url: "https://hermes-agent.nousresearch.com",
-        install_hint: "Buzz talks to Hermes Agent through its hermes-acp command.",
+        install_hint: "Colony talks to Hermes Agent through its hermes-acp command.",
         underlying_cli: None,
     },
     PresetHarness {
@@ -1607,7 +1607,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "openclaw",
         args: &["acp"],
         install_instructions_url: "https://docs.openclaw.ai/start/getting-started",
-        install_hint: "Buzz talks to OpenClaw through its ACP mode (openclaw acp), which relies on the OpenClaw Gateway daemon. Follow the setup guide to install both.\n\n\
+        install_hint: "Colony talks to OpenClaw through its ACP mode (openclaw acp), which relies on the OpenClaw Gateway daemon. Follow the setup guide to install both.\n\n\
             ⚠️  Execution-locus note: `openclaw acp` runs tools inside the \
             OpenClaw Gateway daemon, not in the Desktop process. \
             Desktop-injected BUZZ_* env vars are visible to the `openclaw` \
