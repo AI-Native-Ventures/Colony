@@ -145,6 +145,25 @@ test("block status resolver covers warning error and completed progress states",
   );
 });
 
+test("terminal attention replaces a pending data-backed status without overwriting independent state", () => {
+  const node = { type: "status", label: "Decision", state_path: "/status" };
+  const completed = render(BlockStatus, {
+    attentionResolution: "succeeded",
+    data: { status: "pending" },
+    node,
+  });
+  assert.match(completed, /Completed/);
+  assert.doesNotMatch(completed, /pending/i);
+
+  const independent = render(BlockStatus, {
+    attentionResolution: "succeeded",
+    data: { status: "qualified" },
+    node,
+  });
+  assert.match(independent, /qualified/);
+  assert.doesNotMatch(independent, /Completed/);
+});
+
 test("block actions resolver disables undeclared and non-Core presentation controls", () => {
   const signed = {
     label: "Approve",

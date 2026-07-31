@@ -43,8 +43,13 @@ export function BlockStatus({
   rootData?: unknown;
 }) {
   const resolved = resolveStatus(node, data, rootData);
+  const resolvedState = resolved.state.trim().toLowerCase();
+  const isPendingAttentionStatus =
+    !node.state_path ||
+    resolvedState === "pending" ||
+    resolvedState === "pending review";
   const status =
-    !node.state_path && attentionResolution
+    attentionResolution && isPendingAttentionStatus
       ? attentionResolution === "succeeded"
         ? {
             label: "Completed",
