@@ -78,9 +78,14 @@ Before copying production configuration to the origin, prove:
 - the host has persistent storage sized for Postgres, Redis, MinIO, and git;
 - outbound access can pull the approved container images;
 - only approved operators can access the host;
-- inbound TCP 80 and 443 reach the origin when bundled Caddy is used;
-- database, Redis, MinIO, admin, and direct relay ports are not publicly
-  exposed; and
+- database, Redis, MinIO, admin, and direct relay ports remain private in every
+  edge mode;
+- in DNS-only mode, bundled Caddy's TCP 80 and 443 are public for ACME
+  validation and user traffic;
+- in Cloudflare-proxied mode, TCP 80 and 443 are restricted, where feasible and
+  supported by the provider, to Cloudflare's current
+  [published origin ranges](https://www.cloudflare.com/ips/), with a documented
+  owner, update cadence, change alert, and post-update health/WebSocket check;
 - the approved backup destination is reachable without placing backup
   credentials in the repository; and
 - exact provider-specific commands exist for a write-consistent backup and
@@ -122,7 +127,8 @@ In both patterns:
 - allow WebSocket upgrades on `/`;
 - do not cache authenticated relay, query, event, media-write, or git traffic;
 - do not rewrite the WebSocket URL or append a path; and
-- keep origin ports and state services firewalled from the public internet.
+- keep direct relay and state-service ports private; apply the approved
+  mode-specific TCP 80/443 policy above.
 
 Cloudflare may provide DNS, edge TLS, and WebSocket proxying. It does not run the
 Buzz relay or its state. This architecture is not a Cloudflare Worker
@@ -289,8 +295,9 @@ command-line arguments and shell history, and unset the variable immediately:
 cargo build --release -p buzz-cli
 
 set +x
-IFS= read -r -s -p "Disposable Nostr private key: " BUZZ_PRIVATE_KEY
-printf '\n'
+printf '%s' "Disposable Nostr private key: " >&2
+IFS= read -r -s BUZZ_PRIVATE_KEY
+printf '\n' >&2
 export BUZZ_PRIVATE_KEY
 export BUZZ_RELAY_URL="wss://${OWNED_DOMAIN}"
 ./target/release/buzz users set-presence --status online
