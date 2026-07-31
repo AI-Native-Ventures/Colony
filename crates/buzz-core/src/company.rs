@@ -1,5 +1,700 @@
 //! Colony company, initiative, task, and work-attribution contracts.
 
+use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+const COMPANY_SCHEMA: &str = "colony.company/v1";
+const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
+const TASK_SCHEMA: &str = "colony.task/v1";
+const MAX_ID_LEN: usize = 128;
+const MAX_NAME_LEN: usize = 200;
+const MAX_SUMMARY_LEN: usize = 4_000;
+const MAX_SERVICES: usize = 100;
+const MAX_COST_CENTRES: usize = 100;
+const MAX_ASSIGNEES: usize = 100;
+
+/// A service the company sells or delivers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanyService {
+    /// Stable service identifier.
+    pub id: String,
+    /// Human-readable service name.
+    pub name: String,
+    /// Bounded service description.
+    pub description: String,
+}
+
+/// Accounting purpose of a company cost centre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CostCentreKind {
+    /// Cost centre associated with a customer-facing service.
+    Service,
+    /// Cost centre associated with internal company work.
+    Internal,
+}
+
+/// A deterministic bucket against which work costs are recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CostCentre {
+    /// Stable cost-centre identifier.
+    pub id: String,
+    /// Human-readable cost-centre name.
+    pub name: String,
+    /// Whether this cost centre serves delivery or internal work.
+    pub kind: CostCentreKind,
+    /// Referenced service identifier for service cost centres.
+    pub service_id: Option<String>,
+}
+
+/// Approval state of a company profile created during onboarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompanyOnboardingStatus {
+    /// Profile is still being assembled or reviewed.
+    Draft,
+    /// Owner approved the profile as authoritative.
+    Approved,
+}
+
+/// Owner-authored company operating profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanyProfile {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable company coordinate identifier.
+    pub id: String,
+    /// Customer-facing company name.
+    pub trading_name: String,
+    /// Optional registered company name.
+    pub legal_name: Option<String>,
+    /// Optional public company website.
+    pub website: Option<String>,
+    /// Bounded description of the company.
+    pub summary: String,
+    /// Business model or operating type.
+    pub business_type: String,
+    /// Services the company sells or delivers.
+    pub services: Vec<CompanyService>,
+    /// Customer segments the company serves.
+    pub customer_segments: Vec<String>,
+    /// Deterministic accounting buckets available to work records.
+    pub cost_centres: Vec<CostCentre>,
+    /// Optional source report event used during onboarding.
+    pub source_report_event_id: Option<String>,
+    /// Whether the owner has approved this company profile.
+    pub onboarding_status: CompanyOnboardingStatus,
+    /// Unix timestamp at which the profile was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the profile was last updated.
+    pub updated_at: i64,
+}
+
+/// Commercial reason for performing a unit of work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommercialPurpose {
+    /// Work performed to deliver for a specific client.
+    ClientDelivery,
+    /// Work performed to generate or close sales.
+    Sales,
+    /// Work performed to market the company.
+    Marketing,
+    /// General administrative work.
+    Administration,
+    /// Work performed on the company's internal product or platform.
+    InternalProduct,
+    /// Work whose commercial purpose has not yet been determined.
+    Uncertain,
+}
+
+/// Lifecycle state of a cross-team initiative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InitiativeStatus {
+    /// Initiative has been proposed but not approved.
+    Proposed,
+    /// Initiative has owner approval but has not started.
+    Approved,
+    /// Initiative is currently active.
+    Active,
+    /// Initiative cannot currently progress.
+    Blocked,
+    /// Initiative completed successfully.
+    Completed,
+    /// Initiative was cancelled.
+    Cancelled,
+}
+
+/// A cross-team body of work containing one or more team-owned tasks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Initiative {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable initiative coordinate identifier.
+    pub id: String,
+    /// Company that owns the initiative.
+    pub company_id: String,
+    /// Human-readable initiative title.
+    pub title: String,
+    /// Bounded initiative summary.
+    pub summary: String,
+    /// Current initiative lifecycle state.
+    pub status: InitiativeStatus,
+    /// Persona accountable for the initiative.
+    pub owner_persona_id: String,
+    /// Company cost centre charged for the initiative.
+    pub cost_centre_id: String,
+    /// Commercial reason for the initiative.
+    pub commercial_purpose: CommercialPurpose,
+    /// Optional client organization receiving the work.
+    pub client_organization_id: Option<String>,
+    /// Optional expected total cost in USD.
+    pub expected_cost_usd: Option<f64>,
+    /// Channel in which the initiative originated.
+    pub source_channel_id: String,
+    /// Optional triggering message event.
+    pub source_event_id: Option<String>,
+    /// Unix timestamp at which the initiative was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the initiative was last updated.
+    pub updated_at: i64,
+}
+
+/// Lifecycle state of a single-team task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskStatus {
+    /// Task has been proposed but not accepted.
+    Proposed,
+    /// Task is ready for its owning team.
+    Ready,
+    /// Task is currently being performed.
+    InProgress,
+    /// Task is awaiting quality review.
+    InReview,
+    /// Task cannot currently progress.
+    Blocked,
+    /// Task completed successfully.
+    Completed,
+    /// Task was cancelled.
+    Cancelled,
+}
+
+/// A unit of work owned by exactly one team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanyTask {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable task coordinate identifier.
+    pub id: String,
+    /// Company that owns the task.
+    pub company_id: String,
+    /// Optional initiative containing this task.
+    pub initiative_id: Option<String>,
+    /// Human-readable task title.
+    pub title: String,
+    /// Current task lifecycle state.
+    pub status: TaskStatus,
+    /// The single team accountable for delivery.
+    pub owning_team_id: String,
+    /// Personas currently assigned to perform the task.
+    pub assignee_persona_ids: Vec<String>,
+    /// Persona responsible for quality review.
+    pub qa_persona_id: String,
+    /// Company cost centre charged for the task.
+    pub cost_centre_id: String,
+    /// Commercial reason for the task.
+    pub commercial_purpose: CommercialPurpose,
+    /// Optional client organization receiving the work.
+    pub client_organization_id: Option<String>,
+    /// Channel in which the task originated.
+    pub source_channel_id: String,
+    /// Optional triggering message event.
+    pub source_event_id: Option<String>,
+    /// Whether Colony created this task implicitly from chat.
+    pub implicit: bool,
+    /// Unix timestamp at which the task was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the task was last updated.
+    pub updated_at: i64,
+}
+
+/// Deterministic accounting classification for an agent turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CostClassification {
+    /// Direct cost of delivering work to a named client.
+    Cogs,
+    /// Company operating expense.
+    Opex,
+    /// Classification requires owner or CFO review.
+    NeedsReview,
+}
+
+/// How Colony established the work attribution for a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttributionState {
+    /// The triggering message explicitly referenced the task.
+    Explicit,
+    /// The task was inherited from surrounding conversation context.
+    Inherited,
+    /// Colony created an idempotent implicit task before the turn.
+    ImplicitTask,
+}
+
+/// Encrypted work and accounting snapshot attached to an agent turn metric.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWorkContext {
+    /// Company charged for the turn.
+    pub company_id: String,
+    /// Task charged for the turn.
+    pub task_id: String,
+    /// Optional initiative containing the task.
+    pub initiative_id: Option<String>,
+    /// Team accountable for the task.
+    pub owning_team_id: String,
+    /// Cost centre charged for the turn.
+    pub cost_centre_id: String,
+    /// Commercial reason for the work.
+    pub commercial_purpose: CommercialPurpose,
+    /// Deterministic accounting classification.
+    pub cost_classification: CostClassification,
+    /// How Colony established this attribution.
+    pub attribution_state: AttributionState,
+    /// Optional client organization receiving the work.
+    pub client_organization_id: Option<String>,
+}
+
+/// Minimal team projection used to validate task ownership and QA membership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompanyTeamRef {
+    /// Stable team identifier.
+    pub id: String,
+    /// Persona accountable for team delegation and quality review.
+    pub lead_persona_id: String,
+    /// Personas that currently belong to the team.
+    pub persona_ids: Vec<String>,
+}
+
+/// Display-safe failure produced by a company/work contract validator.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CompanyContractError {
+    /// The content schema does not exactly match the supported version.
+    #[error("unsupported {0} schema")]
+    InvalidSchema(&'static str),
+    /// A stable identifier is blank, malformed, or too long.
+    #[error("invalid identifier in {0}")]
+    InvalidIdentifier(&'static str),
+    /// A required or bounded text field is invalid.
+    #[error("invalid text in {0}")]
+    InvalidText(&'static str),
+    /// A bounded collection contains too many entries.
+    #[error("{field} exceeds the maximum of {max} entries")]
+    TooManyItems {
+        /// Static field name safe to show in logs or UI.
+        field: &'static str,
+        /// Maximum accepted entry count.
+        max: usize,
+    },
+    /// A collection contains the same stable identifier more than once.
+    #[error("duplicate identifier in {0}")]
+    DuplicateIdentifier(&'static str),
+    /// A required referenced record was not supplied or does not exist.
+    #[error("missing reference in {0}")]
+    MissingReference(&'static str),
+    /// Two supplied records disagree about a stable coordinate.
+    #[error("mismatched reference in {0}")]
+    MismatchedReference(&'static str),
+    /// Expected initiative cost is negative or non-finite.
+    #[error("expectedCostUsd must be finite and non-negative")]
+    InvalidExpectedCost,
+    /// The owning team's lead is not included in that team.
+    #[error("owning team lead must be a team member")]
+    TeamLeadNotMember,
+    /// The task QA persona is not included in the owning team.
+    #[error("task QA persona must be an owning-team member")]
+    QaNotOwningTeamMember,
+    /// A task lists one assignee more than once.
+    #[error("task assignee persona identifiers must be unique")]
+    DuplicateAssignee,
+    /// A task assignee is not represented in any supplied team.
+    #[error("task assignees must belong to a supplied team")]
+    AssigneeNotTeamMember,
+    /// The snapshotted cost classification differs from the deterministic rule.
+    #[error("work context cost classification is inconsistent")]
+    CostClassificationMismatch,
+}
+
+/// Validate one owner-authored company profile.
+pub fn validate_company(profile: &CompanyProfile) -> Result<(), CompanyContractError> {
+    validate_schema(&profile.schema, COMPANY_SCHEMA, "company")?;
+    validate_id(&profile.id, "company.id")?;
+    validate_required_text(&profile.trading_name, "company.tradingName", MAX_NAME_LEN)?;
+    validate_optional_text(
+        profile.legal_name.as_deref(),
+        "company.legalName",
+        MAX_NAME_LEN,
+    )?;
+    validate_text(&profile.summary, "company.summary", MAX_SUMMARY_LEN)?;
+    validate_required_text(&profile.business_type, "company.businessType", MAX_NAME_LEN)?;
+    validate_optional_id(
+        profile.source_report_event_id.as_deref(),
+        "company.sourceReportEventId",
+    )?;
+
+    ensure_cardinality(&profile.services, "company.services", MAX_SERVICES)?;
+    ensure_cardinality(
+        &profile.cost_centres,
+        "company.costCentres",
+        MAX_COST_CENTRES,
+    )?;
+
+    let mut service_ids = HashSet::new();
+    for service in &profile.services {
+        validate_id(&service.id, "company.services.id")?;
+        validate_required_text(&service.name, "company.services.name", MAX_NAME_LEN)?;
+        validate_text(
+            &service.description,
+            "company.services.description",
+            MAX_SUMMARY_LEN,
+        )?;
+        if !service_ids.insert(service.id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier(
+                "company.services.id",
+            ));
+        }
+    }
+
+    let mut cost_centre_ids = HashSet::new();
+    for cost_centre in &profile.cost_centres {
+        validate_id(&cost_centre.id, "company.costCentres.id")?;
+        validate_required_text(&cost_centre.name, "company.costCentres.name", MAX_NAME_LEN)?;
+        if !cost_centre_ids.insert(cost_centre.id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier(
+                "company.costCentres.id",
+            ));
+        }
+        match (cost_centre.kind, cost_centre.service_id.as_deref()) {
+            (CostCentreKind::Service, Some(service_id)) => {
+                validate_id(service_id, "company.costCentres.serviceId")?;
+                if !service_ids.contains(service_id) {
+                    return Err(CompanyContractError::MissingReference(
+                        "company.costCentres.serviceId",
+                    ));
+                }
+            }
+            (CostCentreKind::Service, None) => {
+                return Err(CompanyContractError::MissingReference(
+                    "company.costCentres.serviceId",
+                ));
+            }
+            (CostCentreKind::Internal, Some(_)) => {
+                return Err(CompanyContractError::MismatchedReference(
+                    "company.costCentres.serviceId",
+                ));
+            }
+            (CostCentreKind::Internal, None) => {}
+        }
+    }
+
+    for segment in &profile.customer_segments {
+        validate_required_text(segment, "company.customerSegments", MAX_NAME_LEN)?;
+    }
+
+    Ok(())
+}
+
+/// Validate one initiative against its canonical company profile.
+pub fn validate_initiative(
+    initiative: &Initiative,
+    company: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_company(company)?;
+    validate_schema(&initiative.schema, INITIATIVE_SCHEMA, "initiative")?;
+    validate_id(&initiative.id, "initiative.id")?;
+    validate_id(&initiative.company_id, "initiative.companyId")?;
+    validate_required_text(&initiative.title, "initiative.title", MAX_NAME_LEN)?;
+    validate_text(&initiative.summary, "initiative.summary", MAX_SUMMARY_LEN)?;
+    validate_id(&initiative.owner_persona_id, "initiative.ownerPersonaId")?;
+    validate_id(&initiative.cost_centre_id, "initiative.costCentreId")?;
+    validate_optional_id(
+        initiative.client_organization_id.as_deref(),
+        "initiative.clientOrganizationId",
+    )?;
+    validate_id(&initiative.source_channel_id, "initiative.sourceChannelId")?;
+    validate_optional_id(
+        initiative.source_event_id.as_deref(),
+        "initiative.sourceEventId",
+    )?;
+
+    if initiative.company_id != company.id {
+        return Err(CompanyContractError::MismatchedReference(
+            "initiative.companyId",
+        ));
+    }
+    if !company
+        .cost_centres
+        .iter()
+        .any(|cost_centre| cost_centre.id == initiative.cost_centre_id)
+    {
+        return Err(CompanyContractError::MissingReference(
+            "initiative.costCentreId",
+        ));
+    }
+    if initiative
+        .expected_cost_usd
+        .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+    {
+        return Err(CompanyContractError::InvalidExpectedCost);
+    }
+
+    Ok(())
+}
+
+/// Validate one task against its canonical company, optional initiative, and teams.
+pub fn validate_task(
+    task: &CompanyTask,
+    company: &CompanyProfile,
+    initiative: Option<&Initiative>,
+    teams: &[CompanyTeamRef],
+) -> Result<(), CompanyContractError> {
+    validate_company(company)?;
+    validate_teams(teams)?;
+    validate_schema(&task.schema, TASK_SCHEMA, "task")?;
+    validate_id(&task.id, "task.id")?;
+    validate_id(&task.company_id, "task.companyId")?;
+    validate_optional_id(task.initiative_id.as_deref(), "task.initiativeId")?;
+    validate_required_text(&task.title, "task.title", MAX_NAME_LEN)?;
+    validate_id(&task.owning_team_id, "task.owningTeamId")?;
+    validate_id(&task.qa_persona_id, "task.qaPersonaId")?;
+    validate_id(&task.cost_centre_id, "task.costCentreId")?;
+    validate_optional_id(
+        task.client_organization_id.as_deref(),
+        "task.clientOrganizationId",
+    )?;
+    validate_id(&task.source_channel_id, "task.sourceChannelId")?;
+    validate_optional_id(task.source_event_id.as_deref(), "task.sourceEventId")?;
+    ensure_cardinality(
+        &task.assignee_persona_ids,
+        "task.assigneePersonaIds",
+        MAX_ASSIGNEES,
+    )?;
+
+    if task.company_id != company.id {
+        return Err(CompanyContractError::MismatchedReference("task.companyId"));
+    }
+    match (task.initiative_id.as_deref(), initiative) {
+        (Some(task_initiative_id), Some(initiative)) => {
+            validate_initiative(initiative, company)?;
+            if initiative.id != task_initiative_id {
+                return Err(CompanyContractError::MismatchedReference(
+                    "task.initiativeId",
+                ));
+            }
+            if initiative.company_id != task.company_id {
+                return Err(CompanyContractError::MismatchedReference(
+                    "task.initiative.companyId",
+                ));
+            }
+        }
+        (Some(_), None) => {
+            return Err(CompanyContractError::MissingReference("task.initiativeId"));
+        }
+        (None, Some(_)) => {
+            return Err(CompanyContractError::MismatchedReference(
+                "task.initiativeId",
+            ));
+        }
+        (None, None) => {}
+    }
+    if !company
+        .cost_centres
+        .iter()
+        .any(|cost_centre| cost_centre.id == task.cost_centre_id)
+    {
+        return Err(CompanyContractError::MissingReference("task.costCentreId"));
+    }
+
+    let owning_team = teams
+        .iter()
+        .find(|team| team.id == task.owning_team_id)
+        .ok_or(CompanyContractError::MissingReference("task.owningTeamId"))?;
+    if !owning_team.persona_ids.contains(&task.qa_persona_id) {
+        return Err(CompanyContractError::QaNotOwningTeamMember);
+    }
+
+    let mut assignees = HashSet::new();
+    for assignee in &task.assignee_persona_ids {
+        validate_id(assignee, "task.assigneePersonaIds")?;
+        if !assignees.insert(assignee.as_str()) {
+            return Err(CompanyContractError::DuplicateAssignee);
+        }
+        if !teams.iter().any(|team| team.persona_ids.contains(assignee)) {
+            return Err(CompanyContractError::AssigneeNotTeamMember);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_teams(teams: &[CompanyTeamRef]) -> Result<(), CompanyContractError> {
+    let mut team_ids = HashSet::new();
+    for team in teams {
+        validate_id(&team.id, "team.id")?;
+        validate_id(&team.lead_persona_id, "team.leadPersonaId")?;
+        if !team_ids.insert(team.id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier("teams.id"));
+        }
+
+        let mut persona_ids = HashSet::new();
+        for persona_id in &team.persona_ids {
+            validate_id(persona_id, "team.personaIds")?;
+            if !persona_ids.insert(persona_id.as_str()) {
+                return Err(CompanyContractError::DuplicateIdentifier("team.personaIds"));
+            }
+        }
+        if !persona_ids.contains(team.lead_persona_id.as_str()) {
+            return Err(CompanyContractError::TeamLeadNotMember);
+        }
+    }
+    Ok(())
+}
+
+/// Classify cost deterministically from commercial purpose and client presence.
+pub fn classify_cost(
+    purpose: CommercialPurpose,
+    client_organization_id: Option<&str>,
+) -> CostClassification {
+    match purpose {
+        CommercialPurpose::ClientDelivery
+            if client_organization_id.is_some_and(|id| !id.trim().is_empty()) =>
+        {
+            CostClassification::Cogs
+        }
+        CommercialPurpose::ClientDelivery | CommercialPurpose::Uncertain => {
+            CostClassification::NeedsReview
+        }
+        CommercialPurpose::Sales
+        | CommercialPurpose::Marketing
+        | CommercialPurpose::Administration
+        | CommercialPurpose::InternalProduct => CostClassification::Opex,
+    }
+}
+
+impl AgentWorkContext {
+    /// Validate identifiers and the deterministic cost-classification snapshot.
+    pub fn validate(&self) -> Result<(), CompanyContractError> {
+        validate_id(&self.company_id, "workContext.companyId")?;
+        validate_id(&self.task_id, "workContext.taskId")?;
+        validate_optional_id(self.initiative_id.as_deref(), "workContext.initiativeId")?;
+        validate_id(&self.owning_team_id, "workContext.owningTeamId")?;
+        validate_id(&self.cost_centre_id, "workContext.costCentreId")?;
+        validate_optional_id(
+            self.client_organization_id.as_deref(),
+            "workContext.clientOrganizationId",
+        )?;
+        if self.cost_classification
+            != classify_cost(
+                self.commercial_purpose,
+                self.client_organization_id.as_deref(),
+            )
+        {
+            return Err(CompanyContractError::CostClassificationMismatch);
+        }
+        Ok(())
+    }
+}
+
+fn validate_schema(
+    actual: &str,
+    expected: &str,
+    entity: &'static str,
+) -> Result<(), CompanyContractError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(CompanyContractError::InvalidSchema(entity))
+    }
+}
+
+fn validate_id(value: &str, field: &'static str) -> Result<(), CompanyContractError> {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return Err(CompanyContractError::InvalidIdentifier(field));
+    };
+    if value.len() > MAX_ID_LEN
+        || !first.is_ascii_lowercase() && !first.is_ascii_digit()
+        || !bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+    {
+        return Err(CompanyContractError::InvalidIdentifier(field));
+    }
+    Ok(())
+}
+
+fn validate_optional_id(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<(), CompanyContractError> {
+    if let Some(value) = value {
+        validate_id(value, field)?;
+    }
+    Ok(())
+}
+
+fn validate_required_text(
+    value: &str,
+    field: &'static str,
+    max: usize,
+) -> Result<(), CompanyContractError> {
+    if value.trim().is_empty() {
+        return Err(CompanyContractError::InvalidText(field));
+    }
+    validate_text(value, field, max)
+}
+
+fn validate_optional_text(
+    value: Option<&str>,
+    field: &'static str,
+    max: usize,
+) -> Result<(), CompanyContractError> {
+    if let Some(value) = value {
+        validate_required_text(value, field, max)?;
+    }
+    Ok(())
+}
+
+fn validate_text(value: &str, field: &'static str, max: usize) -> Result<(), CompanyContractError> {
+    if value.chars().count() > max {
+        return Err(CompanyContractError::InvalidText(field));
+    }
+    Ok(())
+}
+
+fn ensure_cardinality<T>(
+    values: &[T],
+    field: &'static str,
+    max: usize,
+) -> Result<(), CompanyContractError> {
+    if values.len() > max {
+        return Err(CompanyContractError::TooManyItems { field, max });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -185,6 +185,15 @@ pub const KIND_PERSONA: u32 = 30175;
 /// Chat-native Block catalog head (parameterized replaceable, relay-authored).
 pub const KIND_BLOCK_CATALOG_ENTRY: u32 = 30178;
 
+/// Colony company profile (parameterized replaceable, company-owner-authored).
+pub const KIND_COMPANY_PROFILE: u32 = 30179;
+
+/// Colony cross-team initiative (parameterized replaceable, company-owner-authored).
+pub const KIND_INITIATIVE: u32 = 30180;
+
+/// Colony single-team task (parameterized replaceable, company-owner-authored).
+pub const KIND_TASK: u32 = 30181;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -597,6 +606,9 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_EVENT_REMINDER,
     KIND_PERSONA,
     KIND_BLOCK_CATALOG_ENTRY,
+    KIND_COMPANY_PROFILE,
+    KIND_INITIATIVE,
+    KIND_TASK,
     KIND_BLOCK_ACTION,
     KIND_BLOCK_RECEIPT,
     KIND_BLOCK_MANIFEST,
@@ -800,6 +812,9 @@ pub fn event_kind_i32(event: &nostr::Event) -> i32 {
 const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–19999
 const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_BLOCK_CATALOG_ENTRY)); // 30178 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_COMPANY_PROFILE)); // 30179 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_INITIATIVE)); // 30180 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_TASK)); // 30181 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
@@ -822,6 +837,12 @@ const _: () = assert!(
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);
 const _: () = assert!(KIND_CANVAS <= u16::MAX as u32);
 const _: () = assert!(KIND_HUDDLE_GUIDELINES <= u16::MAX as u32);
+const _: () = assert!(KIND_COMPANY_PROFILE <= u16::MAX as u32);
+const _: () = assert!(KIND_INITIATIVE <= u16::MAX as u32);
+const _: () = assert!(KIND_TASK <= u16::MAX as u32);
+const _: () = assert!(!is_ephemeral(KIND_COMPANY_PROFILE));
+const _: () = assert!(!is_ephemeral(KIND_INITIATIVE));
+const _: () = assert!(!is_ephemeral(KIND_TASK));
 const _: () = assert!(EPHEMERAL_KIND_MIN < EPHEMERAL_KIND_MAX);
 // Compile-time: KIND_AGENT_TURN_METRIC is a regular stored kind (not ephemeral, not replaceable).
 const _: () = assert!(!is_ephemeral(KIND_AGENT_TURN_METRIC));
