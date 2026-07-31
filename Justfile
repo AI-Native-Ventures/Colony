@@ -159,23 +159,28 @@ _ensure-sidecar-stubs:
         touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
 
-# Ensure Docker dev services (Postgres, Redis, etc.) are running and healthy
-_ensure-services:
+# Ensure relay runtime services are running and healthy. Keep this path narrow:
+# `just dev` should not pull optional Adminer, Keycloak, or Prometheus images.
+_ensure-runtime-services:
     #!/usr/bin/env bash
     set -euo pipefail
     pg=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-postgres 2>/dev/null || echo "not_found")
     redis=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-redis 2>/dev/null || echo "not_found")
-    if [[ "$pg" == "healthy" && "$redis" == "healthy" ]]; then
+    minio=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-minio 2>/dev/null || echo "not_found")
+    minio_init=$(docker inspect --format '{{"{{"}}.State.Status{{"}}"}}:{{"{{"}}.State.ExitCode{{"}}"}}' buzz-minio-init 2>/dev/null || echo "not_found")
+    if [[ "$pg" == "healthy" && "$redis" == "healthy" && "$minio" == "healthy" && "$minio_init" == "exited:0" ]]; then
         echo "Services already healthy"
         exit 0
     fi
     echo "Starting services..."
-    docker compose up -d || true
+    docker compose up -d postgres redis minio minio-init || true
     echo -n "Waiting for services"
     for i in $(seq 1 40); do
         pg=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-postgres 2>/dev/null || echo "not_found")
         redis=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-redis 2>/dev/null || echo "not_found")
-        if [[ "$pg" == "healthy" && "$redis" == "healthy" ]]; then
+        minio=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-minio 2>/dev/null || echo "not_found")
+        minio_init=$(docker inspect --format '{{"{{"}}.State.Status{{"}}"}}:{{"{{"}}.State.ExitCode{{"}}"}}' buzz-minio-init 2>/dev/null || echo "not_found")
+        if [[ "$pg" == "healthy" && "$redis" == "healthy" && "$minio" == "healthy" && "$minio_init" == "exited:0" ]]; then
             echo " ready"
             exit 0
         fi
@@ -185,8 +190,13 @@ _ensure-services:
     echo " timed out"
     exit 1
 
+# Ensure the complete local development stack is running. `just setup` uses this
+# fuller path; relay and desktop startup use `_ensure-runtime-services`.
+_ensure-services: _ensure-runtime-services
+    docker compose up -d adminer keycloak prometheus
+
 # Apply database migrations and seed the local dev community if the dev database is running
-_ensure-migrations: _ensure-services
+_ensure-migrations: _ensure-runtime-services
     cargo run -p buzz-admin -- migrate
     ./scripts/seed-local-community.sh
 
