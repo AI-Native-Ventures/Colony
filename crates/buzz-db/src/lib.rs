@@ -56,7 +56,8 @@ pub mod workflow;
 
 pub use error::{DbError, Result};
 pub use event::{
-    BlockActionInsert, BlockCatalogActionApply, EventQuery, ReactionEventInsertOutcome,
+    BlockActionInsert, BlockCatalogActionApply, CompanyActionApply, EventQuery,
+    ReactionEventInsertOutcome,
 };
 
 use chrono::{DateTime, Utc};
@@ -2481,6 +2482,215 @@ impl Db {
 
         tx.commit().await?;
         Ok(BlockCatalogActionApply::Applied {
+            action,
+            head,
+            receipt,
+        })
+    }
+
+    /// Atomically apply one owner-authorized Colony Company Action.
+    ///
+    /// Company, Initiative, and Task heads are relay-authored, so the only
+    /// authority check that matters is whether the *action's* author is the
+    /// community's current human owner — and that must hold at commit time,
+    /// not at request time. The owner rows are therefore locked `FOR UPDATE`
+    /// inside this transaction, the same lock `transfer_ownership` takes, so an
+    /// action queued before a transfer is rejected after the transfer lands
+    /// instead of committing against stale authority.
+    ///
+    /// `expected_head_event_id` is the compare-and-set token: `None` asserts
+    /// the head does not yet exist (a create), `Some(id)` asserts it is exactly
+    /// that event (a replacement). A mismatch rolls back with
+    /// [`CompanyActionApply::StaleHead`] and stores nothing.
+    ///
+    /// The idempotency claim, action, head, and receipt commit as one batch.
+    /// Replaying an action ID returns the original result without writing.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn apply_company_action_once(
+        &self,
+        community: CommunityId,
+        action_event: &nostr::Event,
+        head_event: &nostr::Event,
+        head_d_tag: &str,
+        receipt_event: &nostr::Event,
+        idempotency_key: Uuid,
+        actor_pubkey_hex: &str,
+        expected_head_event_id: Option<&[u8]>,
+    ) -> Result<CompanyActionApply> {
+        let expected_kinds = [
+            (
+                action_event,
+                buzz_core::kind::KIND_COMPANY_ACTION,
+                "company action",
+            ),
+            (
+                receipt_event,
+                buzz_core::kind::KIND_COMPANY_RECEIPT,
+                "company receipt",
+            ),
+        ];
+        for (event, expected_kind, label) in expected_kinds {
+            if event.kind.as_u16() as u32 != expected_kind {
+                return Err(DbError::InvalidData(format!(
+                    "{label} has kind {}, expected {expected_kind}",
+                    event.kind.as_u16()
+                )));
+            }
+        }
+        let head_kind = head_event.kind.as_u16() as u32;
+        if !matches!(
+            head_kind,
+            buzz_core::kind::KIND_COMPANY_PROFILE
+                | buzz_core::kind::KIND_INITIATIVE
+                | buzz_core::kind::KIND_TASK
+        ) {
+            return Err(DbError::InvalidData(format!(
+                "company head has kind {head_kind}, expected a Company, Initiative, or Task head"
+            )));
+        }
+        if head_d_tag.len() > event::D_TAG_MAX_LEN {
+            return Err(DbError::InvalidData(format!(
+                "company head d tag exceeds {} bytes",
+                event::D_TAG_MAX_LEN
+            )));
+        }
+        let head_d_tags = head_event
+            .tags
+            .iter()
+            .filter_map(|tag| {
+                let parts = tag.as_slice();
+                (parts.first().is_some_and(|part| part == "d")).then_some(parts)
+            })
+            .collect::<Vec<_>>();
+        if head_d_tags.len() != 1 || head_d_tags[0].len() != 2 || head_d_tags[0][1] != head_d_tag {
+            return Err(DbError::InvalidData(
+                "company head must contain exactly one matching d tag".to_owned(),
+            ));
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        // Authority first, and under a lock: `transfer_ownership` takes this
+        // exact `FOR UPDATE` on the owner rows, so the two serialize.
+        let owners: Vec<String> = sqlx::query_scalar(
+            "SELECT pubkey FROM relay_members \
+             WHERE community_id = $1 AND role = 'owner' \
+             FOR UPDATE",
+        )
+        .bind(community.as_uuid())
+        .fetch_all(&mut *tx)
+        .await?;
+        let actor = actor_pubkey_hex.to_ascii_lowercase();
+        if !owners.iter().any(|owner| owner == &actor) {
+            tx.rollback().await?;
+            return Ok(CompanyActionApply::NotOwner);
+        }
+
+        let claimed_action_id: Option<Vec<u8>> = sqlx::query_scalar(
+            r#"
+            INSERT INTO company_action_claims
+                (community_id, idempotency_key, action_event_id, head_event_id, receipt_event_id)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            RETURNING action_event_id
+            "#,
+        )
+        .bind(community.as_uuid())
+        .bind(idempotency_key)
+        .bind(action_event.id.as_bytes().as_slice())
+        .bind(head_event.id.as_bytes().as_slice())
+        .bind(receipt_event.id.as_bytes().as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if claimed_action_id.is_none() {
+            let original_action_event_id: Option<Vec<u8>> = sqlx::query_scalar(
+                r#"
+                SELECT action_event_id
+                FROM company_action_claims
+                WHERE community_id = $1 AND idempotency_key = $2
+                "#,
+            )
+            .bind(community.as_uuid())
+            .bind(idempotency_key)
+            .fetch_optional(&mut *tx)
+            .await?;
+            tx.rollback().await?;
+            return original_action_event_id
+                .map(|original_action_event_id| CompanyActionApply::Duplicate {
+                    original_action_event_id,
+                })
+                .ok_or_else(|| {
+                    DbError::InvalidData(
+                        "company action claim conflict had no durable winning row".to_owned(),
+                    )
+                });
+        }
+
+        // Compare-and-set against the head actually stored right now. Read with
+        // the same ordering `replace_parameterized_event_tx` uses so the row we
+        // check is the row that would be superseded.
+        let current_head_event_id: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT id FROM events \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 \
+               AND deleted_at IS NULL \
+             ORDER BY created_at DESC, id ASC LIMIT 1",
+        )
+        .bind(community.as_uuid())
+        .bind(head_kind as i32)
+        .bind(head_event.pubkey.to_bytes().as_slice())
+        .bind(head_d_tag)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if current_head_event_id.as_deref() != expected_head_event_id {
+            tx.rollback().await?;
+            return Ok(CompanyActionApply::StaleHead {
+                current_head_event_id,
+            });
+        }
+
+        let (action, action_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            action_event,
+            None,
+            None,
+        )
+        .await?;
+        if !action_inserted {
+            tx.rollback().await?;
+            return Err(DbError::InvalidData(
+                "company action event was already stored".to_owned(),
+            ));
+        }
+
+        let (head, head_inserted) =
+            replace_parameterized_event_tx(&mut tx, community, head_event, head_d_tag, None)
+                .await?;
+        if !head_inserted {
+            tx.rollback().await?;
+            return Err(DbError::InvalidData(
+                "company head lost NIP-33 replacement ordering".to_owned(),
+            ));
+        }
+
+        let (receipt, receipt_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            receipt_event,
+            None,
+            None,
+        )
+        .await?;
+        if !receipt_inserted {
+            tx.rollback().await?;
+            return Err(DbError::InvalidData(
+                "company receipt event was already stored".to_owned(),
+            ));
+        }
+
+        tx.commit().await?;
+        Ok(CompanyActionApply::Applied {
             action,
             head,
             receipt,
@@ -5398,6 +5608,444 @@ mod tests {
         .await
         .expect("count rolled-back catalog events");
         assert_eq!(event_count, 0, "failed batch must store no supplied event");
+    }
+
+    // ── Colony Company Action transaction ────────────────────────────────
+
+    struct CompanyBatch {
+        action: Event,
+        head: Event,
+        receipt: Event,
+        d_tag: String,
+    }
+
+    fn company_batch(
+        relay_keys: &Keys,
+        owner_keys: &Keys,
+        d_tag: &str,
+        head_created_at: u64,
+        nonce: &str,
+    ) -> CompanyBatch {
+        let action = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_COMPANY_ACTION as u16),
+            format!(r#"{{"nonce":"{nonce}"}}"#),
+        )
+        .sign_with_keys(owner_keys)
+        .expect("sign company action");
+        let head = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_COMPANY_PROFILE as u16),
+            format!(r#"{{"id":"{d_tag}","nonce":"{nonce}"}}"#),
+        )
+        .tags([Tag::parse(["d", d_tag]).expect("company d tag")])
+        .custom_created_at(Timestamp::from(head_created_at))
+        .sign_with_keys(relay_keys)
+        .expect("sign company head");
+        let receipt = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_COMPANY_RECEIPT as u16),
+            format!(r#"{{"nonce":"{nonce}"}}"#),
+        )
+        .sign_with_keys(relay_keys)
+        .expect("sign company receipt");
+        CompanyBatch {
+            action,
+            head,
+            receipt,
+            d_tag: d_tag.to_owned(),
+        }
+    }
+
+    async fn seed_owner(pool: &PgPool, community: Uuid, pubkey: &str) {
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'owner')",
+        )
+        .bind(community)
+        .bind(pubkey.to_ascii_lowercase())
+        .execute(pool)
+        .await
+        .expect("seed owner");
+    }
+
+    async fn stored_kind_count(pool: &PgPool, community: Uuid, kind: u32) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id = $1 AND kind = $2")
+            .bind(community)
+            .bind(kind as i32)
+            .fetch_one(pool)
+            .await
+            .expect("count stored events")
+    }
+
+    /// Company heads are relay-authored, so the only authority that matters is
+    /// whether the ACTION's author is the current owner — and it must hold at
+    /// commit time. A non-owner must store nothing at all.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_action_from_a_non_owner_stores_nothing() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        let intruder = Keys::generate();
+        seed_owner(&db.pool, *community.as_uuid(), &owner.public_key().to_hex()).await;
+
+        let batch = company_batch(&relay, &intruder, "acme", 1_000, "intruder");
+        let outcome = db
+            .apply_company_action_once(
+                community,
+                &batch.action,
+                &batch.head,
+                &batch.d_tag,
+                &batch.receipt,
+                Uuid::new_v4(),
+                &intruder.public_key().to_hex(),
+                None,
+            )
+            .await
+            .expect("broker call");
+
+        assert!(matches!(outcome, CompanyActionApply::NotOwner));
+        for kind in [
+            buzz_core::kind::KIND_COMPANY_ACTION,
+            buzz_core::kind::KIND_COMPANY_PROFILE,
+            buzz_core::kind::KIND_COMPANY_RECEIPT,
+        ] {
+            assert_eq!(
+                stored_kind_count(&db.pool, *community.as_uuid(), kind).await,
+                0,
+                "kind {kind} must not be stored for a non-owner action"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_action_from_the_owner_commits_action_head_and_receipt() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        seed_owner(&db.pool, *community.as_uuid(), &owner.public_key().to_hex()).await;
+
+        let batch = company_batch(&relay, &owner, "acme", 1_000, "create");
+        let outcome = db
+            .apply_company_action_once(
+                community,
+                &batch.action,
+                &batch.head,
+                &batch.d_tag,
+                &batch.receipt,
+                Uuid::new_v4(),
+                &owner.public_key().to_hex(),
+                None,
+            )
+            .await
+            .expect("broker call");
+
+        assert!(matches!(outcome, CompanyActionApply::Applied { .. }));
+        for kind in [
+            buzz_core::kind::KIND_COMPANY_ACTION,
+            buzz_core::kind::KIND_COMPANY_PROFILE,
+            buzz_core::kind::KIND_COMPANY_RECEIPT,
+        ] {
+            assert_eq!(
+                stored_kind_count(&db.pool, *community.as_uuid(), kind).await,
+                1,
+                "kind {kind} must be stored exactly once"
+            );
+        }
+    }
+
+    /// A replacement asserts which head it is replacing. If that assertion is
+    /// wrong the whole batch must roll back — never a partial replace.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_action_with_a_stale_expected_head_stores_nothing() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        seed_owner(&db.pool, *community.as_uuid(), &owner_hex).await;
+
+        let first = company_batch(&relay, &owner, "acme", 1_000, "create");
+        db.apply_company_action_once(
+            community,
+            &first.action,
+            &first.head,
+            &first.d_tag,
+            &first.receipt,
+            Uuid::new_v4(),
+            &owner_hex,
+            None,
+        )
+        .await
+        .expect("first batch")
+        .applied_or_panic();
+
+        // Points at an event that is not the stored head.
+        let stale = company_batch(&relay, &owner, "acme", 2_000, "stale");
+        let outcome = db
+            .apply_company_action_once(
+                community,
+                &stale.action,
+                &stale.head,
+                &stale.d_tag,
+                &stale.receipt,
+                Uuid::new_v4(),
+                &owner_hex,
+                Some(stale.action.id.as_bytes().as_slice()),
+            )
+            .await
+            .expect("broker call");
+
+        match outcome {
+            CompanyActionApply::StaleHead {
+                current_head_event_id,
+            } => assert_eq!(
+                current_head_event_id.as_deref(),
+                Some(first.head.id.as_bytes().as_slice()),
+                "conflict must report the head that is actually stored"
+            ),
+            other => panic!("expected StaleHead, got {other:?}"),
+        }
+        assert_eq!(
+            stored_kind_count(
+                &db.pool,
+                *community.as_uuid(),
+                buzz_core::kind::KIND_COMPANY_ACTION
+            )
+            .await,
+            1,
+            "the conflicting action must not be stored"
+        );
+    }
+
+    /// A create asserts there is no head yet. Racing two creates must not let
+    /// the second silently replace the first.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_create_against_an_existing_head_is_a_conflict() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        seed_owner(&db.pool, *community.as_uuid(), &owner_hex).await;
+
+        let first = company_batch(&relay, &owner, "acme", 1_000, "create");
+        db.apply_company_action_once(
+            community,
+            &first.action,
+            &first.head,
+            &first.d_tag,
+            &first.receipt,
+            Uuid::new_v4(),
+            &owner_hex,
+            None,
+        )
+        .await
+        .expect("first batch")
+        .applied_or_panic();
+
+        let second = company_batch(&relay, &owner, "acme", 2_000, "create-again");
+        let outcome = db
+            .apply_company_action_once(
+                community,
+                &second.action,
+                &second.head,
+                &second.d_tag,
+                &second.receipt,
+                Uuid::new_v4(),
+                &owner_hex,
+                None,
+            )
+            .await
+            .expect("broker call");
+
+        assert!(matches!(outcome, CompanyActionApply::StaleHead { .. }));
+    }
+
+    /// Replaying one action ID must return the original result, not create a
+    /// second record.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_action_replay_returns_the_original_without_writing() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        seed_owner(&db.pool, *community.as_uuid(), &owner_hex).await;
+
+        let key = Uuid::new_v4();
+        let first = company_batch(&relay, &owner, "acme", 1_000, "create");
+        db.apply_company_action_once(
+            community,
+            &first.action,
+            &first.head,
+            &first.d_tag,
+            &first.receipt,
+            key,
+            &owner_hex,
+            None,
+        )
+        .await
+        .expect("first batch")
+        .applied_or_panic();
+
+        let retry = company_batch(&relay, &owner, "acme", 2_000, "retry");
+        let outcome = db
+            .apply_company_action_once(
+                community,
+                &retry.action,
+                &retry.head,
+                &retry.d_tag,
+                &retry.receipt,
+                key,
+                &owner_hex,
+                Some(first.head.id.as_bytes().as_slice()),
+            )
+            .await
+            .expect("broker call");
+
+        match outcome {
+            CompanyActionApply::Duplicate {
+                original_action_event_id,
+            } => assert_eq!(
+                original_action_event_id.as_slice(),
+                first.action.id.as_bytes().as_slice()
+            ),
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        assert_eq!(
+            stored_kind_count(
+                &db.pool,
+                *community.as_uuid(),
+                buzz_core::kind::KIND_COMPANY_PROFILE
+            )
+            .await,
+            1,
+            "a replay must not add a second head"
+        );
+    }
+
+    /// The head kind and its `d` tag are part of the coordinate. A mismatch is
+    /// a caller bug and must be refused before anything is written.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_action_rejects_a_head_whose_d_tag_disagrees() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        seed_owner(&db.pool, *community.as_uuid(), &owner_hex).await;
+
+        let batch = company_batch(&relay, &owner, "acme", 1_000, "mismatch");
+        let error = db
+            .apply_company_action_once(
+                community,
+                &batch.action,
+                &batch.head,
+                "not-acme",
+                &batch.receipt,
+                Uuid::new_v4(),
+                &owner_hex,
+                None,
+            )
+            .await
+            .expect_err("mismatched d tag must be refused");
+        assert!(
+            format!("{error}").contains("exactly one matching d tag"),
+            "{error}"
+        );
+    }
+
+    /// The plan's ownership invariant: an action authored by the previous owner
+    /// must fail once ownership has moved. The `FOR UPDATE` on the owner rows is
+    /// the same lock `transfer_ownership` takes, so an action already in flight
+    /// serializes behind the transfer rather than committing against stale
+    /// authority.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_action_from_the_previous_owner_fails_after_a_transfer() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let old_owner = Keys::generate();
+        let new_owner = Keys::generate();
+        let old_hex = old_owner.public_key().to_hex();
+        let new_hex = new_owner.public_key().to_hex();
+        seed_owner(&db.pool, *community.as_uuid(), &old_hex).await;
+
+        // The old owner could act before the transfer.
+        let before = company_batch(&relay, &old_owner, "acme", 1_000, "before");
+        db.apply_company_action_once(
+            community,
+            &before.action,
+            &before.head,
+            &before.d_tag,
+            &before.receipt,
+            Uuid::new_v4(),
+            &old_hex,
+            None,
+        )
+        .await
+        .expect("pre-transfer batch")
+        .applied_or_panic();
+
+        sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2)")
+            .bind(community.as_uuid())
+            .bind(hex::decode(&new_hex).expect("hex pubkey"))
+            .execute(&db.pool)
+            .await
+            .ok();
+        let transfer = db
+            .transfer_ownership(community, &new_hex, &old_hex)
+            .await
+            .expect("transfer ownership");
+        assert!(
+            matches!(transfer, relay_members::TransferResult::Transferred { .. }),
+            "expected a transfer, got {transfer:?}"
+        );
+
+        // The same identity, now demoted, must be refused.
+        let after = company_batch(&relay, &old_owner, "acme", 2_000, "after");
+        let outcome = db
+            .apply_company_action_once(
+                community,
+                &after.action,
+                &after.head,
+                &after.d_tag,
+                &after.receipt,
+                Uuid::new_v4(),
+                &old_hex,
+                Some(before.head.id.as_bytes().as_slice()),
+            )
+            .await
+            .expect("broker call");
+
+        assert!(
+            matches!(outcome, CompanyActionApply::NotOwner),
+            "the previous owner must lose authority, got {outcome:?}"
+        );
+        assert_eq!(
+            stored_kind_count(
+                &db.pool,
+                *community.as_uuid(),
+                buzz_core::kind::KIND_COMPANY_PROFILE
+            )
+            .await,
+            1,
+            "the refused action must not replace the head"
+        );
+    }
+
+    async fn setup_company_db() -> Db {
+        let db = setup_db().await;
+        crate::migration::run_migrations(&db.pool)
+            .await
+            .expect("apply company action claims migration");
+        db
     }
 
     #[tokio::test]
