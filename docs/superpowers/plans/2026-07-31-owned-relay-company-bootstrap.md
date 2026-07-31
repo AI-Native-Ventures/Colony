@@ -18,6 +18,7 @@
 - Do not rename internal Buzz symbols or protocols in this phase.
 - Do not put a human or agent private key in `.env`, localStorage, logs, build output, or test fixtures.
 - Do not deploy publicly or rotate production secrets until the user has approved the domain, host, owner public key, and recurring infrastructure cost.
+- Do not start the public relay without an approved immutable image, TLS at the edge and origin, and a restore-tested write-consistent recovery procedure.
 - Keep implemented, locally tested, packaged, deployed, and live-proven as distinct states.
 
 ## Acceptance Gates
@@ -26,8 +27,9 @@
 2. **Deployment contract:** one command creates a mode-`600` Compose `.env` with an explicit owner public key, stable generated secrets, closed membership, and no placeholders or private owner key.
 3. **Desktop regression:** a fresh owned build stores exactly one community with the current public key, stores no `nsec`, shows no community chooser, and invokes no Builderlab command.
 4. **Local quality:** focused shell contracts, desktop unit checks, compiled-flag tests, targeted Playwright integration, and repository checks pass.
-5. **Relay live proof:** the approved public hostname is healthy, maps to the intended community, fails closed for unknown hosts, persists data across restart, and enforces owner/member/agent authorization.
-6. **Packaged product proof:** a fresh packaged app enters the owned company without Builderlab, sends chat messages, starts an agent, receives an agent response, and preserves human/community/agent identities after restart.
+5. **Recovery proof:** provider-specific backup and restore commands reproduce Postgres, object/media, git, secrets, and any required Redis state from one write-consistent recovery point in an isolated restore drill.
+6. **Relay live proof:** the approved public hostname is healthy, maps to the intended community, fails closed for unknown hosts, persists data across restart, and enforces owner/member/agent authorization.
+7. **Packaged product proof:** a fresh packaged app with an owner or pre-admitted disposable identity enters the owned company without Builderlab, sends chat messages, starts an agent, receives an agent response, and preserves human/community/agent identities after restart.
 
 ## Task 1: Add the Owned Desktop Distribution Contract
 
@@ -368,13 +370,8 @@ $1 == "BUZZ_S3_SECRET_KEY" {
 
 ### Step 4: Correct the existing owner-key backup wording
 
-- [ ] In `deploy/compose/run.sh`, replace:
-
-```text
-- The owner private key if bootstrap generated one for RELAY_OWNER_PUBKEY
-```
-
-with:
+- [ ] Ensure `deploy/compose/run.sh` never implies that bootstrap creates the
+  owner identity. Its inventory reminder must use:
 
 ```text
 - The owner private key and recovery backup held outside this deployment
@@ -549,23 +546,31 @@ git commit -s -m "test(desktop): pin owned relay bootstrap path"
   11. backup, upgrade, rollback, and incident notes;
   12. proof-state reporting template.
 - [ ] State that Cloudflare may terminate/proxy DNS, TLS, and WebSockets, but Buzz still runs on an origin host with persistent Postgres, Redis, object, and git storage.
-- [ ] State that the owner public key is infrastructure input while the owner private key remains in the user's keyring and encrypted recovery backup.
-- [ ] Require a pinned image digest or immutable `sha-...` tag before public release.
+- [ ] Separate Cloudflare edge TLS from origin TLS: for a proxied zone require evidence of Full (strict) mode plus an authorized direct-origin certificate verification against the public hostname.
+- [ ] State that the owner public key is infrastructure input while the owner private key remains on the user device in the OS keyring or the existing mode-`600` `identity.key` fallback, with encrypted recovery material outside the relay deployment.
+- [ ] Require a pinned image digest or immutable `sha-...` tag on the first production bootstrap.
+- [ ] Block public start until exact provider-specific backup and restore commands exist and an isolated restore drill proves one write-consistent recovery point across Postgres, object/media, git, secrets, and any required Redis state. State that `run.sh backup-hint` is an inventory reminder, not a backup procedure.
 
 Use these exact local preparation commands:
 
 ```bash
 : "${OWNED_DOMAIN:?Set the approved public relay domain}"
 : "${OWNER_PUBKEY:?Set the approved 64-character hex Nostr public key}"
+: "${OWNED_IMAGE:?Set the approved immutable image tag or digest}"
 
 ./deploy/compose/bootstrap.sh \
   --domain "${OWNED_DOMAIN}" \
-  --owner-pubkey "${OWNER_PUBKEY}"
+  --owner-pubkey "${OWNER_PUBKEY}" \
+  --image "${OWNED_IMAGE}"
 
-BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh config
+BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh config >/dev/null
 ```
 
-Document these first-deployment commands:
+Document that `run.sh config` renders secrets and may alternatively write only
+to a protected mode-`600` file that is securely removed after review. A non-TLS
+start is local/pre-edge only.
+
+Document these first-deployment commands only after the recovery gate passes:
 
 ```bash
 BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh start
@@ -584,24 +589,36 @@ just desktop-owned-build "wss://${OWNED_DOMAIN}"
 ### Step 2: Define relay-level live evidence
 
 - [ ] Require evidence for:
-  - public DNS and certificate;
+  - public DNS and Cloudflare edge certificate;
+  - authorized direct-origin certificate verification with
+    `openssl s_client -connect "${ORIGIN_IP}:443" -servername "${OWNED_DOMAIN}" -verify_hostname "${OWNED_DOMAIN}" -verify_return_error`;
+  - Cloudflare Full (strict) evidence when proxying is enabled;
   - WebSocket upgrade through the public hostname;
   - `/_liveness` and `/_readiness`;
   - exactly one intended community for the host;
   - unknown-host rejection;
-  - owner authentication and owner role;
-  - rejection of an unprovisioned human;
-  - invite admission of a second human only to this relay;
+  - owner authentication and owner role through the desktop;
+  - rejection of an unprovisioned disposable human using
+    `buzz users set-presence --status online` with securely supplied
+    `BUZZ_PRIVATE_KEY`;
+  - admission of the same disposable human followed by a successful
+    `set-presence` NIP-42 exchange only on this relay;
   - valid owner-signed NIP-OA managed-agent admission;
-  - missing/invalid agent delegation rejection;
+  - missing/invalid agent delegation rejection through a supported low-level
+    WebSocket AUTH harness, or an explicit `unproven` result when no such
+    harness exists;
   - message/media persistence after relay restart.
-- [ ] Point to `crates/buzz-cli/TESTING.md` and the existing operator/member commands rather than inventing new endpoints.
+- [ ] State that `users set-presence` publishes ephemeral kind `20001` over WebSocket/NIP-42; HTTP bridge commands use NIP-98 and are not NIP-42 proof.
+- [ ] Point to `crates/buzz-cli/TESTING.md` as a broader reference with a current-command caveat, and verify syntax against `buzz --help` plus `buzz users set-presence --help` from the built commit.
+- [ ] Use the existing operator/member commands rather than inventing new endpoints.
 - [ ] Require secrets and signed events to be redacted from screenshots and logs.
 
 ### Step 3: Define packaged-app evidence without risking the user's main profile
 
 - [ ] Require a clean macOS test account, test machine, or separately identified canary bundle.
 - [ ] Explicitly forbid wiping the user's normal app data as a test shortcut.
+- [ ] Explain closed-relay fresh-profile admission: use the approved owner device, or pre-admit a disposable public key and import its matching private key only on the isolated test device.
+- [ ] Require the imported identity to persist in the OS keyring or the existing mode-`600` `identity.key` fallback; never put it in relay configuration, localStorage, evidence, or shell history.
 - [ ] Require screenshots/logs proving:
   - no Builderlab browser login or community chooser;
   - relay-local profile/welcome then chat;
@@ -625,6 +642,7 @@ just desktop-owned-build "wss://${OWNED_DOMAIN}"
 | Locally tested | pass/fail | contract, unit, and E2E commands |
 | Packaged | pass/fail | artifact path, version, embedded relay |
 | Deployed | pass/fail | image digest, public host, health checks |
+| Recovery-proven | pass/fail | recovery-point ID, protected procedure, restore-drill evidence |
 | Live-proven | pass/fail | fresh-install, chat, agent, restart evidence |
 ```
 
@@ -634,13 +652,17 @@ just desktop-owned-build "wss://${OWNED_DOMAIN}"
 
 ```bash
 cd deploy/compose
+: "${OWNED_IMAGE:?Set the approved immutable image tag or digest}"
 ./bootstrap.sh \
   --domain "${OWNED_DOMAIN:?Set the approved public relay domain}" \
-  --owner-pubkey "${OWNER_PUBKEY:?Set the approved owner public key}"
-./run.sh config
-./run.sh start
+  --owner-pubkey "${OWNER_PUBKEY:?Set the approved owner public key}" \
+  --image "${OWNED_IMAGE}"
+BUZZ_COMPOSE_TLS=true ./run.sh config >/dev/null
 ```
 
+- [ ] Put `BUZZ_COMPOSE_TLS=true ./run.sh start` after an explicit recovery gate requiring provider-specific write-consistent backup/restore commands and a passed restore drill.
+- [ ] Label any non-TLS direct-port path as isolated local/pre-edge validation only.
+- [ ] Warn that `run.sh config` renders secret-bearing output; validate to `/dev/null` or a protected mode-`600` file, never the terminal or shared evidence.
 - [ ] Remove wording that the bootstrap may generate an owner keypair.
 - [ ] Link to `docs/operations/owned-relay-runbook.md` for public-host and packaged-app validation.
 - [ ] Keep the manual `.env.example` route documented as an advanced/recovery option.
@@ -756,26 +778,31 @@ git commit -s -m "fix: satisfy owned relay bootstrap gate"
   - the production origin host/provider and recurring cost;
   - the public company domain;
   - the stable owner Nostr public key;
-  - DNS/TLS changes;
-  - the image tag or digest to deploy;
-  - who controls backup storage.
+  - DNS, Cloudflare mode, and origin TLS changes;
+  - the immutable image tag or digest to deploy;
+  - who controls backup storage;
+  - the exact provider-specific write-consistent backup and restore commands;
+  - the named recovery-point contract and completed isolated restore drill.
 - [ ] Do not infer these values and do not create paid infrastructure without approval.
 
 ### Step 2: Bootstrap and inspect configuration
 
-- [ ] On the approved host, generate `.env` using the runbook.
-- [ ] Replace the pre-release image with the approved immutable image.
+- [ ] On the approved host, generate `.env` using the runbook and pass the approved immutable `OWNED_IMAGE` to `bootstrap.sh --image` on its first invocation.
 - [ ] Back up `.env` to the approved encrypted secret store before first start.
 - [ ] Run:
 
 ```bash
-BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh config
+BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh config >/dev/null
 ```
 
 Expected: Compose renders successfully, no `CHANGE_ME` appears, the public host is consistent across relay/media/CORS settings, and membership plus NIP-OA remain enabled.
 
+`run.sh config` renders secrets. If an operator must inspect it, write it under
+`umask 077` to a mode-`600` file and securely remove that file after review.
+
 ### Step 3: Deploy and prove health
 
+- [ ] Stop before `start` unless the provider-specific restore procedure has already reproduced Postgres, object/media, git, secrets, and any required Redis state from one write-consistent recovery point in an isolated restore drill.
 - [ ] Start the stack and capture redacted evidence:
 
 ```bash
@@ -787,15 +814,17 @@ curl -fsS "https://${OWNED_DOMAIN}/_readiness"
 ```
 
 - [ ] Confirm the configured owner appears with owner authority.
-- [ ] Confirm the WebSocket endpoint accepts a NIP-42 exchange through `wss://${OWNED_DOMAIN}`.
+- [ ] Prove the public Cloudflare edge certificate and WebSocket `101` separately from origin TLS.
+- [ ] For a proxied zone, capture Full (strict) evidence and run the authorized direct-origin certificate verification from the runbook.
+- [ ] Confirm the WebSocket endpoint accepts a NIP-42 exchange through `wss://${OWNED_DOMAIN}` using `buzz users set-presence --status online` and a securely supplied disposable `BUZZ_PRIVATE_KEY`.
 
 ### Step 4: Prove security and tenancy faults
 
 - [ ] Exercise the public hostname and an unknown `Host` value; the unknown host must fail closed.
-- [ ] Attempt authentication with an unprovisioned human public key; it must be rejected.
-- [ ] Invite one test human, prove admission, and prove it does not create or access another host-bound community.
+- [ ] Attempt `buzz users set-presence --status online` with an unprovisioned disposable identity; its WebSocket/NIP-42 exchange must be rejected.
+- [ ] Admit that disposable human, rerun the same command successfully, and prove the member operation does not create another host-bound community.
 - [ ] Start a managed test agent with a valid owner-signed NIP-OA tag; it must authenticate.
-- [ ] Retry with the tag missing and with a tampered tag; both must be rejected.
+- [ ] Exercise missing and tampered NIP-OA tags only through a supported low-level WebSocket AUTH harness that proves the exact credential reached the relay. If no such harness exists, mark both negative controls `unproven`; do not infer rejection by changing a local CLI environment.
 
 ### Step 5: Prove persistence and rollback readiness
 
@@ -807,8 +836,9 @@ BUZZ_COMPOSE_TLS=true ./deploy/compose/run.sh restart
 ```
 
 - [ ] Recheck health and confirm membership, message, media, and agent authorization persist.
-- [ ] Run `./deploy/compose/run.sh backup-hint` and complete the approved backup procedure.
-- [ ] Record the previous image digest and exact rollback command without deleting volumes.
+- [ ] Treat `./deploy/compose/run.sh backup-hint` as an inventory reminder only. Run the approved provider-specific write-consistent backup commands and record the recovery-point ID.
+- [ ] Record the previous image digest and exact server rollback command without deleting volumes.
+- [ ] Document that application-version rollback reinstalls the previous reviewed artifact but does not retarget an existing stored community. Moving an existing profile to another relay is a separate supported community-migration operation with its own approval and proof.
 
 ## Task 7: Build and Live-Prove the Packaged Desktop
 
@@ -838,6 +868,8 @@ just desktop-owned-build "wss://${OWNED_DOMAIN}"
 ### Step 2: Fresh-install proof
 
 - [ ] Install in the approved isolated environment.
+- [ ] Use the approved owner device identity, or pre-admit a disposable public key before importing its matching private key into the isolated desktop profile. A random unprovisioned fresh identity cannot enter the closed relay.
+- [ ] Confirm the imported identity persists in the OS keyring or the existing mode-`600` `identity.key` fallback without entering localStorage or relay configuration.
 - [ ] Capture the first-run command/network evidence.
 - [ ] Prove:
   - exactly one owned community is created;
@@ -867,6 +899,7 @@ just desktop-owned-build "wss://${OWNED_DOMAIN}"
 ### Step 5: Report the proof states separately
 
 - [ ] Fill the runbook's release-evidence table.
+- [ ] Mark `Recovery-proven` as pass only when one named write-consistent recovery point has passed the isolated provider-specific restore drill.
 - [ ] Mark `live-proven` as pass only when the packaged fresh-install, chat, agent, and restart checks all pass against the public host.
 - [ ] If an infrastructure credential, signing identity, or paid-host decision blocks the remaining gate, report that dependency without calling the release complete.
 
@@ -875,7 +908,8 @@ just desktop-owned-build "wss://${OWNED_DOMAIN}"
 - The owned build and Compose bootstrap contracts are versioned and run under `just check`.
 - The existing desktop auto-connect path is regression-tested for no Builderlab invocation and no private-key persistence.
 - Builderlab's explicit hosted-community tests still pass.
-- The deployment runbook contains no secret values and separates local, packaged, deployed, and live proof.
+- The deployment runbook contains no secret values and separates local, packaged, deployed, recovery-proven, and live proof.
+- Public deployment is blocked until an approved immutable image, Cloudflare/origin TLS proof, and a provider-specific write-consistent restore drill all pass.
 - The public relay passes health, host isolation, membership, agent delegation, and restart persistence checks.
-- A fresh packaged app completes chat and managed-agent work against that relay without Builderlab.
+- A fresh packaged app using the owner identity or a pre-admitted disposable identity completes chat and managed-agent work against that relay without Builderlab.
 - Branding and consumer-facing Buzz-to-AI-Native-Office terminology remain deferred to their own approved phase.
