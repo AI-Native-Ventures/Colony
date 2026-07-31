@@ -11,6 +11,8 @@ pub mod agent_turn_metric;
 pub mod block;
 /// Channel and membership enums shared across crates.
 pub mod channel;
+/// Company, initiative, task, and agent work-attribution contracts.
+pub mod company;
 /// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
 /// body parse/serialize, envelope build/validate, head selection.
 pub mod engram;
