@@ -2586,6 +2586,24 @@ impl Db {
             return Ok(CompanyActionApply::NotOwner);
         }
 
+        // An owner row alone is not enough: nothing structurally stops an agent
+        // pubkey occupying one (the operator transfer endpoint has no human
+        // check). Company state carries commercial and accounting authority, so
+        // the transaction enforces humanity itself rather than relying on the
+        // caller's pre-check still being there.
+        let actor_is_agent: Option<bool> = sqlx::query_scalar(
+            "SELECT agent_owner_pubkey IS NOT NULL FROM users \
+             WHERE community_id = $1 AND pubkey = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(hex::decode(&actor).unwrap_or_default())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if actor_is_agent.unwrap_or(true) {
+            tx.rollback().await?;
+            return Ok(CompanyActionApply::NotOwner);
+        }
+
         let claimed_action_id: Option<Vec<u8>> = sqlx::query_scalar(
             r#"
             INSERT INTO company_action_claims
@@ -2658,10 +2676,13 @@ impl Db {
         )
         .await?;
         if !action_inserted {
+            // The refuse path stores the action alongside its failure receipt,
+            // so a byte-identical retry of a previously refused action lands
+            // here. Report it as its own outcome: it is NOT a claim duplicate
+            // (the claim above just rolled back) and reporting the submitter's
+            // own id as "the winner" would be self-referential nonsense.
             tx.rollback().await?;
-            return Err(DbError::InvalidData(
-                "company action event was already stored".to_owned(),
-            ));
+            return Ok(CompanyActionApply::ActionAlreadyStored);
         }
 
         let (head, head_inserted) =
@@ -5721,6 +5742,9 @@ mod tests {
         }
     }
 
+    /// Seed a HUMAN owner: both the membership row and a `users` row with no
+    /// `agent_owner_pubkey`. The transaction requires both, because an owner row
+    /// alone does not prove the actor is a person.
     async fn seed_owner(pool: &PgPool, community: Uuid, pubkey: &str) {
         sqlx::query(
             "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'owner')",
@@ -5729,7 +5753,34 @@ mod tests {
         .bind(pubkey.to_ascii_lowercase())
         .execute(pool)
         .await
-        .expect("seed owner");
+        .expect("seed owner membership");
+        sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2)")
+            .bind(community)
+            .bind(hex::decode(pubkey).expect("hex pubkey"))
+            .execute(pool)
+            .await
+            .expect("seed owner user row");
+    }
+
+    /// Seed an owner row backed by an AGENT identity.
+    async fn seed_agent_owner(pool: &PgPool, community: Uuid, pubkey: &str, owner_pubkey: &str) {
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'owner')",
+        )
+        .bind(community)
+        .bind(pubkey.to_ascii_lowercase())
+        .execute(pool)
+        .await
+        .expect("seed agent owner membership");
+        sqlx::query(
+            "INSERT INTO users (community_id, pubkey, agent_owner_pubkey) VALUES ($1, $2, $3)",
+        )
+        .bind(community)
+        .bind(hex::decode(pubkey).expect("hex pubkey"))
+        .bind(hex::decode(owner_pubkey).expect("hex owner pubkey"))
+        .execute(pool)
+        .await
+        .expect("seed agent user row");
     }
 
     async fn stored_kind_count(pool: &PgPool, community: Uuid, kind: u32) -> i64 {
@@ -6104,6 +6155,56 @@ mod tests {
             .await,
             1,
             "the refused action must not replace the head"
+        );
+    }
+
+    /// Nothing structurally stops an agent pubkey occupying an owner row — the
+    /// operator transfer endpoint has no human check. Company state carries
+    /// commercial authority, so the transaction refuses it regardless.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn company_action_from_an_agent_owner_row_is_refused() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let human = Keys::generate();
+        let agent = Keys::generate();
+        seed_owner(&db.pool, *community.as_uuid(), &human.public_key().to_hex()).await;
+        seed_agent_owner(
+            &db.pool,
+            *community.as_uuid(),
+            &agent.public_key().to_hex(),
+            &human.public_key().to_hex(),
+        )
+        .await;
+
+        let batch = company_batch(&relay, &agent, "acme", 1_000, "agent-owner");
+        let outcome = db
+            .apply_company_action_once(
+                community,
+                &batch.action,
+                &batch.head,
+                &batch.d_tag,
+                &batch.receipt,
+                Uuid::new_v4(),
+                &agent.public_key().to_hex(),
+                None,
+            )
+            .await
+            .expect("broker call");
+
+        assert!(
+            matches!(outcome, CompanyActionApply::NotOwner),
+            "an agent must not mutate company state even from an owner row"
+        );
+        assert_eq!(
+            stored_kind_count(
+                &db.pool,
+                *community.as_uuid(),
+                buzz_core::kind::KIND_COMPANY_PROFILE
+            )
+            .await,
+            0
         );
     }
 

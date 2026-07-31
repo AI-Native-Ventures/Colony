@@ -1263,10 +1263,16 @@ async fn excluded_kinds_are_storage_level_unsearchable() {
 /// those private hits before the relay post-filter rejects them. Catch that
 /// drift here by inserting one row per author-only kind and proving only the
 /// public kind:9 control is searchable.
-/// Colony company records carry private commercial and accounting state:
-/// what the business sells, who its clients are, expected costs, and the
-/// accounting treatment of each task. None of it may surface through NIP-50
-/// full-text search.
+/// Colony company records carry commercial and accounting state: what the
+/// business sells, who its clients are, expected costs, and the accounting
+/// treatment of each task. It must not be reachable through NIP-50 full-text
+/// SEARCH, which crosses channel and intent boundaries by design.
+///
+/// Note the boundary this does and does not draw. These kinds are not in
+/// `P_GATED_KINDS`, `AUTHOR_ONLY_KINDS`, or `RESULT_GATED_KINDS`, so any
+/// community member can already read them with a plain `{"kinds":[30179]}`
+/// REQ. Keeping them out of the search index is about not surfacing company
+/// internals in unrelated keyword results, not about read authorization.
 ///
 /// Note what this test can and cannot prove. `setup()` builds an EMPTY schema,
 /// so migration 0008 takes its emptiness branch and installs the positive
