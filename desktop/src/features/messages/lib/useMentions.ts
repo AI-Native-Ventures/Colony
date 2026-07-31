@@ -35,14 +35,22 @@ import {
   extractTypedActorPubkeys,
 } from "./draftMentionRefs";
 import { flushMentionDebounce } from "./flushMentionDebounce";
+import {
+  buildPersonaNameByPubkey,
+  buildPersonaRoleById,
+  buildPersonaRoleByPubkey,
+} from "./mentionPersonaLookups";
 import { useDraftMentionRouting } from "./useDraftMentionRouting";
 import { rankMentionCandidates } from "./mentionRanking";
 import { mapMentionCandidateToSuggestion } from "./mentionSuggestionMapping";
 import {
   appendUniqueMentionName,
+  collectSearchableMentionNames,
+  dedupeMentionNames,
   extractPersonaMentionTargets,
   formatSearchUserDisplayName,
   formatSearchUserSecondaryLabel,
+  resolveMentionInsertLabel,
 } from "./mentionHelpers";
 import {
   buildTeamMentionCandidates,
@@ -208,19 +216,19 @@ export function useMentions(
       sharedChannelIds,
     ],
   );
-  const personaNameByPubkey = React.useMemo(() => {
-    const agents = managedAgentsQuery.data ?? [];
-    const personas = personasQuery.data ?? [];
-    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
-    const lookup = new Map<string, string>();
-    for (const agent of agents) {
-      if (agent.personaId) {
-        const name = personaById.get(agent.personaId);
-        if (name) lookup.set(normalizePubkey(agent.pubkey), name);
-      }
-    }
-    return lookup;
-  }, [managedAgentsQuery.data, personasQuery.data]);
+  const personaNameByPubkey = React.useMemo(
+    () => buildPersonaNameByPubkey(managedAgentsQuery.data, personasQuery.data),
+    [managedAgentsQuery.data, personasQuery.data],
+  );
+  /** Role identity is carried by the Persona, so deployed agents join to it. */
+  const personaRoleById = React.useMemo(
+    () => buildPersonaRoleById(personasQuery.data),
+    [personasQuery.data],
+  );
+  const personaRoleByPubkey = React.useMemo(
+    () => buildPersonaRoleByPubkey(managedAgentsQuery.data, personaRoleById),
+    [managedAgentsQuery.data, personaRoleById],
+  );
   const knownAgentPubkeys = mentionableAgentPubkeys;
   const activePersonas = React.useMemo(
     () => (personasQuery.data ?? []).filter((persona) => persona.isActive),
@@ -283,6 +291,8 @@ export function useMentions(
         personaId: current.personaId ?? candidate.personaId,
         personaName: current.personaName ?? candidate.personaName ?? null,
         role: current.role ?? candidate.role ?? null,
+        roleId: current.roleId ?? candidate.roleId ?? null,
+        roleTitle: current.roleTitle ?? candidate.roleTitle ?? null,
         secondaryLabel:
           current.secondaryLabel ?? candidate.secondaryLabel ?? null,
         ownerPubkey:
@@ -327,6 +337,8 @@ export function useMentions(
         ownerPubkey: profile?.ownerPubkey ?? null,
         personaName: personaNameByPubkey.get(pubkey) ?? null,
         role: member.role,
+        roleId: personaRoleByPubkey.get(pubkey)?.roleId ?? null,
+        roleTitle: personaRoleByPubkey.get(pubkey)?.roleTitle ?? null,
         secondaryLabel:
           profile?.displayName?.trim() && profile?.nip05Handle?.trim()
             ? profile.nip05Handle
@@ -346,10 +358,13 @@ export function useMentions(
           (activePersonaById.has(pubkey) ? pubkey : undefined),
         ownerPubkey: null,
         isAgent: true,
+        roleId: personaRoleByPubkey.get(pubkey)?.roleId ?? null,
+        roleTitle: personaRoleByPubkey.get(pubkey)?.roleTitle ?? null,
       });
     }
 
     for (const agent of managedAgentsQuery.data ?? []) {
+      const pubkey = normalizePubkey(agent.pubkey);
       addCandidate({
         kind: "identity",
         pubkey: agent.pubkey,
@@ -358,8 +373,9 @@ export function useMentions(
         isAgent: true,
         isManagedAgent: true,
         personaId: agent.personaId ?? undefined,
-        personaName:
-          personaNameByPubkey.get(normalizePubkey(agent.pubkey)) ?? null,
+        personaName: personaNameByPubkey.get(pubkey) ?? null,
+        roleId: personaRoleByPubkey.get(pubkey)?.roleId ?? null,
+        roleTitle: personaRoleByPubkey.get(pubkey)?.roleTitle ?? null,
         ownerPubkey: currentPubkey,
       });
     }
@@ -381,6 +397,8 @@ export function useMentions(
             managedAgentNamesByPubkey.has(pubkey) ||
             relayAgentNamesByPubkey.has(pubkey),
           personaName: personaNameByPubkey.get(pubkey) ?? null,
+          roleId: personaRoleByPubkey.get(pubkey)?.roleId ?? null,
+          roleTitle: personaRoleByPubkey.get(pubkey)?.roleTitle ?? null,
           secondaryLabel: formatSearchUserSecondaryLabel(user),
           ownerPubkey: user.ownerPubkey ?? null,
           isGlobalSearchResult: true,
@@ -398,6 +416,10 @@ export function useMentions(
         avatarUrl: persona.avatarUrl,
         isMember: false,
         isAgent: true,
+        // Same validator the deployed-identity join uses, so an undeployed
+        // persona cannot obey looser role rules than a deployed one.
+        roleId: personaRoleById.get(persona.id)?.roleId ?? null,
+        roleTitle: personaRoleById.get(persona.id)?.roleTitle ?? null,
       }))
       .filter((candidate) => candidate.displayName.trim().length > 0);
 
@@ -429,6 +451,8 @@ export function useMentions(
     members,
     mentionableAgentPubkeys,
     personaNameByPubkey,
+    personaRoleById,
+    personaRoleByPubkey,
     profiles,
     relayAgentNamesByPubkey,
     relayAgentsQuery.data,
@@ -466,57 +490,20 @@ export function useMentions(
     enabled: ownerPubkeys.length > 0,
   });
 
-  const searchableNames = React.useMemo<string[]>(() => {
-    const names: string[] = [];
-    const seen = new Set<string>();
+  const searchableNames = React.useMemo<string[]>(
+    () => collectSearchableMentionNames(mentionCandidatesWithTeams),
+    [mentionCandidatesWithTeams],
+  );
 
-    for (const candidate of mentionCandidatesWithTeams) {
-      for (const name of [
-        candidate.displayName,
-        candidate.kind === "block" ? candidate.blockHandle : null,
-        candidate.kind === "block" ? null : candidate.personaName,
-        candidate.kind === "block" ? null : candidate.secondaryLabel,
-      ]) {
-        const trimmed = name?.trim();
-        if (trimmed && !seen.has(trimmed.toLowerCase())) {
-          names.push(trimmed);
-          seen.add(trimmed.toLowerCase());
-        }
-      }
-    }
+  const highlightNames = React.useMemo<string[]>(
+    () => dedupeMentionNames(selectedMentionNames),
+    [selectedMentionNames],
+  );
 
-    return names;
-  }, [mentionCandidatesWithTeams]);
-
-  const highlightNames = React.useMemo<string[]>(() => {
-    const names: string[] = [];
-    const seen = new Set<string>();
-
-    for (const name of selectedMentionNames) {
-      const trimmed = name.trim();
-      if (trimmed && !seen.has(trimmed.toLowerCase())) {
-        names.push(trimmed);
-        seen.add(trimmed.toLowerCase());
-      }
-    }
-
-    return names;
-  }, [selectedMentionNames]);
-
-  const agentHighlightNames = React.useMemo<string[]>(() => {
-    const names: string[] = [];
-    const seen = new Set<string>();
-
-    for (const name of selectedAgentMentionNames) {
-      const trimmed = name.trim();
-      if (trimmed && !seen.has(trimmed.toLowerCase())) {
-        names.push(trimmed);
-        seen.add(trimmed.toLowerCase());
-      }
-    }
-
-    return names;
-  }, [selectedAgentMentionNames]);
+  const agentHighlightNames = React.useMemo<string[]>(
+    () => dedupeMentionNames(selectedAgentMentionNames),
+    [selectedAgentMentionNames],
+  );
 
   const searchableNamesLower = React.useMemo<string[]>(
     () => searchableNames.map((n) => n.toLowerCase()),
@@ -554,10 +541,11 @@ export function useMentions(
       activePersonaIds,
     )
       .slice(0, MENTION_SUGGESTION_LIMIT)
-      .map(({ candidate, label }) =>
+      .map(({ candidate, label, matchedRole }) =>
         mapMentionCandidateToSuggestion({
           candidate,
           label,
+          matchedRole,
           channelType: options?.channelType,
           currentPubkey,
           ownerProfiles: ownerProfilesQuery.data?.profiles,
@@ -640,13 +628,32 @@ export function useMentions(
       }
       const teamMembers =
         suggestion.kind === "team" ? suggestion.teamMembers : null;
-      const insertText = teamMembers
-        ? formatTeamMention(displayName, teamMembers)
-        : `@${displayName} `;
 
       const mentions = mentionMapRef.current;
       const personaMentions = personaMentionMapRef.current;
-      const selectedMentions = teamMembers ?? [suggestion];
+      const insertLabel = teamMembers
+        ? displayName
+        : resolveMentionInsertLabel({
+            desiredLabel: displayName,
+            personalName: suggestion.personalName,
+            pubkey: suggestion.pubkey,
+            personaId: suggestion.personaId,
+            mentions,
+            personaMentions,
+          });
+      // `null` = no safe token; insert the picked text but keep existing
+      // bindings. See `resolveMentionInsertLabel` for the full rationale.
+      const rebindsTarget = insertLabel !== null;
+      const resolved =
+        insertLabel && insertLabel !== displayName
+          ? { ...suggestion, displayName: insertLabel }
+          : suggestion;
+
+      const insertText = teamMembers
+        ? formatTeamMention(resolved.displayName, teamMembers)
+        : `@${resolved.displayName} `;
+
+      const selectedMentions = rebindsTarget ? (teamMembers ?? [resolved]) : [];
       for (const selected of selectedMentions) {
         deleteMentionName(
           blockMentions.blockMentionMapRef.current,

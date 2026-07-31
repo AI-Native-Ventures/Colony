@@ -1,6 +1,6 @@
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import type { AgentPersona, AgentTeam, ChannelRole } from "@/shared/api/types";
-import { truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 export type TeamMentionMember = {
   displayName: string;
@@ -27,6 +27,13 @@ export type ActorMentionCandidate = {
   isAgent: boolean;
   isManagedAgent?: boolean;
   isGlobalSearchResult?: boolean;
+  /**
+   * Stable lowercase role slug joined from the linked Persona. Matching is
+   * alias-only: the authoritative target stays the pubkey or Persona ID.
+   */
+  roleId?: string | null;
+  /** Human role title paired with `roleId`; inserted when the role wins. */
+  roleTitle?: string | null;
 };
 
 export type BlockMentionCandidate = {
@@ -161,11 +168,35 @@ export function buildTeamMentionCandidates(
     const resolution = resolveTeamPersonas(team, personas);
     if (!resolution.isUsable) return [];
 
-    const teamMembers = resolution.resolvedPersonas
-      .map((persona) => findTeamMemberTarget(persona, candidates))
-      .filter((member): member is TeamMentionMember => member !== null);
-    if (teamMembers.length !== resolution.resolvedPersonas.length) return [];
+    const resolvedMembers = resolution.resolvedPersonas.map((persona) =>
+      findTeamMemberTarget(persona, candidates),
+    );
+    if (resolvedMembers.some((member) => member === null)) return [];
 
+    // One persona may sit in several teams, and two persona rows may resolve
+    // onto the same deployed identity. Expand each distinct target once, in
+    // first-seen order, keyed by pubkey and falling back to persona ID.
+    const seenTargets = new Set<string>();
+    const teamMembers: TeamMentionMember[] = [];
+    for (const member of resolvedMembers) {
+      if (!member) continue;
+      const targetKey = member.pubkey
+        ? `pubkey:${normalizePubkey(member.pubkey)}`
+        : member.personaId
+          ? `persona:${member.personaId}`
+          : null;
+      // A member with no addressable target cannot be expanded, and silently
+      // shipping a short team would under-address the mention. Fail closed,
+      // matching every other rejection in this function.
+      if (targetKey === null) return [];
+      if (seenTargets.has(targetKey)) continue;
+      seenTargets.add(targetKey);
+      teamMembers.push(member);
+    }
+    if (teamMembers.length === 0) return [];
+
+    // Two distinct targets sharing one visible mention token would make the
+    // text-keyed draft maps ambiguous, so the whole team is withheld.
     const mentionNames = new Set<string>();
     for (const member of teamMembers) {
       const mentionName = member.displayName.trim().toLowerCase();

@@ -118,6 +118,10 @@ type MockRelayAgentSeed = {
 type MockPersonaSeed = {
   id?: string;
   displayName: string;
+  /** Stable lowercase role slug; must be seeded together with `roleTitle`. */
+  roleId?: string;
+  /** Human role title an `@role` match inserts. */
+  roleTitle?: string;
   avatarUrl?: string | null;
   systemPrompt: string;
   updatedAt?: string;
@@ -2205,6 +2209,10 @@ function resetMockPersonas(config?: E2eConfig) {
     {
       id: "builtin:fizz",
       display_name: "Fizz",
+      // Fizz keeps its personal name and stable ID; the Chief of Staff role is
+      // separate identity, mirroring the native built-in definition.
+      role_id: "chief-of-staff",
+      role_title: "Chief of Staff",
       avatar_url: null,
       system_prompt: "You are Fizz.",
     },
@@ -2224,6 +2232,8 @@ function resetMockPersonas(config?: E2eConfig) {
   mockPersonas = builtInPersonas.map((persona) => ({
     id: persona.id,
     display_name: persona.display_name,
+    role_id: "role_id" in persona ? persona.role_id : null,
+    role_title: "role_title" in persona ? persona.role_title : null,
     avatar_url: persona.avatar_url,
     system_prompt: persona.system_prompt,
     runtime: null,
@@ -2242,6 +2252,11 @@ function resetMockPersonas(config?: E2eConfig) {
     mockPersonas.push({
       id: persona.id ?? crypto.randomUUID(),
       display_name: persona.displayName,
+      // Role identity is a pair: half a pair is not a usable mention alias, so
+      // the mock mirrors the native rule and stores neither half alone.
+      role_id: persona.roleId && persona.roleTitle ? persona.roleId : null,
+      role_title:
+        persona.roleId && persona.roleTitle ? persona.roleTitle : null,
       avatar_url: persona.avatarUrl ?? null,
       system_prompt: persona.systemPrompt,
       runtime: persona.runtime ?? null,
