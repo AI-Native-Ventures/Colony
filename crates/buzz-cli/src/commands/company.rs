@@ -341,8 +341,15 @@ async fn publish_action(
         Ok(())
     } else {
         // A refused action is a write conflict, not a transport failure: the
-        // relay stored a receipt saying so.
-        Err(CliError::Conflict(response_message(&response)))
+        // relay stored a receipt saying so. Strip the relay's own `conflict:`
+        // prefix — CliError::Conflict adds one, and doubling it up reads as a
+        // bug in the message rather than a clean explanation.
+        let message = response_message(&response);
+        let reason = message
+            .strip_prefix("conflict: ")
+            .unwrap_or(&message)
+            .to_owned();
+        Err(CliError::Conflict(reason))
     }
 }
 

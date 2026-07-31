@@ -411,6 +411,18 @@ pub(crate) async fn handle_company_action(
     state: &Arc<AppState>,
     action_event: &Event,
 ) -> Result<CompanyBrokerOutcome, String> {
+    // Canonical company heads are only as trustworthy as the key that signs
+    // them. Without BUZZ_RELAY_PRIVATE_KEY the relay falls back to a hardcoded
+    // development key that every install shares, so anyone could forge a head
+    // for any community. Chat tolerates that fallback; commercial and
+    // accounting state must not.
+    if state.config.relay_private_key.is_none() {
+        return Err(
+            "company actions require a durable relay signing key (set BUZZ_RELAY_PRIVATE_KEY)"
+                .into(),
+        );
+    }
+
     let action = parse_company_action(action_event).map_err(|error| error.to_string())?;
     if action.relay_pubkey != state.relay_keypair.public_key().to_hex() {
         return Err("company action `p` tag must target this relay".into());
