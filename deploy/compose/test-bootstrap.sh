@@ -7,6 +7,10 @@ TEST_TMP_DIR="$(mktemp -d)"
 OWNER_PUBKEY="$(printf 'a%.0s' {1..64})"
 UPPERCASE_OWNER_PUBKEY="$(printf 'B%.0s' {1..64})"
 REJECTION_COUNT=0
+REAL_AWK="$(command -v awk)"
+AWK_WRAPPER_DIR="${TEST_TMP_DIR}/bin"
+AWK_ARGV_LOG="${TEST_TMP_DIR}/awk-argv.log"
+AWK_REPLACEMENT_MODE_LOG="${TEST_TMP_DIR}/awk-replacement-mode.log"
 
 cleanup() {
   rm -rf -- "${TEST_TMP_DIR}"
@@ -77,9 +81,45 @@ expect_rejected() {
 [[ -x "${BOOTSTRAP_SCRIPT}" ]] ||
   fail "bootstrap script is missing or not executable: ${BOOTSTRAP_SCRIPT}"
 
+mkdir -p "${AWK_WRAPPER_DIR}"
+awk_wrapper="${AWK_WRAPPER_DIR}/awk"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' ': "${REAL_AWK:?}"'
+  printf '%s\n' ': "${AWK_ARGV_LOG:?}"'
+  printf '%s\n' 'printf "%s\n" "$@" >>"${AWK_ARGV_LOG}"'
+  printf '%s\n' 'for argument in "$@"; do'
+  printf '%s\n' '  case "${argument}" in'
+  printf '%s\n' '    replacement_file=*)'
+  printf '%s\n' '      replacement_file="${argument#replacement_file=}"'
+  printf '%s\n' '      mode="$(stat -f "%Lp" "${replacement_file}" 2>/dev/null || stat -c "%a" "${replacement_file}")"'
+  printf '%s\n' '      printf "%s\n" "${mode}" >>"${AWK_REPLACEMENT_MODE_LOG:?}"'
+  printf '%s\n' '      ;;'
+  printf '%s\n' '  esac'
+  printf '%s\n' 'done'
+  printf '%s\n' 'if [[ -n "${AWK_FAIL_ON_CALL:-}" ]]; then'
+  printf '%s\n' '  call_count=0'
+  printf '%s\n' '  if [[ -f "${AWK_CALL_COUNT_FILE:?}" ]]; then'
+  printf '%s\n' '    call_count="$(cat "${AWK_CALL_COUNT_FILE}")"'
+  printf '%s\n' '  fi'
+  printf '%s\n' '  call_count=$((call_count + 1))'
+  printf '%s\n' '  printf "%s\n" "${call_count}" >"${AWK_CALL_COUNT_FILE}"'
+  printf '%s\n' '  if [[ "${call_count}" == "${AWK_FAIL_ON_CALL}" ]]; then'
+  printf '%s\n' '    exit 86'
+  printf '%s\n' '  fi'
+  printf '%s\n' 'fi'
+  printf '%s\n' 'exec "${REAL_AWK}" "$@"'
+} >"${awk_wrapper}"
+chmod 700 "${awk_wrapper}"
+
 generated_env="${TEST_TMP_DIR}/owned.env"
 success_output="$(
-  "${BOOTSTRAP_SCRIPT}" \
+  REAL_AWK="${REAL_AWK}" \
+    AWK_ARGV_LOG="${AWK_ARGV_LOG}" \
+    AWK_REPLACEMENT_MODE_LOG="${AWK_REPLACEMENT_MODE_LOG}" \
+    PATH="${AWK_WRAPPER_DIR}:${PATH}" \
+    "${BOOTSTRAP_SCRIPT}" \
     --domain office.example.com \
     --owner-pubkey "${UPPERCASE_OWNER_PUBKEY}" \
     --image ghcr.io/horizon-labs/ai-native-office:v1 \
@@ -124,6 +164,18 @@ for secret_key in "${secret_keys[@]}"; do
 done
 unique_secret_count="$(printf '%s\n' "${secret_values[@]}" | sort -u | awk 'END { print NR }')"
 assert_equal "${unique_secret_count}" "${#secret_keys[@]}" "independent secret count"
+for secret_value in "${secret_values[@]}"; do
+  if grep -Fq -- "${secret_value}" "${AWK_ARGV_LOG}"; then
+    fail "generated secret appeared in awk process arguments"
+  fi
+done
+assert_equal "$(cat "${AWK_REPLACEMENT_MODE_LOG}")" "600" "replacement map mode"
+
+if find "${TEST_TMP_DIR}" -maxdepth 1 -type f \
+  \( -name 'owned.env.tmp.*' -o -name 'owned.env.replacements.*' -o -name 'owned.env.*.ready' \) \
+  -print -quit | grep -q .; then
+  fail "successful bootstrap left a temporary file behind"
+fi
 
 default_image_env="${TEST_TMP_DIR}/default-image.env"
 "${BOOTSTRAP_SCRIPT}" \
@@ -132,6 +184,16 @@ default_image_env="${TEST_TMP_DIR}/default-image.env"
   --output "${default_image_env}" >/dev/null
 assert_env_value "${default_image_env}" BUZZ_IMAGE "ghcr.io/block/buzz:main"
 assert_env_value "${default_image_env}" RELAY_OWNER_PUBKEY "${OWNER_PUBKEY}"
+
+digest_env="${TEST_TMP_DIR}/digest-image.env"
+digest_hex="$(printf 'c%.0s' {1..64})"
+"${BOOTSTRAP_SCRIPT}" \
+  --domain company.example \
+  --owner-pubkey "${OWNER_PUBKEY}" \
+  --image "ghcr.io/horizon-labs/ai-native-office@sha256:${digest_hex}" \
+  --output "${digest_env}" >/dev/null
+assert_env_value "${digest_env}" BUZZ_IMAGE \
+  "ghcr.io/horizon-labs/ai-native-office@sha256:${digest_hex}"
 
 expect_rejected
 expect_rejected --domain office.example.com
@@ -166,6 +228,16 @@ expect_rejected --domain office.example.com --owner-pubkey "$(printf 'a%.0s' {1.
 expect_rejected --domain office.example.com --owner-pubkey "$(printf 'g%.0s' {1..64})"
 expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" --image ""
 expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" \
+  --image https://ghcr.io/horizon/app:v1
+expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" \
+  --image ghcr.io/horizon/app:
+expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" \
+  --image ghcr.io/horizon/app@
+expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" \
+  --image horizon/app:v1
+expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" \
+  --image ghcr.io/Horizon/app:v1
+expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" \
   --image $'ghcr.io/horizon/app:v1\nPOSTGRES_PASSWORD=attacker'
 expect_rejected --domain office.example.com --owner-pubkey "${OWNER_PUBKEY}" \
   --image 'ghcr.io/horizon/app:v1;touch-pwned'
@@ -191,5 +263,26 @@ if "${BOOTSTRAP_SCRIPT}" \
   fail "bootstrap followed an existing output symlink"
 fi
 assert_equal "$(cat "${symlink_target}")" "keep-symlink-target" "symlink target contents"
+
+failed_env="${TEST_TMP_DIR}/render-failure.env"
+if REAL_AWK="${REAL_AWK}" \
+  AWK_ARGV_LOG="${AWK_ARGV_LOG}" \
+  AWK_REPLACEMENT_MODE_LOG="${AWK_REPLACEMENT_MODE_LOG}" \
+  AWK_FAIL_ON_CALL=2 \
+  AWK_CALL_COUNT_FILE="${TEST_TMP_DIR}/awk-call-count" \
+  PATH="${AWK_WRAPPER_DIR}:${PATH}" \
+  "${BOOTSTRAP_SCRIPT}" \
+  --domain office.example.com \
+  --owner-pubkey "${OWNER_PUBKEY}" \
+  --output "${failed_env}" >/dev/null 2>&1; then
+  fail "bootstrap unexpectedly succeeded when rendering failed"
+fi
+[[ ! -e "${failed_env}" && ! -L "${failed_env}" ]] ||
+  fail "failed rendering left an output file behind"
+if find "${TEST_TMP_DIR}" -maxdepth 1 -type f \
+  \( -name 'render-failure.env.tmp.*' -o -name 'render-failure.env.replacements.*' -o -name 'render-failure.env.*.ready' \) \
+  -print -quit | grep -q .; then
+  fail "failed rendering left a secret-bearing temporary file behind"
+fi
 
 echo "compose bootstrap contract passed"

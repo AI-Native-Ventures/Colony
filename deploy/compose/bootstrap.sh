@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_TEMPLATE="${SCRIPT_DIR}/.env.example"
 temporary_file=""
 installed_file=""
+replacement_file=""
 
 cleanup() {
   if [[ -n "${temporary_file}" ]]; then
@@ -12,6 +13,9 @@ cleanup() {
   fi
   if [[ -n "${installed_file}" ]]; then
     rm -f -- "${installed_file}"
+  fi
+  if [[ -n "${replacement_file}" ]]; then
+    rm -f -- "${replacement_file}"
   fi
 }
 trap cleanup EXIT
@@ -25,7 +29,8 @@ Required:
   --owner-pubkey <64-hex>  Human owner's Nostr public key
 
 Options:
-  --image <reference>      Relay image (default: value from .env.example)
+  --image <reference>      Fully qualified registry/repository with an optional
+                           tag or sha256 digest (default: .env.example value)
   --output <path>          Destination (default: deploy/compose/.env)
   -h, --help               Show this help
 
@@ -75,9 +80,49 @@ validate_domain() {
 
 validate_image() {
   local candidate="$1"
+  local component
+  local digest=""
+  local last_segment
+  local reference
+  local registry
+  local repository
+  local repository_components=()
+  local tag=""
 
-  [[ -n "${candidate}" ]] || return 1
-  [[ "${candidate}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]
+  [[ -n "${candidate}" && ${#candidate} -le 512 ]] || return 1
+  [[ "${candidate}" != *//* && "${candidate}" != *@*@* ]] || return 1
+
+  reference="${candidate}"
+  if [[ "${reference}" == *@* ]]; then
+    digest="${reference##*@}"
+    reference="${reference%@*}"
+    [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  else
+    last_segment="${reference##*/}"
+    if [[ "${last_segment}" == *:* ]]; then
+      tag="${last_segment##*:}"
+      reference="${reference%:*}"
+      [[ "${tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || return 1
+    fi
+  fi
+
+  # Keep the supported grammar deliberately narrow: a public DNS registry,
+  # lowercase repository components, no registry port, and either a tag or
+  # sha256 digest (not both).
+  [[ "${reference}" == */* && "${reference}" != *:* && "${reference}" != *@* ]] ||
+    return 1
+  registry="${reference%%/*}"
+  repository="${reference#*/}"
+  validate_domain "${registry}" || return 1
+  [[ -n "${repository}" && "${repository}" != */ && "${repository}" != /* ]] ||
+    return 1
+
+  IFS='/' read -r -a repository_components <<<"${repository}"
+  for component in "${repository_components[@]}"; do
+    [[ "${component}" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]] || return 1
+  done
+
+  ((${#repository_components[@]} >= 1))
 }
 
 generate_secret() {
@@ -203,7 +248,7 @@ fi
 owner_pubkey="$(printf '%s' "${owner_pubkey}" | tr '[:upper:]' '[:lower:]')"
 
 if ! validate_image "${image}"; then
-  error "image must be a non-empty OCI image reference without whitespace or shell metacharacters"
+  error "image must use registry/repository with lowercase path components and an optional tag or sha256 digest"
   exit 2
 fi
 
@@ -229,53 +274,43 @@ s3_access_key="$(generate_secret)"
 s3_secret_key="$(generate_secret)"
 
 temporary_file="$(mktemp "${output}.tmp.XXXXXX")"
-awk \
-  -v image="${image}" \
-  -v domain="${domain}" \
-  -v owner="${owner_pubkey}" \
-  -v relay_key="${relay_key}" \
-  -v hook_secret="${hook_secret}" \
-  -v postgres_password="${postgres_password}" \
-  -v redis_password="${redis_password}" \
-  -v s3_access_key="${s3_access_key}" \
-  -v s3_secret_key="${s3_secret_key}" '
-BEGIN { FS = "=" }
-$1 == "BUZZ_IMAGE" { print "BUZZ_IMAGE=" image; next }
-$1 == "BUZZ_DOMAIN" { print "BUZZ_DOMAIN=" domain; next }
-$1 == "RELAY_URL" { print "RELAY_URL=wss://" domain; next }
-$1 == "BUZZ_MEDIA_BASE_URL" {
-  print "BUZZ_MEDIA_BASE_URL=https://" domain "/media"; next
+replacement_file="$(mktemp "${output}.replacements.XXXXXX")"
+chmod 600 "${replacement_file}"
+{
+  printf 'BUZZ_IMAGE=%s\n' "${image}"
+  printf 'BUZZ_DOMAIN=%s\n' "${domain}"
+  printf 'RELAY_URL=wss://%s\n' "${domain}"
+  printf 'BUZZ_MEDIA_BASE_URL=https://%s/media\n' "${domain}"
+  printf 'BUZZ_MEDIA_SERVER_DOMAIN=%s\n' "${domain}"
+  printf 'BUZZ_CORS_ORIGINS=https://%s\n' "${domain}"
+  printf 'RELAY_OWNER_PUBKEY=%s\n' "${owner_pubkey}"
+  printf 'BUZZ_RELAY_PRIVATE_KEY=%s\n' "${relay_key}"
+  printf 'BUZZ_GIT_HOOK_HMAC_SECRET=%s\n' "${hook_secret}"
+  printf 'POSTGRES_PASSWORD=%s\n' "${postgres_password}"
+  printf 'REDIS_PASSWORD=%s\n' "${redis_password}"
+  printf 'BUZZ_S3_ACCESS_KEY=%s\n' "${s3_access_key}"
+  printf 'BUZZ_S3_SECRET_KEY=%s\n' "${s3_secret_key}"
+} >"${replacement_file}"
+
+awk -v replacement_file="${replacement_file}" '
+BEGIN {
+  FS = "="
+  while ((getline replacement_line < replacement_file) > 0) {
+    separator = index(replacement_line, "=")
+    replacement_key = substr(replacement_line, 1, separator - 1)
+    replacements[replacement_key] = substr(replacement_line, separator + 1)
+  }
+  close(replacement_file)
 }
-$1 == "BUZZ_MEDIA_SERVER_DOMAIN" {
-  print "BUZZ_MEDIA_SERVER_DOMAIN=" domain; next
-}
-$1 == "BUZZ_CORS_ORIGINS" {
-  print "BUZZ_CORS_ORIGINS=https://" domain; next
-}
-$1 == "RELAY_OWNER_PUBKEY" { print "RELAY_OWNER_PUBKEY=" owner; next }
-$1 == "BUZZ_RELAY_PRIVATE_KEY" {
-  print "BUZZ_RELAY_PRIVATE_KEY=" relay_key; next
-}
-$1 == "BUZZ_GIT_HOOK_HMAC_SECRET" {
-  print "BUZZ_GIT_HOOK_HMAC_SECRET=" hook_secret; next
-}
-$1 == "POSTGRES_PASSWORD" {
-  print "POSTGRES_PASSWORD=" postgres_password; next
-}
-$1 == "REDIS_PASSWORD" {
-  print "REDIS_PASSWORD=" redis_password; next
-}
-$1 == "BUZZ_S3_ACCESS_KEY" {
-  print "BUZZ_S3_ACCESS_KEY=" s3_access_key; next
-}
-$1 == "BUZZ_S3_SECRET_KEY" {
-  print "BUZZ_S3_SECRET_KEY=" s3_secret_key; next
-}
+$1 in replacements { print $1 "=" replacements[$1]; next }
 /^#/ && index($0, "CHANGE_ME") {
   print "# Generated by bootstrap.sh; keep this file private and stable."; next
 }
 { print }
 ' "${ENV_TEMPLATE}" >"${temporary_file}"
+
+rm -f -- "${replacement_file}"
+replacement_file=""
 
 if grep -q "CHANGE_ME" "${temporary_file}"; then
   error "generated environment still contains CHANGE_ME placeholders"
