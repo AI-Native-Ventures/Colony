@@ -6,6 +6,8 @@ fn record() -> ManagedAgentRecord {
     ManagedAgentRecord {
         pubkey: "p".repeat(64),
         name: "agent".into(),
+        role_id: None,
+        role_title: None,
         persona_id: None,
         creation_request_id: None,
         private_key_nsec: "nsec1fake".into(),
@@ -64,6 +66,8 @@ fn record() -> ManagedAgentRecord {
 fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> AgentDefinition {
     AgentDefinition {
         id: id.into(),
+        role_id: None,
+        role_title: None,
         display_name: id.into(),
         avatar_url: None,
         system_prompt: prompt.into(),

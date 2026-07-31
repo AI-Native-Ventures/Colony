@@ -120,6 +120,8 @@ fn definition_from_snapshot(
 
     Ok(AgentDefinition {
         id: Uuid::new_v4().to_string(),
+        role_id: None,
+        role_title: None,
         display_name: member.profile.display_name.trim().to_string(),
         avatar_url: effective_avatar(member),
         system_prompt: member.definition.system_prompt.clone().unwrap_or_default(),
@@ -552,6 +554,8 @@ pub async fn confirm_team_snapshot_import(
         let record = ManagedAgentRecord {
             pubkey: pubkey.clone(),
             name: display_name.clone(),
+            role_id: None,
+            role_title: None,
             display_name: None,
             slug: None,
             persona_id: Some(definition.id.clone()),

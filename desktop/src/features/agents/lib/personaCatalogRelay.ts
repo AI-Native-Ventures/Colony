@@ -11,6 +11,8 @@ export type CatalogPersonaShareLevel = "not-shared" | "none";
 
 type CatalogAgentProjection = {
   displayName: string;
+  roleId: string | null;
+  roleTitle: string | null;
   avatarUrl: string | null;
   systemPrompt: string;
   runtime: string | null;
@@ -165,9 +167,19 @@ function parsePersonaContent(event: RelayEvent): CatalogAgentProjection | null {
     parsed.parallelism <= 32
       ? parsed.parallelism
       : null;
+  const roleId = optionalString(parsed.role_id);
+  const roleTitle = optionalString(parsed.role_title);
+  if (
+    (roleId === null) !== (roleTitle === null) ||
+    (roleId !== null && !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(roleId))
+  ) {
+    return null;
+  }
 
   return {
     displayName: parsed.display_name,
+    roleId,
+    roleTitle,
     avatarUrl,
     systemPrompt:
       typeof parsed.system_prompt === "string" ? parsed.system_prompt : "",
@@ -291,6 +303,8 @@ function publicationToPersona(
   const timestamp = new Date(publication.createdAt * 1_000).toISOString();
   const basePersona: AgentPersona = localPersona ?? {
     id: `catalog:${publication.ownerPubkey}:${publication.sourcePersonaId}`,
+    roleId: publication.agent.roleId,
+    roleTitle: publication.agent.roleTitle,
     displayName: publication.agent.displayName,
     avatarUrl: publication.agent.avatarUrl,
     systemPrompt: publication.agent.systemPrompt,

@@ -844,6 +844,8 @@ type RawManagedAgentPrereqs = {
 
 type RawPersona = {
   id: string;
+  role_id?: string | null;
+  role_title?: string | null;
   display_name: string;
   avatar_url: string | null;
   system_prompt: string;
@@ -7550,9 +7552,34 @@ function applyMockPersonaBehavior(
   persona.parallelism = behavior.parallelism ?? null;
 }
 
+function normalizeMockPersonaRole(
+  roleId: string | undefined,
+  roleTitle: string | undefined,
+): [string | null, string | null] {
+  if (roleId === undefined && roleTitle === undefined) {
+    return [null, null];
+  }
+  if (roleId === undefined || roleTitle === undefined) {
+    throw new Error("Role ID and Role title must be provided together");
+  }
+  const normalizedId = roleId.trim();
+  const normalizedTitle = roleTitle.trim();
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(normalizedId)) {
+    throw new Error(
+      "Role ID must be a lowercase slug (letters, numbers, and hyphens; max 64 characters)",
+    );
+  }
+  if (normalizedTitle.length === 0) {
+    throw new Error("Role title is required when Role ID is set");
+  }
+  return [normalizedId, normalizedTitle];
+}
+
 async function handleCreatePersona(args: {
   input: {
     displayName: string;
+    roleId?: string;
+    roleTitle?: string;
     avatarUrl?: string;
     systemPrompt: string;
     runtime?: string;
@@ -7564,8 +7591,14 @@ async function handleCreatePersona(args: {
   };
 }): Promise<RawPersona> {
   const now = new Date().toISOString();
+  const [roleId, roleTitle] = normalizeMockPersonaRole(
+    args.input.roleId,
+    args.input.roleTitle,
+  );
   const persona: RawPersona = {
     id: crypto.randomUUID(),
+    role_id: roleId,
+    role_title: roleTitle,
     display_name: args.input.displayName.trim(),
     avatar_url: args.input.avatarUrl?.trim() || null,
     system_prompt: args.input.systemPrompt.trim(),
@@ -7599,6 +7632,8 @@ async function handleCreatePersona(args: {
 type MockUpdatePersonaInput = {
   id: string;
   displayName: string;
+  roleId?: string;
+  roleTitle?: string;
   avatarUrl?: string;
   systemPrompt: string;
   runtime?: string;
@@ -7630,6 +7665,14 @@ function applyMockPersonaUpdate(input: MockUpdatePersonaInput): RawPersona {
     throw new Error(`agent ${input.id} not found`);
   }
   persona.display_name = input.displayName.trim();
+  if (input.roleId !== undefined || input.roleTitle !== undefined) {
+    const [roleId, roleTitle] = normalizeMockPersonaRole(
+      input.roleId,
+      input.roleTitle,
+    );
+    persona.role_id = roleId;
+    persona.role_title = roleTitle;
+  }
   persona.avatar_url = input.avatarUrl?.trim() || null;
   persona.system_prompt = input.systemPrompt.trim();
   persona.runtime = input.runtime?.trim() || null;

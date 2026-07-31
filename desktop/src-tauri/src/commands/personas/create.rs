@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        apply_persona_behavior, load_personas, save_personas, try_regenerate_nest, AgentDefinition,
-        CatalogSource, CreatePersonaRequest,
+        apply_persona_behavior, load_personas, normalize_persona_role, save_personas,
+        try_regenerate_nest, AgentDefinition, CatalogSource, CreatePersonaRequest,
     },
     util::now_iso,
 };
@@ -36,6 +36,7 @@ pub(crate) async fn create_persona_with_id(
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let display_name = trim_required(&input.display_name, "Display name")?;
+        let (role_id, role_title) = normalize_persona_role(input.role_id, input.role_title)?;
         // System prompt optional: core memory is auto-injected. Empty is valid.
         let system_prompt = input.system_prompt.trim().to_string();
         let avatar_url = trim_optional(input.avatar_url);
@@ -69,6 +70,8 @@ pub(crate) async fn create_persona_with_id(
         crate::managed_agents::validate_user_env_keys(&input.env_vars)?;
         let mut persona = AgentDefinition {
             id: definition_id,
+            role_id,
+            role_title,
             display_name,
             avatar_url,
             system_prompt,

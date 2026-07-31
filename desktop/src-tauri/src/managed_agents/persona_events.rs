@@ -16,13 +16,19 @@ use crate::app_state::AppState;
 ///
 /// Field order MUST match the NIP-AP reference vectors (`docs/nips/NIP-AP.md`
 /// content body: `display_name, system_prompt, avatar_url, runtime, model,
-/// provider, name_pool`). serde emits fields in declaration order, so this
+/// provider, name_pool`). Optional role fields extend that body immediately
+/// after `display_name`; because they are omitted when absent, legacy vectors
+/// remain byte-identical. serde emits fields in declaration order, so this
 /// order pins the exact content bytes and therefore the NIP-01 event id — a
 /// reorder here breaks cross-implementation interop. Guarded by
 /// `content_matches_nip_ap_vector`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonaEventContent {
     pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_title: Option<String>,
     /// Optional since the unified agent model (NIP-AP revision): a definition
     /// can be pure configuration. Writers emit `Some` whenever the record has
     /// a prompt (including the empty string) so pre-revision content bytes —
@@ -178,11 +184,14 @@ pub fn persona_from_event(event: &nostr::Event) -> Result<AgentDefinition, Strin
 
     let content: PersonaEventContent = serde_json::from_str(event.content.as_ref())
         .map_err(|e| format!("failed to parse persona event content: {e}"))?;
+    let (role_id, role_title) = super::normalize_persona_role(content.role_id, content.role_title)?;
 
     let created_at = event.created_at.to_human_datetime();
 
     Ok(AgentDefinition {
         id: d_tag.clone(),
+        role_id,
+        role_title,
         display_name: content.display_name,
         avatar_url: content.avatar_url,
         system_prompt: content.system_prompt.unwrap_or_default(),
@@ -379,6 +388,8 @@ pub fn persona_content_hash(content: &PersonaEventContent) -> String {
 pub fn persona_event_content(record: &AgentDefinition) -> PersonaEventContent {
     PersonaEventContent {
         display_name: record.display_name.clone(),
+        role_id: record.role_id.clone(),
+        role_title: record.role_title.clone(),
         avatar_url: record.avatar_url.clone(),
         // Always Some — including for an empty prompt — so pre-revision
         // records serialize byte-identically and persona_content_hash is

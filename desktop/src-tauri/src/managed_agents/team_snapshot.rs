@@ -254,6 +254,8 @@ mod tests {
         ManagedAgentRecord {
             pubkey: format!("{name}-pubkey"),
             name: name.to_string(),
+            role_id: None,
+            role_title: None,
             display_name: Some(format!("{name} Display")),
             persona_id: Some("SENTINEL_PERSONA_ID".to_string()), // MUST NOT appear
             creation_request_id: None,

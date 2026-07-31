@@ -446,6 +446,8 @@ pub async fn confirm_agent_snapshot_import(
         // Build persona from snapshot definition.
         let persona = AgentDefinition {
             id: persona_id.clone(),
+            role_id: None,
+            role_title: None,
             display_name: display_name.clone(),
             avatar_url: effective_avatar.clone(),
             system_prompt: snapshot
@@ -482,6 +484,8 @@ pub async fn confirm_agent_snapshot_import(
         let record = ManagedAgentRecord {
             pubkey: pubkey.clone(),
             name: display_name.clone(),
+            role_id: None,
+            role_title: None,
             display_name: None,
             slug: None,
             persona_id: Some(persona_id.clone()),

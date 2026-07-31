@@ -114,13 +114,9 @@ fn goose_has_no_mcp_hooks() {
 fn unknown_command_returns_none() {
     assert!(known_acp_runtime("custom-agent").is_none());
 }
-
 // ── build_respond_to_env tests ───────────────────────────────────────
-
 use super::build_respond_to_env;
 use crate::managed_agents::types::{ManagedAgentRecord, RespondTo};
-
-/// Minimal fixture containing only fields read by `build_respond_to_env`.
 fn fixture(
     respond_to: RespondTo,
     allowlist: Vec<String>,
@@ -129,6 +125,8 @@ fn fixture(
     ManagedAgentRecord {
         pubkey: "p".into(),
         name: "n".into(),
+        role_id: None,
+        role_title: None,
         persona_id: None,
         creation_request_id: None,
         private_key_nsec: "nsec1fake".into(),
@@ -285,6 +283,8 @@ fn persona_with_provider(
 ) -> crate::managed_agents::AgentDefinition {
     crate::managed_agents::AgentDefinition {
         id: id.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: id.to_string(),
         avatar_url: None,
         system_prompt: prompt.to_string(),

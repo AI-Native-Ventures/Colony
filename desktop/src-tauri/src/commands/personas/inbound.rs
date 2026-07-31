@@ -347,6 +347,8 @@ fn apply_inbound_persona(personas: &mut Vec<AgentDefinition>, inbound: AgentDefi
     {
         Some(local) => {
             local.display_name = inbound.display_name;
+            local.role_id = inbound.role_id;
+            local.role_title = inbound.role_title;
             local.avatar_url = inbound.avatar_url;
             local.system_prompt = inbound.system_prompt;
             local.runtime = inbound.runtime;

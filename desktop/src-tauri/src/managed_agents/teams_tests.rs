@@ -165,6 +165,8 @@ fn managed_agent(name: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
         pubkey: name.to_string(),
         name: name.to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: None,
         creation_request_id: None,
         team_id: None,
