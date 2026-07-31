@@ -15,6 +15,10 @@ validate_relay_url() {
   node - "${1}" <<'NODE'
 const { isIP } = require("node:net");
 const raw = process.argv[2];
+if (/[\x00-\x20\x7f]/.test(raw)) {
+  process.exit(1);
+}
+
 let url;
 try {
   url = new URL(raw);
@@ -46,8 +50,30 @@ const valid =
   !host.endsWith(".localhost") &&
   !host.endsWith(".local");
 
-process.exit(valid ? 0 : 1);
+if (!valid) {
+  process.exit(1);
+}
+
+process.stdout.write(url.origin);
 NODE
+}
+
+validate_target() {
+  local requested_target="$1"
+  local known_target
+  local target_list
+
+  if ! target_list="$(rustc --print target-list)"; then
+    return 1
+  fi
+
+  while IFS= read -r known_target; do
+    if [[ "${known_target}" == "${requested_target}" ]]; then
+      return 0
+    fi
+  done <<<"${target_list}"
+
+  return 1
 }
 
 relay_url="${BUZZ_OWNED_RELAY_URL:-}"
@@ -91,7 +117,7 @@ if [[ -z "${relay_url}" ]]; then
   exit 2
 fi
 
-if ! validate_relay_url "${relay_url}"; then
+if ! canonical_relay_url="$(validate_relay_url "${relay_url}")"; then
   echo "error: relay must be a root-level wss:// URL on a public DNS hostname" >&2
   exit 2
 fi
@@ -103,15 +129,19 @@ if [[ -z "${target}" ]]; then
   echo "error: could not determine the Rust host target" >&2
   exit 2
 fi
+if ! validate_target "${target}"; then
+  echo "error: target is not recognized by rustc: ${target}" >&2
+  exit 2
+fi
 
 if [[ "${BUZZ_OWNED_BUILD_DRY_RUN:-0}" == "1" ]]; then
   printf 'BUZZ_RELAY_URL=%s BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY=1 just desktop-release-build %s\n' \
-    "${relay_url}" "${target}"
+    "${canonical_relay_url}" "${target}"
   exit 0
 fi
 
 cd "${REPO_ROOT}"
 unset BUZZ_RELAY_HTTP
-export BUZZ_RELAY_URL="${relay_url}"
+export BUZZ_RELAY_URL="${canonical_relay_url}"
 export BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY=1
 exec just desktop-release-build "${target}"

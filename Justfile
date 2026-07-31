@@ -239,10 +239,11 @@ desktop-tauri-test-compiled-flags: _ensure-sidecar-stubs
 # Build the full desktop Tauri app locally (unsigned, for testing)
 # Sidecar binary list must stay in sync with _ensure-sidecar-stubs above.
 # pnpm install is unconditional here: release builds must start from a clean dep tree.
+[positional-arguments]
 desktop-release-build target="aarch64-apple-darwin":
     #!/usr/bin/env bash
     set -euo pipefail
-    TARGET={{target}}
+    TARGET="$1"
     mkdir -p desktop/src-tauri/binaries
     touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
@@ -250,11 +251,14 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-$TARGET"
     pnpm install
-    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
+    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target "$TARGET"
 
 # Build an owned-company desktop distribution for a reviewed public relay.
+[positional-arguments]
 desktop-owned-build relay *ARGS:
-    ./scripts/build-owned-desktop.sh --relay "{{relay}}" {{ARGS}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exec ./scripts/build-owned-desktop.sh --relay "$1" "${@:2}"
 
 # Fast contracts for owned desktop and relay distribution tooling.
 owned-distribution-contract:
