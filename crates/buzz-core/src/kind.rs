@@ -843,6 +843,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn company_work_kinds_are_addressable_and_distinct() {
+        let kinds = [KIND_COMPANY_PROFILE, KIND_INITIATIVE, KIND_TASK];
+        assert_eq!(kinds, [30179, 30180, 30181]);
+        for kind in kinds {
+            assert!(is_parameterized_replaceable(kind));
+            assert!(!is_ephemeral(kind));
+            assert!(kind <= u16::MAX as u32);
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        let unique = kinds.into_iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), 3);
+
+        for existing in [
+            KIND_PERSONA,
+            KIND_TEAM,
+            KIND_MANAGED_AGENT,
+            KIND_BLOCK_CATALOG_ENTRY,
+        ] {
+            assert!(!unique.contains(&existing));
+        }
+    }
+
+    #[test]
     fn no_duplicate_kind_values() {
         let mut seen = std::collections::HashSet::new();
         for &k in ALL_KINDS {
