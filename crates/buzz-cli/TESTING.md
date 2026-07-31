@@ -528,6 +528,113 @@ agent was created or changed.
 
 ---
 
+## 7b. Colony company work records
+
+Company, Initiative, and Task heads are **relay-authored**. The CLI never signs
+one. `put` and `complete` publish an owner-signed Company Action (kind 40013);
+the relay validates it, signs the replacement head, and returns a receipt
+(kind 40014). Reads resolve heads authored by the relay signer only.
+
+Mutations require the signing key to be the community's current **human owner**.
+A managed agent can `list` and `get`, but its `put` is refused — agents request
+changes in chat and an owner authorizes them.
+
+Use placeholder ids and no real client data below.
+
+### Create a company
+
+```bash
+cat > /tmp/company.json <<'JSON'
+{
+  "schema": "colony.company/v1",
+  "id": "horizon-labs",
+  "tradingName": "Horizon Labs",
+  "legalName": null,
+  "website": null,
+  "summary": "Digital services studio",
+  "businessType": "agency",
+  "services": [
+    { "id": "web", "name": "Web", "description": "Websites" }
+  ],
+  "customerSegments": ["smb"],
+  "costCentres": [
+    { "id": "internal", "name": "Internal", "kind": "internal", "serviceId": null }
+  ],
+  "sourceReportEventId": null,
+  "onboardingStatus": "draft",
+  "createdAt": 1000,
+  "updatedAt": 1000
+}
+JSON
+
+buzz company put --file /tmp/company.json
+buzz company get --id horizon-labs
+```
+
+`put` prints one stable envelope. `receipt` is the relay's signed verdict:
+
+```json
+{
+  "event_id": "<hex>",
+  "accepted": true,
+  "message": "",
+  "entity_id": "horizon-labs",
+  "request_id": "<uuid>",
+  "idempotency_key": "<uuid>",
+  "receipt": { "kind": 40014, "...": "..." }
+}
+```
+
+### Create an initiative and two tasks
+
+An Initiative needs a cost centre that exists on the Company. A Task needs an
+owning Team whose lead is a member, and a QA persona drawn from that team — so
+create the two teams first (`buzz agents` / the desktop Agents tab) and use
+their real ids.
+
+```bash
+buzz initiatives put --file /tmp/initiative.json
+buzz tasks put --file /tmp/task-copy.json
+buzz tasks put --file /tmp/task-build.json
+
+buzz initiatives list --company horizon-labs
+buzz tasks list --company horizon-labs
+buzz tasks list --initiative init-homepage
+```
+
+### Complete a task
+
+`complete` reads the current head, changes only `status`, and sends the head it
+read as the compare-and-set token — so a concurrent edit loses rather than
+being silently overwritten.
+
+```bash
+buzz tasks complete --id task-copy
+buzz tasks get --id task-copy    # status is now "completed"
+```
+
+### Expected refusals
+
+These are the behaviours worth confirming by hand, because they are what keeps
+company state consistent:
+
+```bash
+# Replacing a record that changed underneath you: exit 5, conflict receipt.
+buzz tasks complete --id task-copy   # run twice; the second loses
+
+# A non-owner (e.g. a managed agent key) cannot mutate.
+BUZZ_PRIVATE_KEY=$AGENT_KEY buzz company put --file /tmp/company.json
+
+# A record whose referenced company or team does not exist is refused.
+buzz tasks put --file /tmp/task-with-unknown-team.json
+```
+
+Compact output works as a **global** flag, before the subcommand:
+
+```bash
+buzz --format compact tasks list --company horizon-labs
+```
+
 ## 8. Error Path Testing
 
 Verify the CLI produces correct JSON on stderr and correct exit codes.

@@ -185,6 +185,15 @@ enum Cmd {
     /// Create, configure, and manage channels
     #[command(subcommand)]
     Channels(ChannelsCmd),
+    /// Read the Colony company profile and request owner-authorized changes
+    #[command(subcommand)]
+    Company(CompanyCmd),
+    /// Read and request changes to cross-team Initiatives
+    #[command(subcommand)]
+    Initiatives(InitiativesCmd),
+    /// Read and request changes to single-team Tasks
+    #[command(subcommand)]
+    Tasks(TasksCmd),
     /// Get and set channel canvas documents
     #[command(subcommand)]
     Canvas(CanvasCmd),
@@ -363,6 +372,69 @@ pub enum BlockReceiptStatusArg {
     Failed,
     #[value(name = "timed-out")]
     TimedOut,
+}
+
+/// Colony company profile access.
+///
+/// `put` never authors a canonical head. It publishes an owner-signed Company
+/// Action; the relay validates it and signs the replacement.
+#[derive(Subcommand)]
+pub enum CompanyCmd {
+    /// Get the company profile by stable id
+    Get {
+        #[arg(long)]
+        id: String,
+    },
+    /// Request a company create or replacement from a complete JSON record
+    Put {
+        #[arg(long)]
+        file: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum InitiativesCmd {
+    /// List initiatives belonging to one company
+    List {
+        #[arg(long)]
+        company: String,
+    },
+    /// Get one initiative by stable id
+    Get {
+        #[arg(long)]
+        id: String,
+    },
+    /// Request an initiative create or replacement from a complete JSON record
+    Put {
+        #[arg(long)]
+        file: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum TasksCmd {
+    /// List tasks by company and/or initiative
+    List {
+        #[arg(long)]
+        company: Option<String>,
+        #[arg(long)]
+        initiative: Option<String>,
+    },
+    /// Get one task by stable id
+    Get {
+        #[arg(long)]
+        id: String,
+    },
+    /// Request a task create or replacement from a complete JSON record
+    Put {
+        #[arg(long)]
+        file: String,
+    },
+    /// Mark a task completed, preserving every other stored field
+    Complete {
+        #[arg(long)]
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1928,6 +2000,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Cmd::Agents(sub) => commands::agents::dispatch(sub, &client).await,
         Cmd::Blocks(sub) => commands::blocks::dispatch(sub, &client).await,
+        Cmd::Company(sub) => commands::company::dispatch_company(sub, &client).await,
+        Cmd::Initiatives(sub) => commands::company::dispatch_initiatives(sub, &client).await,
+        Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
@@ -1960,6 +2035,70 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn company_command_surface_parses() {
+        let cases = vec![
+            vec!["buzz", "company", "get", "--id", "horizon-labs"],
+            vec!["buzz", "company", "put", "--file", "company.json"],
+            vec!["buzz", "initiatives", "list", "--company", "horizon-labs"],
+            vec!["buzz", "initiatives", "get", "--id", "init-homepage"],
+            vec!["buzz", "initiatives", "put", "--file", "initiative.json"],
+            vec!["buzz", "tasks", "list", "--company", "horizon-labs"],
+            vec!["buzz", "tasks", "list", "--initiative", "init-homepage"],
+            vec!["buzz", "tasks", "get", "--id", "task-copy"],
+            vec!["buzz", "tasks", "put", "--file", "task.json"],
+            vec!["buzz", "tasks", "complete", "--id", "task-copy"],
+        ];
+        for args in cases {
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "should parse: {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    /// `--format compact` is a GLOBAL flag and must stay before the
+    /// subcommand. Pinning it here stops the company surface from drifting
+    /// into a per-subcommand flag, which is the mistake the CLI guide calls out.
+    #[test]
+    fn company_commands_accept_the_global_compact_format_flag() {
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "--format",
+            "compact",
+            "tasks",
+            "list",
+            "--company",
+            "horizon-labs"
+        ])
+        .is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "buzz",
+                "tasks",
+                "list",
+                "--company",
+                "x",
+                "--format",
+                "compact"
+            ])
+            .is_err(),
+            "--format after the subcommand must not be accepted"
+        );
+    }
+
+    /// Company mutations are whole-record replacements, so `put` takes a file
+    /// rather than ad-hoc field flags.
+    #[test]
+    fn company_writes_require_a_complete_record_file() {
+        assert!(Cli::try_parse_from(["buzz", "company", "put"]).is_err());
+        assert!(
+            Cli::try_parse_from(["buzz", "company", "put", "--trading-name", "Horizon"]).is_err(),
+            "per-field flags would silently drop unspecified fields"
+        );
     }
 
     #[test]
@@ -2150,9 +2289,11 @@ mod tests {
             "blocks",
             "canvas",
             "channels",
+            "company",
             "dms",
             "emoji",
             "feed",
+            "initiatives",
             "issues",
             "media",
             "mem",
@@ -2165,6 +2306,7 @@ mod tests {
             "reactions",
             "repos",
             "social",
+            "tasks",
             "upload",
             "users",
             "workflows",
