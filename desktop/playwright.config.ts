@@ -137,6 +137,7 @@ export default defineConfig({
         "**/discovery-scroll.spec.ts",
         "**/discovery-settings.spec.ts",
         "**/discovery-lead-detail.spec.ts",
+        "**/huddle-transcription.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

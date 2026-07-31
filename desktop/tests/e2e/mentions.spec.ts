@@ -162,7 +162,7 @@ async function waitForTimelineSettled(page: import("@playwright/test").Page) {
   await expect(page.locator("[data-render-pending]")).toHaveCount(0);
 }
 
-async function expectAgentProfileMessageOnly(
+async function expectOwnedAgentProfileActions(
   profilePopover: import("@playwright/test").Locator,
   pubkey: string,
 ) {
@@ -174,7 +174,7 @@ async function expectAgentProfileMessageOnly(
   ).toHaveCount(0);
   await expect(
     profilePopover.getByTestId(`user-profile-popover-huddle-${pubkey}`),
-  ).toHaveCount(0);
+  ).toBeVisible();
 }
 
 async function expectAgentProfileActionsHidden(
@@ -1255,7 +1255,7 @@ test("groups member additions and joins with hidden names in the standard toolti
   await expect(page.getByRole("tooltip")).toContainText("Sam Rivera");
 });
 
-test("system agent profile only exposes message action", async ({ page }) => {
+test("system agent profile exposes owned agent actions", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
@@ -1294,13 +1294,13 @@ test("system agent profile only exposes message action", async ({ page }) => {
     '[data-testid="user-profile-popover"][data-state="open"]',
   );
   await expect(profilePopover).toBeVisible();
-  await expectAgentProfileMessageOnly(
+  await expectOwnedAgentProfileActions(
     profilePopover,
     PROFILE_ONLY_AGENT_PUBKEY,
   );
 });
 
-test("system agent avatar only exposes message action", async ({ page }) => {
+test("system agent avatar exposes owned agent actions", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-random").click();
   await expect(page.getByTestId("chat-title")).toHaveText("random");
@@ -1335,7 +1335,7 @@ test("system agent avatar only exposes message action", async ({ page }) => {
     '[data-testid="user-profile-popover"][data-state="open"]',
   );
   await expect(profilePopover).toBeVisible();
-  await expectAgentProfileMessageOnly(
+  await expectOwnedAgentProfileActions(
     profilePopover,
     PROFILE_ONLY_AGENT_PUBKEY,
   );
@@ -1914,7 +1914,9 @@ test("human profile popover does not show an owner", async ({ page }) => {
   ).toHaveCount(0);
 });
 
-test("owned bot profile only exposes message action", async ({ page }) => {
+test("owned bot profile exposes message and huddle actions", async ({
+  page,
+}) => {
   await installMockBridge(page, {
     managedAgents: [
       {
@@ -1938,13 +1940,29 @@ test("owned bot profile only exposes message action", async ({ page }) => {
     '[data-testid="user-profile-popover"][data-state="open"]',
   );
   await expect(profilePopover).toBeVisible();
-  await expectAgentProfileMessageOnly(
+  await expectOwnedAgentProfileActions(
     profilePopover,
     TEST_IDENTITIES.charlie.pubkey,
   );
+
+  await profilePopover
+    .getByTestId(
+      `user-profile-popover-huddle-${TEST_IDENTITIES.charlie.pubkey}`,
+    )
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).find(
+            (entry) => entry.command === "start_huddle",
+          )?.payload,
+      ),
+    )
+    .toMatchObject({ memberPubkeys: [TEST_IDENTITIES.charlie.pubkey] });
 });
 
-test("owned agent mention profile only exposes message action", async ({
+test("owned agent mention profile exposes message and huddle actions", async ({
   page,
 }) => {
   await installMockBridge(page, {
@@ -1977,7 +1995,7 @@ test("owned agent mention profile only exposes message action", async ({
     '[data-testid="user-profile-popover"][data-state="open"]',
   );
   await expect(profilePopover).toBeVisible();
-  await expectAgentProfileMessageOnly(
+  await expectOwnedAgentProfileActions(
     profilePopover,
     TEST_IDENTITIES.charlie.pubkey,
   );
