@@ -41,9 +41,6 @@ readonly ACP_TMUX_SESSION="${ACP_TMUX_SESSION:-blocks-acp}"
 readonly ACP_FIXTURE="${REPO_ROOT}/desktop/tests/e2e/fixtures/fake-acp-agent.mjs"
 
 mkdir -p "${REPO_ROOT}/desktop/test-results/blocks/gate-c"
-git rev-parse HEAD > "${REPO_ROOT}/desktop/test-results/blocks/gate-c/git-revision.txt"
-git status --short --untracked-files=all -- . ':(exclude).codegraph' \
-  > "${REPO_ROOT}/desktop/test-results/blocks/gate-c/git-status.txt"
 
 echo "[blocks] building real relay, CLI, and ACP binaries (profile=${CARGO_BUILD_PROFILE})..."
 cargo build --profile "${CARGO_BUILD_PROFILE}" -p buzz-relay -p buzz-cli -p buzz-acp
@@ -159,3 +156,9 @@ else
   echo "[blocks] blocks-live spec is not present yet. Once added, run:"
   echo "  cd ${REPO_ROOT}/desktop && ${PLAYWRIGHT_COMMAND}"
 fi
+
+# The Playwright spec recreates the evidence directory at startup. Pin the
+# proven revision and final worktree state only after that cleanup completes.
+git rev-parse HEAD > "${BUZZ_E2E_EVIDENCE_DIR}/git-revision.txt"
+git status --short --untracked-files=all -- . ':(exclude).codegraph' \
+  > "${BUZZ_E2E_EVIDENCE_DIR}/git-status.txt"
