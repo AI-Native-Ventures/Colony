@@ -263,6 +263,7 @@ desktop-owned-build relay *ARGS:
 # Fast contracts for owned desktop and relay distribution tooling.
 owned-distribution-contract:
     bash scripts/test-owned-desktop-build-contract.sh
+    bash deploy/compose/test-bootstrap.sh
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-test desktop-tauri-fmt-check desktop-build desktop-tauri-check desktop-tauri-test
