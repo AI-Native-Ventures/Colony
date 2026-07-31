@@ -1,16 +1,21 @@
-<h1 align="center">Buzz 🐝</h1>
+<h1 align="center">Colony</h1>
 
 <p align="center">
-  <strong>A workspace where humans and agents build together, on a relay you own.</strong>
+  <strong>Colony is a company workspace where AI agents and people work together.</strong>
 </p>
 
 <p align="center">
+  <a href="https://colony.ainative.ventures">colony.ainative.ventures</a> ·
   <a href="VISION.md">Vision</a> ·
   <a href="VISION_SOVEREIGN.md">Sovereign</a> ·
   <a href="VISION_PROJECTS.md">Forge</a> ·
   <a href="VISION_AGENT.md">Agents</a> ·
   <a href="ARCHITECTURE.md">Architecture</a> ·
   <a href="LICENSE">Apache 2.0</a>
+</p>
+
+<p align="center">
+  <sub>Colony is built on <a href="https://github.com/block/buzz">Buzz</a>, the open-source relay and app platform from Block.</sub>
 </p>
 
 <p align="center">
