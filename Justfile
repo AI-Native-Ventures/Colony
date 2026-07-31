@@ -92,7 +92,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check owned-distribution-contract
 
 # Format all Rust code
 fmt:
@@ -251,6 +251,14 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/buzz-$TARGET"
     pnpm install
     cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
+
+# Build an owned-company desktop distribution for a reviewed public relay.
+desktop-owned-build relay *ARGS:
+    ./scripts/build-owned-desktop.sh --relay "{{relay}}" {{ARGS}}
+
+# Fast contracts for owned desktop and relay distribution tooling.
+owned-distribution-contract:
+    bash scripts/test-owned-desktop-build-contract.sh
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-test desktop-tauri-fmt-check desktop-build desktop-tauri-check desktop-tauri-test
