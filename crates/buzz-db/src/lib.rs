@@ -2697,6 +2697,73 @@ impl Db {
         })
     }
 
+    /// Store one owner-signed Company Action together with its relay-signed
+    /// failure receipt, without touching any canonical head.
+    ///
+    /// Only reached for a request that was well-formed and genuinely from the
+    /// owner but lost on validation or compare-and-set. Malformed and
+    /// unauthorized requests are refused upstream and stored nowhere, so this
+    /// path cannot be used to fill the store with junk.
+    ///
+    /// Returns `None` when the action was already stored, which makes a replay
+    /// a no-op rather than a duplicate receipt.
+    pub async fn store_company_failure_receipt(
+        &self,
+        community: CommunityId,
+        action_event: &nostr::Event,
+        receipt_event: &nostr::Event,
+    ) -> Result<Option<(StoredEvent, StoredEvent)>> {
+        for (event, expected_kind, label) in [
+            (
+                action_event,
+                buzz_core::kind::KIND_COMPANY_ACTION,
+                "company action",
+            ),
+            (
+                receipt_event,
+                buzz_core::kind::KIND_COMPANY_RECEIPT,
+                "company receipt",
+            ),
+        ] {
+            if event.kind.as_u16() as u32 != expected_kind {
+                return Err(DbError::InvalidData(format!(
+                    "{label} has kind {}, expected {expected_kind}",
+                    event.kind.as_u16()
+                )));
+            }
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let (action, action_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            action_event,
+            None,
+            None,
+        )
+        .await?;
+        if !action_inserted {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        let (receipt, receipt_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            receipt_event,
+            None,
+            None,
+        )
+        .await?;
+        if !receipt_inserted {
+            tx.rollback().await?;
+            return Err(DbError::InvalidData(
+                "company failure receipt was already stored".to_owned(),
+            ));
+        }
+        tx.commit().await?;
+        Ok(Some((action, receipt)))
+    }
+
     /// Atomically insert a kind:7 reaction event and its reaction row.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_reaction_event_with_thread_metadata(

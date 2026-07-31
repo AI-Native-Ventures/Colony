@@ -15,10 +15,10 @@ use buzz_core::kind::{
     is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_AGENT_PROFILE, KIND_AGENT_TURN_METRIC,
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BLOCK_ACTION,
     KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST, KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST,
-    KIND_BOOKMARK_SET, KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER,
-    KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EVENT_REMINDER,
-    KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
-    KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
+    KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION, KIND_CONTACT_LIST, KIND_DELETION,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
+    KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
+    KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
     KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
     KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED,
@@ -222,6 +222,9 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_TEAM
         | KIND_MANAGED_AGENT
         | KIND_BLOCK_MANIFEST
+        // Company mutations carry owner authority; the actual owner check is
+        // made under `FOR UPDATE` inside the broker's transaction.
+        | KIND_COMPANY_ACTION
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
@@ -399,6 +402,16 @@ pub(crate) async fn derive_reaction_channel(
 /// which means a stray `h` tag can still match `#h` queries. This is a known
 /// limitation affecting all global-only kinds and should be addressed in the
 /// filter layer as a follow-up.
+/// Whether a command kind is handled by the generic command executor.
+///
+/// Company Actions are command kinds but are deliberately excluded: this branch
+/// returns BEFORE the ban/timeout write-block, so routing them here would let a
+/// banned or timed-out owner mutate company state. They are brokered further
+/// down, past that gate.
+pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
+    buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION
+}
+
 pub(crate) fn is_global_only_kind(kind: u32) -> bool {
     matches!(
         kind,
@@ -437,6 +450,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // addressable global definitions. Instances remain kind:9 messages.
             | KIND_BLOCK_MANIFEST
             | KIND_BLOCK_CATALOG_ENTRY
+            | KIND_COMPANY_ACTION
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
@@ -1594,7 +1608,12 @@ async fn ingest_event_inner(
 
     // Command kinds are routed AFTER signature verification, timestamp check,
     // pubkey/auth match, and scope validation — never before.
-    if buzz_core::kind::is_command_kind(kind_u32) {
+    //
+    // Company Actions are deliberately excluded: this branch returns before the
+    // ban/timeout write-block below, and a banned or timed-out owner must not
+    // be able to mutate company state. They are brokered further down, past
+    // that gate, alongside the Block catalog.
+    if takes_generic_command_branch(kind_u32) {
         return super::command_executor::handle_command(tenant, state, event, auth).await;
     }
 
@@ -1705,6 +1724,44 @@ async fn ingest_event_inner(
                 )));
             }
         }
+    }
+
+    // Company mutations are community-global governance requests authorized by
+    // the owner's signature. Routed here, after the ban/timeout write-block, so
+    // a restricted owner cannot change company state.
+    if crate::company_broker::is_company_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot mutate company state".into(),
+            ));
+        }
+        return match crate::company_broker::handle_company_action(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::company_broker::CompanyBrokerOutcome::Applied => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: String::new(),
+            }),
+            crate::company_broker::CompanyBrokerOutcome::Duplicate {
+                original_action_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original action {original_event_id_hex}"),
+                })
+            }
+            // The owner's request lost, but a durable receipt says so. Report
+            // it as not accepted rather than as a protocol error.
+            crate::company_broker::CompanyBrokerOutcome::Refused { message } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: false,
+                message: format!("conflict: {message}"),
+            }),
+        };
     }
 
     // Reserved catalog actions are community-global governance requests, not
@@ -3048,6 +3105,65 @@ mod tests {
                 required_scope_for_kind(kind, &dummy).is_ok(),
                 "kind {kind} should be in the allowlist"
             );
+        }
+    }
+
+    #[test]
+    fn company_kinds_have_pinned_scope_and_channel_classification() {
+        let dummy = make_dummy_event();
+
+        // The owner's request is the only client-authored company kind.
+        assert_eq!(
+            required_scope_for_kind(KIND_COMPANY_ACTION, &dummy).unwrap(),
+            Scope::UsersWrite
+        );
+        assert!(is_global_only_kind(KIND_COMPANY_ACTION));
+        assert!(
+            !requires_h_channel_scope(KIND_COMPANY_ACTION),
+            "company definitions are community-global and never channel-scoped"
+        );
+
+        // Heads and receipts are relay-authored. A client submitting one must
+        // be rejected before it reaches any handler, so they carry no scope.
+        for kind in [
+            buzz_core::kind::KIND_COMPANY_PROFILE,
+            buzz_core::kind::KIND_INITIATIVE,
+            buzz_core::kind::KIND_TASK,
+            buzz_core::kind::KIND_COMPANY_RECEIPT,
+        ] {
+            assert!(
+                buzz_core::kind::is_relay_only_kind(kind),
+                "kind {kind} must be relay-only"
+            );
+            assert!(
+                required_scope_for_kind(kind, &dummy).is_err(),
+                "relay-only kind {kind} must have no client write scope"
+            );
+        }
+        assert!(!buzz_core::kind::is_relay_only_kind(KIND_COMPANY_ACTION));
+    }
+
+    /// Company Actions are a command kind, but they must NOT take the generic
+    /// command branch: that branch returns before the ban/timeout write-block,
+    /// so routing them there would let a banned owner mutate company state.
+    #[test]
+    fn company_actions_are_excluded_from_the_generic_command_branch() {
+        assert!(
+            buzz_core::kind::is_command_kind(KIND_COMPANY_ACTION),
+            "company actions remain a transactional command kind"
+        );
+        assert!(
+            !takes_generic_command_branch(KIND_COMPANY_ACTION),
+            "routing company actions through handle_command would skip the ban gate"
+        );
+        // Every other command kind still takes that branch.
+        for &kind in buzz_core::kind::ALL_KINDS {
+            if buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION {
+                assert!(
+                    takes_generic_command_branch(kind),
+                    "command kind {kind} must still reach handle_command"
+                );
+            }
         }
     }
 
