@@ -1,0 +1,805 @@
+//! Evidence extraction from one fetched HTML page.
+//!
+//! Everything here is a pure function over markup, so the whole surface is
+//! testable without a network. That matters: the Chief of Staff has to be able
+//! to show its sources, and a scanner that silently guesses is worse than one
+//! that reports a gap.
+//!
+//! The ordering principle throughout is **stated beats inferred**. A site's own
+//! JSON-LD is a claim the business published about itself; an OpenGraph tag is
+//! a claim it made to social networks; a heuristic over CSS is our guess. Each
+//! extracted value carries which of those it came from so downstream can weigh
+//! it, and so a Company Brief can cite it.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use scraper::{Html, Selector};
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+/// How strongly a piece of evidence is attested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Confidence {
+    /// The site published this as machine-readable structured data (JSON-LD).
+    Stated,
+    /// The site declared it in metadata intended for machines (OG, meta tags).
+    Declared,
+    /// We inferred it from page content or styling.
+    Inferred,
+}
+
+/// One extracted fact plus where it came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Evidence<T> {
+    /// The extracted value.
+    pub value: T,
+    /// How strongly it is attested.
+    pub confidence: Confidence,
+    /// Exact URL this was read from, so a brief can cite it.
+    pub source_url: String,
+}
+
+impl<T> Evidence<T> {
+    fn new(value: T, confidence: Confidence, source_url: &str) -> Self {
+        Self {
+            value,
+            confidence,
+            source_url: source_url.to_owned(),
+        }
+    }
+}
+
+/// Brand assets and styling observed on a page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrandEvidence {
+    /// Absolute URLs of candidate logo images, best guess first.
+    pub logo_candidates: Vec<Evidence<String>>,
+    /// Absolute URLs of favicons and touch icons.
+    pub icon_candidates: Vec<Evidence<String>>,
+    /// Hex colours observed, most frequent first.
+    pub colors: Vec<Evidence<String>>,
+    /// Font families declared in inline styles or CSS custom properties.
+    pub fonts: Vec<String>,
+}
+
+/// Ways a visitor is asked to make contact.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactEvidence {
+    /// Email addresses found in `mailto:` links.
+    pub emails: Vec<String>,
+    /// Phone numbers found in `tel:` links.
+    pub phones: Vec<String>,
+    /// Social profile URLs, keyed by network.
+    pub socials: BTreeMap<String, String>,
+    /// Third-party booking or scheduling links.
+    pub booking_links: Vec<String>,
+}
+
+/// A same-origin link, classified by what kind of page it probably is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifiedLink {
+    /// Absolute URL.
+    pub url: String,
+    /// Which crawl category it fell into.
+    pub category: LinkCategory,
+    /// Visible link text, trimmed.
+    pub text: String,
+}
+
+/// Page categories worth crawling, in priority order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkCategory {
+    /// What the business sells. Highest value: drives services and cost centres.
+    Services,
+    /// Stated prices, packages, tiers.
+    Pricing,
+    /// Who they are, size, history.
+    About,
+    /// Proof: case studies, portfolio, clients.
+    Work,
+    /// How to reach them.
+    Contact,
+    /// Hiring pages, which reveal team size and structure.
+    Careers,
+    /// Anything else same-origin.
+    Other,
+}
+
+impl LinkCategory {
+    /// Classify from the URL path and link text.
+    fn classify(path: &str, text: &str) -> Self {
+        let haystack = format!(
+            "{} {}",
+            path.to_ascii_lowercase(),
+            text.to_ascii_lowercase()
+        );
+        let has = |needles: &[&str]| needles.iter().any(|n| haystack.contains(n));
+
+        if has(&["pricing", "price", "plans", "packages", "rates"]) {
+            return Self::Pricing;
+        }
+        if has(&[
+            "service",
+            "solution",
+            "product",
+            "what-we-do",
+            "offering",
+            "capabilit",
+        ]) {
+            return Self::Services;
+        }
+        if has(&[
+            "case-stud",
+            "case_stud",
+            "portfolio",
+            "our-work",
+            "/work",
+            "project",
+            "client",
+        ]) {
+            return Self::Work;
+        }
+        if has(&["career", "job", "hiring", "join-us", "vacanc"]) {
+            return Self::Careers;
+        }
+        if has(&["contact", "get-in-touch", "book", "enquir", "inquir"]) {
+            return Self::Contact;
+        }
+        if has(&["about", "who-we-are", "our-story", "team", "mission"]) {
+            return Self::About;
+        }
+        Self::Other
+    }
+}
+
+/// Everything extracted from one page.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageEvidence {
+    /// URL this page was fetched from.
+    pub url: String,
+    /// `<title>`, or the OpenGraph title when richer.
+    pub title: Option<Evidence<String>>,
+    /// Meta description or OpenGraph description.
+    pub description: Option<Evidence<String>>,
+    /// Canonical URL the site declares for this page.
+    pub canonical_url: Option<String>,
+    /// Headings in document order, giving the page's shape.
+    pub headings: Vec<String>,
+    /// Readable body text with boilerplate removed.
+    pub text: String,
+    /// Raw JSON-LD blocks, parsed but not interpreted.
+    pub structured_data: Vec<serde_json::Value>,
+    /// Brand assets observed here.
+    pub brand: BrandEvidence,
+    /// Contact routes observed here.
+    pub contact: ContactEvidence,
+    /// Same-origin links worth following.
+    pub links: Vec<ClassifiedLink>,
+    /// Notes about what could not be read.
+    pub warnings: Vec<String>,
+}
+
+fn selector(spec: &str) -> Selector {
+    // Every selector here is a compile-time constant string; a parse failure is
+    // a programming error, not a runtime condition.
+    Selector::parse(spec).expect("static selector must parse")
+}
+
+fn attr_of(document: &Html, spec: &str, attribute: &str) -> Option<String> {
+    document
+        .select(&selector(spec))
+        .find_map(|element| element.value().attr(attribute))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn absolutize(base: &Url, candidate: &str) -> Option<String> {
+    let joined = base.join(candidate.trim()).ok()?;
+    matches!(joined.scheme(), "https" | "http").then(|| joined.to_string())
+}
+
+/// Extract the page title, preferring OpenGraph when the site supplied one.
+fn extract_title(document: &Html, url: &str) -> Option<Evidence<String>> {
+    if let Some(og) = attr_of(document, r#"meta[property="og:title"]"#, "content") {
+        return Some(Evidence::new(og, Confidence::Declared, url));
+    }
+    document
+        .select(&selector("title"))
+        .next()
+        .map(|element| element.text().collect::<String>().trim().to_owned())
+        .filter(|title| !title.is_empty())
+        .map(|title| Evidence::new(title, Confidence::Declared, url))
+}
+
+fn extract_description(document: &Html, url: &str) -> Option<Evidence<String>> {
+    for spec in [
+        r#"meta[name="description"]"#,
+        r#"meta[property="og:description"]"#,
+        r#"meta[name="twitter:description"]"#,
+    ] {
+        if let Some(value) = attr_of(document, spec, "content") {
+            return Some(Evidence::new(value, Confidence::Declared, url));
+        }
+    }
+    None
+}
+
+/// Parse every JSON-LD block. These are the site's own machine-readable claims
+/// and are the highest-confidence evidence available, so they are kept whole
+/// rather than being flattened into our own shapes.
+fn extract_structured_data(document: &Html) -> Vec<serde_json::Value> {
+    document
+        .select(&selector(r#"script[type="application/ld+json"]"#))
+        .filter_map(|element| {
+            let raw = element.text().collect::<String>();
+            serde_json::from_str::<serde_json::Value>(raw.trim()).ok()
+        })
+        .collect()
+}
+
+fn extract_brand(document: &Html, base: &Url, url: &str) -> BrandEvidence {
+    let mut brand = BrandEvidence::default();
+    let mut seen_logos = BTreeSet::new();
+
+    // An explicit OpenGraph image is a deliberate choice by the site owner.
+    if let Some(og) = attr_of(document, r#"meta[property="og:image"]"#, "content") {
+        if let Some(absolute) = absolutize(base, &og) {
+            if seen_logos.insert(absolute.clone()) {
+                brand
+                    .logo_candidates
+                    .push(Evidence::new(absolute, Confidence::Declared, url));
+            }
+        }
+    }
+
+    // Images that call themselves a logo. Inferred, but usually the real mark.
+    for element in document.select(&selector("img")) {
+        let value = element.value();
+        let haystack = [
+            value.attr("src").unwrap_or_default(),
+            value.attr("alt").unwrap_or_default(),
+            value.attr("class").unwrap_or_default(),
+            value.attr("id").unwrap_or_default(),
+        ]
+        .join(" ")
+        .to_ascii_lowercase();
+        if !haystack.contains("logo") && !haystack.contains("brand") {
+            continue;
+        }
+        let Some(src) = value.attr("src") else {
+            continue;
+        };
+        let Some(absolute) = absolutize(base, src) else {
+            continue;
+        };
+        if seen_logos.insert(absolute.clone()) {
+            brand
+                .logo_candidates
+                .push(Evidence::new(absolute, Confidence::Inferred, url));
+        }
+    }
+
+    let mut seen_icons = BTreeSet::new();
+    for spec in [
+        r#"link[rel="icon"]"#,
+        r#"link[rel="shortcut icon"]"#,
+        r#"link[rel="apple-touch-icon"]"#,
+        r#"link[rel="mask-icon"]"#,
+    ] {
+        for element in document.select(&selector(spec)) {
+            let Some(href) = element.value().attr("href") else {
+                continue;
+            };
+            let Some(absolute) = absolutize(base, href) else {
+                continue;
+            };
+            if seen_icons.insert(absolute.clone()) {
+                brand
+                    .icon_candidates
+                    .push(Evidence::new(absolute, Confidence::Declared, url));
+            }
+        }
+    }
+
+    // `theme-color` is the one colour a site states outright.
+    if let Some(theme) = attr_of(document, r#"meta[name="theme-color"]"#, "content") {
+        if let Some(hex) = normalize_hex(&theme) {
+            brand
+                .colors
+                .push(Evidence::new(hex, Confidence::Declared, url));
+        }
+    }
+
+    // Colours from inline styles and CSS custom properties, ranked by how often
+    // they appear — a brand colour is used repeatedly, an accident once.
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut style_text = String::new();
+    for element in document.select(&selector("style")) {
+        style_text.push_str(&element.text().collect::<String>());
+    }
+    for element in document.select(&selector("[style]")) {
+        if let Some(style) = element.value().attr("style") {
+            style_text.push(' ');
+            style_text.push_str(style);
+        }
+    }
+    for hex in hex_colors_in(&style_text) {
+        *counts.entry(hex).or_default() += 1;
+    }
+    let mut ranked: Vec<(String, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    for (hex, _) in ranked.into_iter().take(8) {
+        if brand.colors.iter().any(|existing| existing.value == hex) {
+            continue;
+        }
+        brand
+            .colors
+            .push(Evidence::new(hex, Confidence::Inferred, url));
+    }
+
+    brand.fonts = font_families_in(&style_text);
+    brand
+}
+
+/// Normalize a CSS hex colour to lowercase `#rrggbb`.
+fn normalize_hex(raw: &str) -> Option<String> {
+    let value = raw.trim().trim_start_matches('#');
+    if !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let expanded = match value.len() {
+        3 => value.chars().flat_map(|c| [c, c]).collect::<String>(),
+        6 => value.to_owned(),
+        // 8 digits is #rrggbbaa; keep the colour, drop the alpha.
+        8 => value[..6].to_owned(),
+        _ => return None,
+    };
+    Some(format!("#{}", expanded.to_ascii_lowercase()))
+}
+
+fn hex_colors_in(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'#' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && (bytes[end] as char).is_ascii_hexdigit() && end - start < 8 {
+            end += 1;
+        }
+        let candidate = &text[start..end];
+        // Only 3, 6 and 8 digit runs are colours; 4 or 5 is something else.
+        if matches!(candidate.len(), 3 | 6 | 8) {
+            if let Some(hex) = normalize_hex(candidate) {
+                // Pure black and white are almost always text, not brand.
+                if hex != "#000000" && hex != "#ffffff" {
+                    found.push(hex);
+                }
+            }
+        }
+        index = end.max(index + 1);
+    }
+    found
+}
+
+fn font_families_in(style_text: &str) -> Vec<String> {
+    let mut families = BTreeSet::new();
+    let lowered = style_text.to_ascii_lowercase();
+    for (offset, _) in lowered.match_indices("font-family") {
+        let Some(colon) = lowered[offset..].find(':') else {
+            continue;
+        };
+        let rest = &style_text[offset + colon + 1..];
+        let end = rest.find([';', '}']).unwrap_or(rest.len());
+        let first = rest[..end]
+            .split(',')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_matches(['"', '\''])
+            .to_owned();
+        if !first.is_empty() && first.len() <= 64 {
+            families.insert(first);
+        }
+    }
+    families.into_iter().take(6).collect()
+}
+
+/// Known social networks, matched on host so a link to a post still counts.
+const SOCIAL_HOSTS: [(&str, &str); 9] = [
+    ("linkedin.com", "linkedin"),
+    ("twitter.com", "twitter"),
+    ("x.com", "twitter"),
+    ("instagram.com", "instagram"),
+    ("facebook.com", "facebook"),
+    ("youtube.com", "youtube"),
+    ("tiktok.com", "tiktok"),
+    ("github.com", "github"),
+    ("threads.net", "threads"),
+];
+
+/// Third-party scheduling tools, which reveal how a business converts interest.
+const BOOKING_HOSTS: [&str; 5] = [
+    "calendly.com",
+    "cal.com",
+    "hubspot.com",
+    "savvycal.com",
+    "acuityscheduling.com",
+];
+
+fn extract_contact_and_links(
+    document: &Html,
+    base: &Url,
+    origin_host: &str,
+) -> (ContactEvidence, Vec<ClassifiedLink>) {
+    let mut contact = ContactEvidence::default();
+    let mut emails = BTreeSet::new();
+    let mut phones = BTreeSet::new();
+    let mut booking = BTreeSet::new();
+    let mut links: Vec<ClassifiedLink> = Vec::new();
+    let mut seen_links = BTreeSet::new();
+
+    for element in document.select(&selector("a[href]")) {
+        let Some(href) = element.value().attr("href") else {
+            continue;
+        };
+        let href = href.trim();
+
+        if let Some(address) = href.strip_prefix("mailto:") {
+            let cleaned = address.split('?').next().unwrap_or(address).trim();
+            if cleaned.contains('@') {
+                emails.insert(cleaned.to_ascii_lowercase());
+            }
+            continue;
+        }
+        if let Some(number) = href.strip_prefix("tel:") {
+            let cleaned = number.trim();
+            if !cleaned.is_empty() {
+                phones.insert(cleaned.to_owned());
+            }
+            continue;
+        }
+
+        let Some(absolute) = absolutize(base, href) else {
+            continue;
+        };
+        let Ok(parsed) = Url::parse(&absolute) else {
+            continue;
+        };
+        let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
+            continue;
+        };
+
+        if host == origin_host || host == format!("www.{origin_host}") {
+            // Fragments and queries point at the same document; the crawler
+            // wants distinct pages, so key on the path alone.
+            let mut canonical = parsed.clone();
+            canonical.set_fragment(None);
+            canonical.set_query(None);
+            let key = canonical.to_string();
+            if seen_links.insert(key.clone()) {
+                let text = element.text().collect::<String>().trim().to_owned();
+                links.push(ClassifiedLink {
+                    category: LinkCategory::classify(canonical.path(), &text),
+                    url: key,
+                    text: text.chars().take(120).collect(),
+                });
+            }
+            continue;
+        }
+
+        for (needle, network) in SOCIAL_HOSTS {
+            if host == needle || host.ends_with(&format!(".{needle}")) {
+                contact
+                    .socials
+                    .entry(network.to_owned())
+                    .or_insert(absolute.clone());
+            }
+        }
+        for needle in BOOKING_HOSTS {
+            if host == needle || host.ends_with(&format!(".{needle}")) {
+                booking.insert(absolute.clone());
+            }
+        }
+    }
+
+    contact.emails = emails.into_iter().collect();
+    contact.phones = phones.into_iter().collect();
+    contact.booking_links = booking.into_iter().collect();
+    (contact, links)
+}
+
+/// Readable text with scripts, styling and chrome removed.
+fn extract_text(document: &Html) -> String {
+    let mut out = String::new();
+    for element in document.select(&selector("body")) {
+        for text in element.text() {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(trimmed);
+        }
+    }
+    // scraper's `text()` already skips comments; strip the remaining runs.
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Extract every piece of evidence from one page of HTML.
+pub fn extract_page(html: &str, page_url: &str) -> PageEvidence {
+    let document = Html::parse_document(html);
+    let base = Url::parse(page_url).ok();
+    let origin_host = base
+        .as_ref()
+        .and_then(|url| url.host_str())
+        .map(|host| host.trim_start_matches("www.").to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let mut evidence = PageEvidence {
+        url: page_url.to_owned(),
+        title: extract_title(&document, page_url),
+        description: extract_description(&document, page_url),
+        canonical_url: attr_of(&document, r#"link[rel="canonical"]"#, "href"),
+        headings: document
+            .select(&selector("h1, h2, h3"))
+            .map(|element| element.text().collect::<String>().trim().to_owned())
+            .filter(|heading| !heading.is_empty())
+            .take(60)
+            .collect(),
+        text: extract_text(&document),
+        structured_data: extract_structured_data(&document),
+        ..PageEvidence::default()
+    };
+
+    if let Some(base) = base.as_ref() {
+        evidence.brand = extract_brand(&document, base, page_url);
+        let (contact, links) = extract_contact_and_links(&document, base, &origin_host);
+        evidence.contact = contact;
+        evidence.links = links;
+    }
+
+    // A shell with almost no text but plenty of script is a client-rendered
+    // app. Saying so beats reporting an empty business.
+    let script_count = document.select(&selector("script")).count();
+    if evidence.text.len() < 200 && script_count > 0 && evidence.structured_data.is_empty() {
+        evidence.warnings.push(
+            "page rendered almost no text server-side; it is probably a client-rendered app"
+                .to_owned(),
+        );
+    }
+    evidence
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PAGE: &str = r##"<!doctype html>
+<html><head>
+  <title>Horizon Labs — Web &amp; Brand Studio</title>
+  <meta name="description" content="We build websites and brands for small teams.">
+  <meta property="og:title" content="Horizon Labs">
+  <meta property="og:image" content="/img/og-card.png">
+  <meta name="theme-color" content="#1D9BF0">
+  <link rel="canonical" href="https://horizonlabs.example/">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/touch.png">
+  <style>
+    :root { --brand: #1d9bf0; --accent: #FF6B35; font-family: "Sohne", sans-serif; }
+    .a { color: #ff6b35; } .b { border: 1px solid #ff6b35; } .c { background: #000000; }
+  </style>
+  <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Organization","name":"Horizon Labs",
+     "email":"hi@horizonlabs.example","sameAs":["https://www.linkedin.com/company/horizon"]}
+  </script>
+</head>
+<body>
+  <img src="/img/logo.svg" alt="Horizon Labs logo">
+  <h1>Websites that earn their keep</h1>
+  <h2>Services</h2>
+  <p>We design, build and maintain marketing sites.</p>
+  <a href="/services/web-design">Web design</a>
+  <a href="/pricing">Pricing</a>
+  <a href="/about-us">About us</a>
+  <a href="/work/acme">Case study: Acme</a>
+  <a href="/careers">Join the team</a>
+  <a href="/contact">Get in touch</a>
+  <a href="/services/web-design#top">Web design again</a>
+  <a href="mailto:hi@horizonlabs.example?subject=Hi">Email us</a>
+  <a href="tel:+27115551234">Call us</a>
+  <a href="https://www.linkedin.com/company/horizon">LinkedIn</a>
+  <a href="https://x.com/horizon">X</a>
+  <a href="https://calendly.com/horizon/intro">Book a call</a>
+  <a href="https://partner.example/somewhere">A partner</a>
+</body></html>"##;
+
+    fn page() -> PageEvidence {
+        extract_page(PAGE, "https://horizonlabs.example/")
+    }
+
+    #[test]
+    fn opengraph_title_wins_over_the_document_title() {
+        let evidence = page();
+        let title = evidence.title.expect("title");
+        assert_eq!(title.value, "Horizon Labs");
+        assert_eq!(title.confidence, Confidence::Declared);
+        assert_eq!(title.source_url, "https://horizonlabs.example/");
+    }
+
+    #[test]
+    fn meta_description_and_canonical_are_captured() {
+        let evidence = page();
+        assert_eq!(
+            evidence.description.expect("description").value,
+            "We build websites and brands for small teams."
+        );
+        assert_eq!(
+            evidence.canonical_url.as_deref(),
+            Some("https://horizonlabs.example/")
+        );
+    }
+
+    /// JSON-LD is the site's own machine-readable claim about itself — the
+    /// highest-confidence evidence there is, and kept whole rather than
+    /// flattened into our shapes.
+    #[test]
+    fn structured_data_is_captured_verbatim() {
+        let evidence = page();
+        assert_eq!(evidence.structured_data.len(), 1);
+        let organization = &evidence.structured_data[0];
+        assert_eq!(organization["@type"], "Organization");
+        assert_eq!(organization["name"], "Horizon Labs");
+        assert_eq!(organization["email"], "hi@horizonlabs.example");
+    }
+
+    #[test]
+    fn logo_and_icons_are_absolutized_with_provenance() {
+        let brand = page().brand;
+        let logos: Vec<&str> = brand
+            .logo_candidates
+            .iter()
+            .map(|c| c.value.as_str())
+            .collect();
+        assert!(logos.contains(&"https://horizonlabs.example/img/og-card.png"));
+        assert!(logos.contains(&"https://horizonlabs.example/img/logo.svg"));
+        // The declared OpenGraph image outranks the inferred <img> guess.
+        assert_eq!(brand.logo_candidates[0].confidence, Confidence::Declared);
+
+        let icons: Vec<&str> = brand
+            .icon_candidates
+            .iter()
+            .map(|c| c.value.as_str())
+            .collect();
+        assert!(icons.contains(&"https://horizonlabs.example/favicon.ico"));
+        assert!(icons.contains(&"https://horizonlabs.example/touch.png"));
+    }
+
+    /// theme-color is stated outright, so it leads. The rest are ranked by how
+    /// often they appear, because a brand colour recurs and an accident does not.
+    #[test]
+    fn colors_prefer_the_declared_theme_then_the_most_repeated() {
+        let brand = page().brand;
+        let colors: Vec<&str> = brand.colors.iter().map(|c| c.value.as_str()).collect();
+        assert_eq!(colors[0], "#1d9bf0");
+        assert_eq!(brand.colors[0].confidence, Confidence::Declared);
+        // #ff6b35 appears three times, more than any other inferred colour.
+        assert_eq!(colors[1], "#ff6b35");
+        // Pure black is chrome, not brand.
+        assert!(!colors.contains(&"#000000"));
+    }
+
+    #[test]
+    fn shorthand_and_alpha_hex_normalize_to_six_digits() {
+        assert_eq!(normalize_hex("#ABC").as_deref(), Some("#aabbcc"));
+        assert_eq!(normalize_hex("#1D9BF0").as_deref(), Some("#1d9bf0"));
+        assert_eq!(normalize_hex("#1d9bf080").as_deref(), Some("#1d9bf0"));
+        assert_eq!(normalize_hex("not-a-colour"), None);
+        assert_eq!(normalize_hex("#12345"), None);
+    }
+
+    #[test]
+    fn declared_font_family_is_captured() {
+        assert_eq!(page().brand.fonts, vec!["Sohne".to_owned()]);
+    }
+
+    #[test]
+    fn contact_routes_are_separated_by_kind() {
+        let contact = page().contact;
+        assert_eq!(contact.emails, vec!["hi@horizonlabs.example".to_owned()]);
+        assert_eq!(contact.phones, vec!["+27115551234".to_owned()]);
+        assert_eq!(
+            contact.socials.get("linkedin").map(String::as_str),
+            Some("https://www.linkedin.com/company/horizon")
+        );
+        // x.com and twitter.com are the same network.
+        assert_eq!(
+            contact.socials.get("twitter").map(String::as_str),
+            Some("https://x.com/horizon")
+        );
+        assert_eq!(
+            contact.booking_links,
+            vec!["https://calendly.com/horizon/intro".to_owned()]
+        );
+    }
+
+    #[test]
+    fn links_are_same_origin_only_and_classified_by_purpose() {
+        let links = page().links;
+        let by_url = |needle: &str| {
+            links
+                .iter()
+                .find(|link| link.url.contains(needle))
+                .unwrap_or_else(|| panic!("expected a link containing {needle}"))
+        };
+        assert_eq!(by_url("/services/").category, LinkCategory::Services);
+        assert_eq!(by_url("/pricing").category, LinkCategory::Pricing);
+        assert_eq!(by_url("/about-us").category, LinkCategory::About);
+        assert_eq!(by_url("/work/").category, LinkCategory::Work);
+        assert_eq!(by_url("/careers").category, LinkCategory::Careers);
+        assert_eq!(by_url("/contact").category, LinkCategory::Contact);
+
+        // Off-origin links are never crawl candidates, only contact evidence.
+        assert!(!links
+            .iter()
+            .any(|link| link.url.contains("partner.example")));
+        assert!(!links.iter().any(|link| link.url.contains("linkedin.com")));
+    }
+
+    /// A fragment points at the same document, so following it would spend a
+    /// page of the crawl budget re-reading what we already have.
+    #[test]
+    fn fragment_variants_collapse_to_one_crawl_target() {
+        let links = page().links;
+        let design = links
+            .iter()
+            .filter(|link| link.url.contains("/services/web-design"))
+            .count();
+        assert_eq!(design, 1);
+        assert!(links.iter().all(|link| !link.url.contains('#')));
+    }
+
+    #[test]
+    fn headings_and_text_survive_but_style_and_script_do_not() {
+        let evidence = page();
+        assert_eq!(evidence.headings[0], "Websites that earn their keep");
+        assert!(evidence.text.contains("We design, build and maintain"));
+        assert!(!evidence.text.contains("font-family"));
+        assert!(!evidence.text.contains("schema.org"));
+    }
+
+    /// Reporting "we could not read this" is more useful than reporting an
+    /// empty business.
+    #[test]
+    fn a_client_rendered_shell_is_reported_rather_than_read_as_empty() {
+        let shell = r#"<!doctype html><html><head><title>App</title></head>
+            <body><div id="root"></div><script src="/app.js"></script></body></html>"#;
+        let evidence = extract_page(shell, "https://app.example/");
+        assert!(
+            evidence
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("client-rendered")),
+            "warnings: {:?}",
+            evidence.warnings
+        );
+    }
+
+    #[test]
+    fn a_server_rendered_page_carries_no_client_render_warning() {
+        assert!(page().warnings.is_empty());
+    }
+}

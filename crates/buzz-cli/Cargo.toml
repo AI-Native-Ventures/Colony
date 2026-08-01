@@ -65,6 +65,7 @@ infer = "0.19"
 
 # URL parsing — extract server domain for Blossom auth tag
 url = { workspace = true }
+scraper = { workspace = true }
 
 # Persona pack parsing, validation, and resolution
 buzz-persona = { path = "../buzz-persona" }

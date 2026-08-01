@@ -4,4 +4,5 @@
 //! assets and explicit gaps. Inferring what a business sells is the Chief of
 //! Staff's job, and it must be able to show its sources.
 
+pub mod extract;
 pub mod url_guard;
