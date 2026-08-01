@@ -496,3 +496,44 @@ fn the_blueprint_hash_is_independent_of_key_order() {
         "an edit must change the hash"
     );
 }
+
+/// The hash-mismatch guard is only as good as the canonicalisation. If two
+/// different blueprints could produce the same canonical string, an edited
+/// document would resume an approval it was not approved for.
+///
+/// Keys and string values both go through JSON quoting, so a separator inside
+/// a value stays inside quotes and cannot be confused for structure. These are
+/// the inputs that would break a naive `key:value` join.
+#[test]
+fn separators_inside_content_cannot_forge_a_matching_hash() {
+    let mut a = blueprint();
+    a.company.trading_name = "Horizon\",\"legalName\":\"Forged".to_string();
+    let mut b = blueprint();
+    b.company.trading_name = "Horizon".to_string();
+    b.company.legal_name = Some("Forged".to_string());
+    assert_ne!(
+        blueprint_hash(&a),
+        blueprint_hash(&b),
+        "a value that looks like structure must not hash as structure"
+    );
+
+    for hostile in [
+        "a:b",
+        "a,b",
+        "}{",
+        "\"quoted\"",
+        "back\\slash",
+        "new\nline",
+        "unicode \u{2028} sep",
+    ] {
+        let mut left = blueprint();
+        left.company.summary = hostile.to_string();
+        let mut right = blueprint();
+        right.company.summary = format!("{hostile} ");
+        assert_ne!(
+            blueprint_hash(&left),
+            blueprint_hash(&right),
+            "`{hostile}` must hash distinctly from itself plus a space"
+        );
+    }
+}
