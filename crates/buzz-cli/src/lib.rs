@@ -2492,6 +2492,7 @@ mod tests {
             "canvas",
             "channels",
             "company",
+            "discovery",
             "dms",
             "emoji",
             "feed",
