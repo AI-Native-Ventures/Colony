@@ -189,6 +189,9 @@ enum Cmd {
     /// Read the Colony company profile and request owner-authorized changes
     #[command(subcommand)]
     Company(CompanyCmd),
+    /// Start, inspect, and cancel entitled business Discovery runs
+    #[command(subcommand)]
+    Discovery(DiscoveryCmd),
     /// Read and request changes to cross-team Initiatives
     #[command(subcommand)]
     Initiatives(InitiativesCmd),
@@ -487,6 +490,38 @@ pub enum CompanyCmd {
         /// Pages to read at most. Clamped to a hard ceiling.
         #[arg(long)]
         max_pages: Option<usize>,
+    },
+}
+
+/// Workspace-scoped business Discovery operations.
+#[derive(Subcommand)]
+pub enum DiscoveryCmd {
+    /// Start a durable run for an existing campaign reference
+    Start {
+        /// Campaign UUID owned by the Discovery work surface.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Read the latest durable run projection
+    Status {
+        /// Discovery run UUID.
+        #[arg(long)]
+        run: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Request cancellation at the next fenced step boundary
+    Cancel {
+        /// Discovery run UUID.
+        #[arg(long)]
+        run: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
     },
 }
 
@@ -2127,6 +2162,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Blocks(sub) => commands::blocks::dispatch(sub, &client).await,
         Cmd::Company(sub) => commands::company::dispatch_company(sub, &client).await,
         Cmd::Parties(sub) => commands::parties::dispatch_parties(sub, &client).await,
+        Cmd::Discovery(sub) => commands::discovery::dispatch(sub, &client).await,
         Cmd::Initiatives(sub) => commands::company::dispatch_initiatives(sub, &client).await,
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
@@ -2194,6 +2230,36 @@ mod tests {
                 args.join(" ")
             );
         }
+    }
+
+    #[test]
+    fn discovery_command_surface_parses_and_requires_uuids() {
+        let campaign = "7c07e659-3610-42f4-9a5e-1e9973c09da9";
+        let run = "8797229a-3c2c-4bd0-8e2e-48e13f9bcc6f";
+        let retry = "43ad3fa8-5bf8-4d87-909d-92cb998ddf1c";
+        for args in [
+            vec!["buzz", "discovery", "start", "--campaign", campaign],
+            vec!["buzz", "discovery", "status", "--run", run],
+            vec![
+                "buzz",
+                "discovery",
+                "cancel",
+                "--run",
+                run,
+                "--idempotency-key",
+                retry,
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "should parse: {}",
+                args.join(" ")
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", "dentists"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["buzz", "discovery", "status"]).is_err());
     }
 
     /// `--format compact` is a GLOBAL flag and must stay before the
