@@ -452,8 +452,13 @@ pub struct BlueprintCompany {
 }
 
 /// A complete company proposal, awaiting human approval.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+///
+/// `Deserialize` is written by hand rather than derived, so that validation
+/// runs as part of parsing. A derived one would let any future caller reach
+/// for `serde_json::from_str` and silently obtain a Blueprint that was never
+/// checked, which is precisely the mistake this type exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompanyBlueprint {
     /// Exact schema string.
     pub schema: String,
@@ -473,6 +478,46 @@ pub struct CompanyBlueprint {
     pub proposed_initiatives: Vec<BlueprintInitiative>,
 }
 
+/// The wire form. Private, so the only way out of it is through validation.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompanyBlueprintWire {
+    schema: String,
+    request_id: String,
+    company: BlueprintCompany,
+    roster: Vec<BlueprintRosterEntry>,
+    teams: Vec<BlueprintTeam>,
+    cost_centres: Vec<BlueprintCostCentre>,
+    readiness_gaps: Vec<BlueprintReadinessGap>,
+    proposed_initiatives: Vec<BlueprintInitiative>,
+}
+
+impl From<CompanyBlueprintWire> for CompanyBlueprint {
+    fn from(wire: CompanyBlueprintWire) -> Self {
+        Self {
+            schema: wire.schema,
+            request_id: wire.request_id,
+            company: wire.company,
+            roster: wire.roster,
+            teams: wire.teams,
+            cost_centres: wire.cost_centres,
+            readiness_gaps: wire.readiness_gaps,
+            proposed_initiatives: wire.proposed_initiatives,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CompanyBlueprint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let blueprint = CompanyBlueprint::from(CompanyBlueprintWire::deserialize(deserializer)?);
+        validate_blueprint(&blueprint).map_err(serde::de::Error::custom)?;
+        Ok(blueprint)
+    }
+}
+
 /// The only accepted schema string.
 pub const BLUEPRINT_SCHEMA: &str = "colony.company-blueprint/v1";
 
@@ -483,8 +528,14 @@ pub const BLUEPRINT_SCHEMA: &str = "colony.company-blueprint/v1";
 /// partially honoured. That is the property worth protecting: the parse is the
 /// boundary, not a later check someone might forget.
 pub fn parse_blueprint(raw: &str) -> Result<CompanyBlueprint, BlueprintError> {
-    let blueprint: CompanyBlueprint =
+    // Deserialized through the wire type rather than `CompanyBlueprint`, whose
+    // own `Deserialize` also validates but can only report failures as an
+    // opaque serde error. Validating here keeps refusals specific enough to
+    // act on, while the `Deserialize` impl remains the backstop for callers
+    // that do not come through this function.
+    let wire: CompanyBlueprintWire =
         serde_json::from_str(raw).map_err(|_| BlueprintError::Malformed)?;
+    let blueprint = CompanyBlueprint::from(wire);
     validate_blueprint(&blueprint)?;
     Ok(blueprint)
 }
@@ -919,6 +970,34 @@ mod tests {
             validate_blueprint(&blueprint).unwrap_err(),
             BlueprintError::DanglingReference
         );
+    }
+
+    /// The guarantee that outlives this file: a future caller reaching for
+    /// `serde_json::from_str` cannot obtain a Blueprint that was never
+    /// checked. Validation is part of deserializing, not a separate step
+    /// someone has to remember.
+    #[test]
+    fn deserializing_directly_still_validates() {
+        let mut invalid = valid_blueprint();
+        invalid.teams[0].name = "Operations".to_string();
+        let json = json_of(&invalid);
+
+        // The struct's own Deserialize, not parse_blueprint.
+        let direct: Result<CompanyBlueprint, _> = serde_json::from_str(&json);
+        assert!(
+            direct.is_err(),
+            "deserializing an invalid blueprint must fail, not succeed unchecked"
+        );
+
+        let mut wrong_count = valid_blueprint();
+        wrong_count.proposed_initiatives.truncate(1);
+        assert!(serde_json::from_str::<CompanyBlueprint>(&json_of(&wrong_count)).is_err());
+
+        // And a valid one still round-trips.
+        let good = valid_blueprint();
+        let parsed: CompanyBlueprint =
+            serde_json::from_str(&json_of(&good)).expect("a valid blueprint round-trips");
+        assert_eq!(parsed, good);
     }
 
     #[test]
