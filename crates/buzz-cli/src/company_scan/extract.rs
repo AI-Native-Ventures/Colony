@@ -709,10 +709,82 @@ fn collect_images(document: &Html, base: &Url) -> Vec<String> {
     seen.into_iter().take(60).collect()
 }
 
+/// Tags whose contents are not readable text, however much text they contain.
+///
+/// A modern site ships its whole page state as JSON inside a `<script>` in the
+/// body, and draws its icons as `<svg>` full of coordinates. Both look like
+/// prose to a naive walk, and both then get mined for contact details: the
+/// JSON yields "emails" like `dangerouslysetinnerhtml":{"__html":...` and the
+/// path coordinates yield "phone numbers" like `2 2 0 0 1-2.009 0`. Those end
+/// up in the brief an owner reads as if they were facts about the business.
+const NON_PROSE_TAGS: &[&str] = &[
+    "script", "style", "noscript", "svg", "template", "iframe", "canvas",
+];
+
+/// Values a page's schema.org markup states for one field.
+///
+/// Walks nested objects and arrays, since a business can publish its contact
+/// details on the organization itself or on a nested `PostalAddress`, and both
+/// are equally stated.
+fn structured_strings(blocks: &[serde_json::Value], field: &str) -> Vec<String> {
+    fn walk(value: &serde_json::Value, field: &str, found: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, nested) in map {
+                    if key.eq_ignore_ascii_case(field) {
+                        match nested {
+                            serde_json::Value::String(text) if !text.trim().is_empty() => {
+                                found.push(text.trim().to_owned());
+                            }
+                            serde_json::Value::Array(items) => {
+                                for item in items {
+                                    if let Some(text) = item.as_str() {
+                                        if !text.trim().is_empty() {
+                                            found.push(text.trim().to_owned());
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    walk(nested, field, found);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item, field, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut found = Vec::new();
+    for block in blocks {
+        walk(block, field, &mut found);
+    }
+    found.sort();
+    found.dedup();
+    found.truncate(5);
+    found
+}
+
 fn extract_text(document: &Html) -> String {
     let mut out = String::new();
     for element in document.select(&selector("body")) {
-        for text in element.text() {
+        for node in element.descendants() {
+            let Some(text) = node.value().as_text() else {
+                continue;
+            };
+            if node.ancestors().any(|ancestor| {
+                ancestor
+                    .value()
+                    .as_element()
+                    .is_some_and(|element| NON_PROSE_TAGS.contains(&element.name()))
+            }) {
+                continue;
+            }
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 continue;
@@ -723,7 +795,7 @@ fn extract_text(document: &Html) -> String {
             out.push_str(trimmed);
         }
     }
-    // scraper's `text()` already skips comments; strip the remaining runs.
+    // scraper's text nodes already skip comments; strip the remaining runs.
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -761,9 +833,26 @@ pub fn extract_page(html: &str, page_url: &str) -> PageEvidence {
         evidence.images = collect_images(&document, base);
     }
 
-    // Only fall back to scanning text when the explicit links found nothing.
-    // A linked address is stated; one scraped out of prose is a guess, and
-    // mixing the two would hide which is which.
+    // Structured data next, before prose. A site that publishes schema.org
+    // markup is telling us its own contact details rather than leaving them to
+    // be recognised, and that is the strongest evidence available: exact, and
+    // stated by the business itself.
+    if evidence.contact.emails.is_empty() {
+        let stated = structured_strings(&evidence.structured_data, "email");
+        if !stated.is_empty() {
+            evidence.contact.emails = stated;
+        }
+    }
+    if evidence.contact.phones.is_empty() {
+        let stated = structured_strings(&evidence.structured_data, "telephone");
+        if !stated.is_empty() {
+            evidence.contact.phones = stated;
+        }
+    }
+
+    // Only fall back to scanning text when neither links nor structured data
+    // said anything. A linked or declared address is stated; one scraped out of
+    // prose is a guess, and mixing the two would hide which is which.
     if evidence.contact.emails.is_empty() {
         let mut scraped = emails_in_text(&evidence.text);
         scraped.sort();
@@ -1125,5 +1214,80 @@ mod tests {
     #[test]
     fn a_server_rendered_page_carries_no_client_render_warning() {
         assert!(page().warnings.is_empty());
+    }
+
+    /// A real site's own markup, reduced to the shape that broke the scan.
+    ///
+    /// Every one of these came from scanning a live business: the page state
+    /// shipped as JSON inside a body script, icons drawn as SVG coordinates,
+    /// and the actual contact details published only as schema.org markup.
+    const NEXT_JS_PAGE: &str = r##"<html><head>
+        <script type="application/ld+json">
+        {"@context":"https://schema.org","@type":"ProfessionalService",
+         "name":"Horizon Labs","email":"hello@horizonlabs.co.za",
+         "telephone":"+27683735905",
+         "address":{"@type":"PostalAddress","addressCountry":"ZA"}}
+        </script></head>
+        <body>
+        <h1>See your new website before you pay for it.</h1>
+        <p>Live in 5 business days.</p>
+        <svg><path d="M2 2 0 0 1-2.009 0c-1 22 7-8.991 5.727"/></svg>
+        <script>self.__next_f.push([1,"{\\\"email\\\":\\\"hello@horizonlabs.co.za\\\"}"])</script>
+        <style>.a{content:"7 8 9 0 1 2 3 4 5"}</style>
+        </body></html>"##;
+
+    /// Script payloads and SVG coordinates are not prose, however much text
+    /// they contain. Mining them yielded "emails" like
+    /// `dangerouslysetinnerhtml":{"__html":...` and "phone numbers" like
+    /// `2 2 0 0 1-2.009 0`, which then read as facts about the business.
+    #[test]
+    fn script_and_svg_content_is_not_treated_as_readable_text() {
+        let evidence = extract_page(NEXT_JS_PAGE, "https://example.test/");
+
+        assert!(evidence.text.contains("See your new website"));
+        assert!(evidence.text.contains("Live in 5 business days"));
+        assert!(
+            !evidence.text.contains("__next_f"),
+            "a body script is not readable text"
+        );
+        assert!(
+            !evidence.text.contains("M2 2 0 0 1-2.009"),
+            "svg path coordinates are not readable text"
+        );
+        assert!(
+            !evidence.text.contains("content:"),
+            "css is not readable text"
+        );
+    }
+
+    /// A business that publishes schema.org markup is stating its contact
+    /// details rather than leaving them to be recognised, so that is what gets
+    /// reported, and it is reported as stated rather than inferred.
+    #[test]
+    fn contact_details_come_from_the_markup_the_business_published() {
+        let evidence = extract_page(NEXT_JS_PAGE, "https://example.test/");
+
+        assert_eq!(evidence.contact.emails, ["hello@horizonlabs.co.za"]);
+        assert_eq!(evidence.contact.phones, ["+27683735905"]);
+        assert!(
+            !evidence.contact.emails_inferred,
+            "a stated address is not a guess"
+        );
+        assert!(!evidence.contact.phones_inferred);
+    }
+
+    /// Nested objects count. A business can publish its details on itself or
+    /// on a nested address, and both are equally stated.
+    #[test]
+    fn structured_values_are_found_however_deeply_they_are_nested() {
+        let blocks = vec![serde_json::json!({
+            "@type": "Organization",
+            "subOrganization": {
+                "@type": "Organization",
+                "contactPoint": [{"telephone": "+27110000000"}],
+            },
+        })];
+        assert_eq!(structured_strings(&blocks, "telephone"), ["+27110000000"]);
+        assert!(structured_strings(&blocks, "email").is_empty());
     }
 }
