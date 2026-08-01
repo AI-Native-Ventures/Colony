@@ -218,13 +218,13 @@ async fn list_initiatives(client: &BuzzClient, company: &str) -> Result<(), CliE
         .query_all(json!({
             "kinds": [KIND_INITIATIVE],
             "authors": [relay.to_hex()],
-            "#company": [company]
+            "#c": [company]
         }))
         .await?;
-    // The relay can only index single-letter tags, so `#company` is a hint it
-    // is free to ignore, and it does: an unfiltered query returns every
-    // company's initiatives. Listing one company's work while showing another
-    // company's is worse than being slow, so the answer is narrowed here.
+    // Scoped twice on purpose. `#c` is the indexed tag the relay can actually
+    // answer, and this narrows again in case the answer came from a head
+    // written before that tag existed. Showing an owner another company's work
+    // is worse than being slow.
     let initiatives: Vec<_> = parse_all(&events, parse_initiative_event)
         .into_iter()
         .filter(|initiative| json_field(initiative, "companyId") == Some(company))
@@ -251,7 +251,7 @@ async fn list_tasks(
         }
         _ => {
             if let Some(company) = company {
-                filter["#company"] = json!([company]);
+                filter["#c"] = json!([company]);
             }
             if let Some(initiative) = initiative {
                 filter["#initiative"] = json!([initiative]);
@@ -259,9 +259,8 @@ async fn list_tasks(
         }
     }
     let events = client.query_all(filter).await?;
-    // Same reason as `list_initiatives`: `#company` and `#initiative` are not
-    // single-letter tags, so the relay cannot index them and the query comes
-    // back unscoped.
+    // `#c` is indexed and `#initiative` is not, so the initiative scope in
+    // particular still has to be applied here.
     let tasks: Vec<_> = parse_all(&events, parse_task_event)
         .into_iter()
         .filter(|task| company.is_none_or(|company| json_field(task, "companyId") == Some(company)))

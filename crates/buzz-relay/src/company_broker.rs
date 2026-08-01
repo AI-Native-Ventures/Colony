@@ -81,10 +81,16 @@ fn canonical_content(value: &serde_json::Value) -> Result<String, String> {
 /// The action carries a target coordinate, but trusting its tags would let a
 /// requester point a validated payload at someone else's coordinate.
 fn build_head(relay: &Keys, payload: &CompanyActionPayload) -> Result<Event, String> {
+    // Every head carries `c` alongside the readable `company` tag. Only
+    // single-letter tags are indexed, so `#company` is a filter the relay
+    // never receives: the nostr filter type drops it before parsing, and a
+    // client asking for one company's records gets every company's. `c` is
+    // what makes that question answerable where the records are.
     let (kind, tags, content) = match payload {
         CompanyActionPayload::Company(profile) => {
             let tags = vec![
                 scalar_tag("d", &profile.id)?,
+                scalar_tag("c", &profile.id)?,
                 scalar_tag("company", &profile.id)?,
             ];
             (KIND_COMPANY_PROFILE, tags, serde_json::to_value(profile))
@@ -92,6 +98,7 @@ fn build_head(relay: &Keys, payload: &CompanyActionPayload) -> Result<Event, Str
         CompanyActionPayload::Initiative(initiative) => {
             let mut tags = vec![
                 scalar_tag("d", &initiative.id)?,
+                scalar_tag("c", &initiative.company_id)?,
                 scalar_tag("company", &initiative.company_id)?,
                 scalar_tag("cost-centre", &initiative.cost_centre_id)?,
             ];
@@ -103,6 +110,7 @@ fn build_head(relay: &Keys, payload: &CompanyActionPayload) -> Result<Event, Str
         CompanyActionPayload::Task(task) => {
             let mut tags = vec![
                 scalar_tag("d", &task.id)?,
+                scalar_tag("c", &task.company_id)?,
                 scalar_tag("company", &task.company_id)?,
                 scalar_tag("team", &task.owning_team_id)?,
                 scalar_tag("cost-centre", &task.cost_centre_id)?,
