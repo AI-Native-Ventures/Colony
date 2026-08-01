@@ -40,8 +40,8 @@ export function DiscoveryHeader({
   toolbarEntity = "industries",
 }: DiscoveryHeaderProps) {
   return (
-    <header className="space-y-6">
-      <div className="flex items-end justify-between gap-6">
+    <header className="space-y-8">
+      <div className="flex items-end justify-between gap-8">
         <div className="min-w-0">
           <h1 className="font-serif text-5xl leading-none tracking-tight text-foreground">
             Millions of leads,{" "}
@@ -67,13 +67,13 @@ export function DiscoveryHeader({
         {onModeChange ? (
           <fieldset
             aria-label="Discovery audience"
-            className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-background p-1"
+            className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-border bg-background p-1.5"
             data-testid="discovery-audience-toggle"
           >
             <legend className="sr-only">Discovery audience</legend>
             <button
               className={cn(
-                "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors",
+                "inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors",
                 mode === "businesses"
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground",
@@ -86,7 +86,7 @@ export function DiscoveryHeader({
             </button>
             <button
               className={cn(
-                "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors",
+                "inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors",
                 mode === "people"
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground",
@@ -103,7 +103,7 @@ export function DiscoveryHeader({
 
       {showToolbar ? (
         <label
-          className="flex items-center gap-3 rounded-2xl border border-border bg-background px-5 py-1.5 shadow-sm focus-within:border-[#8b5cf6] focus-within:ring-4 focus-within:ring-[#8b5cf6]/10"
+          className="flex items-center gap-3 rounded-2xl border border-border bg-background px-6 py-3 shadow-sm focus-within:border-[#8b5cf6] focus-within:ring-4 focus-within:ring-[#8b5cf6]/10"
           htmlFor="discovery-search"
         >
           <Search
@@ -112,7 +112,7 @@ export function DiscoveryHeader({
           />
           <Input
             aria-label={`Search discovery ${toolbarEntity}`}
-            className="h-11 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+            className="h-12 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
             id="discovery-search"
             onChange={(event) => onQueryChange?.(event.target.value)}
             placeholder={
@@ -123,7 +123,7 @@ export function DiscoveryHeader({
             value={query}
           />
           <Button
-            className="h-11 rounded-xl bg-foreground px-6 text-sm font-semibold text-background hover:bg-foreground/90"
+            className="h-12 rounded-xl bg-foreground px-7 text-sm font-semibold text-background hover:bg-foreground/90"
             type="button"
           >
             Search
@@ -132,7 +132,7 @@ export function DiscoveryHeader({
       ) : null}
 
       {breadcrumb ? (
-        <div className="space-y-4 pt-2">
+        <div className="space-y-6 pt-2">
           <button
             className="inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
             onClick={onBack}
@@ -141,9 +141,9 @@ export function DiscoveryHeader({
             <ArrowLeft aria-hidden="true" className="h-4 w-4" />
             Back to {breadcrumb}
           </button>
-          <div className="flex items-end justify-between gap-4 border-b border-border pb-5">
+          <div className="flex items-end justify-between gap-4 border-b border-border pb-6">
             <div>
-              <h2 className="font-serif text-4xl leading-none text-foreground">
+              <h2 className="font-serif text-5xl leading-none text-foreground">
                 {title}
               </h2>
               {description ? (
