@@ -33,6 +33,11 @@ pub async fn dispatch_company(command: CompanyCmd, client: &BuzzClient) -> Resul
         CompanyCmd::Scan { url, max_pages } => scan_public_site(&url, max_pages).await,
         // Routed before auth in `run`; unreachable here.
         CompanyCmd::Blueprint { file } => check_blueprint(&file),
+        CompanyCmd::Approve {
+            file,
+            channel,
+            scope,
+        } => approve_blueprint(client, &file, &channel, scope.as_deref()).await,
     }
 }
 
@@ -337,6 +342,72 @@ async fn complete_task(client: &BuzzClient, id: &str) -> Result<(), CliError> {
         Some(event.id.to_hex()),
     )
     .await
+}
+
+/// Approve a blueprint: publish the company and its three proposed initiatives.
+///
+/// Every action carries an idempotency key derived from the approval, so
+/// running this twice is a no-op at the relay rather than a second company.
+/// That is what makes it safe to re-run after a network failure, which is the
+/// case it exists for.
+async fn approve_blueprint(
+    client: &BuzzClient,
+    file: &str,
+    channel: &str,
+    scope: Option<&str>,
+) -> Result<(), CliError> {
+    let raw = std::fs::read_to_string(file)
+        .map_err(|error| CliError::Usage(format!("could not read {file}: {error}")))?;
+    let blueprint = buzz_core::company_roster::parse_blueprint(&raw)
+        .map_err(|error| CliError::Usage(error.to_string()))?;
+
+    let relay = relay_self(client).await?.to_hex();
+    let scope = scope.unwrap_or(&relay).to_owned();
+
+    // Derived from the approval, not the clock: a retry has to rebuild
+    // byte-identical events, and `now` would make every attempt a new one.
+    let created_at = buzz_core::company_roster::approval_timestamp(&blueprint.request_id);
+
+    let mut actions =
+        vec![
+            buzz_sdk::company_blueprint::company_action(&blueprint, &relay, created_at)
+                .map_err(CliError::Usage)?,
+        ];
+    actions.extend(
+        buzz_sdk::company_blueprint::initiative_actions(
+            &blueprint, &scope, &relay, channel, created_at,
+        )
+        .map_err(CliError::Usage)?,
+    );
+
+    let mut results = Vec::with_capacity(actions.len());
+    for action in &actions {
+        let builder = build_company_action(action)
+            .map_err(|error| CliError::Usage(format!("invalid company action: {error}")))?;
+        let event = client.sign_event(builder)?;
+        let event_id = event.id.to_hex();
+        let response = client.submit_event(event).await?;
+        let receipt = fetch_receipt(client, &event_id).await.ok();
+        results.push(json!({
+            "target": action.target,
+            "event_id": event_id,
+            "accepted": response_accepted(&response),
+            "message": response_message(&response),
+            "idempotency_key": action.idempotency_key,
+            "receipt": receipt,
+        }));
+    }
+
+    println!(
+        "{}",
+        json!({
+            "company_id": blueprint.company.id,
+            "request_id": blueprint.request_id,
+            "blueprint_hash": buzz_core::company_roster::blueprint_hash(&blueprint),
+            "actions": results,
+        })
+    );
+    Ok(())
 }
 
 /// Publish one owner-signed Company Action and report the relay's answer.

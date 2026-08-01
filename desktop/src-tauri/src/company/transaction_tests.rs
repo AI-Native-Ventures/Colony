@@ -10,6 +10,10 @@ use buzz_core_pkg::company_roster::{
     ValidatedBlueprint,
 };
 
+use buzz_core_pkg::company_roster::{
+    materialized_persona_id, persona_id_for, step_idempotency_key,
+};
+
 use super::*;
 
 /// The IDs a run would address. The command derives these through `seed`,

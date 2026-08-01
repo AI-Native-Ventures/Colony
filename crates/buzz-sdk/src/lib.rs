@@ -15,6 +15,7 @@
 pub mod blocks;
 pub mod builders;
 pub mod company;
+pub mod company_blueprint;
 pub mod mentions;
 pub mod nip_oa;
 

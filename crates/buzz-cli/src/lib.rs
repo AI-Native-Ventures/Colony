@@ -396,6 +396,23 @@ pub enum CompanyCmd {
     /// Evidence only: pages, brand assets, structured data and explicit gaps.
     /// Inferring what a business sells is the Chief of Staff's job, and it has
     /// to be able to cite sources.
+    /// Approve a blueprint: create the company and its first initiatives
+    ///
+    /// Publishes the Company head and three proposed Initiatives as
+    /// owner-signed actions. Safe to run twice: every write carries a key
+    /// derived from the approval, so the relay recognises a repeat rather than
+    /// creating a second company.
+    Approve {
+        /// Path to the blueprint JSON.
+        #[arg(long)]
+        file: String,
+        /// Channel the approval happened in.
+        #[arg(long)]
+        channel: String,
+        /// Community scope the company belongs to. Defaults to the relay URL.
+        #[arg(long)]
+        scope: Option<String>,
+    },
     /// Check a proposed blueprint and print its hash
     ///
     /// The hash the owner approves has to come from the same implementation

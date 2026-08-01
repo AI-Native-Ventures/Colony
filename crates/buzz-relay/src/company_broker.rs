@@ -452,6 +452,21 @@ pub(crate) async fn handle_company_action(
     };
     let previous_head = load_head(tenant, state, payload_kind, &entity_id).await?;
 
+    // A retry has to be answered before the create-vs-replace contract is
+    // checked. The first attempt already created the record, so checking that
+    // contract first refuses the second attempt as "that record already
+    // exists" — which is exactly the case a derived idempotency key exists to
+    // make safe. A client that lost its answer to a dropped connection would
+    // have no way to find out it had actually succeeded.
+    if let Some(claim) = state
+        .db
+        .find_company_action_claim(tenant.community(), action.idempotency_key)
+        .await
+        .map_err(|error| format!("company action claim lookup failed: {error}"))?
+    {
+        return replay_claim(state, tenant, action_event, &action, &claim).await;
+    }
+
     // Everything past this point is a legitimate owner request, so a loss is
     // reported through a stored receipt rather than a bare error.
     if let Err(message) = check_expectations(&action, previous_head.as_ref()) {
@@ -572,6 +587,30 @@ pub(crate) async fn handle_company_action(
             .await
         }
     }
+}
+
+/// Answer a retry with the outcome its first attempt already produced.
+///
+/// Deliberately not a refusal. From the client's side this attempt succeeded,
+/// because the work it asked for is done; reporting a conflict would push it
+/// to change the request, and changing an approval is the one thing it must
+/// not do.
+async fn replay_claim(
+    state: &Arc<AppState>,
+    tenant: &TenantContext,
+    action_event: &Event,
+    action: &CompanyAction,
+    claim: &buzz_db::CompanyActionClaim,
+) -> Result<CompanyBrokerOutcome, String> {
+    tracing::info!(
+        idempotency_key = %action.idempotency_key,
+        retry_event = %action_event.id.to_hex(),
+        "company action retried; replaying the original outcome"
+    );
+    let _ = (state, tenant);
+    Ok(CompanyBrokerOutcome::Duplicate {
+        original_action_event_id: claim.action_event_id.clone(),
+    })
 }
 
 /// Enforce the create-vs-replace contract against what is actually stored.

@@ -23,6 +23,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 /// A role in the fixed baseline catalog.
 ///
@@ -750,6 +751,57 @@ fn is_safe_slug(value: &str, max_len: usize) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// The namespace for derived request-scoped UUIDs.
+///
+/// Fixed forever: changing it would make every in-flight retry generate fresh
+/// idempotency keys and re-apply completed relay writes.
+const COLONY_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x1e, 0x9f, 0x4d, 0x2a, 0x7c, 0x3b, 0x4e, 0x8a, 0x9d, 0x5f, 0x62, 0x10, 0xa4, 0xc7, 0x83, 0x51,
+]);
+
+/// The idempotency key for one step of one request.
+///
+/// Derived, not random. A retry after a crash produces the same key, so the
+/// relay recognises the write as one it already applied rather than applying
+/// it a second time. This is the single most important function in the module.
+pub fn step_idempotency_key(request_id: &str, step: &str) -> Uuid {
+    Uuid::new_v5(&COLONY_NAMESPACE, format!("{request_id}:{step}").as_bytes())
+}
+
+/// Whether a string is a well-formed Nostr event ID.
+///
+/// The frontend reports the relay's receipt, and this process cannot verify
+/// that the relay accepted anything. It can refuse to record something that is
+/// not an event ID at all, so a journal marked complete at least points at a
+/// plausible event rather than an empty string or arbitrary text that would
+/// then be believed forever.
+pub fn is_event_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A stable `created_at` for one approval.
+///
+/// Derived from the request ID rather than read from the clock, so a retry
+/// rebuilds byte-identical events. Reading the clock would make every attempt
+/// a different event with a different ID, and the relay's duplicate
+/// suppression would be the only thing standing between a retry and a second
+/// company.
+///
+/// Anchored at a fixed date so the value is far enough in the past to be
+/// plausible and far enough forward to be ordered after the epoch.
+pub fn approval_timestamp(request_id: &str) -> i64 {
+    const COLONY_EPOCH: i64 = 1_767_225_600; // 2026-01-01T00:00:00Z
+    let mut hasher = Sha256::new();
+    hasher.update(request_id.as_bytes());
+    let digest = hasher.finalize();
+    let spread = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
+    // Within roughly a year of the epoch, so the value stays a sane timestamp.
+    COLONY_EPOCH + i64::from(spread % 31_536_000)
+}
+
 /// Canonical hash of an approved Blueprint.
 ///
 /// Lives here so the agent that proposes a Blueprint and the code that
@@ -804,6 +856,19 @@ pub fn materialized_persona_id(
     let role = role_slug(role_id);
     let scope = community_discriminator(community_scope);
     format!("company:{scope}:{company_id}:{role}")
+}
+
+/// The Persona ID for a role, honouring the reuse of the existing Chief of
+/// Staff.
+///
+/// Fizz is already in the workspace and already talking to the owner: creating
+/// a second Chief of Staff would leave the owner with two, one of which has no
+/// memory of the conversation that created the company.
+pub fn persona_id_for(community_scope: &str, company_id: &str, role_id: BaselineRoleId) -> String {
+    if role_id == BaselineRoleId::ChiefOfStaff {
+        return "builtin:fizz".to_string();
+    }
+    materialized_persona_id(community_scope, company_id, role_id)
 }
 
 /// The stable Team ID a materialized team receives.

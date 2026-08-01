@@ -56,7 +56,7 @@ pub mod workflow;
 
 pub use error::{DbError, Result};
 pub use event::{
-    BlockActionInsert, BlockCatalogActionApply, CompanyActionApply, EventQuery,
+    BlockActionInsert, BlockCatalogActionApply, CompanyActionApply, CompanyActionClaim, EventQuery,
     ReactionEventInsertOutcome,
 };
 
@@ -2503,6 +2503,40 @@ impl Db {
     /// that event (a replacement). A mismatch rolls back with
     /// [`CompanyActionApply::StaleHead`] and stores nothing.
     ///
+    /// Look up a previously applied Company Action by its idempotency key.
+    ///
+    /// A retry of a legitimate request has to be answerable before the
+    /// create-vs-replace contract is checked. Otherwise the second attempt at
+    /// an approval that already succeeded is refused as "that record already
+    /// exists", which is precisely the case derived idempotency keys exist to
+    /// make safe.
+    pub async fn find_company_action_claim(
+        &self,
+        community: CommunityId,
+        idempotency_key: Uuid,
+    ) -> Result<Option<CompanyActionClaim>> {
+        type ClaimRow = (Vec<u8>, Option<Vec<u8>>, Vec<u8>);
+        let row: Option<ClaimRow> = sqlx::query_as(
+            r#"
+            SELECT action_event_id, head_event_id, receipt_event_id
+            FROM company_action_claims
+            WHERE community_id = $1 AND idempotency_key = $2
+            "#,
+        )
+        .bind(community.as_uuid())
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(
+            |(action_event_id, head_event_id, receipt_event_id)| CompanyActionClaim {
+                action_event_id,
+                head_event_id,
+                receipt_event_id,
+            },
+        ))
+    }
+
     /// The idempotency claim, action, head, and receipt commit as one batch.
     /// Replaying an action ID returns the original result without writing.
     #[allow(clippy::too_many_arguments)]

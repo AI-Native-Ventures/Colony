@@ -13,8 +13,10 @@
 
 use buzz_core_pkg::company_roster::{baseline_role, role_slug, BaselineRoleId, ValidatedBlueprint};
 
+use buzz_core_pkg::company_roster::persona_id_for;
+
 use crate::{
-    company::transaction::{persona_id_for, TransactionError},
+    company::transaction::TransactionError,
     managed_agents::{AgentDefinition, TeamRecord},
 };
 

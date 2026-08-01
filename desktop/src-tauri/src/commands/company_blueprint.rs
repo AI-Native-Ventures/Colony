@@ -7,9 +7,8 @@
 //! than generated: the relay recognises a repeat write by its key, so a retry
 //! from a client that lost its journal still cannot apply anything twice.
 
-use buzz_core_pkg::company_roster::blueprint_hash;
+use buzz_core_pkg::company_roster::{approval_timestamp, blueprint_hash};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
@@ -207,26 +206,6 @@ pub async fn execute_company_blueprint(
             .and_then(|value| value.as_str().map(str::to_owned))
             .unwrap_or_default(),
     })
-}
-
-/// A stable `created_at` for one approval.
-///
-/// Derived from the request ID rather than read from the clock, so a retry
-/// rebuilds byte-identical events. Reading the clock would make every attempt
-/// a different event with a different ID, and the relay's duplicate
-/// suppression would be the only thing standing between a retry and a second
-/// company.
-///
-/// Anchored at a fixed date so the value is far enough in the past to be
-/// plausible and far enough forward to be ordered after the epoch.
-fn approval_timestamp(request_id: &str) -> i64 {
-    const COLONY_EPOCH: i64 = 1_767_225_600; // 2026-01-01T00:00:00Z
-    let mut hasher = Sha256::new();
-    hasher.update(request_id.as_bytes());
-    let digest = hasher.finalize();
-    let spread = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
-    // Within roughly a year of the epoch, so the value stays a sane timestamp.
-    COLONY_EPOCH + i64::from(spread % 31_536_000)
 }
 
 /// Record that the relay accepted the Company head and the Initiatives.

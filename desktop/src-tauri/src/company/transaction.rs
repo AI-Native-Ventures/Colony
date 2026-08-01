@@ -28,10 +28,9 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use buzz_core_pkg::company_roster::{blueprint_hash, materialized_persona_id, ValidatedBlueprint};
+use buzz_core_pkg::company_roster::{blueprint_hash, ValidatedBlueprint};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 /// How far a materialization got. Each is recorded only after the side effect
 /// it names has actually completed.
@@ -120,23 +119,6 @@ pub struct BlueprintJournal {
     /// Initiatives published so far.
     #[serde(default)]
     pub initiative_ids: Vec<String>,
-}
-
-/// The namespace for derived request-scoped UUIDs.
-///
-/// Fixed forever: changing it would make every in-flight retry generate fresh
-/// idempotency keys and re-apply completed relay writes.
-const COLONY_NAMESPACE: Uuid = Uuid::from_bytes([
-    0x1e, 0x9f, 0x4d, 0x2a, 0x7c, 0x3b, 0x4e, 0x8a, 0x9d, 0x5f, 0x62, 0x10, 0xa4, 0xc7, 0x83, 0x51,
-]);
-
-/// The idempotency key for one step of one request.
-///
-/// Derived, not random. A retry after a crash produces the same key, so the
-/// relay recognises the write as one it already applied rather than applying
-/// it a second time. This is the single most important function in the module.
-pub fn step_idempotency_key(request_id: &str, step: &str) -> Uuid {
-    Uuid::new_v5(&COLONY_NAMESPACE, format!("{request_id}:{step}").as_bytes())
 }
 
 /// Whether a string is a well-formed Nostr event ID.
@@ -333,23 +315,6 @@ pub fn advance(
         journal.checkpoint = reached;
     }
     store_journal(path, journal)
-}
-
-/// The Persona ID for a role, honouring the reuse of the existing Chief of
-/// Staff.
-///
-/// Fizz is already in the workspace and already talking to the owner: creating
-/// a second Chief of Staff would leave the owner with two, one of which has no
-/// memory of the conversation that created the company.
-pub fn persona_id_for(
-    community_scope: &str,
-    company_id: &str,
-    role_id: buzz_core_pkg::company_roster::BaselineRoleId,
-) -> String {
-    if role_id == buzz_core_pkg::company_roster::BaselineRoleId::ChiefOfStaff {
-        return "builtin:fizz".to_string();
-    }
-    materialized_persona_id(community_scope, company_id, role_id)
 }
 
 /// Every Initiative ID this Blueprint materializes, in Blueprint order.

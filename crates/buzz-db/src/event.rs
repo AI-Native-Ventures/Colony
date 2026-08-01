@@ -172,6 +172,20 @@ pub enum BlockCatalogActionApply {
 ///
 /// Every non-`Applied` variant leaves the database untouched: the transaction
 /// rolls back before any event is stored, so a rejected action can never
+/// A Company Action that was already applied, found by its idempotency key.
+///
+/// Returned so a retry can be answered with the original outcome instead of
+/// being refused, which is what makes a derived idempotency key useful.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompanyActionClaim {
+    /// The action event that won the claim.
+    pub action_event_id: Vec<u8>,
+    /// The head it produced, when it produced one.
+    pub head_event_id: Option<Vec<u8>>,
+    /// The receipt the relay signed for it.
+    pub receipt_event_id: Vec<u8>,
+}
+
 /// partially replace a canonical head.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)] // Preserve direct StoredEvent handoff for relay fan-out.
