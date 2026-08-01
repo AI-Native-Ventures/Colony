@@ -115,6 +115,10 @@ pub enum LinkCategory {
     Careers,
     /// Anything else same-origin.
     Other,
+    /// Terms, privacy, cookies. Enormous, boilerplate, and says nothing about
+    /// what the business does — but "Terms of Service" reads as a services
+    /// page unless it is matched first.
+    Legal,
 }
 
 impl LinkCategory {
@@ -127,6 +131,25 @@ impl LinkCategory {
         );
         let has = |needles: &[&str]| needles.iter().any(|n| haystack.contains(n));
 
+        // Legal first, and deliberately so. "Terms of Service" contains
+        // "service", so without this these pages classify as the highest
+        // priority category and their boilerplate eats the whole byte budget
+        // ahead of the pages that describe the business.
+        if has(&[
+            "/legal",
+            "terms",
+            "privacy",
+            "cookie",
+            "gdpr",
+            "/dpa",
+            "acceptable-use",
+            "disclaimer",
+            "refund-policy",
+            "sub-processor",
+            "subprocessor",
+        ]) {
+            return Self::Legal;
+        }
         if has(&["pricing", "price", "plans", "packages", "rates"]) {
             return Self::Pricing;
         }
@@ -943,6 +966,43 @@ mod tests {
             .iter()
             .any(|link| link.url.contains("partner.example")));
         assert!(!links.iter().any(|link| link.url.contains("linkedin.com")));
+    }
+
+    /// Found live: "Commercial Terms of Service" contains "service", so legal
+    /// boilerplate classified as the highest-priority category and a 340 KB
+    /// terms page consumed the byte budget ahead of the company page.
+    #[test]
+    fn terms_of_service_is_legal_not_a_services_page() {
+        for (path, text) in [
+            ("/legal/commercial-terms", "Commercial Terms of Service"),
+            ("/legal/consumer-terms", "Consumer Terms of Service"),
+            ("/privacy", "Privacy Policy"),
+            ("/cookie-policy", "Cookies"),
+            ("/legal/subprocessors", "Sub-processors"),
+        ] {
+            assert_eq!(
+                LinkCategory::classify(path, text),
+                LinkCategory::Legal,
+                "{path} must be legal boilerplate, not a services page"
+            );
+        }
+    }
+
+    /// The fix must not swallow genuine services pages.
+    #[test]
+    fn real_services_pages_still_classify_as_services() {
+        for (path, text) in [
+            ("/services/web-design", "Web design"),
+            ("/what-we-do", "What we do"),
+            ("/solutions", "Solutions"),
+            ("/products/analytics", "Analytics product"),
+        ] {
+            assert_eq!(
+                LinkCategory::classify(path, text),
+                LinkCategory::Services,
+                "{path} is a real services page"
+            );
+        }
     }
 
     /// A fragment points at the same document, so following it would spend a

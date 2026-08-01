@@ -5,5 +5,6 @@
 //! Staff's job, and it must be able to show its sources.
 
 pub mod extract;
+pub mod fetch;
 pub mod sitemap;
 pub mod url_guard;
