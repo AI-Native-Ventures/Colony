@@ -47,4 +47,3 @@ Run `pnpm exec playwright test tests/e2e/discovery.spec.ts --project=smoke` from
 - [ ] **Step 3: Verify zoom resilience**
 
 Confirm the Discovery smoke flow still renders without overflow or clipped text at the test viewport, and confirm every changed text size uses a rem-backed named token so Buzz Cmd +/- zoom remains supported.
-

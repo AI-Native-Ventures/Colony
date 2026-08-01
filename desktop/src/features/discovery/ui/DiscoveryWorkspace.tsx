@@ -625,12 +625,14 @@ export function DiscoveryWorkspace({
 
   if (surface === "leads") {
     return (
-      <LeadsWorkspace
-        dataSource={dataSource}
-        initialLeads={readModel.leads}
-        initialMode={mode === "people" ? "people" : "companies"}
-        scope="global"
-      />
+      <div className="px-9 pb-16 pt-9">
+        <LeadsWorkspace
+          dataSource={dataSource}
+          initialLeads={readModel.leads}
+          initialMode={mode === "people" ? "people" : "companies"}
+          scope="global"
+        />
+      </div>
     );
   }
 

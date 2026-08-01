@@ -169,7 +169,13 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await capture(appWorkspace(page), page, "discovery-source-config.png");
 
   await page.goto("/#/discovery?surface=leads");
-  await expect(page.getByRole("heading", { name: "Leads." })).toBeVisible();
+  const globalLeadsHeading = page.getByRole("heading", { name: "Leads." });
+  await expect(globalLeadsHeading).toBeVisible();
+  const globalLeadsHeadingBox = await globalLeadsHeading.boundingBox();
+  expect(
+    globalLeadsHeadingBox?.y,
+    "The global Leads heading must preserve the Discovery workspace top padding.",
+  ).toBeGreaterThan(40);
   await expect(page.getByTestId("global-lead-table")).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-global-leads.png");
 
