@@ -196,6 +196,15 @@ fn kickoff_action(
     (task_id, action)
 }
 
+/// What the owner asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitiativeIntent {
+    /// Move it forward until it is running with a first Task.
+    Start,
+    /// Stop it before any work is done.
+    Decline,
+}
+
 /// Decide the next publish for one initiative.
 ///
 /// `initiative` and `head_event_id` must come from the same relay-authored
@@ -208,11 +217,51 @@ pub fn next_activation_step(
     teams: &[CompanyTeamRef],
     relay_pubkey: &str,
 ) -> Result<InitiativeStep, String> {
+    next_step(
+        initiative,
+        head_event_id,
+        company,
+        teams,
+        relay_pubkey,
+        InitiativeIntent::Start,
+    )
+}
+
+/// Decide the next publish for one initiative under a stated intent.
+pub fn next_step(
+    initiative: &Initiative,
+    head_event_id: &str,
+    company: &CompanyProfile,
+    teams: &[CompanyTeamRef],
+    relay_pubkey: &str,
+    intent: InitiativeIntent,
+) -> Result<InitiativeStep, String> {
     if initiative.schema != INITIATIVE_SCHEMA {
         return Err("that is not a Colony initiative".to_string());
     }
     if initiative.company_id != company.id {
         return Err("that initiative belongs to a different company".to_string());
+    }
+
+    if intent == InitiativeIntent::Decline {
+        return Ok(match initiative.status {
+            // Declining is one write from anywhere the work has not finished.
+            // It is deliberately not a ladder: an owner saying "not now" should
+            // not have to approve something first in order to stop it.
+            InitiativeStatus::Proposed
+            | InitiativeStatus::Approved
+            | InitiativeStatus::Active
+            | InitiativeStatus::Blocked => InitiativeStep::Transition {
+                to: InitiativeStatus::Cancelled,
+                action: Box::new(transition_action(
+                    initiative,
+                    head_event_id,
+                    InitiativeStatus::Cancelled,
+                    relay_pubkey,
+                )),
+            },
+            status => InitiativeStep::Settled { status },
+        });
     }
 
     match initiative.status {
@@ -524,6 +573,81 @@ mod tests {
         )
         .expect_err("an ownerless initiative must not produce a task");
         assert!(error.contains("no team"), "unexpected error: {error}");
+    }
+
+    // Declining has to be one write from wherever the initiative stands. An
+    // owner saying "not now" must not have to approve it first in order to
+    // stop it, and every one of these transitions is one the contract allows.
+    #[test]
+    fn declining_cancels_from_anywhere_the_work_has_not_finished() {
+        for status in [
+            InitiativeStatus::Proposed,
+            InitiativeStatus::Approved,
+            InitiativeStatus::Active,
+            InitiativeStatus::Blocked,
+        ] {
+            let step = next_step(
+                &initiative(status),
+                HEAD,
+                &company(),
+                &teams(),
+                RELAY,
+                InitiativeIntent::Decline,
+            )
+            .expect("step");
+            let (to, action) = expect_transition(step);
+            assert_eq!(to, InitiativeStatus::Cancelled);
+            assert!(
+                buzz_core::company::is_initiative_status_transition_allowed(status, to),
+                "cancelling from {status:?} is not an allowed transition"
+            );
+            assert_eq!(action.expected_head.as_deref(), Some(HEAD));
+        }
+    }
+
+    #[test]
+    fn declining_something_already_finished_publishes_nothing() {
+        for status in [InitiativeStatus::Completed, InitiativeStatus::Cancelled] {
+            let step = next_step(
+                &initiative(status),
+                HEAD,
+                &company(),
+                &teams(),
+                RELAY,
+                InitiativeIntent::Decline,
+            )
+            .expect("step");
+            assert_eq!(step, InitiativeStep::Settled { status });
+        }
+    }
+
+    // Starting and declining the same initiative must never collide on a key,
+    // or the relay would answer one with the other's receipt.
+    #[test]
+    fn starting_and_declining_never_share_an_idempotency_key() {
+        let (_, start) = expect_transition(
+            next_step(
+                &initiative(InitiativeStatus::Proposed),
+                HEAD,
+                &company(),
+                &teams(),
+                RELAY,
+                InitiativeIntent::Start,
+            )
+            .expect("step"),
+        );
+        let (_, decline) = expect_transition(
+            next_step(
+                &initiative(InitiativeStatus::Proposed),
+                HEAD,
+                &company(),
+                &teams(),
+                RELAY,
+                InitiativeIntent::Decline,
+            )
+            .expect("step"),
+        );
+        assert_ne!(start.idempotency_key, decline.idempotency_key);
     }
 
     #[test]

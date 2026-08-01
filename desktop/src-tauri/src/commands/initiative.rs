@@ -11,7 +11,7 @@
 use buzz_sdk_pkg::{
     company::parse_company_event,
     company_blueprint::sign_action,
-    initiative_activation::{next_activation_step, InitiativeStep},
+    initiative_activation::{next_step, InitiativeIntent, InitiativeStep},
 };
 use nostr::JsonUtil;
 use serde::{Deserialize, Serialize};
@@ -69,8 +69,18 @@ pub async fn advance_initiative(
     company_head: String,
     initiative_head: String,
     relay_pubkey: String,
+    intent: String,
     state: State<'_, AppState>,
 ) -> Result<InitiativeStepResult, String> {
+    // Named rather than boolean: "start" and "decline" reach the same relay
+    // coordinate, and a silent default would let a caller that mistyped the
+    // field start work the owner asked to stop.
+    let intent = match intent.as_str() {
+        "start" => InitiativeIntent::Start,
+        "decline" => InitiativeIntent::Decline,
+        _ => return Err("an initiative can be started or declined".to_string()),
+    };
+
     // Starting work is an owner action. Reading the signing key proves an owner
     // identity is present and usable, and refuses while the identity is in
     // recovery mode, which is exactly when nothing should start spending.
@@ -111,12 +121,13 @@ pub async fn advance_initiative(
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_default();
 
-    let step = next_activation_step(
+    let step = next_step(
         &initiative,
         &initiative_event.id.to_hex(),
         &company,
         &teams,
         &relay_pubkey,
+        intent,
     )?;
 
     let result = match step {
