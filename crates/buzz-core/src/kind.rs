@@ -182,6 +182,33 @@ pub const P_GATED_KINDS: &[u32] = &[
 /// or more than one `shared` tag) so no ambiguous heads can exist.
 pub const KIND_PERSONA: u32 = 30175;
 
+/// Chat-native Block catalog head (parameterized replaceable, relay-authored).
+pub const KIND_BLOCK_CATALOG_ENTRY: u32 = 30178;
+
+/// Colony company profile (parameterized replaceable, relay-authored canonical head).
+pub const KIND_COMPANY_PROFILE: u32 = 30179;
+
+/// Colony cross-team initiative (parameterized replaceable, relay-authored canonical head).
+pub const KIND_INITIATIVE: u32 = 30180;
+
+/// Colony single-team task (parameterized replaceable, relay-authored canonical head).
+pub const KIND_TASK: u32 = 30181;
+
+/// A signed interaction with a chat-native Block instance.
+pub const KIND_BLOCK_ACTION: u32 = 40010;
+
+/// An auditable result for a chat-native Block action.
+pub const KIND_BLOCK_RECEIPT: u32 = 40011;
+
+/// An immutable chat-native Block manifest.
+pub const KIND_BLOCK_MANIFEST: u32 = 40012;
+
+/// Owner-signed request to create or mutate canonical Colony company state.
+pub const KIND_COMPANY_ACTION: u32 = 40013;
+
+/// Relay-signed auditable result of a Colony company action.
+pub const KIND_COMPANY_RECEIPT: u32 = 40014;
+
 /// Returns `true` if `kind` uses the author-only-unless-shared read model
 /// (currently only `KIND_PERSONA` / 30175).
 ///
@@ -584,6 +611,15 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_AGENT_ENGRAM,
     KIND_EVENT_REMINDER,
     KIND_PERSONA,
+    KIND_BLOCK_CATALOG_ENTRY,
+    KIND_COMPANY_PROFILE,
+    KIND_INITIATIVE,
+    KIND_TASK,
+    KIND_BLOCK_ACTION,
+    KIND_BLOCK_RECEIPT,
+    KIND_BLOCK_MANIFEST,
+    KIND_COMPANY_ACTION,
+    KIND_COMPANY_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_REPORT,
@@ -750,6 +786,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_WORKFLOW_TRIGGER
             | KIND_APPROVAL_GRANT
             | KIND_APPROVAL_DENY
+            | KIND_COMPANY_ACTION
     )
 }
 
@@ -764,6 +801,11 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_DM_VISIBILITY
             | KIND_THREAD_SUMMARY
             | KIND_WINDOW_BOUNDS
+            | KIND_BLOCK_CATALOG_ENTRY
+            | KIND_COMPANY_PROFILE
+            | KIND_INITIATIVE
+            | KIND_TASK
+            | KIND_COMPANY_RECEIPT
     )
 }
 
@@ -782,6 +824,10 @@ pub fn event_kind_i32(event: &nostr::Event) -> i32 {
 // Compile-time: new kinds are in the expected ranges.
 const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–19999
 const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_BLOCK_CATALOG_ENTRY)); // 30178 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_COMPANY_PROFILE)); // 30179 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_INITIATIVE)); // 30180 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_TASK)); // 30181 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
@@ -804,6 +850,14 @@ const _: () = assert!(
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);
 const _: () = assert!(KIND_CANVAS <= u16::MAX as u32);
 const _: () = assert!(KIND_HUDDLE_GUIDELINES <= u16::MAX as u32);
+const _: () = assert!(KIND_COMPANY_PROFILE <= u16::MAX as u32);
+const _: () = assert!(KIND_INITIATIVE <= u16::MAX as u32);
+const _: () = assert!(KIND_TASK <= u16::MAX as u32);
+const _: () = assert!(KIND_COMPANY_ACTION <= u16::MAX as u32);
+const _: () = assert!(KIND_COMPANY_RECEIPT <= u16::MAX as u32);
+const _: () = assert!(!is_ephemeral(KIND_COMPANY_PROFILE));
+const _: () = assert!(!is_ephemeral(KIND_INITIATIVE));
+const _: () = assert!(!is_ephemeral(KIND_TASK));
 const _: () = assert!(EPHEMERAL_KIND_MIN < EPHEMERAL_KIND_MAX);
 // Compile-time: KIND_AGENT_TURN_METRIC is a regular stored kind (not ephemeral, not replaceable).
 const _: () = assert!(!is_ephemeral(KIND_AGENT_TURN_METRIC));
@@ -825,11 +879,87 @@ mod tests {
     use super::*;
 
     #[test]
+    fn company_work_kinds_are_addressable_and_distinct() {
+        let kinds = [KIND_COMPANY_PROFILE, KIND_INITIATIVE, KIND_TASK];
+        assert_eq!(kinds, [30179, 30180, 30181]);
+        for kind in kinds {
+            assert!(is_parameterized_replaceable(kind));
+            assert!(!is_ephemeral(kind));
+            assert!(kind <= u16::MAX as u32);
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        let unique = kinds.into_iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), 3);
+
+        for existing in [
+            KIND_PERSONA,
+            KIND_TEAM,
+            KIND_MANAGED_AGENT,
+            KIND_BLOCK_CATALOG_ENTRY,
+        ] {
+            assert!(!unique.contains(&existing));
+        }
+    }
+
+    #[test]
+    fn company_authority_kinds_have_exact_classifications() {
+        assert_eq!(KIND_COMPANY_ACTION, 40013);
+        assert_eq!(KIND_COMPANY_RECEIPT, 40014);
+
+        for kind in [
+            KIND_COMPANY_PROFILE,
+            KIND_INITIATIVE,
+            KIND_TASK,
+            KIND_COMPANY_ACTION,
+            KIND_COMPANY_RECEIPT,
+        ] {
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        for head in [KIND_COMPANY_PROFILE, KIND_INITIATIVE, KIND_TASK] {
+            assert!(is_relay_only_kind(head));
+            assert!(!is_command_kind(head));
+        }
+        assert!(is_command_kind(KIND_COMPANY_ACTION));
+        assert!(!is_relay_only_kind(KIND_COMPANY_ACTION));
+        assert!(is_relay_only_kind(KIND_COMPANY_RECEIPT));
+        assert!(!is_command_kind(KIND_COMPANY_RECEIPT));
+        assert!(!is_parameterized_replaceable(KIND_COMPANY_ACTION));
+        assert!(!is_parameterized_replaceable(KIND_COMPANY_RECEIPT));
+    }
+
+    #[test]
     fn no_duplicate_kind_values() {
         let mut seen = std::collections::HashSet::new();
         for &k in ALL_KINDS {
             assert!(seen.insert(k), "duplicate kind value: {k}");
         }
+    }
+
+    #[test]
+    fn block_kinds() {
+        assert_eq!(KIND_BLOCK_ACTION, 40010);
+        assert_eq!(KIND_BLOCK_RECEIPT, 40011);
+        assert_eq!(KIND_BLOCK_MANIFEST, 40012);
+        assert_eq!(KIND_BLOCK_CATALOG_ENTRY, 30178);
+
+        for kind in [
+            KIND_BLOCK_ACTION,
+            KIND_BLOCK_RECEIPT,
+            KIND_BLOCK_MANIFEST,
+            KIND_BLOCK_CATALOG_ENTRY,
+        ] {
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        assert!(is_parameterized_replaceable(KIND_BLOCK_CATALOG_ENTRY));
+        assert!(!is_parameterized_replaceable(KIND_BLOCK_ACTION));
+        assert!(!is_parameterized_replaceable(KIND_BLOCK_RECEIPT));
+        assert!(!is_parameterized_replaceable(KIND_BLOCK_MANIFEST));
+        assert!(!is_replaceable(KIND_BLOCK_ACTION));
+        assert!(!is_replaceable(KIND_BLOCK_RECEIPT));
+        assert!(!is_replaceable(KIND_BLOCK_MANIFEST));
     }
 
     #[test]

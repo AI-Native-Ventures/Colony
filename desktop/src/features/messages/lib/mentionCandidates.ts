@@ -1,6 +1,6 @@
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import type { AgentPersona, AgentTeam, ChannelRole } from "@/shared/api/types";
-import { truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 export type TeamMentionMember = {
   displayName: string;
@@ -9,7 +9,9 @@ export type TeamMentionMember = {
   pubkey?: string;
 };
 
-export type MentionCandidate = {
+export type MentionKind = "identity" | "persona" | "team" | "block";
+
+export type ActorMentionCandidate = {
   kind: "identity" | "persona" | "team";
   pubkey?: string;
   personaId?: string;
@@ -25,9 +27,40 @@ export type MentionCandidate = {
   isAgent: boolean;
   isManagedAgent?: boolean;
   isGlobalSearchResult?: boolean;
+  /**
+   * Stable lowercase role slug joined from the linked Persona. Matching is
+   * alias-only: the authoritative target stays the pubkey or Persona ID.
+   */
+  roleId?: string | null;
+  /** Human role title paired with `roleId`; inserted when the role wins. */
+  roleTitle?: string | null;
 };
 
+export type BlockMentionCandidate = {
+  kind: "block";
+  blockHandle: string;
+  blockAddress: string;
+  manifestId: string;
+  displayName: string;
+};
+
+export type MentionCandidate = ActorMentionCandidate | BlockMentionCandidate;
+
+export type BlockCatalogMentionSource = {
+  handle: string;
+  name: string;
+  blockAddress: string;
+  manifestId: string;
+  status: "active" | "deprecated";
+};
+
+const BLOCK_HANDLE_RE = /^[a-z][a-z0-9-]{0,63}$/;
+const LOWER_HEX_64_RE = /^[0-9a-f]{64}$/;
+
 export function mentionCandidateLabel(candidate: MentionCandidate) {
+  if (candidate.kind === "block") {
+    return candidate.displayName;
+  }
   return (
     candidate.displayName ??
     (candidate.pubkey ? truncatePubkey(candidate.pubkey) : "agent")
@@ -36,6 +69,7 @@ export function mentionCandidateLabel(candidate: MentionCandidate) {
 
 export function globalSearchIdentityKey(candidate: MentionCandidate) {
   if (
+    candidate.kind === "block" ||
     !candidate.isGlobalSearchResult ||
     candidate.isMember ||
     candidate.isAgent
@@ -50,17 +84,52 @@ export function globalSearchIdentityKey(candidate: MentionCandidate) {
   return `global-person:${label}:${secondaryLabel}`;
 }
 
+/** Build strict, deduplicated Block entries from active catalog projections. */
+export function buildBlockMentionCandidates(
+  sources: readonly BlockCatalogMentionSource[],
+): BlockMentionCandidate[] {
+  const byAddress = new Map<string, BlockMentionCandidate>();
+  for (const source of sources) {
+    if (source.status !== "active") continue;
+    const blockHandle = source.handle.trim().toLowerCase();
+    const displayName = source.name.trim();
+    const blockAddress = source.blockAddress.trim();
+    const manifestId = source.manifestId.trim();
+    const coordinate = blockAddress.split(":");
+    if (
+      !BLOCK_HANDLE_RE.test(blockHandle) ||
+      !displayName ||
+      coordinate.length !== 3 ||
+      coordinate[0] !== "30178" ||
+      !LOWER_HEX_64_RE.test(coordinate[1] ?? "") ||
+      coordinate[2] !== blockHandle ||
+      !LOWER_HEX_64_RE.test(manifestId)
+    ) {
+      continue;
+    }
+    byAddress.set(blockAddress, {
+      kind: "block",
+      blockHandle,
+      blockAddress,
+      manifestId,
+      displayName,
+    });
+  }
+  return [...byAddress.values()];
+}
+
 function findTeamMemberTarget(
   persona: AgentPersona,
-  candidates: readonly MentionCandidate[],
+  candidates: readonly ActorMentionCandidate[],
 ): TeamMentionMember | null {
   const linked = candidates
     .filter(
       (candidate) =>
-        candidate.kind !== "team" && candidate.personaId === persona.id,
+        (candidate.kind === "identity" || candidate.kind === "persona") &&
+        candidate.personaId === persona.id,
     )
     .sort((left, right) => {
-      const rank = (candidate: MentionCandidate) => {
+      const rank = (candidate: ActorMentionCandidate) => {
         if (candidate.kind === "identity" && candidate.isMember) return 0;
         if (candidate.kind === "identity" && candidate.isManagedAgent) return 1;
         if (candidate.kind === "identity") return 2;
@@ -91,19 +160,43 @@ function findTeamMemberTarget(
 export function buildTeamMentionCandidates(
   teams: readonly AgentTeam[],
   personas: AgentPersona[],
-  candidates: readonly MentionCandidate[],
-): MentionCandidate[] {
+  candidates: readonly ActorMentionCandidate[],
+): ActorMentionCandidate[] {
   return teams.flatMap((team) => {
     if (team.isBuiltin || !team.name.trim()) return [];
 
     const resolution = resolveTeamPersonas(team, personas);
     if (!resolution.isUsable) return [];
 
-    const teamMembers = resolution.resolvedPersonas
-      .map((persona) => findTeamMemberTarget(persona, candidates))
-      .filter((member): member is TeamMentionMember => member !== null);
-    if (teamMembers.length !== resolution.resolvedPersonas.length) return [];
+    const resolvedMembers = resolution.resolvedPersonas.map((persona) =>
+      findTeamMemberTarget(persona, candidates),
+    );
+    if (resolvedMembers.some((member) => member === null)) return [];
 
+    // One persona may sit in several teams, and two persona rows may resolve
+    // onto the same deployed identity. Expand each distinct target once, in
+    // first-seen order, keyed by pubkey and falling back to persona ID.
+    const seenTargets = new Set<string>();
+    const teamMembers: TeamMentionMember[] = [];
+    for (const member of resolvedMembers) {
+      if (!member) continue;
+      const targetKey = member.pubkey
+        ? `pubkey:${normalizePubkey(member.pubkey)}`
+        : member.personaId
+          ? `persona:${member.personaId}`
+          : null;
+      // A member with no addressable target cannot be expanded, and silently
+      // shipping a short team would under-address the mention. Fail closed,
+      // matching every other rejection in this function.
+      if (targetKey === null) return [];
+      if (seenTargets.has(targetKey)) continue;
+      seenTargets.add(targetKey);
+      teamMembers.push(member);
+    }
+    if (teamMembers.length === 0) return [];
+
+    // Two distinct targets sharing one visible mention token would make the
+    // text-keyed draft maps ambiguous, so the whole team is withheld.
     const mentionNames = new Set<string>();
     for (const member of teamMembers) {
       const mentionName = member.displayName.trim().toLowerCase();
@@ -129,4 +222,8 @@ export function formatTeamMention(
   members: readonly TeamMentionMember[],
 ) {
   return `${teamName}(${members.map((member) => `@${member.displayName}`).join(" ")}) `;
+}
+
+export function formatBlockMention(blockHandle: string) {
+  return `@${blockHandle} `;
 }

@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        apply_persona_behavior, load_personas, save_personas, try_regenerate_nest, AgentDefinition,
-        CatalogSource, CreatePersonaRequest,
+        apply_persona_behavior, load_personas, normalize_persona_role, save_personas,
+        try_regenerate_nest, AgentDefinition, CatalogSource, CreatePersonaRequest,
     },
     util::now_iso,
 };
@@ -20,10 +20,23 @@ pub async fn create_persona(
     input: CreatePersonaRequest,
     app: AppHandle,
 ) -> Result<AgentDefinition, String> {
+    create_persona_with_id(input, None, app).await
+}
+
+/// Create a definition with an optional caller-owned deterministic ID.
+///
+/// Only the Agent Proposal executor supplies an ID. Normal UI creation keeps
+/// the existing random UUID behavior.
+pub(crate) async fn create_persona_with_id(
+    input: CreatePersonaRequest,
+    definition_id: Option<String>,
+    app: AppHandle,
+) -> Result<AgentDefinition, String> {
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let display_name = trim_required(&input.display_name, "Display name")?;
+        let (role_id, role_title) = normalize_persona_role(input.role_id, input.role_title)?;
         // System prompt optional: core memory is auto-injected. Empty is valid.
         let system_prompt = input.system_prompt.trim().to_string();
         let avatar_url = trim_optional(input.avatar_url);
@@ -44,6 +57,10 @@ pub async fn create_persona(
             .map_err(|error| error.to_string())?;
         let mut personas = load_personas(&app)?;
         pending::project_active_persona_sharing(&app, &state, &mut personas);
+        let definition_id = definition_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        if personas.iter().any(|persona| persona.id == definition_id) {
+            return Err(format!("agent definition {definition_id} already exists"));
+        }
         let name_pool: Vec<String> = input
             .name_pool
             .into_iter()
@@ -52,7 +69,9 @@ pub async fn create_persona(
             .collect();
         crate::managed_agents::validate_user_env_keys(&input.env_vars)?;
         let mut persona = AgentDefinition {
-            id: Uuid::new_v4().to_string(),
+            id: definition_id,
+            role_id,
+            role_title,
             display_name,
             avatar_url,
             system_prompt,

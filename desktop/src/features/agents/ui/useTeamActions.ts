@@ -186,6 +186,7 @@ export function useTeamActions(
         name: `${team.name} copy`,
         description: team.description ?? "",
         personaIds: [...team.personaIds],
+        leadPersonaId: team.leadPersonaId ?? undefined,
       },
     });
   }
@@ -217,6 +218,7 @@ export function useTeamActions(
         description: team.description ?? "",
         instructions: team.instructions ?? undefined,
         personaIds: [...team.personaIds],
+        leadPersonaId: team.leadPersonaId ?? undefined,
       },
     });
   }

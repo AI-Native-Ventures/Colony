@@ -13,23 +13,24 @@ use buzz_auth::Scope;
 use buzz_core::kind::{
     event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
     is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_AGENT_PROFILE, KIND_AGENT_TURN_METRIC,
-    KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET,
-    KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
-    KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT,
-    KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH,
-    KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE,
-    KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
-    KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
-    KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST,
-    KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT,
-    KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST,
-    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
-    KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
-    KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
-    KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE,
-    KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE, KIND_REPORT,
-    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
+    KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BLOCK_ACTION,
+    KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST, KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST,
+    KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION, KIND_CONTACT_LIST, KIND_DELETION,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
+    KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
+    KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
+    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
+    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED,
+    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN,
+    KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN,
+    KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
+    KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
+    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
+    KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST,
+    KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
+    KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USER_STATUS,
     KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
@@ -212,8 +213,18 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
     match kind {
         KIND_PROFILE => Ok(Scope::UsersWrite),
         KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
-        KIND_CONTACT_LIST | KIND_READ_STATE | KIND_USER_STATUS | KIND_AGENT_ENGRAM
-        | KIND_EVENT_REMINDER | KIND_PERSONA | KIND_TEAM | KIND_MANAGED_AGENT
+        KIND_CONTACT_LIST
+        | KIND_READ_STATE
+        | KIND_USER_STATUS
+        | KIND_AGENT_ENGRAM
+        | KIND_EVENT_REMINDER
+        | KIND_PERSONA
+        | KIND_TEAM
+        | KIND_MANAGED_AGENT
+        | KIND_BLOCK_MANIFEST
+        // Company mutations carry owner authority; the actual owner check is
+        // made under `FOR UPDATE` inside the broker's transaction.
+        | KIND_COMPANY_ACTION
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
@@ -255,7 +266,9 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_STREAM_MESSAGE_DIFF
         | KIND_FORUM_POST
         | KIND_FORUM_VOTE
-        | KIND_FORUM_COMMENT => Ok(Scope::MessagesWrite),
+        | KIND_FORUM_COMMENT
+        | KIND_BLOCK_ACTION
+        | KIND_BLOCK_RECEIPT => Ok(Scope::MessagesWrite),
         KIND_NIP29_PUT_USER | KIND_NIP29_REMOVE_USER | KIND_NIP29_DELETE_GROUP => {
             Ok(Scope::AdminChannels)
         }
@@ -378,6 +391,16 @@ pub(crate) async fn derive_reaction_channel(
     }
 }
 
+/// Whether a command kind is handled by the generic command executor.
+///
+/// Company Actions are command kinds but are deliberately excluded: this branch
+/// returns BEFORE the ban/timeout write-block, so routing them here would let a
+/// banned or timed-out owner mutate company state. They are brokered further
+/// down, past that gate.
+pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
+    buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION
+}
+
 /// Kinds that are always global (`channel_id = NULL`).
 ///
 /// If a client includes a stray `h` tag on these kinds, the ingest pipeline
@@ -423,6 +446,11 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // keyed by (pubkey, kind, d_tag). A stray `h` tag must not channel-scope them.
             | KIND_TEAM
             | KIND_MANAGED_AGENT
+            // Block manifests and relay-authored catalog heads are immutable or
+            // addressable global definitions. Instances remain kind:9 messages.
+            | KIND_BLOCK_MANIFEST
+            | KIND_BLOCK_CATALOG_ENTRY
+            | KIND_COMPANY_ACTION
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
@@ -493,6 +521,9 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_HUDDLE_PARTICIPANT_LEFT
             | KIND_HUDDLE_ENDED
             | KIND_HUDDLE_GUIDELINES
+            // Block actions and receipts are channel-scoped protocol events.
+            | KIND_BLOCK_ACTION
+            | KIND_BLOCK_RECEIPT
     )
 }
 
@@ -1485,6 +1516,13 @@ async fn ingest_event_inner(
         ));
     }
 
+    // Catalog heads are produced only by the relay-owned Block broker. Keep a
+    // local fail-closed gate at ingest as defense in depth around the shared
+    // relay-only registry; even an authenticated owner cannot submit one.
+    if kind_u32 == KIND_BLOCK_CATALOG_ENTRY {
+        return Err(IngestError::Rejected("restricted: relay-only kind".into()));
+    }
+
     if auth.is_http() && (kind_u32 == KIND_GIFT_WRAP || kind_u32 == KIND_PRESENCE_UPDATE) {
         return Err(IngestError::Rejected(format!(
             "invalid: kind {kind_u32} is only accepted via WebSocket"
@@ -1570,7 +1608,12 @@ async fn ingest_event_inner(
 
     // Command kinds are routed AFTER signature verification, timestamp check,
     // pubkey/auth match, and scope validation — never before.
-    if buzz_core::kind::is_command_kind(kind_u32) {
+    //
+    // Company Actions are deliberately excluded: this branch returns before the
+    // ban/timeout write-block below, and a banned or timed-out owner must not
+    // be able to mutate company state. They are brokered further down, past
+    // that gate, alongside the Block catalog.
+    if takes_generic_command_branch(kind_u32) {
         return super::command_executor::handle_command(tenant, state, event, auth).await;
     }
 
@@ -1681,6 +1724,76 @@ async fn ingest_event_inner(
                 )));
             }
         }
+    }
+
+    // Company mutations are community-global governance requests authorized by
+    // the owner's signature. Routed here, after the ban/timeout write-block, so
+    // a restricted owner cannot change company state.
+    if crate::company_broker::is_company_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot mutate company state".into(),
+            ));
+        }
+        return match crate::company_broker::handle_company_action(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::company_broker::CompanyBrokerOutcome::Applied => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: String::new(),
+            }),
+            crate::company_broker::CompanyBrokerOutcome::Duplicate {
+                original_action_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original action {original_event_id_hex}"),
+                })
+            }
+            // The owner's request lost, but a durable receipt says so. Report
+            // it as not accepted rather than as a protocol error.
+            crate::company_broker::CompanyBrokerOutcome::Refused { message } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: false,
+                message: format!("conflict: {message}"),
+            }),
+        };
+    }
+
+    // Reserved catalog actions are community-global governance requests, not
+    // chat messages and not actions against a synthetic Block instance. Route
+    // every event that names a reserved action before channel derivation so a
+    // malformed request cannot fall through to the ordinary channel/ACP path.
+    if crate::block_broker::is_reserved_catalog_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot mutate the global Block catalog".into(),
+            ));
+        }
+        return match crate::block_broker::handle_catalog_action(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::block_broker::CatalogBrokerOutcome::Applied => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: String::new(),
+            }),
+            crate::block_broker::CatalogBrokerOutcome::Duplicate {
+                original_action_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original action {original_event_id_hex}"),
+                })
+            }
+        };
     }
 
     let mut channel_id = if kind_u32 == KIND_REACTION {
@@ -1845,6 +1958,10 @@ async fn ingest_event_inner(
             auth_result.map_err(IngestError::Rejected)?;
         }
     }
+
+    let validated_block_event = crate::blocks::validate_public_envelope(tenant, state, &event)
+        .await
+        .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
 
     // Handled directly — these mutate relay_members and do NOT get stored.
     // The handler enforces the durable community ban itself: the write-path
@@ -2409,6 +2526,68 @@ async fn ingest_event_inner(
         });
     }
 
+    if let Some(crate::blocks::ValidatedBlockEvent::Action(action)) = validated_block_event.as_ref()
+    {
+        let stored_event = match state
+            .db
+            .insert_block_action_once(
+                tenant.community(),
+                &event,
+                action.channel_id,
+                &action.instance_event_id,
+                action.idempotency_key,
+            )
+            .await
+            .map_err(|error| IngestError::Internal(format!("error: {error}")))?
+        {
+            buzz_db::BlockActionInsert::Inserted(stored) => stored,
+            buzz_db::BlockActionInsert::Duplicate { original_event_id } => {
+                let original_event_id_hex = hex::encode(original_event_id);
+                emit(
+                    tracer,
+                    TraceAction::WriteDuplicate {
+                        msg_id: msg_id_label(event.id.as_bytes()),
+                        channel: channel_label(action.channel_id),
+                        claimed_community: claimed_community_from_event(&event),
+                    },
+                    state_for_request(tenant, auth.pubkey()),
+                );
+                return Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original action {original_event_id_hex}"),
+                });
+            }
+        };
+
+        emit(
+            tracer,
+            TraceAction::WriteInsert {
+                msg_id: msg_id_label(event.id.as_bytes()),
+                channel: channel_label(action.channel_id),
+                claimed_community: claimed_community_from_event(&event),
+            },
+            state_for_request(tenant, auth.pubkey()),
+        );
+
+        dispatch_persistent_event(
+            tenant,
+            state,
+            &stored_event,
+            kind_u32,
+            &auth.pubkey().to_hex(),
+            threaded_visibility.clone(),
+        )
+        .await;
+
+        info!(event_id = %event_id_hex, kind = kind_u32, "Block action ingested");
+        return Ok(IngestResult {
+            event_id: event_id_hex,
+            accepted: true,
+            message: String::new(),
+        });
+    }
+
     let (stored_event, was_inserted) = if buzz_core::kind::is_replaceable(kind_u32) {
         // NIP-16 replaceable event — atomic replace with stale-write protection.
         // channel_id is None for global kinds (0, 1, 3) due to step 5b above.
@@ -2917,6 +3096,9 @@ mod tests {
             KIND_TEAM,
             KIND_MANAGED_AGENT,
             KIND_AGENT_TURN_METRIC,
+            KIND_BLOCK_MANIFEST,
+            KIND_BLOCK_ACTION,
+            KIND_BLOCK_RECEIPT,
         ];
         for kind in migrated {
             assert!(
@@ -2924,6 +3106,119 @@ mod tests {
                 "kind {kind} should be in the allowlist"
             );
         }
+    }
+
+    #[test]
+    fn company_kinds_have_pinned_scope_and_channel_classification() {
+        let dummy = make_dummy_event();
+
+        // The owner's request is the only client-authored company kind.
+        assert_eq!(
+            required_scope_for_kind(KIND_COMPANY_ACTION, &dummy).unwrap(),
+            Scope::UsersWrite
+        );
+        assert!(is_global_only_kind(KIND_COMPANY_ACTION));
+        assert!(
+            !requires_h_channel_scope(KIND_COMPANY_ACTION),
+            "company definitions are community-global and never channel-scoped"
+        );
+
+        // Heads and receipts are relay-authored. A client submitting one must
+        // be rejected before it reaches any handler, so they carry no scope.
+        for kind in [
+            buzz_core::kind::KIND_COMPANY_PROFILE,
+            buzz_core::kind::KIND_INITIATIVE,
+            buzz_core::kind::KIND_TASK,
+            buzz_core::kind::KIND_COMPANY_RECEIPT,
+        ] {
+            assert!(
+                buzz_core::kind::is_relay_only_kind(kind),
+                "kind {kind} must be relay-only"
+            );
+            assert!(
+                required_scope_for_kind(kind, &dummy).is_err(),
+                "relay-only kind {kind} must have no client write scope"
+            );
+        }
+        assert!(!buzz_core::kind::is_relay_only_kind(KIND_COMPANY_ACTION));
+    }
+
+    /// Company Actions are a command kind, but they must NOT take the generic
+    /// command branch: that branch returns before the ban/timeout write-block,
+    /// so routing them there would let a banned owner mutate company state.
+    #[test]
+    fn company_actions_are_excluded_from_the_generic_command_branch() {
+        assert!(
+            buzz_core::kind::is_command_kind(KIND_COMPANY_ACTION),
+            "company actions remain a transactional command kind"
+        );
+        assert!(
+            !takes_generic_command_branch(KIND_COMPANY_ACTION),
+            "routing company actions through handle_command would skip the ban gate"
+        );
+        // Every other command kind still takes that branch.
+        for &kind in buzz_core::kind::ALL_KINDS {
+            if buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION {
+                assert!(
+                    takes_generic_command_branch(kind),
+                    "command kind {kind} must still reach handle_command"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn block_kinds_have_pinned_scope_and_channel_classification() {
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_BLOCK_MANIFEST, &dummy).unwrap(),
+            Scope::UsersWrite
+        );
+        assert!(is_global_only_kind(KIND_BLOCK_MANIFEST));
+        assert!(!requires_h_channel_scope(KIND_BLOCK_MANIFEST));
+
+        assert!(is_global_only_kind(KIND_BLOCK_CATALOG_ENTRY));
+        assert!(!requires_h_channel_scope(KIND_BLOCK_CATALOG_ENTRY));
+        assert!(required_scope_for_kind(KIND_BLOCK_CATALOG_ENTRY, &dummy).is_err());
+
+        for kind in [KIND_BLOCK_ACTION, KIND_BLOCK_RECEIPT] {
+            assert_eq!(
+                required_scope_for_kind(kind, &dummy).unwrap(),
+                Scope::MessagesWrite
+            );
+            assert!(!is_global_only_kind(kind));
+            assert!(requires_h_channel_scope(kind));
+        }
+    }
+
+    #[test]
+    fn reserved_catalog_action_is_detected_before_the_channel_requirement() {
+        let relay = nostr::Keys::generate().public_key().to_hex();
+        let target = "ab".repeat(32);
+        let request = Uuid::new_v4().to_string();
+        let idempotency = Uuid::new_v4().to_string();
+        let event = make_event_with_tags(
+            KIND_BLOCK_ACTION,
+            "{}",
+            &[
+                &["p", &relay],
+                &["e", &target, "", "block-manifest"],
+                &[
+                    "block-action",
+                    "1",
+                    "catalog.activate",
+                    &request,
+                    &idempotency,
+                ],
+            ],
+        );
+
+        assert!(crate::block_broker::is_reserved_catalog_candidate(&event));
+        assert_eq!(extract_channel_id(&event), None);
+        assert!(
+            requires_h_channel_scope(KIND_BLOCK_ACTION),
+            "ordinary Block actions must remain channel-scoped"
+        );
     }
 
     #[test]

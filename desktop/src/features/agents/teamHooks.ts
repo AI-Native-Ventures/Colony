@@ -6,6 +6,7 @@ import {
   listTeams,
   updateTeam,
 } from "@/shared/api/tauriTeams";
+import { validateTeamMembership } from "@/features/agents/lib/teamPersonas";
 import type {
   AgentTeam,
   CreateTeamInput,
@@ -29,7 +30,10 @@ export function useCreateTeamMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: CreateTeamInput) => createTeam(input),
+    mutationFn: (input: CreateTeamInput) => {
+      validateTeamMembership(input);
+      return createTeam(input);
+    },
     onSuccess: (created) => {
       queryClient.setQueryData<AgentTeam[]>(teamsQueryKey, (current) => {
         const next = current ?? [];
@@ -46,7 +50,10 @@ export function useUpdateTeamMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: UpdateTeamInput) => updateTeam(input),
+    mutationFn: (input: UpdateTeamInput) => {
+      validateTeamMembership(input);
+      return updateTeam(input);
+    },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: teamsQueryKey });
     },

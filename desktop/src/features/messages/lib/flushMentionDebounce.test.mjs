@@ -107,3 +107,33 @@ test("flushMentionDebounce preserves a team expansion selected with Enter", () =
   assert.deepEqual(flushed?.suggestion.teamMembers, teamMembers);
   assert.equal(flushed?.suggestion.notInChannel, false);
 });
+
+test("flushMentionDebounce inserts the role title when a role alias wins the flush", () => {
+  // Tab/Enter before the debounce catches up must produce the same role-keyed
+  // token the dropdown would have inserted, or the visible `@CTO` and the
+  // stored pubkey reference drift apart.
+  const flushed = flushMentionDebounce({
+    debounceTimerRef: ref(setTimeout(() => {}, 1000)),
+    latestValueRef: ref("Ping @cto"),
+    latestCursorRef: ref("Ping @cto".length),
+    searchableNamesLowerRef: ref(["jason", "cto"]),
+    candidates: [
+      candidate({
+        displayName: "Jason",
+        isAgent: true,
+        isMember: true,
+        personaId: "builtin:cto",
+        pubkey: "a".repeat(64),
+        roleId: "cto",
+        roleTitle: "CTO",
+      }),
+    ],
+    activePersonaIds: new Set(),
+    channelType: "group",
+  });
+
+  assert.equal(flushed?.type, "match");
+  assert.equal(flushed?.suggestion.displayName, "CTO");
+  assert.equal(flushed?.suggestion.aliasLabel, "Jason");
+  assert.equal(flushed?.suggestion.pubkey, "a".repeat(64));
+});

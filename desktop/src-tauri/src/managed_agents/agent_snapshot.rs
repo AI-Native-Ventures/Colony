@@ -484,19 +484,22 @@ mod tests {
         ManagedAgentRecord {
             pubkey: "deadbeef".to_string(),
             name: "Test Agent".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: Some("Test Agent Display".to_string()),
-            persona_id: Some("SENTINEL_PERSONA_ID".to_string()), // MUST NOT appear in snapshot
-            team_id: Some("SENTINEL_TEAM_ID".to_string()),       // MUST NOT appear in snapshot
-            private_key_nsec: "nsec1secret".to_string(),         // MUST NOT appear in snapshot
-            auth_tag: Some("auth-tag-secret".to_string()),       // MUST NOT appear in snapshot
-            relay_url: "wss://relay.example.com".to_string(),    // MUST NOT appear in snapshot
+            persona_id: Some("SENTINEL_PERSONA_ID".to_string()),
+            creation_request_id: Some("SENTINEL_CREATION_REQUEST_ID".to_string()),
+            team_id: Some("SENTINEL_TEAM_ID".to_string()),
+            private_key_nsec: "nsec1secret".to_string(),
+            auth_tag: Some("auth-tag-secret".to_string()),
+            relay_url: "wss://relay.example.com".to_string(),
             avatar_url: Some("https://example.com/avatar.png".to_string()),
-            acp_command: "/usr/local/bin/acp".to_string(), // MUST NOT appear in snapshot
-            agent_command: "goose".to_string(),            // MUST NOT appear in snapshot
+            acp_command: "/usr/local/bin/acp".to_string(),
+            agent_command: "goose".to_string(),
             agent_command_override: Some("goose-override".to_string()), // MUST NOT appear
-            agent_args: vec!["--arg".to_string()],         // MUST NOT appear in snapshot
-            mcp_command: "mcp-server".to_string(),         // MUST NOT appear in snapshot
-            turn_timeout_seconds: 120,                     // deprecated, MUST NOT appear
+            agent_args: vec!["--arg".to_string()], // MUST NOT appear in snapshot
+            mcp_command: "mcp-server".to_string(), // MUST NOT appear in snapshot
+            turn_timeout_seconds: 120,             // deprecated, MUST NOT appear
             idle_timeout_seconds: Some(30),
             max_turn_duration_seconds: Some(600),
             parallelism: 2,
@@ -545,8 +548,6 @@ mod tests {
             relay_mesh: None,
         }
     }
-
-    // ── Round-trip tests ──────────────────────────────────────────────────────
 
     #[test]
     fn json_round_trip_config_only() {
@@ -631,8 +632,6 @@ mod tests {
         assert_eq!((reader.info().width, reader.info().height), (3, 2));
     }
 
-    // ── PNG memory parity ─────────────────────────────────────────────────────
-
     #[test]
     fn png_round_trip_with_core_memory() {
         let record = minimal_record();
@@ -701,12 +700,6 @@ mod tests {
         );
     }
 
-    // ── Secret exclusion tests ────────────────────────────────────────────────
-    //
-    // These tests assert that every field in the exclusion list is absent from
-    // the serialized snapshot. We serialize to JSON and assert the key is NOT
-    // present.
-
     fn snapshot_json_string(record: &ManagedAgentRecord) -> String {
         let snapshot = build_snapshot(record, MemoryLevel::None, vec![], None);
         let bytes = encode_snapshot_json(&snapshot).unwrap();
@@ -724,6 +717,12 @@ mod tests {
         assert!(
             !json.contains("privateKeyNsec") && !json.contains("private_key_nsec"),
             "privateKeyNsec field must not appear in snapshot"
+        );
+        assert!(
+            !json.contains("creationRequestId")
+                && !json.contains("creation_request_id")
+                && !json.contains("SENTINEL_CREATION_REQUEST_ID"),
+            "Agent Proposal idempotency metadata must not enter snapshots"
         );
     }
 

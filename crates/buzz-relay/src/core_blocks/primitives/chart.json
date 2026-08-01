@@ -1,0 +1,55 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "chart",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Chart",
+  "description": "A bounded chart with an accessible tabular fallback.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["series"],
+    "properties": {
+      "series": {
+        "type": "array",
+        "maxItems": 100,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "value"],
+          "properties": {
+            "label": { "type": "string", "maxLength": 80 },
+            "value": { "type": "number" }
+          }
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "chart",
+    "kind": "bar",
+    "data_path": "/series",
+    "label_key": "label",
+    "value_key": "value"
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "{{series}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "chart": 1 },
+  "examples": [
+    {
+      "name": "Monthly revenue",
+      "data": {
+        "series": [
+          { "label": "May", "value": 28000 },
+          { "label": "June", "value": 34000 },
+          { "label": "July", "value": 42800 }
+        ]
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

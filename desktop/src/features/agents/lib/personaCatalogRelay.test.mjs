@@ -20,6 +20,8 @@ function personaEvent({
   sourcePersonaId = "reviewer",
   shared = true,
   avatarUrl = null,
+  roleId = null,
+  roleTitle = null,
   respondTo = null,
   sharedTag,
 }) {
@@ -38,6 +40,8 @@ function personaEvent({
     ],
     content: JSON.stringify({
       display_name: "Relay Reviewer",
+      role_id: roleId,
+      role_title: roleTitle,
       system_prompt: "Review changes.",
       avatar_url: avatarUrl,
       runtime: "goose",
@@ -64,6 +68,42 @@ test("a shared kind 30175 persona from Alice is discoverable by Bob", () => {
   assert.equal(personas[0].shared, true);
   assert.equal(personas[0].catalogSource.ownerPubkey, ALICE);
   assert.equal(personas[0].catalogSource.isOwn, false);
+});
+
+test("catalog preserves a valid role pair and rejects malformed role identity", () => {
+  const valid = catalogPersonasFromPublications(
+    catalogPublicationsFromEvents([
+      personaEvent({
+        createdAt: 1,
+        id: "chief-of-staff",
+        roleId: "chief-of-staff",
+        roleTitle: "Chief of Staff",
+      }),
+    ]),
+    [],
+    BOB,
+  );
+  assert.equal(valid[0].displayName, "Relay Reviewer");
+  assert.equal(valid[0].roleId, "chief-of-staff");
+  assert.equal(valid[0].roleTitle, "Chief of Staff");
+
+  for (const [index, roleId, roleTitle] of [
+    [0, "Chief-Of-Staff", "Chief of Staff"],
+    [1, "chief-of-staff", null],
+    [2, null, "Chief of Staff"],
+  ]) {
+    assert.deepEqual(
+      catalogPublicationsFromEvents([
+        personaEvent({
+          createdAt: index + 2,
+          id: `invalid-role-${index}`,
+          roleId,
+          roleTitle,
+        }),
+      ]),
+      [],
+    );
+  }
 });
 
 test("a newer unshared head hides the older shared head", () => {

@@ -98,4 +98,44 @@ void main() {
       isNot(contains(EventKind.systemMessage)),
     );
   });
+
+  test('kind 9 Block instances preserve their complete tag envelope', () {
+    final event = NostrEvent.fromJson({
+      'id': 'event-id',
+      'pubkey': 'publisher',
+      'created_at': 1785369600,
+      'kind': 9,
+      'tags': [
+        ['h', 'channel-id'],
+        ['e', 'manifest-id', '', 'block'],
+        [
+          'block',
+          '1',
+          'lead-card',
+          'manifest-id',
+          '11111111-1111-4111-8111-111111111111',
+        ],
+        ['block-data', '{"company":"Tennant Group","fitScore":87}'],
+        ['block-attention', '1', 'required'],
+      ],
+      'content': 'Tennant Group is a qualified website lead.',
+      'sig': 'signature',
+    });
+
+    expect(event.kind, 9);
+    expect(event.content, 'Tennant Group is a qualified website lead.');
+    expect(event.toJson()['tags'], [
+      ['h', 'channel-id'],
+      ['e', 'manifest-id', '', 'block'],
+      [
+        'block',
+        '1',
+        'lead-card',
+        'manifest-id',
+        '11111111-1111-4111-8111-111111111111',
+      ],
+      ['block-data', '{"company":"Tennant Group","fitScore":87}'],
+      ['block-attention', '1', 'required'],
+    ]);
+  });
 }

@@ -87,6 +87,12 @@ run_unit_tests() {
   run_test_step "buzz-cli tests" \
     cargo test -p buzz-cli -- --nocapture
 
+  # buzz-acp: agent prompt contracts and pool/queue logic. Infra-free, and
+  # previously absent from both unit paths — a broken base-prompt assertion sat
+  # red without any gate noticing.
+  run_test_step "buzz-acp unit tests" \
+    cargo test -p buzz-acp --lib -- --nocapture
+
   # buzz-db migrator/lint unit tests (no infra): guard the embedded-migrator
   # invariant (exactly the consolidated 0001; cutover/backfill stays an operator
   # script, not startup state) and the tenant-scoping lints. The Postgres-backed

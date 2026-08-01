@@ -7,8 +7,13 @@
 
 /// NIP-AM: Agent Turn Metric — payload type and encrypt/decrypt helpers.
 pub mod agent_turn_metric;
+/// Safe, versioned contracts for chat-native Block manifests and catalogs.
+pub mod block;
 /// Channel and membership enums shared across crates.
 pub mod channel;
+/// Company, initiative, task, and agent work-attribution contracts.
+pub mod company;
+pub mod company_roster;
 /// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
 /// body parse/serialize, envelope build/validate, head selection.
 pub mod engram;
@@ -28,6 +33,7 @@ pub mod kind;
 pub mod network;
 /// Agent observer frame helpers.
 pub mod observer;
+pub mod onboarding_facts;
 /// NIP-AB device pairing — crypto primitives, message types, and errors.
 pub mod pairing;
 /// Presence status types shared across crates.

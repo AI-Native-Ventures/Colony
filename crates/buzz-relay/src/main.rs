@@ -461,6 +461,17 @@ async fn main() -> anyhow::Result<()> {
     );
     let state = Arc::new(app_state);
 
+    // Seed the relay-owned Block catalog before any client can connect. A
+    // failure is loud but non-fatal for existing communities: ordinary chat
+    // remains available and the deterministic seed converges on the next
+    // restart or provisioning retry.
+    match buzz_relay::core_blocks::ensure_core_blocks_for_all_communities(&state).await {
+        Ok(count) => info!(count, "Core Block catalog reconciled on startup"),
+        Err(error) => {
+            warn!(%error, "Core Block startup reconciliation failed; continuing without a complete catalog")
+        }
+    }
+
     // Inter-relay mesh (BUZZ_MESH seam). `boot_mesh` returns None when the
     // kill switch is off — nothing is bound, published, or spawned, so the
     // relay behaves byte-identically to a build without the mesh. When

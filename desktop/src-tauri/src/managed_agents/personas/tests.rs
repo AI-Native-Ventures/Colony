@@ -1,14 +1,21 @@
 use super::{
     built_in_persona_records, ensure_persona_ids_are_active, ensure_persona_is_active,
     merge_personas, migrate_retired_personas, validate_persona_activation_change,
-    validate_persona_deletion, BUILT_IN_PERSONAS, RETIRED_PERSONAS,
+    validate_persona_deletion, BUILT_IN_PERSONAS, FIZZ_SYSTEM_PROMPT, LEGACY_FIZZ_SYSTEM_PROMPT,
+    RETIRED_PERSONAS,
 };
 use crate::managed_agents::discovery::{default_agent_command, effective_agent_command};
-use crate::managed_agents::AgentDefinition;
+use crate::managed_agents::persona_events::{
+    build_persona_event, persona_content_hash, persona_event_content, persona_from_event,
+    PersonaEventContent,
+};
+use crate::managed_agents::{normalize_persona_role, AgentDefinition};
 
 fn custom_persona(id: &str, display_name: &str) -> AgentDefinition {
     AgentDefinition {
         id: id.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: display_name.to_string(),
         avatar_url: Some("https://example.com/avatar.png".to_string()),
         system_prompt: "Custom prompt".to_string(),
@@ -29,6 +36,104 @@ fn custom_persona(id: &str, display_name: &str) -> AgentDefinition {
         created_at: "2026-03-19T00:00:00Z".to_string(),
         updated_at: "2026-03-19T00:00:00Z".to_string(),
     }
+}
+
+#[test]
+fn legacy_persona_json_defaults_role_pair_to_absent() {
+    let json = serde_json::json!({
+        "id": "legacy",
+        "display_name": "Legacy",
+        "avatar_url": null,
+        "system_prompt": "Keep working.",
+        "is_builtin": false,
+        "created_at": "2026-03-19T00:00:00Z",
+        "updated_at": "2026-03-19T00:00:00Z"
+    });
+
+    let persona: AgentDefinition = serde_json::from_value(json).expect("legacy persona parses");
+    assert_eq!(persona.role_id, None);
+    assert_eq!(persona.role_title, None);
+}
+
+#[test]
+fn role_bearing_persona_event_content_round_trips_and_changes_source_hash() {
+    let mut persona = custom_persona("builtin:fizz", "Fizz");
+    let without_role = persona_content_hash(&persona_event_content(&persona));
+    persona.role_id = Some("chief-of-staff".to_string());
+    persona.role_title = Some("Chief of Staff".to_string());
+    persona
+        .env_vars
+        .insert("API_SECRET".to_string(), "USER_SETTING".to_string());
+
+    let content = persona_event_content(&persona);
+    let json = serde_json::to_string(&content).expect("role content serializes");
+    let decoded: PersonaEventContent =
+        serde_json::from_str(&json).expect("role content deserializes");
+
+    assert_eq!(decoded.role_id.as_deref(), Some("chief-of-staff"));
+    assert_eq!(decoded.role_title.as_deref(), Some("Chief of Staff"));
+    assert_ne!(without_role, persona_content_hash(&decoded));
+    assert!(
+        !json.contains("env_vars") && !json.contains("USER_SETTING"),
+        "persona event projection must not expose secrets"
+    );
+
+    let event = build_persona_event(&persona)
+        .expect("role-bearing event builds")
+        .sign_with_keys(&nostr::Keys::generate())
+        .expect("role-bearing event signs");
+    let round_tripped = persona_from_event(&event).expect("role-bearing event parses");
+    assert_eq!(round_tripped.display_name, "Fizz");
+    assert_eq!(round_tripped.role_id.as_deref(), Some("chief-of-staff"));
+    assert_eq!(round_tripped.role_title.as_deref(), Some("Chief of Staff"));
+}
+
+#[test]
+fn persona_role_pair_validation_is_strict_and_normalizes_title() {
+    assert_eq!(
+        normalize_persona_role(
+            Some("chief-of-staff".to_string()),
+            Some("  Chief of Staff  ".to_string())
+        )
+        .expect("valid role pair"),
+        (
+            Some("chief-of-staff".to_string()),
+            Some("Chief of Staff".to_string())
+        )
+    );
+
+    for (role_id, role_title) in [
+        (
+            Some("Chief-Of-Staff".to_string()),
+            Some("Chief".to_string()),
+        ),
+        (
+            Some("chief of staff".to_string()),
+            Some("Chief".to_string()),
+        ),
+        (Some("chief-of-staff".to_string()), Some("   ".to_string())),
+        (Some("chief-of-staff".to_string()), None),
+        (None, Some("Chief of Staff".to_string())),
+    ] {
+        assert!(
+            normalize_persona_role(role_id, role_title).is_err(),
+            "invalid or incomplete role pair must be rejected"
+        );
+    }
+}
+
+#[test]
+fn builtin_fizz_keeps_personal_identity_and_has_chief_of_staff_role() {
+    let fizz = built_in_persona_records("2026-03-19T00:00:00Z")
+        .into_iter()
+        .find(|persona| persona.id == "builtin:fizz")
+        .expect("fizz built-in exists");
+
+    assert_eq!(fizz.id, "builtin:fizz");
+    assert_eq!(fizz.display_name, "Fizz");
+    assert_eq!(fizz.role_id.as_deref(), Some("chief-of-staff"));
+    assert_eq!(fizz.role_title.as_deref(), Some("Chief of Staff"));
+    assert!(fizz.system_prompt.contains("explicit approval"));
 }
 
 #[test]
@@ -88,6 +193,27 @@ fn merge_personas_preserves_builtin_edits() {
     assert_eq!(fizz.name_pool, edited_builtin.name_pool);
     assert_eq!(fizz.env_vars, edited_builtin.env_vars);
     assert_eq!(fizz.is_active, edited_builtin.is_active);
+    assert_eq!(fizz.role_id.as_deref(), Some("chief-of-staff"));
+    assert_eq!(fizz.role_title.as_deref(), Some("Chief of Staff"));
+}
+
+#[test]
+fn merge_personas_upgrades_unmodified_legacy_fizz_contract() {
+    let mut legacy_fizz = custom_persona("builtin:fizz", "Fizz");
+    legacy_fizz.is_builtin = true;
+    legacy_fizz.system_prompt = LEGACY_FIZZ_SYSTEM_PROMPT.to_string();
+
+    let (records, changed) = merge_personas(vec![legacy_fizz], "2026-07-31T00:00:00Z");
+
+    assert!(changed);
+    let fizz = records
+        .iter()
+        .find(|record| record.id == "builtin:fizz")
+        .expect("fizz built-in should exist");
+    assert_eq!(fizz.display_name, "Fizz");
+    assert_eq!(fizz.system_prompt, FIZZ_SYSTEM_PROMPT);
+    assert_eq!(fizz.role_id.as_deref(), Some("chief-of-staff"));
+    assert_eq!(fizz.role_title.as_deref(), Some("Chief of Staff"));
 }
 
 #[test]

@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::agent_management::{build_create, build_update, CreateAgentDraft, UpdateAgentDraft};
 use crate::client::BuzzClient;
+use crate::commands::blocks::resolve_active_manifest;
 use crate::error::CliError;
 use crate::validate::{read_or_stdin, validate_hex64};
 use crate::{AgentsCmd, RespondToArg};
@@ -15,27 +16,35 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
             channel,
             display_name,
             system_prompt,
+            reply_to,
         } => {
             let owner = require_owner(client)?;
+            let (manifest_id, manifest) = resolve_active_manifest(client, "agent-proposal").await?;
             let built = build_create(
-                client.keys(),
                 &owner,
+                manifest_id,
+                &manifest,
                 CreateAgentDraft {
                     channel_id: channel,
                     display_name,
                     system_prompt: read_or_stdin(&system_prompt)?,
+                    reply_to,
                 },
             )?;
-            let response = client.publish_ephemeral_event(built.event).await?;
+            let event = client.sign_event(built.builder)?;
+            let event_id = event.id.to_hex();
+            let response = client.submit_event(event).await?;
             let mut output: serde_json::Value = serde_json::from_str(&response)
                 .map_err(|e| CliError::Other(format!("invalid relay response: {e}")))?;
             if let Some(obj) = output.as_object_mut() {
-                obj.insert("request_id".into(), built.request_id.into());
+                obj.insert("request_id".into(), built.request_id.to_string().into());
+                obj.insert("instance_event_id".into(), event_id.into());
                 obj.insert("action".into(), built.action.into());
-                obj.insert("saved".into(), false.into());
+                obj.insert("proposal_saved".into(), true.into());
+                obj.insert("agent_changed".into(), false.into());
                 obj.insert(
                     "message".into(),
-                    "Draft sent to Buzz Desktop for owner review. Nothing changes until the owner saves it."
+                    "Agent Proposal saved in the conversation for owner review. Nothing changes until the owner explicitly resolves it."
                         .into(),
                 );
             }
@@ -52,11 +61,14 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
             provider,
             model,
             respond_to,
+            reply_to,
         } => {
             let owner = require_owner(client)?;
+            let (manifest_id, manifest) = resolve_active_manifest(client, "agent-proposal").await?;
             let built = build_update(
-                client.keys(),
                 &owner,
+                manifest_id,
+                &manifest,
                 UpdateAgentDraft {
                     channel_id: channel,
                     agent_name,
@@ -66,18 +78,23 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
                     provider,
                     model,
                     respond_to: respond_to.map(RespondToArg::to_wire),
+                    reply_to,
                 },
             )?;
-            let response = client.publish_ephemeral_event(built.event).await?;
+            let event = client.sign_event(built.builder)?;
+            let event_id = event.id.to_hex();
+            let response = client.submit_event(event).await?;
             let mut output: serde_json::Value = serde_json::from_str(&response)
                 .map_err(|e| CliError::Other(format!("invalid relay response: {e}")))?;
             if let Some(obj) = output.as_object_mut() {
-                obj.insert("request_id".into(), built.request_id.into());
+                obj.insert("request_id".into(), built.request_id.to_string().into());
+                obj.insert("instance_event_id".into(), event_id.into());
                 obj.insert("action".into(), built.action.into());
-                obj.insert("saved".into(), false.into());
+                obj.insert("proposal_saved".into(), true.into());
+                obj.insert("agent_changed".into(), false.into());
                 obj.insert(
                     "message".into(),
-                    "Draft sent to Buzz Desktop for owner review. Nothing changes until the owner saves it."
+                    "Agent Proposal saved in the conversation for owner review. Nothing changes until the owner explicitly resolves it."
                         .into(),
                 );
             }

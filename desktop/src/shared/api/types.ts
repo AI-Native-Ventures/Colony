@@ -739,89 +739,13 @@ export type UpdateManagedAgentInput = {
    */
   respondToAllowlist?: string[];
 };
-export type AgentPersona = {
-  id: string;
-  displayName: string;
-  avatarUrl: string | null;
-  systemPrompt: string;
-  /** Preferred ACP runtime ID (e.g. "goose", "claude"). */
-  runtime: string | null;
-  /** Opaque, harness-specific model identifier string. Buzz stores and passes through without interpretation. */
-  model: string | null;
-  /** LLM inference provider (e.g. "databricks", "anthropic"). Injected as the runtime's provider env var at spawn time. */
-  provider: string | null;
-  namePool: string[];
-  isBuiltIn: boolean;
-  isActive: boolean;
-  /** Whether this persona is discoverable in the active community catalog. */
-  shared: boolean;
-  /** Team ID if this persona was imported from a team directory. Team personas are non-editable. */
-  sourceTeam?: string | null;
-  /**
-   * Set only on a local copy of another owner's shared catalog entry. A copy
-   * carries a fresh local `id`, so this coordinate is the only thing that can
-   * answer "is this catalog entry already added" without minting a duplicate.
-   */
-  catalogSource?: CatalogSourceCoordinate | null;
-  /** Agent environment variables, layered after desktop parent and persona values. */
-  envVars: Record<string, string>;
-  /** NIP-AP behavioral defaults (wire shape). Null/empty = unset. */
-  respondTo: RespondToMode | null;
-  respondToAllowlist: string[];
-  parallelism: number | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-/**
- * A catalog publication's coordinate: the owner who published it and the
- * `d`-tag identifying the persona within that owner's catalog. Mirrors the
- * backend `CatalogSource`.
- */
-export type CatalogSourceCoordinate = {
-  ownerPubkey: string;
-  personaId: string;
-};
-
-/**
- * NIP-AP behavioral group for a definition: absent preserves the stored group
- * for legacy callers; present replaces it as a unit. Mirrors `PersonaBehaviorRequest`.
- */
-export type PersonaBehaviorInput = {
-  respondTo?: RespondToMode;
-  respondToAllowlist?: string[];
-  parallelism?: number;
-};
-
-export type CreatePersonaInput = {
-  displayName: string;
-  avatarUrl?: string;
-  systemPrompt: string;
-  runtime?: string;
-  model?: string;
-  provider?: string;
-  namePool?: string[];
-  envVars?: Record<string, string>;
-  behavior?: PersonaBehaviorInput;
-  /**
-   * Set when this persona is a copy of another owner's shared catalog entry,
-   * so the catalog can tell an already-added foreign entry from a new one.
-   */
-  catalogSource?: CatalogSourceCoordinate;
-};
-
-export type UpdatePersonaInput = {
-  id: string;
-  displayName: string;
-  avatarUrl?: string;
-  systemPrompt: string;
-  runtime?: string;
-  model?: string;
-  provider?: string;
-  namePool?: string[];
-  envVars?: Record<string, string>;
-  behavior?: PersonaBehaviorInput;
-};
+export type {
+  AgentPersona,
+  CatalogSourceCoordinate,
+  CreatePersonaInput,
+  PersonaBehaviorInput,
+  UpdatePersonaInput,
+} from "@/shared/api/personaTypes";
 
 // ── Team types ────────────────────────────────────────────────────────────────
 export type AgentTeam = {
@@ -830,6 +754,7 @@ export type AgentTeam = {
   description: string | null;
   instructions: string | null;
   personaIds: string[];
+  leadPersonaId: string | null;
   isBuiltin: boolean;
   /** Absolute path to the team's backing directory (if directory-backed). */
   sourceDir: string | null;
@@ -848,6 +773,7 @@ export type CreateTeamInput = {
   description?: string;
   instructions?: string;
   personaIds: string[];
+  leadPersonaId?: string;
 };
 
 export type UpdateTeamInput = {
@@ -856,6 +782,8 @@ export type UpdateTeamInput = {
   description?: string;
   instructions?: string;
   personaIds: string[];
+  /** Omit to preserve the current lead; null clears it. */
+  leadPersonaId?: string | null;
 };
 // ── Channel Template types ─────────────────────────────────────────────────────
 

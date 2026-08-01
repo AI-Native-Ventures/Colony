@@ -6,11 +6,29 @@ import {
   WELCOME_CANVAS_CONTENT,
 } from "./welcomeCanvas.ts";
 
-test("welcome canvas covers purpose, agent use, a first challenge, and help", () => {
+test("welcome canvas explains name, role, and team mentions", () => {
   assert.match(WELCOME_CANVAS_CONTENT, /private channel is your home base/i);
-  assert.match(WELCOME_CANVAS_CONTENT, /Mention an agent/i);
-  assert.match(WELCOME_CANVAS_CONTENT, /quick challenge/i);
-  assert.match(WELCOME_CANVAS_CONTENT, /Colony user guide/i);
+  // The three ways to address an employee — the point of separating a personal
+  // name from a stable role.
+  assert.match(WELCOME_CANVAS_CONTENT, /@fizz/i);
+  assert.match(WELCOME_CANVAS_CONTENT, /@chief-of-staff/i);
+  assert.match(WELCOME_CANVAS_CONTENT, /@marketing/i);
+  assert.match(WELCOME_CANVAS_CONTENT, /renaming someone never breaks/i);
+});
+
+test("welcome canvas promises nothing happens without approval", () => {
+  assert.match(WELCOME_CANVAS_CONTENT, /blocks in this channel/i);
+  assert.match(WELCOME_CANVAS_CONTENT, /until you approve the blueprint/i);
+});
+
+test("welcome canvas is Colony-facing and names no retired starter agents", () => {
+  assert.match(WELCOME_CANVAS_CONTENT, /Welcome to Colony/);
+  for (const retired of ["Honey", "Bumble"]) {
+    assert.ok(
+      !WELCOME_CANVAS_CONTENT.includes(retired),
+      `canvas must not introduce ${retired}, which is no longer provisioned`,
+    );
+  }
 });
 
 test("ensureWelcomeCanvas seeds a fresh channel with no canvas", async () => {

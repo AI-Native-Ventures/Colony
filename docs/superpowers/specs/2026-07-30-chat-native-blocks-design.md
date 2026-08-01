@@ -401,6 +401,14 @@ manifest signature, schema, trust policy, and instance data before rendering.
 and manifest, names a declared action, contains only schema-valid input, and
 includes a unique idempotency key.
 
+For an actionable instance, `p` names the human decision maker. If the
+responsible processor is different, the instance also carries exactly one
+`["block-processor","1",processor_pubkey]`; otherwise the single `p` tag serves
+both roles for backward compatibility. The action `p`-tags the pinned processor
+and is signed by the decision maker. The resolving receipt is signed by the
+pinned processor, so approval authority and execution authority remain
+separate without adding another user-facing workflow.
+
 `KIND_BLOCK_RECEIPT` uses custom kind **40011**. It references the action and
 instance and contains the terminal or current result. Receipts overlay the
 instance state in the renderer and remain independently auditable.

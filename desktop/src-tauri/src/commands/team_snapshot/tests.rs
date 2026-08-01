@@ -56,6 +56,8 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
     let definitions = vec![
         AgentDefinition {
             id: "alice".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: "Alice".to_string(),
             avatar_url: None,
             system_prompt: "Alice prompt".to_string(),
@@ -78,6 +80,8 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
         },
         AgentDefinition {
             id: "bob".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: "Bob".to_string(),
             avatar_url: None,
             system_prompt: "Bob prompt".to_string(),
@@ -105,6 +109,7 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
         description: Some("Reviews changes".to_string()),
         instructions: Some("Be thorough.".to_string()),
         persona_ids: vec!["alice".to_string(), "bob".to_string()],
+        lead_persona_id: Some("alice".to_string()),
         is_builtin: false,
         source_dir: None,
         is_symlink: false,
@@ -141,6 +146,8 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
 fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
     let definitions = vec![AgentDefinition {
         id: "alice".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Alice".to_string(),
         avatar_url: None,
         system_prompt: "Alice prompt".to_string(),
@@ -167,6 +174,7 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
         description: None,
         instructions: None,
         persona_ids: vec!["alice".to_string()],
+        lead_persona_id: None,
         is_builtin: false,
         source_dir: None,
         is_symlink: false,
@@ -180,9 +188,12 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
     let instance = ManagedAgentRecord {
         pubkey: "a".repeat(64),
         name: "Alice".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: None,
         slug: None,
         persona_id: Some("alice".to_string()),
+        creation_request_id: None,
         private_key_nsec: String::new(),
         auth_tag: None,
         relay_url: String::new(),
@@ -313,6 +324,10 @@ fn team_import_definitions_are_built_for_all_members() {
     assert_eq!(definitions.len(), 2);
     assert_eq!(team.persona_ids.len(), 2);
     assert_eq!(team.instructions.as_deref(), Some("Be thorough."));
+    // Snapshot v1 carries no portable lead identity, and member persona IDs are
+    // regenerated on import, so copying a source ID would point at nothing.
+    // Importing must leave the role vacant rather than invent a lead.
+    assert_eq!(team.lead_persona_id, None);
     assert_eq!(
         team.persona_ids,
         definitions
@@ -681,6 +696,7 @@ fn full_rollback_at_teams_boundary_absent_agents_store() {
         description: None,
         instructions: None,
         persona_ids: vec![],
+        lead_persona_id: None,
         is_builtin: false,
         source_dir: None,
         is_symlink: false,

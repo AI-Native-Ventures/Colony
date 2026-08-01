@@ -473,6 +473,8 @@ fn sample_agent_record() -> ManagedAgentRecord {
 fn sample_persona() -> AgentDefinition {
     AgentDefinition {
         id: "custom:helper".to_string(),
+        role_id: Some("assistant".to_string()),
+        role_title: Some("Assistant".to_string()),
         display_name: "Helper".to_string(),
         avatar_url: Some("https://example.com/a.png".to_string()),
         system_prompt: "You help.".to_string(),
@@ -545,6 +547,8 @@ fn persona_into_agent_record_is_keyless_and_slugged() {
     assert!(record.private_key_nsec.is_empty());
     assert_eq!(record.slug.as_deref(), Some("custom:helper"));
     assert_eq!(record.display_name.as_deref(), Some("Helper"));
+    assert_eq!(record.role_id.as_deref(), Some("assistant"));
+    assert_eq!(record.role_title.as_deref(), Some("Assistant"));
     assert_eq!(record.system_prompt.as_deref(), Some("You help."));
     assert_eq!(record.runtime.as_deref(), Some("goose"));
     assert_eq!(record.source_team.as_deref(), Some("team-1"));

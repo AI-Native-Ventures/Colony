@@ -36,8 +36,8 @@ import { replayLiveSubscriptions } from "@/shared/api/relayReconnectReplay";
 import {
   activateRateLimit,
   parseRateLimitHint,
-  waitForRateLimit,
 } from "@/shared/api/relayRateLimitGate";
+import { publishRelayEvent } from "@/shared/api/relayEventPublisher";
 import {
   fetchChunkedHistory,
   requestFirstEventGated,
@@ -102,6 +102,7 @@ export class RelayClient {
   private notifyReconnectListeners = false;
   private onMessageChannel: Channel<unknown> | null = null;
   private connectionGeneration = 0;
+  private communityGeneration = 0;
   private stabilityTimer: number | null = null;
   private visibleChannelId: string | null = null;
 
@@ -155,6 +156,7 @@ export class RelayClient {
     }
     this.stallWatchdog.stop();
     this.connectionGeneration++;
+    this.communityGeneration++;
     this.keepAliveRequested = false;
     this.relayUrl = null;
     this.hasConnectedOnce = false;
@@ -712,47 +714,22 @@ export class RelayClient {
     timeoutMessage: string,
     sendErrorMessage: string,
   ) {
-    // Await the gate before sending EVENT; op timeout starts after the wait.
-    await waitForRateLimit();
-
-    return new Promise<RelayEvent>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        this.pendingEvents.delete(event.id);
-        reject(new Error(timeoutMessage));
-      }, PUBLISH_TIMEOUT_MS);
-
-      this.pendingEvents.set(event.id, {
-        event,
-        resolve,
-        reject,
-        timeout,
-      });
-
-      void this.sendRaw(["EVENT", event]).catch(async (error) => {
-        const pendingEvent = this.pendingEvents.get(event.id);
-        this.pendingEvents.delete(event.id);
-        const normalizedError = this.recoverFromSocketFailure(
-          error,
-          sendErrorMessage,
-        );
-
-        try {
-          await this.ensureConnected();
-          if (!pendingEvent) {
-            throw normalizedError;
-          }
-
-          this.pendingEvents.set(event.id, pendingEvent);
-          await this.sendRaw(["EVENT", event]);
-        } catch (retryError) {
-          window.clearTimeout(timeout);
-          this.pendingEvents.delete(event.id);
-          reject(
-            this.recoverFromSocketFailure(retryError, normalizedError.message),
-          );
-        }
-      });
-    });
+    return publishRelayEvent(
+      {
+        currentCommunityGeneration: () => this.communityGeneration,
+        ensureConnected: () => this.ensureConnected(),
+        normalizeError: (error, fallbackMessage) =>
+          this.normalizeRelayError(error, fallbackMessage),
+        pendingEvents: this.pendingEvents,
+        recoverFromSocketFailure: (error, fallbackMessage) =>
+          this.recoverFromSocketFailure(error, fallbackMessage),
+        sendRaw: (payload) => this.sendRaw(payload),
+      },
+      event,
+      timeoutMessage,
+      sendErrorMessage,
+      PUBLISH_TIMEOUT_MS,
+    );
   }
 
   private async handleWsMessage(message: unknown, generation: number) {

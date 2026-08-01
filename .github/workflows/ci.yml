@@ -1038,7 +1038,12 @@ jobs:
         id: mesh_rev
         run: |
           set -euo pipefail
-          REV=$(python3 -c 'import tomllib; d=tomllib.load(open("Cargo.lock", "rb")); p=next(p for p in d["package"] if p["name"] == "mesh-llm-sdk"); print(p["source"].rsplit("#", 1)[1])')
+          # Read the DESKTOP lock, because the next step fetches the desktop
+          # manifest. The root workspace pins mesh-llm by tag and the desktop
+          # crate pins it by rev, so the two locks resolve to different commits;
+          # reading the root lock here made the step hunt for a checkout that
+          # `cargo fetch` had never been asked to produce.
+          REV=$(python3 -c 'import tomllib; d=tomllib.load(open("desktop/src-tauri/Cargo.lock", "rb")); p=next(p for p in d["package"] if p["name"] == "mesh-llm-sdk"); print(p["source"].rsplit("#", 1)[1])')
           [[ -n "$REV" ]] || { echo "::error::could not resolve mesh-llm rev from Cargo.lock"; exit 1; }
           echo "rev=$REV" >> "$GITHUB_OUTPUT"
           echo "short=${REV:0:7}" >> "$GITHUB_OUTPUT"

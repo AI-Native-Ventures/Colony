@@ -3,6 +3,7 @@ mod app_state;
 mod archive;
 mod builderlab;
 mod commands;
+mod company;
 mod deep_link;
 mod event_sync;
 mod events;
@@ -693,6 +694,7 @@ pub fn run() {
             get_relay_ws_url,
             get_relay_http_url,
             get_media_proxy_port,
+            fetch_block_data,
             fetch_link_preview_title,
             discover_acp_auth_methods,
             discover_acp_providers,
@@ -777,6 +779,7 @@ pub fn run() {
             reconcile_managed_agent_runtimes,
             put_managed_agent_runtime_lifecycle,
             create_managed_agent,
+            execute_agent_proposal,
             start_managed_agent,
             stop_managed_agent,
             set_agent_managed_profiles,
@@ -816,6 +819,8 @@ pub fn run() {
             delete_channel_template,
             duplicate_channel_template,
             list_teams,
+            commands::company_blueprint::execute_company_blueprint,
+            commands::company_blueprint::complete_company_blueprint,
             create_team,
             update_team,
             delete_team,

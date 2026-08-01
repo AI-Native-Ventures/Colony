@@ -3499,6 +3499,7 @@ async fn publish_agent_turn_metric(
         cumulative: cumulative_counts,
         delta_reliable: usage.delta_reliable,
         stop_reason,
+        work_context: None,
     };
     let ciphertext = match buzz_core::agent_turn_metric::encrypt_agent_turn_metric(
         &ctx.agent_keys,

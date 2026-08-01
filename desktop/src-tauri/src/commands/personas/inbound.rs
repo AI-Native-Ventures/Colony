@@ -108,6 +108,9 @@ fn reconcile_inbound_persona_event_blocking(
     let inbound_persona = (kind == KIND_PERSONA)
         .then(|| persona_from_event(&event))
         .transpose()?;
+    let inbound_team = (kind == KIND_TEAM)
+        .then(|| team_content_from_event(&event))
+        .transpose()?;
     let d_tag = match &inbound_persona {
         Some(persona) => persona_d_tag(persona),
         None => event_d_tag(&event)?,
@@ -130,6 +133,15 @@ fn reconcile_inbound_persona_event_blocking(
     else {
         return Ok(());
     };
+    // Refuse an unprojectable team BEFORE retention. Retention records the
+    // winning remote copy and clears `pending_sync`; retaining a head we then
+    // refuse to project would assert "in sync" while the local store keeps the
+    // old membership, with no republish or repair path. Persona content is
+    // already parsed before retention, so this keeps teams symmetric.
+    if let Some(inbound) = &inbound_team {
+        validate_inbound_team(&load_teams(&app)?, &d_tag, inbound)?;
+    }
+
     let conn = open_retention_db(&scope.db_path)?;
     let outcome = retain_inbound_event(
         &conn,
@@ -159,7 +171,9 @@ fn reconcile_inbound_persona_event_blocking(
         }
         KIND_TEAM => {
             let mut teams = load_teams(&app)?;
-            apply_inbound_team(&mut teams, d_tag, team_content_from_event(&event)?);
+            let inbound = inbound_team
+                .ok_or_else(|| "inbound team content missing after parse".to_string())?;
+            apply_inbound_team(&mut teams, d_tag, inbound)?;
             save_teams(&app, &teams)?;
         }
         KIND_MANAGED_AGENT => {
@@ -347,6 +361,8 @@ fn apply_inbound_persona(personas: &mut Vec<AgentDefinition>, inbound: AgentDefi
     {
         Some(local) => {
             local.display_name = inbound.display_name;
+            local.role_id = inbound.role_id;
+            local.role_title = inbound.role_title;
             local.avatar_url = inbound.avatar_url;
             local.system_prompt = inbound.system_prompt;
             local.runtime = inbound.runtime;
@@ -404,19 +420,102 @@ fn apply_inbound_managed_agent(
     }
 }
 
+/// The membership an inbound team event resolves to against local state.
+struct ResolvedInboundTeam {
+    persona_ids: Vec<String>,
+    lead_persona_id: Option<String>,
+}
+
+/// Resolve the membership and lead an inbound team event would produce.
+///
+/// Pure and side-effect free, and the single source of truth for both the
+/// pre-retention gate and the projection — sharing it is what keeps the gate
+/// from ever admitting an event the projection would refuse, or vice versa.
+///
+/// Two asymmetries are deliberate, because refusing an event a client cannot
+/// correct would strand the team: `usePersonaSync` only logs the failure, so a
+/// permanently-refused team silently stops syncing between devices forever.
+///
+/// 1. Only membership the event actually *asserts* is held to the uniqueness
+///    invariant. Re-checking preserved local membership would let one legacy
+///    duplicate in `teams.json` reject every future event for that team.
+/// 2. An event that *names* a lead outside its own membership is internally
+///    inconsistent and is refused. An event that merely *omits* the lead comes
+///    from a client that predates leads and cannot express one, so a preserved
+///    local lead that is no longer a member vacates the role instead.
+fn resolve_inbound_team(
+    local: Option<&TeamRecord>,
+    inbound: &TeamEventContent,
+) -> Result<ResolvedInboundTeam, String> {
+    let persona_ids = match inbound.persona_ids.as_ref() {
+        Some(persona_ids) => {
+            let mut unique = std::collections::HashSet::with_capacity(persona_ids.len());
+            for persona_id in persona_ids {
+                if !unique.insert(persona_id.as_str()) {
+                    return Err(format!("agent {persona_id} can only appear once in a team"));
+                }
+            }
+            persona_ids.clone()
+        }
+        None => local
+            .map(|record| record.persona_ids.clone())
+            .unwrap_or_default(),
+    };
+
+    let is_member = |candidate: &String| persona_ids.iter().any(|id| id == candidate);
+    let lead_persona_id = match inbound.lead_persona_id.as_ref() {
+        Some(Some(lead_persona_id)) => {
+            if !is_member(lead_persona_id) {
+                return Err("Team lead must also be a member of the team.".to_string());
+            }
+            Some(lead_persona_id.clone())
+        }
+        Some(None) => None,
+        None => local
+            .and_then(|record| record.lead_persona_id.clone())
+            .filter(is_member),
+    };
+
+    Ok(ResolvedInboundTeam {
+        persona_ids,
+        lead_persona_id,
+    })
+}
+
+/// Check the complete team state an inbound event would produce.
+///
+/// Runs before retention so a remote head the projection would refuse is never
+/// recorded as the winning copy. Delegates to [`resolve_inbound_team`] so the
+/// gate and the projection cannot reach different verdicts.
+fn validate_inbound_team(
+    teams: &[TeamRecord],
+    d_tag: &str,
+    inbound: &TeamEventContent,
+) -> Result<(), String> {
+    let local = teams.iter().find(|record| record.id == d_tag);
+    resolve_inbound_team(local, inbound).map(|_| ())
+}
+
 /// Merge an inbound kind:30176 team projection into the local set.
 ///
 /// Matches the local record whose `id` equals the event's d-tag (the d-tag IS
-/// the team id — see `build_team_event`). On match, overwrite ONLY the three
-/// shared fields (`name`, `description`, `persona_ids`); install-specific local
-/// fields (`source_dir`, `is_symlink`, `symlink_target`, `is_builtin`,
-/// `version`, `created_at`) are preserved. On no match, insert a fresh record
-/// reusing the d-tag as the id so a re-received event stays idempotent —
-/// symmetric to the persona path, since a team (like a persona) is a secretless
-/// definition that another device may legitimately learn about from the relay.
-fn apply_inbound_team(teams: &mut Vec<TeamRecord>, d_tag: String, inbound: TeamEventContent) {
+/// the team id — see `build_team_event`). On match, overwrite only shared
+/// fields (`name`, `description`, `instructions`, `persona_ids`, and lead);
+/// install-specific local fields (`source_dir`, `is_symlink`, `symlink_target`,
+/// `is_builtin`, `version`, `created_at`) are preserved. On no match, insert a
+/// fresh record reusing the d-tag as the id so a re-received event stays
+/// idempotent — symmetric to the persona path, since a team (like a persona) is
+/// a secretless definition that another device may legitimately learn about
+/// from the relay.
+fn apply_inbound_team(
+    teams: &mut Vec<TeamRecord>,
+    d_tag: String,
+    inbound: TeamEventContent,
+) -> Result<(), String> {
     match teams.iter_mut().find(|record| record.id == d_tag) {
         Some(local) => {
+            let resolved = resolve_inbound_team(Some(local), &inbound)?;
+
             local.name = inbound.name;
             local.description = inbound.description;
             // `None` means the event came from a client that predates
@@ -426,25 +525,29 @@ fn apply_inbound_team(teams: &mut Vec<TeamRecord>, d_tag: String, inbound: TeamE
             if let Some(instructions) = inbound.instructions {
                 local.instructions = instructions;
             }
-            if let Some(persona_ids) = inbound.persona_ids {
-                local.persona_ids = persona_ids;
-            }
+            local.persona_ids = resolved.persona_ids;
+            local.lead_persona_id = resolved.lead_persona_id;
         }
-        None => teams.push(TeamRecord {
-            id: d_tag,
-            name: inbound.name,
-            description: inbound.description,
-            // Fresh insert has no local value to preserve; `None` from a
-            // pre-fix client simply means no known value.
-            instructions: inbound.instructions.unwrap_or_default(),
-            persona_ids: inbound.persona_ids.unwrap_or_default(),
-            is_builtin: false,
-            source_dir: None,
-            is_symlink: false,
-            symlink_target: None,
-            version: None,
-            created_at: now_iso(),
-            updated_at: now_iso(),
-        }),
+        None => {
+            let resolved = resolve_inbound_team(None, &inbound)?;
+            teams.push(TeamRecord {
+                id: d_tag,
+                name: inbound.name,
+                description: inbound.description,
+                // Fresh insert has no local value to preserve; `None` from a
+                // pre-fix client simply means no known value.
+                instructions: inbound.instructions.unwrap_or_default(),
+                persona_ids: resolved.persona_ids,
+                lead_persona_id: resolved.lead_persona_id,
+                is_builtin: false,
+                source_dir: None,
+                is_symlink: false,
+                symlink_target: None,
+                version: None,
+                created_at: now_iso(),
+                updated_at: now_iso(),
+            });
+        }
     }
+    Ok(())
 }

@@ -19,7 +19,10 @@ fn make_agent(
     ManagedAgentRecord {
         pubkey: pubkey.to_string(),
         name: "Test Agent".to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: persona_id.map(str::to_string),
+        creation_request_id: None,
         private_key_nsec: "".to_string(),
         auth_tag: None,
         relay_url: "ws://localhost:3000".to_string(),

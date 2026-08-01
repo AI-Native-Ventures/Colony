@@ -1,0 +1,108 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "lead-card",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Lead Card",
+  "description": "A company opportunity summary with qualification evidence.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["company_id", "name", "website", "fit_summary", "status", "evidence"],
+    "properties": {
+      "company_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "website": { "type": "string", "format": "uri", "pattern": "^https?://" },
+      "fit_summary": { "type": "string", "maxLength": 2000 },
+      "status": {
+        "type": "string",
+        "enum": ["new", "researching", "qualified", "contacted", "converted", "disqualified"]
+      },
+      "score": { "type": "number", "minimum": 0, "maximum": 100 },
+      "evidence": {
+        "type": "array",
+        "maxItems": 20,
+        "items": { "type": "string", "maxLength": 500 }
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "{{name}}",
+    "description": "{{fit_summary}}",
+    "children": [
+      {
+        "type": "details",
+        "items": [
+          { "label": "Website", "value": "{{website}}" },
+          { "label": "Fit score", "value": "{{score}}" }
+        ]
+      },
+      {
+        "type": "status",
+        "label": "Lead status",
+        "state_path": "/status"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Review evidence",
+            "interaction": {
+              "type": "signed",
+              "action_id": "lead.view-evidence",
+              "resolves_attention": false
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "lead.view-evidence",
+      "label": "Review evidence",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "lead.view-evidence",
+        "resolves_attention": false
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "**{{name}}** — {{status}}\n{{fit_summary}}\nWebsite: {{website}}\nEvidence: {{evidence}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "details": 1,
+    "status": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Qualified prospect",
+      "data": {
+        "company_id": "tennant-group",
+        "name": "Tennant Group",
+        "website": "https://example.com",
+        "fit_summary": "A credible established business whose current website undersells its work.",
+        "status": "qualified",
+        "score": 87,
+        "evidence": [
+          "Strong service reputation",
+          "Outdated mobile experience",
+          "No clear conversion path"
+        ]
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

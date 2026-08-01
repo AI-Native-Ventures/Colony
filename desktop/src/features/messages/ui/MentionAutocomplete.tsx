@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Bot, Users } from "lucide-react";
+import { Blocks, Bot, Users } from "lucide-react";
 import type { TeamMentionMember } from "@/features/messages/lib/mentionCandidates";
 
 import { Badge } from "@/shared/ui/badge";
@@ -18,8 +18,16 @@ export type MentionSuggestion = {
   personaId?: string;
   teamId?: string;
   teamMembers?: TeamMentionMember[];
-  kind?: "identity" | "persona" | "team";
+  blockHandle?: string;
+  blockAddress?: string;
+  manifestId?: string;
+  kind?: "identity" | "persona" | "team" | "block";
+  /** The token inserted into the draft and used to key the mention maps. */
   displayName: string;
+  /** The alias not being inserted (role title, or personal name for a role match). */
+  aliasLabel?: string | null;
+  personalName?: string | null;
+  roleTitle?: string | null;
   avatarUrl?: string | null;
   isAgent?: boolean;
   notInChannel?: boolean;
@@ -96,6 +104,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
       >
         {suggestions.map((suggestion, index) => {
           const suggestionKey =
+            suggestion.blockAddress ??
             suggestion.pubkey ??
             (suggestion.personaId ? `persona-${suggestion.personaId}` : null) ??
             (suggestion.teamId ? `team-${suggestion.teamId}` : null) ??
@@ -125,7 +134,15 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
               tabIndex={-1}
               type="button"
             >
-              {suggestion.kind === "team" ? (
+              {suggestion.kind === "block" ? (
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Blocks
+                    aria-hidden="true"
+                    className="h-4 w-4"
+                    data-testid="mention-block-icon"
+                  />
+                </span>
+              ) : suggestion.kind === "team" ? (
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <Users aria-hidden="true" className="h-4 w-4" />
                 </span>
@@ -144,9 +161,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                 >
                   {suggestion.displayName}
                 </span>
-                {suggestion.kind === "team" ||
+                {suggestion.kind === "block" ||
+                suggestion.kind === "team" ||
                 suggestion.isAgent ||
                 suggestion.role ||
+                suggestion.aliasLabel ||
                 suggestion.ownerLabel ||
                 suggestion.notInChannel ? (
                   <span
@@ -157,7 +176,12 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                         : "text-muted-foreground",
                     )}
                   >
-                    {suggestion.kind === "team" ? (
+                    {suggestion.kind === "block" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1">
+                        <Blocks aria-hidden="true" className="h-3.5 w-3.5" />
+                        Block
+                      </span>
+                    ) : suggestion.kind === "team" ? (
                       <span className="inline-flex shrink-0 items-center gap-1">
                         <Users aria-hidden="true" className="h-3.5 w-3.5" />
                         team · {suggestion.teamMembers?.length ?? 0} agents
@@ -179,6 +203,15 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                         {suggestion.role}
                       </Badge>
                     ) : null}
+                    {suggestion.aliasLabel ? (
+                      <span
+                        className="min-w-0 truncate"
+                        data-testid="mention-alias-label"
+                        title={suggestion.aliasLabel}
+                      >
+                        {suggestion.aliasLabel}
+                      </span>
+                    ) : null}
                     {suggestion.ownerLabel || suggestion.notInChannel ? (
                       <span
                         className="min-w-0 truncate"
@@ -195,6 +228,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                           : suggestion.ownerLabel
                             ? `managed by ${suggestion.ownerLabel}`
                             : "not in channel"}
+                      </span>
+                    ) : null}
+                    {suggestion.kind === "block" && suggestion.blockHandle ? (
+                      <span className="min-w-0 truncate">
+                        @{suggestion.blockHandle}
                       </span>
                     ) : null}
                   </span>

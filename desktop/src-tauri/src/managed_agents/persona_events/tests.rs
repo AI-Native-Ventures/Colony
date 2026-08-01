@@ -7,7 +7,10 @@ fn sample_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
         pubkey: "p".repeat(64),
         name: "agent".into(),
+        role_id: None,
+        role_title: None,
         persona_id: Some("test-persona".into()),
+        creation_request_id: Some("local-only-request-id".into()),
         private_key_nsec: "nsec1fake".into(),
         auth_tag: None,
         relay_url: "ws://localhost:3000".into(),
@@ -142,6 +145,8 @@ fn preview_passes_through_unchanged_when_persona_missing() {
 fn sample_persona() -> AgentDefinition {
     AgentDefinition {
         id: "test-persona".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Test Persona".to_string(),
         avatar_url: Some("https://example.com/avatar.png".to_string()),
         system_prompt: "You are a test assistant.".to_string(),
@@ -316,6 +321,8 @@ fn content_matches_nip_ap_vector() {
 
     let content = PersonaEventContent {
         display_name: "Test Agent".to_string(),
+        role_id: None,
+        role_title: None,
         system_prompt: Some("You are a test assistant.".to_string()),
         avatar_url: Some("https://example.com/avatar.png".to_string()),
         runtime: Some("goose".to_string()),
@@ -369,6 +376,8 @@ fn content_matches_nip_ap_vector() {
     // the same NIP-01 id.
     let record = AgentDefinition {
         id: "test-agent".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Test Agent".to_string(),
         avatar_url: Some("https://example.com/avatar.png".to_string()),
         system_prompt: "You are a test assistant.".to_string(),
@@ -400,6 +409,8 @@ fn content_matches_nip_ap_vector() {
 fn round_trip_minimal_persona() {
     let record = AgentDefinition {
         id: "minimal".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Minimal".to_string(),
         avatar_url: None,
         system_prompt: "Hello".to_string(),
@@ -497,6 +508,8 @@ fn behavioral_defaults_survive_record_round_trip() {
 fn quad_absent_definition_hash_stable_across_activation() {
     let record = AgentDefinition {
         id: "quad-absent".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Test".to_string(),
         avatar_url: None,
         system_prompt: "Hello".to_string(),
@@ -541,6 +554,8 @@ fn quad_absent_definition_hash_stable_across_activation() {
 fn persona_from_event_content_for_test(content: PersonaEventContent) -> AgentDefinition {
     AgentDefinition {
         id: "staged".to_string(),
+        role_id: content.role_id,
+        role_title: content.role_title,
         display_name: content.display_name,
         avatar_url: content.avatar_url,
         system_prompt: content.system_prompt.unwrap_or_default(),
@@ -567,6 +582,8 @@ fn persona_from_event_content_for_test(content: PersonaEventContent) -> AgentDef
 fn persona_content_hash_is_deterministic() {
     let content = PersonaEventContent {
         display_name: "Test".to_string(),
+        role_id: None,
+        role_title: None,
         avatar_url: None,
         system_prompt: Some("Hello".to_string()),
         runtime: None,
@@ -587,6 +604,8 @@ fn persona_content_hash_is_deterministic() {
 fn persona_content_hash_changes_on_edit() {
     let content1 = PersonaEventContent {
         display_name: "Test".to_string(),
+        role_id: None,
+        role_title: None,
         avatar_url: None,
         system_prompt: Some("Hello".to_string()),
         runtime: None,

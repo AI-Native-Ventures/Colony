@@ -3,6 +3,10 @@
 //! NIP-01 WebSocket relay for Buzz private team communication.
 
 mod admission;
+mod block_broker;
+/// Validation for chat-native Block event envelopes.
+pub mod blocks;
+mod company_broker;
 
 /// REST API route handlers.
 pub mod api;
@@ -17,6 +21,8 @@ pub mod config;
 pub mod conformance;
 /// WebSocket connection lifecycle and state.
 pub mod connection;
+/// Relay-bundled Core Block manifests and deterministic event construction.
+pub mod core_blocks;
 /// Relay error types.
 pub mod error;
 /// WebSocket message handlers for NIP-01 client commands.

@@ -86,6 +86,10 @@ type MockRelayAgentSeed = {
 type MockPersonaSeed = {
   id?: string;
   displayName: string;
+  /** Stable lowercase role slug; must be seeded together with `roleTitle`. */
+  roleId?: string;
+  /** Human role title an `@role` match inserts. */
+  roleTitle?: string;
   avatarUrl?: string | null;
   systemPrompt: string;
   updatedAt?: string;
@@ -114,6 +118,7 @@ type MockTeamSeed = {
   name: string;
   description?: string | null;
   personaIds: string[];
+  leadPersonaId?: string | null;
 };
 
 export type MockEngramEntry = {
@@ -132,6 +137,38 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /** Signed Block manifests/catalog events served by the mock relay. */
+  blockEvents?: RelayEvent[];
+  /** Signed Block timeline events seeded before the app subscribes. */
+  blockTimelineEvents?: Array<{
+    channelName: string;
+    event: RelayEvent;
+  }>;
+  /** Native external-Block fetch outcomes keyed by exact HTTPS URL. */
+  blockDataResponses?: Record<
+    string,
+    { body?: string; bytes?: number[]; error?: string }
+  >;
+  /** Reject successive kind-40010 publications, then resume. */
+  blockActionPublishErrors?: string[];
+  /** Delay kind-40010 relay acknowledgements after live delivery. */
+  blockActionPublishDelayMs?: number;
+  /** Outcomes for successive trusted local Agent Proposal executions. */
+  agentProposalExecutionOutcomes?: Array<
+    | {
+        status: "applied";
+        definition_id: string;
+        agent_pubkey: string;
+        recovered: boolean;
+      }
+    | { status: "failed"; safe_message: string }
+  >;
+  /**
+   * Replace the default mock viewer in seeded channel memberships with the
+   * active E2E identity. This lets signature-sensitive flows use a real test
+   * key while retaining the standard channel fixtures.
+   */
+  activeIdentityInDefaultChannels?: boolean;
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */

@@ -131,6 +131,9 @@ pub async fn apply_workspace(
     agent_managed_profiles: Option<bool>,
     app: AppHandle,
 ) -> Result<(), String> {
+    let operation_app = app.clone();
+    let operation_state = operation_app.state::<AppState>();
+    let community_operation_guard = operation_state.community_operation_lock.write().await;
     let restore_app = app.clone();
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -210,6 +213,7 @@ pub async fn apply_workspace(
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))??;
+    drop(community_operation_guard);
 
     let state = restore_app.state::<AppState>();
     // Backfill this exact relay+owner scope only after the workspace has been

@@ -239,6 +239,7 @@ mod tests {
             description: Some(format!("{name} description")),
             instructions: None,
             persona_ids: vec![],
+            lead_persona_id: None,
             is_builtin: false,
             source_dir: None,
             is_symlink: false,
@@ -254,11 +255,14 @@ mod tests {
         ManagedAgentRecord {
             pubkey: format!("{name}-pubkey"),
             name: name.to_string(),
+            role_id: None,
+            role_title: None,
             display_name: Some(format!("{name} Display")),
             persona_id: Some("SENTINEL_PERSONA_ID".to_string()), // MUST NOT appear
-            private_key_nsec: "nsec1secret".to_string(),         // MUST NOT appear
-            auth_tag: Some("auth-tag-secret".to_string()),       // MUST NOT appear
-            relay_url: "wss://relay.example.com".to_string(),    // MUST NOT appear
+            creation_request_id: None,
+            private_key_nsec: "nsec1secret".to_string(), // MUST NOT appear
+            auth_tag: Some("auth-tag-secret".to_string()), // MUST NOT appear
+            relay_url: "wss://relay.example.com".to_string(), // MUST NOT appear
             avatar_url: Some(format!("https://example.com/{name}.png")),
             acp_command: "/usr/local/bin/acp".to_string(), // MUST NOT appear
             agent_command: "goose".to_string(),            // MUST NOT appear

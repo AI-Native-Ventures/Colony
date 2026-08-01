@@ -8,6 +8,7 @@ import {
   KIND_PERSONA,
   KIND_TEAM,
 } from "@/shared/constants/kinds";
+import { fromRawPersona } from "@/shared/api/tauriPersonas";
 import { startPersonaSync } from "./usePersonaSync.ts";
 
 const EXPECTED_KINDS = [
@@ -16,6 +17,24 @@ const EXPECTED_KINDS = [
   KIND_MANAGED_AGENT,
   KIND_DELETION,
 ];
+
+test("persona bridge preserves personal name and maps role identity separately", () => {
+  const persona = fromRawPersona({
+    id: "builtin:fizz",
+    display_name: "Fizz",
+    role_id: "chief-of-staff",
+    role_title: "Chief of Staff",
+    avatar_url: null,
+    system_prompt: "Coordinate the company.",
+    is_builtin: true,
+    created_at: "2026-07-31T00:00:00Z",
+    updated_at: "2026-07-31T00:00:00Z",
+  });
+
+  assert.equal(persona.displayName, "Fizz");
+  assert.equal(persona.roleId, "chief-of-staff");
+  assert.equal(persona.roleTitle, "Chief of Staff");
+});
 
 // Regression guard for the fresh-start backfill gap (F3): a device that comes
 // online AFTER another published gets zero history from a live-only `limit: 0`

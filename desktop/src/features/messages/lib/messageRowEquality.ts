@@ -69,6 +69,24 @@ export function reactionsEqual(
   return true;
 }
 
+export function blockStateEqual(
+  a: TimelineMessage["blockState"],
+  b: TimelineMessage["blockState"],
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (
+    a.actions.length !== b.actions.length ||
+    a.receipts.length !== b.receipts.length
+  ) {
+    return false;
+  }
+  return (
+    a.actions.every((event, index) => event.id === b.actions[index]?.id) &&
+    a.receipts.every((event, index) => event.id === b.receipts[index]?.id)
+  );
+}
+
 export function numberArrayEqual(
   a: readonly number[] | undefined,
   b: readonly number[] | undefined,

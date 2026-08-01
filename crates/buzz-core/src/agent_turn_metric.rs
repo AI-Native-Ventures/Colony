@@ -9,6 +9,7 @@
 use nostr::{Event, Keys, PublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::company::AgentWorkContext;
 use crate::observer::{decrypt_observer_payload, encrypt_observer_payload, ObserverPayloadError};
 
 // Re-export for callers that only need the error type.
@@ -125,6 +126,10 @@ pub struct AgentTurnMetricPayload {
 
     /// Why the turn ended. Unrecognized values MUST be treated as `Unknown`.
     pub stop_reason: Option<StopReason>,
+
+    /// Optional encrypted snapshot linking this paid turn to canonical work.
+    #[serde(default)]
+    pub work_context: Option<AgentWorkContext>,
 }
 
 fn default_delta_reliable() -> bool {
@@ -153,6 +158,11 @@ impl AgentTurnMetricPayload {
         }
         if let Some(c) = &self.cumulative {
             check_cost(c.cost_usd, "cumulative.costUsd")?;
+        }
+        if let Some(work_context) = &self.work_context {
+            work_context
+                .validate()
+                .map_err(|error| ObserverPayloadError::InvalidPayload(error.to_string()))?;
         }
         Ok(())
     }
@@ -194,7 +204,24 @@ pub fn decrypt_agent_turn_metric(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::company::{
+        AgentWorkContext, AttributionState, CommercialPurpose, CostClassification,
+    };
     use nostr::{EventBuilder, Kind, Tag};
+
+    fn sample_work_context() -> AgentWorkContext {
+        AgentWorkContext {
+            company_id: "horizon-labs".to_string(),
+            task_id: "build-tennant-site".to_string(),
+            initiative_id: Some("tennant-premium-site".to_string()),
+            owning_team_id: "web-team".to_string(),
+            cost_centre_id: "web-delivery".to_string(),
+            commercial_purpose: CommercialPurpose::ClientDelivery,
+            cost_classification: CostClassification::Cogs,
+            attribution_state: AttributionState::Explicit,
+            client_organization_id: Some("tennant-group".to_string()),
+        }
+    }
 
     fn sample_payload() -> AgentTurnMetricPayload {
         AgentTurnMetricPayload {
@@ -223,6 +250,7 @@ mod tests {
             }),
             delta_reliable: true,
             stop_reason: Some(StopReason::EndTurn),
+            work_context: Some(sample_work_context()),
         }
     }
 
@@ -279,6 +307,74 @@ mod tests {
             payload.delta_reliable,
             "deltaReliable should default to true"
         );
+        assert_eq!(payload.work_context, None);
+    }
+
+    #[test]
+    fn legacy_payload_without_work_context_still_parses() {
+        let json = r#"{
+            "harness": "goose",
+            "timestamp": "2026-07-01T20:11:03Z",
+            "turn": {
+                "inputTokens": 1234,
+                "outputTokens": 567,
+                "totalTokens": 1801,
+                "costUsd": 0.0123
+            }
+        }"#;
+
+        let payload: AgentTurnMetricPayload =
+            serde_json::from_str(json).expect("legacy payload must parse");
+        assert_eq!(payload.work_context, None);
+    }
+
+    #[test]
+    fn unknown_fields_inside_work_context_fail_closed() {
+        let base_json = r#"{
+            "harness": "goose",
+            "timestamp": "2026-07-01T20:11:03Z",
+            "workContext": {
+                "companyId": "horizon-labs",
+                "taskId": "build-tennant-site",
+                "initiativeId": "tennant-premium-site",
+                "owningTeamId": "web-team",
+                "costCentreId": "web-delivery",
+                "commercialPurpose": "clientDelivery",
+                "costClassification": "cogs",
+                "attributionState": "explicit",
+                "clientOrganizationId": "tennant-group"
+            }
+        }"#;
+
+        assert!(serde_json::from_str::<AgentTurnMetricPayload>(base_json).is_ok());
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(base_json).expect("base work context json");
+        value["workContext"]
+            .as_object_mut()
+            .expect("work context object")
+            .insert("futureSecret".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<AgentTurnMetricPayload>(value).is_err());
+    }
+
+    #[test]
+    fn work_context_is_preserved_by_nip44_encryption() {
+        let agent_keys = Keys::generate();
+        let owner_keys = Keys::generate();
+        let payload = sample_payload();
+        let expected_context = payload.work_context.clone();
+        let ciphertext = encrypt_agent_turn_metric(&agent_keys, &owner_keys.public_key(), &payload)
+            .expect("encrypt");
+        let event = EventBuilder::new(Kind::Custom(44200), ciphertext)
+            .tags([
+                Tag::parse(["p", &owner_keys.public_key().to_hex()]).unwrap(),
+                Tag::parse(["agent", &agent_keys.public_key().to_hex()]).unwrap(),
+            ])
+            .sign_with_keys(&agent_keys)
+            .expect("sign");
+
+        let decoded = decrypt_agent_turn_metric(&owner_keys, &event).expect("decrypt");
+        assert_eq!(decoded.work_context, expected_context);
     }
 
     #[test]
@@ -368,6 +464,7 @@ mod tests {
             cumulative: None,
             delta_reliable: true,
             stop_reason: None,
+            work_context: None,
         }
     }
 
@@ -391,6 +488,7 @@ mod tests {
             }),
             delta_reliable: true,
             stop_reason: None,
+            work_context: None,
         }
     }
 

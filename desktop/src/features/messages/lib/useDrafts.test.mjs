@@ -935,6 +935,31 @@ test("persist_draft_round_trips_stable_mention_refs_across_restart", () => {
   assert.deepEqual(loadDraftEntry("chan-mentions")?.mentionRefs, mentionRefs);
 });
 
+test("persist_draft_retains_typed_block_manifest_refs_across_restart", () => {
+  setup("block-mention-owner");
+  const relayPubkey = "a".repeat(64);
+  const mentionRefs = [
+    {
+      displayName: "lead-card",
+      blockAddress: `30178:${relayPubkey}:lead-card`,
+      manifestId: "b".repeat(64),
+    },
+  ];
+
+  persistDraftEntry(
+    "chan-block",
+    "Work on @lead-card",
+    "chan-block",
+    [],
+    [],
+    mentionRefs,
+  );
+  clearAllDrafts();
+  initDraftStore("block-mention-owner");
+
+  assert.deepEqual(loadDraftEntry("chan-block")?.mentionRefs, mentionRefs);
+});
+
 test("legacy_draft_without_mention_refs_migrates_to_empty_refs", () => {
   const storage = installFreshLocalStorage();
   clearAllDrafts();
@@ -983,6 +1008,38 @@ test("invalid_mention_ref_rejects_corrupt_draft", () => {
   );
 
   initDraftStore("corrupt-mention-owner");
+  assert.equal(loadDraftEntry("chan-corrupt"), undefined);
+});
+
+test("invalid_block_mention_ref_rejects_corrupt_draft", () => {
+  const storage = installFreshLocalStorage();
+  clearAllDrafts();
+  const now = new Date().toISOString();
+  storage.setItem(
+    "buzz-drafts.v1:corrupt-block-owner",
+    JSON.stringify({
+      "chan-corrupt": {
+        content: "bad ref",
+        selectionStart: 7,
+        selectionEnd: 7,
+        channelId: "chan-corrupt",
+        createdAt: now,
+        updatedAt: now,
+        pendingImeta: [],
+        mentionRefs: [
+          {
+            displayName: "lead-card",
+            blockAddress: "30178:not-a-pubkey:lead-card",
+            manifestId: "b".repeat(64),
+          },
+        ],
+        spoileredAttachmentUrls: [],
+        status: "active",
+      },
+    }),
+  );
+
+  initDraftStore("corrupt-block-owner");
   assert.equal(loadDraftEntry("chan-corrupt"), undefined);
 });
 

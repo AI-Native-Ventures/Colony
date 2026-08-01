@@ -45,6 +45,15 @@ pub struct TeamEventContent {
     /// membership (see the Sietch Tabr incident).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona_ids: Option<Vec<String>>,
+    /// Delegation/QA lead with the same permanent tri-state semantics as
+    /// `instructions`: absent preserves an older local value, `null` clears,
+    /// and a string sets. New clients always publish the field.
+    #[serde(
+        default,
+        deserialize_with = "crate::util::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lead_persona_id: Option<Option<String>>,
 }
 
 /// Project a `TeamRecord` onto the content fields published in team events.
@@ -59,6 +68,7 @@ pub fn team_event_content(record: &TeamRecord) -> TeamEventContent {
         // the struct doc comments).
         instructions: Some(record.instructions.clone()),
         persona_ids: Some(record.persona_ids.clone()),
+        lead_persona_id: Some(record.lead_persona_id.clone()),
     }
 }
 
@@ -79,7 +89,7 @@ pub fn build_team_event(record: &TeamRecord) -> Result<EventBuilder, String> {
 /// Returns [`TeamEventContent`], NOT a [`TeamRecord`]: install-specific local
 /// fields (`source_dir`, `is_symlink`, `symlink_target`, `is_builtin`,
 /// `version`, timestamps) cannot be represented by the return type, so an
-/// inbound event can only ever overwrite the three shared fields. The caller
+/// inbound event can only ever overwrite the shared projection fields. The caller
 /// patches them onto the local record (see `apply_inbound_team`), matching on
 /// the d-tag (the team's id).
 pub fn team_content_from_event(event: &nostr::Event) -> Result<TeamEventContent, String> {
@@ -111,6 +121,7 @@ mod tests {
             description: Some("A test team".to_string()),
             instructions: Some("Coordinate carefully.".to_string()),
             persona_ids: vec!["p1".to_string(), "p2".to_string()],
+            lead_persona_id: Some("p1".to_string()),
             is_builtin: false,
             source_dir: Some(PathBuf::from("/local/only/path")),
             is_symlink: true,
@@ -154,6 +165,7 @@ mod tests {
         // Published fields present.
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"persona_ids\""));
+        assert!(json.contains("\"lead_persona_id\""));
         assert!(json.contains("\"instructions\""));
         // Local-only / install-specific fields never published.
         assert!(!json.contains("source_dir"));
@@ -199,6 +211,48 @@ mod tests {
         assert_eq!(event_content.persona_ids, Some(vec![]));
         let json = serde_json::to_string(&event_content).unwrap();
         assert!(json.contains("\"persona_ids\":[]"));
+    }
+
+    // ── lead_persona_id wire semantics (absent/null/value) ─────────────
+
+    #[test]
+    fn old_team_event_without_lead_parses_unknown() {
+        let legacy = r#"{"name":"Old Team","persona_ids":["p1"]}"#;
+        let restored: TeamEventContent = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(restored.lead_persona_id, None);
+    }
+
+    #[test]
+    fn new_team_event_without_lead_publishes_explicit_null() {
+        let mut team = sample_team();
+        team.lead_persona_id = None;
+
+        let event_content = team_event_content(&team);
+        let json = serde_json::to_string(&event_content).unwrap();
+
+        assert_eq!(event_content.lead_persona_id, Some(None));
+        assert!(json.contains("\"lead_persona_id\":null"));
+    }
+
+    /// Deserialized from raw JSON, not a constructed enum state: `null` is the
+    /// shape every current client publishes for "no lead", and it must land as
+    /// an explicit clear rather than the preserve-local `None`.
+    #[test]
+    fn explicit_null_lead_parses_as_a_clear_not_a_preserve() {
+        let cleared = r#"{"name":"Team","persona_ids":["p1"],"lead_persona_id":null}"#;
+        let restored: TeamEventContent = serde_json::from_str(cleared).unwrap();
+
+        assert_eq!(restored.lead_persona_id, Some(None));
+    }
+
+    #[test]
+    fn team_lead_round_trips_as_a_value() {
+        let event_content = team_event_content(&sample_team());
+        let json = serde_json::to_string(&event_content).unwrap();
+        let restored: TeamEventContent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.lead_persona_id, Some(Some("p1".to_string())));
     }
 
     // ── instructions wire semantics (tri-state: absent/null/value) ────────

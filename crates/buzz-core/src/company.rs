@@ -1,0 +1,1576 @@
+//! Colony company, initiative, task, and work-attribution contracts.
+
+use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Schema string every Company profile carries.
+pub const COMPANY_SCHEMA: &str = "colony.company/v1";
+/// Schema string every Initiative carries.
+pub const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
+const TASK_SCHEMA: &str = "colony.task/v1";
+const MAX_ID_LEN: usize = 128;
+const MAX_NAME_LEN: usize = 200;
+const MAX_SUMMARY_LEN: usize = 4_000;
+const MAX_SERVICES: usize = 100;
+const MAX_COST_CENTRES: usize = 100;
+const MAX_ASSIGNEES: usize = 100;
+
+/// A service the company sells or delivers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanyService {
+    /// Stable service identifier.
+    pub id: String,
+    /// Human-readable service name.
+    pub name: String,
+    /// Bounded service description.
+    pub description: String,
+}
+
+/// Accounting purpose of a company cost centre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CostCentreKind {
+    /// Cost centre associated with a customer-facing service.
+    Service,
+    /// Cost centre associated with internal company work.
+    Internal,
+}
+
+/// A deterministic bucket against which work costs are recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CostCentre {
+    /// Stable cost-centre identifier.
+    pub id: String,
+    /// Human-readable cost-centre name.
+    pub name: String,
+    /// Whether this cost centre serves delivery or internal work.
+    pub kind: CostCentreKind,
+    /// Referenced service identifier for service cost centres.
+    pub service_id: Option<String>,
+}
+
+/// Approval state of a company profile created during onboarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompanyOnboardingStatus {
+    /// Profile is still being assembled or reviewed.
+    Draft,
+    /// Owner approved the profile as authoritative.
+    Approved,
+}
+
+/// Relay-authored canonical company operating profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanyProfile {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable company coordinate identifier.
+    pub id: String,
+    /// Customer-facing company name.
+    pub trading_name: String,
+    /// Optional registered company name.
+    pub legal_name: Option<String>,
+    /// Optional public company website.
+    pub website: Option<String>,
+    /// Bounded description of the company.
+    pub summary: String,
+    /// Business model or operating type.
+    pub business_type: String,
+    /// Services the company sells or delivers.
+    pub services: Vec<CompanyService>,
+    /// Customer segments the company serves.
+    pub customer_segments: Vec<String>,
+    /// Deterministic accounting buckets available to work records.
+    pub cost_centres: Vec<CostCentre>,
+    /// Optional source report event used during onboarding.
+    pub source_report_event_id: Option<String>,
+    /// Whether the owner has approved this company profile.
+    pub onboarding_status: CompanyOnboardingStatus,
+    /// Unix timestamp at which the profile was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the profile was last updated.
+    pub updated_at: i64,
+}
+
+/// Commercial reason for performing a unit of work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommercialPurpose {
+    /// Work performed to deliver for a specific client.
+    ClientDelivery,
+    /// Work performed to generate or close sales.
+    Sales,
+    /// Work performed to market the company.
+    Marketing,
+    /// General administrative work.
+    Administration,
+    /// Work performed on the company's internal product or platform.
+    InternalProduct,
+    /// Work whose commercial purpose has not yet been determined.
+    Uncertain,
+}
+
+/// Lifecycle state of a cross-team initiative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InitiativeStatus {
+    /// Initiative has been proposed but not approved.
+    Proposed,
+    /// Initiative has owner approval but has not started.
+    Approved,
+    /// Initiative is currently active.
+    Active,
+    /// Initiative cannot currently progress.
+    Blocked,
+    /// Initiative completed successfully.
+    Completed,
+    /// Initiative was cancelled.
+    Cancelled,
+}
+
+/// A cross-team body of work containing one or more team-owned tasks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Initiative {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable initiative coordinate identifier.
+    pub id: String,
+    /// Company that owns the initiative.
+    pub company_id: String,
+    /// Human-readable initiative title.
+    pub title: String,
+    /// Bounded initiative summary.
+    pub summary: String,
+    /// Current initiative lifecycle state.
+    pub status: InitiativeStatus,
+    /// Persona accountable for the initiative.
+    pub owner_persona_id: String,
+    /// Company cost centre charged for the initiative.
+    pub cost_centre_id: String,
+    /// Commercial reason for the initiative.
+    pub commercial_purpose: CommercialPurpose,
+    /// Optional client organization receiving the work.
+    pub client_organization_id: Option<String>,
+    /// Optional expected total cost in USD.
+    pub expected_cost_usd: Option<f64>,
+    /// Channel in which the initiative originated.
+    pub source_channel_id: String,
+    /// Optional triggering message event.
+    pub source_event_id: Option<String>,
+    /// Unix timestamp at which the initiative was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the initiative was last updated.
+    pub updated_at: i64,
+}
+
+/// Lifecycle state of a single-team task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskStatus {
+    /// Task has been proposed but not accepted.
+    Proposed,
+    /// Task is ready for its owning team.
+    Ready,
+    /// Task is currently being performed.
+    InProgress,
+    /// Task is awaiting quality review.
+    InReview,
+    /// Task cannot currently progress.
+    Blocked,
+    /// Task completed successfully.
+    Completed,
+    /// Task was cancelled.
+    Cancelled,
+}
+
+/// A unit of work owned by exactly one team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanyTask {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable task coordinate identifier.
+    pub id: String,
+    /// Company that owns the task.
+    pub company_id: String,
+    /// Optional initiative containing this task.
+    pub initiative_id: Option<String>,
+    /// Human-readable task title.
+    pub title: String,
+    /// Current task lifecycle state.
+    pub status: TaskStatus,
+    /// The single team accountable for delivery.
+    pub owning_team_id: String,
+    /// Personas currently assigned to perform the task.
+    pub assignee_persona_ids: Vec<String>,
+    /// Persona responsible for quality review.
+    pub qa_persona_id: String,
+    /// Company cost centre charged for the task.
+    pub cost_centre_id: String,
+    /// Commercial reason for the task.
+    pub commercial_purpose: CommercialPurpose,
+    /// Optional client organization receiving the work.
+    pub client_organization_id: Option<String>,
+    /// Channel in which the task originated.
+    pub source_channel_id: String,
+    /// Optional triggering message event.
+    pub source_event_id: Option<String>,
+    /// Whether Colony created this task implicitly from chat.
+    pub implicit: bool,
+    /// Unix timestamp at which the task was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the task was last updated.
+    pub updated_at: i64,
+}
+
+/// Deterministic accounting classification for an agent turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CostClassification {
+    /// Direct cost of delivering work to a named client.
+    Cogs,
+    /// Company operating expense.
+    Opex,
+    /// Classification requires owner or CFO review.
+    NeedsReview,
+}
+
+/// How Colony established the work attribution for a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttributionState {
+    /// The triggering message explicitly referenced the task.
+    Explicit,
+    /// The task was inherited from surrounding conversation context.
+    Inherited,
+    /// Colony created an idempotent implicit task before the turn.
+    ImplicitTask,
+}
+
+/// Encrypted work and accounting snapshot attached to an agent turn metric.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWorkContext {
+    /// Company charged for the turn.
+    pub company_id: String,
+    /// Task charged for the turn.
+    pub task_id: String,
+    /// Optional initiative containing the task.
+    pub initiative_id: Option<String>,
+    /// Team accountable for the task.
+    pub owning_team_id: String,
+    /// Cost centre charged for the turn.
+    pub cost_centre_id: String,
+    /// Commercial reason for the work.
+    pub commercial_purpose: CommercialPurpose,
+    /// Deterministic accounting classification.
+    pub cost_classification: CostClassification,
+    /// How Colony established this attribution.
+    pub attribution_state: AttributionState,
+    /// Optional client organization receiving the work.
+    pub client_organization_id: Option<String>,
+}
+
+/// Minimal team projection used to validate task ownership and QA membership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompanyTeamRef {
+    /// Stable team identifier.
+    pub id: String,
+    /// Persona accountable for team delegation and quality review.
+    pub lead_persona_id: String,
+    /// Personas that currently belong to the team.
+    pub persona_ids: Vec<String>,
+}
+
+/// Display-safe failure produced by a company/work contract validator.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CompanyContractError {
+    /// The content schema does not exactly match the supported version.
+    #[error("unsupported {0} schema")]
+    InvalidSchema(&'static str),
+    /// A stable identifier is blank, malformed, or too long.
+    #[error("invalid identifier in {0}")]
+    InvalidIdentifier(&'static str),
+    /// A required or bounded text field is invalid.
+    #[error("invalid text in {0}")]
+    InvalidText(&'static str),
+    /// A bounded collection contains too many entries.
+    #[error("{field} exceeds the maximum of {max} entries")]
+    TooManyItems {
+        /// Static field name safe to show in logs or UI.
+        field: &'static str,
+        /// Maximum accepted entry count.
+        max: usize,
+    },
+    /// A collection contains the same stable identifier more than once.
+    #[error("duplicate identifier in {0}")]
+    DuplicateIdentifier(&'static str),
+    /// A required referenced record was not supplied or does not exist.
+    #[error("missing reference in {0}")]
+    MissingReference(&'static str),
+    /// Two supplied records disagree about a stable coordinate.
+    #[error("mismatched reference in {0}")]
+    MismatchedReference(&'static str),
+    /// Expected initiative cost is negative or non-finite.
+    #[error("expectedCostUsd must be finite and non-negative")]
+    InvalidExpectedCost,
+    /// The owning team's lead is not included in that team.
+    #[error("owning team lead must be a team member")]
+    TeamLeadNotMember,
+    /// The task QA persona is not included in the owning team.
+    #[error("task QA persona must be an owning-team member")]
+    QaNotOwningTeamMember,
+    /// A task lists one assignee more than once.
+    #[error("task assignee persona identifiers must be unique")]
+    DuplicateAssignee,
+    /// A task assignee is not represented in any supplied team.
+    #[error("task assignees must belong to a supplied team")]
+    AssigneeNotTeamMember,
+    /// The snapshotted cost classification differs from the deterministic rule.
+    #[error("work context cost classification is inconsistent")]
+    CostClassificationMismatch,
+    /// A field that identifies a canonical record changed during replacement.
+    #[error("{0} is immutable")]
+    ImmutableField(&'static str),
+    /// A replacement did not advance the canonical record timestamp.
+    #[error("updatedAt must strictly increase")]
+    UpdatedAtNotMonotonic,
+    /// A lifecycle state change is outside the exact transition graph.
+    #[error("invalid {0} status transition")]
+    InvalidStatusTransition(&'static str),
+}
+
+/// Return whether a company lifecycle transition is allowed.
+///
+/// Same-status replacements are allowed for content edits. Approval is
+/// irreversible: the only state change is `Draft -> Approved`.
+pub const fn is_company_status_transition_allowed(
+    from: CompanyOnboardingStatus,
+    to: CompanyOnboardingStatus,
+) -> bool {
+    matches!(
+        (from, to),
+        (
+            CompanyOnboardingStatus::Draft,
+            CompanyOnboardingStatus::Draft
+        ) | (
+            CompanyOnboardingStatus::Draft,
+            CompanyOnboardingStatus::Approved
+        ) | (
+            CompanyOnboardingStatus::Approved,
+            CompanyOnboardingStatus::Approved
+        )
+    )
+}
+
+/// Return whether an initiative lifecycle transition is allowed.
+///
+/// Same-status replacements are allowed. Completed and cancelled initiatives
+/// cannot transition to another status.
+pub const fn is_initiative_status_transition_allowed(
+    from: InitiativeStatus,
+    to: InitiativeStatus,
+) -> bool {
+    if from as u8 == to as u8 {
+        return true;
+    }
+    matches!(
+        (from, to),
+        (InitiativeStatus::Proposed, InitiativeStatus::Approved)
+            | (InitiativeStatus::Approved, InitiativeStatus::Active)
+            | (InitiativeStatus::Active, InitiativeStatus::Blocked)
+            | (InitiativeStatus::Blocked, InitiativeStatus::Active)
+            | (InitiativeStatus::Active, InitiativeStatus::Completed)
+            | (
+                InitiativeStatus::Proposed
+                    | InitiativeStatus::Approved
+                    | InitiativeStatus::Active
+                    | InitiativeStatus::Blocked,
+                InitiativeStatus::Cancelled
+            )
+    )
+}
+
+/// Return whether a task lifecycle transition is allowed.
+///
+/// Same-status replacements are allowed. Completed and cancelled tasks cannot
+/// transition to another status.
+pub const fn is_task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool {
+    if from as u8 == to as u8 {
+        return true;
+    }
+    matches!(
+        (from, to),
+        (TaskStatus::Proposed, TaskStatus::Ready)
+            | (
+                TaskStatus::Ready,
+                TaskStatus::InProgress | TaskStatus::Blocked
+            )
+            | (
+                TaskStatus::InProgress,
+                TaskStatus::InReview | TaskStatus::Blocked
+            )
+            | (
+                TaskStatus::InReview,
+                TaskStatus::InProgress | TaskStatus::Completed | TaskStatus::Blocked
+            )
+            | (
+                TaskStatus::Blocked,
+                TaskStatus::Ready | TaskStatus::InProgress
+            )
+            | (
+                TaskStatus::Proposed
+                    | TaskStatus::Ready
+                    | TaskStatus::InProgress
+                    | TaskStatus::InReview
+                    | TaskStatus::Blocked,
+                TaskStatus::Cancelled
+            )
+    )
+}
+
+/// Validate immutable coordinates, timestamps, and lifecycle state for a
+/// replacement company head.
+pub fn validate_company_update(
+    previous: &CompanyProfile,
+    replacement: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_company(replacement)?;
+    validate_immutable(&previous.schema, &replacement.schema, "company.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "company.id")?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    if !is_company_status_transition_allowed(
+        previous.onboarding_status,
+        replacement.onboarding_status,
+    ) {
+        return Err(CompanyContractError::InvalidStatusTransition("company"));
+    }
+    Ok(())
+}
+
+/// Validate immutable coordinates, timestamps, and lifecycle state for a
+/// replacement initiative head.
+pub fn validate_initiative_update(
+    previous: &Initiative,
+    replacement: &Initiative,
+    company: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_initiative(replacement, company)?;
+    validate_immutable(&previous.schema, &replacement.schema, "initiative.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "initiative.id")?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "initiative.companyId",
+    )?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    if !is_initiative_status_transition_allowed(previous.status, replacement.status) {
+        return Err(CompanyContractError::InvalidStatusTransition("initiative"));
+    }
+    Ok(())
+}
+
+/// Validate immutable coordinates, timestamps, and lifecycle state for a
+/// replacement task head.
+pub fn validate_task_update(
+    previous: &CompanyTask,
+    replacement: &CompanyTask,
+    company: &CompanyProfile,
+    initiative: Option<&Initiative>,
+    teams: &[CompanyTeamRef],
+) -> Result<(), CompanyContractError> {
+    validate_task(replacement, company, initiative, teams)?;
+    validate_immutable(&previous.schema, &replacement.schema, "task.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "task.id")?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "task.companyId",
+    )?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    if !is_task_status_transition_allowed(previous.status, replacement.status) {
+        return Err(CompanyContractError::InvalidStatusTransition("task"));
+    }
+    Ok(())
+}
+
+/// Validate one relay-authored canonical company profile.
+pub fn validate_company(profile: &CompanyProfile) -> Result<(), CompanyContractError> {
+    validate_schema(&profile.schema, COMPANY_SCHEMA, "company")?;
+    validate_id(&profile.id, "company.id")?;
+    validate_required_text(&profile.trading_name, "company.tradingName", MAX_NAME_LEN)?;
+    validate_optional_text(
+        profile.legal_name.as_deref(),
+        "company.legalName",
+        MAX_NAME_LEN,
+    )?;
+    validate_text(&profile.summary, "company.summary", MAX_SUMMARY_LEN)?;
+    validate_required_text(&profile.business_type, "company.businessType", MAX_NAME_LEN)?;
+    validate_optional_id(
+        profile.source_report_event_id.as_deref(),
+        "company.sourceReportEventId",
+    )?;
+
+    ensure_cardinality(&profile.services, "company.services", MAX_SERVICES)?;
+    ensure_cardinality(
+        &profile.cost_centres,
+        "company.costCentres",
+        MAX_COST_CENTRES,
+    )?;
+
+    let mut service_ids = HashSet::new();
+    for service in &profile.services {
+        validate_id(&service.id, "company.services.id")?;
+        validate_required_text(&service.name, "company.services.name", MAX_NAME_LEN)?;
+        validate_text(
+            &service.description,
+            "company.services.description",
+            MAX_SUMMARY_LEN,
+        )?;
+        if !service_ids.insert(service.id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier(
+                "company.services.id",
+            ));
+        }
+    }
+
+    let mut cost_centre_ids = HashSet::new();
+    for cost_centre in &profile.cost_centres {
+        validate_id(&cost_centre.id, "company.costCentres.id")?;
+        validate_required_text(&cost_centre.name, "company.costCentres.name", MAX_NAME_LEN)?;
+        if !cost_centre_ids.insert(cost_centre.id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier(
+                "company.costCentres.id",
+            ));
+        }
+        match (cost_centre.kind, cost_centre.service_id.as_deref()) {
+            (CostCentreKind::Service, Some(service_id)) => {
+                validate_id(service_id, "company.costCentres.serviceId")?;
+                if !service_ids.contains(service_id) {
+                    return Err(CompanyContractError::MissingReference(
+                        "company.costCentres.serviceId",
+                    ));
+                }
+            }
+            (CostCentreKind::Service, None) => {
+                return Err(CompanyContractError::MissingReference(
+                    "company.costCentres.serviceId",
+                ));
+            }
+            (CostCentreKind::Internal, Some(_)) => {
+                return Err(CompanyContractError::MismatchedReference(
+                    "company.costCentres.serviceId",
+                ));
+            }
+            (CostCentreKind::Internal, None) => {}
+        }
+    }
+
+    for segment in &profile.customer_segments {
+        validate_required_text(segment, "company.customerSegments", MAX_NAME_LEN)?;
+    }
+
+    Ok(())
+}
+
+/// Validate one initiative against its canonical company profile.
+pub fn validate_initiative(
+    initiative: &Initiative,
+    company: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_company(company)?;
+    validate_schema(&initiative.schema, INITIATIVE_SCHEMA, "initiative")?;
+    validate_id(&initiative.id, "initiative.id")?;
+    validate_id(&initiative.company_id, "initiative.companyId")?;
+    validate_required_text(&initiative.title, "initiative.title", MAX_NAME_LEN)?;
+    validate_text(&initiative.summary, "initiative.summary", MAX_SUMMARY_LEN)?;
+    validate_id(&initiative.owner_persona_id, "initiative.ownerPersonaId")?;
+    validate_id(&initiative.cost_centre_id, "initiative.costCentreId")?;
+    validate_optional_id(
+        initiative.client_organization_id.as_deref(),
+        "initiative.clientOrganizationId",
+    )?;
+    validate_id(&initiative.source_channel_id, "initiative.sourceChannelId")?;
+    validate_optional_id(
+        initiative.source_event_id.as_deref(),
+        "initiative.sourceEventId",
+    )?;
+
+    if initiative.company_id != company.id {
+        return Err(CompanyContractError::MismatchedReference(
+            "initiative.companyId",
+        ));
+    }
+    if !company
+        .cost_centres
+        .iter()
+        .any(|cost_centre| cost_centre.id == initiative.cost_centre_id)
+    {
+        return Err(CompanyContractError::MissingReference(
+            "initiative.costCentreId",
+        ));
+    }
+    if initiative
+        .expected_cost_usd
+        .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+    {
+        return Err(CompanyContractError::InvalidExpectedCost);
+    }
+
+    Ok(())
+}
+
+/// Validate one task against its canonical company, optional initiative, and teams.
+pub fn validate_task(
+    task: &CompanyTask,
+    company: &CompanyProfile,
+    initiative: Option<&Initiative>,
+    teams: &[CompanyTeamRef],
+) -> Result<(), CompanyContractError> {
+    validate_company(company)?;
+    validate_teams(teams)?;
+    validate_schema(&task.schema, TASK_SCHEMA, "task")?;
+    validate_id(&task.id, "task.id")?;
+    validate_id(&task.company_id, "task.companyId")?;
+    validate_optional_id(task.initiative_id.as_deref(), "task.initiativeId")?;
+    validate_required_text(&task.title, "task.title", MAX_NAME_LEN)?;
+    validate_id(&task.owning_team_id, "task.owningTeamId")?;
+    validate_id(&task.qa_persona_id, "task.qaPersonaId")?;
+    validate_id(&task.cost_centre_id, "task.costCentreId")?;
+    validate_optional_id(
+        task.client_organization_id.as_deref(),
+        "task.clientOrganizationId",
+    )?;
+    validate_id(&task.source_channel_id, "task.sourceChannelId")?;
+    validate_optional_id(task.source_event_id.as_deref(), "task.sourceEventId")?;
+    ensure_cardinality(
+        &task.assignee_persona_ids,
+        "task.assigneePersonaIds",
+        MAX_ASSIGNEES,
+    )?;
+
+    if task.company_id != company.id {
+        return Err(CompanyContractError::MismatchedReference("task.companyId"));
+    }
+    match (task.initiative_id.as_deref(), initiative) {
+        (Some(task_initiative_id), Some(initiative)) => {
+            validate_initiative(initiative, company)?;
+            if initiative.id != task_initiative_id {
+                return Err(CompanyContractError::MismatchedReference(
+                    "task.initiativeId",
+                ));
+            }
+            if initiative.company_id != task.company_id {
+                return Err(CompanyContractError::MismatchedReference(
+                    "task.initiative.companyId",
+                ));
+            }
+        }
+        (Some(_), None) => {
+            return Err(CompanyContractError::MissingReference("task.initiativeId"));
+        }
+        (None, Some(_)) => {
+            return Err(CompanyContractError::MismatchedReference(
+                "task.initiativeId",
+            ));
+        }
+        (None, None) => {}
+    }
+    if !company
+        .cost_centres
+        .iter()
+        .any(|cost_centre| cost_centre.id == task.cost_centre_id)
+    {
+        return Err(CompanyContractError::MissingReference("task.costCentreId"));
+    }
+
+    let owning_team = teams
+        .iter()
+        .find(|team| team.id == task.owning_team_id)
+        .ok_or(CompanyContractError::MissingReference("task.owningTeamId"))?;
+    if !owning_team.persona_ids.contains(&task.qa_persona_id) {
+        return Err(CompanyContractError::QaNotOwningTeamMember);
+    }
+
+    let mut assignees = HashSet::new();
+    for assignee in &task.assignee_persona_ids {
+        validate_id(assignee, "task.assigneePersonaIds")?;
+        if !assignees.insert(assignee.as_str()) {
+            return Err(CompanyContractError::DuplicateAssignee);
+        }
+        if !teams.iter().any(|team| team.persona_ids.contains(assignee)) {
+            return Err(CompanyContractError::AssigneeNotTeamMember);
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate one team reference in isolation.
+///
+/// Exported so callers that must FILTER teams before validation — the relay
+/// broker projects arbitrary stored Team events into `CompanyTeamRef` — can
+/// test the exact same conditions `validate_teams` rejects on. Duplicating the
+/// rules in two crates lets the skip set drift from the reject set, and any
+/// gap between them turns one unusable team into a whole-list failure.
+///
+/// Cross-team rules (duplicate ids across the list) stay in `validate_teams`.
+pub fn validate_team_ref(team: &CompanyTeamRef) -> Result<(), CompanyContractError> {
+    validate_id(&team.id, "team.id")?;
+    validate_id(&team.lead_persona_id, "team.leadPersonaId")?;
+
+    let mut persona_ids = HashSet::new();
+    for persona_id in &team.persona_ids {
+        validate_id(persona_id, "team.personaIds")?;
+        if !persona_ids.insert(persona_id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier("team.personaIds"));
+        }
+    }
+    if !persona_ids.contains(team.lead_persona_id.as_str()) {
+        return Err(CompanyContractError::TeamLeadNotMember);
+    }
+    Ok(())
+}
+
+fn validate_teams(teams: &[CompanyTeamRef]) -> Result<(), CompanyContractError> {
+    let mut team_ids = HashSet::new();
+    for team in teams {
+        validate_team_ref(team)?;
+        if !team_ids.insert(team.id.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier("teams.id"));
+        }
+    }
+    Ok(())
+}
+
+/// Classify cost deterministically from commercial purpose and client presence.
+pub fn classify_cost(
+    purpose: CommercialPurpose,
+    client_organization_id: Option<&str>,
+) -> CostClassification {
+    match purpose {
+        CommercialPurpose::ClientDelivery
+            if client_organization_id.is_some_and(|id| !id.trim().is_empty()) =>
+        {
+            CostClassification::Cogs
+        }
+        CommercialPurpose::ClientDelivery | CommercialPurpose::Uncertain => {
+            CostClassification::NeedsReview
+        }
+        CommercialPurpose::Sales
+        | CommercialPurpose::Marketing
+        | CommercialPurpose::Administration
+        | CommercialPurpose::InternalProduct => CostClassification::Opex,
+    }
+}
+
+impl AgentWorkContext {
+    /// Validate identifiers and the deterministic cost-classification snapshot.
+    pub fn validate(&self) -> Result<(), CompanyContractError> {
+        validate_id(&self.company_id, "workContext.companyId")?;
+        validate_id(&self.task_id, "workContext.taskId")?;
+        validate_optional_id(self.initiative_id.as_deref(), "workContext.initiativeId")?;
+        validate_id(&self.owning_team_id, "workContext.owningTeamId")?;
+        validate_id(&self.cost_centre_id, "workContext.costCentreId")?;
+        validate_optional_id(
+            self.client_organization_id.as_deref(),
+            "workContext.clientOrganizationId",
+        )?;
+        if self.cost_classification
+            != classify_cost(
+                self.commercial_purpose,
+                self.client_organization_id.as_deref(),
+            )
+        {
+            return Err(CompanyContractError::CostClassificationMismatch);
+        }
+        Ok(())
+    }
+}
+
+fn validate_schema(
+    actual: &str,
+    expected: &str,
+    entity: &'static str,
+) -> Result<(), CompanyContractError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(CompanyContractError::InvalidSchema(entity))
+    }
+}
+
+fn validate_immutable<T: PartialEq>(
+    previous: &T,
+    replacement: &T,
+    field: &'static str,
+) -> Result<(), CompanyContractError> {
+    if previous == replacement {
+        Ok(())
+    } else {
+        Err(CompanyContractError::ImmutableField(field))
+    }
+}
+
+fn validate_replacement_timestamps(
+    previous_created_at: i64,
+    previous_updated_at: i64,
+    replacement_created_at: i64,
+    replacement_updated_at: i64,
+) -> Result<(), CompanyContractError> {
+    if previous_created_at != replacement_created_at {
+        return Err(CompanyContractError::ImmutableField("createdAt"));
+    }
+    if replacement_updated_at <= previous_updated_at {
+        return Err(CompanyContractError::UpdatedAtNotMonotonic);
+    }
+    Ok(())
+}
+
+fn validate_id(value: &str, field: &'static str) -> Result<(), CompanyContractError> {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return Err(CompanyContractError::InvalidIdentifier(field));
+    };
+    if value.len() > MAX_ID_LEN
+        || !first.is_ascii_lowercase() && !first.is_ascii_digit()
+        || !bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+    {
+        return Err(CompanyContractError::InvalidIdentifier(field));
+    }
+    Ok(())
+}
+
+fn validate_optional_id(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<(), CompanyContractError> {
+    if let Some(value) = value {
+        validate_id(value, field)?;
+    }
+    Ok(())
+}
+
+fn validate_required_text(
+    value: &str,
+    field: &'static str,
+    max: usize,
+) -> Result<(), CompanyContractError> {
+    if value.trim().is_empty() {
+        return Err(CompanyContractError::InvalidText(field));
+    }
+    validate_text(value, field, max)
+}
+
+fn validate_optional_text(
+    value: Option<&str>,
+    field: &'static str,
+    max: usize,
+) -> Result<(), CompanyContractError> {
+    if let Some(value) = value {
+        validate_required_text(value, field, max)?;
+    }
+    Ok(())
+}
+
+fn validate_text(value: &str, field: &'static str, max: usize) -> Result<(), CompanyContractError> {
+    if value.chars().count() > max {
+        return Err(CompanyContractError::InvalidText(field));
+    }
+    Ok(())
+}
+
+fn ensure_cardinality<T>(
+    values: &[T],
+    field: &'static str,
+    max: usize,
+) -> Result<(), CompanyContractError> {
+    if values.len() > max {
+        return Err(CompanyContractError::TooManyItems { field, max });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod team_ref_tests {
+    use super::*;
+
+    fn team(lead: &str, members: &[&str]) -> CompanyTeamRef {
+        CompanyTeamRef {
+            id: "team-marketing".to_string(),
+            lead_persona_id: lead.to_string(),
+            persona_ids: members.iter().map(|m| (*m).to_string()).collect(),
+        }
+    }
+
+    /// The relay broker filters stored teams with `validate_team_ref` before
+    /// handing them to `validate_teams`. If the two ever disagree, one unusable
+    /// team fails the whole list and breaks every Task action in a community.
+    #[test]
+    fn a_team_ref_the_single_validator_accepts_is_accepted_in_a_list() {
+        let good = team("p-lead", &["p-lead", "p-member"]);
+        assert!(validate_team_ref(&good).is_ok());
+        assert!(validate_teams(std::slice::from_ref(&good)).is_ok());
+    }
+
+    #[test]
+    fn every_single_team_rejection_is_also_a_list_rejection() {
+        let cases = [
+            team("", &["p-member"]),               // blank lead
+            team("p-lead", &["p-member"]),         // lead not a member
+            team("p-lead", &["p-lead", "p-lead"]), // duplicate member
+            team("p-lead", &["p-lead", ""]),       // blank member id
+        ];
+        for candidate in cases {
+            assert!(
+                validate_team_ref(&candidate).is_err(),
+                "single validator must reject {candidate:?}"
+            );
+            assert!(
+                validate_teams(std::slice::from_ref(&candidate)).is_err(),
+                "list validator must reject the same team {candidate:?}"
+            );
+        }
+    }
+
+    /// Duplicate ids ACROSS teams stay a list-level rule, so the broker's
+    /// per-team filter cannot be expected to catch them — its author scoping is
+    /// what prevents a foreign duplicate from ever entering the list.
+    #[test]
+    fn duplicate_ids_across_teams_remain_a_list_level_rule() {
+        let one = team("p-lead", &["p-lead"]);
+        let two = team("p-lead", &["p-lead"]);
+        assert!(validate_team_ref(&one).is_ok());
+        assert!(validate_team_ref(&two).is_ok());
+        assert!(validate_teams(&[one, two]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn company_fixture() -> CompanyProfile {
+        CompanyProfile {
+            schema: "colony.company/v1".to_string(),
+            id: "horizon-labs".to_string(),
+            trading_name: "Horizon Labs".to_string(),
+            legal_name: Some("Horizon Labs (Pty) Ltd".to_string()),
+            website: Some("https://horizonlabs.co.za".to_string()),
+            summary: "A digital services company.".to_string(),
+            business_type: "digital-services".to_string(),
+            services: vec![CompanyService {
+                id: "web-development".to_string(),
+                name: "Web Development".to_string(),
+                description: "Premium website design and development.".to_string(),
+            }],
+            customer_segments: vec!["us-service-businesses".to_string()],
+            cost_centres: vec![
+                CostCentre {
+                    id: "web-delivery".to_string(),
+                    name: "Web Delivery".to_string(),
+                    kind: CostCentreKind::Service,
+                    service_id: Some("web-development".to_string()),
+                },
+                CostCentre {
+                    id: "internal-product".to_string(),
+                    name: "Internal Product".to_string(),
+                    kind: CostCentreKind::Internal,
+                    service_id: None,
+                },
+            ],
+            source_report_event_id: Some("scan-event-1".to_string()),
+            onboarding_status: CompanyOnboardingStatus::Approved,
+            created_at: 1_785_400_000,
+            updated_at: 1_785_400_100,
+        }
+    }
+
+    fn team_fixtures() -> Vec<CompanyTeamRef> {
+        vec![
+            CompanyTeamRef {
+                id: "web-team".to_string(),
+                lead_persona_id: "cto".to_string(),
+                persona_ids: vec![
+                    "cto".to_string(),
+                    "frontend-engineer".to_string(),
+                    "backend-engineer".to_string(),
+                ],
+            },
+            CompanyTeamRef {
+                id: "marketing-team".to_string(),
+                lead_persona_id: "marketing-lead".to_string(),
+                persona_ids: vec![
+                    "marketing-lead".to_string(),
+                    "content-specialist".to_string(),
+                ],
+            },
+        ]
+    }
+
+    fn initiative_fixture() -> Initiative {
+        Initiative {
+            schema: "colony.initiative/v1".to_string(),
+            id: "tennant-premium-site".to_string(),
+            company_id: "horizon-labs".to_string(),
+            title: "Tennant Group premium website".to_string(),
+            summary: "Rebuild the client's website and launch the campaign.".to_string(),
+            status: InitiativeStatus::Active,
+            owner_persona_id: "chief-of-staff".to_string(),
+            cost_centre_id: "web-delivery".to_string(),
+            commercial_purpose: CommercialPurpose::ClientDelivery,
+            client_organization_id: Some("tennant-group".to_string()),
+            expected_cost_usd: Some(125.0),
+            source_channel_id: "sales".to_string(),
+            source_event_id: Some("message-1".to_string()),
+            created_at: 1_785_400_200,
+            updated_at: 1_785_400_300,
+        }
+    }
+
+    fn task_fixtures() -> Vec<CompanyTask> {
+        vec![
+            CompanyTask {
+                schema: "colony.task/v1".to_string(),
+                id: "build-tennant-site".to_string(),
+                company_id: "horizon-labs".to_string(),
+                initiative_id: Some("tennant-premium-site".to_string()),
+                title: "Build the Tennant Group website".to_string(),
+                status: TaskStatus::InProgress,
+                owning_team_id: "web-team".to_string(),
+                assignee_persona_ids: vec![
+                    "frontend-engineer".to_string(),
+                    "content-specialist".to_string(),
+                ],
+                qa_persona_id: "cto".to_string(),
+                cost_centre_id: "web-delivery".to_string(),
+                commercial_purpose: CommercialPurpose::ClientDelivery,
+                client_organization_id: Some("tennant-group".to_string()),
+                source_channel_id: "sales".to_string(),
+                source_event_id: Some("message-2".to_string()),
+                implicit: false,
+                created_at: 1_785_400_400,
+                updated_at: 1_785_400_500,
+            },
+            CompanyTask {
+                schema: "colony.task/v1".to_string(),
+                id: "launch-tennant-campaign".to_string(),
+                company_id: "horizon-labs".to_string(),
+                initiative_id: Some("tennant-premium-site".to_string()),
+                title: "Launch the Tennant Group campaign".to_string(),
+                status: TaskStatus::Ready,
+                owning_team_id: "marketing-team".to_string(),
+                assignee_persona_ids: vec!["content-specialist".to_string()],
+                qa_persona_id: "marketing-lead".to_string(),
+                cost_centre_id: "web-delivery".to_string(),
+                commercial_purpose: CommercialPurpose::ClientDelivery,
+                client_organization_id: Some("tennant-group".to_string()),
+                source_channel_id: "sales".to_string(),
+                source_event_id: Some("message-3".to_string()),
+                implicit: false,
+                created_at: 1_785_400_600,
+                updated_at: 1_785_400_700,
+            },
+        ]
+    }
+
+    #[test]
+    fn exact_schema_json_round_trips() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let tasks = task_fixtures();
+
+        let company_json = serde_json::to_string(&company).expect("serialize company");
+        let initiative_json = serde_json::to_string(&initiative).expect("serialize initiative");
+        let task_json = serde_json::to_string(&tasks[0]).expect("serialize task");
+        let company_value: serde_json::Value =
+            serde_json::from_str(&company_json).expect("company value");
+        let initiative_value: serde_json::Value =
+            serde_json::from_str(&initiative_json).expect("initiative value");
+        let task_value: serde_json::Value = serde_json::from_str(&task_json).expect("task value");
+
+        assert!(company_json.contains(r#""schema":"colony.company/v1""#));
+        assert!(initiative_json.contains(r#""schema":"colony.initiative/v1""#));
+        assert!(task_json.contains(r#""schema":"colony.task/v1""#));
+
+        assert_eq!(company_value["tradingName"], "Horizon Labs");
+        assert_eq!(company_value["legalName"], "Horizon Labs (Pty) Ltd");
+        assert_eq!(company_value["businessType"], "digital-services");
+        assert_eq!(
+            company_value["customerSegments"][0],
+            "us-service-businesses"
+        );
+        assert_eq!(company_value["costCentres"][0]["kind"], "service");
+        assert_eq!(
+            company_value["costCentres"][0]["serviceId"],
+            "web-development"
+        );
+        assert_eq!(company_value["sourceReportEventId"], "scan-event-1");
+        assert_eq!(company_value["onboardingStatus"], "approved");
+        assert_eq!(company_value["createdAt"], 1_785_400_000_i64);
+        assert_eq!(company_value["updatedAt"], 1_785_400_100_i64);
+        assert!(company_value.get("trading_name").is_none());
+
+        assert_eq!(initiative_value["companyId"], "horizon-labs");
+        assert_eq!(initiative_value["status"], "active");
+        assert_eq!(initiative_value["ownerPersonaId"], "chief-of-staff");
+        assert_eq!(initiative_value["costCentreId"], "web-delivery");
+        assert_eq!(initiative_value["commercialPurpose"], "clientDelivery");
+        assert_eq!(initiative_value["clientOrganizationId"], "tennant-group");
+        assert_eq!(initiative_value["expectedCostUsd"], 125.0);
+        assert_eq!(initiative_value["sourceChannelId"], "sales");
+        assert_eq!(initiative_value["sourceEventId"], "message-1");
+        assert_eq!(initiative_value["createdAt"], 1_785_400_200_i64);
+        assert_eq!(initiative_value["updatedAt"], 1_785_400_300_i64);
+        assert!(initiative_value.get("company_id").is_none());
+
+        assert_eq!(task_value["companyId"], "horizon-labs");
+        assert_eq!(task_value["initiativeId"], "tennant-premium-site");
+        assert_eq!(task_value["status"], "inProgress");
+        assert_eq!(task_value["owningTeamId"], "web-team");
+        assert_eq!(task_value["assigneePersonaIds"][0], "frontend-engineer");
+        assert_eq!(task_value["qaPersonaId"], "cto");
+        assert_eq!(task_value["costCentreId"], "web-delivery");
+        assert_eq!(task_value["commercialPurpose"], "clientDelivery");
+        assert_eq!(task_value["clientOrganizationId"], "tennant-group");
+        assert_eq!(task_value["sourceChannelId"], "sales");
+        assert_eq!(task_value["sourceEventId"], "message-2");
+        assert_eq!(task_value["implicit"], false);
+        assert_eq!(task_value["createdAt"], 1_785_400_400_i64);
+        assert_eq!(task_value["updatedAt"], 1_785_400_500_i64);
+        assert!(task_value.get("owning_team_id").is_none());
+
+        assert_eq!(
+            serde_json::from_str::<CompanyProfile>(&company_json).expect("parse company"),
+            company
+        );
+        assert_eq!(
+            serde_json::from_str::<Initiative>(&initiative_json).expect("parse initiative"),
+            initiative
+        );
+        assert_eq!(
+            serde_json::from_str::<CompanyTask>(&task_json).expect("parse task"),
+            tasks[0]
+        );
+    }
+
+    #[test]
+    fn unknown_fields_fail_closed() {
+        let mut company = serde_json::to_value(company_fixture()).expect("company json");
+        company
+            .as_object_mut()
+            .expect("object")
+            .insert("futureSecret".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<CompanyProfile>(company).is_err());
+
+        let mut initiative = serde_json::to_value(initiative_fixture()).expect("initiative json");
+        initiative
+            .as_object_mut()
+            .expect("object")
+            .insert("futureSecret".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<Initiative>(initiative).is_err());
+
+        let mut task = serde_json::to_value(&task_fixtures()[0]).expect("task json");
+        task.as_object_mut()
+            .expect("object")
+            .insert("futureSecret".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<CompanyTask>(task).is_err());
+    }
+
+    #[test]
+    fn unknown_fields_in_nested_company_records_fail_closed() {
+        let mut service = serde_json::to_value(company_fixture()).expect("company json");
+        service["services"][0]
+            .as_object_mut()
+            .expect("service object")
+            .insert("futureSecret".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<CompanyProfile>(service).is_err());
+
+        let mut cost_centre = serde_json::to_value(company_fixture()).expect("company json");
+        cost_centre["costCentres"][0]
+            .as_object_mut()
+            .expect("cost centre object")
+            .insert("futureSecret".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<CompanyProfile>(cost_centre).is_err());
+    }
+
+    #[test]
+    fn company_rejects_blank_ids_titles_and_duplicate_children() {
+        assert!(validate_company(&company_fixture()).is_ok());
+
+        let mut blank_id = company_fixture();
+        blank_id.id = " ".to_string();
+        assert!(validate_company(&blank_id).is_err());
+
+        let mut blank_title = company_fixture();
+        blank_title.trading_name = "".to_string();
+        assert!(validate_company(&blank_title).is_err());
+
+        let mut duplicate_service = company_fixture();
+        duplicate_service
+            .services
+            .push(duplicate_service.services[0].clone());
+        assert!(validate_company(&duplicate_service).is_err());
+
+        let mut duplicate_cost_centre = company_fixture();
+        duplicate_cost_centre
+            .cost_centres
+            .push(duplicate_cost_centre.cost_centres[0].clone());
+        assert!(validate_company(&duplicate_cost_centre).is_err());
+    }
+
+    #[test]
+    fn initiative_requires_a_company_cost_centre() {
+        let company = company_fixture();
+        let mut initiative = initiative_fixture();
+        assert!(validate_initiative(&initiative, &company).is_ok());
+
+        initiative.id = " ".to_string();
+        assert!(validate_initiative(&initiative, &company).is_err());
+
+        initiative = initiative_fixture();
+        initiative.title = "".to_string();
+        assert!(validate_initiative(&initiative, &company).is_err());
+
+        initiative = initiative_fixture();
+        initiative.cost_centre_id = "missing".to_string();
+        assert!(validate_initiative(&initiative, &company).is_err());
+    }
+
+    #[test]
+    fn task_enforces_company_team_qa_and_unique_assignees() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let base = task_fixtures().remove(0);
+        assert!(validate_task(&base, &company, Some(&initiative), &teams).is_ok());
+
+        let mut blank_id = base.clone();
+        blank_id.id = " ".to_string();
+        assert!(validate_task(&blank_id, &company, Some(&initiative), &teams).is_err());
+
+        let mut blank_title = base.clone();
+        blank_title.title = "".to_string();
+        assert!(validate_task(&blank_title, &company, Some(&initiative), &teams).is_err());
+
+        let mut wrong_initiative = initiative.clone();
+        wrong_initiative.company_id = "another-company".to_string();
+        assert!(validate_task(&base, &company, Some(&wrong_initiative), &teams).is_err());
+
+        let mut missing_team = base.clone();
+        missing_team.owning_team_id = "missing-team".to_string();
+        assert!(validate_task(&missing_team, &company, Some(&initiative), &teams).is_err());
+
+        let mut qa_outside_team = base.clone();
+        qa_outside_team.qa_persona_id = "marketing-lead".to_string();
+        assert!(validate_task(&qa_outside_team, &company, Some(&initiative), &teams).is_err());
+
+        let mut duplicate_assignee = base;
+        duplicate_assignee
+            .assignee_persona_ids
+            .push("frontend-engineer".to_string());
+        assert!(validate_task(&duplicate_assignee, &company, Some(&initiative), &teams).is_err());
+    }
+
+    #[test]
+    fn specialist_from_another_team_does_not_change_task_ownership() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let task = task_fixtures().remove(0);
+
+        assert_eq!(task.owning_team_id, "web-team");
+        assert!(task
+            .assignee_persona_ids
+            .contains(&"content-specialist".to_string()));
+        assert!(validate_task(&task, &company, Some(&initiative), &teams).is_ok());
+    }
+
+    #[test]
+    fn company_status_transition_graph_is_exhaustive() {
+        let statuses = [
+            CompanyOnboardingStatus::Draft,
+            CompanyOnboardingStatus::Approved,
+        ];
+        let allowed = [
+            (
+                CompanyOnboardingStatus::Draft,
+                CompanyOnboardingStatus::Draft,
+            ),
+            (
+                CompanyOnboardingStatus::Draft,
+                CompanyOnboardingStatus::Approved,
+            ),
+            (
+                CompanyOnboardingStatus::Approved,
+                CompanyOnboardingStatus::Approved,
+            ),
+        ];
+
+        for from in statuses {
+            for to in statuses {
+                assert_eq!(
+                    is_company_status_transition_allowed(from, to),
+                    allowed.contains(&(from, to)),
+                    "unexpected company transition result: {from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn initiative_status_transition_graph_is_exhaustive() {
+        let statuses = [
+            InitiativeStatus::Proposed,
+            InitiativeStatus::Approved,
+            InitiativeStatus::Active,
+            InitiativeStatus::Blocked,
+            InitiativeStatus::Completed,
+            InitiativeStatus::Cancelled,
+        ];
+        let allowed_changes = [
+            (InitiativeStatus::Proposed, InitiativeStatus::Approved),
+            (InitiativeStatus::Approved, InitiativeStatus::Active),
+            (InitiativeStatus::Active, InitiativeStatus::Blocked),
+            (InitiativeStatus::Blocked, InitiativeStatus::Active),
+            (InitiativeStatus::Active, InitiativeStatus::Completed),
+            (InitiativeStatus::Proposed, InitiativeStatus::Cancelled),
+            (InitiativeStatus::Approved, InitiativeStatus::Cancelled),
+            (InitiativeStatus::Active, InitiativeStatus::Cancelled),
+            (InitiativeStatus::Blocked, InitiativeStatus::Cancelled),
+        ];
+
+        for from in statuses {
+            for to in statuses {
+                let expected = from == to || allowed_changes.contains(&(from, to));
+                assert_eq!(
+                    is_initiative_status_transition_allowed(from, to),
+                    expected,
+                    "unexpected initiative transition result: {from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn task_status_transition_graph_is_exhaustive() {
+        let statuses = [
+            TaskStatus::Proposed,
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+            TaskStatus::Blocked,
+            TaskStatus::Completed,
+            TaskStatus::Cancelled,
+        ];
+        let allowed_changes = [
+            (TaskStatus::Proposed, TaskStatus::Ready),
+            (TaskStatus::Ready, TaskStatus::InProgress),
+            (TaskStatus::Ready, TaskStatus::Blocked),
+            (TaskStatus::InProgress, TaskStatus::InReview),
+            (TaskStatus::InProgress, TaskStatus::Blocked),
+            (TaskStatus::InReview, TaskStatus::InProgress),
+            (TaskStatus::InReview, TaskStatus::Completed),
+            (TaskStatus::InReview, TaskStatus::Blocked),
+            (TaskStatus::Blocked, TaskStatus::Ready),
+            (TaskStatus::Blocked, TaskStatus::InProgress),
+            (TaskStatus::Proposed, TaskStatus::Cancelled),
+            (TaskStatus::Ready, TaskStatus::Cancelled),
+            (TaskStatus::InProgress, TaskStatus::Cancelled),
+            (TaskStatus::InReview, TaskStatus::Cancelled),
+            (TaskStatus::Blocked, TaskStatus::Cancelled),
+        ];
+
+        for from in statuses {
+            for to in statuses {
+                let expected = from == to || allowed_changes.contains(&(from, to));
+                assert_eq!(
+                    is_task_status_transition_allowed(from, to),
+                    expected,
+                    "unexpected task transition result: {from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn company_replacement_requires_immutable_identity_and_monotonic_time() {
+        let previous = company_fixture();
+        let mut replacement = previous.clone();
+        replacement.summary = "An updated summary.".to_string();
+        replacement.updated_at += 1;
+        assert!(validate_company_update(&previous, &replacement).is_ok());
+
+        let mut approved_to_draft = replacement.clone();
+        approved_to_draft.onboarding_status = CompanyOnboardingStatus::Draft;
+        assert_eq!(
+            validate_company_update(&previous, &approved_to_draft),
+            Err(CompanyContractError::InvalidStatusTransition("company"))
+        );
+
+        let mut changed_id = replacement.clone();
+        changed_id.id = "different-company".to_string();
+        assert_eq!(
+            validate_company_update(&previous, &changed_id),
+            Err(CompanyContractError::ImmutableField("company.id"))
+        );
+
+        let mut changed_created_at = replacement.clone();
+        changed_created_at.created_at += 1;
+        assert_eq!(
+            validate_company_update(&previous, &changed_created_at),
+            Err(CompanyContractError::ImmutableField("createdAt"))
+        );
+
+        let mut stale = replacement;
+        stale.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_company_update(&previous, &stale),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    #[test]
+    fn initiative_replacement_requires_immutable_identity_and_monotonic_time() {
+        let company = company_fixture();
+        let previous = initiative_fixture();
+        let mut replacement = previous.clone();
+        replacement.summary = "An updated initiative summary.".to_string();
+        replacement.updated_at += 1;
+        assert!(validate_initiative_update(&previous, &replacement, &company).is_ok());
+
+        let mut invalid_transition = replacement.clone();
+        invalid_transition.status = InitiativeStatus::Approved;
+        assert_eq!(
+            validate_initiative_update(&previous, &invalid_transition, &company),
+            Err(CompanyContractError::InvalidStatusTransition("initiative"))
+        );
+
+        let mut changed_company = replacement.clone();
+        changed_company.company_id = "different-company".to_string();
+        let mut different_company = company.clone();
+        different_company.id = changed_company.company_id.clone();
+        assert_eq!(
+            validate_initiative_update(&previous, &changed_company, &different_company),
+            Err(CompanyContractError::ImmutableField("initiative.companyId"))
+        );
+
+        let mut changed_id = replacement.clone();
+        changed_id.id = "different-initiative".to_string();
+        assert_eq!(
+            validate_initiative_update(&previous, &changed_id, &company),
+            Err(CompanyContractError::ImmutableField("initiative.id"))
+        );
+
+        let mut stale = replacement;
+        stale.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_initiative_update(&previous, &stale, &company),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    #[test]
+    fn task_replacement_requires_immutable_identity_and_monotonic_time() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let previous = task_fixtures().remove(0);
+        let mut replacement = previous.clone();
+        replacement.title = "Build and launch the Tennant Group website".to_string();
+        replacement.updated_at += 1;
+        assert!(
+            validate_task_update(&previous, &replacement, &company, Some(&initiative), &teams)
+                .is_ok()
+        );
+
+        let mut invalid_transition = replacement.clone();
+        invalid_transition.status = TaskStatus::Ready;
+        assert_eq!(
+            validate_task_update(
+                &previous,
+                &invalid_transition,
+                &company,
+                Some(&initiative),
+                &teams
+            ),
+            Err(CompanyContractError::InvalidStatusTransition("task"))
+        );
+
+        let mut changed_created_at = replacement.clone();
+        changed_created_at.created_at += 1;
+        assert_eq!(
+            validate_task_update(
+                &previous,
+                &changed_created_at,
+                &company,
+                Some(&initiative),
+                &teams
+            ),
+            Err(CompanyContractError::ImmutableField("createdAt"))
+        );
+
+        let mut changed_id = replacement.clone();
+        changed_id.id = "different-task".to_string();
+        assert_eq!(
+            validate_task_update(&previous, &changed_id, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::ImmutableField("task.id"))
+        );
+
+        let mut stale = replacement;
+        stale.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_task_update(&previous, &stale, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    #[test]
+    fn commercial_purpose_maps_deterministically_to_cost_classification() {
+        assert_eq!(
+            classify_cost(CommercialPurpose::ClientDelivery, None),
+            CostClassification::NeedsReview
+        );
+        assert_eq!(
+            classify_cost(CommercialPurpose::ClientDelivery, Some("tennant-group")),
+            CostClassification::Cogs
+        );
+        for purpose in [
+            CommercialPurpose::Sales,
+            CommercialPurpose::Marketing,
+            CommercialPurpose::Administration,
+            CommercialPurpose::InternalProduct,
+        ] {
+            assert_eq!(classify_cost(purpose, None), CostClassification::Opex);
+        }
+        assert_eq!(
+            classify_cost(CommercialPurpose::Uncertain, Some("tennant-group")),
+            CostClassification::NeedsReview
+        );
+    }
+}

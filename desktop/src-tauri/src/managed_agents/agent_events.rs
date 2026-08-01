@@ -160,7 +160,10 @@ mod tests {
         ManagedAgentRecord {
             pubkey: "agentpubkeyhex".to_string(),
             name: "Test Agent".to_string(),
+            role_id: None,
+            role_title: None,
             persona_id: Some("persona-1".to_string()),
+            creation_request_id: Some("local-only-request-id".to_string()),
             private_key_nsec: "nsec1secretdonotpublish".to_string(),
             auth_tag: Some("authtagsecret".to_string()),
             relay_url: "wss://relay.example".to_string(),
@@ -259,6 +262,10 @@ mod tests {
         assert!(!json.contains("private_key"), "leaked private key field");
         assert!(!json.contains("authtagsecret"), "leaked auth tag value");
         assert!(!json.contains("auth_tag"), "leaked auth tag field");
+        assert!(
+            !json.contains("local-only-request-id") && !json.contains("creation_request_id"),
+            "leaked local Agent Proposal idempotency metadata"
+        );
         assert!(!json.contains("OPENAI_API_KEY"), "leaked env var key");
         assert!(!json.contains("sk-secret"), "leaked env var value");
         assert!(!json.contains("env_vars"), "leaked env var field");

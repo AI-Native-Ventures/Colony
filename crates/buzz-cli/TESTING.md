@@ -62,14 +62,22 @@ via direct DB access. Use this for testing admin operations (archive,
 delete-channel, add/remove-channel-member).
 
 ```bash
-DATABASE_URL="${DATABASE_URL:?set DATABASE_URL for the local Buzz database}" \
-cargo run -p buzz-admin -- mint-token \
-  --name "cli-test" \
-  --scopes "messages:read,messages:write,channels:read,channels:write,users:read,users:write,files:read,files:write,admin:channels"
+cargo run -p buzz-admin -- generate-key
 ```
 
-This generates a keypair and prints:
-- **Private key (nsec)** — save for `BUZZ_PRIVATE_KEY` testing
+This prints a public/secret keypair. Save the secret for `BUZZ_PRIVATE_KEY`.
+
+To make that identity a relay **member** or **admin**:
+
+```bash
+DATABASE_URL="${DATABASE_URL:?set DATABASE_URL for the local Buzz database}" \
+cargo run -p buzz-admin -- add-member --pubkey <hex-or-npub> --role admin
+```
+
+`add-member` deliberately refuses `--role owner`. The community owner is set
+by `RELAY_OWNER_PUBKEY` on the relay process and bootstrapped at startup — the
+owner is deployment configuration, not something an admin command can grant.
+This matters for company commands, which require the owner specifically.
 
 Export:
 
@@ -484,7 +492,158 @@ buzz notes rm --name does-not-exist   # exits non-zero
 
 ---
 
-## 7. Error Path Testing
+## 7. Chat-native Blocks
+
+Block reads always use explicit kind filters. Manifest and data files are
+validated locally before a write is signed.
+
+```bash
+# Catalog and immutable manifests
+buzz blocks list | jq .
+buzz blocks get --handle lead-card | jq .
+buzz blocks draft --manifest manifest.json | jq .
+buzz blocks test --manifest manifest.json --data data.json | jq .
+
+# Publish an ordinary kind:9 message with a pinned manifest
+buzz blocks invoke \
+  --channel "$CHANNEL_ID" \
+  --handle lead-card \
+  --data data.json \
+  --fallback fallback.md | jq .
+
+# Inspect and answer actions
+buzz blocks actions --channel "$CHANNEL_ID" --instance "$INSTANCE_EVENT_ID" | jq .
+buzz blocks act \
+  --channel "$CHANNEL_ID" \
+  --instance "$INSTANCE_EVENT_ID" \
+  --action submit \
+  --input input.json \
+  --idempotency-key "$IDEMPOTENCY_KEY" | jq .
+buzz blocks receipt \
+  --channel "$CHANNEL_ID" \
+  --action "$ACTION_EVENT_ID" \
+  --instance "$INSTANCE_EVENT_ID" \
+  --status succeeded \
+  --result result.json | jq .
+```
+
+`buzz agents draft-create` and `buzz agents draft-update` now publish persisted
+`agent-proposal` Block messages. Verify the returned JSON contains
+`proposal_saved:true` and `agent_changed:false`, and verify the stored event is
+kind `9`, channel-scoped, owner-addressed, attention-marked, and contains no
+credential or backend configuration fields. Posting a proposal never means the
+agent was created or changed.
+
+---
+
+## 7b. Colony company work records
+
+Company, Initiative, and Task heads are **relay-authored**. The CLI never signs
+one. `put` and `complete` publish an owner-signed Company Action (kind 40013);
+the relay validates it, signs the replacement head, and returns a receipt
+(kind 40014). Reads resolve heads authored by the relay signer only.
+
+Mutations require the signing key to be the community's current **human owner**.
+A managed agent can `list` and `get`, but its `put` is refused — agents request
+changes in chat and an owner authorizes them.
+
+Use placeholder ids and no real client data below.
+
+### Create a company
+
+```bash
+cat > /tmp/company.json <<'JSON'
+{
+  "schema": "colony.company/v1",
+  "id": "horizon-labs",
+  "tradingName": "Horizon Labs",
+  "legalName": null,
+  "website": null,
+  "summary": "Digital services studio",
+  "businessType": "agency",
+  "services": [
+    { "id": "web", "name": "Web", "description": "Websites" }
+  ],
+  "customerSegments": ["smb"],
+  "costCentres": [
+    { "id": "internal", "name": "Internal", "kind": "internal", "serviceId": null }
+  ],
+  "sourceReportEventId": null,
+  "onboardingStatus": "draft",
+  "createdAt": 1000,
+  "updatedAt": 1000
+}
+JSON
+
+buzz company put --file /tmp/company.json
+buzz company get --id horizon-labs
+```
+
+`put` prints one stable envelope. `receipt` is the relay's signed verdict:
+
+```json
+{
+  "event_id": "<hex>",
+  "accepted": true,
+  "message": "",
+  "entity_id": "horizon-labs",
+  "request_id": "<uuid>",
+  "idempotency_key": "<uuid>",
+  "receipt": { "kind": 40014, "...": "..." }
+}
+```
+
+### Create an initiative and two tasks
+
+An Initiative needs a cost centre that exists on the Company. A Task needs an
+owning Team whose lead is a member, and a QA persona drawn from that team — so
+create the two teams first (`buzz agents` / the desktop Agents tab) and use
+their real ids.
+
+```bash
+buzz initiatives put --file /tmp/initiative.json
+buzz tasks put --file /tmp/task-copy.json
+buzz tasks put --file /tmp/task-build.json
+
+buzz initiatives list --company horizon-labs
+buzz tasks list --company horizon-labs
+buzz tasks list --initiative init-homepage
+```
+
+### Complete a task
+
+`complete` reads the current head, changes only `status`, and sends the head it
+read as the compare-and-set token — so a concurrent edit loses rather than
+being silently overwritten.
+
+```bash
+buzz tasks complete --id task-copy
+buzz tasks get --id task-copy    # status is now "completed"
+```
+
+### Expected refusals
+
+These are the behaviours worth confirming by hand, because they are what keeps
+company state consistent:
+
+```bash
+# Replacing a record that changed underneath you: exit 5, conflict receipt.
+buzz tasks complete --id task-copy   # run twice; the second loses
+
+# A non-owner (e.g. a managed agent key) cannot mutate.
+BUZZ_PRIVATE_KEY=$AGENT_KEY buzz company put --file /tmp/company.json
+
+# A record whose referenced company or team does not exist is refused.
+buzz tasks put --file /tmp/task-with-unknown-team.json
+```
+
+Compact output works as a **global** flag, before the subcommand:
+
+```bash
+buzz --format compact tasks list --company horizon-labs
+```
+
+## 8. Error Path Testing
 
 Verify the CLI produces correct JSON on stderr and correct exit codes.
 
@@ -527,7 +686,7 @@ buzz channels get --channel "00000000-0000-0000-0000-000000000000"
 
 ---
 
-## 8. Auth Testing
+## 9. Auth Testing
 
 Test authentication.
 
@@ -545,7 +704,7 @@ env -u BUZZ_PRIVATE_KEY \
 
 ---
 
-## 9. Cleanup
+## 10. Cleanup
 
 ```bash
 # Delete test channels
@@ -555,7 +714,7 @@ buzz channels delete --channel "$FORUM_ID" | jq .
 
 ---
 
-## 10. Checklist
+## 11. Checklist
 
 | # | Command | Tested | Notes |
 |---|---------|:------:|-------|

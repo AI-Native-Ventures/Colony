@@ -5,8 +5,9 @@ use crate::{
     managed_agents::{
         current_instance_id, delete_agent_key, load_managed_agents, load_personas, load_teams,
         save_managed_agents, save_personas, stop_managed_agent_process,
-        sync_managed_agent_processes, try_regenerate_nest, validate_persona_activation_change,
-        validate_persona_deletion, AgentDefinition, ManagedAgentRecord,
+        sync_managed_agent_processes, team_references_persona, try_regenerate_nest,
+        validate_persona_activation_change, validate_persona_deletion, AgentDefinition,
+        ManagedAgentRecord,
     },
     util::now_iso,
 };
@@ -31,6 +32,7 @@ pub(in crate::commands) use pending::retain_persona_pending;
 pub(super) use pending::tombstone_persona_pending;
 mod create;
 pub use create::create_persona;
+pub(crate) use create::create_persona_with_id;
 mod sharing;
 pub use sharing::set_persona_shared;
 pub use sharing::update_persona_and_publish;
@@ -129,11 +131,9 @@ pub async fn delete_persona(id: String, app: AppHandle) -> Result<(), String> {
                 .iter()
                 .find(|record| record.id == id)
                 .ok_or_else(|| format!("persona {id} not found"))?;
-            let referenced_by_team = load_teams(&app)?.iter().any(|team| {
-                team.persona_ids
-                    .iter()
-                    .any(|persona_id| persona_id == id.as_str())
-            });
+            let referenced_by_team = load_teams(&app)?
+                .iter()
+                .any(|team| team_references_persona(team, &id));
             validate_persona_deletion(persona, referenced_by_team)?;
             // Capture the coordinate before the record might leave the list. Only
             // reached for non-builtin, non-team personas (both rejected above),
@@ -276,11 +276,9 @@ pub async fn set_persona_active(
                 .iter()
                 .any(|agent| agent.persona_id.as_deref() == Some(id.as_str()));
         let referenced_by_team = !active
-            && load_teams(&app)?.iter().any(|team| {
-                team.persona_ids
-                    .iter()
-                    .any(|persona_id| persona_id == id.as_str())
-            });
+            && load_teams(&app)?
+                .iter()
+                .any(|team| team_references_persona(team, &id));
 
         validate_persona_activation_change(
             persona,

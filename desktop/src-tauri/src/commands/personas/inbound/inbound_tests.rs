@@ -11,6 +11,8 @@ const UUID: &str = "11111111-2222-3333-4444-555555555555";
 fn local_in_app() -> AgentDefinition {
     AgentDefinition {
         id: UUID.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Local".to_string(),
         avatar_url: None,
         system_prompt: "local prompt".to_string(),
@@ -38,6 +40,8 @@ fn local_in_app() -> AgentDefinition {
 fn inbound_for(d_tag: &str, display_name: &str) -> AgentDefinition {
     AgentDefinition {
         id: d_tag.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: display_name.to_string(),
         avatar_url: Some("https://example.com/a.png".to_string()),
         system_prompt: "remote prompt".to_string(),
@@ -161,7 +165,10 @@ fn local_agent() -> ManagedAgentRecord {
     ManagedAgentRecord {
         pubkey: AGENT_PUBKEY.to_string(),
         name: "Local Agent".to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: Some("persona-local".to_string()),
+        creation_request_id: None,
         private_key_nsec: "nsec1localsecret".to_string(),
         auth_tag: Some("localauthtag".to_string()),
         relay_url: "wss://relay.local".to_string(),
@@ -394,6 +401,7 @@ fn local_team() -> TeamRecord {
         description: Some("local desc".to_string()),
         instructions: None,
         persona_ids: vec!["p-local".to_string()],
+        lead_persona_id: Some("p-local".to_string()),
         is_builtin: false,
         source_dir: Some(std::path::PathBuf::from("/local/team/dir")),
         is_symlink: true,
@@ -410,6 +418,7 @@ fn team_content(name: &str) -> TeamEventContent {
         description: Some("remote desc".to_string()),
         instructions: Some(Some("remote instructions".to_string())),
         persona_ids: Some(vec!["p-remote-1".to_string(), "p-remote-2".to_string()]),
+        lead_persona_id: Some(Some("p-remote-1".to_string())),
     }
 }
 
@@ -421,6 +430,7 @@ fn team_content_omitting_optional_fields(name: &str) -> TeamEventContent {
         description: Some("remote desc".to_string()),
         instructions: None,
         persona_ids: None,
+        lead_persona_id: None,
     }
 }
 
@@ -432,6 +442,7 @@ fn team_content_clearing_optional_fields(name: &str) -> TeamEventContent {
         description: Some("remote desc".to_string()),
         instructions: Some(None),
         persona_ids: Some(vec![]),
+        lead_persona_id: Some(None),
     }
 }
 
@@ -442,7 +453,8 @@ fn inbound_team_match_patches_shared_preserves_local() {
         &mut teams,
         TEAM_ID.to_string(),
         team_content("Renamed Team"),
-    );
+    )
+    .unwrap();
 
     assert_eq!(teams.len(), 1, "no duplicate row");
     let t = &teams[0];
@@ -454,6 +466,7 @@ fn inbound_team_match_patches_shared_preserves_local() {
         t.persona_ids,
         vec!["p-remote-1".to_string(), "p-remote-2".to_string()]
     );
+    assert_eq!(t.lead_persona_id.as_deref(), Some("p-remote-1"));
     // Install-local fields preserved.
     assert_eq!(t.id, TEAM_ID);
     assert_eq!(
@@ -482,7 +495,8 @@ fn inbound_team_omitted_fields_preserve_local() {
         &mut teams,
         TEAM_ID.to_string(),
         team_content_omitting_optional_fields("Renamed Team"),
-    );
+    )
+    .unwrap();
 
     assert_eq!(teams.len(), 1);
     let t = &teams[0];
@@ -500,6 +514,11 @@ fn inbound_team_omitted_fields_preserve_local() {
         vec!["p-local".to_string()],
         "omitted persona_ids preserves local membership rather than wiping it"
     );
+    assert_eq!(
+        t.lead_persona_id.as_deref(),
+        Some("p-local"),
+        "omitted lead preserves local value"
+    );
 }
 
 #[test]
@@ -514,7 +533,8 @@ fn inbound_team_explicit_clear_overwrites_local() {
         &mut teams,
         TEAM_ID.to_string(),
         team_content_clearing_optional_fields("Cleared Team"),
-    );
+    )
+    .unwrap();
 
     assert_eq!(teams.len(), 1);
     let t = &teams[0];
@@ -524,13 +544,121 @@ fn inbound_team_explicit_clear_overwrites_local() {
         Vec::<String>::new(),
         "explicit empty array clears membership"
     );
+    assert_eq!(t.lead_persona_id, None, "explicit null clears the lead");
+}
+
+#[test]
+fn inbound_team_rejects_lead_outside_resulting_membership_atomically() {
+    let mut teams = vec![local_team()];
+    let mut invalid = team_content("Invalid Team");
+    invalid.lead_persona_id = Some(Some("p-not-a-member".to_string()));
+
+    let error = apply_inbound_team(&mut teams, TEAM_ID.to_string(), invalid).unwrap_err();
+
+    assert_eq!(error, "Team lead must also be a member of the team.");
+    assert_eq!(teams[0].name, "Local Team");
+    assert_eq!(teams[0].persona_ids, vec!["p-local".to_string()]);
+    assert_eq!(teams[0].lead_persona_id.as_deref(), Some("p-local"));
+}
+
+/// The pre-retention gate must reach the same verdict as the projection, or an
+/// invalid remote head would still be recorded as the winning copy (clearing
+/// `pending_sync`) while the local store keeps the old membership.
+#[test]
+fn inbound_team_validation_runs_before_retention_with_the_same_verdict() {
+    let teams = vec![local_team()];
+    let mut invalid = team_content("Invalid Team");
+    invalid.lead_persona_id = Some(Some("p-not-a-member".to_string()));
+
+    let error = validate_inbound_team(&teams, TEAM_ID, &invalid).unwrap_err();
+    assert_eq!(error, "Team lead must also be a member of the team.");
+
+    validate_inbound_team(&teams, TEAM_ID, &team_content("Valid Team"))
+        .expect("a projectable team passes the pre-retention gate");
+}
+
+/// An old client that predates leads cannot express one, so a membership change
+/// that strands the preserved local lead must vacate the role rather than refuse
+/// the event. Refusing would be permanent: `usePersonaSync` only logs the
+/// failure, and the old client can never publish a correcting event, so the team
+/// would silently stop syncing between devices forever.
+#[test]
+fn omitted_lead_stranded_by_inbound_membership_is_vacated_not_refused() {
+    let mut teams = vec![local_team()];
+    let mut strands_local_lead = team_content_omitting_optional_fields("Old Client");
+    strands_local_lead.persona_ids = Some(vec!["p-remote-1".to_string()]);
+
+    validate_inbound_team(&teams, TEAM_ID, &strands_local_lead)
+        .expect("an old client's membership change must not be refused");
+    apply_inbound_team(&mut teams, TEAM_ID.to_string(), strands_local_lead).unwrap();
+
+    assert_eq!(teams[0].persona_ids, vec!["p-remote-1".to_string()]);
+    assert_eq!(teams[0].lead_persona_id, None, "stranded lead is vacated");
+}
+
+/// Omitting membership as well keeps the local pair intact.
+#[test]
+fn omitting_both_fields_preserves_the_local_membership_and_lead() {
+    let mut teams = vec![local_team()];
+    let inbound = team_content_omitting_optional_fields("Old Client");
+
+    validate_inbound_team(&teams, TEAM_ID, &inbound).expect("preserving stays projectable");
+    apply_inbound_team(&mut teams, TEAM_ID.to_string(), inbound).unwrap();
+
+    assert_eq!(teams[0].persona_ids, vec!["p-local".to_string()]);
+    assert_eq!(teams[0].lead_persona_id.as_deref(), Some("p-local"));
+}
+
+/// A legacy `teams.json` may carry duplicate persona IDs from before the
+/// uniqueness invariant existed. Only membership the event actually asserts is
+/// checked, or that one stored duplicate would reject every future event for
+/// the team.
+#[test]
+fn preserved_local_membership_is_not_re_checked_for_duplicates() {
+    let mut legacy = local_team();
+    legacy.persona_ids = vec!["p-local".to_string(), "p-local".to_string()];
+    let teams = vec![legacy];
+
+    validate_inbound_team(
+        &teams,
+        TEAM_ID,
+        &team_content_omitting_optional_fields("Old Client"),
+    )
+    .expect("a legacy duplicate must not permanently desync the team");
+}
+
+/// Duplicates the event itself asserts are still refused.
+#[test]
+fn inbound_membership_the_event_asserts_must_be_unique() {
+    let teams = vec![local_team()];
+    let mut duplicated = team_content("Duplicated");
+    duplicated.persona_ids = Some(vec!["p-remote-1".to_string(), "p-remote-1".to_string()]);
+
+    let error = validate_inbound_team(&teams, TEAM_ID, &duplicated).unwrap_err();
+
+    assert_eq!(error, "agent p-remote-1 can only appear once in a team");
+}
+
+/// A first-sight team has no local row to merge with, so the gate judges the
+/// inbound content alone.
+#[test]
+fn pre_retention_gate_validates_an_unknown_team_from_its_own_content() {
+    let teams = vec![local_team()];
+    let mut invalid = team_content("Fresh Team");
+    invalid.lead_persona_id = Some(Some("p-not-a-member".to_string()));
+
+    let error = validate_inbound_team(&teams, "team-never-seen", &invalid).unwrap_err();
+    assert_eq!(error, "Team lead must also be a member of the team.");
+
+    validate_inbound_team(&teams, "team-never-seen", &team_content("Fresh Team"))
+        .expect("a valid unknown team passes");
 }
 
 #[test]
 fn inbound_team_no_match_inserts_idempotently() {
     let mut teams = vec![local_team()];
     let other = "team-remote-id";
-    apply_inbound_team(&mut teams, other.to_string(), team_content("New Team"));
+    apply_inbound_team(&mut teams, other.to_string(), team_content("New Team")).unwrap();
 
     assert_eq!(teams.len(), 2, "unmatched inbound is inserted");
     let inserted = teams.iter().find(|t| t.id == other).unwrap();
@@ -540,7 +668,7 @@ fn inbound_team_no_match_inserts_idempotently() {
         "inserted team has no local install dir"
     );
     // Re-receive stays idempotent.
-    apply_inbound_team(&mut teams, other.to_string(), team_content("New Team"));
+    apply_inbound_team(&mut teams, other.to_string(), team_content("New Team")).unwrap();
     assert_eq!(teams.len(), 2, "re-receive of inserted team no-ops");
 }
 

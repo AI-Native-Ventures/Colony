@@ -135,6 +135,107 @@ pub enum ReactionEventInsertOutcome {
     },
 }
 
+/// Result of atomically claiming and inserting a Block action.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Preserve the insertion API's direct StoredEvent result.
+pub enum BlockActionInsert {
+    /// This action won its idempotency claim and its event was inserted.
+    Inserted(StoredEvent),
+    /// Another action already owns this community-scoped idempotency claim.
+    Duplicate {
+        /// Raw event ID of the action that originally won the claim.
+        original_event_id: Vec<u8>,
+    },
+}
+
+/// Result of atomically applying a relay-brokered global catalog action.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Preserve direct StoredEvent handoff for relay fan-out.
+pub enum BlockCatalogActionApply {
+    /// The action, winning catalog head, and receipt committed together.
+    Applied {
+        /// Stored global action.
+        action: StoredEvent,
+        /// Stored relay-authored parameterized catalog head.
+        head: StoredEvent,
+        /// Stored global relay-authored receipt.
+        receipt: StoredEvent,
+    },
+    /// Another batch already owns this community-local retry key.
+    Duplicate {
+        /// Raw event ID of the action that originally won the claim.
+        original_action_event_id: Vec<u8>,
+    },
+}
+
+/// Result of atomically applying one owner-authorized Colony Company Action.
+///
+/// Every non-`Applied` variant leaves the database untouched: the transaction
+/// rolls back before any event is stored, so a rejected action can never
+/// A Company Action that was already applied, found by its idempotency key.
+///
+/// Returned so a retry can be answered with the original outcome instead of
+/// being refused, which is what makes a derived idempotency key useful.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompanyActionClaim {
+    /// The action event that won the claim.
+    pub action_event_id: Vec<u8>,
+    /// The head it produced, when it produced one.
+    pub head_event_id: Option<Vec<u8>>,
+    /// The receipt the relay signed for it.
+    pub receipt_event_id: Vec<u8>,
+}
+
+/// partially replace a canonical head.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Preserve direct StoredEvent handoff for relay fan-out.
+pub enum CompanyActionApply {
+    /// The action, relay-authored head, and receipt committed together.
+    Applied {
+        /// Stored owner-signed action.
+        action: StoredEvent,
+        /// Stored relay-authored canonical head.
+        head: StoredEvent,
+        /// Stored relay-signed receipt.
+        receipt: StoredEvent,
+    },
+    /// Another batch already owns this community-local retry key.
+    Duplicate {
+        /// Raw event ID of the action that originally won the claim.
+        original_action_event_id: Vec<u8>,
+    },
+    /// This exact action event is already stored, so it cannot be applied.
+    ///
+    /// Distinct from `Duplicate`: no batch won a claim here. The refuse path
+    /// stores an action alongside its failure receipt, so a byte-identical
+    /// retry of a previously refused action lands here. The signature is
+    /// spent — applying it requires a newly signed request.
+    ActionAlreadyStored,
+    /// The action author is not the community's current human owner.
+    ///
+    /// Decided while holding `FOR UPDATE` on the owner rows, so an action
+    /// queued before an ownership transfer is rejected after it lands rather
+    /// than committing against stale authority.
+    NotOwner,
+    /// Compare-and-set failed: the stored head is not the one the action
+    /// expected to replace.
+    StaleHead {
+        /// Raw event ID of the head that is actually stored, if any.
+        current_head_event_id: Option<Vec<u8>>,
+    },
+}
+
+impl CompanyActionApply {
+    /// Panic unless the batch committed. Test helper for arranging a head.
+    #[cfg(test)]
+    pub(crate) fn applied_or_panic(self) {
+        assert!(
+            matches!(self, Self::Applied { .. }),
+            "expected the batch to commit, got {self:?}"
+        );
+    }
+}
+
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
 /// anything beyond this is either a bug or abuse.
 pub const D_TAG_MAX_LEN: usize = 1024;
@@ -1076,7 +1177,7 @@ pub struct ThreadMetadataParams<'a> {
     pub broadcast: bool,
 }
 
-async fn insert_event_with_thread_metadata_tx(
+pub(crate) async fn insert_event_with_thread_metadata_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
     event: &Event,
@@ -1265,6 +1366,84 @@ pub async fn insert_event_with_thread_metadata(
             .await?;
     tx.commit().await?;
     Ok(result)
+}
+
+/// Atomically claim an idempotency key and insert its Block action event.
+///
+/// The claim is acquired before event insertion. Concurrent, separately signed
+/// actions for the same `(community, instance, idempotency_key)` therefore
+/// serialize on the claim primary key and only the winner stores an event.
+pub async fn insert_block_action_once(
+    pool: &PgPool,
+    community_id: CommunityId,
+    event: &Event,
+    channel_id: Uuid,
+    instance_event_id: &[u8],
+    idempotency_key: Uuid,
+) -> Result<BlockActionInsert> {
+    let mut tx = pool.begin().await?;
+
+    let claimed_event_id: Option<Vec<u8>> = sqlx::query_scalar(
+        r#"
+        INSERT INTO block_action_claims
+            (community_id, instance_event_id, idempotency_key, action_event_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT DO NOTHING
+        RETURNING action_event_id
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(instance_event_id)
+    .bind(idempotency_key)
+    .bind(event.id.as_bytes().as_slice())
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if claimed_event_id.is_none() {
+        // This is deliberately a second statement. Under READ COMMITTED, a
+        // conflicting INSERT may wait for the winner to commit; the new
+        // statement snapshot then observes that winner's durable event ID.
+        let original_event_id: Option<Vec<u8>> = sqlx::query_scalar(
+            r#"
+            SELECT action_event_id
+            FROM block_action_claims
+            WHERE community_id = $1
+              AND instance_event_id = $2
+              AND idempotency_key = $3
+            "#,
+        )
+        .bind(community_id.as_uuid())
+        .bind(instance_event_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        tx.rollback().await?;
+        return original_event_id
+            .map(|original_event_id| BlockActionInsert::Duplicate { original_event_id })
+            .ok_or_else(|| {
+                DbError::InvalidData(
+                    "block action claim conflict had no durable winning row".to_owned(),
+                )
+            });
+    }
+
+    let (stored_event, was_inserted) =
+        insert_event_with_thread_metadata_tx(&mut tx, community_id, event, Some(channel_id), None)
+            .await?;
+
+    if !was_inserted {
+        // The signed event itself was already stored through another path.
+        // Roll back the new claim and report a duplicate so callers never
+        // fan out or execute an already-durable action a second time.
+        tx.rollback().await?;
+        return Ok(BlockActionInsert::Duplicate {
+            original_event_id: event.id.as_bytes().to_vec(),
+        });
+    }
+
+    tx.commit().await?;
+    Ok(BlockActionInsert::Inserted(stored_event))
 }
 
 /// Atomically insert a kind:7 reaction event and its reaction row.
@@ -1552,6 +1731,154 @@ mod tests {
         .await
         .expect("insert test channel");
         id
+    }
+
+    fn make_block_action(content: &str) -> nostr::Event {
+        EventBuilder::new(Kind::Custom(40_010), content)
+            .sign_with_keys(&Keys::generate())
+            .expect("sign Block action")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn block_action_same_community_idempotency_is_transaction_safe() {
+        let pool = setup_pool().await;
+        crate::migration::run_migrations(&pool)
+            .await
+            .expect("apply Block action claims migration");
+        let community_uuid = make_test_community(&pool).await;
+        let community = CommunityId::from_uuid(community_uuid);
+        let channel = make_test_channel(&pool, community_uuid, None).await;
+        let db = crate::Db::from_pool(pool.clone());
+        let instance_event_id = [23_u8; 32];
+        let idempotency_key = Uuid::new_v4();
+        let action_a = make_block_action("action-a");
+        let action_b = make_block_action("action-b");
+
+        let (outcome_a, outcome_b) = tokio::join!(
+            db.insert_block_action_once(
+                community,
+                &action_a,
+                channel,
+                &instance_event_id,
+                idempotency_key,
+            ),
+            db.insert_block_action_once(
+                community,
+                &action_b,
+                channel,
+                &instance_event_id,
+                idempotency_key,
+            ),
+        );
+        let outcome_a = outcome_a.expect("first action insert");
+        let outcome_b = outcome_b.expect("second action insert");
+
+        let (stored, original_event_id) = match (outcome_a, outcome_b) {
+            (
+                BlockActionInsert::Inserted(stored),
+                BlockActionInsert::Duplicate { original_event_id },
+            )
+            | (
+                BlockActionInsert::Duplicate { original_event_id },
+                BlockActionInsert::Inserted(stored),
+            ) => (stored, original_event_id),
+            other => panic!("exactly one Block action must win the claim: {other:?}"),
+        };
+        assert_eq!(original_event_id, stored.event.id.as_bytes().as_slice());
+
+        let stored_actions: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM events \
+             WHERE community_id = $1 AND id IN ($2, $3)",
+        )
+        .bind(community_uuid)
+        .bind(action_a.id.as_bytes().as_slice())
+        .bind(action_b.id.as_bytes().as_slice())
+        .fetch_one(&pool)
+        .await
+        .expect("count stored Block actions");
+        assert_eq!(stored_actions, 1, "the losing action must not be stored");
+
+        let claimed_action_id: Vec<u8> = sqlx::query_scalar(
+            "SELECT action_event_id FROM block_action_claims \
+             WHERE community_id = $1 \
+               AND instance_event_id = $2 \
+               AND idempotency_key = $3",
+        )
+        .bind(community_uuid)
+        .bind(instance_event_id.as_slice())
+        .bind(idempotency_key)
+        .fetch_one(&pool)
+        .await
+        .expect("read winning Block action claim");
+        assert_eq!(claimed_action_id, stored.event.id.as_bytes().as_slice());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn block_action_claims_are_independent_across_communities() {
+        let pool = setup_pool().await;
+        crate::migration::run_migrations(&pool)
+            .await
+            .expect("apply Block action claims migration");
+        let community_a_uuid = make_test_community(&pool).await;
+        let community_b_uuid = make_test_community(&pool).await;
+        let community_a = CommunityId::from_uuid(community_a_uuid);
+        let community_b = CommunityId::from_uuid(community_b_uuid);
+        let channel_a = make_test_channel(&pool, community_a_uuid, None).await;
+        let channel_b = make_test_channel(&pool, community_b_uuid, None).await;
+        let db = crate::Db::from_pool(pool.clone());
+        let instance_event_id = [47_u8; 32];
+        let idempotency_key = Uuid::new_v4();
+        let action_a = make_block_action("community-a-action");
+        let action_b = make_block_action("community-b-action");
+
+        let (outcome_a, outcome_b) = tokio::join!(
+            db.insert_block_action_once(
+                community_a,
+                &action_a,
+                channel_a,
+                &instance_event_id,
+                idempotency_key,
+            ),
+            db.insert_block_action_once(
+                community_b,
+                &action_b,
+                channel_b,
+                &instance_event_id,
+                idempotency_key,
+            ),
+        );
+
+        assert!(
+            matches!(
+                outcome_a.expect("community A insert"),
+                BlockActionInsert::Inserted(_)
+            ),
+            "community A must win its own claim"
+        );
+        assert!(
+            matches!(
+                outcome_b.expect("community B insert"),
+                BlockActionInsert::Inserted(_)
+            ),
+            "community B must win its independent claim"
+        );
+
+        let claim_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM block_action_claims \
+             WHERE community_id IN ($1, $2) \
+               AND instance_event_id = $3 \
+               AND idempotency_key = $4",
+        )
+        .bind(community_a_uuid)
+        .bind(community_b_uuid)
+        .bind(instance_event_id.as_slice())
+        .bind(idempotency_key)
+        .fetch_one(&pool)
+        .await
+        .expect("count community-scoped Block action claims");
+        assert_eq!(claim_count, 2);
     }
 
     #[tokio::test]

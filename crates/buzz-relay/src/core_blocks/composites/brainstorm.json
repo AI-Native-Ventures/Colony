@@ -1,0 +1,120 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "brainstorm",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Brainstorm",
+  "description": "A structured multi-select question with selectable ideas and custom input.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["title", "prompt", "choices"],
+    "properties": {
+      "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "prompt": { "type": "string", "minLength": 1, "maxLength": 1000 },
+      "choices": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 12,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "label", "description"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+            "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "description": { "type": "string", "minLength": 1, "maxLength": 500 }
+          }
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "stack",
+    "gap": "medium",
+    "children": [
+      {
+        "type": "section",
+        "title": "{{title}}"
+      },
+      {
+        "type": "question",
+        "prompt": "{{prompt}}",
+        "mode": "multi-select",
+        "options_path": "/choices",
+        "min_selections": 1,
+        "max_selections": 12,
+        "allow_custom": true,
+        "require_custom_input": false,
+        "submit_action": "brainstorm.submit"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "brainstorm.submit",
+      "label": "Submit directions",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["selected"],
+        "properties": {
+          "selected": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            }
+          },
+          "custom_input": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "brainstorm.submit",
+        "resolves_attention": false
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "## {{title}}\n\n{{prompt}}\nChoices: {{choices}}\nSelect one or more directions or reply with your own.",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "section": 1,
+    "question": 1
+  },
+  "examples": [
+    {
+      "name": "Homepage direction",
+      "data": {
+        "title": "Choose the homepage direction",
+        "prompt": "Which qualities should the first concept combine?",
+        "choices": [
+          {
+            "id": "premium",
+            "label": "Premium editorial",
+            "description": "Confident typography, restraint, and strong art direction."
+          },
+          {
+            "id": "motion",
+            "label": "Cinematic motion",
+            "description": "A carefully paced hero with meaningful scroll transitions."
+          },
+          {
+            "id": "conversion",
+            "label": "Conversion-led",
+            "description": "Clear proof, trust, and a focused call to action."
+          }
+        ]
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

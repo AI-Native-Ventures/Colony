@@ -71,10 +71,52 @@ pub fn apply_persona_behavior(
     Ok(())
 }
 
+/// Validate and normalize the stable role identity attached to a persona.
+///
+/// Roles are a pair: the machine-readable lowercase slug and its human title
+/// must either both exist or both be absent. Personal identity is deliberately
+/// outside this helper and is never derived from the role.
+pub fn normalize_persona_role(
+    role_id: Option<String>,
+    role_title: Option<String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    match (role_id, role_title) {
+        (None, None) => Ok((None, None)),
+        (Some(role_id), Some(role_title)) => {
+            let role_id = role_id.trim();
+            let role_title = role_title.trim();
+            let valid_slug = !role_id.is_empty()
+                && role_id.len() <= 64
+                && role_id
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                && role_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+            if !valid_slug {
+                return Err(
+                    "Role ID must be a lowercase slug (letters, numbers, and hyphens; max 64 characters)"
+                        .to_string(),
+                );
+            }
+            if role_title.is_empty() {
+                return Err("Role title is required when Role ID is set".to_string());
+            }
+            Ok((Some(role_id.to_string()), Some(role_title.to_string())))
+        }
+        _ => Err("Role ID and Role title must be provided together".to_string()),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePersonaRequest {
     pub display_name: String,
+    #[serde(default)]
+    pub role_id: Option<String>,
+    #[serde(default)]
+    pub role_title: Option<String>,
     pub avatar_url: Option<String>,
     pub system_prompt: String,
     #[serde(default)]
@@ -102,6 +144,11 @@ pub struct CreatePersonaRequest {
 pub struct UpdatePersonaRequest {
     pub id: String,
     pub display_name: String,
+    /// Absent pair preserves the stored role for legacy callers.
+    #[serde(default)]
+    pub role_id: Option<String>,
+    #[serde(default)]
+    pub role_title: Option<String>,
     pub avatar_url: Option<String>,
     pub system_prompt: String,
     #[serde(default)]
@@ -125,6 +172,33 @@ pub struct UpdatePersonaRequest {
     /// present = validate and replace the fields as a unit.
     #[serde(default)]
     pub behavior: Option<PersonaBehaviorRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTeamRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub persona_ids: Vec<String>,
+    #[serde(default)]
+    pub lead_persona_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTeamRequest {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub persona_ids: Vec<String>,
+    /// Absent preserves the current lead, `null` clears it, and a string sets
+    /// a new lead. The tri-state prevents older callers from erasing leaders.
+    #[serde(default, deserialize_with = "crate::util::double_option")]
+    pub lead_persona_id: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -270,6 +344,8 @@ mod tests {
     fn record_without_quad() -> AgentDefinition {
         AgentDefinition {
             id: "p-1".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: "Test".to_string(),
             avatar_url: None,
             system_prompt: "prompt".to_string(),

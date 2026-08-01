@@ -259,8 +259,8 @@ fn preset_entry_stays_available_when_adapter_present_but_cli_absent() {
 
 #[test]
 fn preset_entry_without_underlying_cli_stays_simple() {
-    // Most presets: the command IS the vendor CLI. No external-CLI flag,
-    // absent command means plain NotInstalled.
+    // Most presets use the vendor CLI directly, so an absent command is plain
+    // NotInstalled without the external-CLI flag.
     let preset = PresetHarness {
         underlying_cli: None,
         ..ADAPTER_PRESET
@@ -270,10 +270,11 @@ fn preset_entry_without_underlying_cli_stays_simple() {
     assert!(!entry.requires_external_cli);
     assert!(entry.underlying_cli_path.is_none());
 }
-
 fn persona_with_runtime(id: &str, runtime: Option<&str>) -> crate::managed_agents::AgentDefinition {
     crate::managed_agents::AgentDefinition {
         id: id.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: id.to_string(),
         avatar_url: None,
         system_prompt: String::new(),
@@ -295,19 +296,15 @@ fn persona_with_runtime(id: &str, runtime: Option<&str>) -> crate::managed_agent
         updated_at: "2026-06-09T00:00:00Z".to_string(),
     }
 }
-
 #[test]
 fn effective_agent_command_explicit_override_wins() {
-    // An explicit pin beats the persona's runtime.
     let personas = vec![persona_with_runtime("p1", Some("claude"))];
     assert_eq!(
         effective_agent_command(Some("p1"), &personas, Some("codex-acp")),
         "codex-acp"
     );
 }
-
-/// Minimal record for `record_agent_command` tests. Only the resolution
-/// inputs (runtime / persona_id / agent_command_override) vary.
+/// Minimal record for `record_agent_command` resolution tests.
 fn record_with(
     runtime: Option<&str>,
     persona_id: Option<&str>,
@@ -316,7 +313,10 @@ fn record_with(
     crate::managed_agents::types::ManagedAgentRecord {
         pubkey: String::new(),
         name: "r".to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: persona_id.map(str::to_string),
+        creation_request_id: None,
         private_key_nsec: String::new(),
         auth_tag: None,
         relay_url: String::new(),

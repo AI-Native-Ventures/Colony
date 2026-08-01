@@ -92,7 +92,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check owned-distribution-contract
 
 # Format all Rust code
 fmt:
@@ -159,23 +159,28 @@ _ensure-sidecar-stubs:
         touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
 
-# Ensure Docker dev services (Postgres, Redis, etc.) are running and healthy
-_ensure-services:
+# Ensure relay runtime services are running and healthy. Keep this path narrow:
+# `just dev` should not pull optional Adminer, Keycloak, or Prometheus images.
+_ensure-runtime-services:
     #!/usr/bin/env bash
     set -euo pipefail
     pg=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-postgres 2>/dev/null || echo "not_found")
     redis=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-redis 2>/dev/null || echo "not_found")
-    if [[ "$pg" == "healthy" && "$redis" == "healthy" ]]; then
+    minio=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-minio 2>/dev/null || echo "not_found")
+    minio_init=$(docker inspect --format '{{"{{"}}.State.Status{{"}}"}}:{{"{{"}}.State.ExitCode{{"}}"}}' buzz-minio-init 2>/dev/null || echo "not_found")
+    if [[ "$pg" == "healthy" && "$redis" == "healthy" && "$minio" == "healthy" && "$minio_init" == "exited:0" ]]; then
         echo "Services already healthy"
         exit 0
     fi
     echo "Starting services..."
-    docker compose up -d || true
+    docker compose up -d postgres redis minio minio-init || true
     echo -n "Waiting for services"
     for i in $(seq 1 40); do
         pg=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-postgres 2>/dev/null || echo "not_found")
         redis=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-redis 2>/dev/null || echo "not_found")
-        if [[ "$pg" == "healthy" && "$redis" == "healthy" ]]; then
+        minio=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' buzz-minio 2>/dev/null || echo "not_found")
+        minio_init=$(docker inspect --format '{{"{{"}}.State.Status{{"}}"}}:{{"{{"}}.State.ExitCode{{"}}"}}' buzz-minio-init 2>/dev/null || echo "not_found")
+        if [[ "$pg" == "healthy" && "$redis" == "healthy" && "$minio" == "healthy" && "$minio_init" == "exited:0" ]]; then
             echo " ready"
             exit 0
         fi
@@ -185,8 +190,13 @@ _ensure-services:
     echo " timed out"
     exit 1
 
+# Ensure the complete local development stack is running. `just setup` uses this
+# fuller path; relay and desktop startup use `_ensure-runtime-services`.
+_ensure-services: _ensure-runtime-services
+    docker compose up -d adminer keycloak prometheus
+
 # Apply database migrations and seed the local dev community if the dev database is running
-_ensure-migrations: _ensure-services
+_ensure-migrations: _ensure-runtime-services
     cargo run -p buzz-admin -- migrate
     ./scripts/seed-local-community.sh
 
@@ -229,10 +239,11 @@ desktop-tauri-test-compiled-flags: _ensure-sidecar-stubs
 # Build the full desktop Tauri app locally (unsigned, for testing)
 # Sidecar binary list must stay in sync with _ensure-sidecar-stubs above.
 # pnpm install is unconditional here: release builds must start from a clean dep tree.
+[positional-arguments]
 desktop-release-build target="aarch64-apple-darwin":
     #!/usr/bin/env bash
     set -euo pipefail
-    TARGET={{target}}
+    TARGET="$1"
     mkdir -p desktop/src-tauri/binaries
     touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
@@ -240,7 +251,19 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-$TARGET"
     pnpm install
-    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
+    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target "$TARGET"
+
+# Build an owned-company desktop distribution for a reviewed public relay.
+[positional-arguments]
+desktop-owned-build relay *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exec ./scripts/build-owned-desktop.sh --relay "$1" "${@:2}"
+
+# Fast contracts for owned desktop and relay distribution tooling.
+owned-distribution-contract:
+    bash scripts/test-owned-desktop-build-contract.sh
+    bash deploy/compose/test-bootstrap.sh
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-test desktop-tauri-fmt-check desktop-build desktop-tauri-check desktop-tauri-test
@@ -277,6 +300,10 @@ test-unit:
     if command -v cargo-nextest &>/dev/null; then
         cargo nextest run -p buzz-core -p buzz-auth --lib
         cargo nextest run -p buzz-cli
+        # buzz-acp: agent prompt contracts and pool/queue logic. Pure unit
+        # tests, no infra — they were absent from this gate, so a broken
+        # base-prompt assertion sat red without CI noticing.
+        cargo nextest run -p buzz-acp --lib
         # buzz-db migrator/lint tests: pure SQL-parsing unit tests (no infra).
         # They guard the embedded-migrator invariant (exactly the consolidated
         # 0001; cutover/backfill stays an operator script, not startup state)

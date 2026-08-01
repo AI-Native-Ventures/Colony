@@ -9,6 +9,8 @@ fn definition(
 ) -> AgentDefinition {
     AgentDefinition {
         id: id.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Test Definition".to_string(),
         avatar_url: None,
         system_prompt: prompt.to_string(),
@@ -41,7 +43,10 @@ fn record(
     ManagedAgentRecord {
         pubkey: "agent-pk".to_string(),
         name: "Agent".to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: persona_id.map(str::to_string),
+        creation_request_id: None,
         private_key_nsec: "".to_string(),
         auth_tag: None,
         relay_url: "ws://localhost:3000".to_string(),

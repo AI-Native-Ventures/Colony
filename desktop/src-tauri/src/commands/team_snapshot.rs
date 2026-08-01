@@ -120,6 +120,8 @@ fn definition_from_snapshot(
 
     Ok(AgentDefinition {
         id: Uuid::new_v4().to_string(),
+        role_id: None,
+        role_title: None,
         display_name: member.profile.display_name.trim().to_string(),
         avatar_url: effective_avatar(member),
         system_prompt: member.definition.system_prompt.clone().unwrap_or_default(),
@@ -170,6 +172,10 @@ pub(crate) fn build_import_team(
         name: name.to_string(),
         description: snapshot.team.description.clone(),
         persona_ids,
+        // Snapshot v1 has no stable way to map a lead after member persona IDs
+        // are regenerated. A future schema must identify the lead by member
+        // position or another portable identity, never by the source ID.
+        lead_persona_id: None,
         instructions: snapshot.team.instructions.clone(),
         is_builtin: false,
         source_dir: None,
@@ -552,9 +558,12 @@ pub async fn confirm_team_snapshot_import(
         let record = ManagedAgentRecord {
             pubkey: pubkey.clone(),
             name: display_name.clone(),
+            role_id: None,
+            role_title: None,
             display_name: None,
             slug: None,
             persona_id: Some(definition.id.clone()),
+            creation_request_id: None,
             private_key_nsec: private_key_nsec.clone(),
             auth_tag: auth_tag.clone(),
             relay_url: String::new(),

@@ -301,7 +301,10 @@ fn bare_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
         pubkey: "agent".to_string(),
         name: "Agent".to_string(),
+        role_id: None,
+        role_title: None,
         persona_id: None,
+        creation_request_id: None,
         private_key_nsec: "".to_string(),
         auth_tag: None,
         relay_url: "ws://localhost:3000".to_string(),
@@ -358,6 +361,8 @@ fn bare_record() -> ManagedAgentRecord {
 fn persona(id: &str, model: Option<&str>, provider: Option<&str>) -> AgentDefinition {
     AgentDefinition {
         id: id.to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Test Persona".to_string(),
         avatar_url: None,
         system_prompt: "".to_string(),
@@ -619,6 +624,8 @@ fn record_runtime_wins_over_persona_runtime_for_command_resolution() {
 
     let persona = AgentDefinition {
         id: "p1".to_string(),
+        role_id: None,
+        role_title: None,
         display_name: "Goose persona".to_string(),
         avatar_url: None,
         system_prompt: "".to_string(),

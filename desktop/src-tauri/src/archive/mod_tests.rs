@@ -8,7 +8,6 @@ use super::*;
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use rusqlite::Connection;
 use uuid::Uuid;
-
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 fn in_memory() -> Connection {
@@ -647,6 +646,7 @@ fn make_turn_metric_event(owner_keys: &Keys, agent_keys: &Keys) -> Event {
         cumulative: None,
         delta_reliable: true,
         stop_reason: None,
+        work_context: None,
     };
     let ciphertext =
         encrypt_agent_turn_metric(agent_keys, &owner_keys.public_key(), &payload).unwrap();

@@ -8,6 +8,8 @@ import type {
 
 export type RawPersona = {
   id: string;
+  role_id?: string | null;
+  role_title?: string | null;
   display_name: string;
   avatar_url: string | null;
   system_prompt: string;
@@ -38,6 +40,8 @@ export type RawPersona = {
 export function fromRawPersona(persona: RawPersona): AgentPersona {
   return {
     id: persona.id,
+    roleId: persona.role_id ?? null,
+    roleTitle: persona.role_title ?? null,
     displayName: persona.display_name,
     avatarUrl: persona.avatar_url,
     systemPrompt: persona.system_prompt,
@@ -75,6 +79,8 @@ export async function createPersona(
     await invokeTauri<RawPersona>("create_persona", {
       input: {
         displayName: input.displayName,
+        roleId: input.roleId,
+        roleTitle: input.roleTitle,
         avatarUrl: input.avatarUrl,
         systemPrompt: input.systemPrompt,
         runtime: input.runtime,
@@ -94,6 +100,8 @@ function updatePersonaPayload(input: UpdatePersonaInput) {
   return {
     id: input.id,
     displayName: input.displayName,
+    roleId: input.roleId,
+    roleTitle: input.roleTitle,
     avatarUrl: input.avatarUrl,
     systemPrompt: input.systemPrompt,
     runtime: input.runtime,

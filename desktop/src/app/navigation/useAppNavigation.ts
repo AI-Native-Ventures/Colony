@@ -15,6 +15,12 @@ type NavigationBehavior = {
   resetScroll?: boolean;
 };
 
+type NewMessageNavigationOptions = NavigationBehavior & {
+  blockAddress?: string;
+  blockHandle?: string;
+  blockManifestId?: string;
+};
+
 export function useAppNavigation() {
   const router = useRouter();
   const navigate = useNavigate();
@@ -62,6 +68,17 @@ export function useAppNavigation() {
       commitNavigation(
         {
           to: "/agents",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
+  const goBlocks = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/blocks",
         },
         behavior,
       ),
@@ -190,12 +207,22 @@ export function useAppNavigation() {
   );
 
   const goNewMessage = React.useCallback(
-    (behavior?: NavigationBehavior) =>
+    (options?: NewMessageNavigationOptions) =>
       commitNavigation(
         {
           to: "/messages/new",
+          search:
+            options?.blockAddress &&
+            options.blockHandle &&
+            options.blockManifestId
+              ? {
+                  blockAddress: options.blockAddress,
+                  blockHandle: options.blockHandle,
+                  blockManifestId: options.blockManifestId,
+                }
+              : {},
         },
-        behavior,
+        options,
       ),
     [commitNavigation],
   );
@@ -296,6 +323,7 @@ export function useAppNavigation() {
     closeSettings,
     closeWorkflowDetail,
     goAgents,
+    goBlocks,
     goChannel,
     goForumPost,
     goHome,

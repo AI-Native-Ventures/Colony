@@ -18,6 +18,7 @@ import {
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
+import { resolveSubmittedTeamLead } from "@/features/agents/lib/teamPersonas";
 import { personaCatalogCopy } from "./personaLibraryCopy";
 import { RemoveMembersConfirmDialog } from "./RemoveMembersConfirmDialog";
 import {
@@ -126,17 +127,24 @@ export function TeamDialog({
   );
 
   function buildSubmitInput(): CreateTeamInput | UpdateTeamInput {
+    const personaIds = filterAvailablePersonaIds(selectedPersonaIds, personas);
+    // This dialog edits membership, not leadership.
+    const leadPersonaId = resolveSubmittedTeamLead(
+      initialValues?.leadPersonaId,
+      personaIds,
+    );
+
     const baseInput = {
       name,
       description: teamDescription.trim() || undefined,
       instructions: instructions.trim() || undefined,
-      personaIds: filterAvailablePersonaIds(selectedPersonaIds, personas),
+      personaIds,
     };
 
     if (initialValues && "id" in initialValues) {
-      return { id: initialValues.id, ...baseInput };
+      return { id: initialValues.id, ...baseInput, leadPersonaId };
     }
-    return baseInput;
+    return { ...baseInput, leadPersonaId: leadPersonaId ?? undefined };
   }
 
   async function handleSubmit() {

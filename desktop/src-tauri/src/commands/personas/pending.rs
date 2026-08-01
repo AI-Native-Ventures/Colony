@@ -255,6 +255,8 @@ mod tests {
     fn persona() -> AgentDefinition {
         AgentDefinition {
             id: "catalog-reviewer".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: "Catalog Reviewer".to_string(),
             avatar_url: None,
             system_prompt: "Review the catalog.".to_string(),

@@ -1,0 +1,38 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "section",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Section",
+  "description": "A titled section of readable content.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "title": { "type": "string", "maxLength": 160 },
+      "text": { "type": "string", "maxLength": 10000 }
+    }
+  },
+  "tree": {
+    "type": "section",
+    "title": "{{title}}",
+    "text": "{{text}}"
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "## {{title}}\n\n{{text}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "section": 1 },
+  "examples": [
+    {
+      "name": "Summary",
+      "data": {
+        "title": "Weekly summary",
+        "text": "Three opportunities moved forward this week."
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

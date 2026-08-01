@@ -644,7 +644,10 @@ mod tests {
         ManagedAgentRecord {
             pubkey: "agent".to_string(),
             name: "Agent".to_string(),
+            role_id: None,
+            role_title: None,
             persona_id: Some("persona-1".to_string()),
+            creation_request_id: None,
             private_key_nsec: "".to_string(),
             auth_tag: None,
             relay_url: "ws://localhost:3000".to_string(),
@@ -697,10 +700,11 @@ mod tests {
             provider: None,
         }
     }
-
     fn persona_with_model(model: &str) -> AgentDefinition {
         AgentDefinition {
             id: "persona-1".to_string(),
+            role_id: None,
+            role_title: None,
             display_name: "Persona".to_string(),
             avatar_url: None,
             system_prompt: "You are a persona.".to_string(),
@@ -964,9 +968,7 @@ mod tests {
             "override baseline origin must be GlobalDefault, not PersonaDefault or BuzzExplicit"
         );
     }
-
     // ── get_baked_build_env / is_secret_key tests ──────────────────────────
-
     /// Build a `BakedEnvEntry` vec from a synthetic map, mirroring what
     /// `get_baked_build_env()` does. Used to test masking without relying on
     /// compile-time `option_env!` vars (OSS builds have empty `baked_build_env`).
@@ -987,7 +989,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn baked_env_non_secret_key_shows_real_value() {
         let entries = baked_env_from_map(&[("BUZZ_AGENT_PROVIDER", "databricks_v2")]);
@@ -1080,7 +1081,6 @@ mod tests {
         assert_eq!(effort.value, "medium");
         assert!(!effort.masked);
     }
-
     #[test]
     fn baked_env_allowlist_is_case_insensitive() {
         // Known-safe keys — case-insensitive match must allow them.

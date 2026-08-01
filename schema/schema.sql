@@ -209,7 +209,7 @@ CREATE TABLE events (
     -- never matches `@@`.
     -- Keep in sync with migrations (final state: 0001 + 0005 + 0009).
     search_tsv  TSVECTOR GENERATED ALWAYS AS (
-        CASE WHEN kind IN (1059, 30300, 30350, 30622, 44100, 44101, 44200) THEN NULL::tsvector
+        CASE WHEN kind IN (1059, 30179, 30180, 30181, 30300, 30350, 30622, 40013, 40014, 44100, 44101, 44200) THEN NULL::tsvector
              ELSE to_tsvector('simple', content)
         END
     ) STORED,
@@ -1071,3 +1071,27 @@ INSERT INTO replica_heartbeat (id) VALUES (1);
 
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('replica_heartbeat', 'single-row replication freshness token; describes deployment topology, never tenant data');
+
+-- Durable idempotency claims for signed chat-native Block actions. A retry may
+-- carry a fresh signed event ID, but one community/instance/idempotency tuple
+-- owns execution and its winning event.
+CREATE TABLE block_action_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    instance_event_id BYTEA NOT NULL CHECK (octet_length(instance_event_id) = 32),
+    idempotency_key UUID NOT NULL,
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, instance_event_id, idempotency_key)
+);
+
+-- The relay-owned catalog broker atomically records the winning activation,
+-- catalog head, and receipt under the same community-scoped retry boundary.
+CREATE TABLE block_catalog_action_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key UUID NOT NULL,
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    head_event_id BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key)
+);

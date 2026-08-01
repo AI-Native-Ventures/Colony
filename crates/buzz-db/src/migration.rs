@@ -561,7 +561,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 26);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -919,6 +919,75 @@ mod tests {
         assert!(heartbeat.contains("epoch"));
         assert!(heartbeat.contains("INSERT INTO replica_heartbeat (id) VALUES (1)"));
         assert!(heartbeat.contains("_operator_global_tables"));
+
+        // Block action claims are the durable, community-scoped execution
+        // boundary for separately signed retries sharing one idempotency key.
+        assert_eq!(migrations[26].version, 27);
+        let block_action_claims = migrations[26].sql.as_str();
+        assert!(block_action_claims.contains("CREATE TABLE block_action_claims"));
+        assert!(block_action_claims
+            .contains("PRIMARY KEY (community_id, instance_event_id, idempotency_key)"));
+        assert!(block_action_claims.contains(
+            "instance_event_id BYTEA NOT NULL CHECK (octet_length(instance_event_id) = 32)"
+        ));
+        assert!(block_action_claims
+            .contains("action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32)"));
+        assert!(!block_action_claims.contains("_operator_global_tables"));
+
+        // Reserved catalog actions bind the global action, relay-authored head,
+        // and relay-authored receipt to one community-local retry key.
+        assert_eq!(migrations[27].version, 28);
+        let catalog_action_claims = migrations[27].sql.as_str();
+        assert!(catalog_action_claims.contains("CREATE TABLE block_catalog_action_claims"));
+        assert!(catalog_action_claims.contains("PRIMARY KEY (community_id, idempotency_key)"));
+        for event_id in [
+            "action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32)",
+            "head_event_id BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32)",
+            "receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32)",
+        ] {
+            assert!(catalog_action_claims.contains(event_id));
+        }
+        assert!(!catalog_action_claims.contains("_operator_global_tables"));
+    }
+
+    #[test]
+    fn block_action_claim_migration_is_community_scoped() {
+        let migration = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == 27)
+            .expect("Block action claims migration");
+        let sql = migration.sql.as_ref();
+
+        assert!(sql.contains("CREATE TABLE block_action_claims"));
+        assert!(
+            sql.contains("PRIMARY KEY (community_id, instance_event_id, idempotency_key)"),
+            "community_id must lead the durable idempotency boundary"
+        );
+        assert!(sql.contains("REFERENCES communities(id) ON DELETE CASCADE"));
+        assert!(!sql.contains("_operator_global_tables"));
+    }
+
+    #[test]
+    fn block_catalog_action_claim_migration_is_community_scoped() {
+        let migration = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == 28)
+            .expect("Block catalog action claims migration");
+        let sql = migration.sql.as_ref();
+
+        assert!(sql.contains("CREATE TABLE block_catalog_action_claims"));
+        assert!(
+            sql.contains("PRIMARY KEY (community_id, idempotency_key)"),
+            "community_id must lead the catalog action idempotency boundary"
+        );
+        assert!(sql.contains("REFERENCES communities(id) ON DELETE CASCADE"));
+        for column in ["action_event_id", "head_event_id", "receipt_event_id"] {
+            assert!(
+                sql.contains(&format!("octet_length({column}) = 32")),
+                "{column} must be a fixed-width event ID"
+            );
+        }
+        assert!(!sql.contains("_operator_global_tables"));
     }
 
     #[test]

@@ -1,11 +1,17 @@
 import { Button } from "@/shared/ui/button";
 
+export type SecondaryAction = {
+  label: string;
+  onSelect: () => void;
+};
+
 type AgentDefinitionDialogFooterProps = {
   canSubmit: boolean;
   isAvatarUploadPending: boolean;
   isPending: boolean;
   onCancel: () => void;
   publishesCatalogUpdates: boolean;
+  secondaryAction?: SecondaryAction;
   submitBlockReason: string | null;
   submitLabel: string;
 };
@@ -16,6 +22,7 @@ export function AgentDefinitionDialogFooter({
   isPending,
   onCancel,
   publishesCatalogUpdates,
+  secondaryAction,
   submitBlockReason,
   submitLabel,
 }: AgentDefinitionDialogFooterProps) {
@@ -42,6 +49,16 @@ export function AgentDefinitionDialogFooter({
       </div>
 
       <div className="flex items-center gap-2">
+        {secondaryAction ? (
+          <Button
+            disabled={isPending || isAvatarUploadPending}
+            onClick={secondaryAction.onSelect}
+            type="button"
+            variant="ghost"
+          >
+            {secondaryAction.label}
+          </Button>
+        ) : null}
         <Button
           disabled={isPending || isAvatarUploadPending}
           onClick={onCancel}

@@ -68,12 +68,13 @@ export function flushMentionDebounce<T extends MentionCandidateWithUI>(opts: {
     return { type: "no-match" };
   }
 
-  const { candidate, label } = ranked[0];
+  const { candidate, label, matchedRole } = ranked[0];
   return {
     type: "match",
     suggestion: mapMentionCandidateToSuggestion({
       candidate,
       label,
+      matchedRole,
       channelType: opts.channelType,
       currentPubkey: opts.currentPubkey,
       ownerProfiles: opts.ownerProfiles,
