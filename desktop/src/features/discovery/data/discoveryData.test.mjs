@@ -18,6 +18,24 @@ test("fixture source returns the SalesTeams-shaped discovery hierarchy", async (
   assert.equal(industries[0].slug, "automotive");
   assert.ok(industries[0].imageKey);
 
+  const verticals = await source.getVerticals("automotive");
+  assert.deepEqual(
+    verticals.map(({ id, name, industryId }) => ({ id, name, industryId })),
+    [
+      { id: "auto-repair", name: "Auto Repair", industryId: "automotive" },
+      {
+        id: "car-dealerships",
+        name: "Car Dealerships",
+        industryId: "automotive",
+      },
+      {
+        id: "collision-repair",
+        name: "Collision Repair",
+        industryId: "automotive",
+      },
+    ],
+  );
+
   const vertical = await source.getVertical("automotive", "auto-repair");
   assert.equal(vertical.name, "Auto Repair");
   assert.equal(vertical.campaigns.length, 1);
