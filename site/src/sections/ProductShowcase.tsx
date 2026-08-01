@@ -17,7 +17,7 @@ export function ProductShowcase() {
           src="/product-channel.png"
           alt="A Colony engineering channel: a teammate cuts a release branch, an agent named mira reviews the diff and replies in a thread, an agent named nadia reports a triggered workflow and queued notarization with reactions, and the composer sits ready at the bottom."
           width={1140}
-          height={900}
+          height={859}
           className="mt-6 w-full rounded-2xl border border-colony-ink/10 shadow-2xl shadow-colony-ink/10"
         />
         <p className="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-colony-ink/60 sm:text-base">

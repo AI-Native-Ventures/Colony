@@ -1,12 +1,24 @@
 // site/src/sections/Features.tsx
 import { AntMark } from "@/brand/AntMark";
 
-// Three of the five cards below carry a real crop from the same engineering
-// channel screenshot ProductShowcase renders in full (see
-// site/public/product-channel.png, generated via `just desktop-screenshot`).
-// Canvas and Git built in have no honest crop from that capture (the mock
-// conversation never opens a canvas or a repo view), so they keep the
-// original AntMark badge per docs/BRAND.md rather than fake a screenshot.
+// Four of the five cards below carry a real crop from an actual E2E
+// screenshot, generated via `just desktop-screenshot`. Channels, Agent
+// teams, and Workflows come from the same engineering-channel capture
+// ProductShowcase renders in full (site/public/product-channel.png). Git
+// built in is a separate capture of the Projects feature's commit view
+// (mock route /projects/<bob>:design-system?commitHash=..., a seeded repo
+// with deterministic mock commit/diff data — deliberately not the "buzz"
+// mock project, whose name would put "buzz" text in a Colony screenshot).
+//
+// Canvas has no honest screenshot: the E2E mock's `get_canvas` handler
+// always returns `{ content: null }` (desktop/src/testing/e2eBridge.ts,
+// case "get_canvas"), so every reachable canvas view renders "No canvas
+// set for this channel." — a real UI state, but one that would misrepresent
+// the feature as empty rather than illustrate it. Flagged to the team lead;
+// shipping a deliberately distinct non-screenshot treatment (a dot-grid
+// "blank canvas" pattern instead of the plain badge the other placeholder
+// used) rather than either faking content or leaving a lone odd card next
+// to four real screenshots.
 const FEATURES = [
   {
     title: "Channels",
@@ -38,10 +50,16 @@ const FEATURES = [
   {
     title: "Canvas",
     body: "A shared surface for diagrams and drafts that agents and people can both edit in real time.",
+    pattern: true,
   },
   {
     title: "Git built in",
     body: "Repos, pull requests, and signed commits live in the same workspace as the conversation about them.",
+    image: {
+      src: "/feature-git.png",
+      alt: "A design-system repository in Colony's git browser: Files, Commits, Issues, and Pull Request tabs, and a commit with +27/-4 changes.",
+      position: "object-top",
+    },
   },
 ];
 
@@ -65,12 +83,14 @@ export function Features() {
                   className={`h-28 w-full border-b border-colony-ink/10 object-cover ${feature.image.position}`}
                 />
               ) : (
-                // Ant on an ink badge, same pairing as the packaged app icon
-                // (white ant on violet), inverted per hue: canvas-tint ant
-                // on ink. Keeps AntMark itself wingless and untouched. Sits
-                // in a same-height band as the image cards so the row of
-                // five stays visually aligned.
-                <div className="flex h-28 w-full items-center justify-center border-b border-colony-ink/10 bg-colony-ink/5">
+                // Canvas's deliberate non-screenshot treatment: a dot-grid
+                // "blank canvas" pattern, distinct from a plain flat badge
+                // so it reads as a considered choice sitting next to four
+                // real screenshots, not a placeholder someone forgot. Ant on
+                // an ink badge, same pairing as the packaged app icon (white
+                // ant on violet), inverted per hue: canvas-tint ant on ink.
+                // Keeps AntMark itself wingless and untouched.
+                <div className="flex h-28 w-full items-center justify-center border-b border-colony-ink/10 bg-colony-ink/5 bg-[radial-gradient(circle,_currentColor_1px,_transparent_1px)] bg-[length:14px_14px] text-colony-ink/15">
                   <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-colony-ink text-colony-canvas">
                     <AntMark className="h-5 w-5" />
                   </span>
