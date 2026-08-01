@@ -72,7 +72,7 @@ export function CampaignListView({
               <span className="h-2 w-2 rounded-full bg-[#8b5cf6]" />
               {industryName ?? vertical.industryId}
             </div>
-            <h2 className="text-3xl font-bold tracking-tight text-foreground">
+            <h2 className="text-3xl font-semibold tracking-tight text-foreground">
               {vertical.name}
             </h2>
           </div>
@@ -81,7 +81,7 @@ export function CampaignListView({
         <div className="space-y-8 px-6 pb-10 pt-6">
           <div className="grid grid-cols-2 gap-4">
             <div className="rounded-2xl border border-border bg-muted/20 p-5">
-              <div className="text-3xl font-bold text-foreground">
+              <div className="text-3xl font-semibold tabular-nums text-foreground">
                 {campaigns.length}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
@@ -89,7 +89,7 @@ export function CampaignListView({
               </div>
             </div>
             <div className="rounded-2xl border border-border bg-muted/20 p-5">
-              <div className="text-3xl font-bold text-foreground">
+              <div className="text-3xl font-semibold tabular-nums text-foreground">
                 {totalLeads}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">

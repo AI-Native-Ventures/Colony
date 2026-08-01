@@ -43,7 +43,7 @@ export function DiscoveryHeader({
     <header className="space-y-8">
       <div className="flex items-end justify-between gap-8">
         <div className="min-w-0">
-          <h1 className="font-serif text-5xl leading-none tracking-tight text-foreground">
+          <h1 className="font-sans text-title font-semibold tracking-tight text-foreground">
             Millions of leads,{" "}
             <em className="not-italic italic text-[#8b5cf6]">
               one search away.
@@ -143,7 +143,7 @@ export function DiscoveryHeader({
           </button>
           <div className="flex items-end justify-between gap-4 border-b border-border pb-6">
             <div>
-              <h2 className="font-serif text-5xl leading-none text-foreground">
+              <h2 className="font-sans text-3xl font-semibold tracking-tight text-foreground">
                 {title}
               </h2>
               {description ? (
