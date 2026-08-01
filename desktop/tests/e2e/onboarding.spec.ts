@@ -2749,7 +2749,9 @@ test("successful starter channel retry clears its actionable toast", async ({
   await expectStarterChannels(page);
 });
 
-test("first-run onboarding posts the live Fizz kickoff", async ({ page }) => {
+test("first-run onboarding posts the live Chief of Staff kickoff", async ({
+  page,
+}) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
@@ -2771,10 +2773,10 @@ test("first-run onboarding posts the live Fizz kickoff", async ({ page }) => {
   // Greeted by the name typed above — the @mention pill also files the opener
   // into the new user's Inbox mentions feed.
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi @Morty QA, I'm Fizz. Welcome to Colony.",
+    "Hi @Morty QA, I'm Fizz, your Chief of Staff.",
   );
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Honey and Bumble, introduce yourselves",
+    "Send me the company website.",
   );
 });
 
@@ -2795,10 +2797,10 @@ test("first-run onboarding lands before Welcome team bootstrap completes", async
   await expectPrivateWelcomeLanding(page);
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi @Morty QA, I'm Fizz. Welcome to Colony.",
+    "Hi @Morty QA, I'm Fizz, your Chief of Staff.",
   );
   await page.waitForTimeout(1_500);
-  expect(await commandCount(page, "create_managed_agent")).toBe(3);
+  expect(await commandCount(page, "create_managed_agent")).toBe(1);
 });
 
 test("existing relay profile with display name auto-skips onboarding without localStorage", async ({
