@@ -119,6 +119,45 @@ pub fn build_discovery_cancel_action(
     build_run_action(relay_pubkey, DiscoveryOperation::Cancel, request)
 }
 
+/// Build the exact relay-signable Discovery receipt envelope.
+///
+/// Relay ingest rejects client-authored receipt kinds, so exposing the shape
+/// does not grant authority; the configured relay key remains the trust root.
+pub fn build_discovery_receipt(
+    actor_pubkey: PublicKey,
+    action_event_id: EventId,
+    receipt: &DiscoveryReceipt,
+) -> Result<EventBuilder, DiscoverySdkError> {
+    validate_projection(receipt)?;
+    let actor_text = actor_pubkey.to_hex();
+    let action_text = action_event_id.to_hex();
+    let run_text = receipt.run.run_id.to_string();
+    let request_text = receipt.request_id.to_string();
+    let idempotency_text = receipt.idempotency_key.to_string();
+    let content = DiscoveryReceiptContent {
+        schema: RECEIPT_SCHEMA.to_owned(),
+        receipt: receipt.clone(),
+    };
+    let tags = [
+        scalar_tag("p", &actor_text)?,
+        tuple_tag(&["e", &action_text, "", "discovery-action"])?,
+        scalar_tag("run", &run_text)?,
+        tuple_tag(&[
+            "discovery-receipt",
+            "1",
+            operation_tag(receipt.operation),
+            &request_text,
+            &idempotency_text,
+            &run_text,
+        ])?,
+    ];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_DISCOVERY_RECEIPT as u16),
+        canonical_content(&content, "discovery receipt")?,
+    )
+    .tags(tags))
+}
+
 fn build_run_action(
     relay_pubkey: PublicKey,
     operation: DiscoveryOperation,
@@ -464,7 +503,11 @@ fn required_tuple_tag<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::discovery::{DiscoveryAction, DiscoveryRunRequest, DiscoveryStartRequest};
+    use buzz_core::discovery::{
+        DiscoveryAction, DiscoveryOperation, DiscoveryReceipt, DiscoveryRunProjection,
+        DiscoveryRunRequest, DiscoveryRunState, DiscoveryStartRequest,
+    };
+    use chrono::TimeZone;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use uuid::Uuid;
 
@@ -589,5 +632,46 @@ mod tests {
             parse_discovery_action(&event),
             Err(DiscoverySdkError::TagContentMismatch("discovery action"))
         ));
+    }
+
+    #[test]
+    fn receipt_round_trips_with_exact_private_tags() {
+        let actor = Keys::generate();
+        let relay = Keys::generate();
+        let action = EventBuilder::new(Kind::Custom(KIND_DISCOVERY_ACTION as u16), "{}")
+            .sign_with_keys(&actor)
+            .expect("test action signs");
+        let receipt = DiscoveryReceipt {
+            operation: DiscoveryOperation::Start,
+            request_id: Uuid::from_u128(21),
+            idempotency_key: Uuid::from_u128(22),
+            run: DiscoveryRunProjection {
+                run_id: Uuid::from_u128(23),
+                campaign_id: Uuid::from_u128(24),
+                state: DiscoveryRunState::Queued,
+                completed_steps: 0,
+                total_steps: 5,
+                cancel_requested: false,
+                terminal_reason: None,
+                created_at: chrono::Utc
+                    .timestamp_opt(1_800_000_000, 0)
+                    .single()
+                    .expect("time"),
+                updated_at: chrono::Utc
+                    .timestamp_opt(1_800_000_000, 0)
+                    .single()
+                    .expect("time"),
+            },
+        };
+        let event = build_discovery_receipt(actor.public_key(), action.id, &receipt)
+            .expect("receipt builds")
+            .sign_with_keys(&relay)
+            .expect("receipt signs");
+        let parsed = parse_discovery_receipt(&event).expect("receipt parses");
+
+        assert_eq!(parsed.actor_pubkey, actor.public_key());
+        assert_eq!(parsed.action_event_id, action.id);
+        assert_eq!(parsed.receipt, receipt);
+        assert_eq!(event.tags.len(), 4);
     }
 }

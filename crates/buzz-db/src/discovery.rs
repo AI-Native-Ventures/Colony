@@ -1,10 +1,14 @@
 //! Private entitlement, authorization, and durable run persistence for Discovery.
 
 use buzz_core::{
-    discovery::{DiscoveryRunProjection, DiscoveryRunState, DiscoveryTerminalReason},
-    CommunityId,
+    discovery::{
+        DiscoveryOperation, DiscoveryRunProjection, DiscoveryRunState, DiscoveryTerminalReason,
+    },
+    CommunityId, StoredEvent,
 };
 use chrono::{DateTime, Duration, Utc};
+use nostr::Event;
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -115,6 +119,71 @@ pub enum DiscoveryAdvance {
     Cancelled(DiscoveryRunRecord),
     /// The caller no longer owns a valid lease.
     LostLease,
+}
+
+/// State mutation associated with one validated signed Discovery command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryCommandMutation {
+    /// Insert a deterministic queued run.
+    Start {
+        /// Campaign reference copied from the action.
+        campaign_id: Uuid,
+        /// Server-configured fake executor step count.
+        total_steps: u32,
+        /// Timestamp already embedded in the relay-signed queued receipt.
+        accepted_at: DateTime<Utc>,
+    },
+    /// Read an existing run without mutating it.
+    Status {
+        /// Run referenced by the action.
+        run_id: Uuid,
+    },
+    /// Set the cancellation request on an existing run.
+    Cancel {
+        /// Run referenced by the action.
+        run_id: Uuid,
+    },
+}
+
+impl DiscoveryCommandMutation {
+    /// Operation represented by this mutation.
+    pub const fn operation(self) -> DiscoveryOperation {
+        match self {
+            Self::Start { .. } => DiscoveryOperation::Start,
+            Self::Status { .. } => DiscoveryOperation::Status,
+            Self::Cancel { .. } => DiscoveryOperation::Cancel,
+        }
+    }
+
+    fn target_id(self, community_id: CommunityId, idempotency_key: Uuid) -> Uuid {
+        match self {
+            Self::Start { .. } => deterministic_run_id(community_id, idempotency_key),
+            Self::Status { run_id } | Self::Cancel { run_id } => run_id,
+        }
+    }
+}
+
+/// Atomic result of storing a command, its safe receipt, and its run mutation.
+#[derive(Debug, Clone)]
+pub enum DiscoveryCommandApply {
+    /// This action won the retry key and committed all records.
+    Applied {
+        /// Stored actor-signed action.
+        action: StoredEvent,
+        /// Stored relay-signed receipt.
+        receipt: StoredEvent,
+        /// Resulting private run state.
+        run: DiscoveryRunRecord,
+    },
+    /// The same logical command already committed.
+    Duplicate {
+        /// Original actor-signed action event ID.
+        original_action_event_id: Vec<u8>,
+        /// Original relay-signed receipt event ID.
+        receipt_event_id: Vec<u8>,
+        /// Current private run state.
+        run: DiscoveryRunRecord,
+    },
 }
 
 /// Derive a stable run ID from the server-resolved tenant and retry key.
@@ -234,6 +303,168 @@ impl Db {
         })
     }
 
+    /// Atomically apply one validated command and persist its signed audit events.
+    pub async fn apply_discovery_command_once<F>(
+        &self,
+        community_id: CommunityId,
+        actor_pubkey: &[u8; 32],
+        idempotency_key: Uuid,
+        mutation: DiscoveryCommandMutation,
+        action_event: &Event,
+        build_receipt: F,
+    ) -> Result<DiscoveryCommandApply>
+    where
+        F: FnOnce(&DiscoveryRunRecord) -> Result<Event>,
+    {
+        if action_event.pubkey.to_bytes() != *actor_pubkey {
+            return Err(DbError::AccessDenied(
+                "Discovery action signer does not match authenticated actor".into(),
+            ));
+        }
+        let mut tx = self.pool.begin().await?;
+        require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
+        let operation = mutation.operation();
+        let target_id = mutation.target_id(community_id, idempotency_key);
+        let fingerprint = command_fingerprint(operation, target_id);
+        if let Some(row) = sqlx::query(
+            "SELECT operation, request_fingerprint, action_event_id, receipt_event_id, run_id \
+             FROM discovery_action_claims WHERE community_id=$1 AND idempotency_key=$2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let claimed_operation: String = row.try_get("operation")?;
+            let claimed_fingerprint: Vec<u8> = row.try_get("request_fingerprint")?;
+            if claimed_operation != operation_text(operation)
+                || claimed_fingerprint != fingerprint.as_slice()
+            {
+                return Err(DbError::AccessDenied(
+                    "Discovery idempotency key conflicts with an existing command".into(),
+                ));
+            }
+            let run_id: Uuid = row.try_get("run_id")?;
+            let run = load_run_tx(&mut tx, community_id, run_id, false).await?;
+            tx.commit().await?;
+            return Ok(DiscoveryCommandApply::Duplicate {
+                original_action_event_id: row.try_get("action_event_id")?,
+                receipt_event_id: row.try_get("receipt_event_id")?,
+                run,
+            });
+        }
+
+        let run = match mutation {
+            DiscoveryCommandMutation::Start {
+                campaign_id,
+                total_steps,
+                accepted_at,
+            } => {
+                if total_steps == 0 || total_steps > i32::MAX as u32 {
+                    return Err(DbError::InvalidData(
+                        "Discovery total steps must be between 1 and i32::MAX".into(),
+                    ));
+                }
+                let row = sqlx::query(
+                    "INSERT INTO discovery_runs \
+                     (community_id, id, campaign_id, requested_by, start_idempotency_key, \
+                      total_steps, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+                     RETURNING id, community_id, campaign_id, requested_by, start_idempotency_key, \
+                     state, completed_steps, total_steps, cancel_requested, claim_id, lease_until, \
+                     attempt, terminal_reason, created_at, updated_at",
+                )
+                .bind(community_id.as_uuid())
+                .bind(target_id)
+                .bind(campaign_id)
+                .bind(actor_pubkey.as_slice())
+                .bind(idempotency_key)
+                .bind(total_steps as i32)
+                .bind(accepted_at)
+                .fetch_one(&mut *tx)
+                .await?;
+                run_from_row(&row)?
+            }
+            DiscoveryCommandMutation::Status { run_id } => {
+                load_run_tx(&mut tx, community_id, run_id, false).await?
+            }
+            DiscoveryCommandMutation::Cancel { run_id } => {
+                let row = sqlx::query(
+                    "UPDATE discovery_runs \
+                     SET cancel_requested=CASE WHEN state IN ('queued','running') THEN TRUE \
+                                               ELSE cancel_requested END, \
+                         updated_at=CASE WHEN state IN ('queued','running') THEN now() \
+                                         ELSE updated_at END \
+                     WHERE community_id=$1 AND id=$2 \
+                     RETURNING id, community_id, campaign_id, requested_by, start_idempotency_key, \
+                     state, completed_steps, total_steps, cancel_requested, claim_id, lease_until, \
+                     attempt, terminal_reason, created_at, updated_at",
+                )
+                .bind(community_id.as_uuid())
+                .bind(run_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| DbError::NotFound("Discovery run".into()))?;
+                run_from_row(&row)?
+            }
+        };
+
+        // Build the receipt from the exact row produced while the community
+        // authority lock is held. Loading a projection in the broker before
+        // this transaction would let a concurrent cancel/status command make
+        // the signed receipt disagree with the committed result.
+        let receipt_event = build_receipt(&run)?;
+
+        let (stored_action, action_inserted) = crate::event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community_id,
+            action_event,
+            None,
+            None,
+        )
+        .await?;
+        if !action_inserted {
+            return Err(DbError::InvalidData(
+                "Discovery action event already exists without its command claim".into(),
+            ));
+        }
+        let (stored_receipt, receipt_inserted) =
+            crate::event::insert_event_with_thread_metadata_tx(
+                &mut tx,
+                community_id,
+                &receipt_event,
+                None,
+                None,
+            )
+            .await?;
+        if !receipt_inserted {
+            return Err(DbError::InvalidData(
+                "Discovery receipt event already exists without its command claim".into(),
+            ));
+        }
+        sqlx::query(
+            "INSERT INTO discovery_action_claims \
+             (community_id, idempotency_key, operation, request_fingerprint, \
+              action_event_id, receipt_event_id, run_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(idempotency_key)
+        .bind(operation_text(operation))
+        .bind(fingerprint.as_slice())
+        .bind(action_event.id.as_bytes())
+        .bind(receipt_event.id.as_bytes())
+        .bind(run.id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(DiscoveryCommandApply::Applied {
+            action: stored_action,
+            receipt: stored_receipt,
+            run,
+        })
+    }
+
     /// Load a run after rechecking entitlement and actor authorization.
     pub async fn get_discovery_run_authorized(
         &self,
@@ -264,7 +495,11 @@ impl Db {
         let mut tx = self.pool.begin().await?;
         require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
         let row = sqlx::query(
-            "UPDATE discovery_runs SET cancel_requested=TRUE, updated_at=now() \
+            "UPDATE discovery_runs \
+             SET cancel_requested=CASE WHEN state IN ('queued','running') THEN TRUE \
+                                       ELSE cancel_requested END, \
+                 updated_at=CASE WHEN state IN ('queued','running') THEN now() \
+                                 ELSE updated_at END \
              WHERE community_id=$1 AND id=$2 \
              RETURNING id, community_id, campaign_id, requested_by, start_idempotency_key, \
              state, completed_steps, total_steps, cancel_requested, claim_id, lease_until, \
@@ -294,7 +529,7 @@ impl Db {
         let lease_until = Utc::now() + lease_duration;
         let row = sqlx::query(
             "WITH candidate AS ( \
-                 SELECT id FROM discovery_runs \
+                 SELECT community_id, id FROM discovery_runs \
                  WHERE state IN ('queued', 'running') \
                    AND (claim_id IS NULL OR lease_until < now()) \
                  ORDER BY created_at, id \
@@ -302,7 +537,7 @@ impl Db {
              ) \
              UPDATE discovery_runs r \
              SET state='running', claim_id=$1, lease_until=$2, attempt=r.attempt+1, updated_at=now() \
-             FROM candidate c WHERE r.id=c.id \
+             FROM candidate c WHERE r.community_id=c.community_id AND r.id=c.id \
              RETURNING r.id, r.community_id, r.campaign_id, r.requested_by, \
              r.start_idempotency_key, r.state, r.completed_steps, r.total_steps, \
              r.cancel_requested, r.claim_id, r.lease_until, r.attempt, r.terminal_reason, \
@@ -458,6 +693,51 @@ impl Db {
         .await?;
         Ok(result.rows_affected() == 1)
     }
+}
+
+fn command_fingerprint(operation: DiscoveryOperation, target_id: Uuid) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"colony.discovery-command/v1\0");
+    hasher.update(operation_text(operation).as_bytes());
+    hasher.update([0]);
+    hasher.update(target_id.as_bytes());
+    hasher.finalize().into()
+}
+
+fn operation_text(operation: DiscoveryOperation) -> &'static str {
+    match operation {
+        DiscoveryOperation::Start => "start",
+        DiscoveryOperation::Status => "status",
+        DiscoveryOperation::Cancel => "cancel",
+    }
+}
+
+async fn load_run_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+    for_update: bool,
+) -> Result<DiscoveryRunRecord> {
+    let row = if for_update {
+        sqlx::query(
+            "SELECT id, community_id, campaign_id, requested_by, start_idempotency_key, state, \
+             completed_steps, total_steps, cancel_requested, claim_id, lease_until, attempt, \
+             terminal_reason, created_at, updated_at FROM discovery_runs \
+             WHERE community_id=$1 AND id=$2 FOR UPDATE",
+        )
+        .bind(community_id.as_uuid())
+        .bind(run_id)
+        .fetch_optional(&mut **tx)
+        .await?
+    } else {
+        sqlx::query(DISCOVERY_RUN_SELECT_BY_ID)
+            .bind(community_id.as_uuid())
+            .bind(run_id)
+            .fetch_optional(&mut **tx)
+            .await?
+    }
+    .ok_or_else(|| DbError::NotFound("Discovery run".into()))?;
+    run_from_row(&row)
 }
 
 const DISCOVERY_RUN_SELECT_BY_ID: &str =

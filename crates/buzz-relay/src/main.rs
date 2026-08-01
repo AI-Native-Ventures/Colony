@@ -729,6 +729,11 @@ async fn main() -> anyhow::Result<()> {
         info!("NIP-PL push matcher and delivery worker started");
     }
 
+    // The foundation executor is deliberately opt-in and performs no network
+    // calls. Production relays remain unable to fabricate Discovery results
+    // unless the explicit fake-executor flag is set.
+    buzz_relay::discovery_runtime::spawn_workers(Arc::clone(&state));
+
     // NIP-ER reminder scheduler — polls for due reminders and publishes them
     // to Redis pub/sub for cross-pod fan-out. Each pod's existing
     // subscribe_local consumer picks them up and applies the author-only gate.

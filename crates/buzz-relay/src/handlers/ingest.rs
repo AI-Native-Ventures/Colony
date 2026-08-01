@@ -16,7 +16,7 @@ use buzz_core::kind::{
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BLOCK_ACTION,
     KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST, KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST,
     KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION, KIND_CONTACT_LIST, KIND_DELETION,
-    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
+    KIND_DISCOVERY_ACTION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
     KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
     KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
@@ -227,6 +227,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // check is made under `FOR UPDATE` inside the broker's transaction.
         | KIND_COMPANY_ACTION
         | KIND_PARTY_ACTION
+        | KIND_DISCOVERY_ACTION
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
@@ -395,7 +396,7 @@ pub(crate) async fn derive_reaction_channel(
 
 /// Whether a command kind is handled by the generic command executor.
 ///
-/// Company and Party Actions are command kinds but are deliberately excluded:
+/// Company, Party, and Discovery Actions are command kinds but are deliberately excluded:
 /// this branch returns BEFORE the ban/timeout write-block, so routing them here
 /// would let a banned or timed-out owner mutate company or party state. They are
 /// brokered further down, past that gate.
@@ -403,6 +404,7 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
     buzz_core::kind::is_command_kind(kind)
         && kind != KIND_COMPANY_ACTION
         && kind != KIND_PARTY_ACTION
+        && kind != KIND_DISCOVERY_ACTION
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -456,6 +458,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_BLOCK_CATALOG_ENTRY
             | KIND_COMPANY_ACTION
             | KIND_PARTY_ACTION
+            | KIND_DISCOVERY_ACTION
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
@@ -1805,6 +1808,52 @@ async fn ingest_event_inner(
                 accepted: false,
                 message: format!("conflict: {message}"),
             }),
+        };
+    }
+
+    // Discovery is a community-global paid primitive. The signed command is
+    // authorized and atomically receipted by the broker after restrictions
+    // have been enforced, never by the generic command path.
+    if crate::discovery_broker::is_discovery_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot operate Discovery".into(),
+            ));
+        }
+        return match crate::discovery_broker::handle_discovery_action(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::discovery_broker::DiscoveryBrokerOutcome::Applied {
+                receipt_event_id,
+                run,
+            } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: serde_json::json!({
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                    "run": run,
+                })
+                .to_string(),
+            }),
+            crate::discovery_broker::DiscoveryBrokerOutcome::Duplicate {
+                original_action_event_id,
+                receipt_event_id,
+                run,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: serde_json::json!({
+                        "duplicate": true,
+                        "original_action_event_id": original_event_id_hex,
+                        "receipt_event_id": hex::encode(receipt_event_id),
+                        "run": run,
+                    })
+                    .to_string(),
+                })
+            }
         };
     }
 
@@ -3187,13 +3236,18 @@ mod tests {
         assert!(!buzz_core::kind::is_relay_only_kind(KIND_COMPANY_ACTION));
     }
 
-    /// Company and Party Actions are command kinds, but they must NOT take the
+    /// Company, Party, and Discovery Actions are command kinds, but they must
+    /// NOT take the
     /// generic command branch: that branch returns before the ban/timeout
     /// write-block, so routing them there would let a banned owner mutate
     /// company or party state.
     #[test]
     fn brokered_actions_are_excluded_from_the_generic_command_branch() {
-        let brokered = [KIND_COMPANY_ACTION, KIND_PARTY_ACTION];
+        let brokered = [
+            KIND_COMPANY_ACTION,
+            KIND_PARTY_ACTION,
+            KIND_DISCOVERY_ACTION,
+        ];
         for kind in brokered {
             assert!(
                 buzz_core::kind::is_command_kind(kind),
@@ -3201,7 +3255,7 @@ mod tests {
             );
             assert!(
                 !takes_generic_command_branch(kind),
-                "routing {kind} through handle_command would skip the ban gate"
+                "routing brokered action {kind} through handle_command would skip the ban gate"
             );
         }
         // Every other command kind still takes that branch.
