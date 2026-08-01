@@ -1,6 +1,7 @@
 pub mod agent_management;
 mod client;
 mod commands;
+pub mod company_scan;
 mod error;
 mod validate;
 
