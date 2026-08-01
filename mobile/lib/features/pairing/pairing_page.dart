@@ -7,8 +7,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
-import '../../shared/widgets/tappable_flapping_bee.dart';
+import '../../shared/widgets/colony_loading_indicator.dart';
+import '../../shared/widgets/tappable_flapping_ant.dart';
 import 'pairing_provider.dart';
 import 'pairing_qr_scanner.dart';
 
@@ -242,7 +242,7 @@ class _SasVerificationView extends StatelessWidget {
         const SizedBox(height: Grid.lg),
 
         Text(
-          'You are about to transfer your Buzz identity\nto this device. Only confirm if you initiated\nthis pairing from your desktop.',
+          'You are about to transfer your Colony identity\nto this device. Only confirm if you initiated\nthis pairing from your desktop.',
           textAlign: TextAlign.center,
           style: context.textTheme.bodySmall?.copyWith(
             color: context.colors.onSurfaceVariant,
@@ -256,7 +256,7 @@ class _SasVerificationView extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              BuzzLoadingIndicator(
+              ColonyLoadingIndicator(
                 size: 24,
                 color: context.colors.primary,
                 semanticLabel: 'Connecting',

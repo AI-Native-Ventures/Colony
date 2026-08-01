@@ -151,8 +151,11 @@ void main() {
 
       expect(resolved.forcedMode, ThemeMode.dark);
       expect(resolved.dark.brightness, Brightness.dark);
-      expect(resolved.darkTheme?.name, buzzDarkThemeName);
-      expect(resolved.dark, generateColorScheme(findTheme(buzzDarkThemeName)!));
+      expect(resolved.darkTheme?.name, colonyDarkThemeName);
+      expect(
+        resolved.dark,
+        generateColorScheme(findTheme(colonyDarkThemeName)!),
+      );
     });
 
     test('light mode falls back to the default pair when pick is unpaired', () {
@@ -160,8 +163,8 @@ void main() {
 
       expect(resolved.forcedMode, ThemeMode.light);
       expect(resolved.light.brightness, Brightness.light);
-      expect(resolved.lightTheme?.name, buzzThemeName);
-      expect(resolved.light, generateColorScheme(findTheme(buzzThemeName)!));
+      expect(resolved.lightTheme?.name, colonyThemeName);
+      expect(resolved.light, generateColorScheme(findTheme(colonyThemeName)!));
     });
 
     test('an unknown scheme name falls back to the default theme', () {
@@ -175,16 +178,22 @@ void main() {
   });
 
   group('schemeForAppearanceMode', () {
-    test('system mode replaces an unpaired selection with a paired theme', () {
-      expect(
-        schemeForAppearanceMode('snazzy-light', ThemeMode.system),
-        themeGroups().paired.first.name,
-      );
-      expect(
-        schemeForAppearanceMode('nord', ThemeMode.system),
-        themeGroups().paired.first.name,
-      );
-    });
+    test(
+      'system mode replaces an unpaired selection with the default pair',
+      () {
+        // Names the first-party pair rather than `themeGroups().paired.first`,
+        // which restates the implementation. The two agreed only while the
+        // first-party theme was called Buzz and sorted first by display name.
+        expect(
+          schemeForAppearanceMode('snazzy-light', ThemeMode.system),
+          defaultSchemeName,
+        );
+        expect(
+          schemeForAppearanceMode('nord', ThemeMode.system),
+          defaultSchemeName,
+        );
+      },
+    );
 
     test('system mode preserves either half of a paired selection', () {
       expect(

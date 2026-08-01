@@ -183,7 +183,7 @@ class _IOSInlinePhotoPicker extends HookWidget {
                 child: isPreparingSelection.value
                     ? const SizedBox.square(
                         dimension: 20,
-                        child: BuzzLoadingIndicator(
+                        child: ColonyLoadingIndicator(
                           size: 20,
                           color: Colors.white,
                           semanticLabel: 'Preparing selected photos',
@@ -202,7 +202,7 @@ class _IOSInlinePhotoPicker extends HookWidget {
             const ColoredBox(
               color: Color.fromRGBO(0, 0, 0, 0.28),
               child: Center(
-                child: BuzzLoadingIndicator(
+                child: ColonyLoadingIndicator(
                   size: 44,
                   color: Colors.white,
                   semanticLabel: 'Preparing selected photos',
@@ -225,7 +225,10 @@ class _NativePhotoPickerLoading extends StatelessWidget {
       height: _attachmentExpandedHeight,
       width: double.infinity,
       child: const Center(
-        child: BuzzLoadingIndicator(size: 44, semanticLabel: 'Opening Photos'),
+        child: ColonyLoadingIndicator(
+          size: 44,
+          semanticLabel: 'Opening Photos',
+        ),
       ),
     );
   }

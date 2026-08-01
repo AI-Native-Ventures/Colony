@@ -642,7 +642,7 @@ class _NewDirectMessageSheet extends HookConsumerWidget {
                                               ),
                                               child: SizedBox.square(
                                                 dimension: 16,
-                                                child: BuzzLoadingIndicator(
+                                                child: ColonyLoadingIndicator(
                                                   size: 16,
                                                   semanticLabel:
                                                       'Creating conversation',
@@ -688,7 +688,7 @@ class _NewDirectMessageSheet extends HookConsumerWidget {
                     return const SizedBox(
                       height: 280,
                       child: Center(
-                        child: BuzzLoadingIndicator(
+                        child: ColonyLoadingIndicator(
                           size: 44,
                           semanticLabel: 'Loading people',
                         ),

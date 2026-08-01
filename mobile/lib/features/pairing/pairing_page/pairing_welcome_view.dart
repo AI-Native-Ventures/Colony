@@ -50,14 +50,14 @@ class _PairingWelcomeView extends StatelessWidget {
                     shape: BoxShape.circle,
                     color: Color(0x4DFFFFFF),
                   ),
-                  child: const TappableFlappingBee(
+                  child: const TappableFlappingAnt(
                     width: 76,
                     color: _onboardingInk,
                   ),
                 ),
                 const SizedBox(height: Grid.sm),
                 Text(
-                  'Welcome to Buzz',
+                  'Welcome to Colony',
                   textAlign: TextAlign.center,
                   style: context.textTheme.headlineSmall?.copyWith(
                     color: _onboardingInk,
@@ -87,7 +87,7 @@ class _PairingWelcomeView extends StatelessWidget {
                               ? const SizedBox(
                                   width: 20,
                                   height: 20,
-                                  child: BuzzLoadingIndicator(
+                                  child: ColonyLoadingIndicator(
                                     size: 20,
                                     color: _onboardingCtaLabel,
                                     semanticLabel: 'Opening scanner',
@@ -174,7 +174,7 @@ class _PairingWelcomeView extends StatelessWidget {
                                             ? const SizedBox(
                                                 width: 20,
                                                 height: 20,
-                                                child: BuzzLoadingIndicator(
+                                                child: ColonyLoadingIndicator(
                                                   size: 20,
                                                   color: _onboardingCtaLabel,
                                                   semanticLabel: 'Connecting',

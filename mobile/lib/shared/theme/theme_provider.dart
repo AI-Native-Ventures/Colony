@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'accent_colors.dart';
 import 'adaptive_theme.dart';
-import 'buzz_theme.dart';
+import 'colony_theme.dart';
 import 'color_scheme.dart';
 import 'theme_catalog.dart';
 import 'theme_pairs.dart';
@@ -13,10 +13,22 @@ const _themeModeKey = 'buzz_theme_mode';
 const _accentKey = 'buzz_accent_color';
 const _schemeKey = 'buzz_color_scheme';
 
-/// Buzz ships as the default: the first-party pair, so a fresh install gets the
-/// branded top-section gradient without picking a theme first.
-const defaultSchemeName = buzzThemeName;
-const defaultSchemeDisplayName = 'Buzz';
+/// Colony ships as the default: the first-party pair, so a fresh install gets
+/// the branded top-section gradient without picking a theme first.
+const defaultSchemeName = colonyThemeName;
+const defaultSchemeDisplayName = 'Colony';
+
+/// Scheme names the first-party pair was stored under before it was renamed
+/// from Buzz to Colony. The app never writes these any more, but they are
+/// sitting in the preferences of every install that predates the rename, and
+/// they no longer resolve in [themeCatalog]. Read them so an existing selection
+/// survives instead of falling through to an unrelated theme.
+const _legacyColonyThemeName = 'buzz';
+const _legacyColonyDarkThemeName = 'buzz-dark';
+const _legacySchemeNames = <String, String>{
+  _legacyColonyThemeName: colonyThemeName,
+  _legacyColonyDarkThemeName: colonyDarkThemeName,
+};
 
 /// Pre-loaded SharedPreferences instance, overridden in main().
 final savedPrefsProvider = Provider<SharedPreferences>(
@@ -78,7 +90,16 @@ class SchemeNotifier extends Notifier<String?> {
   @override
   String? build() {
     final prefs = ref.read(savedPrefsProvider);
-    final stored = prefs.getString(_schemeKey);
+    var stored = prefs.getString(_schemeKey);
+
+    // Migrate a pre-rename value before anything tries to resolve it: the key
+    // is unchanged, only the value it holds moved from Buzz to Colony.
+    final migrated = _legacySchemeNames[stored];
+    if (migrated != null) {
+      prefs.setString(_schemeKey, migrated);
+      stored = migrated;
+    }
+
     final compatible = schemeForAppearanceMode(
       stored,
       ref.watch(themeProvider),
@@ -114,12 +135,18 @@ final schemeProvider = NotifierProvider<SchemeNotifier, String?>(
 ///
 /// System mode only offers paired themes because they have both light and dark
 /// variants. Switching to it from an unpaired or unknown selection therefore
-/// falls back to the first paired theme, matching the picker ordering.
+/// falls back to the first-party pair, the same default a fresh install gets.
 String? schemeForAppearanceMode(String? schemeName, ThemeMode mode) {
   if (mode != ThemeMode.system) return schemeName;
 
   final selected = findTheme(schemeName ?? defaultSchemeName);
   if (selected != null && isPairedTheme(selected.name)) return schemeName;
+
+  // Name the first-party pair explicitly rather than taking whichever paired
+  // theme sorts first by display name. Those were the same theme only by
+  // alphabetical accident: "Buzz" led the sorted list, "Colony" does not, so
+  // relying on the ordering would silently hand this user Catppuccin Latte.
+  if (isPairedTheme(defaultSchemeName)) return defaultSchemeName;
 
   return themeGroups().paired.firstOrNull?.name ?? schemeName;
 }

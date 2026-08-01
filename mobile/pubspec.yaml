@@ -1,5 +1,5 @@
 name: buzz
-description: Buzz mobile client
+description: Colony mobile client
 publish_to: 'none'
 version: 0.0.0+1
 
@@ -50,7 +50,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/buzz-icon.png
+    - assets/images/colony-icon.png
   fonts:
     - family: Inter
       fonts:

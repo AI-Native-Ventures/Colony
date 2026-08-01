@@ -509,7 +509,7 @@ class _AttachmentStrip extends StatelessWidget {
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    BuzzLoadingIndicator(
+                    ColonyLoadingIndicator(
                       size: 34,
                       color: context.colors.primary,
                       semanticLabel: label,

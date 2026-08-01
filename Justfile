@@ -639,7 +639,7 @@ mobile-dev:
     unset GIT_DIR GIT_WORK_TREE
     flutter run
 
-# Uninstall stale worktree-suffixed Buzz debug installs (production apps kept)
+# Uninstall stale worktree-suffixed Colony debug installs (production apps kept)
 mobile-clean:
     ./scripts/mobile-worktree-clean.sh
 

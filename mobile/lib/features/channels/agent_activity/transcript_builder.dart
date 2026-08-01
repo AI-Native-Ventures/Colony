@@ -219,7 +219,11 @@ _parsePromptText(String text) {
 
   PromptSection? eventSection;
   for (final section in sections) {
-    if (section.title.toLowerCase().startsWith('buzz event')) {
+    // The section header is written by the ACP harness, not by this file, so
+    // both prefixes have to match: `buzz event` is legacy data from before the
+    // rename and is still what an un-renamed harness emits.
+    final title = section.title.toLowerCase();
+    if (title.startsWith('colony event') || title.startsWith('buzz event')) {
       eventSection = section;
       break;
     }
@@ -234,7 +238,7 @@ _parsePromptText(String text) {
     userText: eventContent,
     userTitle: eventKind != null && eventKind.isNotEmpty
         ? _titleCase(eventKind)
-        : 'Buzz event',
+        : 'Colony event',
   );
 }
 

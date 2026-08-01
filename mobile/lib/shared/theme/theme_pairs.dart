@@ -4,10 +4,13 @@ import 'theme_catalog.dart';
 /// (`desktop/src/shared/theme/theme-loader.ts`) so both clients offer the same
 /// System-mode pairings.
 ///
-/// Buzz leads the map the way it leads desktop's, so the first-party pair sorts
-/// ahead of the borrowed syntax themes wherever insertion order is preserved.
+/// Colony leads the map the way it leads desktop's, so the first-party pair
+/// sorts ahead of the borrowed syntax themes wherever insertion order is
+/// preserved. Note that the appearance picker is not one of those places:
+/// [themeGroups] re-sorts by display name, so leading the map does not by
+/// itself put Colony first in the System-mode list.
 const themePairs = <String, String>{
-  'buzz': 'buzz-dark',
+  'colony': 'colony-dark',
   'catppuccin-latte': 'catppuccin-mocha',
   'everforest-light': 'everforest-dark',
   'github-light': 'github-dark',

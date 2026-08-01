@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/buzz_loading_indicator.dart';
+import 'package:buzz/shared/widgets/colony_loading_indicator.dart';
 
 Widget _testable({required bool disableAnimations}) {
   return ProviderScope(
@@ -13,7 +13,7 @@ Widget _testable({required bool disableAnimations}) {
           disableAnimations: disableAnimations,
         ),
         child: const Scaffold(
-          body: BuzzLoadingIndicator(semanticLabel: 'Loading photos'),
+          body: ColonyLoadingIndicator(semanticLabel: 'Loading photos'),
         ),
       ),
     ),
@@ -28,7 +28,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 70));
 
     final spinner = tester.widget<RotationTransition>(
-      find.byKey(const ValueKey('buzz-loading-indicator-spinner')),
+      find.byKey(const ValueKey('colony-loading-indicator-spinner')),
     );
     expect(spinner.turns.value, greaterThan(0));
     expect(find.bySemanticsLabel('Loading photos'), findsOneWidget);
@@ -42,7 +42,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 70));
 
     final spinner = tester.widget<RotationTransition>(
-      find.byKey(const ValueKey('buzz-loading-indicator-spinner')),
+      find.byKey(const ValueKey('colony-loading-indicator-spinner')),
     );
     expect(spinner.turns.value, 0);
     expect(tester.binding.hasScheduledFrame, isFalse);

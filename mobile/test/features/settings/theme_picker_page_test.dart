@@ -70,10 +70,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        instance.getString('buzz_color_scheme'),
-        themeGroups().paired.first.name,
-      );
+      // Asserts the first-party pair by name, not `themeGroups().paired.first`.
+      // The latter restates the implementation and so held even when the
+      // Colony rename moved the fallback onto Catppuccin Latte.
+      expect(instance.getString('buzz_color_scheme'), defaultSchemeName);
     });
 
     testWidgets('light mode lists light themes by their full name', (
