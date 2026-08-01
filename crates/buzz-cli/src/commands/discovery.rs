@@ -162,11 +162,13 @@ async fn fetch_and_verify_receipt(
     submitted_action_id: &str,
     receipt_id: Option<&str>,
 ) -> Result<buzz_sdk::discovery::ParsedDiscoveryReceipt, CliError> {
+    let actor = client.keys().public_key().to_hex();
     let filter = if let Some(receipt_id) = receipt_id {
         json!({
             "ids": [receipt_id],
             "kinds": [KIND_DISCOVERY_RECEIPT],
             "authors": [relay.to_hex()],
+            "#p": [actor],
             "limit": 1
         })
     } else {
@@ -174,6 +176,7 @@ async fn fetch_and_verify_receipt(
             "kinds": [KIND_DISCOVERY_RECEIPT],
             "authors": [relay.to_hex()],
             "#e": [submitted_action_id],
+            "#p": [actor],
             "limit": 1
         })
     };

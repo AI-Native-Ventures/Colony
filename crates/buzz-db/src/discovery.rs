@@ -442,6 +442,7 @@ impl Db {
                 "Discovery receipt event already exists without its command claim".into(),
             ));
         }
+        crate::insert_mentions_tx(&mut tx, community_id, &receipt_event, None).await?;
         sqlx::query(
             "INSERT INTO discovery_action_claims \
              (community_id, idempotency_key, operation, request_fingerprint, \

@@ -13,6 +13,14 @@ use nostr::Event;
 
 use crate::{handlers::event::dispatch_persistent_event, state::AppState};
 
+/// Stable broker failure classes used by ingest to preserve HTTP/CLI semantics.
+pub(crate) enum DiscoveryBrokerError {
+    Invalid(String),
+    Restricted(String),
+    Conflict(String),
+    Internal(String),
+}
+
 /// Successful result returned to event ingest.
 pub(crate) enum DiscoveryBrokerOutcome {
     /// This signed action committed a command and receipt.
@@ -46,19 +54,22 @@ pub(crate) async fn handle_discovery_action(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     action_event: &Event,
-) -> Result<DiscoveryBrokerOutcome, String> {
+) -> Result<DiscoveryBrokerOutcome, DiscoveryBrokerError> {
     // Discovery receipts are commercial access-control records. The shared
     // development fallback key is not an acceptable authority for them.
     if state.config.relay_private_key.is_none() {
-        return Err(
+        return Err(DiscoveryBrokerError::Invalid(
             "Discovery actions require a durable relay signing key (set BUZZ_RELAY_PRIVATE_KEY)"
                 .into(),
-        );
+        ));
     }
 
-    let parsed = parse_discovery_action(action_event).map_err(|error| error.to_string())?;
+    let parsed = parse_discovery_action(action_event)
+        .map_err(|error| DiscoveryBrokerError::Invalid(error.to_string()))?;
     if parsed.relay_pubkey != state.relay_keypair.public_key() {
-        return Err("Discovery action `p` tag must target this relay".into());
+        return Err(DiscoveryBrokerError::Invalid(
+            "Discovery action `p` tag must target this relay".into(),
+        ));
     }
 
     let actor = action_event.pubkey.to_bytes();
@@ -68,7 +79,9 @@ pub(crate) async fn handle_discovery_action(
     let mutation = match parsed.action {
         DiscoveryAction::Start(request) => {
             if !state.config.discovery.fake_executor_enabled {
-                return Err("Discovery execution is not enabled on this relay".into());
+                return Err(DiscoveryBrokerError::Invalid(
+                    "Discovery execution is not enabled on this relay".into(),
+                ));
             }
             DiscoveryCommandMutation::Start {
                 campaign_id: request.campaign_id,
@@ -109,7 +122,7 @@ pub(crate) async fn handle_discovery_action(
             },
         )
         .await
-        .map_err(|error| format!("failed to apply Discovery action atomically: {error}"))?;
+        .map_err(classify_db_error)?;
 
     match applied {
         DiscoveryCommandApply::Applied {
@@ -151,6 +164,39 @@ pub(crate) async fn handle_discovery_action(
             receipt_event_id,
             run: run.projection(),
         }),
+    }
+}
+
+fn classify_db_error(error: buzz_db::DbError) -> DiscoveryBrokerError {
+    match error {
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Discovery entitlement is inactive" =>
+        {
+            DiscoveryBrokerError::Restricted("an active Discovery subscription is required".into())
+        }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Discovery requires relay membership" =>
+        {
+            DiscoveryBrokerError::Restricted("Discovery requires workspace membership".into())
+        }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Discovery agent capability is required" =>
+        {
+            DiscoveryBrokerError::Restricted(
+                "this agent has not been granted the Discovery capability".into(),
+            )
+        }
+        buzz_db::DbError::AccessDenied(message)
+            if message.contains("idempotency key conflicts") =>
+        {
+            DiscoveryBrokerError::Conflict(
+                "that idempotency key belongs to a different Discovery command".into(),
+            )
+        }
+        buzz_db::DbError::NotFound(_) => {
+            DiscoveryBrokerError::Invalid("Discovery run not found".into())
+        }
+        other => DiscoveryBrokerError::Internal(other.to_string()),
     }
 }
 

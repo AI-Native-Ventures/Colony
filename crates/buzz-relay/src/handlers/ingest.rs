@@ -1820,10 +1820,26 @@ async fn ingest_event_inner(
                 "restricted: channel-scoped tokens cannot operate Discovery".into(),
             ));
         }
-        return match crate::discovery_broker::handle_discovery_action(tenant, state, &event)
-            .await
-            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
-        {
+        let outcome =
+            match crate::discovery_broker::handle_discovery_action(tenant, state, &event).await {
+                Ok(outcome) => outcome,
+                Err(crate::discovery_broker::DiscoveryBrokerError::Invalid(message)) => {
+                    return Err(IngestError::Rejected(format!("invalid: {message}")));
+                }
+                Err(crate::discovery_broker::DiscoveryBrokerError::Restricted(message)) => {
+                    return Err(IngestError::AuthFailed(format!("restricted: {message}")));
+                }
+                Err(crate::discovery_broker::DiscoveryBrokerError::Conflict(message)) => {
+                    return Err(IngestError::Rejected(format!("conflict: {message}")));
+                }
+                Err(crate::discovery_broker::DiscoveryBrokerError::Internal(detail)) => {
+                    error!(%detail, "Discovery broker internal failure");
+                    return Err(IngestError::Internal(
+                        "error: Discovery is temporarily unavailable".into(),
+                    ));
+                }
+            };
+        return match outcome {
             crate::discovery_broker::DiscoveryBrokerOutcome::Applied {
                 receipt_event_id,
                 run,
