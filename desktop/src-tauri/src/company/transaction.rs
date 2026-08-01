@@ -28,9 +28,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use buzz_core_pkg::company_roster::{
-    materialized_persona_id, materialized_team_id, CompanyBlueprint,
-};
+use buzz_core_pkg::company_roster::{materialized_persona_id, CompanyBlueprint};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -316,25 +314,6 @@ pub fn persona_id_for(
         return "builtin:fizz".to_string();
     }
     materialized_persona_id(community_scope, company_id, role_id)
-}
-
-/// Every Persona ID this Blueprint materializes, in Blueprint order.
-pub fn planned_persona_ids(community_scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
-    blueprint
-        .roster
-        .iter()
-        .filter(|entry| entry.enabled)
-        .map(|entry| persona_id_for(community_scope, &blueprint.company.id, entry.role_id))
-        .collect()
-}
-
-/// Every Team ID this Blueprint materializes, in Blueprint order.
-pub fn planned_team_ids(community_scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
-    blueprint
-        .teams
-        .iter()
-        .map(|team| materialized_team_id(community_scope, &blueprint.company.id, &team.id))
-        .collect()
 }
 
 /// Every Initiative ID this Blueprint materializes, in Blueprint order.

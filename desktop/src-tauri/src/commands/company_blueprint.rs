@@ -1,0 +1,225 @@
+//! The command that turns an approved Blueprint into a real company.
+//!
+//! This owns the local half of materialization and the journal. The relay half
+//! (publishing the Company head and the three Initiatives) is done by the
+//! frontend, which is where relay publishing lives, using the idempotency keys
+//! returned here. That split is safe because those keys are derived rather
+//! than generated: the relay recognises a repeat write by its key, so a retry
+//! from a client that lost its journal still cannot apply anything twice.
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, State};
+
+use crate::{
+    app_state::AppState,
+    company::{
+        seed::{seed_personas, seed_teams},
+        transaction::{
+            advance, begin, blueprint_hash, journal_path, load_journal, needs,
+            planned_initiative_ids, step_idempotency_key, transaction_lock, BlueprintCheckpoint,
+            BlueprintJournal, TransactionError,
+        },
+    },
+    managed_agents::{load_personas, load_teams, save_personas, save_teams},
+    util::now_iso,
+};
+
+/// What the caller gets back. Deliberately narrow: IDs and keys, never a
+/// prompt, a private key, an env var, or an auth tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyBlueprintExecutionResult {
+    /// Whether this call did the work or found it already done.
+    pub outcome: String,
+    /// The company that now exists.
+    pub company_id: String,
+    /// Employees, created or reused.
+    pub persona_ids: Vec<String>,
+    /// Teams, created or reused.
+    pub team_ids: Vec<String>,
+    /// Stable IDs the three Initiatives will carry.
+    pub initiative_ids: Vec<String>,
+    /// Idempotency key for the Company head write.
+    pub company_idempotency_key: String,
+    /// Idempotency key per Initiative, in the same order as `initiative_ids`.
+    pub initiative_idempotency_keys: Vec<String>,
+    /// How far the transaction got.
+    pub checkpoint: String,
+}
+
+/// Materialize an approved Blueprint's employees and teams.
+///
+/// `blueprint` is the exact JSON the owner approved. It is parsed here rather
+/// than trusted from the caller, so the trusted-catalog and closed-payload
+/// rules apply to what actually executes, not to some earlier copy.
+#[tauri::command]
+pub async fn execute_company_blueprint(
+    app: AppHandle,
+    blueprint: String,
+    request_id: String,
+    community_scope: String,
+    expected_hash: String,
+    state: State<'_, AppState>,
+) -> Result<CompanyBlueprintExecutionResult, String> {
+    // Approving a company is an owner action. Reading the signing key proves
+    // an owner identity is present and usable, and gives the key the journal
+    // is scoped by. `signing_keys` also refuses while the identity is in
+    // recovery mode, which is exactly when nothing should be created.
+    let owner_pubkey = state
+        .signing_keys()
+        .map_err(|_| TransactionError::NotOwner.to_string())?
+        .public_key()
+        .to_hex();
+
+    let parsed = buzz_core_pkg::company_roster::parse_blueprint(&blueprint)
+        .map_err(|error| error.to_string())?;
+
+    // The request ID is part of the approval, so a blueprint whose embedded ID
+    // disagrees with the action's is not the document that was approved.
+    if parsed.request_id != request_id {
+        return Err(TransactionError::HashMismatch.to_string());
+    }
+
+    // The caller states the hash it believes it approved. Checking it here
+    // catches a blueprint edited between review and approval, before any
+    // record is written.
+    let actual_hash = blueprint_hash(&parsed);
+    if !expected_hash.is_empty() && expected_hash != actual_hash {
+        return Err(TransactionError::HashMismatch.to_string());
+    }
+
+    let dir = crate::managed_agents::storage::managed_agents_base_dir(&app)?.join("company");
+    let path = journal_path(&dir, &owner_pubkey, &community_scope, &request_id);
+
+    // Two clicks on Approve join here rather than racing.
+    let lock = transaction_lock(&path);
+    let _guard = lock.lock().await;
+
+    let app_for_blocking = app.clone();
+    let journal = tokio::task::spawn_blocking(move || -> Result<BlueprintJournal, String> {
+        let state = app_for_blocking.state::<AppState>();
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|error| error.to_string())?;
+
+        let existing = load_journal(&path).map_err(|error| error.to_string())?;
+        let mut journal = begin(
+            existing,
+            &owner_pubkey,
+            &community_scope,
+            &request_id,
+            &parsed,
+        )
+        .map_err(|error| error.to_string())?;
+        advance(&mut journal, &path, BlueprintCheckpoint::Validated)
+            .map_err(|error| error.to_string())?;
+
+        let now = now_iso();
+
+        // Employees first, then teams: a team names its members, so writing a
+        // team whose personas do not exist yet would leave a window where the
+        // app can load a team pointing at nothing.
+        // Seeding is idempotent on its own, so a repeat is harmless; the
+        // checkpoint just saves reading and rewriting the stores.
+        if needs(&journal, BlueprintCheckpoint::PersonasSeeded) {
+            let personas = load_personas(&app_for_blocking)?;
+            let seeded = seed_personas(&community_scope, &parsed, &personas, &now);
+            if !seeded.created_personas.is_empty() {
+                let mut next = personas;
+                next.extend(seeded.created_personas.clone());
+                save_personas(&app_for_blocking, &next)?;
+            }
+            journal.persona_ids = seeded.persona_ids();
+            advance(&mut journal, &path, BlueprintCheckpoint::PersonasSeeded)
+                .map_err(|error| error.to_string())?;
+        }
+
+        if needs(&journal, BlueprintCheckpoint::TeamsSeeded) {
+            let teams = load_teams(&app_for_blocking)?;
+            let seeded_teams = seed_teams(&community_scope, &parsed, &teams, &now)
+                .map_err(|error| error.to_string())?;
+            if !seeded_teams.created_teams.is_empty() {
+                let mut next = teams;
+                next.extend(seeded_teams.created_teams.clone());
+                save_teams(&app_for_blocking, &next)?;
+            }
+            journal.team_ids = seeded_teams.team_ids();
+            journal.initiative_ids = planned_initiative_ids(&parsed);
+            advance(&mut journal, &path, BlueprintCheckpoint::TeamsSeeded)
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(journal)
+    })
+    .await
+    .map_err(|error| format!("spawn_blocking failed: {error}"))??;
+
+    let initiative_idempotency_keys = journal
+        .initiative_ids
+        .iter()
+        .map(|id| {
+            step_idempotency_key(&journal.request_id, &format!("initiative:{id}")).to_string()
+        })
+        .collect();
+
+    Ok(CompanyBlueprintExecutionResult {
+        // `Validated` means a previous call already got past seeding, so this
+        // one found the work done.
+        outcome: if journal.checkpoint > BlueprintCheckpoint::TeamsSeeded {
+            "recovered".to_string()
+        } else {
+            "created".to_string()
+        },
+        company_id: journal.company_id.clone(),
+        persona_ids: journal.persona_ids.clone(),
+        team_ids: journal.team_ids.clone(),
+        initiative_ids: journal.initiative_ids.clone(),
+        company_idempotency_key: step_idempotency_key(&journal.request_id, "company").to_string(),
+        initiative_idempotency_keys,
+        checkpoint: serde_json::to_value(journal.checkpoint)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+    })
+}
+
+/// Record that the relay accepted the Company head and the Initiatives.
+///
+/// Called by the frontend once it holds receipts. Only then is the transaction
+/// complete: a journal that claimed completion before the relay confirmed
+/// would let a resumed run skip a write that never landed.
+#[tauri::command]
+pub async fn complete_company_blueprint(
+    app: AppHandle,
+    request_id: String,
+    community_scope: String,
+    company_event_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let owner_pubkey = state
+        .signing_keys()
+        .map_err(|_| TransactionError::NotOwner.to_string())?
+        .public_key()
+        .to_hex();
+
+    let dir = crate::managed_agents::storage::managed_agents_base_dir(&app)?.join("company");
+    let path = journal_path(&dir, &owner_pubkey, &community_scope, &request_id);
+    let lock = transaction_lock(&path);
+    let _guard = lock.lock().await;
+
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let mut journal = load_journal(&path)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "no materialization is in progress for this approval".to_string())?;
+        if journal.owner_pubkey != owner_pubkey {
+            return Err(TransactionError::NotOwner.to_string());
+        }
+        journal.company_event_id = Some(company_event_id);
+        advance(&mut journal, &path, BlueprintCheckpoint::Completed)
+            .map_err(|error| error.to_string())?;
+        Ok(journal.company_id)
+    })
+    .await
+    .map_err(|error| format!("spawn_blocking failed: {error}"))?
+}

@@ -819,6 +819,8 @@ pub fn run() {
             delete_channel_template,
             duplicate_channel_template,
             list_teams,
+            commands::company_blueprint::execute_company_blueprint,
+            commands::company_blueprint::complete_company_blueprint,
             create_team,
             update_team,
             delete_team,

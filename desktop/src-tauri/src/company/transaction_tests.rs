@@ -11,6 +11,32 @@ use buzz_core_pkg::company_roster::{
 
 use super::*;
 
+/// The IDs a run would address. The command derives these through `seed`,
+/// which shares `persona_id_for` and `materialized_team_id` with this, so
+/// there is one definition of an ID rather than two that can drift.
+fn planned_persona_ids(scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
+    blueprint
+        .roster
+        .iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| persona_id_for(scope, &blueprint.company.id, entry.role_id))
+        .collect()
+}
+
+fn planned_team_ids(scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
+    blueprint
+        .teams
+        .iter()
+        .map(|team| {
+            buzz_core_pkg::company_roster::materialized_team_id(
+                scope,
+                &blueprint.company.id,
+                &team.id,
+            )
+        })
+        .collect()
+}
+
 const OWNER: &str = "ownerpubkeyhex";
 const SCOPE: &str = "relay.example";
 const REQUEST: &str = "3f6c1a2e-0000-4000-8000-000000000001";
