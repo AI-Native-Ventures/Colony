@@ -91,6 +91,13 @@ blueprint.
 
 ### 5. Propose the blueprint
 
+Publish a `company-blueprint` Block. It is what the owner approves from, so it
+carries the request ID and the hash of the exact document you are proposing.
+
+```bash
+buzz blocks invoke --channel <channel> --handle company-blueprint --data @blueprint.json
+```
+
 Propose the baseline roster by its trusted role IDs, plus service or production
 teams derived from what the business actually sells and how it delivers.
 

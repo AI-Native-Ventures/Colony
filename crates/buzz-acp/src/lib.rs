@@ -3720,6 +3720,11 @@ website; you did not audit a business"
     fn company_onboarding_publishes_the_brief_before_any_question() {
         assert!(PROMPT.contains("Publish the brief before asking anything"));
         assert!(PROMPT.contains("company-brief"));
+        // Each of the three Blocks the protocol runs on. A prompt that names
+        // a handle the relay does not bundle sends the agent to a Block that
+        // does not exist, which fails silently as "nothing happened".
+        assert!(PROMPT.contains("interview"));
+        assert!(PROMPT.contains("company-blueprint"));
         assert!(PROMPT.contains("Include every gap you found"));
     }
 
