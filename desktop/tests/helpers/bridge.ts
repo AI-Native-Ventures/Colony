@@ -336,6 +336,13 @@ type MockBridgeOptions = {
    */
   observerArchiveDefaultEnabledDelayMs?: number;
   /**
+   * Hold the policy unresolved until the test calls
+   * `window.__BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__()`. Prefer this over
+   * the delay when asserting work has not started: a fixed delay races app
+   * boot, so a slower first render resolves the policy early.
+   */
+  observerArchiveDefaultEnabledHold?: boolean;
+  /**
    * When set, `observer_archive_default_enabled` throws with this message —
    * drives the fail-closed path when the policy check itself fails.
    */

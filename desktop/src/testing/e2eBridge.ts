@@ -397,6 +397,15 @@ type E2eConfig = {
      */
     observerArchiveDefaultEnabledDelayMs?: number;
     /**
+     * Hold `observer_archive_default_enabled` unresolved until the test calls
+     * `window.__BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__()`. Prefer this over
+     * `observerArchiveDefaultEnabledDelayMs` when asserting that work has NOT
+     * started yet: a fixed delay races app boot, so a slower first render lets
+     * the timer expire and the policy legitimately resolve before the
+     * assertion runs.
+     */
+    observerArchiveDefaultEnabledHold?: boolean;
+    /**
      * When set, `observer_archive_default_enabled` throws with this message
      * instead of resolving — drives the fail-closed `.catch()` path in
      * `useObserverArchiveReconciliation` / `LocalArchiveSettingsCard`.
@@ -1052,6 +1061,7 @@ declare global {
       ownerPubkey: string;
       kind: number;
     }) => boolean;
+    __BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__?: () => void;
     __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -2949,6 +2959,20 @@ type MockSaveSubscriptionRow = {
   kinds: string; // JSON-encoded integer array, e.g. "[9,40002]"
 };
 let mockSaveSubscriptions: MockSaveSubscriptionRow[] = [];
+
+// Deterministic gate for `observer_archive_default_enabled`. Tests that assert
+// archive sync has NOT started yet hold the policy here and release it
+// explicitly, instead of racing app boot against a fixed timer.
+let releaseObserverArchivePolicy: () => void = () => {};
+let observerArchivePolicyGate: Promise<void> = new Promise<void>((resolve) => {
+  releaseObserverArchivePolicy = resolve;
+});
+
+function resetObserverArchivePolicyGate() {
+  observerArchivePolicyGate = new Promise<void>((resolve) => {
+    releaseObserverArchivePolicy = resolve;
+  });
+}
 
 function resetMockSaveSubscriptions(config: E2eConfig | undefined) {
   mockSaveSubscriptions = (config?.mock?.saveSubscriptions ?? []).map((s) => ({
@@ -9766,6 +9790,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockUserStatuses();
   resetMockPersonaCatalogEvents(config);
   resetMockSaveSubscriptions(config);
+  resetObserverArchivePolicyGate();
   resetMockPendingCommunityDeepLinks(config);
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");
@@ -9867,6 +9892,9 @@ export function maybeInstallE2eTauriMocks() {
     ownerPubkey,
     kind,
   }) => hasMockOwnerKindSubscription(ownerPubkey, kind);
+  window.__BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__ = () => {
+    releaseObserverArchivePolicy();
+  };
   window.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ = (item) => {
     const category = item.category === "mention" ? "mentions" : item.category;
     mockFeedOverrides[category].unshift(item);
@@ -11959,6 +11987,9 @@ export function maybeInstallE2eTauriMocks() {
         // Returns the ArchiveBatchResult shape the UI expects.
         return { persisted: 0, dropped: 0 };
       case "observer_archive_default_enabled": {
+        if (activeConfig?.mock?.observerArchiveDefaultEnabledHold) {
+          await observerArchivePolicyGate;
+        }
         const delayMs =
           activeConfig?.mock?.observerArchiveDefaultEnabledDelayMs;
         if (delayMs && delayMs > 0) {
