@@ -1,4 +1,12 @@
-import { Activity, Blocks, Bot, FolderGit2, Inbox, Zap } from "lucide-react";
+import {
+  Activity,
+  Blocks,
+  Bot,
+  Compass,
+  FolderGit2,
+  Inbox,
+  Zap,
+} from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { FeatureGate } from "@/shared/features";
@@ -18,6 +26,7 @@ type SidebarSelectedView =
   | "messages"
   | "agents"
   | "blocks"
+  | "discovery"
   | "workflows"
   | "pulse"
   | "projects";
@@ -40,6 +49,7 @@ type AppSidebarPrimaryMenuProps = {
   homeBadgeCount: number;
   onSelectAgents: () => void;
   onSelectBlocks: () => void;
+  onSelectDiscovery: () => void;
   onSelectHome: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
@@ -86,6 +96,7 @@ export function AppSidebarPrimaryMenu({
   homeBadgeCount,
   onSelectAgents,
   onSelectBlocks,
+  onSelectDiscovery,
   onSelectHome,
   onSelectProjects,
   onSelectPulse,
@@ -184,6 +195,18 @@ export function AppSidebarPrimaryMenu({
             </SidebarMenuButton>
           </SidebarMenuItem>
         </FeatureGate>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            data-testid="open-discovery-view"
+            isActive={selectedView === "discovery"}
+            onClick={onSelectDiscovery}
+            tooltip="Discovery"
+            type="button"
+          >
+            <Compass className="h-4 w-4" />
+            <SidebarMenuLabel>Discovery</SidebarMenuLabel>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
       </SidebarMenu>
     </SidebarHeader>
   );

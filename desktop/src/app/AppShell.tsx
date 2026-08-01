@@ -127,6 +127,7 @@ export function AppShell() {
     goAgents,
     goBlocks,
     goChannel,
+    goDiscovery,
     goHome,
     goNewMessage,
     goProjects,
@@ -425,7 +426,6 @@ export function AppShell() {
       getMessageReadAt,
       channels,
     );
-
   const dueReminderBadge = useDueReminderBadgeCount(
     identityQuery.data?.pubkey,
     notificationSettings.settings.homeBadgeEnabled,
@@ -445,7 +445,6 @@ export function AppShell() {
       mentionedRootIds,
     ],
   );
-
   const handleFollowThread = React.useCallback(
     (rootId: string) => {
       followThread(rootId);
@@ -707,7 +706,6 @@ export function AppShell() {
     markChannelRead,
     selectedView,
   });
-
   return (
     <PreventSleepProvider>
       <ChannelNavigationProvider channels={channels}>
@@ -877,6 +875,7 @@ export function AppShell() {
                           }}
                           onSelectAgents={() => void goAgents()}
                           onSelectBlocks={() => void goBlocks()}
+                          onSelectDiscovery={() => void goDiscovery()}
                           onSelectChannel={(channelId) =>
                             void goChannel(channelId)
                           }
