@@ -27,6 +27,7 @@ mod export_util;
 mod global_agent_config;
 mod identity;
 mod identity_archive;
+pub mod initiative;
 mod join_policy;
 mod legacy_storage;
 mod link_preview;
