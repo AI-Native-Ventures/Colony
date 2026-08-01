@@ -215,7 +215,14 @@ pub async fn complete_company_blueprint(
         if journal.owner_pubkey != owner_pubkey {
             return Err(TransactionError::NotOwner.to_string());
         }
+        // The relay writes are only known to have happened once the frontend
+        // reports their receipts, so this is where that gets recorded. It is
+        // deliberately two steps: a journal that claimed completion before the
+        // relay confirmed would let a resumed run skip a write that never
+        // landed.
         journal.company_event_id = Some(company_event_id);
+        advance(&mut journal, &path, BlueprintCheckpoint::RelayPublished)
+            .map_err(|error| error.to_string())?;
         advance(&mut journal, &path, BlueprintCheckpoint::Completed)
             .map_err(|error| error.to_string())?;
         Ok(journal.company_id)

@@ -70,6 +70,16 @@ pub fn seed_personas(
 
     for entry in blueprint.roster.iter().filter(|entry| entry.enabled) {
         let id = persona_id_for(community_scope, &blueprint.company.id, entry.role_id);
+        // The Chief of Staff is not created here under any circumstance. Its ID
+        // is the built-in one, and minting a persona at that ID would produce a
+        // second Fizz that the built-in merge then treats as a stored copy of
+        // itself, with is_builtin wrong and no way for the owner to tell them
+        // apart. If it is somehow absent, the built-in seeding is what restores
+        // it, with the catalog prompt.
+        if id == "builtin:fizz" {
+            outcome.reused_persona_ids.push(id);
+            continue;
+        }
         if existing.iter().any(|persona| persona.id == id) {
             // Already an employee. The Chief of Staff reaches here on a first
             // run (Fizz predates the company) and everyone reaches it on a

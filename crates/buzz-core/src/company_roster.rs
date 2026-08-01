@@ -91,7 +91,11 @@ macro_rules! shared_conduct {
     };
 }
 
-const CHIEF_OF_STAFF_PROMPT: &str = concat!(
+/// Public so the desktop app's built-in Chief of Staff uses this exact text
+/// rather than a parallel copy. The Chief of Staff is the one employee that
+/// reads the company website, so it is the last one that should be missing the
+/// clause saying outside content is information, not instruction.
+pub const CHIEF_OF_STAFF_PROMPT: &str = concat!(
     "You are the Chief of Staff. Keep an evidence-based picture of how the ",
     "company actually works, turn the owner's goals into initiatives with a ",
     "named owner, delegate to the right team, unblock what is stuck, and ",
@@ -321,6 +325,10 @@ pub enum BlueprintError {
     /// Wrong number of proposed initiatives.
     #[error("a blueprint proposes exactly three initiatives")]
     InitiativeCount,
+    /// An identifier is not a safe slug, or is long enough that the relay
+    /// would truncate it into a different identifier.
+    #[error("an identifier is too long or contains unusable characters")]
+    UnusableIdentifier,
 }
 
 /// One service the company sells.
@@ -546,6 +554,19 @@ pub fn validate_blueprint(blueprint: &CompanyBlueprint) -> Result<(), BlueprintE
         return Err(BlueprintError::UnsupportedSchema);
     }
 
+    // These become relay coordinates. The relay lowercases, rewrites unsafe
+    // characters, and truncates at 64 bytes, so an identifier that needs any of
+    // that is refused here rather than silently becoming a different one, or
+    // worse, the same one as another employee.
+    if !is_safe_slug(&blueprint.company.id, MAX_COMPANY_ID_LEN) {
+        return Err(BlueprintError::UnusableIdentifier);
+    }
+    for team in &blueprint.teams {
+        if !is_safe_slug(&team.id, MAX_TEAM_ID_LEN) {
+            return Err(BlueprintError::UnusableIdentifier);
+        }
+    }
+
     let mut service_ids = BTreeSet::new();
     for service in &blueprint.company.services {
         if !service_ids.insert(service.id.as_str()) {
@@ -654,12 +675,46 @@ fn is_generic_operations(value: &str) -> bool {
 /// communities that both chose `acme` would share one set of employees, and
 /// approving the second company would silently adopt the first one's staff.
 ///
-/// Twelve hex characters: enough that a single install will never collide,
-/// short enough that an ID stays readable in a log.
+/// Eight hex characters. Every derived ID has to survive the relay's 64-byte
+/// `d`-tag grammar intact, and that budget is shared with the company ID and
+/// the role slug; a truncated ID would collapse two distinct employees onto
+/// one coordinate, silently overwriting one with the other. Eight is still far
+/// more than a single install's handful of communities can collide across.
 fn community_discriminator(community_scope: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(community_scope.as_bytes());
-    hex::encode(hasher.finalize())[..12].to_string()
+    hex::encode(hasher.finalize())[..COMMUNITY_DISCRIMINATOR_LEN].to_string()
+}
+
+/// Length of the community discriminator inside a materialized ID.
+const COMMUNITY_DISCRIMINATOR_LEN: usize = 8;
+
+/// The relay's `d`-tag grammar caps a coordinate at 64 bytes and truncates
+/// past it. Anything longer stops being an identifier.
+pub const MAX_MATERIALIZED_ID_LEN: usize = 64;
+
+/// Longest company ID that keeps every derived Persona ID inside the budget.
+///
+/// `company:` + discriminator + `:` + company ID + `:` + role slug.
+pub const MAX_COMPANY_ID_LEN: usize = 19;
+
+/// Longest team ID that keeps every derived Team ID inside the budget.
+///
+/// `company-team:` + discriminator + `:` + company ID + `:` + team ID.
+pub const MAX_TEAM_ID_LEN: usize = 22;
+
+/// Whether a slug is safe to build an identifier from.
+///
+/// Deliberately narrow. These strings are chosen by an agent and end up in a
+/// relay coordinate, so anything that could be case-folded, normalized, or
+/// truncated into a different identifier is refused rather than repaired.
+fn is_safe_slug(value: &str, max_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// The stable Persona ID a materialized role receives.
@@ -969,6 +1024,75 @@ mod tests {
         assert_eq!(
             validate_blueprint(&blueprint).unwrap_err(),
             BlueprintError::DanglingReference
+        );
+    }
+
+    /// The relay truncates a coordinate at 64 bytes. A persona ID that
+    /// overflows loses its tail, which is the role slug, so two employees of
+    /// the same company would collapse onto one coordinate and silently
+    /// overwrite each other. This checks the worst case rather than a typical
+    /// one: the longest company ID the validator permits, against every role.
+    #[test]
+    fn every_derived_id_fits_the_relay_coordinate_budget() {
+        let longest_company = "a".repeat(MAX_COMPANY_ID_LEN);
+        let longest_team = "b".repeat(MAX_TEAM_ID_LEN);
+        let scope = "relay.example";
+
+        let mut seen = BTreeSet::new();
+        for role in BASELINE_ROLES {
+            let id = materialized_persona_id(scope, &longest_company, role.id);
+            assert!(
+                id.len() <= MAX_MATERIALIZED_ID_LEN,
+                "{id} is {} bytes, over the {MAX_MATERIALIZED_ID_LEN}-byte budget",
+                id.len()
+            );
+            assert!(seen.insert(id), "two roles produced the same ID");
+        }
+
+        let team_id = materialized_team_id(scope, &longest_company, &longest_team);
+        assert!(
+            team_id.len() <= MAX_MATERIALIZED_ID_LEN,
+            "{team_id} is {} bytes",
+            team_id.len()
+        );
+    }
+
+    /// An identifier that the relay would rewrite is refused here, rather than
+    /// silently becoming a different identifier than the one approved.
+    #[test]
+    fn an_identifier_the_relay_would_rewrite_is_refused() {
+        for bad in [
+            "",
+            "-leading-dash",
+            "_leading_underscore",
+            "Has-Capitals",
+            "has spaces",
+            "has_underscore",
+            "has.dot",
+            "unicode-\u{e9}",
+        ] {
+            let mut blueprint = valid_blueprint();
+            blueprint.company.id = bad.to_string();
+            assert_eq!(
+                validate_blueprint(&blueprint).unwrap_err(),
+                BlueprintError::UnusableIdentifier,
+                "company id `{bad}` must be refused"
+            );
+        }
+
+        // And the length cap, which is what stops a truncation collapse.
+        let mut blueprint = valid_blueprint();
+        blueprint.company.id = "a".repeat(MAX_COMPANY_ID_LEN + 1);
+        assert_eq!(
+            validate_blueprint(&blueprint).unwrap_err(),
+            BlueprintError::UnusableIdentifier
+        );
+
+        let mut blueprint = valid_blueprint();
+        blueprint.teams[0].id = "b".repeat(MAX_TEAM_ID_LEN + 1);
+        assert_eq!(
+            validate_blueprint(&blueprint).unwrap_err(),
+            BlueprintError::UnusableIdentifier
         );
     }
 

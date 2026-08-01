@@ -308,3 +308,26 @@ fn ids_are_scoped_to_the_company() {
         );
     }
 }
+
+/// The Chief of Staff must never be minted here, even when it is absent.
+/// A persona created at `builtin:fizz` would carry is_builtin false, and the
+/// built-in merge would then treat it as a stored copy of itself, leaving the
+/// owner with a Fizz that is neither built in nor theirs.
+#[test]
+fn the_chief_of_staff_is_never_minted_even_when_absent() {
+    let outcome = seed_personas(SCOPE, &blueprint(), &[], NOW);
+
+    assert!(
+        !outcome
+            .created_personas
+            .iter()
+            .any(|persona| persona.id == "builtin:fizz"),
+        "no persona may be created at the built-in Chief of Staff ID"
+    );
+    assert!(
+        outcome
+            .reused_persona_ids
+            .contains(&"builtin:fizz".to_string()),
+        "it is still part of the company; the built-in seeding restores it"
+    );
+}

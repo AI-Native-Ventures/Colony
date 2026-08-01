@@ -37,17 +37,20 @@ use uuid::Uuid;
 /// it names has actually completed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// The order is the order the work actually happens in, because `advance`
+/// refuses to move a checkpoint backwards. A variant listed out of sequence
+/// would make its own `advance` call a silent no-op returning `Ok`.
 pub enum BlueprintCheckpoint {
     /// The Blueprint parsed and matched the approving action.
     Validated,
-    /// The Company profile head exists on the relay.
-    CompanyPublished,
     /// Every enabled Persona exists locally.
     PersonasSeeded,
     /// Every Team exists locally.
     TeamsSeeded,
-    /// All three Initiatives exist on the relay as `proposed`.
-    InitiativesPublished,
+    /// The Company head and all three Initiatives are on the relay, confirmed
+    /// by receipt. Recorded last because the relay writes are performed by the
+    /// frontend, after this process has handed back the derived keys.
+    RelayPublished,
     /// Nothing left to do.
     Completed,
 }

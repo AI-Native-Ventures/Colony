@@ -142,15 +142,6 @@ fn run(
 
     let stop = |reached: BlueprintCheckpoint| fail_after == Some(reached);
 
-    if needs(&journal, BlueprintCheckpoint::CompanyPublished) {
-        effects.company_published.fetch_add(1, Ordering::SeqCst);
-        journal.company_event_id = Some("companyeventid".to_string());
-        advance(&mut journal, &path, BlueprintCheckpoint::CompanyPublished)?;
-    }
-    if stop(BlueprintCheckpoint::CompanyPublished) {
-        return Ok(journal);
-    }
-
     if needs(&journal, BlueprintCheckpoint::PersonasSeeded) {
         let planned = planned_persona_ids(SCOPE, blueprint);
         for id in &planned {
@@ -180,19 +171,21 @@ fn run(
         return Ok(journal);
     }
 
-    if needs(&journal, BlueprintCheckpoint::InitiativesPublished) {
+    // The relay writes happen last, and together: the frontend performs them
+    // with the derived keys this process handed back, then reports the
+    // receipts. Until it does, neither the head nor the initiatives are known
+    // to exist.
+    if needs(&journal, BlueprintCheckpoint::RelayPublished) {
+        effects.company_published.fetch_add(1, Ordering::SeqCst);
+        journal.company_event_id = Some("companyeventid".to_string());
         let planned = planned_initiative_ids(blueprint);
         effects
             .initiatives_published
             .fetch_add(planned.len(), Ordering::SeqCst);
         journal.initiative_ids = planned;
-        advance(
-            &mut journal,
-            &path,
-            BlueprintCheckpoint::InitiativesPublished,
-        )?;
+        advance(&mut journal, &path, BlueprintCheckpoint::RelayPublished)?;
     }
-    if stop(BlueprintCheckpoint::InitiativesPublished) {
+    if stop(BlueprintCheckpoint::RelayPublished) {
         return Ok(journal);
     }
 
@@ -206,10 +199,9 @@ fn run(
 #[test]
 fn interrupting_after_any_checkpoint_and_rerunning_creates_exactly_one_company() {
     for (index, interrupt) in [
-        BlueprintCheckpoint::CompanyPublished,
         BlueprintCheckpoint::PersonasSeeded,
         BlueprintCheckpoint::TeamsSeeded,
-        BlueprintCheckpoint::InitiativesPublished,
+        BlueprintCheckpoint::RelayPublished,
     ]
     .into_iter()
     .enumerate()
@@ -275,7 +267,7 @@ fn a_request_id_reused_with_different_content_is_refused() {
         &dir,
         &blueprint(),
         &effects,
-        Some(BlueprintCheckpoint::CompanyPublished),
+        Some(BlueprintCheckpoint::PersonasSeeded),
     )
     .expect("first run");
 
@@ -286,7 +278,9 @@ fn a_request_id_reused_with_different_content_is_refused() {
         TransactionError::HashMismatch
     );
     // And the refusal performed no side effect beyond the interrupted run.
-    assert_eq!(effects.company_published.load(Ordering::SeqCst), 1);
+    assert_eq!(effects.personas_created.load(Ordering::SeqCst), 2);
+    assert_eq!(effects.teams_created.load(Ordering::SeqCst), 0);
+    assert_eq!(effects.company_published.load(Ordering::SeqCst), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
