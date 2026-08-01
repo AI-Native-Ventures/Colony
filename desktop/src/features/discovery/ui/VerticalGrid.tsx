@@ -42,7 +42,7 @@ export function VerticalGrid({
             onClick={() => onSelect(vertical)}
             type="button"
           >
-            <div className="relative aspect-[3/1] items-center justify-center overflow-hidden bg-gradient-to-br from-[#ede9fe] to-background">
+            <div className="relative aspect-[3/1] items-center justify-center overflow-hidden bg-gradient-to-br from-primary/10 to-background">
               <img
                 alt={vertical.name}
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
@@ -51,8 +51,8 @@ export function VerticalGrid({
               <div className="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-black/20 to-transparent" />
               <div className="absolute right-4 top-4">
                 {active ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[#8b5cf6] px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-white">
-                    <span className="h-1.5 w-1.5 rounded-full bg-white" />{" "}
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-primary-foreground">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />{" "}
                     Active
                   </span>
                 ) : (

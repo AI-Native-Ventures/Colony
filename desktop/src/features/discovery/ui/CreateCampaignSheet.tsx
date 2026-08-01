@@ -158,9 +158,9 @@ export function CreateCampaignSheet({
               <h2 className="text-base font-semibold text-foreground">
                 What type of business?
               </h2>
-              <div className="flex items-center justify-between rounded-2xl border border-[#c4b5fd] bg-[#f4f1ff] px-4 py-3">
+              <div className="flex items-center justify-between rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[#c4b5fd] bg-white text-[#8b5cf6]">
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-primary/30 bg-background text-primary">
                     <Building2 aria-hidden="true" className="h-4 w-4" />
                   </div>
                   <div>
@@ -244,7 +244,7 @@ export function CreateCampaignSheet({
                     ~300 credits per lead (varies by enrichment depth)
                   </p>
                 </div>
-                <span className="font-mono text-lg font-semibold text-[#8b5cf6]">
+                <span className="font-mono text-lg font-semibold text-primary">
                   {estimatedCredits.toLocaleString()} credits
                 </span>
               </div>
@@ -425,8 +425,8 @@ function CriteriaSwitch({
         aria-pressed={checked}
         className={
           checked
-            ? "grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#8b5cf6] text-white transition-colors"
-            : "h-5 w-5 shrink-0 rounded-full border-2 border-muted-foreground/40 transition-colors hover:border-[#8b5cf6]"
+            ? "grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition-colors"
+            : "h-5 w-5 shrink-0 rounded-full border-2 border-muted-foreground/40 transition-colors hover:border-primary"
         }
         onClick={() => onCheckedChange(!checked)}
         type="button"

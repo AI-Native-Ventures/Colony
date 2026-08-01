@@ -17,7 +17,7 @@ export type CampaignListViewProps = {
 
 function statusClass(status: CampaignSummary["status"]) {
   if (status === "completed") return "bg-[#e8f6ef] text-[#1f8a5b]";
-  if (status === "running") return "bg-[#ede9fe] text-[#5b21b6]";
+  if (status === "running") return "bg-primary/10 text-primary";
   if (status === "failed" || status === "cancelled")
     return "bg-red-100 text-red-700";
   return "bg-[#f4f6f5] text-[#5b6660]";
@@ -69,7 +69,7 @@ export function CampaignListView({
           </Button>
           <div className="absolute bottom-0 left-0 right-0 px-6 pb-5">
             <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="h-2 w-2 rounded-full bg-[#8b5cf6]" />
+              <span className="h-2 w-2 rounded-full bg-primary" />
               {industryName ?? vertical.industryId}
             </div>
             <h2 className="text-3xl font-semibold tracking-tight text-foreground">
@@ -138,7 +138,7 @@ export function CampaignListView({
                 return (
                   <button
                     aria-label={`Open campaign ${campaign.name}`}
-                    className="group w-full rounded-2xl border border-border bg-background p-5 text-left transition-all hover:border-[#c4b5fd] hover:shadow-md"
+                    className="group w-full rounded-2xl border border-border bg-background p-5 text-left transition-all hover:border-primary/30 hover:shadow-md"
                     data-testid={`discovery-campaign-card-${campaign.id}`}
                     key={campaign.id}
                     onClick={() => onOpenCampaign(campaign)}
@@ -146,14 +146,14 @@ export function CampaignListView({
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0">
-                        <h4 className="truncate text-base font-semibold text-foreground group-hover:text-[#7c3aed]">
+                        <h4 className="truncate text-base font-semibold text-foreground group-hover:text-primary">
                           {campaign.name}
                         </h4>
                         <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                           {campaign.description ?? "Discovery campaign"}
                         </p>
                       </div>
-                      <ArrowRight className="mt-1 h-5 w-5 shrink-0 text-muted-foreground group-hover:text-[#7c3aed]" />
+                      <ArrowRight className="mt-1 h-5 w-5 shrink-0 text-muted-foreground group-hover:text-primary" />
                     </div>
                     <div className="mt-4 flex flex-wrap items-center gap-2">
                       <span
