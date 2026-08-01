@@ -169,9 +169,9 @@ pub enum DiscoveryCommandApply {
     /// This action won the retry key and committed all records.
     Applied {
         /// Stored actor-signed action.
-        action: StoredEvent,
+        action: Box<StoredEvent>,
         /// Stored relay-signed receipt.
-        receipt: StoredEvent,
+        receipt: Box<StoredEvent>,
         /// Resulting private run state.
         run: DiscoveryRunRecord,
     },
@@ -460,8 +460,8 @@ impl Db {
         .await?;
         tx.commit().await?;
         Ok(DiscoveryCommandApply::Applied {
-            action: stored_action,
-            receipt: stored_receipt,
+            action: Box::new(stored_action),
+            receipt: Box::new(stored_receipt),
             run,
         })
     }
