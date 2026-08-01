@@ -1,196 +1,202 @@
 // site/src/brand/ScatterField.tsx
 // Site version of desktop/src/features/onboarding/ui/LandingAnts.tsx: the
-// same fixed-scatter plus wander/pointer-repel physics, at lower density (14
-// ants vs 38) and lower opacity (0.5 vs 0.9) so it reads as a hero backdrop
-// rather than the focal point. Kept in sync by hand against the desktop
-// source, same as the other standalone brand copies in this directory.
+// same fixed-scatter plus wander/pointer-repel physics, using the winged
+// variant (WingedAnt, scatter-field-only per docs/BRAND.md) at lower
+// density and opacity than the desktop original so it reads as a hero
+// backdrop rather than the focal point. Kept in sync by hand against the
+// desktop source, same as the other standalone brand copies in this
+// directory.
 import * as React from "react";
 
-import { COLONY_HUES } from "./palette";
-import { WalkingAnt } from "./WalkingAnt";
+import { getActiveHue, HUE_SCATTER_TONES } from "./hue";
+import { WingedAnt } from "./WingedAnt";
 
 type Ant = {
   top: string;
   left: string;
   size: number;
   rotate: number;
-  color: string;
-  // Below `sm`, the H1/paragraph span nearly the full 375px viewport width
-  // (no side margin the way the desktop max-w-4xl layout has), so any ant
-  // whose vertical position falls between the headline and the CTA
-  // intrudes on text regardless of its horizontal position. Verified by
-  // sweeping worst-case bounding boxes (base position + rotation + full
-  // wander amplitude) against the measured mobile text zone: 19 of 26
-  // entries land inside it. Relocating all 19 into the ~31%-tall safe band
-  // above the headline would just cram them into a tiny strip, so instead
-  // they're hidden below `sm` and kept at full density from `sm` up, where
-  // the desktop text zone leaves real side margin for them.
+  // Index into the active hue's tonal scale (HUE_SCATTER_TONES), not a
+  // literal color: the actual hue is picked at load, so color must be
+  // resolved at render time. Positions and this index stay fixed regardless
+  // of which hue loads; only the tone each index resolves to changes.
+  toneIndex: number;
+  // The hero is now asymmetric (wordmark hard left, copy set right) and on
+  // mobile those stack into one tall column that spans nearly the full
+  // 375px viewport width with no side margin. Any ant positioned between
+  // the badge and the CTA row intrudes on that column regardless of its
+  // horizontal position, so most entries are desktop-only; the handful left
+  // visible on mobile sit in the thin padding bands above the badge and
+  // below the CTA row, verified against the rendered mobile layout.
   hideOnMobile?: boolean;
 };
 
-// Fixed scatter so the field doesn't shimmer between renders. Sized and
-// counted to read as a colony rather than dust: bigger ants, denser
-// coverage, still a hand-authored static table (no runtime randomness).
+// Fixed scatter so the field doesn't shimmer between renders. Framed around
+// the two-column hero content (wordmark left, copy right) rather than a
+// centered block: most ants sit in the outer edge margins, the top/bottom
+// padding bands, and the vertical gap between the two columns.
 const ANTS: Ant[] = [
-  { top: "8%", left: "10%", size: 62, rotate: -12, color: COLONY_HUES[0] },
-  { top: "12%", left: "82%", size: 54, rotate: 18, color: COLONY_HUES[1] },
+  // Visible at every width: kept inside the top/bottom padding bands, clear
+  // of the content column at both 375px (stacked) and desktop (two-up).
+  { top: "1%", left: "10%", size: 30, rotate: -14, toneIndex: 0 },
+  { top: "2.5%", left: "86%", size: 26, rotate: 18, toneIndex: 2 },
+  { top: "0.5%", left: "48%", size: 24, rotate: 8, toneIndex: 3 },
+  { top: "97%", left: "18%", size: 28, rotate: -10, toneIndex: 1 },
+  { top: "98%", left: "78%", size: 26, rotate: 16, toneIndex: 0 },
+
+  // Left edge, outside the wordmark column.
+  {
+    top: "8%",
+    left: "3%",
+    size: 50,
+    rotate: -12,
+    toneIndex: 0,
+    hideOnMobile: true,
+  },
   {
     top: "20%",
-    left: "45%",
-    size: 70,
-    rotate: -20,
-    color: COLONY_HUES[2],
-    hideOnMobile: true,
-  },
-  {
-    top: "28%",
-    left: "6%",
-    size: 50,
+    left: "1.5%",
+    size: 44,
     rotate: 10,
-    color: COLONY_HUES[3],
-    hideOnMobile: true,
-  },
-  { top: "18%", left: "65%", size: 58, rotate: -8, color: COLONY_HUES[4] },
-  {
-    top: "38%",
-    left: "90%",
-    size: 66,
-    rotate: 22,
-    color: COLONY_HUES[0],
-    hideOnMobile: true,
-  },
-  {
-    top: "45%",
-    left: "4%",
-    size: 54,
-    rotate: -16,
-    color: COLONY_HUES[1],
-    hideOnMobile: true,
-  },
-  {
-    top: "55%",
-    left: "91%",
-    size: 62,
-    rotate: 14,
-    color: COLONY_HUES[2],
-    hideOnMobile: true,
-  },
-  {
-    top: "62%",
-    left: "6%",
-    size: 50,
-    rotate: -22,
-    color: COLONY_HUES[3],
-    hideOnMobile: true,
-  },
-  {
-    top: "70%",
-    left: "8%",
-    size: 58,
-    rotate: 8,
-    color: COLONY_HUES[4],
-    hideOnMobile: true,
-  },
-  {
-    top: "78%",
-    left: "90%",
-    size: 66,
-    rotate: -10,
-    color: COLONY_HUES[0],
-    hideOnMobile: true,
-  },
-  {
-    top: "85%",
-    left: "85%",
-    size: 54,
-    rotate: 20,
-    color: COLONY_HUES[1],
-    hideOnMobile: true,
-  },
-  {
-    top: "90%",
-    left: "2%",
-    size: 58,
-    rotate: -18,
-    color: COLONY_HUES[2],
-    hideOnMobile: true,
-  },
-  { top: "5%", left: "35%", size: 46, rotate: 16, color: COLONY_HUES[3] },
-  { top: "1%", left: "50%", size: 44, rotate: -6, color: COLONY_HUES[0] },
-  { top: "2%", left: "90%", size: 38, rotate: 24, color: COLONY_HUES[2] },
-  {
-    top: "24%",
-    left: "55%",
-    size: 48,
-    rotate: -14,
-    color: COLONY_HUES[4],
+    toneIndex: 2,
     hideOnMobile: true,
   },
   {
     top: "33%",
-    left: "72%",
-    size: 42,
-    rotate: 10,
-    color: COLONY_HUES[1],
-    hideOnMobile: true,
-  },
-  {
-    top: "42%",
-    left: "92%",
+    left: "2.5%",
     size: 56,
-    rotate: -20,
-    color: COLONY_HUES[3],
+    rotate: -18,
+    toneIndex: 1,
     hideOnMobile: true,
   },
   {
-    top: "80%",
-    left: "93%",
-    size: 40,
-    rotate: 16,
-    color: COLONY_HUES[2],
-    hideOnMobile: true,
-  },
-  {
-    top: "58%",
-    left: "92%",
+    top: "48%",
+    left: "1%",
     size: 48,
+    rotate: 14,
+    toneIndex: 3,
+    hideOnMobile: true,
+  },
+  {
+    top: "63%",
+    left: "2.5%",
+    size: 52,
+    rotate: -20,
+    toneIndex: 0,
+    hideOnMobile: true,
+  },
+  {
+    top: "78%",
+    left: "1.5%",
+    size: 46,
+    rotate: 12,
+    toneIndex: 2,
+    hideOnMobile: true,
+  },
+  {
+    top: "90%",
+    left: "3%",
+    size: 40,
     rotate: -8,
-    color: COLONY_HUES[0],
+    toneIndex: 1,
+    hideOnMobile: true,
+  },
+
+  // Right edge, outside the copy column.
+  {
+    top: "10%",
+    left: "97%",
+    size: 50,
+    rotate: 16,
+    toneIndex: 1,
+    hideOnMobile: true,
+  },
+  {
+    top: "24%",
+    left: "98.5%",
+    size: 42,
+    rotate: -14,
+    toneIndex: 3,
+    hideOnMobile: true,
+  },
+  {
+    top: "38%",
+    left: "97.5%",
+    size: 54,
+    rotate: 20,
+    toneIndex: 0,
+    hideOnMobile: true,
+  },
+  {
+    top: "53%",
+    left: "98.5%",
+    size: 46,
+    rotate: -10,
+    toneIndex: 2,
     hideOnMobile: true,
   },
   {
     top: "68%",
-    left: "3%",
-    size: 44,
+    left: "97%",
+    size: 50,
     rotate: 18,
-    color: COLONY_HUES[4],
+    toneIndex: 1,
     hideOnMobile: true,
   },
   {
     top: "82%",
-    left: "12%",
-    size: 52,
-    rotate: -12,
-    color: COLONY_HUES[1],
+    left: "98%",
+    size: 40,
+    rotate: -16,
+    toneIndex: 3,
+    hideOnMobile: true,
+  },
+  {
+    top: "93%",
+    left: "96%",
+    size: 36,
+    rotate: 10,
+    toneIndex: 0,
+    hideOnMobile: true,
+  },
+
+  // Top/bottom padding bands, desktop-only supplements.
+  {
+    top: "4%",
+    left: "30%",
+    size: 34,
+    rotate: -8,
+    toneIndex: 2,
+    hideOnMobile: true,
+  },
+  {
+    top: "5%",
+    left: "68%",
+    size: 30,
+    rotate: 14,
+    toneIndex: 1,
     hideOnMobile: true,
   },
   {
     top: "95%",
-    left: "68%",
-    size: 46,
-    rotate: 20,
-    color: COLONY_HUES[3],
+    left: "40%",
+    size: 32,
+    rotate: -12,
+    toneIndex: 3,
     hideOnMobile: true,
   },
   {
     top: "96%",
-    left: "4%",
-    size: 38,
-    rotate: -22,
-    color: COLONY_HUES[2],
+    left: "62%",
+    size: 28,
+    rotate: 10,
+    toneIndex: 0,
     hideOnMobile: true,
   },
-  { top: "0.5%", left: "14%", size: 36, rotate: 14, color: COLONY_HUES[0] },
+  // No entry in the gap between the two columns: measured against the
+  // rendered h1 bounding box at 1440x900, that strip clips the headline's
+  // wrap width even at a small size (removed after overlap-check.mjs
+  // caught it during verification).
 ];
 
 const REPEL_RADIUS = 180;
@@ -200,18 +206,21 @@ const WANDER_X = 26;
 const WANDER_Y = 20;
 
 /**
- * Fixed scatter of ants wandering and repelling from the pointer, used as
- * the Hero backdrop. The `prefers-reduced-motion` gate wraps both the
- * requestAnimationFrame loop and the pointer-listener registration: when
- * reduced motion is requested, neither ever starts, so each ant stays at
- * its initial CSS `rotate()` transform (set inline below) with no drift and
- * no repel, which is the static fallback state.
+ * Fixed scatter of winged ants wandering and repelling from the pointer,
+ * used as the Hero backdrop. The `prefers-reduced-motion` gate wraps both
+ * the requestAnimationFrame loop and the pointer-listener registration:
+ * when reduced motion is requested, neither ever starts, so each ant stays
+ * at its initial CSS `rotate()` transform (set inline below) with no drift
+ * and no repel, which is the static fallback state. WingedAnt's own wing
+ * flap has its own separate CSS-only reduced-motion fallback (see
+ * site-animations.css).
  */
 export function ScatterField() {
   const fieldRef = React.useRef<HTMLDivElement>(null);
   const antRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
   const pointer = React.useRef<{ x: number; y: number } | null>(null);
   const offsets = React.useRef(ANTS.map(() => ({ x: 0, y: 0 })));
+  const tones = HUE_SCATTER_TONES[getActiveHue()];
 
   React.useEffect(() => {
     const field = fieldRef.current;
@@ -301,12 +310,12 @@ export function ScatterField() {
             top: ant.top,
             left: ant.left,
             width: ant.size,
-            color: ant.color,
+            color: tones[ant.toneIndex % tones.length],
             transform: `rotate(${ant.rotate}deg)`,
             opacity: 0.5,
           }}
         >
-          <WalkingAnt className="w-full" />
+          <WingedAnt className="w-full" />
         </span>
       ))}
     </div>

@@ -5,18 +5,20 @@ const GITHUB_URL = "https://github.com/nocodeafrica/AI-Native-Ventures-App";
 
 export function Footer() {
   return (
-    <footer className="border-t border-zinc-800 bg-zinc-950 px-6 py-12">
+    <footer className="border-t border-colony-ink/15 bg-colony-canvas px-6 py-12">
       <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left">
         <div className="flex items-center gap-3">
-          <span className="block w-6 text-colony-violet">
+          <span className="block w-6 text-colony-ink">
             <AntMark className="h-auto w-full" />
           </span>
-          <span className="text-base font-semibold text-zinc-50">Colony</span>
+          <span className="text-base font-semibold text-colony-ink">
+            Colony
+          </span>
         </div>
-        <div className="flex flex-col items-center gap-1 text-sm text-zinc-500 sm:items-end">
+        <div className="flex flex-col items-center gap-1 text-sm text-colony-ink/60 sm:items-end">
           <a
             href={GITHUB_URL}
-            className="text-zinc-400 underline underline-offset-4 transition hover:text-zinc-50"
+            className="text-colony-ink/70 underline underline-offset-4 transition hover:text-colony-ink"
           >
             GitHub
           </a>

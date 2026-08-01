@@ -11,29 +11,29 @@ export function Download() {
   return (
     <section
       id="download"
-      className="bg-zinc-950 px-6 py-10 text-center sm:py-14"
+      className="bg-colony-canvas px-6 py-10 text-center sm:py-14"
     >
       <div className="mx-auto max-w-2xl">
-        <h2 className="text-3xl font-semibold text-zinc-50 sm:text-4xl">
+        <h2 className="text-3xl font-semibold text-colony-ink sm:text-4xl">
           Download Colony for macOS
         </h2>
-        <p className="mt-4 text-base leading-relaxed text-zinc-400 sm:text-lg">
+        <p className="mt-4 text-base leading-relaxed text-colony-ink/70 sm:text-lg">
           Colony runs as a native desktop app. Bring your own AI provider and
           start building with agents today.
         </p>
         <a
           href={RELEASES_URL}
-          className="mt-8 inline-flex items-center justify-center rounded-full bg-colony-violet px-8 py-3 text-base font-medium text-zinc-950 transition hover:opacity-90"
+          className="mt-8 inline-flex items-center justify-center rounded-full bg-colony-ink px-8 py-3 text-base font-medium text-colony-canvas transition hover:opacity-90"
         >
           Download Colony for macOS
         </a>
-        <p className="mt-3 text-sm text-zinc-500">Apple Silicon macOS</p>
+        <p className="mt-3 text-sm text-colony-ink/60">Apple Silicon macOS</p>
 
         <details className="mx-auto mt-8 max-w-md text-left">
-          <summary className="cursor-pointer text-center text-sm text-zinc-500 underline underline-offset-4 transition hover:text-zinc-300">
+          <summary className="cursor-pointer text-center text-sm text-colony-ink/60 underline underline-offset-4 transition hover:text-colony-ink">
             First time opening Colony? Here&apos;s what to expect.
           </summary>
-          <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 text-sm leading-relaxed text-zinc-400">
+          <div className="mt-4 rounded-2xl border border-colony-ink/10 bg-colony-ink/5 p-6 text-sm leading-relaxed text-colony-ink/70">
             <p>
               Colony isn&apos;t notarized by Apple yet, so macOS asks for
               confirmation the first time you open it.
@@ -47,11 +47,11 @@ export function Download() {
               <li>
                 Open System Settings, go to Privacy &amp; Security, scroll to
                 the Security section near the bottom, and click{" "}
-                <span className="text-zinc-300">Open Anyway</span> next to
+                <span className="text-colony-ink">Open Anyway</span> next to
                 Colony.
               </li>
               <li>
-                Click <span className="text-zinc-300">Open</span> to confirm.
+                Click <span className="text-colony-ink">Open</span> to confirm.
               </li>
             </ol>
           </div>

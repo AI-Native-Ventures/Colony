@@ -1,6 +1,6 @@
 // site/src/sections/Story.tsx
 import { PheromoneTrail } from "@/brand/PheromoneTrail";
-import { COLONY_BLUE, COLONY_VIOLET } from "@/brand/palette";
+import { getActiveHue, HUE_ACCENT, HUE_SCATTER_TONES } from "@/brand/hue";
 
 const COLUMNS = [
   {
@@ -18,12 +18,16 @@ const COLUMNS = [
 ];
 
 export function Story() {
+  const hue = getActiveHue();
+  const trailA = HUE_ACCENT[hue];
+  const trailB = HUE_SCATTER_TONES[hue][0];
+
   return (
     <section
       id="story"
-      className="relative overflow-hidden bg-zinc-950 px-6 py-12 sm:py-16"
+      className="relative overflow-hidden bg-colony-canvas px-6 py-12 sm:py-16"
     >
-      <h2 className="mx-auto max-w-2xl text-center text-3xl font-semibold text-zinc-50 sm:text-4xl">
+      <h2 className="mx-auto max-w-2xl text-center text-3xl font-semibold text-colony-ink sm:text-4xl">
         One history, three ways to work
       </h2>
       <div className="relative mx-auto mt-16 grid max-w-5xl gap-10 sm:grid-cols-3">
@@ -43,25 +47,25 @@ export function Story() {
           <PheromoneTrail
             viewBox="0 -50 1024 213"
             d="M157 0 C 260 -44, 410 -44, 512 0"
-            color={COLONY_VIOLET}
+            color={trailA}
             className="absolute inset-0 h-full w-full"
           />
           <PheromoneTrail
             viewBox="0 -50 1024 213"
             d="M512 0 C 614 -44, 764 -44, 867 0"
-            color={COLONY_BLUE}
+            color={trailB}
             className="absolute inset-0 h-full w-full"
           />
         </div>
         {COLUMNS.map((column) => (
           <div
             key={column.title}
-            className="relative rounded-2xl bg-zinc-950/70 p-4 text-center backdrop-blur-sm sm:text-left"
+            className="relative rounded-2xl border border-colony-ink/10 bg-colony-ink/5 p-4 text-center backdrop-blur-sm sm:text-left"
           >
-            <h3 className="text-xl font-semibold text-zinc-50">
+            <h3 className="text-xl font-semibold text-colony-ink">
               {column.title}
             </h3>
-            <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+            <p className="mt-3 text-sm leading-relaxed text-colony-ink/70">
               {column.body}
             </p>
           </div>

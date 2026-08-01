@@ -79,6 +79,55 @@
     }
   }
 
+  /* ── Winged ant flap ────────────────────────────────────────────────────
+     WingedAnt.tsx (scatter field only). Each wing is its own HTML-level
+     wrapper (.ant-wing), same rule as the leg tripods above: the flap
+     transform runs on the wrapper div, never on the SVG ellipse inside it,
+     so it stays on the compositor. Fore and hind wings run out of phase
+     (animation-delay) so they don't flap in lockstep, which read as a
+     single rigid plate instead of two wings. */
+  .ant-winged .ant-wing {
+    will-change: transform;
+    animation-duration: 0.5s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+  }
+
+  .ant-winged .ant-wing-hind {
+    animation-name: ant-wing-flap-hind;
+  }
+
+  .ant-winged .ant-wing-fore {
+    animation-name: ant-wing-flap-fore;
+    animation-delay: -0.15s;
+  }
+
+  @keyframes ant-wing-flap-hind {
+    0%,
+    100% {
+      transform: rotate(0deg) scaleY(1);
+    }
+    50% {
+      transform: rotate(-6deg) scaleY(0.72);
+    }
+  }
+
+  @keyframes ant-wing-flap-fore {
+    0%,
+    100% {
+      transform: rotate(0deg) scaleY(1);
+    }
+    50% {
+      transform: rotate(6deg) scaleY(0.68);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ant-winged .ant-wing {
+      animation: none;
+    }
+  }
+
   /* ── Pheromone trail ────────────────────────────────────────────────────
      Dashed path behind the Story section columns, animated by scrolling the
      dash pattern along the path. Reduced motion shows the static dashed

@@ -1,35 +1,45 @@
 // site/src/sections/Hero.tsx
-import { AntMark } from "@/brand/AntMark";
 import { ScatterField } from "@/brand/ScatterField";
 
 export function Hero() {
   return (
-    <section className="relative flex flex-col items-center overflow-hidden bg-zinc-950 px-6 pb-16 pt-20 text-center sm:pb-24 sm:pt-32">
+    <section className="relative overflow-hidden bg-colony-canvas px-6 pb-16 pt-14 sm:px-10 sm:pb-24 sm:pt-16 lg:px-16 lg:pt-20">
       <ScatterField />
-      <div className="relative z-10 flex flex-col items-center">
-        <span className="mb-10 block w-32 text-colony-violet sm:mb-14 sm:w-56">
-          <AntMark className="h-auto w-full" />
-        </span>
-        <h1 className="max-w-4xl text-4xl font-semibold tracking-tight text-zinc-50 sm:text-6xl">
-          Run your company with AI agents
-        </h1>
-        <p className="mt-6 max-w-xl text-base leading-relaxed text-zinc-400 sm:mt-8 sm:text-lg">
-          Colony is a workspace where AI agents and people build a company
-          together: chat, agent teams, workflows, canvas, and git.
-        </p>
-        <div className="mt-10 flex flex-col items-center gap-4 sm:mt-14 sm:flex-row">
-          <a
-            href="#download"
-            className="rounded-full bg-colony-violet px-8 py-3 text-base font-medium text-zinc-950 transition hover:opacity-90"
-          >
-            Download for macOS
-          </a>
-          <a
-            href="#story"
-            className="text-base font-medium text-zinc-300 underline underline-offset-4 transition hover:text-zinc-50"
-          >
-            How it works
-          </a>
+      <div className="relative z-10 mx-auto flex max-w-7xl flex-col gap-10 lg:grid lg:grid-cols-[1.2fr_1fr] lg:items-center lg:gap-16">
+        <div className="flex flex-col items-start">
+          <span className="inline-flex items-center rounded-full bg-colony-ink/10 px-3 py-1 text-xs font-medium uppercase tracking-wide text-colony-ink/80">
+            Developer preview
+          </span>
+          <img
+            src="/colony-wordmark.png"
+            alt="Colony"
+            width={777}
+            height={326}
+            className="mt-6 w-full max-w-[22rem] sm:max-w-[30rem] lg:max-w-none"
+          />
+        </div>
+        <div className="flex flex-col items-start text-left">
+          <h1 className="text-4xl font-semibold tracking-tight text-colony-ink sm:text-5xl lg:text-6xl">
+            Run your company with AI agents
+          </h1>
+          <p className="mt-6 max-w-xl text-base leading-relaxed text-colony-ink/70 sm:mt-8 sm:text-lg">
+            Colony is a workspace where AI agents and people build a company
+            together: chat, agent teams, workflows, canvas, and git.
+          </p>
+          <div className="mt-10 flex flex-col items-start gap-4 sm:mt-12 sm:flex-row sm:items-center">
+            <a
+              href="#download"
+              className="rounded-full bg-colony-ink px-8 py-3 text-base font-medium text-colony-canvas transition hover:opacity-90"
+            >
+              Download for macOS
+            </a>
+            <a
+              href="#story"
+              className="text-base font-medium text-colony-ink underline underline-offset-4 transition hover:opacity-70"
+            >
+              How it works
+            </a>
+          </div>
         </div>
       </div>
     </section>

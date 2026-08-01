@@ -1,2 +1,16 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
+
+/* Fallback only: index.html's inline script sets these on
+   documentElement.style before this stylesheet ever applies, so these
+   values are never visible in a normal load. They exist purely so a
+   JS-disabled load (or a build-time render) still gets a sane color
+   instead of an unset custom property. */
+:root {
+  --colony-canvas: #b394f9;
+  --colony-accent: hsl(258 90% 66%);
+}
+
+body {
+  background: var(--colony-canvas);
+}

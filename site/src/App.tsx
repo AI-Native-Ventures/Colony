@@ -6,7 +6,7 @@ import { Story } from "@/sections/Story";
 
 export function App() {
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-50">
+    <main className="min-h-screen bg-colony-canvas text-colony-ink">
       <Hero />
       <Story />
       <Features />

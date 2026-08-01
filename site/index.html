@@ -1,6 +1,38 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      // Colony's random-hue mechanic: pick one of the five brand hues before
+      // first paint so there is never a flash of a default color. Runs
+      // synchronously as the very first thing in <head>, ahead of any
+      // stylesheet or bundled script, and sets the two CSS custom properties
+      // every downstream color in the site reads. Duplicates
+      // src/brand/hue.ts's HUE_CANVAS/HUE_ACCENT tables by hand (same
+      // hand-sync convention as AntMark.tsx/palette.ts) because this script
+      // must run before that module's bundle ever loads. Keep both in sync.
+      (function () {
+        var names = ["violet", "blue", "pink", "amber", "green"];
+        var canvas = {
+          violet: "#B394F9",
+          blue: "#72A5F8",
+          pink: "#F17EB8",
+          amber: "#F59F0A",
+          green: "#33CC99",
+        };
+        var accent = {
+          violet: "hsl(258 90% 66%)",
+          blue: "hsl(217 91% 60%)",
+          pink: "hsl(330 81% 60%)",
+          amber: "hsl(38 92% 50%)",
+          green: "hsl(160 60% 45%)",
+        };
+        var name = names[Math.floor(Math.random() * names.length)];
+        var root = document.documentElement;
+        root.dataset.hue = name;
+        root.style.setProperty("--colony-canvas", canvas[name]);
+        root.style.setProperty("--colony-accent", accent[name]);
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Colony: run your company with AI agents</title>
