@@ -8,12 +8,15 @@
 export const DISCOVERY_ASSETS = {
   "industry.automotive": "/discovery/industries/automotive.png",
   "industry.professional-services":
-    "/discovery/industries/professional-services.png",
+    "/discovery/industries/professional-services-premium.png",
   "industry.agriculture": "/discovery/industries/agriculture.png",
   "industry.aviation-airlines": "/discovery/industries/aviation-airlines.png",
-  "vertical.auto-repair": "/discovery/verticals/auto-repair.png",
-  "vertical.car-dealerships": "/discovery/verticals/car-dealerships.png",
-  "vertical.collision-repair": "/discovery/verticals/collision-repair.png",
+  // SalesTeams uses the parent Automotive image for the vertical catalog and
+  // its campaign drawer. Keep that visual contract until vertical-specific
+  // artwork exists in the source product.
+  "vertical.auto-repair": "/discovery/industries/automotive.png",
+  "vertical.car-dealerships": "/discovery/industries/automotive.png",
+  "vertical.collision-repair": "/discovery/industries/automotive.png",
 } as const;
 
 export const DISCOVERY_ASSET_FALLBACK = "/discovery/industries/automotive.png";

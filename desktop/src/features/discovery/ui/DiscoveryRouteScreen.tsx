@@ -149,13 +149,41 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
   }, [dataSource, search]);
 
   return (
-    <DiscoveryWorkspace
-      dataSource={dataSource}
-      entitlement={state.entitlement}
-      error={state.error}
-      isLoading={state.isLoading}
-      readModel={state.readModel}
-      search={search}
-    />
+    <div
+      className="min-h-full bg-background text-foreground"
+      style={
+        {
+          "--background": "220 15% 96%",
+          "--foreground": "220 18% 5%",
+          "--card": "0 0% 100%",
+          "--card-foreground": "220 18% 5%",
+          "--muted": "150 8% 94%",
+          "--muted-foreground": "160 8% 43%",
+          "--border": "142 10% 88%",
+          "--input": "142 10% 88%",
+          "--secondary": "150 8% 94%",
+          "--secondary-foreground": "220 18% 5%",
+          "--accent": "150 8% 94%",
+          "--accent-foreground": "220 18% 5%",
+          // The Buzz shell can be dark while this SalesTeams surface is light.
+          // Keep the product accent available for decorative emphasis, but use
+          // the light surface's foreground for controls so neutral Buzz themes
+          // never produce low-contrast pale buttons or headings.
+          "--discovery-accent": "var(--sidebar-primary)",
+          "--primary": "var(--foreground)",
+          "--primary-foreground": "var(--background)",
+          "--ring": "var(--foreground)",
+        } as React.CSSProperties
+      }
+    >
+      <DiscoveryWorkspace
+        dataSource={dataSource}
+        entitlement={state.entitlement}
+        error={state.error}
+        isLoading={state.isLoading}
+        readModel={state.readModel}
+        search={search}
+      />
+    </div>
   );
 }

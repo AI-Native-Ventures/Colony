@@ -224,6 +224,11 @@ export function discoveryRunReducer(
 
 function createInitialRun(campaign: CampaignDetail): DiscoveryRun {
   if (campaign.run) return cloneRun(campaign.run);
+  return createIdleRun(campaign);
+}
+
+/** Reset starts a fresh local session even when the adapter persisted a prior terminal run. */
+function createIdleRun(campaign: CampaignDetail): DiscoveryRun {
   return {
     id: `${campaign.id}-run-0001`,
     campaignId: campaign.id,
@@ -343,7 +348,7 @@ export function useDiscoveryRun(
 
   const reset = React.useCallback(() => {
     generation.current += 1;
-    dispatch({ type: "reset", run: createInitialRun(campaign) });
+    dispatch({ type: "reset", run: createIdleRun(campaign) });
     setBusy(false);
     setError(null);
   }, [campaign]);
