@@ -87,7 +87,7 @@ test.describe.configure({ mode: "serial" });
 test.beforeAll(createProofDirectory);
 test.afterAll(() => assertDistinctScreenshots(SCREENSHOTS));
 
-test("all 11 native primitives and the seven bundled composites render through MessageRow", async ({
+test("all 11 native primitives and the 10 bundled composites render through MessageRow", async ({
   page,
 }) => {
   const errors = trackPageErrors(page);
@@ -207,8 +207,10 @@ test("all 11 native primitives and the seven bundled composites render through M
   await expect(
     page.getByRole("img", { name: "Chart, line chart" }),
   ).toBeVisible();
-  await expect(page.getByPlaceholder("Filter rows")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve" })).toBeEnabled();
+  await expect(page.getByPlaceholder("Filter rows").first()).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Approve", exact: true }),
+  ).toBeEnabled();
   await expect(page.getByRole("button", { name: "Deny" })).toBeEnabled();
   await expect(page.getByText("jordan@tennant-group.com")).toBeVisible();
   await expect(

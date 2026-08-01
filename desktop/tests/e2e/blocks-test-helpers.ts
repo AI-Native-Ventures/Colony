@@ -472,6 +472,10 @@ export function compositeData(handle: CoreHandle, index = 1): unknown {
           },
         ],
       };
+    case "company-brief":
+    case "company-blueprint":
+    case "interview":
+      return structuredClone(readCoreManifest(handle).examples[0]?.data ?? {});
   }
 }
 
