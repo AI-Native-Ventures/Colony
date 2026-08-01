@@ -269,6 +269,21 @@ fn crawl_priority(category: LinkCategory) -> u8 {
     }
 }
 
+/// How many path segments deep a URL is.
+///
+/// Used only to break ties within a crawl category, so a section page outranks
+/// the leaves beneath it.
+fn path_depth(url: &str) -> usize {
+    url::Url::parse(url)
+        .map(|parsed| {
+            parsed
+                .path_segments()
+                .map(|segments| segments.filter(|segment| !segment.is_empty()).count())
+                .unwrap_or(0)
+        })
+        .unwrap_or(usize::MAX)
+}
+
 /// Scan a company website and return the evidence collected.
 pub async fn scan_site(raw_url: &str, limits: ScanLimits) -> Result<CompanyScanResult, ScanError> {
     let started = Instant::now();
@@ -289,23 +304,44 @@ pub async fn scan_site(raw_url: &str, limits: ScanLimits) -> Result<CompanyScanR
     let origin = home.final_url.clone();
     let home_evidence = extract_page(&home.body, &result.canonical_url);
 
-    let mut queue: Vec<(u8, String)> = home_evidence
+    let mut queue: Vec<(u8, usize, String)> = home_evidence
         .links
         .iter()
-        .map(|link| (crawl_priority(link.category), link.url.clone()))
+        .map(|link| {
+            (
+                crawl_priority(link.category),
+                path_depth(&link.url),
+                link.url.clone(),
+            )
+        })
         .collect();
+    let home_url = result.canonical_url.clone();
     result.pages.push(home_evidence);
 
     // The site's own inventory reaches pages navigation never links.
     for discovered in discover_from_sitemap(&origin, &limits, &mut result).await {
-        queue.push((crawl_priority(LinkCategory::Other), discovered));
+        let depth = path_depth(&discovered);
+        queue.push((crawl_priority(LinkCategory::Other), depth, discovered));
     }
 
-    queue.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    // Shallower first within a category. A sitemap lists every leaf a site
+    // has, all of them uncategorised, and sorting those by URL alone lets one
+    // deep branch that happens to sort early take the whole budget: scanning a
+    // real site spent twenty of twenty-five pages on add-on detail pages and
+    // never reached the rest. What a business does is described near its root.
+    queue.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    queue.dedup_by(|left, right| left.2 == right.2);
     let mut seen: std::collections::BTreeSet<String> =
         result.pages.iter().map(|page| page.url.clone()).collect();
+    // The homepage is already read; the sitemap almost always lists it again.
+    seen.insert(home_url);
 
-    for (_, candidate) in queue {
+    for (_, _, candidate) in queue {
         if result.pages.len() >= limits.max_pages {
             result.not_fetched.push(candidate);
             continue;
@@ -333,7 +369,20 @@ pub async fn scan_site(raw_url: &str, limits: ScanLimits) -> Result<CompanyScanR
             Ok(fetched) => {
                 result.bytes_read += fetched.bytes;
                 let url = fetched.final_url.url.to_string();
-                result.pages.push(extract_page(&fetched.body, &url));
+                // Dedupe on where the fetch landed, not where it was aimed. A
+                // site that redirects several URLs to one page would otherwise
+                // spend the budget reading that page again and again; the
+                // homepage came back twice in a real scan for exactly this
+                // reason.
+                // The candidate is already in `seen`; only a redirect can make
+                // this land somewhere else, and only then is there anything to
+                // check. A site that points several URLs at one page would
+                // otherwise spend the budget reading it again and again, which
+                // is how the homepage came back twice in a real scan.
+                let landed_elsewhere = url != candidate;
+                if !landed_elsewhere || seen.insert(url.clone()) {
+                    result.pages.push(extract_page(&fetched.body, &url));
+                }
             }
             Err(error) => result.warnings.push(format!("{candidate}: {error}")),
         }
