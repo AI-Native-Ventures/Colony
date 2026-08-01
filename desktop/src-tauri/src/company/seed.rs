@@ -11,7 +11,7 @@
 //! through this code, and in every case the owner's own edits survive. An
 //! employee the owner renamed stays renamed.
 
-use buzz_core_pkg::company_roster::{baseline_role, role_slug, BaselineRoleId, CompanyBlueprint};
+use buzz_core_pkg::company_roster::{baseline_role, role_slug, BaselineRoleId, ValidatedBlueprint};
 
 use crate::{
     company::transaction::{persona_id_for, TransactionError},
@@ -62,7 +62,7 @@ impl SeedOutcome {
 /// same output and the tests can assert on it.
 pub fn seed_personas(
     community_scope: &str,
-    blueprint: &CompanyBlueprint,
+    blueprint: &ValidatedBlueprint,
     existing: &[AgentDefinition],
     now: &str,
 ) -> SeedOutcome {
@@ -139,7 +139,7 @@ pub fn seed_personas(
 /// again rather than silently dropping a member.
 pub fn seed_teams(
     community_scope: &str,
-    blueprint: &CompanyBlueprint,
+    blueprint: &ValidatedBlueprint,
     existing: &[TeamRecord],
     now: &str,
 ) -> Result<SeedOutcome, TransactionError> {

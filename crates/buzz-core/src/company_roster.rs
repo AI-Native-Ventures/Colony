@@ -529,13 +529,46 @@ impl<'de> Deserialize<'de> for CompanyBlueprint {
 /// The only accepted schema string.
 pub const BLUEPRINT_SCHEMA: &str = "colony.company-blueprint/v1";
 
-/// Parse and validate an agent-proposed Blueprint.
+/// A Blueprint that has passed validation.
 ///
-/// `deny_unknown_fields` throughout means a document carrying a system prompt,
-/// a command, a model choice or a credential fails HERE, rather than being
-/// partially honoured. That is the property worth protecting: the parse is the
-/// boundary, not a later check someone might forget.
-pub fn parse_blueprint(raw: &str) -> Result<CompanyBlueprint, BlueprintError> {
+/// Everything that acts on a Blueprint takes this rather than
+/// `CompanyBlueprint`, so "was this checked?" is answered by the type instead
+/// of by whether a caller remembered. The only ways to obtain one are parsing
+/// and `TryFrom`, and both validate.
+///
+/// The plain struct stays public and constructible because callers legitimately
+/// build one field by field. What they cannot do is hand it to the machinery
+/// without it being checked first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ValidatedBlueprint(CompanyBlueprint);
+
+impl ValidatedBlueprint {
+    /// The document, once checked.
+    pub fn inner(&self) -> &CompanyBlueprint {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for ValidatedBlueprint {
+    type Target = CompanyBlueprint;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<CompanyBlueprint> for ValidatedBlueprint {
+    type Error = BlueprintError;
+
+    fn try_from(blueprint: CompanyBlueprint) -> Result<Self, Self::Error> {
+        validate_blueprint(&blueprint)?;
+        Ok(Self(blueprint))
+    }
+}
+
+/// Parse and validate an agent-proposed Blueprint.
+pub fn parse_blueprint(raw: &str) -> Result<ValidatedBlueprint, BlueprintError> {
     // Deserialized through the wire type rather than `CompanyBlueprint`, whose
     // own `Deserialize` also validates but can only report failures as an
     // opaque serde error. Validating here keeps refusals specific enough to
@@ -545,7 +578,7 @@ pub fn parse_blueprint(raw: &str) -> Result<CompanyBlueprint, BlueprintError> {
         serde_json::from_str(raw).map_err(|_| BlueprintError::Malformed)?;
     let blueprint = CompanyBlueprint::from(wire);
     validate_blueprint(&blueprint)?;
-    Ok(blueprint)
+    Ok(ValidatedBlueprint(blueprint))
 }
 
 /// Check a parsed Blueprint's internal consistency.
@@ -1025,6 +1058,33 @@ mod tests {
             validate_blueprint(&blueprint).unwrap_err(),
             BlueprintError::DanglingReference
         );
+    }
+
+    /// The guarantee the newtype exists for: a caller cannot hand the
+    /// machinery a Blueprint that was never checked. Building the struct is
+    /// still allowed, since callers legitimately assemble one field by field;
+    /// what is refused is getting it past the conversion.
+    #[test]
+    fn an_unchecked_blueprint_cannot_become_a_validated_one() {
+        let mut invalid = valid_blueprint();
+        invalid.teams[0].name = "Operations".to_string();
+        assert_eq!(
+            ValidatedBlueprint::try_from(invalid).unwrap_err(),
+            BlueprintError::GenericOperationsTeam
+        );
+
+        let mut invalid = valid_blueprint();
+        invalid.proposed_initiatives.clear();
+        assert_eq!(
+            ValidatedBlueprint::try_from(invalid).unwrap_err(),
+            BlueprintError::InitiativeCount
+        );
+
+        let valid = valid_blueprint();
+        let validated = ValidatedBlueprint::try_from(valid.clone()).expect("valid");
+        assert_eq!(validated.inner(), &valid);
+        // Reading through it is transparent, so callers keep field access.
+        assert_eq!(validated.company.id, valid.company.id);
     }
 
     /// The relay truncates a coordinate at 64 bytes. A persona ID that

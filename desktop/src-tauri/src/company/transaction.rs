@@ -28,7 +28,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use buzz_core_pkg::company_roster::{materialized_persona_id, CompanyBlueprint};
+use buzz_core_pkg::company_roster::{materialized_persona_id, ValidatedBlueprint};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -140,9 +140,9 @@ pub fn step_idempotency_key(request_id: &str, step: &str) -> Uuid {
 }
 
 /// Canonical hash of an approved Blueprint.
-pub fn blueprint_hash(blueprint: &CompanyBlueprint) -> String {
+pub fn blueprint_hash(blueprint: &ValidatedBlueprint) -> String {
     let canonical =
-        canonical_json(&serde_json::to_value(blueprint).unwrap_or(serde_json::Value::Null));
+        canonical_json(&serde_json::to_value(blueprint.inner()).unwrap_or(serde_json::Value::Null));
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_bytes());
     hex::encode(hasher.finalize())
@@ -321,7 +321,7 @@ pub fn begin(
     owner_pubkey: &str,
     community_scope: &str,
     request_id: &str,
-    blueprint: &CompanyBlueprint,
+    blueprint: &ValidatedBlueprint,
 ) -> Result<BlueprintJournal, TransactionError> {
     let hash = blueprint_hash(blueprint);
     match existing {
@@ -389,7 +389,7 @@ pub fn persona_id_for(
 }
 
 /// Every Initiative ID this Blueprint materializes, in Blueprint order.
-pub fn planned_initiative_ids(blueprint: &CompanyBlueprint) -> Vec<String> {
+pub fn planned_initiative_ids(blueprint: &ValidatedBlueprint) -> Vec<String> {
     blueprint
         .proposed_initiatives
         .iter()

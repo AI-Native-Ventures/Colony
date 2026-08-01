@@ -1,7 +1,7 @@
 use buzz_core_pkg::company::{CommercialPurpose, CostCentreKind};
 use buzz_core_pkg::company_roster::{
     BlueprintCompany, BlueprintCostCentre, BlueprintInitiative, BlueprintRosterEntry,
-    BlueprintService, BlueprintTeam, BlueprintTeamKind,
+    BlueprintService, BlueprintTeam, BlueprintTeamKind, CompanyBlueprint, ValidatedBlueprint,
 };
 
 use super::*;
@@ -9,7 +9,13 @@ use super::*;
 const NOW: &str = "2026-08-01T09:00:00Z";
 const SCOPE: &str = "relay.example";
 
-fn blueprint() -> CompanyBlueprint {
+/// Built field by field, then converted through the checked conversion, which
+/// is the only way the machinery accepts one.
+fn blueprint() -> ValidatedBlueprint {
+    raw_blueprint().try_into().expect("fixture is valid")
+}
+
+fn raw_blueprint() -> CompanyBlueprint {
     CompanyBlueprint {
         schema: buzz_core_pkg::company_roster::BLUEPRINT_SCHEMA.to_string(),
         request_id: "3f6c1a2e-0000-4000-8000-000000000001".to_string(),
@@ -254,25 +260,25 @@ fn teams_are_created_with_their_members_and_lead() {
 /// team written here that broke it would be unrepairable through the UI.
 #[test]
 fn a_team_whose_lead_is_not_a_member_is_refused() {
-    let mut blueprint = blueprint();
-    blueprint.teams[0].member_role_ids = vec![BaselineRoleId::FrontendEngineer];
-    assert!(matches!(
-        seed_teams(SCOPE, &blueprint, &[], NOW),
-        Err(TransactionError::Invalid(_))
-    ));
+    let mut invalid = raw_blueprint();
+    invalid.teams[0].member_role_ids = vec![BaselineRoleId::FrontendEngineer];
+    // Refused at the conversion, so seeding never sees it. That is the point
+    // of taking a ValidatedBlueprint: the broken state is unrepresentable
+    // rather than caught late.
+    assert!(ValidatedBlueprint::try_from(invalid).is_err());
 }
 
 /// Silently dropping a member would produce a team quietly missing someone the
 /// owner approved.
 #[test]
 fn a_team_staffed_by_a_declined_role_is_refused_not_trimmed() {
-    let mut blueprint = blueprint();
-    blueprint.teams[0].member_role_ids.push(BaselineRoleId::Cfo);
+    let mut invalid = raw_blueprint();
+    invalid.teams[0].member_role_ids.push(BaselineRoleId::Cfo);
+    // Refused at the conversion, so seeding never sees it. That is the point
+    // of taking a ValidatedBlueprint: the broken state is unrepresentable
+    // rather than caught late.
     assert!(
-        matches!(
-            seed_teams(SCOPE, &blueprint, &[], NOW),
-            Err(TransactionError::Invalid(_))
-        ),
+        ValidatedBlueprint::try_from(invalid).is_err(),
         "the CFO was declined; the team must be refused, not quietly trimmed"
     );
 }
@@ -292,8 +298,9 @@ fn an_existing_team_is_reused_rather_than_rebuilt() {
 /// a re-run address the same records.
 #[test]
 fn ids_are_scoped_to_the_company() {
-    let mut other = blueprint();
+    let mut other = raw_blueprint();
     other.company.id = "other-co".to_string();
+    let other: ValidatedBlueprint = other.try_into().expect("valid");
 
     let first = seed_personas(SCOPE, &blueprint(), &[fizz()], NOW);
     let second = seed_personas(SCOPE, &other, &[fizz()], NOW);

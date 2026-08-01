@@ -7,6 +7,7 @@ use buzz_core_pkg::company::{CommercialPurpose, CostCentreKind};
 use buzz_core_pkg::company_roster::{
     BaselineRoleId, BlueprintCompany, BlueprintCostCentre, BlueprintInitiative,
     BlueprintRosterEntry, BlueprintService, BlueprintTeam, BlueprintTeamKind, CompanyBlueprint,
+    ValidatedBlueprint,
 };
 
 use super::*;
@@ -14,7 +15,7 @@ use super::*;
 /// The IDs a run would address. The command derives these through `seed`,
 /// which shares `persona_id_for` and `materialized_team_id` with this, so
 /// there is one definition of an ID rather than two that can drift.
-fn planned_persona_ids(scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
+fn planned_persona_ids(scope: &str, blueprint: &ValidatedBlueprint) -> Vec<String> {
     blueprint
         .roster
         .iter()
@@ -23,7 +24,7 @@ fn planned_persona_ids(scope: &str, blueprint: &CompanyBlueprint) -> Vec<String>
         .collect()
 }
 
-fn planned_team_ids(scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
+fn planned_team_ids(scope: &str, blueprint: &ValidatedBlueprint) -> Vec<String> {
     blueprint
         .teams
         .iter()
@@ -41,7 +42,13 @@ const OWNER: &str = "ownerpubkeyhex";
 const SCOPE: &str = "relay.example";
 const REQUEST: &str = "3f6c1a2e-0000-4000-8000-000000000001";
 
-fn blueprint() -> CompanyBlueprint {
+/// Built field by field, then converted through the checked conversion, which
+/// is the only way the machinery accepts one.
+fn blueprint() -> ValidatedBlueprint {
+    raw_blueprint().try_into().expect("fixture is valid")
+}
+
+fn raw_blueprint() -> CompanyBlueprint {
     CompanyBlueprint {
         schema: buzz_core_pkg::company_roster::BLUEPRINT_SCHEMA.to_string(),
         request_id: REQUEST.to_string(),
@@ -132,7 +139,7 @@ struct Effects {
 /// so nothing past it runs and no further checkpoint is written.
 fn run(
     dir: &std::path::Path,
-    blueprint: &CompanyBlueprint,
+    blueprint: &ValidatedBlueprint,
     effects: &Effects,
     fail_after: Option<BlueprintCheckpoint>,
 ) -> Result<BlueprintJournal, TransactionError> {
@@ -271,8 +278,9 @@ fn a_request_id_reused_with_different_content_is_refused() {
     )
     .expect("first run");
 
-    let mut edited = blueprint();
+    let mut edited = raw_blueprint();
     edited.roster[1].personal_name = "Someone Else".to_string();
+    let edited: ValidatedBlueprint = edited.try_into().expect("still a valid blueprint");
     assert_eq!(
         run(&dir, &edited, &effects, None).unwrap_err(),
         TransactionError::HashMismatch
@@ -503,13 +511,17 @@ fn the_journal_filename_does_not_leak_the_owner_key() {
 fn the_blueprint_hash_is_independent_of_key_order() {
     let blueprint = blueprint();
     let hash = blueprint_hash(&blueprint);
-    let reparsed: CompanyBlueprint =
-        serde_json::from_str(&serde_json::to_string(&blueprint).expect("serialize"))
-            .expect("round trip");
+    let reparsed: ValidatedBlueprint = serde_json::from_str::<CompanyBlueprint>(
+        &serde_json::to_string(&blueprint).expect("serialize"),
+    )
+    .expect("round trip")
+    .try_into()
+    .expect("round trip stays valid");
     assert_eq!(blueprint_hash(&reparsed), hash);
 
-    let mut changed = blueprint.clone();
+    let mut changed = raw_blueprint();
     changed.company.trading_name = "Horizon Labs Ltd".to_string();
+    let changed: ValidatedBlueprint = changed.try_into().expect("valid");
     assert_ne!(
         blueprint_hash(&changed),
         hash,
@@ -526,11 +538,13 @@ fn the_blueprint_hash_is_independent_of_key_order() {
 /// the inputs that would break a naive `key:value` join.
 #[test]
 fn separators_inside_content_cannot_forge_a_matching_hash() {
-    let mut a = blueprint();
+    let mut a = raw_blueprint();
     a.company.trading_name = "Horizon\",\"legalName\":\"Forged".to_string();
-    let mut b = blueprint();
+    let mut b = raw_blueprint();
     b.company.trading_name = "Horizon".to_string();
     b.company.legal_name = Some("Forged".to_string());
+    let a: ValidatedBlueprint = a.try_into().expect("valid");
+    let b: ValidatedBlueprint = b.try_into().expect("valid");
     assert_ne!(
         blueprint_hash(&a),
         blueprint_hash(&b),
@@ -546,10 +560,12 @@ fn separators_inside_content_cannot_forge_a_matching_hash() {
         "new\nline",
         "unicode \u{2028} sep",
     ] {
-        let mut left = blueprint();
+        let mut left = raw_blueprint();
         left.company.summary = hostile.to_string();
-        let mut right = blueprint();
+        let mut right = raw_blueprint();
         right.company.summary = format!("{hostile} ");
+        let left: ValidatedBlueprint = left.try_into().expect("valid");
+        let right: ValidatedBlueprint = right.try_into().expect("valid");
         assert_ne!(
             blueprint_hash(&left),
             blueprint_hash(&right),
