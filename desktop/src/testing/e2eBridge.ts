@@ -10034,7 +10034,7 @@ export function maybeInstallE2eTauriMocks() {
           commit_body: [
             "See the [project guide](https://example.com/project-guide).",
             "",
-            "![Architecture](/buzz.svg)",
+            "![Architecture](/colony.svg)",
             "",
             "![Demo](https://example.com/project-demo.mp4)",
           ].join("\n"),
