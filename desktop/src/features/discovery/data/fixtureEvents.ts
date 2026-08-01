@@ -61,24 +61,24 @@ function metricFor(
   return metric;
 }
 
+type SourceEventPayload =
+  | { type: "source_started" }
+  | { type: "source_progress"; progress: number; message?: string }
+  | { type: "source_completed" }
+  | { type: "source_exhausted" }
+  | { type: "source_failed"; error: string }
+  | { type: "source_skipped"; reason: string }
+  | { type: "lead_stored"; lead: Lead }
+  | { type: "lead_rejected"; lead: Lead; reason: string };
+
 function sourceEvent(
   context: EventContext,
-  type:
-    | "source_started"
-    | "source_progress"
-    | "source_completed"
-    | "source_exhausted"
-    | "source_failed"
-    | "source_skipped"
-    | "lead_stored"
-    | "lead_rejected",
   source: DiscoverySource,
-  extra: Record<string, unknown> = {},
+  payload: SourceEventPayload,
 ): DiscoveryEvent {
   const metric = metricFor(context, source);
   const snapshot = cloneMetric(metric);
-  return {
-    type,
+  const common = {
     campaignId: context.campaign.id,
     runId: context.run.id,
     at: nextAt(context),
@@ -86,29 +86,50 @@ function sourceEvent(
     source,
     metric: snapshot,
     sourceMetric: cloneMetric(snapshot),
-    ...extra,
-  } as DiscoveryEvent;
+  };
+  switch (payload.type) {
+    case "source_started":
+    case "source_completed":
+    case "source_exhausted":
+      return { ...common, type: payload.type };
+    case "source_progress":
+      return { ...common, ...payload };
+    case "source_failed":
+    case "source_skipped":
+      return { ...common, ...payload };
+    case "lead_stored":
+    case "lead_rejected":
+      return { ...common, ...payload };
+  }
 }
+
+type SessionEventPayload =
+  | { type: "session_started" }
+  | {
+      type: "fallback_activated";
+      fromSource?: DiscoverySource;
+      source?: DiscoverySource;
+    }
+  | { type: "target_reached"; targetReached: true }
+  | {
+      type: "session_completed";
+      targetReached: boolean;
+      partial: boolean;
+    }
+  | { type: "session_cancelled" }
+  | { type: "session_failed"; error: string };
 
 function sessionEvent(
   context: EventContext,
-  type:
-    | "session_started"
-    | "fallback_activated"
-    | "target_reached"
-    | "session_completed"
-    | "session_cancelled"
-    | "session_failed",
-  extra: Record<string, unknown> = {},
+  payload: SessionEventPayload,
 ): DiscoveryEvent {
-  return {
-    type,
+  const common = {
     campaignId: context.campaign.id,
     runId: context.run.id,
     at: nextAt(context),
     run: cloneRun(context.run),
-    ...extra,
-  } as DiscoveryEvent;
+  };
+  return { ...common, ...payload };
 }
 
 function createContext(
@@ -139,7 +160,7 @@ function startSource(
   const metric = metricFor(context, source);
   metric.status = "active";
   setCurrentSource(context, source);
-  return sourceEvent(context, "source_started", source);
+  return sourceEvent(context, source, { type: "source_started" });
 }
 
 function progressSource(
@@ -154,7 +175,8 @@ function progressSource(
   metric.acceptance = discovered ? 100 : 0;
   context.run.phase = "sampling";
   context.run.discovered += discovered;
-  return sourceEvent(context, "source_progress", source, {
+  return sourceEvent(context, source, {
+    type: "source_progress",
     progress: Math.min(100, discovered * 20),
     message: `Sampled ${discovered} result${discovered === 1 ? "" : "s"}`,
   });
@@ -174,7 +196,7 @@ function storeLead(
   metric.status = "active";
   metric.stored += 1;
   context.run.stored += 1;
-  return sourceEvent(context, "lead_stored", source, { lead });
+  return sourceEvent(context, source, { type: "lead_stored", lead });
 }
 
 function rejectLead(
@@ -186,7 +208,11 @@ function rejectLead(
   const metric = metricFor(context, source);
   metric.rejected += 1;
   context.run.rejected += 1;
-  return sourceEvent(context, "lead_rejected", source, { lead, reason });
+  return sourceEvent(context, source, {
+    type: "lead_rejected",
+    lead,
+    reason,
+  });
 }
 
 function completeSource(
@@ -199,7 +225,7 @@ function completeSource(
   metric.acceptance = metric.discovered
     ? Math.round((metric.stored / metric.discovered) * 100)
     : 0;
-  return sourceEvent(context, "source_completed", source);
+  return sourceEvent(context, source, { type: "source_completed" });
 }
 
 function exhaustSource(
@@ -209,7 +235,7 @@ function exhaustSource(
   const metric = metricFor(context, source);
   metric.status = "exhausted";
   metric.durationMs = metric.durationMs ?? 250;
-  return sourceEvent(context, "source_exhausted", source);
+  return sourceEvent(context, source, { type: "source_exhausted" });
 }
 
 function failSource(
@@ -222,7 +248,7 @@ function failSource(
   metric.error = error;
   metric.durationMs = 120;
   context.run.phase = "evaluating";
-  return sourceEvent(context, "source_failed", source, { error });
+  return sourceEvent(context, source, { type: "source_failed", error });
 }
 
 function skipSource(
@@ -233,7 +259,7 @@ function skipSource(
   const metric = metricFor(context, source);
   metric.status = "skipped";
   metric.error = reason;
-  return sourceEvent(context, "source_skipped", source, { reason });
+  return sourceEvent(context, source, { type: "source_skipped", reason });
 }
 
 function finish(
@@ -256,15 +282,17 @@ function finish(
   ).toISOString();
   if (error) context.run.error = error;
   if (status === "completed" || status === "partial") {
-    return sessionEvent(context, "session_completed", {
+    return sessionEvent(context, {
+      type: "session_completed",
       targetReached,
       partial: status === "partial",
     });
   }
   if (status === "cancelled") {
-    return sessionEvent(context, "session_cancelled");
+    return sessionEvent(context, { type: "session_cancelled" });
   }
-  return sessionEvent(context, "session_failed", {
+  return sessionEvent(context, {
+    type: "session_failed",
     error: error ?? "Discovery failed",
   });
 }
@@ -279,7 +307,9 @@ export function createFixtureEventSequence(
   scenario: FixtureScenario,
 ): DiscoveryEvent[] {
   const context = createContext(campaign, leads, scenario);
-  const events: DiscoveryEvent[] = [sessionEvent(context, "session_started")];
+  const events: DiscoveryEvent[] = [
+    sessionEvent(context, { type: "session_started" }),
+  ];
   const [first, second, third] = firstSources(context, 3);
 
   if (!first) return [...events, finish(context, "partial")];
@@ -308,7 +338,7 @@ export function createFixtureEventSequence(
       }
       context.run.targetReached = true;
       events.push(
-        sessionEvent(context, "target_reached", { targetReached: true }),
+        sessionEvent(context, { type: "target_reached", targetReached: true }),
       );
       events.push(completeSource(context, first));
       events.push(finish(context, "completed", true));
@@ -324,7 +354,8 @@ export function createFixtureEventSequence(
       );
       context.run.phase = "fallback";
       events.push(
-        sessionEvent(context, "fallback_activated", {
+        sessionEvent(context, {
+          type: "fallback_activated",
           fromSource: first,
           source: second,
         }),
