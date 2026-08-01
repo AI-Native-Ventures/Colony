@@ -45,9 +45,7 @@ export function DiscoveryHeader({
         <div className="min-w-0">
           <h1 className="font-sans text-title font-semibold tracking-tight text-foreground">
             Millions of leads,{" "}
-            <em className="not-italic italic text-[#8b5cf6]">
-              one search away.
-            </em>
+            <em className="not-italic italic text-primary">one search away.</em>
           </h1>
           <p className="mt-3 text-sm text-muted-foreground">
             {mode === "businesses" ? (
@@ -103,7 +101,7 @@ export function DiscoveryHeader({
 
       {showToolbar ? (
         <label
-          className="flex items-center gap-3 rounded-2xl border border-border bg-background px-6 py-3 shadow-sm focus-within:border-[#8b5cf6] focus-within:ring-4 focus-within:ring-[#8b5cf6]/10"
+          className="flex items-center gap-3 rounded-2xl border border-border bg-background px-6 py-3 shadow-sm focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10"
           htmlFor="discovery-search"
         >
           <Search
