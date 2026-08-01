@@ -33,12 +33,19 @@ const fizz = agent("Fizz", "builtin:fizz", "f".repeat(64));
 const honey = agent("Honey", "builtin:honey", "h".repeat(64));
 const bumble = agent("Bumble", "builtin:bumble", "b".repeat(64));
 
-test("resolveWelcomeAgentSet orders agents by stable persona identity", () => {
+test("resolveWelcomeAgentSet resolves the Chief of Staff alone", () => {
+  // Only Fizz is provisioned before blueprint approval, so an agent set is
+  // complete with just the lead and no teammates to coordinate.
   assert.deepEqual(resolveWelcomeAgentSet([bumble, fizz, honey]), {
     lead: fizz,
-    teammates: [honey, bumble],
+    teammates: [],
   });
-  assert.equal(resolveWelcomeAgentSet([fizz, honey]), null);
+  assert.deepEqual(resolveWelcomeAgentSet([fizz]), {
+    lead: fizz,
+    teammates: [],
+  });
+  // Without the Chief of Staff there is no usable set at all.
+  assert.equal(resolveWelcomeAgentSet([honey, bumble]), null);
 });
 
 test("opener uses current agent names and requests bounded simultaneous intros", () => {
@@ -426,4 +433,28 @@ test("merging the opener subtree never double-counts an already-visible reply", 
 test("merging with no subtree replies leaves the channel events untouched", () => {
   const channelEvents = [kickoffOpener];
   assert.equal(mergeKickoffEvents(channelEvents, []), channelEvents);
+});
+
+test("the first-run opener introduces the Chief of Staff and asks for the website", () => {
+  // With no teammates this is the opener every new user actually receives.
+  const opener = buildWelcomeKickoffOpener(fizz, [], [], "tyler");
+
+  assert.match(opener, /Hi @tyler, I'm Fizz, your Chief of Staff\./);
+  assert.match(opener, /Colony is where we'll run the company together/);
+  assert.match(opener, /Send me the company website/);
+  assert.match(opener, /a few focused questions instead/);
+  // The promise the materialization path has to keep.
+  assert.match(
+    opener,
+    /won't create the company or start work until you approve/,
+  );
+  // No coordination copy: there is nobody to coordinate with yet.
+  assert.doesNotMatch(opener, /introduce yoursel/);
+  assert.doesNotMatch(opener, /Welcome to Buzz/);
+});
+
+test("the opener greets without a name when the owner name is unknown", () => {
+  const opener = buildWelcomeKickoffOpener(fizz, [], [], null);
+  assert.match(opener, /^Hi, I'm Fizz, your Chief of Staff\./);
+  assert.doesNotMatch(opener, /@@/);
 });

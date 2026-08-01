@@ -289,32 +289,46 @@ test("existing Welcome starter needs no update when runtime already matches", ()
   );
 });
 
-test("welcome team starter definitions and role identities are stable", () => {
+test("onboarding provisions only the Chief of Staff", () => {
+  // Colony opens as a conversation with one Chief of Staff. The rest of the
+  // roster is proposed from the real business and created on approval, so
+  // nothing is deployed or started on the user's behalf beforehand.
   assert.equal(WELCOME_TEAM_ID, "builtin-team:welcome");
   assert.deepEqual(WELCOME_TEAM_STARTERS, [
-    { name: "Fizz", personaId: "builtin:fizz", role: "lead" },
-    { name: "Honey", personaId: "builtin:honey", role: "teammate" },
-    { name: "Bumble", personaId: "builtin:bumble", role: "teammate" },
+    {
+      name: "Fizz",
+      personaId: "builtin:fizz",
+      role: "lead",
+      roleId: "chief-of-staff",
+    },
   ]);
 });
 
+test("Honey and Bumble are no longer auto-provisioned", () => {
+  // Their built-in definitions still exist and any user customization is
+  // untouched — they are simply not part of first run any more.
+  const personaIds = WELCOME_TEAM_STARTERS.map((s) => s.personaId);
+  assert.ok(!personaIds.includes("builtin:honey"));
+  assert.ok(!personaIds.includes("builtin:bumble"));
+});
+
 test("starter matching ignores user agents with a Welcome persona", () => {
-  const honey = WELCOME_TEAM_STARTERS[1];
-  const userHoney = makeAgent({
-    personaId: honey.personaId,
+  const chief = WELCOME_TEAM_STARTERS[0];
+  const userFizz = makeAgent({
+    personaId: chief.personaId,
     teamId: null,
   });
 
   assert.equal(
-    pickWelcomeTeamStarterAgentForRelay([userHoney], honey, RELAY_A),
+    pickWelcomeTeamStarterAgentForRelay([userFizz], chief, RELAY_A),
     null,
   );
 });
 
 test("starter matching uses persona identity rather than display name", () => {
-  const honey = WELCOME_TEAM_STARTERS[1];
+  const honey = WELCOME_TEAM_STARTERS[0];
   const renamedHoney = makeAgent({
-    name: "Honey the Helper",
+    name: "Fizz the Helper",
     personaId: honey.personaId,
   });
   const nameOnlyHoney = makeAgent({ name: honey.name, pubkey: PUB_B });
@@ -330,7 +344,7 @@ test("starter matching uses persona identity rather than display name", () => {
 });
 
 test("starter matching is relay scoped and normalizes trailing slashes", () => {
-  const bumble = WELCOME_TEAM_STARTERS[2];
+  const bumble = WELCOME_TEAM_STARTERS[0];
   const otherRelay = makeAgent({
     personaId: bumble.personaId,
     relayUrl: RELAY_B,

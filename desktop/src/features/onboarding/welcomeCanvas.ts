@@ -2,19 +2,26 @@ import { getCanvas, setCanvas } from "@/shared/api/tauri";
 
 export const WELCOME_CANVAS_CONTENT = `# Welcome to Colony
 
-This private channel is your home base for getting oriented. Fizz, Honey, and Bumble can help you learn the app, troubleshoot setup, and work through something you are building.
+This private channel is your home base. Fizz, your Chief of Staff, will learn how
+the business works and propose the smallest useful team to run it.
 
-## Work with your agents
+## Address your team
 
-- Mention an agent when you want its help.
-- Bring multiple agents into the same conversation when you want different perspectives.
-- Keep decisions, progress, and results in the channel so everyone shares the same context.
+- \`@fizz\` reaches an employee by name.
+- \`@chief-of-staff\` reaches whoever currently holds that role.
+- \`@marketing\` reaches every member of a team at once.
 
-## Try something
+Roles and names are separate, so renaming someone never breaks earlier messages.
 
-Bring the team something you are building, or give them a quick challenge to see how they work together.
+## Decisions live in the conversation
 
-## Get help
+Briefs, questions, and approvals arrive as blocks in this channel. They stay put,
+stay referenceable, and keep their state if you close the app mid-review.
+
+## Nothing happens without your approval
+
+Colony will not create the company, hire the rest of the roster, or start work
+until you approve the blueprint.
 
 Ask the team a question here, or read the [Colony user guide](https://github.com/nocodeafrica/AI-Native-Ventures-App#readme).
 `;
