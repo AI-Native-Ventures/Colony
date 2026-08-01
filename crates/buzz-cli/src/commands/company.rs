@@ -206,6 +206,12 @@ async fn get_task(client: &BuzzClient, id: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// One string field of a parsed record, for scoping a relay answer the relay
+/// could not scope itself.
+fn json_field<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(|found| found.as_str())
+}
+
 async fn list_initiatives(client: &BuzzClient, company: &str) -> Result<(), CliError> {
     let relay = relay_self(client).await?;
     let events = client
@@ -215,7 +221,14 @@ async fn list_initiatives(client: &BuzzClient, company: &str) -> Result<(), CliE
             "#company": [company]
         }))
         .await?;
-    let initiatives = parse_all(&events, parse_initiative_event);
+    // The relay can only index single-letter tags, so `#company` is a hint it
+    // is free to ignore, and it does: an unfiltered query returns every
+    // company's initiatives. Listing one company's work while showing another
+    // company's is worse than being slow, so the answer is narrowed here.
+    let initiatives: Vec<_> = parse_all(&events, parse_initiative_event)
+        .into_iter()
+        .filter(|initiative| json_field(initiative, "companyId") == Some(company))
+        .collect();
     println!("{}", json!({ "initiatives": initiatives }));
     Ok(())
 }
@@ -246,7 +259,14 @@ async fn list_tasks(
         }
     }
     let events = client.query_all(filter).await?;
-    let tasks = parse_all(&events, parse_task_event);
+    // Same reason as `list_initiatives`: `#company` and `#initiative` are not
+    // single-letter tags, so the relay cannot index them and the query comes
+    // back unscoped.
+    let tasks: Vec<_> = parse_all(&events, parse_task_event)
+        .into_iter()
+        .filter(|task| company.is_none_or(|company| json_field(task, "companyId") == Some(company)))
+        .filter(|task| initiative.is_none_or(|id| json_field(task, "initiativeId") == Some(id)))
+        .collect();
     println!("{}", json!({ "tasks": tasks }));
     Ok(())
 }
