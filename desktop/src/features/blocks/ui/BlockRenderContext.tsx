@@ -20,6 +20,11 @@ import {
   queueRetryableQuestionAction,
   type QueuedQuestionAction,
 } from "@/features/blocks/blockActionQueue";
+import { approveCompanyBlueprint } from "@/features/company/approveCompanyBlueprint";
+import {
+  isBlueprintApproval,
+  readBlueprintApproval,
+} from "@/features/company/blueprintApproval";
 
 import type {
   BlockActionEnvironment,
@@ -206,6 +211,30 @@ export function BlockRenderProvider({
         );
         return;
       }
+      // Approving a Blueprint is the one Block action with a local effect: it
+      // creates the company's employees and teams before anything is published.
+      // It runs first, so a relay that refuses the record of the decision
+      // cannot leave the owner with a company they were told was created.
+      if (isBlueprintApproval(interaction.action_id)) {
+        const approval = readBlueprintApproval(instance.data);
+        if (!approval) {
+          setActionError(
+            "This blueprint is missing the document it proposes. Ask for it again.",
+          );
+          return;
+        }
+        try {
+          await approveCompanyBlueprint({ ...approval, channelId });
+        } catch (error) {
+          setActionError(
+            error instanceof Error
+              ? error.message
+              : "The company could not be created.",
+          );
+          return;
+        }
+      }
+
       const idempotencyKey = crypto.randomUUID();
       try {
         await submitBlockAction({

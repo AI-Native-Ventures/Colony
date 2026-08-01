@@ -19,7 +19,8 @@
       "roster",
       "teams",
       "initiatives",
-      "gaps"
+      "gaps",
+      "blueprint"
     ],
     "properties": {
       "request_id": {
@@ -198,6 +199,11 @@
             }
           }
         }
+      },
+      "blueprint": {
+        "type": "string",
+        "maxLength": 60000,
+        "description": "The exact executable blueprint this proposal renders. Approving sends this document, and its hash must match blueprint_hash."
       }
     }
   },
@@ -536,7 +542,8 @@
             "label": "Who does the work today",
             "cost_of_leaving_open": "The team above may duplicate someone you already have."
           }
-        ]
+        ],
+        "blueprint": "{\"schema\":\"colony.company-blueprint/v1\"}"
       }
     },
     {
@@ -611,7 +618,8 @@
             "label": "How the work is delivered",
             "cost_of_leaving_open": "Nothing can be delegated to a team until the steps are known."
           }
-        ]
+        ],
+        "blueprint": "{\"schema\":\"colony.company-blueprint/v1\"}"
       }
     }
   ],
