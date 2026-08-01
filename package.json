@@ -6,7 +6,8 @@
     "check": "pnpm -r check"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.6"
+    "@biomejs/biome": "^2.4.6",
+    "playwright": "1.60.0"
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19"

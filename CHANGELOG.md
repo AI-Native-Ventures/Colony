@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Rebrand: the app is now Colony. New ant mark, landing, loading animations, icons, and marketing site. Internal names (crates, env vars, protocol) are unchanged.
+
 ## v0.5.2
 
 - feat(cli): mirror Desktop mention delivery ([#3330](https://github.com/block/buzz/pull/3330)) ([`7adc46268`](https://github.com/block/buzz/commit/7adc46268d5e93f0b1d4dc8e700af22815dcac1b))

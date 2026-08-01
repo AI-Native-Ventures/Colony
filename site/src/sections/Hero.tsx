@@ -1,0 +1,47 @@
+// site/src/sections/Hero.tsx
+import { ScatterField } from "@/brand/ScatterField";
+
+export function Hero() {
+  return (
+    <section className="relative overflow-hidden bg-colony-canvas px-6 pb-16 pt-14 sm:px-10 sm:pb-24 sm:pt-16 lg:flex lg:min-h-screen lg:flex-col lg:justify-end lg:px-16 lg:pt-20">
+      <ScatterField />
+      <div className="relative z-10 mx-auto flex max-w-7xl flex-col gap-10 lg:grid lg:max-w-[1600px] lg:grid-cols-[1.8fr_1fr] lg:items-center lg:gap-16">
+        <div className="flex flex-col items-start">
+          <span className="inline-flex items-center rounded-full bg-colony-ink/10 px-3 py-1 text-xs font-medium uppercase tracking-wide text-colony-ink/80">
+            Developer preview
+          </span>
+          <img
+            src="/colony-wordmark.png"
+            alt="Colony"
+            width={777}
+            height={326}
+            className="mt-6 w-full max-w-[22rem] sm:max-w-[30rem] lg:max-w-none lg:mt-10"
+          />
+        </div>
+        <div className="flex flex-col items-start text-left">
+          <h1 className="text-4xl font-semibold tracking-tight text-colony-ink sm:text-5xl lg:text-6xl xl:text-7xl">
+            Run your company with AI agents
+          </h1>
+          <p className="mt-6 max-w-xl text-base leading-relaxed text-colony-ink/70 sm:mt-8 sm:text-lg lg:text-xl">
+            Colony is a workspace where AI agents and people build a company
+            together: chat, agent teams, workflows, canvas, and git.
+          </p>
+          <div className="mt-10 flex flex-col items-start gap-4 sm:mt-12 sm:flex-row sm:items-center lg:mt-14">
+            <a
+              href="#download"
+              className="rounded-full bg-colony-ink px-8 py-3 text-base font-medium text-colony-canvas transition hover:opacity-90 lg:px-10 lg:py-4 lg:text-lg"
+            >
+              Download for macOS
+            </a>
+            <a
+              href="#story"
+              className="text-base font-medium text-colony-ink underline underline-offset-4 transition hover:opacity-70 lg:text-lg"
+            >
+              How it works
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}

@@ -1,0 +1,75 @@
+/*
+ * Scoped to Tailwind's `components` layer so these component defaults yield
+ * to consumer utility classes (e.g. the App boot overlay's `[&>svg]:h-full`)
+ * regardless of selector specificity. Plain unlayered CSS always outranks
+ * layered utilities in the cascade, no matter how specific the utility
+ * selector is, so leaving this unlayered would make `[&>svg]:h-full` on
+ * FuzzyMark's className silently no-op.
+ */
+@layer components {
+  .colony-logo {
+    display: grid;
+    place-items: center;
+    inline-size: fit-content;
+  }
+
+  .colony-logo__mark {
+    display: block;
+    inline-size: min(466px, calc(100vw - 32px));
+    block-size: auto;
+    overflow: visible;
+  }
+
+  .colony-logo__mark--textured {
+    filter: var(--colony-filter);
+  }
+
+  .colony-logo--compact {
+    inline-size: 1.5rem;
+  }
+
+  .colony-logo--compact .colony-logo__mark {
+    inline-size: 100%;
+    block-size: auto;
+    max-inline-size: 100%;
+  }
+
+  @keyframes colony-logo-pulse {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  .colony-logo--pulse .colony-logo__mark {
+    animation: colony-logo-pulse 1.8s ease-in-out infinite;
+  }
+
+  @keyframes colony-logo-rest-loop {
+    0%,
+    80%,
+    100% {
+      opacity: 1;
+    }
+    85%,
+    95% {
+      opacity: 0;
+    }
+  }
+
+  .colony-logo--rest-loop .colony-logo__mark {
+    animation: colony-logo-rest-loop var(--colony-loop-duration, 4s) ease-in-out
+      infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .colony-logo--pulse .colony-logo__mark,
+    .colony-logo--rest-loop .colony-logo__mark {
+      animation: none;
+      opacity: 0.8;
+    }
+  }
+}

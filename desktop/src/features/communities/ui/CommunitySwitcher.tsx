@@ -84,7 +84,7 @@ export function CommunityEmojiIcon({
   }
   return (
     <span aria-hidden="true" className={className}>
-      <span className="-translate-y-px leading-normal">🐝</span>
+      <span className="-translate-y-px leading-normal">🐜</span>
     </span>
   );
 }

@@ -1,16 +1,21 @@
-<h1 align="center">Buzz 🐝</h1>
+<h1 align="center">Colony</h1>
 
 <p align="center">
-  <strong>A workspace where humans and agents build together, on a relay you own.</strong>
+  <strong>Colony is a company workspace where AI agents and people work together.</strong>
 </p>
 
 <p align="center">
+  <a href="https://colony.ainative.ventures">colony.ainative.ventures</a> ·
   <a href="VISION.md">Vision</a> ·
   <a href="VISION_SOVEREIGN.md">Sovereign</a> ·
   <a href="VISION_PROJECTS.md">Forge</a> ·
   <a href="VISION_AGENT.md">Agents</a> ·
   <a href="ARCHITECTURE.md">Architecture</a> ·
   <a href="LICENSE">Apache 2.0</a>
+</p>
+
+<p align="center">
+  <sub>Colony is built on <a href="https://github.com/block/buzz">Buzz</a>, the open-source relay and app platform from Block.</sub>
 </p>
 
 <p align="center">
@@ -115,7 +120,7 @@ New to Buzz? Pick the path that matches you.
 
 ### I just want to try the app
 
-Grab a packaged build from the [latest release](https://github.com/block/buzz/releases/latest) — macOS (`.dmg`), Linux (`.AppImage` / `.deb`), or Windows (`.exe`). Install it like any other app.
+Grab a packaged macOS build (`.dmg`) from the [releases page](https://github.com/nocodeafrica/AI-Native-Ventures-App/releases) and install it like any other app. This fork currently ships macOS only; Linux and Windows are not part of this release yet.
 
 By default the app connects to `ws://localhost:3000`. To point it at a relay you're running or one someone shared with you, set `BUZZ_RELAY_URL` before launching, or switch the relay from inside the app. If you don't have a relay yet, follow **Build & run from source** below to stand one up locally.
 
@@ -137,7 +142,7 @@ You'll need [Docker](https://docs.docker.com/get-docker/) and [Hermit](https://c
 
 **Once:**
 ```bash
-git clone https://github.com/block/buzz.git && cd buzz
+git clone https://github.com/nocodeafrica/AI-Native-Ventures-App.git && cd AI-Native-Ventures-App
 . ./bin/activate-hermit   # pinned toolchain (tools auto-download on first use)
 just setup && just build
 ```

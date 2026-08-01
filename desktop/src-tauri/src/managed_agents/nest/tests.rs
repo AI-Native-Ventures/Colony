@@ -749,7 +749,7 @@ fn test_upsert_marker_in_code_block() {
 
     // The real markers appended at the end must be at line-start (column 0).
     let begin_pos = result
-        .find("<!-- BEGIN BUZZ MANAGED — regenerated")
+        .find("<!-- BEGIN BUZZ MANAGED, regenerated")
         .expect("regenerated BEGIN marker must be present");
     assert!(
         begin_pos == 0 || result.as_bytes()[begin_pos - 1] == b'\n',
@@ -871,7 +871,7 @@ fn refresh_agents_md_preserves_managed_section() {
     let content = fs::read_to_string(&agents_md).unwrap();
     // Static content should be refreshed (from template).
     assert!(
-        content.starts_with("# Buzz Nest"),
+        content.starts_with("# Colony Nest"),
         "template header must be present"
     );
     // Managed section should be preserved.

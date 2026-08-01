@@ -1,0 +1,154 @@
+/*
+ * site/src/brand/site-animations.css
+ *
+ * Standalone copy of the "Colony ant gait" block from
+ * desktop/src/shared/styles/globals/animations.css (Task 2). The gait rules
+ * themselves (selectors, keyframes, timing) are copied verbatim.
+ *
+ * Wrapped in `@layer components`, unlike the desktop source file, per
+ * docs/BRAND.md's general layering rule: plain unlayered CSS always beats
+ * Tailwind's `@layer utilities` regardless of selector specificity, so
+ * leaving this unlayered would let it silently defeat consumer utility
+ * overrides at the call site (the exact bug BRAND.md documents for
+ * colony-logo-animation.css, and that cost a full review cycle in Task 3).
+ * The desktop file happens to ship unlayered today; that is not a pattern to
+ * copy here.
+ */
+@layer components {
+  /* ── Colony ant gait ────────────────────────────────────────────────────
+     Leg tripods are HTML-level layers (see WalkingAnt.tsx). Alternating
+     tripod rotation reads as a walk cycle; the body layer bobs slightly out
+     of phase. All transforms are on HTML elements so they run on the
+     compositor even while the main thread is busy. */
+  .ant-sprite .ant-leg-layer {
+    will-change: transform;
+    transform-origin: 50% 72%;
+    animation-duration: 0.42s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+  }
+
+  .ant-sprite .ant-leg-layer-a {
+    animation-name: ant-step-a;
+  }
+
+  .ant-sprite .ant-leg-layer-b {
+    animation-name: ant-step-b;
+  }
+
+  .ant-sprite .ant-body-layer {
+    will-change: transform;
+    animation: ant-body-bob 0.42s ease-in-out infinite;
+  }
+
+  @keyframes ant-step-a {
+    0%,
+    100% {
+      transform: rotate(0deg) translateY(0);
+    }
+    50% {
+      transform: rotate(-5deg) translateY(-1.6%);
+    }
+  }
+
+  @keyframes ant-step-b {
+    0%,
+    100% {
+      transform: rotate(-5deg) translateY(-1.6%);
+    }
+    50% {
+      transform: rotate(0deg) translateY(0);
+    }
+  }
+
+  @keyframes ant-body-bob {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    25%,
+    75% {
+      transform: translateY(-1%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ant-sprite .ant-leg-layer,
+    .ant-sprite .ant-body-layer {
+      animation: none;
+    }
+  }
+
+  /* ── Winged ant flap ────────────────────────────────────────────────────
+     WingedAnt.tsx (scatter field only). Each wing is its own HTML-level
+     wrapper (.ant-wing), same rule as the leg tripods above: the flap
+     transform runs on the wrapper div, never on the SVG ellipse inside it,
+     so it stays on the compositor. Fore and hind wings run out of phase
+     (animation-delay) so they don't flap in lockstep, which read as a
+     single rigid plate instead of two wings. */
+  .ant-winged .ant-wing {
+    will-change: transform;
+    animation-duration: 0.5s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+  }
+
+  .ant-winged .ant-wing-hind {
+    animation-name: ant-wing-flap-hind;
+  }
+
+  .ant-winged .ant-wing-fore {
+    animation-name: ant-wing-flap-fore;
+    animation-delay: -0.15s;
+  }
+
+  @keyframes ant-wing-flap-hind {
+    0%,
+    100% {
+      transform: rotate(0deg) scaleY(1);
+    }
+    50% {
+      transform: rotate(-6deg) scaleY(0.72);
+    }
+  }
+
+  @keyframes ant-wing-flap-fore {
+    0%,
+    100% {
+      transform: rotate(0deg) scaleY(1);
+    }
+    50% {
+      transform: rotate(6deg) scaleY(0.68);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ant-winged .ant-wing {
+      animation: none;
+    }
+  }
+
+  /* ── Pheromone trail ────────────────────────────────────────────────────
+     Dashed path behind the Story section columns, animated by scrolling the
+     dash pattern along the path. Reduced motion shows the static dashed
+     path: CSS `animation: none` is sufficient here since this is a plain
+     CSS animation (no SMIL), unlike the gait above where SMIL would need a
+     separate per-mechanism gate. The dash pattern is "3 9" (12px period);
+     the keyframe's offset must stay a multiple of that period or the loop
+     visibly jumps when it restarts. */
+  .pheromone-trail__path {
+    animation: pheromone-flow 2.4s linear infinite;
+  }
+
+  @keyframes pheromone-flow {
+    to {
+      stroke-dashoffset: -60;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pheromone-trail__path {
+      animation: none;
+    }
+  }
+}
