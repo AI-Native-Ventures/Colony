@@ -1,4 +1,4 @@
-import type { DiscoverySource } from "../sourceConfig";
+import { DISCOVERY_SOURCE_LABELS, type DiscoverySource } from "../sourceConfig";
 import type {
   CampaignDetail,
   DiscoveryEvent,
@@ -163,15 +163,30 @@ function progressSource(
 function storeLead(
   context: EventContext,
   source: DiscoverySource,
+  leadOverride?: Lead,
 ): DiscoveryEvent {
   const metric = metricFor(context, source);
   const lead =
-    context.leads.find((item) => item.source === source) ?? context.leads[0];
+    leadOverride ??
+    context.leads.find((item) => item.source === source) ??
+    context.leads[0];
   if (!lead) throw new Error("Fixture campaign has no leads");
   metric.status = "active";
   metric.stored += 1;
   context.run.stored += 1;
   return sourceEvent(context, "lead_stored", source, { lead });
+}
+
+function rejectLead(
+  context: EventContext,
+  source: DiscoverySource,
+  lead: Lead,
+  reason: string,
+): DiscoveryEvent {
+  const metric = metricFor(context, source);
+  metric.rejected += 1;
+  context.run.rejected += 1;
+  return sourceEvent(context, "lead_rejected", source, { lead, reason });
 }
 
 function completeSource(
@@ -185,6 +200,16 @@ function completeSource(
     ? Math.round((metric.stored / metric.discovered) * 100)
     : 0;
   return sourceEvent(context, "source_completed", source);
+}
+
+function exhaustSource(
+  context: EventContext,
+  source: DiscoverySource,
+): DiscoveryEvent {
+  const metric = metricFor(context, source);
+  metric.status = "exhausted";
+  metric.durationMs = metric.durationMs ?? 250;
+  return sourceEvent(context, "source_exhausted", source);
 }
 
 function failSource(
@@ -271,14 +296,17 @@ export function createFixtureEventSequence(
       }
       for (const source of sources)
         events.push(completeSource(context, source));
+      if (sources[2]) events.push(exhaustSource(context, sources[2]));
       events.push(finish(context, "partial"));
       return events;
     }
     case "waterfall-target":
       events.push(startSource(context, first));
       events.push(progressSource(context, first, 10));
-      events.push(storeLead(context, first));
-      context.run.stored = context.run.target;
+      for (const lead of context.leads.slice(0, context.run.target)) {
+        events.push(storeLead(context, first, lead));
+      }
+      context.run.targetReached = true;
       events.push(
         sessionEvent(context, "target_reached", { targetReached: true }),
       );
@@ -291,7 +319,7 @@ export function createFixtureEventSequence(
         failSource(
           context,
           first,
-          "Google Maps quota is temporarily unavailable",
+          `${DISCOVERY_SOURCE_LABELS[first]} is temporarily unavailable`,
         ),
       );
       context.run.phase = "fallback";
@@ -321,11 +349,25 @@ export function createFixtureEventSequence(
       }
       events.push(finish(context, "completed"));
       return events;
-    case "partial":
+    case "partial": {
       events.push(startSource(context, first));
-      events.push(progressSource(context, first, 1));
+      events.push(progressSource(context, first, 2));
       events.push(storeLead(context, first));
+      const rejectedLead =
+        context.leads.find((lead) => lead.id !== context.leads[0]?.id) ??
+        context.leads[0];
+      if (rejectedLead) {
+        events.push(
+          rejectLead(
+            context,
+            first,
+            rejectedLead,
+            "Duplicate business profile",
+          ),
+        );
+      }
       events.push(completeSource(context, first));
+      events.push(exhaustSource(context, first));
       if (second) {
         events.push(startSource(context, second));
         events.push(progressSource(context, second, 1));
@@ -333,6 +375,7 @@ export function createFixtureEventSequence(
       }
       events.push(finish(context, "partial"));
       return events;
+    }
     case "cancelled":
       events.push(startSource(context, first));
       events.push(progressSource(context, first, 1));

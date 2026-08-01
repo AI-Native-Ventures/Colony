@@ -1,10 +1,10 @@
-import type { DiscoveryEntitlement } from "./entitlement";
 import type { CampaignSourceConfig, DiscoverySource } from "./sourceConfig";
 
 export type DiscoveryEntityStatus =
   | "active"
   | "available"
   | "draft"
+  | "ready"
   | "running"
   | "completed"
   | "partial"
@@ -237,5 +237,3 @@ export type DiscoveryEvent =
     })
   | (DiscoveryEventBase & { type: "session_cancelled" })
   | (DiscoveryEventBase & { type: "session_failed"; error: string });
-
-export type DiscoveryFixtureEntitlement = DiscoveryEntitlement;
