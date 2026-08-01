@@ -3,19 +3,16 @@ import { ScatterField } from "@/brand/ScatterField";
 
 export function Hero() {
   return (
-    <section className="relative overflow-hidden bg-colony-canvas px-6 pb-16 pt-14 sm:px-10 sm:pb-24 sm:pt-16 lg:flex lg:min-h-screen lg:flex-col lg:justify-end lg:px-16 lg:pt-20">
+    <section className="relative overflow-hidden bg-colony-canvas px-6 pb-16 pt-14 sm:px-10 sm:pb-24 sm:pt-16 lg:flex lg:min-h-screen lg:flex-col lg:justify-center lg:px-16 lg:pt-20">
       <ScatterField />
       <div className="relative z-10 mx-auto flex max-w-7xl flex-col gap-10 lg:grid lg:max-w-[1600px] lg:grid-cols-[1.8fr_1fr] lg:items-center lg:gap-16">
         <div className="flex flex-col items-start">
-          <span className="inline-flex items-center rounded-full bg-colony-ink/10 px-3 py-1 text-xs font-medium uppercase tracking-wide text-colony-ink/80">
-            Developer preview
-          </span>
           <img
             src="/colony-wordmark.png"
             alt="Colony"
             width={777}
             height={326}
-            className="mt-6 w-full max-w-[22rem] sm:max-w-[30rem] lg:max-w-none lg:mt-10"
+            className="w-full max-w-[22rem] sm:max-w-[30rem] lg:max-w-none"
           />
         </div>
         <div className="flex flex-col items-start text-left">
