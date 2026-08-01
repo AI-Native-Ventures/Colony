@@ -24,6 +24,7 @@ type DiscoveryRouteState = {
 
 const EMPTY_READ_MODEL: DiscoveryRouteReadModel = {
   industries: [],
+  verticals: [],
   vertical: null,
   campaign: null,
   leads: null,
@@ -46,6 +47,10 @@ async function loadReadModel(
   search: DiscoverySearch,
 ): Promise<DiscoveryRouteReadModel> {
   const industries = await dataSource.getIndustries();
+  const verticals =
+    search.industryId && !search.verticalId
+      ? await dataSource.getVerticals(search.industryId)
+      : [];
   let vertical: VerticalDetail | null = null;
   let campaign: CampaignDetail | null = null;
   let leads: LeadPage | null = null;
@@ -72,7 +77,7 @@ async function loadReadModel(
     });
   }
 
-  return { industries, vertical, campaign, leads };
+  return { industries, verticals, vertical, campaign, leads };
 }
 
 export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {

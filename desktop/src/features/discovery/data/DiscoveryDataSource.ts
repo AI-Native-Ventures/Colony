@@ -6,6 +6,7 @@ import type {
   Industry,
   LeadPage,
   LeadScope,
+  Vertical,
   VerticalDetail,
 } from "../types";
 import type { CampaignSourceConfig } from "../sourceConfig";
@@ -13,6 +14,7 @@ import type { CampaignSourceConfig } from "../sourceConfig";
 export interface DiscoveryDataSource {
   getEntitlement(): Promise<DiscoveryEntitlement>;
   getIndustries(): Promise<Industry[]>;
+  getVerticals(industryId: string): Promise<Vertical[]>;
   getVertical(industryId: string, verticalId: string): Promise<VerticalDetail>;
   getCampaign(campaignId: string): Promise<CampaignDetail>;
   getLeads(scope: LeadScope): Promise<LeadPage>;

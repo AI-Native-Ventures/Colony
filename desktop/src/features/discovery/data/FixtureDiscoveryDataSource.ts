@@ -16,6 +16,7 @@ import type {
   LeadPage,
   LeadScope,
   CampaignSummary,
+  Vertical,
   VerticalDetail,
 } from "../types";
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
@@ -112,6 +113,14 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
 
   async getIndustries(): Promise<Industry[]> {
     return clone(FIXTURE_INDUSTRIES);
+  }
+
+  async getVerticals(industryId: string): Promise<Vertical[]> {
+    return clone(
+      FIXTURE_VERTICAL_DETAILS.filter(
+        (item) => item.industryId === industryId,
+      ).map(({ campaigns: _campaigns, ...vertical }) => vertical),
+    );
   }
 
   async getVertical(
