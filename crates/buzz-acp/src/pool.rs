@@ -1801,6 +1801,36 @@ pub async fn run_prompt_task(
     // content block so ACP connectors' slash-command detection
     // (`prompt[0].text.startsWith("/")`) fires; the wrapped Buzz context
     // follows as a second block.
+    // What this turn is charged to, resolved from the relay's own records
+    // before a single token is spent.
+    //
+    // Resolution failure is not fatal here, and that is deliberate rather than
+    // lax: a message with no work reference is ordinary chat, and refusing to
+    // answer it would break every conversation that is not company work. What
+    // a failure does cost is the attribution — the metric goes out without a
+    // work context, which is visible as unattributed spend rather than as a
+    // confident wrong number.
+    let work_context = match batch
+        .as_ref()
+        .and_then(|b| b.events.last())
+        .map(|batch_event| &batch_event.event)
+    {
+        Some(event) => {
+            match crate::work_context::resolve_for_event(&ctx.rest_client, event).await {
+                Ok(context) => context,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "pool::work_context",
+                        turn_id,
+                        "work context could not be established: {error}"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let mut slash_command: Option<String> = None;
     let prompt_sections: Vec<String> = if let Some(text) = prompt_text {
         // Heartbeats create their session before this point, so a Goose method-not-found
@@ -1890,11 +1920,22 @@ pub async fn run_prompt_task(
     // own block. Per-section blocks let the observer size trimmer elide a
     // section body in place while every `[Header]` line survives at the head
     // of its own leaf — so the "Prompt context" panel counts every section.
+    // The work section leads, so the agent reads what it is working on before
+    // it reads the instruction. It is its own block for the same reason every
+    // other section is.
+    let work_section = work_context
+        .as_ref()
+        .map(crate::work_context::work_context_section);
     let prompt_blocks: Vec<&str> = match slash_command {
         Some(ref cmd) => std::iter::once(cmd.as_str())
+            .chain(work_section.as_deref())
             .chain(prompt_sections.iter().map(String::as_str))
             .collect(),
-        None => prompt_sections.iter().map(String::as_str).collect(),
+        None => work_section
+            .as_deref()
+            .into_iter()
+            .chain(prompt_sections.iter().map(String::as_str))
+            .collect(),
     };
 
     // Turn start, labelled exactly as `log_stop_reason` labels the end, so a
@@ -1968,6 +2009,7 @@ pub async fn run_prompt_task(
                                     &session_id,
                                     &turn_id,
                                     Some(buzz_core::agent_turn_metric::StopReason::Cancelled),
+                                    work_context.as_ref().map(|context| &context.metric),
                                 )
                                 .await;
                                 send_prompt_result(
@@ -2004,6 +2046,7 @@ pub async fn run_prompt_task(
                                     &session_id,
                                     &turn_id,
                                     Some(buzz_core::agent_turn_metric::StopReason::Error),
+                                    work_context.as_ref().map(|context| &context.metric),
                                 )
                                 .await;
                                 send_prompt_result(
@@ -2059,6 +2102,7 @@ pub async fn run_prompt_task(
                             &session_id,
                             &turn_id,
                             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+                            work_context.as_ref().map(|context| &context.metric),
                         )
                         .await;
                         send_prompt_result(
@@ -2121,6 +2165,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(core_stop),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
 
@@ -2144,6 +2189,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(buzz_core::agent_turn_metric::StopReason::Error),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
             send_prompt_result(
@@ -2176,6 +2222,7 @@ pub async fn run_prompt_task(
                         &session_id,
                         &turn_id,
                         Some(buzz_core::agent_turn_metric::StopReason::Cancelled),
+                        work_context.as_ref().map(|context| &context.metric),
                     )
                     .await;
                     // Timeout triggers respawn in handle_prompt_result —
@@ -2204,6 +2251,7 @@ pub async fn run_prompt_task(
                         &session_id,
                         &turn_id,
                         Some(buzz_core::agent_turn_metric::StopReason::Error),
+                        work_context.as_ref().map(|context| &context.metric),
                     )
                     .await;
                     send_prompt_result(
@@ -2229,6 +2277,7 @@ pub async fn run_prompt_task(
                         &session_id,
                         &turn_id,
                         Some(buzz_core::agent_turn_metric::StopReason::Error),
+                        work_context.as_ref().map(|context| &context.metric),
                     )
                     .await;
                     send_prompt_result(
@@ -2258,6 +2307,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(buzz_core::agent_turn_metric::StopReason::Error),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
             send_prompt_result(
@@ -2285,6 +2335,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(buzz_core::agent_turn_metric::StopReason::Error),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
             send_prompt_result(
@@ -3476,6 +3527,7 @@ async fn publish_agent_turn_metric(
     session_id: &str,
     turn_id: &str,
     stop_reason: Option<buzz_core::agent_turn_metric::StopReason>,
+    work_context: Option<&buzz_core::company::AgentWorkContext>,
 ) {
     use buzz_core::agent_turn_metric::AgentTurnMetricPayload;
     use nostr::{EventBuilder, Kind, Tag};
@@ -3499,7 +3551,7 @@ async fn publish_agent_turn_metric(
         cumulative: cumulative_counts,
         delta_reliable: usage.delta_reliable,
         stop_reason,
-        work_context: None,
+        work_context: work_context.cloned(),
     };
     let ciphertext = match buzz_core::agent_turn_metric::encrypt_agent_turn_metric(
         &ctx.agent_keys,
@@ -5256,6 +5308,7 @@ mod tests {
             "sess-1",
             "turn-1",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
@@ -5286,6 +5339,7 @@ mod tests {
             "sess-1",
             "turn-1",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
@@ -5320,6 +5374,7 @@ mod tests {
             "sess-1",
             "turn-1",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
@@ -5355,6 +5410,7 @@ mod tests {
             "sess-cancel",
             "turn-cancel",
             Some(buzz_core::agent_turn_metric::StopReason::Cancelled),
+            None,
         )
         .await;
     }
@@ -5390,6 +5446,7 @@ mod tests {
             "sess-ba",
             "turn-ba",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
