@@ -318,7 +318,12 @@ jobs:
   desktop-e2e-relay:
     name: Desktop E2E Relay
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A cold build of the relay artifacts measured 29.3 min, which sat inside
+    # the previous 30 min ceiling by seconds. Timing out here is uniquely
+    # expensive: the cancelled job never reaches its "Save relay artifacts
+    # cache" step, so the next run is cold too and the deadlock repeats. The
+    # headroom exists for cold builds only; a cache hit skips every build step.
+    timeout-minutes: 45
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     permissions:
