@@ -418,6 +418,42 @@ description. See [PR #803](https://github.com/block/buzz/pull/803).
 
 ---
 
+## Check, Don't Assume
+
+Every claim about the state of the world needs a command behind it. These are
+not hypotheticals; each has cost real time in this repo.
+
+**Before saying something is missing, look for it.** "Not installed", "not
+configured", "needs setting up" are findings, not assumptions. Check `which`,
+`--version`, `~/.local/bin`, `~/.bun/bin`, and the app's own config under
+`~/Library/Application Support/xyz.block.buzz.app/`. An agent harness was
+declared missing while `opencode` and `goose` were installed, a provider key
+was already in `global-agent-config.json`, and eighteen agents had done real
+work. The repo was checked; the machine was not.
+
+**When something works elsewhere but not here, read the working path.** After
+two failed attempts, stop trying variations and go read how the working one
+does it: the desktop spawn code in `managed_agents/runtime.rs`, an existing
+config file, or a log from a real run under `agents/logs/`. A harness that
+connected but never received messages took several rounds of guessing; the
+spawn code answered it immediately (agents discover channels through
+membership, and only respond to messages that mention them unless
+`--no-mention-filter` is set).
+
+**Prove a test fails before claiming it tests something.** A test that passes
+because its fixture never triggered the code under test is worse than no test.
+When adding a regression test, run it against the unfixed code and watch it
+fail. Two probes shipped here passed while replacing a substring that was not
+in the fixture at all.
+
+**A test that fails in a suite but passes alone is shared state, not your
+bug** — confirm it by running the same suite on a clean checkout before
+spending time on it, and say so rather than implying you fixed it.
+
+**Distinguish what you ran from what you inferred.** "Implemented", "tested",
+"committed", "run against a real relay", and "used by a person" are different
+claims. Say which one you mean. If part of a path was mocked, name it.
+
 ## Common Gotchas
 
 1. **Kind `39000` for channel metadata, not `41`** — kind 41 is NIP-01 (unused). All kinds defined in `buzz-core/src/kind.rs`.
