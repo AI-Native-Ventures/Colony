@@ -29,7 +29,8 @@ import { CampaignListView } from "./CampaignListView";
 import { CampaignDetailView } from "./CampaignDetailView";
 import { CreateCampaignSheet } from "./CreateCampaignSheet";
 import { DiscoveryHeader, type DiscoveryMode } from "./DiscoveryHeader";
-import { IndustryAudienceHint, IndustryGrid } from "./IndustryGrid";
+import { IndustryGrid } from "./IndustryGrid";
+import { DiscoveryListFilters } from "./DiscoveryListFilters";
 import { MetricCard } from "./MetricCard";
 import { VerticalGrid } from "./VerticalGrid";
 import { LeadsWorkspace } from "./LeadsWorkspace";
@@ -263,19 +264,61 @@ export function DiscoveryWorkspace({
       );
     }
 
+    const verticals = readModel.verticals.filter(
+      (candidate) =>
+        statusFilter === "all" || candidate.status === statusFilter,
+    );
+    const normalizedQuery = query.trim().toLowerCase();
+    const visibleVerticals = normalizedQuery
+      ? verticals.filter((candidate) =>
+          [candidate.name, candidate.description]
+            .filter(Boolean)
+            .some((value) => value?.toLowerCase().includes(normalizedQuery)),
+        )
+      : verticals;
+
     return (
-      <div className="space-y-4">
-        <div className="flex justify-end">
-          <Button onClick={() => setCreateCampaignOpen(true)} type="button">
-            Create campaign
-          </Button>
-        </div>
+      <div className="relative space-y-6">
+        <DiscoveryHeader
+          breadcrumb="Industries"
+          description={`${visibleVerticals.length} Verticals Available`}
+          mode={mode}
+          onBack={() => void goDiscovery({ surface: "industries" })}
+          onModeChange={setMode}
+          onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
+          query={query}
+          showToolbar
+          title={industry?.name ?? vertical.industryId}
+          toolbarEntity="verticals"
+        />
+        <DiscoveryListFilters
+          onFilterChange={() => undefined}
+          onViewModeChange={() => undefined}
+          selectedFilter="All Industries"
+          total={visibleVerticals.length}
+          viewMode="grid"
+          showFilters={false}
+        />
+        <VerticalGrid
+          industryName={industry?.name ?? vertical.industryId}
+          onSelect={(selectedVertical) =>
+            void goDiscovery(
+              verticalCampaignsSearch(
+                selectedVertical.industryId,
+                selectedVertical.id,
+              ),
+            )
+          }
+          verticals={visibleVerticals}
+        />
         <EntitlementNotice entitlement={entitlement} />
         <CampaignListView
           campaigns={vertical.campaigns}
+          industryName={industry?.name}
           onBack={() =>
             void goDiscovery(industryVerticalSearch(vertical.industryId))
           }
+          onCreateCampaign={() => setCreateCampaignOpen(true)}
           onOpenCampaign={(campaign) =>
             void goDiscovery(
               campaignDetailSearch(
@@ -333,10 +376,10 @@ export function DiscoveryWorkspace({
       : verticals;
 
     return (
-      <div className="space-y-5">
+      <div className="space-y-6">
         <DiscoveryHeader
-          breadcrumb={industry.name}
-          description="Choose a vertical to see its campaigns and discovery history."
+          breadcrumb="Industries"
+          description={`${visibleVerticals.length} Verticals Available`}
           mode={mode}
           onBack={() => void goDiscovery({ surface: "industries" })}
           onModeChange={setMode}
@@ -347,8 +390,16 @@ export function DiscoveryWorkspace({
           query={query}
           showToolbar
           statusFilter={statusFilter}
-          title="Choose a vertical"
+          title={industry.name}
           toolbarEntity="verticals"
+        />
+        <DiscoveryListFilters
+          onFilterChange={() => undefined}
+          onViewModeChange={() => undefined}
+          selectedFilter="All Industries"
+          total={visibleVerticals.length}
+          viewMode="grid"
+          showFilters={false}
         />
         <EntitlementNotice entitlement={entitlement} />
         <VerticalGrid
@@ -388,9 +439,9 @@ export function DiscoveryWorkspace({
     });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <DiscoveryHeader
-        description="Start with an industry, then narrow to a vertical before choosing a campaign."
+        description=""
         mode={mode}
         onModeChange={setMode}
         onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
@@ -400,11 +451,17 @@ export function DiscoveryWorkspace({
         query={query}
         showToolbar
         statusFilter={statusFilter}
-        title="Discover businesses"
+        title=""
         toolbarEntity="industries"
       />
       <EntitlementNotice entitlement={entitlement} />
-      <IndustryAudienceHint />
+      <DiscoveryListFilters
+        onFilterChange={() => undefined}
+        onViewModeChange={() => undefined}
+        selectedFilter="All Industries"
+        total={visibleIndustries.length}
+        viewMode="grid"
+      />
       <IndustryGrid
         industries={visibleIndustries}
         onSelect={(industryToOpen) =>

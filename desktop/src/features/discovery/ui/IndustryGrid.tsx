@@ -1,20 +1,14 @@
-import { ArrowUpRight, Building2, Users } from "lucide-react";
+import { Building2, Users } from "lucide-react";
 
 import type { Industry } from "../types";
 import { resolveDiscoveryAsset } from "../assets";
-import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
-import { MetricCard } from "./MetricCard";
 
 export type IndustryGridProps = {
   industries: Industry[];
   onSelect: (industry: Industry) => void;
   emptyMessage?: string;
 };
-
-function statusVariant(status: Industry["status"]) {
-  return status === "active" ? "success" : "secondary";
-}
 
 export function IndustryGrid({
   industries,
@@ -34,54 +28,56 @@ export function IndustryGrid({
   }
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {industries.map((industry) => (
-        <Card
-          className="group overflow-hidden border-border/60 bg-card/80 p-0 shadow-none transition-colors hover:border-primary/40 hover:bg-card"
-          key={industry.id}
-        >
+    <div className="grid grid-cols-1 gap-[18px] md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {industries.map((industry) => {
+        const active = industry.status === "active";
+        return (
           <button
             aria-label={`Explore ${industry.name}`}
-            className="flex h-full w-full flex-col text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className="group overflow-hidden rounded-2xl border border-border bg-background text-left transition-all duration-200 hover:border-border/80 hover:shadow-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             data-testid={`discovery-industry-card-${industry.slug}`}
+            key={industry.id}
             onClick={() => onSelect(industry)}
             type="button"
           >
-            <div className="relative h-36 overflow-hidden bg-muted/30">
+            <div className="relative flex h-[108px] items-center justify-center overflow-hidden bg-gradient-to-br from-[#ede9fe] to-background">
               <img
                 alt={industry.name}
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                 src={resolveDiscoveryAsset(industry.imageKey)}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/5 to-transparent" />
-              <Badge
-                className="absolute left-3 top-3"
-                variant={statusVariant(industry.status)}
-              >
-                {industry.status}
-              </Badge>
-              <span className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2 text-white">
-                <span className="text-lg font-semibold">{industry.name}</span>
-                <ArrowUpRight aria-hidden="true" className="h-5 w-5" />
-              </span>
+              <div className="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-black/20 to-transparent" />
+              <div className="absolute right-2.5 top-2.5">
+                {active ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[#8b5cf6] px-2.5 py-1 text-2xs font-semibold uppercase tracking-wide text-white">
+                    <span className="h-1.5 w-1.5 rounded-full bg-white" />{" "}
+                    Active
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-border bg-background px-2.5 py-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Available
+                  </span>
+                )}
+              </div>
             </div>
-            <div className="flex flex-1 flex-col gap-4 p-4">
-              <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
-                {industry.description ?? "Explore this market with Colony."}
-              </p>
-              <div className="mt-auto grid grid-cols-3 gap-2">
-                <MetricCard label="Verticals" value={industry.verticalCount} />
-                <MetricCard label="Campaigns" value={industry.campaignCount} />
-                <MetricCard
-                  hint="Across campaigns"
-                  label="Leads"
-                  value={industry.leadCount}
-                />
+            <div className="px-4 py-4">
+              <div className="mb-2 text-sm font-semibold leading-snug text-foreground">
+                {industry.name}
+              </div>
+              <div className="flex items-center justify-between font-mono text-2xs text-muted-foreground">
+                <span>{industry.verticalCount} verticals</span>
+                <span className="text-foreground/70">
+                  {industry.leadCount > 0
+                    ? `${industry.leadCount.toLocaleString("en-US")} leads`
+                    : industry.campaignCount > 0
+                      ? `${industry.campaignCount} campaigns`
+                      : "–"}
+                </span>
               </div>
             </div>
           </button>
-        </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }

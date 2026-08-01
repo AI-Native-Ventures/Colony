@@ -58,7 +58,10 @@ function assertDistinctScreenshots() {
 }
 
 function appWorkspace(page: Page) {
-  return page.locator("[data-buzz-glass-inset]").first();
+  // Capture the Buzz shell as well as the Discovery surface. The source
+  // reference is a sidebar-mounted experience, so clipping to the inner
+  // workspace would hide the very composition we are validating.
+  return page.locator("body");
 }
 
 test.beforeAll(() => mkdirSync(SCREENSHOT_DIR, { recursive: true }));
@@ -79,27 +82,48 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
 
   await page.getByTestId("open-discovery-view").click();
   await expect(page).toHaveURL(/#\/discovery/);
+  await expect(page.getByTestId("open-discovery-view")).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Discover businesses" }),
+    page.getByRole("heading", { name: /Millions of leads, one search away/ }),
+  ).toBeVisible();
+  await expect(page.getByText("All Industries", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("New Opportunities", { exact: true }),
   ).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-industries.png");
 
   await page.getByTestId("discovery-industry-card-automotive").click();
+  await expect(page.getByRole("heading", { name: "Automotive" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Choose a vertical" }),
+    page.getByText("Back to Industries", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("3 Verticals Available", { exact: true }),
   ).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-verticals.png");
 
   await page.getByTestId("discovery-vertical-card-auto-repair").click();
+  await expect(page.getByTestId("discovery-campaign-sidebar")).toBeVisible();
+  await expect(page.getByText("Campaigns", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Auto Repair campaigns" }),
+    page.getByRole("button", { name: "New Campaign" }),
   ).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-campaign-list.png");
 
-  await page.getByRole("button", { name: "Create campaign" }).click();
-  const campaignDrawer = page.getByRole("dialog");
+  await page.getByRole("button", { name: "New Campaign" }).click();
+  const campaignDrawer = page.getByRole("dialog", {
+    name: /Tell Jen where to find leads/,
+  });
   await expect(campaignDrawer).toBeVisible();
-  await expect(campaignDrawer).toContainText("New discovery campaign");
+  await expect(campaignDrawer).toContainText(
+    "Tell Jen where to find leads and how many you need.",
+  );
+  await expect(
+    campaignDrawer.getByText("Advanced: Data Sources", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    campaignDrawer.getByText("Advanced Criteria", { exact: true }),
+  ).toBeVisible();
   await capture(campaignDrawer, page, "discovery-campaign-drawer.png");
   await campaignDrawer.getByRole("button", { name: "Cancel" }).click();
   await expect(campaignDrawer).not.toBeVisible();

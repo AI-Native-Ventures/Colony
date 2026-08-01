@@ -1,20 +1,14 @@
-import { ArrowUpRight, BriefcaseBusiness } from "lucide-react";
+import { BriefcaseBusiness } from "lucide-react";
 
 import type { Vertical } from "../types";
 import { resolveDiscoveryAsset } from "../assets";
-import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
-import { MetricCard } from "./MetricCard";
 
 export type VerticalGridProps = {
   industryName: string;
   verticals: Vertical[];
   onSelect: (vertical: Vertical) => void;
 };
-
-function statusVariant(status: Vertical["status"]) {
-  return status === "active" ? "success" : "secondary";
-}
 
 export function VerticalGrid({
   industryName,
@@ -36,44 +30,54 @@ export function VerticalGrid({
   }
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {verticals.map((vertical) => (
-        <Card
-          className="group overflow-hidden border-border/60 bg-card/80 p-0 shadow-none transition-colors hover:border-primary/40 hover:bg-card"
-          key={vertical.id}
-        >
+    <div className="grid grid-cols-1 gap-[18px] md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {verticals.map((vertical) => {
+        const active = vertical.status === "active";
+        return (
           <button
             aria-label={`Explore ${vertical.name}`}
-            className="flex h-full w-full flex-col text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className="group overflow-hidden rounded-2xl border border-border bg-background text-left transition-all duration-200 hover:border-border/80 hover:shadow-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             data-testid={`discovery-vertical-card-${vertical.slug}`}
+            key={vertical.id}
             onClick={() => onSelect(vertical)}
             type="button"
           >
-            <div className="relative h-40 overflow-hidden bg-muted/30">
+            <div className="relative flex h-[108px] items-center justify-center overflow-hidden bg-gradient-to-br from-[#ede9fe] to-background">
               <img
                 alt={vertical.name}
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                 src={resolveDiscoveryAsset(vertical.imageKey)}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/5 to-transparent" />
-              <Badge
-                className="absolute left-3 top-3"
-                variant={statusVariant(vertical.status)}
-              >
-                {vertical.status}
-              </Badge>
-              <span className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2 text-white">
-                <span className="text-lg font-semibold">{vertical.name}</span>
-                <ArrowUpRight aria-hidden="true" className="h-5 w-5" />
-              </span>
+              <div className="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-black/20 to-transparent" />
+              <div className="absolute right-2.5 top-2.5">
+                {active ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[#8b5cf6] px-2.5 py-1 text-2xs font-semibold uppercase tracking-wide text-white">
+                    <span className="h-1.5 w-1.5 rounded-full bg-white" />{" "}
+                    Active
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-border bg-background px-2.5 py-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Available
+                  </span>
+                )}
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 p-4">
-              <MetricCard label="Campaigns" value={vertical.campaignCount} />
-              <MetricCard label="Leads" value={vertical.leadCount} />
+            <div className="px-4 py-4">
+              <div className="mb-2 text-sm font-semibold leading-snug text-foreground">
+                {vertical.name}
+              </div>
+              <div className="flex items-center justify-between font-mono text-2xs text-muted-foreground">
+                <span>{vertical.campaignCount} campaigns</span>
+                <span className="text-foreground/70">
+                  {vertical.leadCount > 0
+                    ? `${vertical.leadCount.toLocaleString("en-US")} leads`
+                    : "–"}
+                </span>
+              </div>
             </div>
           </button>
-        </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }
