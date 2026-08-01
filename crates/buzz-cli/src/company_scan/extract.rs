@@ -77,6 +77,12 @@ pub struct ContactEvidence {
     pub socials: BTreeMap<String, String>,
     /// Third-party booking or scheduling links.
     pub booking_links: Vec<String>,
+    /// True when emails were scraped from prose rather than read from links.
+    #[serde(default)]
+    pub emails_inferred: bool,
+    /// True when phones were scraped from prose rather than read from links.
+    #[serde(default)]
+    pub phones_inferred: bool,
 }
 
 /// A same-origin link, classified by what kind of page it probably is.
@@ -182,6 +188,8 @@ pub struct PageEvidence {
     pub contact: ContactEvidence,
     /// Same-origin links worth following.
     pub links: Vec<ClassifiedLink>,
+    /// Absolute URLs of content images, for brand and asset gathering.
+    pub images: Vec<String>,
     /// Notes about what could not be read.
     pub warnings: Vec<String>,
 }
@@ -330,7 +338,13 @@ fn extract_brand(document: &Html, base: &Url, url: &str) -> BrandEvidence {
             style_text.push_str(style);
         }
     }
-    for hex in hex_colors_in(&style_text) {
+    for hex in hex_colors_in(&style_text)
+        .into_iter()
+        .chain(rgb_colors_in(&style_text))
+    {
+        if is_near_grey(&hex) {
+            continue;
+        }
         *counts.entry(hex).or_default() += 1;
     }
     let mut ranked: Vec<(String, usize)> = counts.into_iter().collect();
@@ -364,6 +378,62 @@ fn normalize_hex(raw: &str) -> Option<String> {
     Some(format!("#{}", expanded.to_ascii_lowercase()))
 }
 
+/// Whether a colour is too close to grey to be a brand colour.
+///
+/// Adopted from the browser-based crawl skill, which hard-codes the common
+/// Tailwind greys. Measuring saturation generalizes that: page chrome is
+/// near-grey whatever framework produced it, and a brand colour is not.
+fn is_near_grey(hex: &str) -> bool {
+    let Ok(r) = u8::from_str_radix(&hex[1..3], 16) else {
+        return false;
+    };
+    let Ok(g) = u8::from_str_radix(&hex[3..5], 16) else {
+        return false;
+    };
+    let Ok(b) = u8::from_str_radix(&hex[5..7], 16) else {
+        return false;
+    };
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    // Low chroma is grey. Very dark and very light are chrome regardless.
+    (max - min) < 24 || max < 24 || min > 244
+}
+
+/// Parse `rgb()` / `rgba()` into `#rrggbb`.
+///
+/// Stylesheets mix notations freely, and a brand colour written `rgb(29,155,240)`
+/// is the same colour as `#1d9bf0` — counting them separately would split the
+/// frequency ranking and bury the real brand colour.
+fn rgb_colors_in(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let lowered = text.to_ascii_lowercase();
+    let mut cursor = 0;
+    while let Some(offset) = lowered[cursor..].find("rgb") {
+        let start = cursor + offset;
+        let Some(open) = lowered[start..].find('(') else {
+            break;
+        };
+        let Some(close) = lowered[start + open..].find(')') else {
+            break;
+        };
+        let inner = &lowered[start + open + 1..start + open + close];
+        let parts: Vec<&str> = inner
+            .split(&[',', '/', ' '][..])
+            .filter(|p| !p.is_empty())
+            .collect();
+        if parts.len() >= 3 {
+            let channel = |raw: &str| raw.trim().parse::<u16>().ok().filter(|v| *v <= 255);
+            if let (Some(r), Some(g), Some(b)) =
+                (channel(parts[0]), channel(parts[1]), channel(parts[2]))
+            {
+                found.push(format!("#{r:02x}{g:02x}{b:02x}"));
+            }
+        }
+        cursor = start + open + close;
+    }
+    found
+}
+
 fn hex_colors_in(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let bytes = text.as_bytes();
@@ -382,10 +452,7 @@ fn hex_colors_in(text: &str) -> Vec<String> {
         // Only 3, 6 and 8 digit runs are colours; 4 or 5 is something else.
         if matches!(candidate.len(), 3 | 6 | 8) {
             if let Some(hex) = normalize_hex(candidate) {
-                // Pure black and white are almost always text, not brand.
-                if hex != "#000000" && hex != "#ffffff" {
-                    found.push(hex);
-                }
+                found.push(hex);
             }
         }
         index = end.max(index + 1);
@@ -520,7 +587,105 @@ fn extract_contact_and_links(
     (contact, links)
 }
 
+/// Find email addresses printed as plain text.
+///
+/// Adopted from the browser-based crawl skill: plenty of sites print the
+/// address rather than linking it, and reading only `mailto:` misses them
+/// entirely. Deliberately conservative — a false address is worse than none,
+/// because outreach would send to it.
+fn emails_in_text(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for token in text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | ','))
+    {
+        let candidate = token
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_ascii_lowercase();
+        let Some((local, domain)) = candidate.split_once('@') else {
+            continue;
+        };
+        let plausible = !local.is_empty()
+            && domain.contains('.')
+            && !domain.starts_with('.')
+            && !domain.ends_with('.')
+            && domain
+                .rsplit('.')
+                .next()
+                .is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
+            && candidate.len() <= 254
+            && !candidate.contains("..");
+        if plausible {
+            found.push(candidate);
+        }
+    }
+    found
+}
+
+/// Find phone numbers printed as plain text.
+///
+/// Requires a leading `+` or a run long enough to be a real number, so years,
+/// prices and street numbers are not mistaken for phones.
+fn phones_in_text(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        let starts = chars[index] == '+' || chars[index].is_ascii_digit();
+        if !starts {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let mut digits = 0;
+        let mut end = index;
+        while end < chars.len() {
+            let c = chars[end];
+            if c.is_ascii_digit() {
+                digits += 1;
+                end += 1;
+            } else if matches!(c, ' ' | '-' | '(' | ')' | '.') && digits > 0 {
+                end += 1;
+            } else if c == '+' && end == start {
+                // A leading `+` is part of the number, so it must be consumed
+                // before any digits exist — otherwise the scan restarts one
+                // character in and silently drops the country prefix.
+                end += 1;
+            } else {
+                break;
+            }
+            if digits > 15 {
+                break;
+            }
+        }
+        let raw: String = chars[start..end].iter().collect();
+        let trimmed = raw.trim().trim_end_matches(['-', '.', ' ', '(', ')']);
+        // E.164 allows up to 15 digits; fewer than 9 is not an international
+        // number and is far more likely to be a price or a year.
+        if (9..=15).contains(&digits) && (trimmed.starts_with('+') || digits >= 10) {
+            found.push(trimmed.to_owned());
+        }
+        index = end.max(index + 1);
+    }
+    found
+}
+
 /// Readable text with scripts, styling and chrome removed.
+/// Content images, excluding inline data URIs which carry no fetchable asset.
+fn collect_images(document: &Html, base: &Url) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    for element in document.select(&selector("img[src]")) {
+        let Some(src) = element.value().attr("src") else {
+            continue;
+        };
+        if src.trim_start().starts_with("data:") {
+            continue;
+        }
+        if let Some(absolute) = absolutize(base, src) {
+            seen.insert(absolute);
+        }
+    }
+    seen.into_iter().take(60).collect()
+}
+
 fn extract_text(document: &Html) -> String {
     let mut out = String::new();
     for element in document.select(&selector("body")) {
@@ -570,6 +735,27 @@ pub fn extract_page(html: &str, page_url: &str) -> PageEvidence {
         let (contact, links) = extract_contact_and_links(&document, base, &origin_host);
         evidence.contact = contact;
         evidence.links = links;
+        evidence.images = collect_images(&document, base);
+    }
+
+    // Only fall back to scanning text when the explicit links found nothing.
+    // A linked address is stated; one scraped out of prose is a guess, and
+    // mixing the two would hide which is which.
+    if evidence.contact.emails.is_empty() {
+        let mut scraped = emails_in_text(&evidence.text);
+        scraped.sort();
+        scraped.dedup();
+        scraped.truncate(5);
+        evidence.contact.emails = scraped;
+        evidence.contact.emails_inferred = true;
+    }
+    if evidence.contact.phones.is_empty() {
+        let mut scraped = phones_in_text(&evidence.text);
+        scraped.sort();
+        scraped.dedup();
+        scraped.truncate(5);
+        evidence.contact.phones = scraped;
+        evidence.contact.phones_inferred = true;
     }
 
     // A shell with almost no text but plenty of script is a client-rendered
@@ -783,6 +969,84 @@ mod tests {
 
     /// Reporting "we could not read this" is more useful than reporting an
     /// empty business.
+    /// Adopted from the browser-based crawl skill: plenty of sites print the
+    /// address instead of linking it, and reading only `mailto:` misses them.
+    #[test]
+    fn plain_text_contact_details_are_found_when_no_links_exist() {
+        let html = r#"<!doctype html><html><body>
+            <p>Reach us on +27 11 555 1234 or hello@studio.example any weekday.</p>
+            <p>We have been trading since 1998 and charge from 4500 per project.</p>
+        </body></html>"#;
+        let evidence = extract_page(html, "https://studio.example/");
+
+        assert_eq!(evidence.contact.emails, vec!["hello@studio.example"]);
+        assert_eq!(evidence.contact.phones, vec!["+27 11 555 1234"]);
+        // Scraped from prose, so marked as inferred rather than stated.
+        assert!(evidence.contact.emails_inferred);
+        assert!(evidence.contact.phones_inferred);
+        // A year and a price must not be mistaken for phone numbers.
+        assert!(!evidence.contact.phones.iter().any(|p| p.contains("1998")));
+        assert!(!evidence.contact.phones.iter().any(|p| p.contains("4500")));
+    }
+
+    /// A linked address is stated; one scraped from prose is a guess. Mixing
+    /// them would hide which is which, so links always win outright.
+    #[test]
+    fn linked_contacts_win_and_are_not_marked_inferred() {
+        let contact = page().contact;
+        assert_eq!(contact.emails, vec!["hi@horizonlabs.example".to_owned()]);
+        assert!(!contact.emails_inferred);
+        assert!(!contact.phones_inferred);
+    }
+
+    /// Stylesheets mix notations freely; counting `rgb(29,155,240)` separately
+    /// from `#1d9bf0` would split the ranking and bury the real brand colour.
+    #[test]
+    fn rgb_and_hex_notations_are_counted_as_one_colour() {
+        let html = r##"<!doctype html><html><head><style>
+            .a { color: rgb(29, 155, 240); }
+            .b { background: rgba(29,155,240,0.5); }
+            .c { border-color: #1d9bf0; }
+            .d { color: #ff0000; }
+        </style></head><body><p>x</p></body></html>"##;
+        let evidence = extract_page(html, "https://example.com/");
+        let colors: Vec<&str> = evidence
+            .brand
+            .colors
+            .iter()
+            .map(|c| c.value.as_str())
+            .collect();
+        // Three occurrences across two notations beat the single red.
+        assert_eq!(colors.first(), Some(&"#1d9bf0"));
+        assert!(colors.contains(&"#ff0000"));
+    }
+
+    /// Page chrome is near-grey whatever framework produced it. Measuring
+    /// chroma generalizes the crawl skill's hard-coded Tailwind grey list.
+    #[test]
+    fn greys_and_near_greys_are_not_brand_colours() {
+        for grey in [
+            "#000000", "#ffffff", "#f9fafb", "#f3f4f6", "#e5e7eb", "#111111", "#808080",
+        ] {
+            assert!(
+                is_near_grey(grey),
+                "{grey} must not count as a brand colour"
+            );
+        }
+        for brand in ["#1d9bf0", "#ff6b35", "#7c3aed"] {
+            assert!(!is_near_grey(brand), "{brand} is a brand colour");
+        }
+    }
+
+    #[test]
+    fn content_images_are_collected_without_data_uris() {
+        let html = r#"<!doctype html><html><body>
+            <img src="/photo.jpg"><img src="data:image/gif;base64,R0lGOD">
+        </body></html>"#;
+        let evidence = extract_page(html, "https://example.com/");
+        assert_eq!(evidence.images, vec!["https://example.com/photo.jpg"]);
+    }
+
     #[test]
     fn a_client_rendered_shell_is_reported_rather_than_read_as_empty() {
         let shell = r#"<!doctype html><html><head><title>App</title></head>
