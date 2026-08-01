@@ -17,22 +17,36 @@ type Ant = {
   color: string;
 };
 
-// Fixed scatter so the field doesn't shimmer between renders.
+// Fixed scatter so the field doesn't shimmer between renders. Sized and
+// counted to read as a colony rather than dust: bigger ants, denser
+// coverage, still a hand-authored static table (no runtime randomness).
 const ANTS: Ant[] = [
-  { top: "8%", left: "10%", size: 30, rotate: -12, color: COLONY_HUES[0] },
-  { top: "12%", left: "82%", size: 26, rotate: 18, color: COLONY_HUES[1] },
-  { top: "20%", left: "45%", size: 34, rotate: -20, color: COLONY_HUES[2] },
-  { top: "28%", left: "6%", size: 24, rotate: 10, color: COLONY_HUES[3] },
-  { top: "18%", left: "65%", size: 28, rotate: -8, color: COLONY_HUES[4] },
-  { top: "38%", left: "90%", size: 32, rotate: 22, color: COLONY_HUES[0] },
-  { top: "45%", left: "20%", size: 26, rotate: -16, color: COLONY_HUES[1] },
-  { top: "55%", left: "72%", size: 30, rotate: 14, color: COLONY_HUES[2] },
-  { top: "62%", left: "38%", size: 24, rotate: -22, color: COLONY_HUES[3] },
-  { top: "70%", left: "8%", size: 28, rotate: 8, color: COLONY_HUES[4] },
-  { top: "78%", left: "58%", size: 32, rotate: -10, color: COLONY_HUES[0] },
-  { top: "85%", left: "85%", size: 26, rotate: 20, color: COLONY_HUES[1] },
-  { top: "90%", left: "30%", size: 28, rotate: -18, color: COLONY_HUES[2] },
-  { top: "5%", left: "35%", size: 22, rotate: 16, color: COLONY_HUES[3] },
+  { top: "8%", left: "10%", size: 62, rotate: -12, color: COLONY_HUES[0] },
+  { top: "12%", left: "82%", size: 54, rotate: 18, color: COLONY_HUES[1] },
+  { top: "20%", left: "45%", size: 70, rotate: -20, color: COLONY_HUES[2] },
+  { top: "28%", left: "6%", size: 50, rotate: 10, color: COLONY_HUES[3] },
+  { top: "18%", left: "65%", size: 58, rotate: -8, color: COLONY_HUES[4] },
+  { top: "38%", left: "90%", size: 66, rotate: 22, color: COLONY_HUES[0] },
+  { top: "45%", left: "20%", size: 54, rotate: -16, color: COLONY_HUES[1] },
+  { top: "55%", left: "72%", size: 62, rotate: 14, color: COLONY_HUES[2] },
+  { top: "62%", left: "38%", size: 50, rotate: -22, color: COLONY_HUES[3] },
+  { top: "70%", left: "8%", size: 58, rotate: 8, color: COLONY_HUES[4] },
+  { top: "78%", left: "58%", size: 66, rotate: -10, color: COLONY_HUES[0] },
+  { top: "85%", left: "85%", size: 54, rotate: 20, color: COLONY_HUES[1] },
+  { top: "90%", left: "30%", size: 58, rotate: -18, color: COLONY_HUES[2] },
+  { top: "5%", left: "35%", size: 46, rotate: 16, color: COLONY_HUES[3] },
+  { top: "1%", left: "50%", size: 44, rotate: -6, color: COLONY_HUES[0] },
+  { top: "2%", left: "90%", size: 38, rotate: 24, color: COLONY_HUES[2] },
+  { top: "24%", left: "55%", size: 48, rotate: -14, color: COLONY_HUES[4] },
+  { top: "33%", left: "72%", size: 42, rotate: 10, color: COLONY_HUES[1] },
+  { top: "42%", left: "82%", size: 56, rotate: -20, color: COLONY_HUES[3] },
+  { top: "80%", left: "66%", size: 40, rotate: 16, color: COLONY_HUES[2] },
+  { top: "58%", left: "92%", size: 48, rotate: -8, color: COLONY_HUES[0] },
+  { top: "68%", left: "48%", size: 44, rotate: 18, color: COLONY_HUES[4] },
+  { top: "82%", left: "12%", size: 52, rotate: -12, color: COLONY_HUES[1] },
+  { top: "95%", left: "68%", size: 46, rotate: 20, color: COLONY_HUES[3] },
+  { top: "96%", left: "4%", size: 38, rotate: -22, color: COLONY_HUES[2] },
+  { top: "0.5%", left: "14%", size: 36, rotate: 14, color: COLONY_HUES[0] },
 ];
 
 const REPEL_RADIUS = 180;

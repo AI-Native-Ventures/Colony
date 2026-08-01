@@ -23,30 +23,41 @@ export function Story() {
       id="story"
       className="relative overflow-hidden bg-zinc-950 px-6 py-24 sm:py-32"
     >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-60"
-      >
-        <PheromoneTrail
-          d="M40 80 C 220 20, 380 220, 560 80 S 760 40, 780 150"
-          color={COLONY_VIOLET}
-          className="absolute left-1/2 top-1/2 w-full max-w-4xl -translate-x-1/2 -translate-y-1/2"
-        />
-        <PheromoneTrail
-          d="M20 220 C 200 260, 400 40, 600 200 S 740 260, 780 120"
-          color={COLONY_BLUE}
-          className="absolute left-1/2 top-1/2 w-full max-w-4xl -translate-x-1/2 -translate-y-1/2"
-        />
-      </div>
-      <div className="relative mx-auto grid max-w-5xl gap-10 sm:grid-cols-3">
+      <h2 className="mx-auto max-w-2xl text-center text-3xl font-semibold text-zinc-50 sm:text-4xl">
+        One history, three ways to work
+      </h2>
+      <div className="relative mx-auto mt-16 grid max-w-5xl gap-10 sm:grid-cols-3">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-0 hidden w-full opacity-70 sm:block"
+          style={{ top: -28, height: "calc(100% + 28px)" }}
+        >
+          {/* Arcs sit above the row so they read against open background
+              instead of getting dimmed under the cards' backdrop-blur.
+              Each touches down at x=157/512/867, the measured title-center
+              of columns 1/2/3, so trail A visibly links Chat to Agents and
+              trail B links Agents to Workflows. */}
+          <PheromoneTrail
+            viewBox="0 -28 1024 191"
+            d="M157 32 C 260 -8, 410 -8, 512 32"
+            color={COLONY_VIOLET}
+            className="absolute inset-0 h-full w-full"
+          />
+          <PheromoneTrail
+            viewBox="0 -28 1024 191"
+            d="M512 32 C 614 -8, 764 -8, 867 32"
+            color={COLONY_BLUE}
+            className="absolute inset-0 h-full w-full"
+          />
+        </div>
         {COLUMNS.map((column) => (
           <div
             key={column.title}
-            className="rounded-2xl bg-zinc-950/70 p-4 text-center backdrop-blur-sm sm:text-left"
+            className="relative rounded-2xl bg-zinc-950/70 p-4 text-center backdrop-blur-sm sm:text-left"
           >
-            <h2 className="text-xl font-semibold text-zinc-50">
+            <h3 className="text-xl font-semibold text-zinc-50">
               {column.title}
-            </h2>
+            </h3>
             <p className="mt-3 text-sm leading-relaxed text-zinc-400">
               {column.body}
             </p>

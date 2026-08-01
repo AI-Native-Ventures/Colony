@@ -27,7 +27,7 @@ const FEATURES = [
 
 export function Features() {
   return (
-    <section className="bg-zinc-950 px-6 py-24 sm:py-32">
+    <section className="bg-zinc-950 px-6 py-16 sm:py-24">
       <div className="mx-auto max-w-5xl">
         <h2 className="text-center text-3xl font-semibold text-zinc-50 sm:text-4xl">
           Everything a company needs, in one workspace

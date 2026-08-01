@@ -12,16 +12,18 @@ export function PheromoneTrail({
   d,
   color,
   className,
+  viewBox = "0 0 800 300",
 }: {
   d: string;
   color: string;
   className?: string;
+  viewBox?: string;
 }) {
   return (
     <svg
       aria-hidden="true"
       className={["pheromone-trail", className].filter(Boolean).join(" ")}
-      viewBox="0 0 800 300"
+      viewBox={viewBox}
       fill="none"
     >
       <path
