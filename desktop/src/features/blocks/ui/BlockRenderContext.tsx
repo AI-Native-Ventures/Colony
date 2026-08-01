@@ -124,6 +124,18 @@ export function BlockRenderProvider({
         : new Map<string, Record<string, unknown>>(),
     [data, manifest.handle],
   );
+  const directActionInputs = React.useMemo(() => {
+    const inputs = new Map<string, unknown>();
+    if (approvalInputs?.ok) {
+      for (const [actionId, input] of approvalInputs.inputs) {
+        inputs.set(actionId, input);
+      }
+    }
+    for (const [actionId, input] of blueprintInputs) {
+      inputs.set(actionId, input);
+    }
+    return inputs;
+  }, [approvalInputs, blueprintInputs]);
   const directActionIds = React.useMemo(() => {
     if (manifest.handle === "agent-proposal") return new Set<string>();
     const direct = new Set(
@@ -142,19 +154,15 @@ export function BlockRenderProvider({
         return [action.id];
       }),
     );
-    if (approvalInputs?.ok) {
-      for (const actionId of approvalInputs.inputs.keys()) {
-        direct.add(actionId);
-      }
-    }
-    // The approve action declares required inputs, but they are facts about
-    // the instance rather than anything to ask the owner for, so they are
-    // derived and the control stays directly clickable.
-    for (const actionId of blueprintInputs.keys()) {
+    // An action that declares required inputs is still directly clickable when
+    // those inputs are facts about the instance rather than questions for the
+    // owner. Clickability follows from having them, so there is one place that
+    // decides and the two cannot drift apart.
+    for (const actionId of directActionInputs.keys()) {
       direct.add(actionId);
     }
     return direct;
-  }, [approvalInputs, blueprintInputs, manifest.actions, manifest.handle]);
+  }, [directActionInputs, manifest.actions, manifest.handle]);
   const resolvingActionIds = React.useMemo(
     () =>
       new Set(
@@ -363,8 +371,12 @@ export function BlockRenderProvider({
         trusted,
         declaredActionIds,
         directActionIds,
-        directActionInputs: approvalInputs?.ok
-          ? approvalInputs.inputs
+        // Both maps matter and they are not the same thing: `directActionIds`
+        // decides whether a control is clickable, `directActionInputs` is what
+        // the click actually sends. A control listed in the first but missing
+        // from the second is enabled and submits nothing.
+        directActionInputs: directActionInputs.size
+          ? directActionInputs
           : undefined,
         actionUnavailableReasons,
         hideIndirectSignedActions: manifest.handle === "agent-proposal",
@@ -386,7 +398,7 @@ export function BlockRenderProvider({
       completedActionIds,
       declaredActionIds,
       directActionIds,
-      approvalInputs,
+      directActionInputs,
       resolvingActionIds,
       openPresentation,
       pendingActionId,

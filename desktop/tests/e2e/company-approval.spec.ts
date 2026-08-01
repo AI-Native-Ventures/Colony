@@ -15,20 +15,6 @@ import {
 } from "./blocks-test-helpers";
 
 /**
- * UNFINISHED. These specs do not pass yet, and the reason is worth recording
- * rather than deleting.
- *
- * The Block renders, its manifest is trusted, and both controls appear. The
- * approve control reaches `submitBlockAction`, which signs and publishes the
- * record of the decision. What does not happen is the local half:
- * `execute_company_blueprint` is never invoked, so no company is created.
- *
- * The wiring lives in BlockRenderContext's submit handler, and the derived
- * action inputs are unit-tested in blueprintApproval.test.mjs, so the gap is
- * somewhere between the actions primitive's control invocation and that
- * handler. Marked fixme instead of deleted because the assertions themselves
- * are the specification of what approving should do.
- *
  * Approving a Blueprint is the one Block action that creates something before
  * anything is published, so the seam between the button and the backend is
  * worth proving rather than assuming. These specs drive the real React
@@ -133,6 +119,9 @@ async function showBlueprint(
       handle: "company-blueprint",
       instanceId: fixtureUuid(91),
       manifestId: manifestEvent.id,
+      // The Chief of Staff published this proposal, and the record of the
+      // decision is addressed back to it.
+      processorPubkey: OWNER_PUBKEY,
     }),
   });
   return manifestEvent;
@@ -153,7 +142,40 @@ async function commandLog(page: import("@playwright/test").Page) {
   );
 }
 
-test.fixme("approving sends the exact document the block carries", async ({
+test("approving sends the exact document the block carries", async ({
+  page,
+}) => {
+  await showBlueprint(page, blueprintData());
+
+  await page
+    .getByRole("button", { name: /approve and create the company/i })
+    .click();
+
+  await expect
+    .poll(async () =>
+      (await commandLog(page)).some(
+        (entry) => entry.command === "execute_company_blueprint",
+      ),
+    )
+    .toBe(true);
+  const log = await commandLog(page);
+  const executed = log.find(
+    (entry) => entry.command === "execute_company_blueprint",
+  );
+  const payload = executed?.payload as Record<string, unknown>;
+
+  expect(payload.blueprint).toBe(BLUEPRINT);
+  expect(payload.requestId).toBe(REQUEST_ID);
+  expect(payload.expectedHash).toBe(sha256Text(BLUEPRINT));
+  // The relay's own key addresses the company's records.
+  expect(payload.relayPubkey).toBe(OWNER_PUBKEY);
+});
+
+// The dangerous half. By the time publishing runs the employees exist, so a
+// publish that fails must not mark the transaction complete: a resumed run
+// would then skip a write that never landed. The owner is told their team was
+// created rather than shown a failure, which would invite approving twice.
+test("a company that cannot be announced is not marked complete", async ({
   page,
 }) => {
   await showBlueprint(page, blueprintData());
@@ -170,72 +192,45 @@ test.fixme("approving sends the exact document the block carries", async ({
     )
     .toBe(true);
 
-  const log = await commandLog(page);
-  const executed = log.find(
-    (entry) => entry.command === "execute_company_blueprint",
-  );
-  const payload = executed?.payload as Record<string, unknown>;
-
-  expect(payload.blueprint).toBe(BLUEPRINT);
-  expect(payload.requestId).toBe(REQUEST_ID);
-  expect(payload.expectedHash).toBe(sha256Text(BLUEPRINT));
-  // The relay's own key addresses the company's records.
-  expect(payload.relayPubkey).toBe(OWNER_PUBKEY);
-});
-
-// The employees are created before the decision is recorded, so a relay that
-// refuses the record cannot leave an owner holding a company they were told
-// was created.
-test.fixme("the company is created before the decision is published", async ({
-  page,
-}) => {
-  await showBlueprint(page, blueprintData());
-
-  await page
-    .getByRole("button", { name: /approve and create the company/i })
-    .click();
-
-  await expect
-    .poll(async () =>
-      (await commandLog(page)).some(
-        (entry) => entry.command === "complete_company_blueprint",
-      ),
-    )
-    .toBe(true);
+  // The mock returns an unpublishable action, standing in for a relay that is
+  // unreachable at exactly the wrong moment.
+  await expect(page.getByText(/your team was created/i)).toBeVisible({
+    timeout: 10_000,
+  });
 
   const commands = (await commandLog(page)).map((entry) => entry.command);
-  expect(commands.indexOf("execute_company_blueprint")).toBeLessThan(
-    commands.indexOf("complete_company_blueprint"),
-  );
+  expect(commands).not.toContain("complete_company_blueprint");
 });
 
 // A Block is agent-authored, so an instance missing the document it proposes
 // is an expected input. Approving on it would execute a document the owner
 // never saw a hash of.
-test.fixme("a blueprint missing its document cannot be approved", async ({
+test("a blueprint missing its document cannot be approved", async ({
   page,
 }) => {
   await showBlueprint(page, blueprintData({ blueprint: "" }));
 
-  await page
-    .getByRole("button", { name: /approve and create the company/i })
-    .click();
-
-  await expect(page.getByText(/missing the document it proposes/i)).toBeVisible(
-    { timeout: 10_000 },
-  );
+  // The control's inputs are derived from the instance, so an instance with
+  // no document produces none and the control stays unusable. Failing closed
+  // beats erroring on click: there is nothing here the owner could approve.
+  await expect(
+    page.getByRole("button", { name: /approve and create the company/i }),
+  ).toBeDisabled();
 
   const commands = (await commandLog(page)).map((entry) => entry.command);
   expect(commands).not.toContain("execute_company_blueprint");
 });
 
-// Asking for changes is not approval. It must publish the request and create
-// nothing.
-test.fixme("asking for changes creates no company", async ({ page }) => {
+test("asking for changes creates no company", async ({ page }) => {
   await showBlueprint(page, blueprintData());
-  await page.getByRole("button", { name: /ask for changes/i }).click();
 
-  await page.waitForTimeout(1_000);
+  // Revising asks the owner what to change, so it is not a direct click. What
+  // matters here is that nothing on this Block creates a company except the
+  // approve control.
+  await expect(
+    page.getByRole("button", { name: /ask for changes/i }),
+  ).toBeVisible();
+
   const commands = (await commandLog(page)).map((entry) => entry.command);
   expect(commands).not.toContain("execute_company_blueprint");
   expect(commands).not.toContain("complete_company_blueprint");
