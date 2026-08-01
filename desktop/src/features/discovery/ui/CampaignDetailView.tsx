@@ -7,19 +7,22 @@ import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import type { DiscoveryEntitlement } from "../entitlement";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
-import type { CampaignDetail } from "../types";
+import type { CampaignDetail, LeadPage } from "../types";
 import { useDiscoveryRun } from "../useDiscoveryRun";
 import { EntitlementLock } from "./EntitlementLock";
 import { CampaignTabs, type CampaignTab } from "./CampaignTabs";
 import { DiscoveryRunTab } from "./DiscoveryRunTab";
 import { OverviewTab } from "./OverviewTab";
 import { SourceConfigEditor } from "./SourceConfigEditor";
+import { LeadsWorkspace } from "./LeadsWorkspace";
+import { campaignTabForSearch } from "./discoveryLayout";
 
 export type CampaignDetailViewProps = {
   campaign: CampaignDetail;
   dataSource: DiscoveryDataSource;
   entitlement: DiscoveryEntitlement | null;
   search: DiscoverySearch;
+  leads?: LeadPage | null;
   onBack: () => void;
   onTabChange: (tab: CampaignTab) => void;
 };
@@ -119,13 +122,14 @@ export function CampaignDetailView({
   search,
   onBack,
   onTabChange,
+  leads = null,
 }: CampaignDetailViewProps) {
   const [campaignState, setCampaignState] = React.useState(campaign);
   React.useEffect(() => {
     setCampaignState(campaign);
   }, [campaign]);
   const runState = useDiscoveryRun(campaignState, dataSource, entitlement);
-  const activeTab: CampaignTab = search.tab ?? "overview";
+  const activeTab: CampaignTab = campaignTabForSearch(search);
   const effectiveStatus =
     runState.run.status === "idle" ? campaignState.status : runState.run.status;
 
@@ -192,15 +196,12 @@ export function CampaignDetailView({
         />
       ) : null}
       {activeTab === "leads" ? (
-        <Card className="border-dashed border-border/70 bg-background/30 p-8 text-center shadow-none">
-          <h2 className="text-lg font-semibold text-foreground">
-            Campaign leads are coming next
-          </h2>
-          <p className="mx-auto mt-1 max-w-xl text-sm text-muted-foreground">
-            The lead table will use the same campaign filters and source metrics
-            shown in Discovery.
-          </p>
-        </Card>
+        <LeadsWorkspace
+          campaign={campaignState}
+          dataSource={dataSource}
+          initialLeads={leads}
+          scope="campaign"
+        />
       ) : null}
       {activeTab === "outreach" ||
       activeTab === "conversations" ||
