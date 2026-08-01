@@ -121,7 +121,7 @@ export function EntitlementLock({
               </Button>
             </DialogClose>
             <Button disabled type="button">
-              Activation coming soon
+              LAKA access required
             </Button>
           </DialogFooter>
         </DialogContent>

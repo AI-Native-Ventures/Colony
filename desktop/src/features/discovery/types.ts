@@ -11,6 +11,8 @@ export type DiscoveryEntityStatus =
   | "cancelled"
   | "failed";
 
+export type DiscoveryTargetType = "business" | "individual";
+
 export type Industry = {
   id: string;
   slug: string;
@@ -39,6 +41,35 @@ export type VerticalDetail = Vertical & {
   campaigns: CampaignSummary[];
 };
 
+export type ProfessionalField = {
+  id: string;
+  slug: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  imageKey: string;
+  roleCount: number;
+  leadCount: number;
+  campaignCount: number;
+  status: "active" | "available";
+};
+
+export type ProfessionalRole = {
+  id: string;
+  slug: string;
+  fieldId: string;
+  name: string;
+  description?: string;
+  imageKey: string;
+  campaignCount: number;
+  leadCount: number;
+  status: "active" | "available";
+};
+
+export type ProfessionalRoleDetail = ProfessionalRole & {
+  campaigns: CampaignSummary[];
+};
+
 export type CampaignStatus =
   | "draft"
   | "ready"
@@ -51,10 +82,15 @@ export type CampaignStatus =
 export type CampaignSummary = {
   id: string;
   name: string;
+  targetType?: DiscoveryTargetType;
   industryId: string;
   verticalId: string;
   industryName: string;
   verticalName: string;
+  fieldId?: string;
+  roleId?: string;
+  fieldName?: string;
+  roleName?: string;
   location: string;
   description?: string;
   status: CampaignStatus;
@@ -78,8 +114,11 @@ export type CampaignDetail = CampaignSummary & {
 
 export type CampaignDraft = {
   name: string;
+  targetType?: DiscoveryTargetType;
   industryId: string;
   verticalId: string;
+  fieldId?: string;
+  roleId?: string;
   location: string;
   target: number;
   description?: string;
@@ -90,10 +129,18 @@ export type LeadStatus = "new" | "enriched" | "qualified" | "rejected";
 
 export type Lead = {
   id: string;
+  entityType?: "company" | "person";
   companyName: string;
   company?: string;
   contactName?: string;
   contactTitle?: string;
+  personName?: string;
+  headline?: string;
+  roleName?: string;
+  currentCompany?: string;
+  seniority?: string;
+  linkedinUrl?: string;
+  avatarUrl?: string;
   contacts: number;
   location: string;
   source: DiscoverySource;
@@ -118,6 +165,9 @@ export type LeadScope = {
   campaignId?: string;
   industryId?: string;
   verticalId?: string;
+  targetType?: DiscoveryTargetType;
+  fieldId?: string;
+  roleId?: string;
   search?: string;
   status?: LeadStatus;
   page?: number;
@@ -130,6 +180,39 @@ export type LeadPage = {
   page: number;
   pageSize: number;
   hasNextPage: boolean;
+};
+
+export type OutreachChannel = "Email" | "LinkedIn" | "WhatsApp";
+export type OutreachStatus = "Draft" | "Approved" | "Scheduled";
+
+export type OutreachDraft = {
+  id: string;
+  campaignId: string;
+  leadId: string;
+  lead: string;
+  company: string;
+  channel: OutreachChannel;
+  subject: string;
+  body: string;
+  status: OutreachStatus;
+};
+
+export type ConversationMessage = {
+  id: string;
+  direction: "inbound" | "outbound";
+  body: string;
+  sentAt: string;
+};
+
+export type ConversationThread = {
+  id: string;
+  campaignId: string;
+  leadId: string;
+  name: string;
+  company: string;
+  channel: "Email" | "WhatsApp";
+  unread: boolean;
+  messages: ConversationMessage[];
 };
 
 export type DiscoveryPhase =

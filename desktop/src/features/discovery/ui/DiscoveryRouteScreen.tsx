@@ -4,7 +4,12 @@ import type { DiscoverySearch } from "@/app/routes/discovery";
 import { createFixtureDiscoveryDataSource } from "../data/FixtureDiscoveryDataSource";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { DiscoveryEntitlementState } from "../entitlement";
-import type { CampaignDetail, LeadPage, VerticalDetail } from "../types";
+import type {
+  CampaignDetail,
+  LeadPage,
+  ProfessionalRoleDetail,
+  VerticalDetail,
+} from "../types";
 import {
   DiscoveryWorkspace,
   type DiscoveryRouteReadModel,
@@ -28,6 +33,9 @@ const EMPTY_READ_MODEL: DiscoveryRouteReadModel = {
   industries: [],
   verticals: [],
   vertical: null,
+  fields: [],
+  roles: [],
+  role: null,
   campaign: null,
   leads: null,
 };
@@ -36,12 +44,21 @@ function routeNeedsVertical(search: DiscoverySearch) {
   return Boolean(search.industryId && search.verticalId);
 }
 
+function routeNeedsRole(search: DiscoverySearch) {
+  return Boolean(search.fieldId && search.roleId);
+}
+
 function routeNeedsCampaign(search: DiscoverySearch) {
   return Boolean(search.campaignId);
 }
 
 function routeNeedsLeads(search: DiscoverySearch) {
-  return search.surface === "leads" || search.tab === "leads";
+  return (
+    search.surface === "leads" ||
+    search.tab === "leads" ||
+    search.tab === "outreach" ||
+    search.tab === "conversations"
+  );
 }
 
 type DiscoveryE2eWindow = Window & {
@@ -65,10 +82,13 @@ async function loadReadModel(
   search: DiscoverySearch,
 ): Promise<DiscoveryRouteReadModel> {
   const industries = await dataSource.getIndustries();
+  const fields = await dataSource.getFields();
   const verticals = search.industryId
     ? await dataSource.getVerticals(search.industryId)
     : [];
+  const roles = search.fieldId ? await dataSource.getRoles(search.fieldId) : [];
   let vertical: VerticalDetail | null = null;
+  let role: ProfessionalRoleDetail | null = null;
   let campaign: CampaignDetail | null = null;
   let leads: LeadPage | null = null;
 
@@ -76,6 +96,13 @@ async function loadReadModel(
     vertical = await dataSource.getVertical(
       search.industryId as string,
       search.verticalId as string,
+    );
+  }
+
+  if (routeNeedsRole(search)) {
+    role = await dataSource.getRole(
+      search.fieldId as string,
+      search.roleId as string,
     );
   }
 
@@ -89,12 +116,28 @@ async function loadReadModel(
       campaignId: search.campaignId,
       industryId: search.industryId,
       verticalId: search.verticalId,
+      targetType: search.campaignId
+        ? search.entity === "people"
+          ? "individual"
+          : "business"
+        : undefined,
+      fieldId: search.fieldId,
+      roleId: search.roleId,
       page: 1,
-      pageSize: 25,
+      pageSize: search.campaignId ? 100 : 500,
     });
   }
 
-  return { industries, verticals, vertical, campaign, leads };
+  return {
+    industries,
+    verticals,
+    vertical,
+    fields,
+    roles,
+    role,
+    campaign,
+    leads,
+  };
 }
 
 export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {

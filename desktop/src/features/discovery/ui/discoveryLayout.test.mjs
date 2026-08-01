@@ -10,6 +10,9 @@ import {
   discoverySurface,
   industryVerticalSearch,
   isCampaignListSearch,
+  fieldRolesSearch,
+  peopleCampaignDetailSearch,
+  roleCampaignsSearch,
   verticalCampaignsSearch,
 } from "./discoveryLayout.ts";
 
@@ -73,6 +76,34 @@ test("opening a campaign is an explicit follow-up navigation from the list", () 
   );
 });
 
+test("people discovery preserves field, role, and campaign context", () => {
+  assert.deepEqual(fieldRolesSearch("marketing"), {
+    entity: "people",
+    surface: "verticals",
+    fieldId: "marketing",
+  });
+  assert.deepEqual(roleCampaignsSearch("marketing", "marketing-director"), {
+    entity: "people",
+    surface: "campaigns",
+    fieldId: "marketing",
+    roleId: "marketing-director",
+  });
+  assert.deepEqual(
+    peopleCampaignDetailSearch(
+      "marketing",
+      "marketing-director",
+      "marketing-directors-united-states",
+    ),
+    {
+      entity: "people",
+      surface: "campaign",
+      fieldId: "marketing",
+      roleId: "marketing-director",
+      campaignId: "marketing-directors-united-states",
+    },
+  );
+});
+
 test("campaign progress is clamped and safe for empty targets", () => {
   assert.equal(campaignProgressPercent({ leadCount: 7, targetLeads: 10 }), 70);
   assert.equal(
@@ -105,7 +136,7 @@ test("surface-specific filters do not carry industry search into verticals", () 
   });
 });
 
-test("a campaign leads tab resolves to the leads placeholder, not campaign list", () => {
+test("a campaign leads tab resolves to the complete leads surface, not campaign list", () => {
   assert.equal(
     discoverySurface({
       surface: "campaign",

@@ -48,6 +48,43 @@ export function campaignDetailSearch(
   };
 }
 
+/** Search state for the field → role transition in People discovery. */
+export function fieldRolesSearch(fieldId: string): DiscoveryNavigationOptions {
+  return {
+    entity: "people",
+    surface: "verticals",
+    fieldId,
+  };
+}
+
+/** Search state for a role's individual discovery campaign list. */
+export function roleCampaignsSearch(
+  fieldId: string,
+  roleId: string,
+): DiscoveryNavigationOptions {
+  return {
+    entity: "people",
+    surface: "campaigns",
+    fieldId,
+    roleId,
+  };
+}
+
+/** Search state for an individual campaign detail surface. */
+export function peopleCampaignDetailSearch(
+  fieldId: string,
+  roleId: string,
+  campaignId: string,
+): DiscoveryNavigationOptions {
+  return {
+    entity: "people",
+    surface: "campaign",
+    fieldId,
+    roleId,
+    campaignId,
+  };
+}
+
 export function discoverySurface(
   search: DiscoverySearch,
 ): NonNullable<DiscoverySearch["surface"]> {
@@ -56,6 +93,8 @@ export function discoverySurface(
   if (search.campaignId) return "campaign";
   if (search.verticalId) return "campaigns";
   if (search.industryId) return "verticals";
+  if (search.roleId) return "campaigns";
+  if (search.fieldId) return "verticals";
   return "industries";
 }
 
@@ -74,6 +113,8 @@ export function discoveryFilterKey(search: DiscoverySearch): string {
     discoverySurface(search),
     search.industryId ?? "",
     search.verticalId ?? "",
+    search.fieldId ?? "",
+    search.roleId ?? "",
     search.campaignId ?? "",
   ].join("/");
 }
@@ -90,6 +131,16 @@ export function isCampaignListSearch(search: DiscoverySearch): boolean {
   return (
     discoverySurface(search) === "campaigns" &&
     Boolean(search.industryId && search.verticalId) &&
+    !search.campaignId
+  );
+}
+
+/** A People campaign list is addressable independently of campaign detail. */
+export function isRoleCampaignListSearch(search: DiscoverySearch): boolean {
+  return (
+    search.entity === "people" &&
+    discoverySurface(search) === "campaigns" &&
+    Boolean(search.fieldId && search.roleId) &&
     !search.campaignId
   );
 }

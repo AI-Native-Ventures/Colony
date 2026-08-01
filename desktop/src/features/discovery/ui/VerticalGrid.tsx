@@ -20,10 +20,10 @@ export function VerticalGrid({
       <Card className="border-dashed border-border/70 bg-background/30 p-8 text-center shadow-none">
         <BriefcaseBusiness className="mx-auto h-8 w-8 text-muted-foreground" />
         <h2 className="mt-3 text-base font-semibold text-foreground">
-          Verticals are on their way
+          No verticals match this search
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          We are preparing the first verticals for {industryName}.
+          Adjust the search or filters to explore {industryName} verticals.
         </p>
       </Card>
     );

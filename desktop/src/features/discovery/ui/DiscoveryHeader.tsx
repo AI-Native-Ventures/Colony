@@ -65,7 +65,12 @@ export function DiscoveryHeader({
                 verticals, then launch an AI discovery campaign.
               </>
             ) : (
-              <>Explore fields and roles to find individual professionals.</>
+              <>
+                Explore{" "}
+                <span className="font-semibold text-foreground">18</span> fields
+                and <span className="font-semibold text-foreground">96</span>{" "}
+                roles to find individual professionals.
+              </>
             )}
           </p>
         </div>

@@ -10,14 +10,8 @@ type DiscoveryListFiltersProps = {
   onViewModeChange: (mode: "grid" | "list") => void;
   total: number;
   showFilters?: boolean;
+  entity?: "Industries" | "Fields";
 };
-
-const FILTERS = [
-  "All Industries",
-  "Active",
-  "Has Campaigns",
-  "New Opportunities",
-];
 
 export function DiscoveryListFilters({
   selectedFilter,
@@ -26,12 +20,19 @@ export function DiscoveryListFilters({
   onViewModeChange,
   total,
   showFilters = true,
+  entity = "Industries",
 }: DiscoveryListFiltersProps) {
+  const filters = [
+    `All ${entity}`,
+    "Active",
+    "Has Campaigns",
+    "New Opportunities",
+  ];
   return (
     <div className="flex flex-wrap items-center justify-between gap-5">
       {showFilters ? (
         <div className="flex flex-wrap items-center gap-3">
-          {FILTERS.map((filter) => (
+          {filters.map((filter) => (
             <button
               className={cn(
                 "rounded-full border px-5 py-2.5 text-sm font-semibold transition-colors",

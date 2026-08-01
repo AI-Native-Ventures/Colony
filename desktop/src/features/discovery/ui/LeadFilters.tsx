@@ -73,6 +73,11 @@ export function leadMatchesFilters(
       lead.company,
       lead.contactName,
       lead.contactTitle,
+      lead.personName,
+      lead.headline,
+      lead.roleName,
+      lead.currentCompany,
+      lead.seniority,
       lead.location,
       lead.email,
       lead.phone,
@@ -126,6 +131,7 @@ type LeadFiltersProps = {
   value: LeadFilterState;
   onChange: (next: Partial<LeadFilterState>) => void;
   campaign?: boolean;
+  people?: boolean;
 };
 
 function SelectFilter({
@@ -157,6 +163,7 @@ function SelectFilter({
 
 export function LeadFilters({
   campaign = false,
+  people = false,
   leads,
   onChange,
   value,
@@ -178,7 +185,11 @@ export function LeadFilters({
             className="pl-9"
             id="lead-search"
             onChange={(event) => onChange({ search: event.target.value })}
-            placeholder="Search companies, brands, locations..."
+            placeholder={
+              people
+                ? "Search people, roles, companies, locations..."
+                : "Search companies, brands, locations..."
+            }
             value={value.search}
           />
         </label>
