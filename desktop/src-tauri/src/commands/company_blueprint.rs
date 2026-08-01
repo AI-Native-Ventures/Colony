@@ -80,11 +80,11 @@ pub async fn execute_company_blueprint(
         return Err(TransactionError::HashMismatch.to_string());
     }
 
-    // The caller states the hash it believes it approved. Checking it here
-    // catches a blueprint edited between review and approval, before any
-    // record is written.
-    let actual_hash = blueprint_hash(&parsed);
-    if !expected_hash.is_empty() && expected_hash != actual_hash {
+    // The hash the owner approved. It is what binds this execution to the
+    // document that was actually reviewed, so it is required rather than
+    // optional: an absent hash would silently mean "execute whatever I was
+    // handed", which is the whole thing this check exists to prevent.
+    if expected_hash != blueprint_hash(&parsed) {
         return Err(TransactionError::HashMismatch.to_string());
     }
 
