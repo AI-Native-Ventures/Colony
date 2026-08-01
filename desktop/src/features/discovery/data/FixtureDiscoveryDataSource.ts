@@ -244,6 +244,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     config: CampaignSourceConfig,
   ): Promise<CampaignDetail> {
     const campaign = this.requireCampaign(campaignId);
+    this.activeRuns.delete(campaignId);
     campaign.sourceConfig = resolveSourceConfig(config);
     campaign.run = createIdleDiscoveryRun(campaign);
     campaign.updatedAt = "2026-08-01T10:05:00.000Z";
@@ -252,7 +253,11 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   }
 
   startDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent> {
-    this.requireCampaign(campaignId);
+    const campaign = this.requireCampaign(campaignId);
+    this.activeRuns.delete(campaignId);
+    campaign.run = createIdleDiscoveryRun(campaign);
+    campaign.status = "ready";
+    campaign.updatedAt = "2026-08-01T10:20:00.000Z";
     const scenario =
       this.campaignScenarios.get(campaignId) ?? this.defaultScenario;
     return this.createStream(campaignId, scenario);

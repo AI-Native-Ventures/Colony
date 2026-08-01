@@ -301,6 +301,28 @@ function firstSources(context: EventContext, count: number): DiscoverySource[] {
   return context.campaign.sourceConfig.order.slice(0, count);
 }
 
+function deterministicWaterfallLeads(
+  context: EventContext,
+  target: number,
+): Lead[] {
+  const template = context.leads[0];
+  if (!template) throw new Error("Fixture campaign has no leads");
+  return Array.from({ length: target }, (_, index) => {
+    const existing = context.leads[index];
+    if (existing) return existing;
+    const ordinal = String(index + 1).padStart(3, "0");
+    const companyName = `${template.companyName} Fixture ${ordinal}`;
+    return {
+      ...template,
+      id: `${context.campaign.id}-fixture-lead-${ordinal}`,
+      companyName,
+      company: companyName,
+      campaignIds: [context.campaign.id],
+      addedAt: `2026-08-01T08:${String((index + 1) % 60).padStart(2, "0")}:00.000Z`,
+    };
+  });
+}
+
 export function createFixtureEventSequence(
   campaign: CampaignDetail,
   leads: Lead[],
@@ -332,8 +354,11 @@ export function createFixtureEventSequence(
     }
     case "waterfall-target":
       events.push(startSource(context, first));
-      events.push(progressSource(context, first, 10));
-      for (const lead of context.leads.slice(0, context.run.target)) {
+      events.push(progressSource(context, first, context.run.target));
+      for (const lead of deterministicWaterfallLeads(
+        context,
+        context.run.target,
+      )) {
         events.push(storeLead(context, first, lead));
       }
       context.run.targetReached = true;

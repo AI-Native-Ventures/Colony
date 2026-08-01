@@ -107,6 +107,32 @@ test("waterfall fixture emits ordered source states and target completion", asyn
   );
 });
 
+test("waterfall target fixture expands deterministic leads for larger targets", async () => {
+  const source = createFixtureDiscoveryDataSource({
+    scenario: "waterfall-target",
+  });
+  const campaign = await source.createCampaign({
+    name: "Twenty lead waterfall",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Johannesburg",
+    target: 20,
+  });
+  const events = [];
+  for await (const event of source.startDiscovery(campaign.id)) {
+    events.push(event);
+  }
+  const terminal = events.at(-1);
+  assert.equal(terminal?.type, "session_completed");
+  assert.equal(terminal?.targetReached, true);
+  assert.equal(terminal?.run.stored, 20);
+  assert.equal(terminal?.run.discovered, 20);
+  assert.equal(
+    events.filter((event) => event.type === "lead_stored").length,
+    20,
+  );
+});
+
 test("fixture stream represents rejected leads and exhausted sources", async () => {
   const source = createFixtureDiscoveryDataSource({ scenario: "partial" });
   const events = [];
@@ -205,6 +231,41 @@ test("cancel after a terminal run is a no-op", async () => {
   assert.equal(before.status, "partial");
   assert.equal(after.status, "partial");
   assert.equal(after.run?.status, "partial");
+});
+
+test("starting discovery after a partial run resets the active run boundary", async () => {
+  const source = createFixtureDiscoveryDataSource({ scenario: "partial" });
+  for await (const _event of source.startDiscovery(
+    "auto-repair-johannesburg",
+  )) {
+    // Drain the partial fixture.
+  }
+  const stream = source.startDiscovery("auto-repair-johannesburg");
+  await source.cancelDiscovery("auto-repair-johannesburg");
+  const events = [];
+  for await (const event of stream) events.push(event);
+  assert.equal(events.at(-1)?.type, "session_cancelled");
+  assert.equal(
+    (await source.getCampaign("auto-repair-johannesburg")).status,
+    "cancelled",
+  );
+});
+
+test("updating source config invalidates an active stream before resetting its run", async () => {
+  const source = createFixtureDiscoveryDataSource({ scenario: "concurrent" });
+  const iterator = source
+    .startDiscovery("auto-repair-johannesburg")
+    [Symbol.asyncIterator]();
+  await iterator.next();
+  await source.updateSourceConfig("auto-repair-johannesburg", {
+    mode: "waterfall",
+    order: ["brave_search"],
+  });
+  const stale = await iterator.next();
+  assert.equal(stale.done, true);
+  const campaign = await source.getCampaign("auto-repair-johannesburg");
+  assert.equal(campaign.status, "ready");
+  assert.deepEqual(campaign.sourceConfig.order, ["brave_search"]);
 });
 
 test("createCampaign rejects non-finite and non-positive targets", async () => {
