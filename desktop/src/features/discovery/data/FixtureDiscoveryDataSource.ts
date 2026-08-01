@@ -369,8 +369,6 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     campaign.run = clone(event.run);
     campaign.status = campaignStatusForEvent(event);
     campaign.updatedAt = event.at;
-    campaign.leadCount = event.run.stored;
-    campaign.metrics.companiesFound = event.run.stored;
     if (event.type === "lead_stored") {
       const leads = this.campaignLeads.get(event.campaignId) ?? [];
       if (!leads.some((lead) => lead.id === event.lead.id)) {
@@ -384,6 +382,14 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
         this.campaignLeads.set(event.campaignId, leads);
       }
     }
+    const leads = this.campaignLeads.get(event.campaignId) ?? [];
+    campaign.leadCount = leads.length;
+    campaign.metrics = {
+      companiesFound: leads.length,
+      contactsFound: leads.reduce((total, lead) => total + lead.contacts, 0),
+      emailsFound: leads.filter((lead) => Boolean(lead.email)).length,
+      missingWebsites: leads.filter((lead) => !lead.website).length,
+    };
     if (isTerminalEvent(event))
       campaign.updatedAt = event.run.completedAt ?? event.at;
   }

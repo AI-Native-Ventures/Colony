@@ -311,4 +311,18 @@ test("stored fixture leads persist in the campaign read model", async () => {
   assert.ok(
     after.leads.every((lead) => lead.campaignIds.includes(campaign.id)),
   );
+  const detail = await source.getCampaign(campaign.id);
+  assert.equal(detail.metrics.companiesFound, after.total);
+  assert.equal(
+    detail.metrics.contactsFound,
+    after.leads.reduce((total, lead) => total + lead.contacts, 0),
+  );
+  assert.equal(
+    detail.metrics.emailsFound,
+    after.leads.filter((lead) => Boolean(lead.email)).length,
+  );
+  assert.equal(
+    detail.metrics.missingWebsites,
+    after.leads.filter((lead) => !lead.website).length,
+  );
 });
