@@ -732,7 +732,8 @@ async fn main() -> anyhow::Result<()> {
     // The foundation executor is deliberately opt-in and performs no network
     // calls. Production relays remain unable to fabricate Discovery results
     // unless the explicit fake-executor flag is set.
-    buzz_relay::discovery_runtime::spawn_workers(Arc::clone(&state));
+    let discovery_shutdown = CancellationToken::new();
+    buzz_relay::discovery_runtime::spawn_workers(Arc::clone(&state), discovery_shutdown.clone());
 
     // NIP-ER reminder scheduler — polls for due reminders and publishes them
     // to Redis pub/sub for cross-pod fan-out. Each pod's existing
@@ -1090,6 +1091,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     serve(router, health_router, Arc::clone(&state)).await?;
+    discovery_shutdown.cancel();
     state.community_revalidator_cancel.cancel();
 
     // Signal the audit worker to stop accepting, flush buffered entries, and
