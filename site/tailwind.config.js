@@ -13,6 +13,11 @@ export default {
           // documentElement.style before first paint (the random-hue
           // mechanic). See src/brand/hue.ts.
           canvas: "var(--colony-canvas)",
+          // Vertical color journey steps, paler than canvas, used away from
+          // the hero/footer bookends so the product screenshot and Story
+          // trails read clearly. See src/brand/hue.ts HUE_CANVAS_MID/LIGHT.
+          canvasMid: "var(--colony-canvas-mid)",
+          canvasLight: "var(--colony-canvas-light)",
           accent: "var(--colony-accent)",
           ink: "#171717",
         },

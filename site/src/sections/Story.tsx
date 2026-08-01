@@ -25,7 +25,7 @@ export function Story() {
   return (
     <section
       id="story"
-      className="relative overflow-hidden bg-colony-canvas px-6 py-12 sm:py-16"
+      className="relative overflow-hidden bg-colony-canvasLight px-6 py-12 sm:py-16"
     >
       <h2 className="mx-auto max-w-2xl text-center text-3xl font-semibold text-colony-ink sm:text-4xl">
         One history, three ways to work

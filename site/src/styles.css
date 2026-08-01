@@ -8,6 +8,8 @@
    instead of an unset custom property. */
 :root {
   --colony-canvas: #b394f9;
+  --colony-canvas-mid: #ded4f7;
+  --colony-canvas-light: #f3effa;
   --colony-accent: hsl(258 90% 66%);
 }
 

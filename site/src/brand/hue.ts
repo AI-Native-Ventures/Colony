@@ -55,6 +55,33 @@ export const HUE_CANVAS: Record<HueName, string> = {
   green: "#33CC99", // hsl(160 60% 50%)
 };
 
+/** Vertical color journey, step 2 of 3 (full -> mid -> light -> mid -> full
+ * down the page): same hue/lightness family as HUE_CANVAS pushed paler, used
+ * where the page is transitioning away from the hero's full-strength band
+ * (the Statement section) and transitioning back toward it (Features).
+ * Contrast against #171717 only rises as lightness rises past HUE_CANVAS's
+ * already-7:1-plus values, measured in belowfold-report.md. Keep this table
+ * and index.html's copy identical. */
+export const HUE_CANVAS_MID: Record<HueName, string> = {
+  violet: "#DED4F7", // hsl(258 70% 90%)
+  blue: "#D4E1F7", // hsl(217 70% 90%)
+  pink: "#F8DDEB", // hsl(330 65% 92%)
+  amber: "#FAEBD1", // hsl(38 80% 90%)
+  green: "#D9F2EA", // hsl(160 50% 90%)
+};
+
+/** Vertical color journey, step 3 of 3: the palest tint, used behind the
+ * product screenshot (ProductShowcase) and the Story columns so the
+ * screenshot and the pheromone trails read clearly against a near-white
+ * backdrop. Keep this table and index.html's copy identical. */
+export const HUE_CANVAS_LIGHT: Record<HueName, string> = {
+  violet: "#F3EFFA", // hsl(258 55% 96%)
+  blue: "#EFF3FA", // hsl(217 55% 96%)
+  pink: "#FBF4F7", // hsl(330 50% 97%)
+  amber: "#FBF7EE", // hsl(38 65% 96%)
+  green: "#F1F9F6", // hsl(160 40% 96%)
+};
+
 /** Tonal scatter palette per hue: a dark shade, the raw accent, a pale
  * tint, and white, so the scatter field reads as texture (per buzz.xyz's
  * tonal bees: white and pale yellow on chartreuse) instead of five
