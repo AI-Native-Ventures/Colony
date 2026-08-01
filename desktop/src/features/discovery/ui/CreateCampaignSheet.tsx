@@ -143,7 +143,7 @@ export function CreateCampaignSheet({
         className="flex h-full w-full max-w-[37.5rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[37.5rem]"
         side="right"
       >
-        <SheetHeader className="border-b border-border px-6 py-6">
+        <SheetHeader className="border-b border-border px-8 py-8">
           <SheetTitle className="text-xl" id="create-campaign-title">
             Tell Jen where to find leads and how many you need.
           </SheetTitle>
@@ -153,7 +153,7 @@ export function CreateCampaignSheet({
         </SheetHeader>
 
         <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
-          <div className="min-h-0 flex-1 space-y-7 overflow-y-auto px-6 py-6">
+          <div className="min-h-0 flex-1 space-y-8 overflow-y-auto px-8 py-8">
             <section className="space-y-3">
               <h2 className="text-base font-semibold text-foreground">
                 What type of business?
@@ -387,7 +387,7 @@ export function CreateCampaignSheet({
               {error}
             </p>
           ) : null}
-          <SheetFooter className="mt-6 gap-2 border-t border-border/50 pt-4">
+          <SheetFooter className="mt-6 gap-2 border-t border-border/50 px-8 pb-8 pt-6">
             <Button
               onClick={() => onOpenChange(false)}
               type="button"

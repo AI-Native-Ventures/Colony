@@ -31,7 +31,6 @@ import { CreateCampaignSheet } from "./CreateCampaignSheet";
 import { DiscoveryHeader, type DiscoveryMode } from "./DiscoveryHeader";
 import { IndustryGrid } from "./IndustryGrid";
 import { DiscoveryListFilters } from "./DiscoveryListFilters";
-import { MetricCard } from "./MetricCard";
 import { VerticalGrid } from "./VerticalGrid";
 import { LeadsWorkspace } from "./LeadsWorkspace";
 
@@ -278,7 +277,7 @@ export function DiscoveryWorkspace({
       : verticals;
 
     return (
-      <div className="relative space-y-6">
+      <div className="relative space-y-10 px-8 pb-12 pt-8">
         <DiscoveryHeader
           breadcrumb="Industries"
           description={`${visibleVerticals.length} Verticals Available`}
@@ -376,7 +375,7 @@ export function DiscoveryWorkspace({
       : verticals;
 
     return (
-      <div className="space-y-6">
+      <div className="space-y-10 px-8 pb-12 pt-8">
         <DiscoveryHeader
           breadcrumb="Industries"
           description={`${visibleVerticals.length} Verticals Available`}
@@ -439,7 +438,7 @@ export function DiscoveryWorkspace({
     });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-10 px-8 pb-12 pt-8">
       <DiscoveryHeader
         description=""
         mode={mode}
@@ -468,17 +467,6 @@ export function DiscoveryWorkspace({
           void goDiscovery(industryVerticalSearch(industryToOpen.id))
         }
       />
-      <div className="grid max-w-xl grid-cols-2 gap-3">
-        <MetricCard label="Industries" value={visibleIndustries.length} />
-        <MetricCard
-          hint="Across the catalog"
-          label="Available campaigns"
-          value={readModel.industries.reduce(
-            (total, candidate) => total + candidate.campaignCount,
-            0,
-          )}
-        />
-      </div>
     </div>
   );
 }

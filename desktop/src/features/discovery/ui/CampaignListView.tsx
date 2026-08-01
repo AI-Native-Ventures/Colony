@@ -78,7 +78,7 @@ export function CampaignListView({
           </div>
         </div>
 
-        <div className="space-y-6 px-6 pb-8">
+        <div className="space-y-8 px-6 pb-10 pt-6">
           <div className="grid grid-cols-2 gap-4">
             <div className="rounded-2xl border border-border bg-muted/20 p-5">
               <div className="text-3xl font-bold text-foreground">
