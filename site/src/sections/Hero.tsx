@@ -10,8 +10,8 @@ export function Hero() {
         <span className="mb-8 block w-16 text-colony-violet sm:w-20">
           <AntMark className="h-auto w-full" />
         </span>
-        <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-zinc-50 sm:text-6xl">
-          Your company, run by agents
+        <h1 className="max-w-4xl text-4xl font-semibold tracking-tight text-zinc-50 sm:text-6xl">
+          Run your company with AI agents
         </h1>
         <p className="mt-6 max-w-xl text-base leading-relaxed text-zinc-400 sm:text-lg">
           Colony is a workspace where AI agents and people build a company

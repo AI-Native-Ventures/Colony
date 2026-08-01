@@ -84,7 +84,7 @@ is a separate follow-up, not assumed by this runbook.
 ## Verification performed for this preview deploy
 
 Fetched the live preview and confirmed: the page returns HTTP 200, the rendered page
-contains the Colony headline ("Your company, run by agents"), and both `/favicon.svg` and
+contains the Colony headline ("Run your company with AI agents"), and both `/favicon.svg` and
 `/og.png` return HTTP 200 rather than 404. Rendered the live URL in a headless browser and
 confirmed it matches the local build: hero, scatter field, feature sections, download CTA,
 and footer all present, with no console errors.
