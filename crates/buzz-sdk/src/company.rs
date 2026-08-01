@@ -324,7 +324,7 @@ pub fn parse_company_action(event: &Event) -> Result<CompanyAction, CompanySdkEr
 /// Relay authorship must be checked by the caller against its tenant relay key.
 pub fn parse_company_event(event: &Event) -> Result<CompanyProfile, CompanySdkError> {
     require_kind(event, KIND_COMPANY_PROFILE)?;
-    require_exact_tag_names(event, &["d", "company"], "company head")?;
+    require_head_tag_names(event, &["d", "company"], &["c"], "company head")?;
     let coordinate = required_scalar_tag(event, "d")?;
     let company_tag = required_scalar_tag(event, "company")?;
     let profile: CompanyProfile = parse_canonical_content(&event.content, "company")?;
@@ -342,7 +342,7 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
     require_head_tag_names(
         event,
         &["d", "company", "cost-centre"],
-        &["client"],
+        &["c", "client"],
         "initiative head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
@@ -371,7 +371,7 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     require_head_tag_names(
         event,
         &["d", "company", "team", "cost-centre"],
-        &["initiative", "client"],
+        &["c", "initiative", "client"],
         "task head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
