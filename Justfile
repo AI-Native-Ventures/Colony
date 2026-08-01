@@ -300,6 +300,10 @@ test-unit:
     if command -v cargo-nextest &>/dev/null; then
         cargo nextest run -p buzz-core -p buzz-auth --lib
         cargo nextest run -p buzz-cli
+        # buzz-acp: agent prompt contracts and pool/queue logic. Pure unit
+        # tests, no infra — they were absent from this gate, so a broken
+        # base-prompt assertion sat red without CI noticing.
+        cargo nextest run -p buzz-acp --lib
         # buzz-db migrator/lint tests: pure SQL-parsing unit tests (no infra).
         # They guard the embedded-migrator invariant (exactly the consolidated
         # 0001; cutover/backfill stays an operator script, not startup state)

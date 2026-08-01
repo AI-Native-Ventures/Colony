@@ -3622,6 +3622,196 @@ fn dispatch_heartbeat(
     tracing::info!(agent = agent_index, "heartbeat_fired");
 }
 
+/// The Chief of Staff's company onboarding protocol.
+///
+/// Kept out of `base_prompt.md` deliberately: it is long, it is only relevant
+/// until a company exists, and leaving it in every agent's context would crowd
+/// out ordinary work for the entire life of the workspace.
+pub const COMPANY_ONBOARDING_PROMPT: &str = include_str!("company_onboarding_prompt.md");
+
+/// Whether a session should receive the onboarding protocol.
+///
+/// Injected while there is no company, or one still in draft — that is when
+/// the protocol describes the work at hand. Once a company is approved the
+/// onboarding conversation is over, and continuing to inject it would tell an
+/// agent to re-run an interview the owner has already completed.
+///
+/// Takes the status rather than querying, so the rule is testable on its own
+/// and the caller owns the lookup.
+pub fn should_inject_company_onboarding(
+    company_status: Option<buzz_core::company::CompanyOnboardingStatus>,
+) -> bool {
+    !matches!(
+        company_status,
+        Some(buzz_core::company::CompanyOnboardingStatus::Approved)
+    )
+}
+
+#[cfg(test)]
+mod company_onboarding_injection_tests {
+    use super::*;
+    use buzz_core::company::CompanyOnboardingStatus;
+
+    #[test]
+    fn onboarding_is_injected_until_a_company_is_approved() {
+        // No company yet: this is exactly the conversation the protocol is for.
+        assert!(should_inject_company_onboarding(None));
+        // Drafted but not approved: onboarding is still in progress.
+        assert!(should_inject_company_onboarding(Some(
+            CompanyOnboardingStatus::Draft
+        )));
+    }
+
+    /// Once approved, re-injecting would tell the agent to re-run an interview
+    /// the owner has already finished.
+    #[test]
+    fn onboarding_stops_being_injected_once_approved() {
+        assert!(!should_inject_company_onboarding(Some(
+            CompanyOnboardingStatus::Approved
+        )));
+    }
+
+    /// It is long on purpose, and that is precisely why it must not live in
+    /// every agent's permanent context.
+    #[test]
+    fn the_protocol_is_separate_from_the_shared_base_prompt() {
+        let base = include_str!("base_prompt.md");
+        assert!(!base.contains("colony-company-onboarding"));
+        assert!(COMPANY_ONBOARDING_PROMPT.contains("colony-company-onboarding"));
+    }
+}
+
+/// The onboarding protocol is a contract, not prose. Each assertion here is a
+/// behaviour the owner is entitled to, and a prompt edit that drops one is a
+/// regression rather than a rewording.
+#[cfg(test)]
+mod company_onboarding_prompt_tests {
+    const PROMPT: &str = include_str!("company_onboarding_prompt.md");
+
+    #[test]
+    fn company_onboarding_asks_for_the_website_once_and_scans_it() {
+        assert!(PROMPT.contains("Ask for the company website a single time"));
+        assert!(PROMPT.contains("Do not ask again"));
+        assert!(PROMPT.contains("buzz company scan --url"));
+    }
+
+    /// A scan reads a website; it does not audit a business. Overclaiming here
+    /// would put invented facts into a company record the owner then trusts.
+    #[test]
+    fn company_onboarding_never_overclaims_what_a_scan_proves() {
+        assert!(PROMPT.contains("evidence, not truth"));
+        assert!(PROMPT.contains("Never describe a scanned fact as verified beyond its source"));
+        assert!(PROMPT.contains(
+            "You read a
+website; you did not audit a business"
+        ));
+        // The scanner's own confidence levels must survive into the brief.
+        for level in ["stated", "declared", "inferred"] {
+            assert!(
+                PROMPT.contains(level),
+                "confidence `{level}` must be carried through"
+            );
+        }
+    }
+
+    /// The owner has to see what was found before being asked to fill holes in
+    /// it, and a brief that hides gaps cannot be corrected.
+    #[test]
+    fn company_onboarding_publishes_the_brief_before_any_question() {
+        assert!(PROMPT.contains("Publish the brief before asking anything"));
+        assert!(PROMPT.contains("company-brief"));
+        assert!(PROMPT.contains("Include every gap you found"));
+    }
+
+    /// The closed set is what stops the interview running forever.
+    #[test]
+    fn company_onboarding_bounds_the_interview_to_six_facts() {
+        assert!(PROMPT.contains("Establish exactly six facts, then stop"));
+        assert!(PROMPT.contains("Ask about nothing else"));
+        for fact in [
+            "Services and products",
+            "Type of work and process",
+            "Pricing per service",
+            "Target audience",
+            "Location",
+            "Who does the work today",
+        ] {
+            assert!(PROMPT.contains(fact), "missing required fact `{fact}`");
+        }
+    }
+
+    /// The two rules that guarantee termination, stated to the agent in the
+    /// same terms the code enforces.
+    #[test]
+    fn company_onboarding_makes_unknown_terminal_and_follow_ups_bounded() {
+        assert!(PROMPT.contains("\"I don't know\" is a complete answer"));
+        assert!(PROMPT.contains("never ask again"));
+        assert!(PROMPT.contains("One follow-up per fact, maximum"));
+        assert!(PROMPT.contains("Never restate the original question"));
+        assert!(
+            PROMPT.contains("one question per Interview Block")
+                || PROMPT.contains("one question per Interview")
+        );
+    }
+
+    /// A website often answers part of something; the follow-up has to build on
+    /// what is known rather than start over.
+    #[test]
+    fn company_onboarding_distinguishes_partial_from_missing() {
+        assert!(PROMPT.contains("**partial**"));
+        assert!(
+            PROMPT.contains(
+                "builds on
+what you already know"
+            ) || PROMPT.contains("builds on")
+        );
+        assert!(PROMPT.contains("**answered**"));
+        assert!(PROMPT.contains("Do not ask."));
+    }
+
+    /// An owner explaining a delivery process usually has it written down.
+    #[test]
+    fn company_onboarding_accepts_links_and_documents_as_answers() {
+        assert!(PROMPT.contains("a link, or an attached document"));
+        assert!(PROMPT.contains("better evidence than a retyped summary"));
+    }
+
+    /// The blueprint describes people and structure. A blueprint carrying
+    /// executable configuration is a blueprint that can be used to run code.
+    #[test]
+    fn company_onboarding_keeps_executable_configuration_out_of_the_blueprint() {
+        assert!(PROMPT.contains("Never include system prompts, runtime settings, commands"));
+        assert!(PROMPT.contains("credentials"));
+        assert!(PROMPT.contains("describes people and structure only"));
+        assert!(PROMPT.contains("trusted role IDs"));
+    }
+
+    #[test]
+    fn company_onboarding_refuses_a_generic_operations_team() {
+        assert!(PROMPT.contains("Never invent a generic \"Operations\" team"));
+        assert!(PROMPT.contains("exactly three initiatives"));
+    }
+
+    /// The promise the opener makes to the owner, restated where the agent
+    /// will act on it.
+    #[test]
+    fn company_onboarding_starts_nothing_before_approval() {
+        assert!(PROMPT.contains("Do nothing until approval"));
+        assert!(PROMPT
+            .contains("Do not start agents, send anything, spend anything, or begin any proposed"));
+        assert!(PROMPT.contains("Proposing is your whole job here"));
+    }
+
+    /// The owner may close the app between any two messages, so the thread has
+    /// to be the record rather than the agent's memory.
+    #[test]
+    fn company_onboarding_reads_state_from_the_thread() {
+        assert!(PROMPT.contains("State lives in this thread"));
+        assert!(PROMPT.contains("re-read the thread"));
+        assert!(PROMPT.contains("State is read from persistent thread Blocks and receipts"));
+    }
+}
+
 #[cfg(test)]
 mod agent_draft_prompt_tests {
     #[test]
@@ -3630,7 +3820,13 @@ mod agent_draft_prompt_tests {
         assert!(prompt.contains("buzz agents draft-create"));
         assert!(prompt.contains("ask for at most two things"));
         assert!(prompt.contains("what it should do day-to-day"));
-        assert!(prompt.contains("owner saves it"));
+        // The prompt's wording changed to "owner explicitly approves and
+        // completes the review"; the property being pinned is unchanged — an
+        // agent must never claim the agent exists before the owner acts.
+        assert!(prompt.contains("owner explicitly approves and completes the review"));
+        assert!(
+            prompt.contains("Never claim the agent exists merely because the proposal was posted")
+        );
         assert!(prompt.contains("Do not ask about runtime, provider, model, credentials"));
     }
 
