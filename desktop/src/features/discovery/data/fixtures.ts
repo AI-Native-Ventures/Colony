@@ -21,7 +21,7 @@ export const FIXTURE_INDUSTRIES: Industry[] = [
     description: "Businesses that keep people and vehicles moving.",
     imageKey: "industry.automotive",
     verticalCount: 3,
-    leadCount: 5,
+    leadCount: 10,
     campaignCount: 1,
     status: "active",
   },
@@ -69,7 +69,7 @@ export const FIXTURE_VERTICALS: Vertical[] = [
     description: "Independent workshops and specialist repair centres.",
     imageKey: "vertical.auto-repair",
     campaignCount: 1,
-    leadCount: 5,
+    leadCount: 10,
     status: "active",
   },
   {
@@ -109,7 +109,7 @@ export const FIXTURE_CAMPAIGN_SUMMARY: CampaignSummary = {
   status: "ready",
   target: 10,
   targetLeads: 10,
-  leadCount: 5,
+  leadCount: 10,
   createdAt: CAMPAIGN_CREATED_AT,
   updatedAt: CAMPAIGN_CREATED_AT,
 };
@@ -121,10 +121,10 @@ export const FIXTURE_CAMPAIGN: CampaignDetail = {
     order: [...DEFAULT_SOURCE_CONFIG.order],
   },
   metrics: {
-    companiesFound: 5,
-    contactsFound: 6,
-    emailsFound: 4,
-    missingWebsites: 1,
+    companiesFound: 10,
+    contactsFound: 12,
+    emailsFound: 7,
+    missingWebsites: 3,
   },
 };
 
@@ -216,12 +216,66 @@ export const FIXTURE_CAMPAIGN_LEADS: Lead[] = [
       status: "new",
     },
   ),
+  fixtureLead(
+    "lead-006",
+    "Oakdene Auto Service",
+    "Oakdene, Johannesburg",
+    "google_maps",
+    {
+      contactName: "Naledi Maseko",
+      website: "https://oakdeneautoservice.example",
+      score: 76,
+    },
+  ),
+  fixtureLead(
+    "lead-007",
+    "Alexandra Motor Hub",
+    "Alexandra, Johannesburg",
+    "dataforseo",
+    {
+      contactName: "Sipho Zulu",
+      phone: "+27 11 555 0107",
+      score: 74,
+    },
+  ),
+  fixtureLead(
+    "lead-008",
+    "Kensington Auto Works",
+    "Kensington, Johannesburg",
+    "brave_search",
+    {
+      contactName: "Ayesha Khan",
+      email: "hello@kensingtonautoworks.example",
+      score: 71,
+    },
+  ),
+  fixtureLead(
+    "lead-009",
+    "Northcliff Garage",
+    "Northcliff, Johannesburg",
+    "exa_search",
+    {
+      contactName: "Palesa Mthembu",
+      score: 69,
+    },
+  ),
+  fixtureLead(
+    "lead-010",
+    "Lenasia Motor Clinic",
+    "Lenasia, Johannesburg",
+    "openstreetmap",
+    {
+      contactName: "Yusuf Patel",
+      phone: "+27 11 555 0110",
+      score: 66,
+    },
+  ),
 ];
 
 export const FIXTURE_GLOBAL_LEADS: Lead[] = [
   ...FIXTURE_CAMPAIGN_LEADS,
   fixtureLead(
-    "lead-006",
+    "lead-011",
     "Pretoria Fleet Fix",
     "Pretoria, Gauteng",
     "google_maps",
@@ -233,7 +287,7 @@ export const FIXTURE_GLOBAL_LEADS: Lead[] = [
     },
   ),
   fixtureLead(
-    "lead-007",
+    "lead-012",
     "East Rand Auto",
     "Boksburg, Gauteng",
     "brave_search",

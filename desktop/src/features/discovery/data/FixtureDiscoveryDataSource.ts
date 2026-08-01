@@ -12,6 +12,7 @@ import type {
   CampaignStatus,
   DiscoveryEvent,
   Industry,
+  Lead,
   LeadPage,
   LeadScope,
   CampaignSummary,
@@ -70,6 +71,12 @@ function isTerminalEvent(event: DiscoveryEvent): boolean {
   return TERMINAL_EVENT_TYPES.has(event.type);
 }
 
+type ActiveDiscoveryRun = {
+  token: string;
+  runId: string;
+  cancelled: boolean;
+};
+
 export function createFixtureDiscoveryDataSource(
   options: CreateFixtureDiscoveryDataSourceOptions = {},
 ): DiscoveryDataSource {
@@ -80,9 +87,11 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   private readonly entitlement: DiscoveryEntitlement;
   private readonly defaultScenario: FixtureScenario;
   private readonly campaigns = new Map<string, CampaignDetail>();
-  private readonly cancelledCampaigns = new Set<string>();
+  private readonly campaignLeads = new Map<string, Lead[]>();
+  private readonly activeRuns = new Map<string, ActiveDiscoveryRun>();
   private readonly campaignScenarios = new Map<string, FixtureScenario>();
   private nextCampaignNumber = 1;
+  private nextRunToken = 1;
 
   constructor(options: FixtureDiscoveryDataSourceOptions = {}) {
     this.entitlement = normalizeEntitlement(options.entitlement);
@@ -91,6 +100,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     const fixtureCampaign = clone(CAMPAIGN_FIXTURE);
     fixtureCampaign.run = createIdleDiscoveryRun(fixtureCampaign);
     this.campaigns.set(fixtureCampaign.id, fixtureCampaign);
+    this.campaignLeads.set(fixtureCampaign.id, clone(FIXTURE_CAMPAIGN_LEADS));
     this.campaignScenarios.set(fixtureCampaign.id, this.defaultScenario);
   }
 
@@ -131,7 +141,9 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   async getLeads(scope: LeadScope): Promise<LeadPage> {
     const scopeKind = scope.scope ?? scope.kind ?? scope.type ?? "global";
     const sourceLeads =
-      scopeKind === "campaign" ? FIXTURE_CAMPAIGN_LEADS : FIXTURE_GLOBAL_LEADS;
+      scopeKind === "campaign"
+        ? clone(this.campaignLeads.get(scope.campaignId ?? "") ?? [])
+        : this.getGlobalLeads();
     let leads = sourceLeads.filter((lead) => {
       if (scopeKind === "campaign" && scope.campaignId) {
         return lead.campaignIds.includes(scope.campaignId);
@@ -178,6 +190,17 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
         `Unknown discovery vertical: ${input.industryId}/${input.verticalId}`,
       );
     }
+    if (!Number.isFinite(input.target) || input.target <= 0) {
+      throw new Error(
+        "Discovery campaign target must be a finite positive number",
+      );
+    }
+    const target = Math.round(input.target);
+    if (target <= 0) {
+      throw new Error(
+        "Discovery campaign target must round to at least one lead",
+      );
+    }
     const baseId =
       slugify(input.name) || `discovery-campaign-${this.nextCampaignNumber}`;
     let id = baseId;
@@ -196,8 +219,8 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       location: input.location.trim(),
       description: input.description,
       status: "ready",
-      target: Math.max(1, Math.round(input.target)),
-      targetLeads: Math.max(1, Math.round(input.target)),
+      target,
+      targetLeads: target,
       leadCount: 0,
       createdAt,
       updatedAt: createdAt,
@@ -211,6 +234,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     };
     campaign.run = createIdleDiscoveryRun(campaign);
     this.campaigns.set(id, campaign);
+    this.campaignLeads.set(id, []);
     this.campaignScenarios.set(id, this.defaultScenario);
     return clone(campaign);
   }
@@ -229,7 +253,6 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
 
   startDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent> {
     this.requireCampaign(campaignId);
-    this.cancelledCampaigns.delete(campaignId);
     const scenario =
       this.campaignScenarios.get(campaignId) ?? this.defaultScenario;
     return this.createStream(campaignId, scenario);
@@ -237,8 +260,19 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
 
   async cancelDiscovery(campaignId: string): Promise<void> {
     const campaign = this.requireCampaign(campaignId);
-    this.cancelledCampaigns.add(campaignId);
+    const activeRun = this.activeRuns.get(campaignId);
+    if (
+      !activeRun ||
+      campaign.status === "completed" ||
+      campaign.status === "partial" ||
+      campaign.status === "cancelled" ||
+      campaign.status === "failed"
+    ) {
+      return;
+    }
+    activeRun.cancelled = true;
     const run = campaign.run ?? createIdleDiscoveryRun(campaign);
+    run.id = activeRun.runId;
     run.status = "cancelled";
     run.phase = "completed";
     run.completedAt = "2026-08-01T10:30:00.000Z";
@@ -249,7 +283,6 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
 
   retryDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent> {
     const campaign = this.requireCampaign(campaignId);
-    this.cancelledCampaigns.delete(campaignId);
     const previous =
       this.campaignScenarios.get(campaignId) ?? this.defaultScenario;
     const scenario: FixtureScenario =
@@ -272,34 +305,39 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
         ? FIXTURE_CAMPAIGN_LEADS
         : FIXTURE_GLOBAL_LEADS;
     const events = createFixtureEventSequence(campaign, leads, scenario);
-    return this.streamEvents(campaignId, events);
+    const runId = events[0]?.runId ?? `${campaignId}-run-${scenario}`;
+    const token = `${campaignId}:${this.nextRunToken}`;
+    this.nextRunToken += 1;
+    this.activeRuns.set(campaignId, {
+      token,
+      runId,
+      cancelled: false,
+    });
+    return this.streamEvents(campaignId, events, token);
   }
 
   private async *streamEvents(
     campaignId: string,
     events: DiscoveryEvent[],
+    token: string,
   ): AsyncIterable<DiscoveryEvent> {
-    let emittedTerminal = false;
-    let eventIndex = 0;
     for (const event of events) {
       await Promise.resolve();
-      if (
-        eventIndex > 0 &&
-        this.cancelledCampaigns.has(campaignId) &&
-        !emittedTerminal
-      ) {
+      const activeRun = this.activeRuns.get(campaignId);
+      if (!activeRun || activeRun.token !== token) return;
+      if (activeRun.cancelled) {
         const cancelled = this.createCancellationEvent(campaignId, event);
         this.applyEvent(cancelled);
-        emittedTerminal = true;
-        eventIndex += 1;
+        this.activeRuns.delete(campaignId);
         yield cancelled;
         return;
       }
       this.applyEvent(event);
-      emittedTerminal = isTerminalEvent(event);
-      eventIndex += 1;
       yield clone(event);
-      if (emittedTerminal) return;
+      if (isTerminalEvent(event)) {
+        this.activeRuns.delete(campaignId);
+        return;
+      }
     }
   }
 
@@ -307,8 +345,8 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     campaignId: string,
     previousEvent: DiscoveryEvent,
   ): DiscoveryEvent {
-    const campaign = this.requireCampaign(campaignId);
-    const run = campaign.run ?? clone(previousEvent.run);
+    this.requireCampaign(campaignId);
+    const run = clone(previousEvent.run);
     run.status = "cancelled";
     run.phase = "completed";
     run.completedAt = "2026-08-01T10:30:00.000Z";
@@ -328,6 +366,19 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     campaign.updatedAt = event.at;
     campaign.leadCount = event.run.stored;
     campaign.metrics.companiesFound = event.run.stored;
+    if (event.type === "lead_stored") {
+      const leads = this.campaignLeads.get(event.campaignId) ?? [];
+      if (!leads.some((lead) => lead.id === event.lead.id)) {
+        const lead: Lead = {
+          ...clone(event.lead),
+          campaignIds: [
+            ...new Set([...event.lead.campaignIds, event.campaignId]),
+          ],
+        };
+        leads.push(lead);
+        this.campaignLeads.set(event.campaignId, leads);
+      }
+    }
     if (isTerminalEvent(event))
       campaign.updatedAt = event.run.completedAt ?? event.at;
   }
@@ -336,6 +387,16 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     const campaign = this.campaigns.get(campaignId);
     if (!campaign) throw new Error(`Unknown discovery campaign: ${campaignId}`);
     return campaign;
+  }
+
+  private getGlobalLeads(): Lead[] {
+    const leads = new Map(
+      FIXTURE_GLOBAL_LEADS.map((lead) => [lead.id, clone(lead)]),
+    );
+    for (const campaignLeads of this.campaignLeads.values()) {
+      for (const lead of campaignLeads) leads.set(lead.id, clone(lead));
+    }
+    return [...leads.values()];
   }
 }
 

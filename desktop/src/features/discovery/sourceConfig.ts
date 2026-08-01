@@ -10,16 +10,10 @@ export const DISCOVERY_SOURCES = [
 
 export type DiscoverySource = (typeof DISCOVERY_SOURCES)[number]["key"];
 
-export const ALL_DISCOVERY_SOURCES = DISCOVERY_SOURCES;
-export const AUDITED_DISCOVERY_SOURCES = DISCOVERY_SOURCES;
-export const ALL_SOURCES = DISCOVERY_SOURCES;
-
 export const DISCOVERY_SOURCE_LABELS: Record<DiscoverySource, string> =
   Object.fromEntries(
     DISCOVERY_SOURCES.map(({ key, label }) => [key, label]),
   ) as Record<DiscoverySource, string>;
-
-export const SOURCE_LABELS = DISCOVERY_SOURCE_LABELS;
 
 export type DiscoveryMode = "concurrent" | "waterfall";
 
@@ -41,8 +35,6 @@ export const DEFAULT_SOURCE_CONFIG: CampaignSourceConfig = {
     "directories",
   ],
 };
-
-export const DEFAULT_WATERFALL_SOURCE_CONFIG = DEFAULT_SOURCE_CONFIG;
 
 const sourceSet = new Set<DiscoverySource>(
   DISCOVERY_SOURCES.map(({ key }) => key),
@@ -92,6 +84,7 @@ export function toggleSource(
 ): CampaignSourceConfig {
   const current = resolveSourceConfig(config);
   const enabled = current.order.includes(source);
+  if (enabled && current.order.length === 1) return current;
   return {
     ...current,
     order: enabled
