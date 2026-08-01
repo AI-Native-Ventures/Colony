@@ -15,7 +15,7 @@ use nostr::{Event, Timestamp};
 
 use crate::state::AppState;
 
-const CORE_BLOCK_ASSETS: [(&str, &str); 18] = [
+const CORE_BLOCK_ASSETS: [(&str, &str); 19] = [
     (
         "primitives/section.json",
         include_str!("core_blocks/primitives/section.json"),
@@ -87,6 +87,10 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 18] = [
     (
         "composites/brainstorm.json",
         include_str!("core_blocks/composites/brainstorm.json"),
+    ),
+    (
+        "composites/company-brief.json",
+        include_str!("core_blocks/composites/company-brief.json"),
     ),
 ];
 
@@ -246,7 +250,7 @@ mod tests {
         "actions",
         "question",
     ];
-    const COMPOSITE_HANDLES: [&str; 7] = [
+    const COMPOSITE_HANDLES: [&str; 8] = [
         "lead-card",
         "approval",
         "agent-proposal",
@@ -254,6 +258,7 @@ mod tests {
         "artifact",
         "receipt",
         "brainstorm",
+        "company-brief",
     ];
 
     fn raw_assets() -> BTreeMap<String, Value> {
@@ -303,15 +308,15 @@ mod tests {
     }
 
     #[test]
-    fn loads_eighteen_unique_valid_manifests_and_examples() {
+    fn loads_nineteen_unique_valid_manifests_and_examples() {
         let manifests = core_block_manifests().expect("Core manifests should validate");
-        assert_eq!(manifests.len(), 18);
+        assert_eq!(manifests.len(), 19);
 
         let handles: BTreeSet<_> = manifests
             .iter()
             .map(|manifest| manifest.handle.as_str())
             .collect();
-        assert_eq!(handles.len(), 18);
+        assert_eq!(handles.len(), 19);
 
         let expected: BTreeSet<_> = PRIMITIVE_HANDLES
             .into_iter()
@@ -355,6 +360,85 @@ mod tests {
                 handle
             );
         }
+    }
+
+    /// The brief exists so the owner can correct it. That only works if it
+    /// distinguishes what the site actually said from what we guessed, cites a
+    /// source for each claim, and never quietly omits what it could not find.
+    #[test]
+    fn company_brief_separates_evidence_from_guesswork_and_keeps_gaps() {
+        let manifest = core_block_manifests()
+            .expect("Core manifests")
+            .into_iter()
+            .find(|manifest| manifest.handle == "company-brief")
+            .expect("company-brief is bundled");
+
+        let schema = serde_json::to_value(&manifest.input_schema).expect("schema");
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        // Gaps are required, so a brief cannot be published that hides them.
+        for field in [
+            "trading_name",
+            "summary",
+            "scanned_at",
+            "source_url",
+            "findings",
+            "gaps",
+        ] {
+            assert!(required.contains(&field), "`{field}` must be required");
+        }
+
+        let finding = &schema["properties"]["findings"]["items"];
+        let finding_required: Vec<&str> = finding["required"]
+            .as_array()
+            .expect("finding required")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        // Every claim carries how strongly it is attested and where it came
+        // from, so the owner can weigh it rather than take it on trust.
+        for field in ["label", "value", "confidence", "source"] {
+            assert!(finding_required.contains(&field), "finding needs `{field}`");
+        }
+        let confidence: Vec<&str> = finding["properties"]["confidence"]["enum"]
+            .as_array()
+            .expect("confidence enum")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        assert_eq!(confidence, ["confirmed", "inferred", "unknown"]);
+
+        // A gap has to say why it matters, or it reads as a nag rather than a
+        // reason to answer.
+        let gap_required: Vec<&str> = schema["properties"]["gaps"]["items"]["required"]
+            .as_array()
+            .expect("gap required")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        assert!(gap_required.contains(&"why_it_matters"));
+
+        // The brief only presents; it never mutates company state.
+        assert!(
+            manifest.actions.is_empty(),
+            "the brief is presentation only — approval belongs to the blueprint"
+        );
+
+        // A site that said almost nothing must still produce a usable brief.
+        let sparse = manifest
+            .examples
+            .iter()
+            .find(|example| example.name.contains("said almost nothing"))
+            .expect("sparse example");
+        let gaps = sparse.data["gaps"].as_array().expect("gaps");
+        assert!(
+            gaps.len() >= 3,
+            "an empty site should surface more gaps, not fewer"
+        );
     }
 
     #[test]
@@ -523,8 +607,8 @@ mod tests {
             ensure_core_blocks_with(&db, &relay_keys, community)
                 .await
                 .expect("first seed"),
-            36,
-            "the first seed inserts eighteen manifests and eighteen heads"
+            38,
+            "the first seed inserts nineteen manifests and nineteen heads"
         );
         assert_eq!(
             ensure_core_blocks_with(&db, &relay_keys, community)
@@ -554,8 +638,8 @@ mod tests {
             })
             .await
             .expect("stored heads");
-        assert_eq!(manifests.len(), 18);
-        assert_eq!(heads.len(), 18);
+        assert_eq!(manifests.len(), 19);
+        assert_eq!(heads.len(), 19);
 
         let mut newer_manifest = core_block_manifests()
             .expect("bundled manifests")

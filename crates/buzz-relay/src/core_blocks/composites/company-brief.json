@@ -1,0 +1,242 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "company-brief",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Company Brief",
+  "description": "What a website says about a business, with sources, confidence, and the gaps still to fill.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "trading_name",
+      "summary",
+      "scanned_at",
+      "source_url",
+      "findings",
+      "gaps"
+    ],
+    "properties": {
+      "trading_name": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "summary": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "scanned_at": {
+        "type": "string",
+        "maxLength": 40
+      },
+      "source_url": {
+        "type": "string",
+        "maxLength": 500
+      },
+      "pages_read": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000
+      },
+      "findings": {
+        "type": "array",
+        "maxItems": 60,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "value", "confidence", "source"],
+          "properties": {
+            "label": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "value": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "confidence": {
+              "type": "string",
+              "enum": ["confirmed", "inferred", "unknown"]
+            },
+            "source": {
+              "type": "string",
+              "maxLength": 500
+            }
+          }
+        }
+      },
+      "gaps": {
+        "type": "array",
+        "maxItems": 40,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "why_it_matters"],
+          "properties": {
+            "label": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "why_it_matters": {
+              "type": "string",
+              "maxLength": 500
+            }
+          }
+        }
+      },
+      "brand": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "logo_url": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "colors": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "stack",
+    "gap": "medium",
+    "children": [
+      {
+        "type": "section",
+        "title": "{{trading_name}}",
+        "text": "{{summary}}"
+      },
+      {
+        "type": "table",
+        "columns": [
+          { "key": "label", "label": "What we found" },
+          { "key": "value", "label": "Detail" },
+          { "key": "confidence", "label": "Confidence" },
+          { "key": "source", "label": "Source" }
+        ],
+        "rows_path": "/findings"
+      },
+      {
+        "type": "section",
+        "title": "Still missing",
+        "text": "These are not on the website. Nothing has been assumed in their place."
+      },
+      {
+        "type": "table",
+        "columns": [
+          { "key": "label", "label": "Gap" },
+          { "key": "why_it_matters", "label": "Why it matters" }
+        ],
+        "rows_path": "/gaps"
+      },
+      {
+        "type": "details",
+        "items": [
+          { "label": "Scanned", "value": "{{scanned_at}}" },
+          { "label": "Pages read", "value": "{{pages_read}}" },
+          { "label": "Source", "value": "{{source_url}}" }
+        ]
+      }
+    ]
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "## {{trading_name}}\n\n{{summary}}\n\nFindings:\n{{findings}}\n\nStill missing:\n{{gaps}}\n\nScanned {{scanned_at}} from {{source_url}} ({{pages_read}} pages read).",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "section": 1,
+    "table": 1,
+    "details": 1
+  },
+  "examples": [
+    {
+      "name": "Brief with confirmed facts and open gaps",
+      "data": {
+        "trading_name": "Horizon Labs",
+        "summary": "A small digital studio building marketing websites and running social content for South African service businesses.",
+        "scanned_at": "2026-08-01T09:14:00Z",
+        "source_url": "https://horizonlabs.example/",
+        "pages_read": 7,
+        "findings": [
+          {
+            "label": "Services",
+            "value": "Website design, website build, ongoing maintenance",
+            "confidence": "confirmed",
+            "source": "https://horizonlabs.example/services"
+          },
+          {
+            "label": "Customers",
+            "value": "Small service businesses, mostly Johannesburg and Cape Town",
+            "confidence": "inferred",
+            "source": "https://horizonlabs.example/work"
+          },
+          {
+            "label": "Contact",
+            "value": "hello@horizonlabs.example",
+            "confidence": "confirmed",
+            "source": "https://horizonlabs.example/contact"
+          }
+        ],
+        "gaps": [
+          {
+            "label": "Pricing",
+            "why_it_matters": "Needed to tell a profitable project from an unprofitable one."
+          },
+          {
+            "label": "Team size",
+            "why_it_matters": "Decides how much delegation the company actually needs."
+          }
+        ],
+        "brand": {
+          "logo_url": "https://horizonlabs.example/img/logo.svg",
+          "colors": ["#1d9bf0", "#ff6b35"]
+        }
+      }
+    },
+    {
+      "name": "Brief where the site said almost nothing",
+      "data": {
+        "trading_name": "Unnamed business",
+        "summary": "The website is a single page with no description of services. Almost everything still needs to come from you.",
+        "scanned_at": "2026-08-01T09:20:00Z",
+        "source_url": "https://placeholder.example/",
+        "pages_read": 1,
+        "findings": [
+          {
+            "label": "Trading name",
+            "value": "Not stated anywhere on the site",
+            "confidence": "unknown",
+            "source": "https://placeholder.example/"
+          }
+        ],
+        "gaps": [
+          {
+            "label": "What the business sells",
+            "why_it_matters": "Nothing else can be proposed until this is known."
+          },
+          {
+            "label": "Who it sells to",
+            "why_it_matters": "Decides which teams are worth creating at all."
+          },
+          {
+            "label": "Contact details",
+            "why_it_matters": "Needed before any outreach can be sent."
+          }
+        ]
+      }
+    }
+  ],
+  "validation": {
+    "state": "tested",
+    "requires_attention": false
+  }
+}
