@@ -7,13 +7,10 @@
         font-weight: 900;
       }
     </style>
-    <filter id="colony-wordmark-spray" x="-20%" y="-40%" width="140%" height="180%" color-interpolation-filters="sRGB">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="prefog"/>
+    <filter id="colony-wordmark-spray" x="-25%" y="-50%" width="150%" height="200%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="9" result="prefog"/>
       <feTurbulence type="fractalNoise" baseFrequency="0.5" numOctaves="3" seed="11" result="noise"/>
-      <feDisplacementMap in="prefog" in2="noise" scale="20" xChannelSelector="R" yChannelSelector="G" result="rough"/>
-      <feComponentTransfer in="rough" result="contrast">
-        <feFuncA type="gamma" amplitude="1" exponent="0.75" offset="0"/>
-      </feComponentTransfer>
+      <feDisplacementMap in="prefog" in2="noise" scale="10" xChannelSelector="R" yChannelSelector="G" result="rough"/>
     </filter>
   </defs>
   <text
