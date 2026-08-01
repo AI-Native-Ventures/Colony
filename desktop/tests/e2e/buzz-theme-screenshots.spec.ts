@@ -330,7 +330,10 @@ async function expectAppliedBuzzTheme(
       storedTheme,
       isDark,
       buzzTheme: themeName,
-      gradientTop: isDark ? "#4a4616" : "#e6e6b6",
+      // Colony violet, derived from hsl(258 90% 66%). Keep in sync with
+      // --buzz-gradient-* in shared/styles/globals/theme.css and with
+      // mobile/lib/shared/theme/colony_theme.dart.
+      gradientTop: isDark ? "#2a1e48" : "#d9cdf3",
       gradientBottom: isDark ? "#0a1423" : "#c4d0da",
     });
 }
