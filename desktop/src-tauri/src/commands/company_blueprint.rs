@@ -15,7 +15,7 @@ use crate::{
     company::{
         seed::{seed_personas, seed_teams},
         transaction::{
-            advance, begin, blueprint_hash, journal_path, load_journal, needs,
+            advance, begin, blueprint_hash, is_event_id, journal_path, load_journal, needs,
             planned_initiative_ids, step_idempotency_key, transaction_lock, BlueprintCheckpoint,
             BlueprintJournal, TransactionError,
         },
@@ -203,6 +203,14 @@ pub async fn complete_company_blueprint(
         .public_key()
         .to_hex();
 
+    // This process cannot check that the relay accepted anything, but it can
+    // refuse to record something that is not an event ID at all. A journal
+    // marked complete is believed by every later run, so what it points at had
+    // better be plausible.
+    if !is_event_id(&company_event_id) {
+        return Err("company event id is not a valid event id".to_string());
+    }
+
     let dir = crate::managed_agents::storage::managed_agents_base_dir(&app)?.join("company");
     let path = journal_path(&dir, &owner_pubkey, &community_scope, &request_id);
     let lock = transaction_lock(&path);
@@ -214,6 +222,12 @@ pub async fn complete_company_blueprint(
             .ok_or_else(|| "no materialization is in progress for this approval".to_string())?;
         if journal.owner_pubkey != owner_pubkey {
             return Err(TransactionError::NotOwner.to_string());
+        }
+        // Completing a transaction whose local half never ran would record a
+        // company with no employees as finished, and no later run would fix
+        // it, because every step checks the checkpoint before doing work.
+        if needs(&journal, BlueprintCheckpoint::TeamsSeeded) {
+            return Err("this approval has not finished creating its employees".to_string());
         }
         // The relay writes are only known to have happened once the frontend
         // reports their receipts, so this is where that gets recorded. It is

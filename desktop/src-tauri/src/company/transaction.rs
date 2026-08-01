@@ -175,6 +175,20 @@ fn canonical_json(value: &serde_json::Value) -> String {
     }
 }
 
+/// Whether a string is a well-formed Nostr event ID.
+///
+/// The frontend reports the relay's receipt, and this process cannot verify
+/// that the relay accepted anything. It can refuse to record something that is
+/// not an event ID at all, so a journal marked complete at least points at a
+/// plausible event rather than an empty string or arbitrary text that would
+/// then be believed forever.
+pub fn is_event_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Where one transaction's journal lives.
 ///
 /// The filename is a hash of the key rather than the key itself: an owner's
@@ -211,23 +225,78 @@ pub fn store_journal(path: &Path, journal: &BlueprintJournal) -> Result<(), Tran
         .parent()
         .ok_or_else(|| TransactionError::Journal("journal path has no parent".to_string()))?;
     std::fs::create_dir_all(parent).map_err(|err| TransactionError::Journal(err.to_string()))?;
+    restrict_dir(parent)?;
 
     let body =
         serde_json::to_string(journal).map_err(|err| TransactionError::Journal(err.to_string()))?;
     let temp = path.with_extension("json.tmp");
     write_private(&temp, &body)?;
-    std::fs::rename(&temp, path).map_err(|err| TransactionError::Journal(err.to_string()))
+    std::fs::rename(&temp, path).map_err(|err| TransactionError::Journal(err.to_string()))?;
+
+    // The rename is atomic but not yet durable: the directory entry lives in
+    // the parent's own metadata, and without this a power loss can leave the
+    // file written and the rename lost. That is the one outcome the whole
+    // temp-and-rename dance exists to prevent.
+    sync_dir(parent)
+}
+
+/// Make the journal directory owner-only.
+///
+/// Best effort, and deliberately not fatal: the files inside are already
+/// mode 600, so a permissive directory reveals only that a materialization
+/// happened, and failing the approval over it would be the worse trade.
+#[cfg(unix)]
+fn restrict_dir(dir: &Path) -> Result<(), TransactionError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_dir(_dir: &Path) -> Result<(), TransactionError> {
+    Ok(())
+}
+
+/// Flush the directory entry so a completed rename survives a power loss.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> Result<(), TransactionError> {
+    std::fs::File::open(dir)
+        .and_then(|handle| handle.sync_all())
+        .map_err(|err| TransactionError::Journal(err.to_string()))
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> Result<(), TransactionError> {
+    // Windows has no portable equivalent, and the rename itself is atomic.
+    Ok(())
 }
 
 /// Create the file readable only by its owner, before any content lands in it.
+///
+/// `create_new` rather than `create`: a mode is only applied to a file this
+/// call actually creates, so opening one that already exists would keep
+/// whatever permissions it had, and would follow it if it were a symlink
+/// planted at the predictable temp path. `O_CREAT|O_EXCL` refuses both, and
+/// does not follow a symlink at the final component.
+///
+/// A stale temp file from an interrupted run is removed first. The window
+/// between removing and creating is not a hole: if something recreates the
+/// path in between, the create fails and the journal write fails with it,
+/// which is the safe direction.
 #[cfg(unix)]
 fn write_private(path: &Path, body: &str) -> Result<(), TransactionError> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
 
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(TransactionError::Journal(err.to_string())),
+    }
+
     let mut file = std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
         .open(path)
         .map_err(|err| TransactionError::Journal(err.to_string()))?;

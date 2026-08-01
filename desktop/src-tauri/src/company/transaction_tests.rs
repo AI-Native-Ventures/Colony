@@ -557,3 +557,115 @@ fn separators_inside_content_cannot_forge_a_matching_hash() {
         );
     }
 }
+
+/// The frontend reports the relay's receipt, and this process cannot verify
+/// the relay accepted anything. It can refuse what is not an event ID at all:
+/// a journal marked complete is believed by every later run.
+#[test]
+fn only_a_well_formed_event_id_is_accepted() {
+    assert!(is_event_id(&"a".repeat(64)));
+    assert!(is_event_id(
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ));
+
+    for bad in [
+        "",
+        "ok",
+        &"a".repeat(63),
+        &"a".repeat(65),
+        // Uppercase is refused rather than folded: two spellings of one ID
+        // would compare unequal everywhere else in the system.
+        &"A".repeat(64),
+        &"g".repeat(64),
+        &format!("{}!", "a".repeat(63)),
+        &format!("{} ", "a".repeat(63)),
+    ] {
+        assert!(!is_event_id(bad), "`{bad}` must not pass as an event id");
+    }
+}
+
+/// The temp path is predictable, so anything already sitting there is either a
+/// stale file from an interrupted run or something planted. Neither may be
+/// written through: `create` would keep an existing file's permissions, and
+/// would follow a symlink straight out of the journal directory.
+#[test]
+fn a_symlink_planted_at_the_temp_path_is_not_written_through() {
+    let dir = temp_dir("symlink");
+    let path = journal_path(&dir, OWNER, SCOPE, REQUEST);
+    let temp = path.with_extension("json.tmp");
+
+    let target = dir.join("elsewhere.txt");
+    std::fs::write(&target, "untouched").expect("write target");
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &temp).expect("plant symlink");
+
+    let blueprint = blueprint();
+    let journal = begin(None, OWNER, SCOPE, REQUEST, &blueprint).expect("begin");
+    store_journal(&path, &journal).expect("store must still succeed");
+
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("target still readable"),
+        "untouched",
+        "the journal must not have been written through the symlink"
+    );
+    serde_json::from_str::<BlueprintJournal>(
+        &std::fs::read_to_string(&path).expect("journal written"),
+    )
+    .expect("a real journal landed at the real path");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A stale temp file from an interrupted run must not block every later write.
+#[test]
+fn a_stale_temp_file_does_not_wedge_the_journal() {
+    let dir = temp_dir("staletemp");
+    let path = journal_path(&dir, OWNER, SCOPE, REQUEST);
+    let temp = path.with_extension("json.tmp");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(&temp, "{ truncated garbage").expect("stale temp");
+
+    let blueprint = blueprint();
+    let journal = begin(None, OWNER, SCOPE, REQUEST, &blueprint).expect("begin");
+    store_journal(&path, &journal).expect("a stale temp must not wedge the write");
+
+    assert!(!temp.exists(), "the temp file is renamed away");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Written by a real run, not constructed: the mode has to hold on the file
+/// the code actually produces, including on the second write when the target
+/// already exists.
+#[test]
+fn the_journal_stays_owner_only_across_repeated_writes() {
+    let dir = temp_dir("modes");
+    let path = journal_path(&dir, OWNER, SCOPE, REQUEST);
+    let blueprint = blueprint();
+    let mut journal = begin(None, OWNER, SCOPE, REQUEST, &blueprint).expect("begin");
+
+    for checkpoint in [
+        BlueprintCheckpoint::Validated,
+        BlueprintCheckpoint::PersonasSeeded,
+        BlueprintCheckpoint::TeamsSeeded,
+    ] {
+        advance(&mut journal, &path, checkpoint).expect("advance");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "after reaching {checkpoint:?}");
+            let dir_mode = std::fs::metadata(&dir)
+                .expect("stat dir")
+                .permissions()
+                .mode();
+            assert_eq!(
+                dir_mode & 0o777,
+                0o700,
+                "the journal directory is owner-only"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
