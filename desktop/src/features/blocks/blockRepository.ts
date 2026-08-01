@@ -52,6 +52,12 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   "1b304e8462becddfb008209bcca017c8618e872a5b2d82b1b6ddf86c4faec3a3",
   "629d6ca7eaa203506e163ea82ae09527c32f1c585b9a750d3b45fa96d342fc89",
   "831124bc552ece44081713a5d2cf74806ebe28f1315fabc76137e1c6e8db88bd",
+  // company-blueprint
+  "b9079558c6cd27c7559ae9241cd7ff8108aadbb1ee42c6f60dd363687caf4a72",
+  // interview
+  "44f7517a011316af12f5057128851b885e23842fb14cedbcd4a75578c76e7ff7",
+  // company-brief
+  "6936a3f3b147ad3739dc19fae71df77fb2010de6953fb4039e6d7f06e359b2a5",
 ]);
 
 type CachedManifest = {
