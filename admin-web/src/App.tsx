@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useState,
 } from "react";
@@ -94,7 +95,7 @@ function Reports() {
     <Page
       eyebrow="Moderation"
       title="Open reports"
-      description="Review reports across every Buzz community."
+      description="Review reports across every Colony community."
     >
       <StateView resource={resource}>
         {(reports) =>
@@ -237,7 +238,7 @@ function FeedbackList() {
     <Page
       eyebrow="Product"
       title="Feedback"
-      description="Recent product feedback from across Buzz."
+      description="Recent product feedback from across Colony."
     >
       <StateView resource={resource}>
         {(items) => {
@@ -692,15 +693,44 @@ function date(value: string) {
     : parsed.toLocaleString();
 }
 
-function BuzzMark() {
+// Geometry copied from desktop/src/shared/ui/colony-logo/AntMark.tsx (same
+// viewBox and coordinates, so this mark and the desktop one stay in sync).
+function AntMark() {
+  const maskId = `admin-mark-eye-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+
   return (
-    <svg viewBox="0 0 466 309" aria-hidden="true">
-      <path d="M91.7 62.8a91.7 91.7 0 0 0 0 183.4H128V62.8H91.7Zm282.6 0H338v183.4h36.3a91.7 91.7 0 1 0 0-183.4Z" />
-      <path
-        fillRule="evenodd"
-        d="M162 0h142a34 34 0 0 1 34 34v241a34 34 0 0 1-34 34H162a34 34 0 0 1-34-34V34a34 34 0 0 1 34-34Zm31.3 57.4a27 27 0 1 0 0 54 27 27 0 0 0 0-54Zm82.7 0a27 27 0 1 0 0 54 27 27 0 0 0 0-54Zm-109.7 99.8h136.9v38.3H166.3v-38.3Zm.6 77.9h136.2v37.6H166.9v-37.6Z"
-        clipRule="evenodd"
-      />
+    <svg viewBox="0 0 466 309" fill="currentColor" aria-hidden="true">
+      <defs>
+        <mask
+          id={maskId}
+          x="-80"
+          y="-80"
+          width="626"
+          height="469"
+          maskUnits="userSpaceOnUse"
+          maskContentUnits="userSpaceOnUse"
+        >
+          <rect x="-80" y="-80" width="626" height="469" fill="#fff" />
+          <circle cx="335" cy="136" r="11" fill="#000" />
+        </mask>
+      </defs>
+      <g fill="none" stroke="currentColor" strokeWidth="14" strokeLinecap="round">
+        <path d="M202 203 L136 292" />
+        <path d="M220 210 L196 298" />
+        <path d="M235 209 L246 300" />
+        <path d="M247 205 L294 294" />
+        <path d="M257 198 L336 282" />
+        <path d="M164 215 L112 272" />
+      </g>
+      <g fill="none" stroke="currentColor" strokeWidth="14" strokeLinecap="round">
+        <path d="M327 114 Q345 64 397 50" />
+        <path d="M343 126 Q377 86 427 80" />
+      </g>
+      <g mask={`url(#${maskId})`}>
+        <circle cx="104" cy="172" r="80" />
+        <circle cx="226" cy="164" r="52" />
+        <circle cx="313" cy="148" r="46" />
+      </g>
     </svg>
   );
 }
@@ -815,10 +845,10 @@ export function App() {
       <header className="app-header">
         <Link href="/reports" className="brand">
           <span className="brand-mark">
-            <BuzzMark />
+            <AntMark />
           </span>
           <span>
-            Buzz <b>Admin</b>
+            Colony <b>Admin</b>
           </span>
         </Link>
         <nav>
