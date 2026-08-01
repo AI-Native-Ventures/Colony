@@ -137,8 +137,8 @@ const ANTS: Ant[] = [
   },
   {
     top: "68%",
-    left: "97%",
-    size: 50,
+    left: "99%",
+    size: 36,
     rotate: 18,
     toneIndex: 1,
     hideOnMobile: true,
