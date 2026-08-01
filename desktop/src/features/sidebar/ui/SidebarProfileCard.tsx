@@ -91,7 +91,7 @@ export function SidebarProfileCard({
         aria-hidden="true"
         className="flex w-3.5 shrink-0 items-center justify-center text-2xs"
       >
-        <span className="-translate-y-px leading-normal">🐝</span>
+        <span className="-translate-y-px leading-normal">🐜</span>
       </span>
       <span className="truncate">{communityLabel}</span>
     </span>
