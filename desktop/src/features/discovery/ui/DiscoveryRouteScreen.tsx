@@ -64,10 +64,9 @@ async function loadReadModel(
   search: DiscoverySearch,
 ): Promise<DiscoveryRouteReadModel> {
   const industries = await dataSource.getIndustries();
-  const verticals =
-    search.industryId && !search.verticalId
-      ? await dataSource.getVerticals(search.industryId)
-      : [];
+  const verticals = search.industryId
+    ? await dataSource.getVerticals(search.industryId)
+    : [];
   let vertical: VerticalDetail | null = null;
   let campaign: CampaignDetail | null = null;
   let leads: LeadPage | null = null;

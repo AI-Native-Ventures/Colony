@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2, MapPin } from "lucide-react";
+import { Building2, Check, Loader2, MapPin } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -12,7 +12,7 @@ import {
   SheetTitle,
 } from "@/shared/ui/sheet";
 import { Switch } from "@/shared/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { DiscoveryEntitlement } from "../entitlement";
 import {
@@ -42,8 +42,12 @@ const LOCATION_SUGGESTIONS = [
   "Cape Town",
   "Durban",
   "Pretoria",
-  "New York",
-  "Los Angeles",
+  "Sandton",
+  "Port Elizabeth",
+  "Gauteng",
+  "Western Cape",
+  "KwaZulu-Natal",
+  "South Africa",
 ];
 
 function defaultCampaignName(vertical: Vertical) {
@@ -65,8 +69,8 @@ export function CreateCampaignSheet({
   const [target, setTarget] = React.useState("50");
   const [description, setDescription] = React.useState("");
   const [hasWebsite, setHasWebsite] = React.useState(true);
-  const [hasPhone, setHasPhone] = React.useState(false);
-  const [hasEmail, setHasEmail] = React.useState(false);
+  const [hasPhone, setHasPhone] = React.useState(true);
+  const [hasEmail, setHasEmail] = React.useState(true);
   const [sourceMode, setSourceMode] = React.useState<DiscoveryMode>(
     DEFAULT_SOURCE_CONFIG.mode,
   );
@@ -83,8 +87,8 @@ export function CreateCampaignSheet({
     setTarget("50");
     setDescription("");
     setHasWebsite(true);
-    setHasPhone(false);
-    setHasEmail(false);
+    setHasPhone(true);
+    setHasEmail(true);
     setSourceMode(DEFAULT_SOURCE_CONFIG.mode);
     setEnabledSources([...DEFAULT_SOURCE_CONFIG.order]);
     setError(null);
@@ -136,167 +140,125 @@ export function CreateCampaignSheet({
       <SheetContent
         aria-describedby="create-campaign-description"
         aria-labelledby="create-campaign-title"
-        className="flex h-full max-w-xl flex-col overflow-y-auto"
+        className="flex h-full w-full max-w-[37.5rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[37.5rem]"
         side="right"
       >
-        <SheetHeader>
-          <SheetTitle id="create-campaign-title">
-            New discovery campaign
+        <SheetHeader className="border-b border-border px-6 py-6">
+          <SheetTitle className="text-xl" id="create-campaign-title">
+            Tell Jen where to find leads and how many you need.
           </SheetTitle>
           <SheetDescription id="create-campaign-description">
-            Tell the discovery agent where to find {vertical.name.toLowerCase()}{" "}
-            businesses.
+            Configure the discovery campaign for {vertical.name}.
           </SheetDescription>
         </SheetHeader>
 
-        <form className="mt-5 flex flex-1 flex-col" onSubmit={handleSubmit}>
-          <Tabs className="flex-1" defaultValue="campaign">
-            <TabsList aria-label="Campaign setup sections">
-              <TabsTrigger value="campaign">Campaign</TabsTrigger>
-              <TabsTrigger value="criteria">Criteria</TabsTrigger>
-            </TabsList>
-            <TabsContent className="space-y-5" value="campaign">
-              <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-                <p className="text-2xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  Selected vertical
-                </p>
-                <p className="mt-1 text-base font-semibold text-foreground">
-                  {vertical.name}
-                </p>
-                <p className="text-sm text-muted-foreground">{industryName}</p>
-              </div>
-
-              <label
-                className="space-y-1.5 text-sm font-medium text-foreground"
-                htmlFor="discovery-campaign-name"
-              >
-                Campaign name
-                <Input
-                  id="discovery-campaign-name"
-                  onChange={(event) => setName(event.target.value)}
-                  value={name}
-                />
-              </label>
-
-              <fieldset className="space-y-2">
-                <legend className="text-sm font-medium text-foreground">
-                  Where should the agent search?
-                </legend>
-                <div className="flex flex-wrap gap-2">
-                  {LOCATION_SUGGESTIONS.map((suggestion) => (
-                    <Button
-                      aria-pressed={location === suggestion}
-                      key={suggestion}
-                      onClick={() => setLocation(suggestion)}
-                      size="sm"
-                      type="button"
-                      variant={
-                        location === suggestion ? "secondary" : "outline"
-                      }
-                    >
-                      <MapPin aria-hidden="true" />
-                      {suggestion}
-                    </Button>
-                  ))}
+        <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
+          <div className="min-h-0 flex-1 space-y-7 overflow-y-auto px-6 py-6">
+            <section className="space-y-3">
+              <h2 className="text-base font-semibold text-foreground">
+                What type of business?
+              </h2>
+              <div className="flex items-center justify-between rounded-2xl border border-[#c4b5fd] bg-[#f4f1ff] px-4 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[#c4b5fd] bg-white text-[#8b5cf6]">
+                    <Building2 aria-hidden="true" className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">
+                      {vertical.name}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Selected vertical · {industryName}
+                    </div>
+                  </div>
                 </div>
+                <Button
+                  className="text-xs"
+                  onClick={() => undefined}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  Change
+                </Button>
+              </div>
+            </section>
+
+            <fieldset className="space-y-3">
+              <legend className="text-base font-semibold text-foreground">
+                Where should Jen search?
+              </legend>
+              <div className="flex flex-wrap gap-2">
+                {LOCATION_SUGGESTIONS.map((suggestion) => (
+                  <Button
+                    aria-pressed={location === suggestion}
+                    className="rounded-full"
+                    key={suggestion}
+                    onClick={() => setLocation(suggestion)}
+                    size="sm"
+                    type="button"
+                    variant={location === suggestion ? "secondary" : "outline"}
+                  >
+                    {suggestion}
+                  </Button>
+                ))}
+              </div>
+              <div className="relative">
+                <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   aria-label="Search location"
+                  className="pl-9"
                   onChange={(event) => setLocation(event.target.value)}
-                  placeholder="Or type a city, state, or country"
+                  placeholder="Or type a location (city, province, country)..."
                   value={location}
                 />
-              </fieldset>
+              </div>
+            </fieldset>
 
-              <label
-                className="space-y-1.5 text-sm font-medium text-foreground"
-                htmlFor="discovery-campaign-target"
-              >
+            <section className="space-y-3">
+              <h2 className="text-base font-semibold text-foreground">
                 How many leads?
+              </h2>
+              <div className="flex items-center gap-3">
                 <Input
+                  className="w-32 text-center font-mono"
                   id="discovery-campaign-target"
                   min="1"
                   onChange={(event) => setTarget(event.target.value)}
                   type="number"
                   value={target}
                 />
-              </label>
-
-              <div className="rounded-xl border border-border/60 bg-muted/30 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      Estimated discovery credits
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      A display-only fixture estimate; no credits are reserved
-                      or charged.
-                    </p>
-                  </div>
-                  <span className="font-mono text-base font-semibold text-primary">
-                    {estimatedCredits.toLocaleString()} credits
-                  </span>
-                </div>
-              </div>
-
-              <label
-                className="space-y-1.5 text-sm font-medium text-foreground"
-                htmlFor="discovery-campaign-description"
-              >
-                Campaign details{" "}
-                <span className="font-normal text-muted-foreground">
-                  (optional)
+                <span className="text-sm text-muted-foreground">
+                  per location
                 </span>
-                <Input
-                  id="discovery-campaign-description"
-                  onChange={(event) => setDescription(event.target.value)}
-                  placeholder="Describe the ideal lead"
-                  value={description}
-                />
-              </label>
-            </TabsContent>
+              </div>
+            </section>
 
-            <TabsContent className="space-y-5" value="criteria">
-              <div>
-                <h2 className="text-base font-semibold text-foreground">
-                  Advanced criteria
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  These preferences are saved with the campaign setup for the
-                  provider integration.
-                </p>
-              </div>
-              <div className="space-y-3 rounded-lg border border-border/60 p-4">
-                <CriteriaSwitch
-                  checked={hasWebsite}
-                  label="Has website"
-                  onCheckedChange={setHasWebsite}
-                />
-                <CriteriaSwitch
-                  checked={hasPhone}
-                  label="Has phone number"
-                  onCheckedChange={setHasPhone}
-                />
-                <CriteriaSwitch
-                  checked={hasEmail}
-                  label="Has email address"
-                  onCheckedChange={setHasEmail}
-                />
-              </div>
-              <div className="space-y-4 rounded-lg border border-border/60 p-4">
+            <div className="rounded-2xl bg-muted/60 p-4">
+              <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-base font-semibold text-foreground">
-                    Advanced Data Sources
-                  </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Choose which sources the discovery agent can use. This is
-                    saved with the draft and never charges credits here.
+                  <p className="text-sm text-muted-foreground">
+                    Estimated cost
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    ~300 credits per lead (varies by enrichment depth)
                   </p>
                 </div>
+                <span className="font-mono text-lg font-semibold text-[#8b5cf6]">
+                  {estimatedCredits.toLocaleString()} credits
+                </span>
+              </div>
+            </div>
+
+            <details className="group rounded-2xl border border-border p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-foreground">
+                Advanced: Data Sources
+              </summary>
+              <div className="mt-4 space-y-4">
                 <Tabs
                   onValueChange={(value) => {
-                    if (value === "waterfall" || value === "concurrent") {
+                    if (value === "waterfall" || value === "concurrent")
                       setSourceMode(value);
-                    }
                   }}
                   value={sourceMode}
                 >
@@ -323,18 +285,15 @@ export function CreateCampaignSheet({
                           aria-label={`${enabled ? "Disable" : "Enable"} ${DISCOVERY_SOURCE_LABELS[key]}`}
                           checked={enabled}
                           disabled={paidLocked}
-                          onCheckedChange={() => {
+                          onCheckedChange={() =>
                             setEnabledSources(
                               (current) =>
                                 toggleSource(
-                                  {
-                                    mode: sourceMode,
-                                    order: current,
-                                  },
+                                  { mode: sourceMode, order: current },
                                   key,
                                 ).order,
-                            );
-                          }}
+                            )
+                          }
                         />
                         {paidLocked ? (
                           <EntitlementLock
@@ -349,8 +308,79 @@ export function CreateCampaignSheet({
                   })}
                 </div>
               </div>
-            </TabsContent>
-          </Tabs>
+            </details>
+
+            <section className="space-y-4">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  Advanced Criteria
+                </h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Optional signals Jen can use to qualify results.
+                </p>
+              </div>
+              <div className="space-y-3">
+                <p className="text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Must have
+                </p>
+                <CriteriaSwitch
+                  checked={hasWebsite}
+                  label="Must be in the specified location"
+                  onCheckedChange={setHasWebsite}
+                />
+                <CriteriaSwitch
+                  checked={hasPhone}
+                  label="Must match the vertical/profession"
+                  onCheckedChange={setHasPhone}
+                />
+                <p className="pt-2 text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Nice to have
+                </p>
+                <CriteriaSwitch
+                  checked={hasWebsite}
+                  label="Has website"
+                  onCheckedChange={setHasWebsite}
+                />
+                <CriteriaSwitch
+                  checked={hasPhone}
+                  label="Has phone number"
+                  onCheckedChange={setHasPhone}
+                />
+                <CriteriaSwitch
+                  checked={hasEmail}
+                  label="Has email address"
+                  onCheckedChange={setHasEmail}
+                />
+              </div>
+            </section>
+
+            <label
+              className="space-y-2 text-sm font-medium text-foreground"
+              htmlFor="discovery-campaign-name"
+            >
+              Campaign name
+              <Input
+                id="discovery-campaign-name"
+                onChange={(event) => setName(event.target.value)}
+                value={name}
+              />
+            </label>
+            <label
+              className="space-y-2 text-sm font-medium text-foreground"
+              htmlFor="discovery-campaign-description"
+            >
+              Campaign details{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+              <Input
+                id="discovery-campaign-description"
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="Describe the ideal lead"
+                value={description}
+              />
+            </label>
+          </div>
 
           {error ? (
             <p className="mt-4 text-sm text-destructive" role="alert">
@@ -369,7 +399,7 @@ export function CreateCampaignSheet({
               {submitting ? (
                 <Loader2 aria-hidden="true" className="animate-spin" />
               ) : null}
-              Create campaign
+              Create Campaign
             </Button>
           </SheetFooter>
         </form>
@@ -389,12 +419,22 @@ function CriteriaSwitch({
 }) {
   return (
     <div className="flex items-center justify-between gap-3 text-sm text-foreground">
-      <span>{label}</span>
-      <Switch
+      <span className="min-w-0 flex-1">{label}</span>
+      <button
         aria-label={label}
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-      />
+        aria-pressed={checked}
+        className={
+          checked
+            ? "grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#8b5cf6] text-white transition-colors"
+            : "h-5 w-5 shrink-0 rounded-full border-2 border-muted-foreground/40 transition-colors hover:border-[#8b5cf6]"
+        }
+        onClick={() => onCheckedChange(!checked)}
+        type="button"
+      >
+        {checked ? (
+          <Check aria-hidden="true" className="h-3 w-3" strokeWidth={3} />
+        ) : null}
+      </button>
     </div>
   );
 }

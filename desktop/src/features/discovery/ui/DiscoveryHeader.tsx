@@ -1,14 +1,8 @@
-import {
-  ArrowLeft,
-  LockKeyhole,
-  Search,
-  SlidersHorizontal,
-} from "lucide-react";
+import { ArrowLeft, Building2, Search, Users } from "lucide-react";
 
-import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import { cn } from "@/shared/lib/cn";
 
 export type DiscoveryMode = "businesses" | "people";
 export type DiscoveryStatusFilter = "all" | "active" | "available";
@@ -28,6 +22,11 @@ export type DiscoveryHeaderProps = {
   toolbarEntity?: string;
 };
 
+/**
+ * This is intentionally shaped like SalesTeams' discovery header. Buzz owns
+ * the data and routing, but the visual contract stays in one place: editorial
+ * headline, audience switcher, search field, then the contextual catalog.
+ */
 export function DiscoveryHeader({
   title,
   description,
@@ -37,104 +36,123 @@ export function DiscoveryHeader({
   onModeChange,
   query = "",
   onQueryChange,
-  statusFilter = "all",
-  onStatusFilterChange,
   showToolbar = false,
   toolbarEntity = "industries",
 }: DiscoveryHeaderProps) {
   return (
-    <header className="space-y-4 border-b border-border/50 pb-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-3">
-          {onBack ? (
-            <Button
-              aria-label={breadcrumb ? `Back to ${breadcrumb}` : "Go back"}
-              className="mt-0.5 shrink-0"
-              onClick={onBack}
-              size="icon"
-              variant="ghost"
-            >
-              <ArrowLeft aria-hidden="true" />
-            </Button>
-          ) : null}
-          <div className="min-w-0">
-            {breadcrumb ? (
-              <p className="text-2xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                {breadcrumb}
-              </p>
-            ) : null}
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-              {title}
-            </h1>
-            {description ? (
-              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                {description}
-              </p>
-            ) : null}
-          </div>
+    <header className="space-y-6">
+      <div className="flex items-end justify-between gap-6">
+        <div className="min-w-0">
+          <h1 className="font-serif text-5xl leading-none tracking-tight text-foreground">
+            Millions of leads,{" "}
+            <em className="not-italic italic text-[#8b5cf6]">
+              one search away.
+            </em>
+          </h1>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {mode === "businesses" ? (
+              <>
+                Explore{" "}
+                <span className="font-semibold text-foreground">34</span>{" "}
+                industries and{" "}
+                <span className="font-semibold text-foreground">500</span>{" "}
+                verticals, then launch an AI discovery campaign.
+              </>
+            ) : (
+              <>Explore fields and roles to find individual professionals.</>
+            )}
+          </p>
         </div>
 
         {onModeChange ? (
-          <Tabs
+          <fieldset
             aria-label="Discovery audience"
-            onValueChange={(value) => {
-              if (value === "businesses" || value === "people") {
-                onModeChange(value);
-              }
-            }}
-            value={mode}
+            className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-background p-1"
+            data-testid="discovery-audience-toggle"
           >
-            <TabsList>
-              <TabsTrigger value="businesses">Businesses</TabsTrigger>
-              <TabsTrigger value="people">
-                <LockKeyhole aria-hidden="true" className="mr-1 h-3 w-3" />
-                People
-                <Badge className="ml-1" variant="secondary">
-                  Soon
-                </Badge>
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+            <legend className="sr-only">Discovery audience</legend>
+            <button
+              className={cn(
+                "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors",
+                mode === "businesses"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => onModeChange("businesses")}
+              type="button"
+            >
+              <Building2 aria-hidden="true" className="h-4 w-4" />
+              Businesses
+            </button>
+            <button
+              className={cn(
+                "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors",
+                mode === "people"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => onModeChange("people")}
+              type="button"
+            >
+              <Users aria-hidden="true" className="h-4 w-4" />
+              People
+            </button>
+          </fieldset>
         ) : null}
       </div>
 
       {showToolbar ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <label
-            className="relative min-w-56 flex-1 sm:max-w-md"
-            htmlFor="discovery-search"
+        <label
+          className="flex items-center gap-3 rounded-2xl border border-border bg-background px-5 py-1.5 shadow-sm focus-within:border-[#8b5cf6] focus-within:ring-4 focus-within:ring-[#8b5cf6]/10"
+          htmlFor="discovery-search"
+        >
+          <Search
+            aria-hidden="true"
+            className="h-5 w-5 shrink-0 text-muted-foreground"
+          />
+          <Input
+            aria-label={`Search discovery ${toolbarEntity}`}
+            className="h-11 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+            id="discovery-search"
+            onChange={(event) => onQueryChange?.(event.target.value)}
+            placeholder={
+              mode === "businesses"
+                ? "Search industries, verticals, or keywords..."
+                : "Search fields, roles, or keywords..."
+            }
+            value={query}
+          />
+          <Button
+            className="h-11 rounded-xl bg-foreground px-6 text-sm font-semibold text-background hover:bg-foreground/90"
+            type="button"
           >
-            <Search
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              aria-label={`Search discovery ${toolbarEntity}`}
-              className="pl-9"
-              id="discovery-search"
-              onChange={(event) => onQueryChange?.(event.target.value)}
-              placeholder={`Search ${toolbarEntity}`}
-              value={query}
-            />
-          </label>
-          <label className="flex h-9 items-center gap-2 rounded-lg border border-input/40 bg-background px-3 text-sm text-muted-foreground">
-            <SlidersHorizontal aria-hidden="true" className="h-4 w-4" />
-            <span className="sr-only">Filter {toolbarEntity}</span>
-            <select
-              aria-label={`Filter ${toolbarEntity}`}
-              className="bg-transparent text-sm text-foreground outline-hidden"
-              onChange={(event) =>
-                onStatusFilterChange?.(
-                  event.target.value as DiscoveryStatusFilter,
-                )
-              }
-              value={statusFilter}
-            >
-              <option value="all">All statuses</option>
-              <option value="active">Active</option>
-              <option value="available">Available</option>
-            </select>
-          </label>
+            Search
+          </Button>
+        </label>
+      ) : null}
+
+      {breadcrumb ? (
+        <div className="space-y-4 pt-2">
+          <button
+            className="inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
+            onClick={onBack}
+            type="button"
+          >
+            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+            Back to {breadcrumb}
+          </button>
+          <div className="flex items-end justify-between gap-4 border-b border-border pb-5">
+            <div>
+              <h2 className="font-serif text-4xl leading-none text-foreground">
+                {title}
+              </h2>
+              {description ? (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {description}
+                </p>
+              ) : null}
+            </div>
+          </div>
         </div>
       ) : null}
     </header>

@@ -1,204 +1,197 @@
-import {
-  ArrowLeft,
-  ArrowUpRight,
-  CalendarDays,
-  MapPin,
-  Megaphone,
-} from "lucide-react";
+import { ArrowRight, MapPin, Plus, X } from "lucide-react";
 
-import type { CampaignDetail, CampaignSummary, VerticalDetail } from "../types";
+import type { CampaignSummary, VerticalDetail } from "../types";
 import { resolveDiscoveryAsset } from "../assets";
 import { campaignProgressPercent } from "./discoveryLayout";
-import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
-import { Card } from "@/shared/ui/card";
-import { Progress } from "@/shared/ui/progress";
-import { MetricCard } from "./MetricCard";
+import { cn } from "@/shared/lib/cn";
 
 export type CampaignListViewProps = {
   vertical: VerticalDetail;
   campaigns: CampaignSummary[];
-  selectedCampaign?: CampaignDetail | null;
+  industryName?: string;
   onBack: () => void;
   onOpenCampaign: (campaign: CampaignSummary) => void;
+  onCreateCampaign?: () => void;
 };
 
-function statusVariant(status: CampaignSummary["status"]) {
-  if (status === "completed") return "success";
-  if (status === "running") return "info";
-  if (status === "failed" || status === "cancelled") return "destructive";
-  if (status === "partial") return "warning";
-  return "secondary";
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(value));
-}
-
-function CampaignProgress({ campaign }: { campaign: CampaignSummary }) {
-  const progress = campaignProgressPercent(campaign);
-  return (
-    <div className="mt-4 space-y-1.5">
-      <div className="flex items-center justify-between gap-3 text-2xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-        <span>Discovery progress</span>
-        <span>{progress}%</span>
-      </div>
-      <Progress
-        aria-label={`${campaign.name} discovery progress`}
-        value={progress}
-      />
-      <p className="text-2xs text-muted-foreground">
-        {campaign.leadCount} of {campaign.targetLeads} leads discovered
-      </p>
-    </div>
-  );
+function statusClass(status: CampaignSummary["status"]) {
+  if (status === "completed") return "bg-[#e8f6ef] text-[#1f8a5b]";
+  if (status === "running") return "bg-[#ede9fe] text-[#5b21b6]";
+  if (status === "failed" || status === "cancelled")
+    return "bg-red-100 text-red-700";
+  return "bg-[#f4f6f5] text-[#5b6660]";
 }
 
 export function CampaignListView({
   vertical,
   campaigns,
-  selectedCampaign = null,
+  industryName,
   onBack,
   onOpenCampaign,
+  onCreateCampaign,
 }: CampaignListViewProps) {
+  const totalLeads = campaigns.reduce(
+    (sum, campaign) => sum + campaign.leadCount,
+    0,
+  );
+
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(15rem,0.35fr)_minmax(0,1fr)]">
-      <aside className="space-y-4">
-        <Button className="-ml-2" onClick={onBack} variant="ghost">
-          <ArrowLeft aria-hidden="true" />
-          Back to verticals
-        </Button>
-        <Card className="overflow-hidden border-border/60 bg-card/80 p-0 shadow-none">
+    <>
+      <button
+        aria-label="Close campaign sidebar"
+        className="fixed inset-0 z-40 cursor-default bg-black/50"
+        onClick={onBack}
+        type="button"
+      />
+      <aside
+        aria-label={`${vertical.name} campaigns`}
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[37.5rem] flex-col overflow-y-auto border-l border-border bg-background shadow-2xl"
+        data-testid="discovery-campaign-sidebar"
+        role="dialog"
+      >
+        <div className="relative h-48 shrink-0 overflow-hidden">
           <img
             alt={vertical.name}
-            className="h-36 w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover opacity-20 grayscale"
             src={resolveDiscoveryAsset(vertical.imageKey)}
           />
-          <div className="space-y-4 p-4">
-            <div>
-              <p className="text-2xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                Vertical
-              </p>
-              <h2 className="mt-1 text-xl font-semibold text-foreground">
-                {vertical.name}
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {vertical.description ?? "Campaigns for this market."}
-              </p>
+          <div className="absolute inset-0 bg-gradient-to-b from-background/10 via-background/70 to-background" />
+          <Button
+            aria-label="Close campaign sidebar"
+            className="absolute right-4 top-4 z-10 h-8 w-8 rounded-full bg-background/80"
+            onClick={onBack}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+          <div className="absolute bottom-0 left-0 right-0 px-6 pb-5">
+            <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="h-2 w-2 rounded-full bg-[#8b5cf6]" />
+              {industryName ?? vertical.industryId}
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <MetricCard label="Campaigns" value={campaigns.length} />
-              <MetricCard label="Leads" value={vertical.leadCount} />
-            </div>
+            <h2 className="text-3xl font-bold tracking-tight text-foreground">
+              {vertical.name}
+            </h2>
           </div>
-        </Card>
-      </aside>
-
-      <section aria-labelledby="discovery-campaign-list" className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-2xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-              Campaign workspace
-            </p>
-            <h1
-              className="mt-1 text-2xl font-semibold tracking-tight text-foreground"
-              id="discovery-campaign-list"
-            >
-              {vertical.name} campaigns
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Choose a campaign to open its discovery workspace.
-            </p>
-          </div>
-          <Badge variant="outline">{campaigns.length} total</Badge>
         </div>
 
-        {selectedCampaign ? (
-          <Card className="border-primary/30 bg-primary/5 p-4 shadow-none">
-            <p className="text-sm font-medium text-foreground">
-              {selectedCampaign.name} is ready to open
-            </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Campaign detail is selected in the address bar. The detailed
-              workspace will land in the next Discovery surface.
-            </p>
-          </Card>
-        ) : null}
-
-        {campaigns.length === 0 ? (
-          <Card className="border-dashed border-border/70 bg-background/30 p-8 text-center shadow-none">
-            <Megaphone className="mx-auto h-8 w-8 text-muted-foreground" />
-            <h2 className="mt-3 text-base font-semibold text-foreground">
-              No campaigns yet
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              This vertical is ready for its first discovery campaign.
-            </p>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {campaigns.map((campaign) => (
-              <Card
-                className="border-border/60 bg-card/80 p-4 shadow-none"
-                data-testid={`discovery-campaign-card-${campaign.id}`}
-                key={campaign.id}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-base font-semibold text-foreground">
-                        {campaign.name}
-                      </h2>
-                      <Badge variant={statusVariant(campaign.status)}>
-                        {campaign.status}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                      {campaign.description ?? "Discovery campaign"}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-2xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1">
-                        <MapPin aria-hidden="true" className="h-3.5 w-3.5" />
-                        {campaign.location}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <CalendarDays
-                          aria-hidden="true"
-                          className="h-3.5 w-3.5"
-                        />
-                        Updated {formatDate(campaign.updatedAt)}
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    aria-label={`Open campaign ${campaign.name}`}
-                    onClick={() => onOpenCampaign(campaign)}
-                    size="sm"
-                    variant="outline"
-                  >
-                    Open campaign
-                    <ArrowUpRight aria-hidden="true" />
-                  </Button>
-                </div>
-                <CampaignProgress campaign={campaign} />
-                <div className="mt-4 grid max-w-xl grid-cols-2 gap-2 sm:grid-cols-4">
-                  <MetricCard label="Leads" value={campaign.leadCount} />
-                  <MetricCard label="Target" value={campaign.targetLeads} />
-                  <MetricCard label="Location" value={campaign.location} />
-                  <MetricCard
-                    label="Created"
-                    value={formatDate(campaign.createdAt)}
-                  />
-                </div>
-              </Card>
-            ))}
+        <div className="space-y-6 px-6 pb-8">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-2xl border border-border bg-muted/20 p-5">
+              <div className="text-3xl font-bold text-foreground">
+                {campaigns.length}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {campaigns.length === 1 ? "Campaign" : "Campaigns"}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/20 p-5">
+              <div className="text-3xl font-bold text-foreground">
+                {totalLeads}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                Total Leads
+              </div>
+            </div>
           </div>
-        )}
-      </section>
-    </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-foreground">
+                Campaigns
+              </h3>
+              {onCreateCampaign ? (
+                <Button
+                  data-testid="create-discovery-campaign"
+                  onClick={onCreateCampaign}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <Plus className="mr-1 h-4 w-4" />
+                  New Campaign
+                </Button>
+              ) : null}
+            </div>
+
+            {campaigns.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border p-8 text-center">
+                <p className="text-sm text-muted-foreground">
+                  No campaigns yet for this vertical.
+                </p>
+                {onCreateCampaign ? (
+                  <Button
+                    className="mt-4 bg-foreground text-background"
+                    onClick={onCreateCampaign}
+                    type="button"
+                  >
+                    <Plus className="mr-2 h-4 w-4" /> Create Campaign
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              campaigns.map((campaign) => {
+                const progress = campaignProgressPercent(campaign);
+                return (
+                  <button
+                    aria-label={`Open campaign ${campaign.name}`}
+                    className="group w-full rounded-2xl border border-border bg-background p-5 text-left transition-all hover:border-[#c4b5fd] hover:shadow-md"
+                    data-testid={`discovery-campaign-card-${campaign.id}`}
+                    key={campaign.id}
+                    onClick={() => onOpenCampaign(campaign)}
+                    type="button"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <h4 className="truncate text-base font-semibold text-foreground group-hover:text-[#7c3aed]">
+                          {campaign.name}
+                        </h4>
+                        <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                          {campaign.description ?? "Discovery campaign"}
+                        </p>
+                      </div>
+                      <ArrowRight className="mt-1 h-5 w-5 shrink-0 text-muted-foreground group-hover:text-[#7c3aed]" />
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <span
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-xs font-medium",
+                          statusClass(campaign.status),
+                        )}
+                      >
+                        {campaign.status}
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">
+                        <MapPin className="h-3 w-3" /> {campaign.location}
+                      </span>
+                    </div>
+                    <div className="mt-5 space-y-2">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Lead Generation</span>
+                        <span>
+                          <strong className="text-[#1f8a5b]">
+                            {progress}%
+                          </strong>{" "}
+                          ({campaign.leadCount}/{campaign.targetLeads})
+                        </span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-[#1f8a5b]"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </aside>
+    </>
   );
 }
