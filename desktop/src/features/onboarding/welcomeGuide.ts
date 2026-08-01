@@ -28,7 +28,7 @@ const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Sprout's friendly welcome guide. Help new users understand the community, channels, messages, and agents. Keep introductions concise, practical, and warm.";
 export const WELCOME_GUIDE_INTRO_MESSAGE =
-  "Hi, I'm Fizz. Welcome to Buzz.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Buzz, or just talk through what you want to build.";
+  "Hi, I'm Fizz, your Chief of Staff.\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or start work until you approve the blueprint.";
 
 export type WelcomeTeamRole = "lead" | "teammate";
 
@@ -36,16 +36,31 @@ export type WelcomeTeamStarterDefinition = Readonly<{
   name: string;
   personaId: string;
   role: WelcomeTeamRole;
+  roleId: string;
 }>;
 
-/** Stable identities used to provision the Rust-seeded Welcome Team. */
+/**
+ * The only employee provisioned before the company blueprint is approved.
+ *
+ * Colony opens as a conversation with one Chief of Staff, not a staffed team.
+ * The rest of the roster is proposed from what the business actually turns out
+ * to need and created on approval, so nothing is deployed, started, or paid for
+ * on the user's behalf before they have agreed to it.
+ *
+ * Honey and Bumble are deliberately absent. Their built-in definitions still
+ * exist and any customization a user already made is untouched — they are
+ * simply no longer auto-provisioned.
+ */
 export const WELCOME_TEAM_STARTERS = [
-  { name: "Fizz", personaId: "builtin:fizz", role: "lead" },
-  { name: "Honey", personaId: "builtin:honey", role: "teammate" },
-  { name: "Bumble", personaId: "builtin:bumble", role: "teammate" },
+  {
+    name: "Fizz",
+    personaId: "builtin:fizz",
+    role: "lead",
+    roleId: "chief-of-staff",
+  },
 ] as const satisfies readonly WelcomeTeamStarterDefinition[];
 
-export type WelcomeTeamAgents = [ManagedAgent, ManagedAgent, ManagedAgent];
+export type WelcomeTeamAgents = [ManagedAgent];
 
 const welcomeTeamPromises = new Map<string, Promise<WelcomeTeamAgents>>();
 
@@ -314,28 +329,14 @@ async function provisionWelcomeTeam(
     const created = await createManagedAgent(desired);
     agents.push(created.agent);
   }
-  const [lead, honey, bumble] = agents;
-  if (!lead || !honey || !bumble) {
-    throw new Error("Welcome Team provisioning did not return every starter.");
+  const [chiefOfStaff] = agents;
+  if (!chiefOfStaff) {
+    throw new Error("Chief of Staff provisioning did not return an agent.");
   }
-  const welcomeAgents: WelcomeTeamAgents = [lead, honey, bumble];
-  const leadPubkey = lead.pubkey;
-  for (const index of [1, 2] as const) {
-    const teammate = welcomeAgents[index];
-    const alreadyAllowsLead =
-      teammate.respondTo === "allowlist" &&
-      teammate.respondToAllowlist.some(
-        (pubkey) => normalizePubkey(pubkey) === normalizePubkey(leadPubkey),
-      );
-    if (!alreadyAllowsLead) {
-      const updated = await updateManagedAgent({
-        pubkey: teammate.pubkey,
-        respondTo: "allowlist",
-        respondToAllowlist: [leadPubkey],
-      });
-      welcomeAgents[index] = updated.agent;
-    }
-  }
+  // No teammate allowlists to wire: the Chief of Staff is the only employee
+  // before approval, and it answers the owner directly (`respondTo`
+  // "owner-only" from the starter definition).
+  const welcomeAgents: WelcomeTeamAgents = [chiefOfStaff];
   await ensureWelcomeTeamMembership(channelId, welcomeAgents);
   return welcomeAgents;
 }

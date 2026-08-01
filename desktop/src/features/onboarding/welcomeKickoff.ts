@@ -118,7 +118,12 @@ const closerTimeouts = new Map<
 
 type WelcomeAgentSet = {
   lead: ManagedAgent;
-  teammates: [ManagedAgent, ManagedAgent];
+  /**
+   * Empty before blueprint approval — the Chief of Staff is the only employee.
+   * Kept as a list rather than removed so the kickoff still reads as
+   * "lead plus whoever else exists" once the approved roster is provisioned.
+   */
+  teammates: ManagedAgent[];
 };
 
 function markerEvent(events: readonly RelayEvent[], marker: string) {
@@ -138,7 +143,7 @@ export function resolveWelcomeAgentSet(
   if (ordered.some((agent) => !agent)) return null;
   return {
     lead: ordered[0] as ManagedAgent,
-    teammates: [ordered[1] as ManagedAgent, ordered[2] as ManagedAgent],
+    teammates: ordered.slice(1) as ManagedAgent[],
   };
 }
 
@@ -170,17 +175,29 @@ export function buildWelcomeKickoffOpener(
   // the p tags, the @mention renders as a pill and files the opener into
   // their Inbox mentions feed.
   const trimmedOwnerName = ownerName?.trim();
+  const introNames = formatMentionNames(introTeammates);
+
+  // Before blueprint approval the Chief of Staff is the only employee, so this
+  // is the opener in practice. It states what Colony is for, asks for the one
+  // input onboarding needs, and promises that nothing is created or started
+  // until the user approves — the same promise the materialization path keeps.
+  if (allTeammates.length === 0) {
+    const chiefGreeting = trimmedOwnerName
+      ? `Hi @${trimmedOwnerName}, I'm ${lead.name}, your Chief of Staff.`
+      : `Hi, I'm ${lead.name}, your Chief of Staff.`;
+    return `${chiefGreeting}\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or start work until you approve the blueprint.`;
+  }
+
   const greeting = trimmedOwnerName
     ? `Hi @${trimmedOwnerName}, I'm ${lead.name}.`
     : `Hi, I'm ${lead.name}.`;
-  const introNames = formatMentionNames(introTeammates);
   if (introTeammates.length === 0) {
     const teammateNames = formatAgentNames(allTeammates);
     const teammatePhrase = teammateNames ? ` with ${teammateNames}` : "";
-    return `${greeting} Welcome to Buzz. This is your private home base, and I'm here${teammatePhrase} to help you get oriented or work through something you're building.\n\n${WELCOME_KICKOFF_CTA}`;
+    return `${greeting} Welcome to Colony. This is your private home base, and I'm here${teammatePhrase} to help you get oriented or work through something you're building.\n\n${WELCOME_KICKOFF_CTA}`;
   }
 
-  return `${greeting} Welcome to Buzz. This is your private home base, and we're here to help you get oriented or work through something you're building.\n\n${introNames}, introduce ${introTeammates.length === 1 ? "yourself" : "yourselves"} in a sentence or two — share what you're good at and when to bring you in. Don't start any work yet.`;
+  return `${greeting} Welcome to Colony. This is your private home base, and we're here to help you get oriented or work through something you're building.\n\n${introNames}, introduce ${introTeammates.length === 1 ? "yourself" : "yourselves"} in a sentence or two — share what you're good at and when to bring you in. Don't start any work yet.`;
 }
 
 export function onlineWelcomeTeammates(
@@ -282,7 +299,7 @@ function isReplyToOpener(event: RelayEvent, opener: RelayEvent) {
 function introAuthorsAfterOpener(
   events: readonly RelayEvent[],
   opener: RelayEvent,
-  teammates: readonly [ManagedAgent, ManagedAgent],
+  teammates: readonly ManagedAgent[],
 ) {
   const authors = new Set(
     events
@@ -575,9 +592,11 @@ export function useWelcomeKickoff(
         await queryClient.invalidateQueries({
           queryKey: managedAgentsQueryKey,
         });
+        // Only the Chief of Staff exists before blueprint approval, so the
+        // kickoff has no teammates to coordinate.
         const resolvedAgentSet: WelcomeAgentSet = {
           lead: welcomeTeam[0],
-          teammates: [welcomeTeam[1], welcomeTeam[2]],
+          teammates: [],
         };
 
         if (await markerExists(channelId, closerMarker)) {
