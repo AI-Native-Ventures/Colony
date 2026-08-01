@@ -26,6 +26,9 @@ export const CORE_HANDLES = [
   "artifact",
   "receipt",
   "brainstorm",
+  "company-brief",
+  "company-blueprint",
+  "interview",
 ] as const;
 
 export type CoreHandle = (typeof CORE_HANDLES)[number];

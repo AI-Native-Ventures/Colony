@@ -61,3 +61,17 @@ test("the document is passed through byte for byte", () => {
   const approval = readBlueprintApproval({ ...VALID, blueprint: awkward });
   assert.equal(approval?.blueprint, awkward);
 });
+
+// The fixture the E2E renders, to prove the reader agrees with what the
+// renderer actually hands it.
+test("resolves the approve action input from real block data", async () => {
+  const { resolveBlueprintActionInputs } = await import(
+    "./blueprintApproval.ts"
+  );
+  const inputs = resolveBlueprintActionInputs(VALID);
+  assert.deepEqual(inputs.get("company-blueprint.approve"), {
+    request_id: VALID.request_id,
+    blueprint_hash: VALID.blueprint_hash,
+  });
+  assert.equal(resolveBlueprintActionInputs({}).size, 0);
+});

@@ -153,6 +153,7 @@ export default defineConfig({
         "**/persona-sync.spec.ts",
         "**/team-snapshot.spec.ts",
         "**/blocks-live.spec.ts",
+        "**/company-approval.spec.ts",
         "**/agents-everywhere.live.spec.ts",
         "**/relay-restart.live.spec.ts",
         "**/parity-ancestor-island.spec.ts",

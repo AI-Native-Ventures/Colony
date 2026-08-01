@@ -24,6 +24,7 @@ import { approveCompanyBlueprint } from "@/features/company/approveCompanyBluepr
 import {
   isBlueprintApproval,
   readBlueprintApproval,
+  resolveBlueprintActionInputs,
 } from "@/features/company/blueprintApproval";
 
 import type {
@@ -116,6 +117,13 @@ export function BlockRenderProvider({
     );
     return () => window.clearTimeout(timeout);
   }, [data, manifest.handle, nowSeconds]);
+  const blueprintInputs = React.useMemo(
+    () =>
+      manifest.handle === "company-blueprint"
+        ? resolveBlueprintActionInputs(data)
+        : new Map<string, Record<string, unknown>>(),
+    [data, manifest.handle],
+  );
   const directActionIds = React.useMemo(() => {
     if (manifest.handle === "agent-proposal") return new Set<string>();
     const direct = new Set(
@@ -139,8 +147,14 @@ export function BlockRenderProvider({
         direct.add(actionId);
       }
     }
+    // The approve action declares required inputs, but they are facts about
+    // the instance rather than anything to ask the owner for, so they are
+    // derived and the control stays directly clickable.
+    for (const actionId of blueprintInputs.keys()) {
+      direct.add(actionId);
+    }
     return direct;
-  }, [approvalInputs, manifest.actions, manifest.handle]);
+  }, [approvalInputs, blueprintInputs, manifest.actions, manifest.handle]);
   const resolvingActionIds = React.useMemo(
     () =>
       new Set(
@@ -183,6 +197,10 @@ export function BlockRenderProvider({
         return;
       }
       let currentInput = input;
+      const derivedBlueprintInput = blueprintInputs.get(interaction.action_id);
+      if (derivedBlueprintInput) {
+        currentInput = derivedBlueprintInput;
+      }
       if (manifest.handle === "approval") {
         const currentApprovalInput = resolveApprovalActionInputForSubmission(
           data,
@@ -216,7 +234,7 @@ export function BlockRenderProvider({
       // It runs first, so a relay that refuses the record of the decision
       // cannot leave the owner with a company they were told was created.
       if (isBlueprintApproval(interaction.action_id)) {
-        const approval = readBlueprintApproval(instance.data);
+        const approval = readBlueprintApproval(data);
         if (!approval) {
           setActionError(
             "This blueprint is missing the document it proposes. Ask for it again.",
@@ -277,6 +295,7 @@ export function BlockRenderProvider({
       }
     },
     [
+      blueprintInputs,
       data,
       instance,
       manifest,

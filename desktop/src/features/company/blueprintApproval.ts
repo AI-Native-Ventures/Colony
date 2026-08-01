@@ -14,7 +14,7 @@ export const APPROVE_ACTION_ID = "company-blueprint.approve";
  * Read as unknown fields on purpose: a Block instance is agent-authored JSON,
  * so nothing about its shape is guaranteed until it is checked here.
  */
-export type BlueprintInstanceData = Readonly<Record<string, unknown>>;
+export type BlueprintInstanceData = unknown;
 
 export type BlueprintApprovalRequest = {
   blueprint: string;
@@ -36,11 +36,12 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 export function readBlueprintApproval(
   data: BlueprintInstanceData | null | undefined,
 ): BlueprintApprovalRequest | null {
-  if (!data || typeof data !== "object") return null;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const fields = data as Record<string, unknown>;
 
-  const blueprint = data.blueprint;
-  const expectedHash = data.blueprint_hash;
-  const requestId = data.request_id;
+  const blueprint = fields.blueprint;
+  const expectedHash = fields.blueprint_hash;
+  const requestId = fields.request_id;
 
   if (typeof blueprint !== "string" || blueprint.trim() === "") return null;
   if (typeof expectedHash !== "string" || !SHA256_HEX.test(expectedHash)) {
@@ -54,4 +55,26 @@ export function readBlueprintApproval(
 /** Whether this action is the one that creates a company. */
 export function isBlueprintApproval(actionId: string): boolean {
   return actionId === APPROVE_ACTION_ID;
+}
+
+/**
+ * The inputs the Blueprint Block's actions carry.
+ *
+ * An action that declares required inputs cannot be clicked directly: the
+ * renderer has no way to know what to send. The approve action's inputs are
+ * not free-form though, they are facts about the instance being approved, so
+ * they are derived from it here rather than asked for.
+ */
+export function resolveBlueprintActionInputs(
+  data: BlueprintInstanceData | null | undefined,
+): Map<string, Record<string, unknown>> {
+  const inputs = new Map<string, Record<string, unknown>>();
+  const approval = readBlueprintApproval(data);
+  if (approval) {
+    inputs.set(APPROVE_ACTION_ID, {
+      request_id: approval.requestId,
+      blueprint_hash: approval.expectedHash,
+    });
+  }
+  return inputs;
 }

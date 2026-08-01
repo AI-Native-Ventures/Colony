@@ -10990,6 +10990,22 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_teams":
         return handleListTeams();
+      // Company approval. Recorded so a spec can prove the app calls the
+      // backend with the document the owner was shown, and completes only
+      // after the relay accepted it.
+      case "execute_company_blueprint": {
+        return {
+          outcome: "created",
+          companyId: "horizon-labs",
+          personaIds: ["builtin:fizz", "company:abc:horizon-labs:cto"],
+          teamIds: ["company-team:abc:horizon-labs:engineering"],
+          initiativeIds: ["horizon-labs:init-1"],
+          signedActions: [JSON.stringify({ id: "c".repeat(64), kind: 40013 })],
+          checkpoint: "teams_seeded",
+        };
+      }
+      case "complete_company_blueprint":
+        return "horizon-labs";
       case "list_channel_templates":
         return (activeConfig?.mock?.channelTemplates ?? []).map((template) => ({
           id: template.id,
