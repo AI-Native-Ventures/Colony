@@ -21,7 +21,7 @@ export function Story() {
   return (
     <section
       id="story"
-      className="relative overflow-hidden bg-zinc-950 px-6 py-24 sm:py-32"
+      className="relative overflow-hidden bg-zinc-950 px-6 py-12 sm:py-16"
     >
       <h2 className="mx-auto max-w-2xl text-center text-3xl font-semibold text-zinc-50 sm:text-4xl">
         One history, three ways to work
@@ -29,23 +29,26 @@ export function Story() {
       <div className="relative mx-auto mt-16 grid max-w-5xl gap-10 sm:grid-cols-3">
         <div
           aria-hidden
-          className="pointer-events-none absolute left-0 hidden w-full opacity-70 sm:block"
-          style={{ top: -28, height: "calc(100% + 28px)" }}
+          className="pointer-events-none absolute left-0 hidden w-full opacity-90 sm:block"
+          style={{ top: -50, height: "calc(100% + 50px)" }}
         >
-          {/* Arcs sit above the row so they read against open background
-              instead of getting dimmed under the cards' backdrop-blur.
-              Each touches down at x=157/512/867, the measured title-center
-              of columns 1/2/3, so trail A visibly links Chat to Agents and
-              trail B links Agents to Workflows. */}
+          {/* Touchdown is y=0, the cards' own top edge, not y>0 (inside the
+              card): the first version of this arc touched down *inside*
+              each card at y=32, so most of its length sat under the cards'
+              backdrop-blur and only a ~30px sliver near the peak was ever
+              visible. Staying at y<=0 for the whole curve keeps it entirely
+              over open background. Touches down at x=157/512/867, the
+              measured title-center of columns 1/2/3, so trail A visibly
+              links Chat to Agents and trail B links Agents to Workflows. */}
           <PheromoneTrail
-            viewBox="0 -28 1024 191"
-            d="M157 32 C 260 -8, 410 -8, 512 32"
+            viewBox="0 -50 1024 213"
+            d="M157 0 C 260 -44, 410 -44, 512 0"
             color={COLONY_VIOLET}
             className="absolute inset-0 h-full w-full"
           />
           <PheromoneTrail
-            viewBox="0 -28 1024 191"
-            d="M512 32 C 614 -8, 764 -8, 867 32"
+            viewBox="0 -50 1024 213"
+            d="M512 0 C 614 -44, 764 -44, 867 0"
             color={COLONY_BLUE}
             className="absolute inset-0 h-full w-full"
           />

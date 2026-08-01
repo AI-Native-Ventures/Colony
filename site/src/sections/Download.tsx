@@ -11,7 +11,7 @@ export function Download() {
   return (
     <section
       id="download"
-      className="bg-zinc-950 px-6 py-14 text-center sm:py-20"
+      className="bg-zinc-950 px-6 py-10 text-center sm:py-14"
     >
       <div className="mx-auto max-w-2xl">
         <h2 className="text-3xl font-semibold text-zinc-50 sm:text-4xl">

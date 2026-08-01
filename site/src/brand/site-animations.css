@@ -84,14 +84,16 @@
      dash pattern along the path. Reduced motion shows the static dashed
      path: CSS `animation: none` is sufficient here since this is a plain
      CSS animation (no SMIL), unlike the gait above where SMIL would need a
-     separate per-mechanism gate. */
+     separate per-mechanism gate. The dash pattern is "3 9" (12px period);
+     the keyframe's offset must stay a multiple of that period or the loop
+     visibly jumps when it restarts. */
   .pheromone-trail__path {
     animation: pheromone-flow 2.4s linear infinite;
   }
 
   @keyframes pheromone-flow {
     to {
-      stroke-dashoffset: -64;
+      stroke-dashoffset: -60;
     }
   }
 

@@ -29,9 +29,9 @@ export function PheromoneTrail({
       <path
         d={d}
         stroke={color}
-        strokeWidth="3"
+        strokeWidth="4"
         strokeLinecap="round"
-        strokeDasharray="2 14"
+        strokeDasharray="3 9"
         className="pheromone-trail__path"
       />
     </svg>

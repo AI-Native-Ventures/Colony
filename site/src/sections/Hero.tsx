@@ -4,7 +4,7 @@ import { ScatterField } from "@/brand/ScatterField";
 
 export function Hero() {
   return (
-    <section className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-zinc-950 px-6 text-center">
+    <section className="relative flex flex-col items-center overflow-hidden bg-zinc-950 px-6 pb-16 pt-20 text-center sm:pb-24 sm:pt-32">
       <ScatterField />
       <div className="relative z-10 flex flex-col items-center">
         <span className="mb-10 block w-32 text-colony-violet sm:mb-14 sm:w-56">
