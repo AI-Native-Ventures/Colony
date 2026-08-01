@@ -1,0 +1,622 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "company-blueprint",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Company Blueprint",
+  "description": "The proposed company: who it hires, what teams they sit in, where costs land, and the first three pieces of work. Nothing is created until it is approved.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "request_id",
+      "blueprint_hash",
+      "company_id",
+      "trading_name",
+      "summary",
+      "roster",
+      "teams",
+      "initiatives",
+      "gaps"
+    ],
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "maxLength": 64,
+        "description": "Ties this proposal to the approval that executes it."
+      },
+      "blueprint_hash": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "Hash of the exact document under review. Approving a different one is refused."
+      },
+      "company_id": {
+        "type": "string",
+        "maxLength": 120
+      },
+      "trading_name": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "summary": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "roster": {
+        "type": "array",
+        "maxItems": 40,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role_id",
+            "role_title",
+            "personal_name",
+            "team",
+            "enabled"
+          ],
+          "properties": {
+            "role_id": {
+              "type": "string",
+              "maxLength": 80,
+              "description": "A role from the trusted catalog. Anything else is refused at execution."
+            },
+            "role_title": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "personal_name": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "team": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "why": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "enabled": {
+              "type": "boolean",
+              "description": "Unchecking removes this employee from what gets created."
+            }
+          }
+        }
+      },
+      "teams": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "name",
+            "lead",
+            "members",
+            "accountable_for"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "lead": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "members": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "accountable_for": {
+              "type": "string",
+              "maxLength": 600
+            }
+          }
+        }
+      },
+      "cost_centres": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "kind"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "kind": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "covers": {
+              "type": "string",
+              "maxLength": 400
+            }
+          }
+        }
+      },
+      "initiatives": {
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 3,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "owner",
+            "why_first"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "owner": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "why_first": {
+              "type": "string",
+              "maxLength": 600
+            }
+          }
+        }
+      },
+      "gaps": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "label",
+            "cost_of_leaving_open"
+          ],
+          "properties": {
+            "label": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "cost_of_leaving_open": {
+              "type": "string",
+              "maxLength": 500
+            }
+          }
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "stack",
+    "gap": "medium",
+    "children": [
+      {
+        "type": "section",
+        "title": "{{trading_name}}",
+        "text": "{{summary}}"
+      },
+      {
+        "type": "section",
+        "title": "The people",
+        "text": "Uncheck anyone you don't want. Nothing is created until you approve."
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "personal_name",
+            "label": "Name"
+          },
+          {
+            "key": "role_title",
+            "label": "Role"
+          },
+          {
+            "key": "team",
+            "label": "Team"
+          },
+          {
+            "key": "why",
+            "label": "Why"
+          },
+          {
+            "key": "enabled",
+            "label": "Create"
+          }
+        ],
+        "rows_path": "/roster"
+      },
+      {
+        "type": "section",
+        "title": "The teams"
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "name",
+            "label": "Team"
+          },
+          {
+            "key": "lead",
+            "label": "Lead"
+          },
+          {
+            "key": "members",
+            "label": "Members"
+          },
+          {
+            "key": "accountable_for",
+            "label": "Accountable for"
+          }
+        ],
+        "rows_path": "/teams"
+      },
+      {
+        "type": "section",
+        "title": "Where costs land"
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "name",
+            "label": "Cost centre"
+          },
+          {
+            "key": "kind",
+            "label": "Kind"
+          },
+          {
+            "key": "covers",
+            "label": "Covers"
+          }
+        ],
+        "rows_path": "/cost_centres"
+      },
+      {
+        "type": "section",
+        "title": "First three pieces of work",
+        "text": "Proposed only. None of these start until you say so."
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "title",
+            "label": "Initiative"
+          },
+          {
+            "key": "owner",
+            "label": "Owner"
+          },
+          {
+            "key": "why_first",
+            "label": "Why first"
+          }
+        ],
+        "rows_path": "/initiatives"
+      },
+      {
+        "type": "section",
+        "title": "Still unknown",
+        "text": "These were not answered. The company can start without them, at the cost shown."
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "label",
+            "label": "Gap"
+          },
+          {
+            "key": "cost_of_leaving_open",
+            "label": "What it costs to leave open"
+          }
+        ],
+        "rows_path": "/gaps"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Approve and create the company",
+            "interaction": {
+              "type": "signed",
+              "action_id": "company-blueprint.approve",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Ask for changes",
+            "interaction": {
+              "type": "signed",
+              "action_id": "company-blueprint.revise",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "company-blueprint.approve",
+      "label": "Approve and create the company",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "blueprint_hash"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "blueprint_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Must match the document shown. An edited blueprint is refused rather than executed."
+          },
+          "disabled_role_ids": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "description": "Roles unchecked during review. These are not created."
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "company-blueprint.approve",
+        "resolves_attention": true
+      },
+      "permissions": [
+        "company.create"
+      ]
+    },
+    {
+      "id": "company-blueprint.revise",
+      "label": "Ask for changes",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what_to_change"
+        ],
+        "properties": {
+          "what_to_change": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "company-blueprint.revise",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [
+    {
+      "capability": "company.create",
+      "constraints": {
+        "exact_content": true,
+        "expires": true
+      }
+    }
+  ],
+  "fallback_template": "## {{trading_name}}\n\n{{summary}}\n\nPeople:\n{{roster}}\n\nTeams:\n{{teams}}\n\nFirst three pieces of work:\n{{initiatives}}\n\nStill unknown:\n{{gaps}}\n\nApprove to create the company. Nothing exists until you do.",
+  "supported_clients": [
+    "desktop"
+  ],
+  "primitive_versions": {
+    "section": 1,
+    "table": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "A small agency with two service teams",
+      "data": {
+        "request_id": "3f6c1a2e-0000-4000-8000-000000000001",
+        "blueprint_hash": "9f2c8a1b3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
+        "company_id": "horizon-labs",
+        "trading_name": "Horizon Labs",
+        "summary": "A small studio building marketing websites and running social content for service businesses. The team below is the smallest one that covers the work you described, plus the review you said nobody currently does.",
+        "roster": [
+          {
+            "role_id": "chief-of-staff",
+            "role_title": "Chief of Staff",
+            "personal_name": "Fizz",
+            "team": "Company Coordination",
+            "why": "Already here. Turns your goals into work and brings decisions back to you.",
+            "enabled": true
+          },
+          {
+            "role_id": "cto",
+            "role_title": "CTO",
+            "personal_name": "Jason",
+            "team": "Engineering",
+            "why": "You said nobody reviews the build before it goes live.",
+            "enabled": true
+          },
+          {
+            "role_id": "frontend-engineer",
+            "role_title": "Frontend Engineer",
+            "personal_name": "Priya",
+            "team": "Engineering",
+            "why": "Website builds are most of what you sell.",
+            "enabled": true
+          },
+          {
+            "role_id": "content-campaign-specialist",
+            "role_title": "Content & Campaign Specialist",
+            "personal_name": "Mo",
+            "team": "Marketing",
+            "why": "Social content is a recurring service, not a one-off.",
+            "enabled": true
+          }
+        ],
+        "teams": [
+          {
+            "id": "engineering",
+            "name": "Engineering",
+            "lead": "Jason (CTO)",
+            "members": "Jason, Priya",
+            "accountable_for": "Building and maintaining client websites"
+          },
+          {
+            "id": "marketing",
+            "name": "Marketing",
+            "lead": "Mo",
+            "members": "Mo",
+            "accountable_for": "Social content and campaigns, for clients and for Horizon Labs"
+          }
+        ],
+        "cost_centres": [
+          {
+            "name": "Website builds",
+            "kind": "service",
+            "covers": "Everything billed against a client website project"
+          },
+          {
+            "name": "Internal",
+            "kind": "internal",
+            "covers": "Coordination, your own site, anything not billable"
+          }
+        ],
+        "initiatives": [
+          {
+            "title": "Write down how a website project actually runs",
+            "owner": "Fizz (Chief of Staff)",
+            "why_first": "You described the process out loud but it is not recorded anywhere. Everything else depends on it."
+          },
+          {
+            "title": "Review the three live client sites",
+            "owner": "Jason (CTO)",
+            "why_first": "You said nobody checks them after launch. This finds what is already broken."
+          },
+          {
+            "title": "Set pricing per service",
+            "owner": "Fizz (Chief of Staff)",
+            "why_first": "Without it there is no way to tell a profitable project from an unprofitable one."
+          }
+        ],
+        "gaps": [
+          {
+            "label": "Pricing per service",
+            "cost_of_leaving_open": "Nobody can tell whether a project made money until you say what it should have cost."
+          },
+          {
+            "label": "Who does the work today",
+            "cost_of_leaving_open": "The team above may duplicate someone you already have."
+          }
+        ]
+      }
+    },
+    {
+      "name": "A blueprint built almost entirely from the interview",
+      "data": {
+        "request_id": "3f6c1a2e-0000-4000-8000-000000000002",
+        "blueprint_hash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+        "company_id": "unnamed-business",
+        "trading_name": "Your business",
+        "summary": "There was no website to read, so all of this comes from what you told me. It is a smaller team than usual on purpose: I would rather start with too few and add than create people with nothing to do.",
+        "roster": [
+          {
+            "role_id": "chief-of-staff",
+            "role_title": "Chief of Staff",
+            "personal_name": "Fizz",
+            "team": "Company Coordination",
+            "why": "Already here.",
+            "enabled": true
+          },
+          {
+            "role_id": "lead-specialist",
+            "role_title": "Lead Specialist",
+            "personal_name": "Sam",
+            "team": "Leads",
+            "why": "You said finding customers is the thing you have least time for.",
+            "enabled": true
+          }
+        ],
+        "teams": [
+          {
+            "id": "leads",
+            "name": "Leads",
+            "lead": "Fizz (Chief of Staff)",
+            "members": "Fizz, Sam",
+            "accountable_for": "Finding and qualifying potential customers"
+          }
+        ],
+        "cost_centres": [
+          {
+            "name": "Internal",
+            "kind": "internal",
+            "covers": "Everything, until services are defined"
+          }
+        ],
+        "initiatives": [
+          {
+            "title": "List what you actually sell, and for how much",
+            "owner": "Fizz (Chief of Staff)",
+            "why_first": "Three of the six things I need to know depend on this one."
+          },
+          {
+            "title": "Describe one recent job start to finish",
+            "owner": "Fizz (Chief of Staff)",
+            "why_first": "The fastest way to learn your process is one real example rather than a general description."
+          },
+          {
+            "title": "Find ten businesses that look like your best customer",
+            "owner": "Sam (Lead Specialist)",
+            "why_first": "Tests whether the audience you described is one I can actually find."
+          }
+        ],
+        "gaps": [
+          {
+            "label": "Pricing",
+            "cost_of_leaving_open": "No way to tell a good job from a bad one."
+          },
+          {
+            "label": "Target audience",
+            "cost_of_leaving_open": "You said you were not sure. Outreach stays guesswork until it is settled."
+          },
+          {
+            "label": "How the work is delivered",
+            "cost_of_leaving_open": "Nothing can be delegated to a team until the steps are known."
+          }
+        ]
+      }
+    }
+  ],
+  "validation": {
+    "state": "tested",
+    "requires_attention": false
+  }
+}

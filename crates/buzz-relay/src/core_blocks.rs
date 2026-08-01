@@ -15,7 +15,7 @@ use nostr::{Event, Timestamp};
 
 use crate::state::AppState;
 
-const CORE_BLOCK_ASSETS: [(&str, &str); 19] = [
+const CORE_BLOCK_ASSETS: [(&str, &str); 21] = [
     (
         "primitives/section.json",
         include_str!("core_blocks/primitives/section.json"),
@@ -91,6 +91,14 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 19] = [
     (
         "composites/company-brief.json",
         include_str!("core_blocks/composites/company-brief.json"),
+    ),
+    (
+        "composites/company-blueprint.json",
+        include_str!("core_blocks/composites/company-blueprint.json"),
+    ),
+    (
+        "composites/interview.json",
+        include_str!("core_blocks/composites/interview.json"),
     ),
 ];
 
@@ -250,7 +258,7 @@ mod tests {
         "actions",
         "question",
     ];
-    const COMPOSITE_HANDLES: [&str; 8] = [
+    const COMPOSITE_HANDLES: [&str; 10] = [
         "lead-card",
         "approval",
         "agent-proposal",
@@ -259,6 +267,8 @@ mod tests {
         "receipt",
         "brainstorm",
         "company-brief",
+        "company-blueprint",
+        "interview",
     ];
 
     fn raw_assets() -> BTreeMap<String, Value> {
@@ -307,16 +317,110 @@ mod tests {
             .unwrap_or_else(|| panic!("missing bundled manifest for {handle}"))
     }
 
+    /// The Blueprint Block is what an owner reads before approving. Every role
+    /// it names must exist in the trusted catalog, or the Block would advertise
+    /// an employee that materialization then refuses to create, and the owner
+    /// would have approved something that cannot happen.
     #[test]
-    fn loads_nineteen_unique_valid_manifests_and_examples() {
+    fn the_blueprint_block_only_offers_roles_from_the_trusted_catalog() {
+        let known: Vec<String> = buzz_core::company_roster::BASELINE_ROLES
+            .iter()
+            .map(|role| buzz_core::company_roster::role_slug(role.id))
+            .collect();
+
+        let manifest = core_block_manifests()
+            .expect("bundled manifests")
+            .into_iter()
+            .find(|manifest| manifest.handle == "company-blueprint")
+            .expect("company-blueprint is bundled");
+
+        let mut checked = 0;
+        for example in &manifest.examples {
+            let roster = example
+                .data
+                .get("roster")
+                .and_then(|value| value.as_array())
+                .expect("every example has a roster");
+            assert!(!roster.is_empty(), "an empty roster proposes no company");
+            for entry in roster {
+                let role_id = entry
+                    .get("role_id")
+                    .and_then(|value| value.as_str())
+                    .expect("every roster entry names a role");
+                assert!(
+                    known.iter().any(|candidate| candidate == role_id),
+                    "`{role_id}` is not in the trusted catalog"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 2, "the examples must actually exercise roles");
+    }
+
+    /// Three is enough to show direction and few enough that an owner reads
+    /// them all before approving. The Block and the executable document have
+    /// to agree on that, since the transaction refuses any other count.
+    #[test]
+    fn the_blueprint_block_proposes_exactly_three_initiatives() {
+        let manifest = core_block_manifests()
+            .expect("bundled manifests")
+            .into_iter()
+            .find(|manifest| manifest.handle == "company-blueprint")
+            .expect("company-blueprint is bundled");
+
+        for example in &manifest.examples {
+            let initiatives = example
+                .data
+                .get("initiatives")
+                .and_then(|value| value.as_array())
+                .expect("every example proposes initiatives");
+            assert_eq!(initiatives.len(), 3, "example `{}`", example.name);
+        }
+    }
+
+    /// An owner is entitled to know what was not answered. A blueprint that
+    /// hides its gaps is worse than one with none, because the owner cannot
+    /// correct what was never admitted.
+    #[test]
+    fn the_blueprint_block_always_carries_its_gaps() {
+        let manifest = core_block_manifests()
+            .expect("bundled manifests")
+            .into_iter()
+            .find(|manifest| manifest.handle == "company-blueprint")
+            .expect("company-blueprint is bundled");
+
+        assert!(
+            manifest
+                .input_schema
+                .get("required")
+                .and_then(|value| value.as_array())
+                .is_some_and(|required| required.iter().any(|field| field == "gaps")),
+            "gaps must be required, not optional"
+        );
+        for example in &manifest.examples {
+            let gaps = example
+                .data
+                .get("gaps")
+                .and_then(|value| value.as_array())
+                .expect("every example states its gaps");
+            assert!(
+                !gaps.is_empty(),
+                "example `{}` hides its gaps",
+                example.name
+            );
+        }
+    }
+
+    #[test]
+    fn loads_twenty_one_unique_valid_manifests_and_examples() {
         let manifests = core_block_manifests().expect("Core manifests should validate");
-        assert_eq!(manifests.len(), 19);
+        assert_eq!(manifests.len(), 21);
 
         let handles: BTreeSet<_> = manifests
             .iter()
             .map(|manifest| manifest.handle.as_str())
             .collect();
-        assert_eq!(handles.len(), 19);
+        assert_eq!(handles.len(), 21);
 
         let expected: BTreeSet<_> = PRIMITIVE_HANDLES
             .into_iter()
@@ -607,8 +711,8 @@ mod tests {
             ensure_core_blocks_with(&db, &relay_keys, community)
                 .await
                 .expect("first seed"),
-            38,
-            "the first seed inserts nineteen manifests and nineteen heads"
+            42,
+            "the first seed inserts twenty-one manifests and twenty-one heads"
         );
         assert_eq!(
             ensure_core_blocks_with(&db, &relay_keys, community)
@@ -638,8 +742,8 @@ mod tests {
             })
             .await
             .expect("stored heads");
-        assert_eq!(manifests.len(), 19);
-        assert_eq!(heads.len(), 19);
+        assert_eq!(manifests.len(), 21);
+        assert_eq!(heads.len(), 21);
 
         let mut newer_manifest = core_block_manifests()
             .expect("bundled manifests")

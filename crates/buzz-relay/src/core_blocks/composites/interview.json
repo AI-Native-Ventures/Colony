@@ -1,0 +1,217 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "interview",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Interview",
+  "description": "One question at a time. The owner answers in chat, in whatever form the answer already exists in: typed, a link, or a document.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "fact",
+      "question",
+      "position",
+      "total"
+    ],
+    "properties": {
+      "fact": {
+        "type": "string",
+        "maxLength": 80,
+        "description": "Which of the facts onboarding needs. Used to record the answer against it."
+      },
+      "question": {
+        "type": "string",
+        "maxLength": 1000
+      },
+      "why_asking": {
+        "type": "string",
+        "maxLength": 500,
+        "description": "What this changes. An owner is entitled to know why they are being asked."
+      },
+      "already_known": {
+        "type": "string",
+        "maxLength": 1000,
+        "description": "What the website already answered. Present only on a follow-up, so the question does not read as if nothing was read."
+      },
+      "position": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "description": "Which question this is. Shown so the end is visible from the start."
+      },
+      "total": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20
+      }
+    }
+  },
+  "tree": {
+    "type": "stack",
+    "gap": "small",
+    "children": [
+      {
+        "type": "status",
+        "label": "Question {{position}} of {{total}}"
+      },
+      {
+        "type": "section",
+        "title": "{{question}}",
+        "text": "{{why_asking}}"
+      },
+      {
+        "type": "section",
+        "title": "Already on your site",
+        "text": "{{already_known}}"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "I don't know",
+            "interaction": {
+              "type": "signed",
+              "action_id": "interview.unknown",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "interview.answer",
+      "label": "Answer",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fact"
+        ],
+        "properties": {
+          "fact": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "description": "A page that answers this better than retyping it would."
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "url"
+              ],
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "maxLength": 2000
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              }
+            },
+            "description": "A document the owner already has. Better evidence than a summary from memory."
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "interview.answer",
+        "resolves_attention": true
+      },
+      "permissions": []
+    },
+    {
+      "id": "interview.unknown",
+      "label": "I don't know",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fact"
+        ],
+        "properties": {
+          "fact": {
+            "type": "string",
+            "maxLength": 80
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "interview.unknown",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "Question {{position}} of {{total}}\n\n{{question}}\n\n{{why_asking}}\n\nReply here, send a link, or attach a document. \"I don't know\" is a complete answer.",
+  "supported_clients": [
+    "desktop"
+  ],
+  "primitive_versions": {
+    "status": 1,
+    "section": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "A gap the website did not cover at all",
+      "data": {
+        "fact": "pricing",
+        "question": "What do you charge for each thing you sell?",
+        "why_asking": "Without it, nobody can tell a profitable job from an unprofitable one.",
+        "position": 3,
+        "total": 6
+      }
+    },
+    {
+      "name": "A follow-up, where the site answered part of it",
+      "data": {
+        "fact": "services",
+        "question": "Is the monthly maintenance a separate service, or included in a build?",
+        "why_asking": "It decides whether maintenance gets its own team and its own cost centre.",
+        "already_known": "Your site lists website design, website build, and ongoing maintenance.",
+        "position": 1,
+        "total": 6
+      }
+    },
+    {
+      "name": "A question the owner may genuinely not be able to answer",
+      "data": {
+        "fact": "target-audience",
+        "question": "Who is this mainly for?",
+        "why_asking": "It decides which businesses are worth approaching. \"I don't know\" is a real answer here, and I'll record it as a gap rather than guess.",
+        "position": 4,
+        "total": 6
+      }
+    }
+  ],
+  "validation": {
+    "state": "tested",
+    "requires_attention": false
+  }
+}
