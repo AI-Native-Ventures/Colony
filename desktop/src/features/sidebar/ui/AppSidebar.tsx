@@ -2,7 +2,6 @@
 import * as React from "react";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
-
 import type { Community } from "@/features/communities/types";
 import { AddCommunityDialog } from "@/features/communities/ui/AddCommunityDialog";
 import type { AddCommunityPrefillRequest } from "@/features/communities/addCommunityPrefill";
@@ -104,6 +103,7 @@ type AppSidebarProps = {
     | "messages"
     | "agents"
     | "blocks"
+    | "discovery"
     | "workflows"
     | "pulse"
     | "projects";
@@ -145,6 +145,7 @@ type AppSidebarProps = {
   onCreateAgent: () => void;
   onSelectAgents: () => void;
   onSelectBlocks: () => void;
+  onSelectDiscovery: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
   onSelectWorkflows: () => void;
@@ -176,7 +177,6 @@ type AppSidebarProps = {
   onStarChannel?: (channelId: string) => void;
   onUnstarChannel?: (channelId: string) => void;
 };
-
 export function AppSidebar({
   addCommunityPrefill,
   activeCommunity,
@@ -215,6 +215,7 @@ export function AppSidebar({
   onCreateAgent,
   onSelectAgents,
   onSelectBlocks,
+  onSelectDiscovery,
   onSelectProjects,
   onSelectPulse,
   onSelectWorkflows,
@@ -598,7 +599,6 @@ export function AppSidebar({
               testId="sidebar-more-unread-above"
             />
           ) : null}
-
           <SidebarContent
             className="buzz-sidebar-scrollbar overscroll-none"
             data-sidebar-background
@@ -613,6 +613,7 @@ export function AppSidebar({
                 homeBadgeCount={homeBadgeCount}
                 onSelectAgents={onSelectAgents}
                 onSelectBlocks={onSelectBlocks}
+                onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}
                 onSelectProjects={onSelectProjects}
                 onSelectPulse={onSelectPulse}

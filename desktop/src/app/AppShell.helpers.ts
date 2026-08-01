@@ -8,6 +8,7 @@ export type AppView =
   | "messages"
   | "agents"
   | "blocks"
+  | "discovery"
   | "workflows"
   | "pulse"
   | "projects";
@@ -111,50 +112,59 @@ export function deriveShellRoute(pathname: string): {
   selectedChannelId: string | null;
   selectedView: AppView;
 } {
-  if (pathname.startsWith("/channels/")) {
-    const [, , rawChannelId] = pathname.split("/");
+  const path = pathname.split("?", 1)[0] ?? pathname;
+
+  if (path.startsWith("/channels/")) {
+    const [, , rawChannelId] = path.split("/");
     return {
       selectedChannelId: rawChannelId ? decodeURIComponent(rawChannelId) : null,
       selectedView: "channel",
     };
   }
 
-  if (pathname === "/messages/new") {
+  if (path === "/messages/new") {
     return {
       selectedChannelId: null,
       selectedView: "messages",
     };
   }
 
-  if (pathname === "/agents") {
+  if (path === "/agents") {
     return {
       selectedChannelId: null,
       selectedView: "agents",
     };
   }
 
-  if (pathname === "/blocks") {
+  if (path === "/blocks") {
     return {
       selectedChannelId: null,
       selectedView: "blocks",
     };
   }
 
-  if (pathname === "/workflows" || pathname.startsWith("/workflows/")) {
+  if (path === "/discovery") {
+    return {
+      selectedChannelId: null,
+      selectedView: "discovery",
+    };
+  }
+
+  if (path === "/workflows" || path.startsWith("/workflows/")) {
     return {
       selectedChannelId: null,
       selectedView: "workflows",
     };
   }
 
-  if (pathname === "/projects" || pathname.startsWith("/projects/")) {
+  if (path === "/projects" || path.startsWith("/projects/")) {
     return {
       selectedChannelId: null,
       selectedView: "projects",
     };
   }
 
-  if (pathname === "/pulse") {
+  if (path === "/pulse") {
     return {
       selectedChannelId: null,
       selectedView: "pulse",
