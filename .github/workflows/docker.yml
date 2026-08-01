@@ -39,25 +39,13 @@ name: Docker image
 # semver, so relay-v0.3.0-rc.1 publishes :0.3.0-rc.1 without moving :latest,
 # and main pushes (no semver tag) never produce :latest.
 
+# Relay releases only. Per-merge and per-PR image builds are disabled on
+# this fork: pushes target ghcr.io/block/buzz (or the GHCR_IMAGE override),
+# which this repo has no credentials for, so branch-triggered runs only
+# ever failed at the push step while billing four Linux jobs per merge.
 on:
   push:
-    branches: [main]
     tags: ["relay-v[0-9]*"]
-  pull_request:
-    paths:
-      - "Dockerfile"
-      - "Dockerfile.push-gateway"
-      - ".dockerignore"
-      - ".github/workflows/docker.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "crates/**"
-      - "web/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - "patches/**"
   workflow_dispatch:
     inputs:
       version:

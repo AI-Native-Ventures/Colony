@@ -14,9 +14,11 @@ name: Sprig
 #   - tag `sprig-v*`  → versioned release
 #   - workflow_dispatch → manual canary build (no release publish unless asked)
 
+# Sprig releases only. The per-merge build on main is disabled on this
+# fork: promotion CI covers build health, and sprig artifacts are only
+# consumed from sprig-v* tags.
 on:
   push:
-    branches: [main]
     tags: ["sprig-v*"]
   workflow_dispatch:
     inputs:
