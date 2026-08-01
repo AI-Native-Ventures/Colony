@@ -3,6 +3,7 @@ import * as React from "react";
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { createFixtureDiscoveryDataSource } from "../data/FixtureDiscoveryDataSource";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
+import type { DiscoveryEntitlementState } from "../entitlement";
 import type { CampaignDetail, LeadPage, VerticalDetail } from "../types";
 import {
   DiscoveryWorkspace,
@@ -40,6 +41,22 @@ function routeNeedsCampaign(search: DiscoverySearch) {
 
 function routeNeedsLeads(search: DiscoverySearch) {
   return search.surface === "leads" || search.tab === "leads";
+}
+
+type DiscoveryE2eWindow = Window & {
+  __BUZZ_E2E_DISCOVERY_ENTITLEMENT__?: DiscoveryEntitlementState;
+};
+
+/**
+ * The fixture route can be opened in a deterministic entitlement state for
+ * browser proof. The hook is only read from an e2e build, so production
+ * routing and entitlement reads cannot be influenced by a browser query.
+ */
+function fixtureEntitlementOverride(): DiscoveryEntitlementState | undefined {
+  if (import.meta.env.MODE !== "e2e" || typeof window === "undefined") {
+    return undefined;
+  }
+  return (window as DiscoveryE2eWindow).__BUZZ_E2E_DISCOVERY_ENTITLEMENT__;
 }
 
 async function loadReadModel(
@@ -83,7 +100,9 @@ async function loadReadModel(
 export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
   const dataSourceRef = React.useRef<DiscoveryDataSource | null>(null);
   if (!dataSourceRef.current) {
-    dataSourceRef.current = createFixtureDiscoveryDataSource();
+    dataSourceRef.current = createFixtureDiscoveryDataSource({
+      entitlement: fixtureEntitlementOverride(),
+    });
   }
   const dataSource = dataSourceRef.current;
   const [state, setState] = React.useState<DiscoveryRouteState>(() => ({
