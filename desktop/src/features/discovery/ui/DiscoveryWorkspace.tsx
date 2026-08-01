@@ -6,7 +6,7 @@ import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
-import type { DiscoveryEntitlement } from "../entitlement";
+import { canStartDiscovery, type DiscoveryEntitlement } from "../entitlement";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type {
   CampaignDetail,
@@ -26,9 +26,12 @@ import {
   verticalCampaignsSearch,
 } from "./discoveryLayout";
 import { CampaignListView } from "./CampaignListView";
+import { CreateCampaignSheet } from "./CreateCampaignSheet";
 import { DiscoveryHeader, type DiscoveryMode } from "./DiscoveryHeader";
+import { EntitlementLock } from "./EntitlementLock";
 import { IndustryAudienceHint, IndustryGrid } from "./IndustryGrid";
 import { MetricCard } from "./MetricCard";
+import { SourceConfigEditor } from "./SourceConfigEditor";
 import { VerticalGrid } from "./VerticalGrid";
 
 /** The read models loaded by the route for the active addressable surface. */
@@ -111,12 +114,95 @@ function entitlementMessage(entitlement: DiscoveryEntitlement | null) {
   return "Discovery access could not be confirmed";
 }
 
+function EntitlementNotice({
+  entitlement,
+}: {
+  entitlement: DiscoveryEntitlement | null;
+}) {
+  const message = entitlementMessage(entitlement);
+  if (!message) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+      <p>
+        <Badge className="mr-2" variant="warning">
+          Access
+        </Badge>
+        {message}
+      </p>
+      {entitlement?.state === "error" ? (
+        <Button
+          onClick={() => window.location.reload()}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          Retry access
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function CampaignControls({
+  campaign,
+  dataSource,
+  entitlement,
+  onRun,
+  onUpdated,
+  runNotice,
+}: {
+  campaign: CampaignDetail;
+  dataSource: DiscoveryDataSource;
+  entitlement: DiscoveryEntitlement | null;
+  onRun: () => void;
+  onUpdated: (campaign: CampaignDetail) => void;
+  runNotice: string | null;
+}) {
+  return (
+    <Card className="space-y-4 border-border/60 bg-card/70 p-4 shadow-none">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-2xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            Campaign actions
+          </p>
+          <h2 className="mt-1 text-lg font-semibold text-foreground">
+            {campaign.name}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Configure sources before starting a discovery run. The detailed
+            campaign tabs will follow in the next surface.
+          </p>
+        </div>
+        <EntitlementLock
+          entitlement={entitlement}
+          onRetry={() => window.location.reload()}
+          onRun={onRun}
+        />
+      </div>
+      {runNotice ? (
+        <p
+          className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-primary"
+          role="status"
+        >
+          {runNotice}
+        </p>
+      ) : null}
+      <SourceConfigEditor
+        campaign={campaign}
+        dataSource={dataSource}
+        entitlement={entitlement}
+        onUpdated={onUpdated}
+      />
+    </Card>
+  );
+}
+
 /**
  * Colony's first Discovery workspace: industries, verticals, and campaigns.
  * The route owns reads; this component owns presentation and addressable hops.
  */
 export function DiscoveryWorkspace({
-  dataSource: _dataSource,
+  dataSource,
   entitlement,
   error,
   isLoading,
@@ -128,6 +214,11 @@ export function DiscoveryWorkspace({
   const [filters, setFilters] = React.useState<
     Record<string, DiscoveryFilterState>
   >({});
+  const [createCampaignOpen, setCreateCampaignOpen] = React.useState(false);
+  const [campaignOverride, setCampaignOverride] =
+    React.useState<CampaignDetail | null>(null);
+  const [runNotice, setRunNotice] = React.useState<string | null>(null);
+  const campaignId = search.campaignId;
   const surface = discoverySurface(search);
   const surfaceFilter = discoveryFiltersForSearch(filters, search);
   const query = surfaceFilter.query;
@@ -145,6 +236,12 @@ export function DiscoveryWorkspace({
     },
     [filterKey],
   );
+
+  React.useEffect(() => {
+    if (campaignId === undefined) return;
+    setCampaignOverride(null);
+    setRunNotice(null);
+  }, [campaignId]);
 
   if (isLoading || !readModel) {
     return <LoadingState />;
@@ -164,7 +261,6 @@ export function DiscoveryWorkspace({
     );
   }
 
-  const accessMessage = entitlementMessage(entitlement);
   const industry = readModel.industries.find(
     (candidate) => candidate.id === search.industryId,
   );
@@ -194,26 +290,100 @@ export function DiscoveryWorkspace({
       );
     }
 
+    const selectedCampaign =
+      surface === "campaign" ? (campaignOverride ?? readModel.campaign) : null;
+    const runDiscovery = () => {
+      if (!selectedCampaign) return;
+      if (!canStartDiscovery({ state: entitlement?.state ?? "loading" })) {
+        setRunNotice(
+          entitlement?.state === "error"
+            ? "Discovery access could not be confirmed. Retry access before running."
+            : "Activate LAKA before running discovery.",
+        );
+        return;
+      }
+      setRunNotice("Discovery is running with the configured sources…");
+      void (async () => {
+        try {
+          let terminal = "Discovery completed";
+          for await (const event of dataSource.startDiscovery(
+            selectedCampaign.id,
+          )) {
+            if (event.type === "session_failed") terminal = event.error;
+            if (event.type === "session_cancelled")
+              terminal = "Discovery was cancelled";
+            if (event.type === "session_completed") {
+              terminal = event.partial
+                ? "Discovery completed with partial results"
+                : "Discovery completed";
+            }
+          }
+          setRunNotice(terminal);
+        } catch (cause: unknown) {
+          setRunNotice(
+            cause instanceof Error
+              ? cause.message
+              : "Discovery could not start",
+          );
+        }
+      })();
+    };
+
     return (
-      <CampaignListView
-        campaigns={vertical.campaigns}
-        onBack={() =>
-          void goDiscovery(industryVerticalSearch(vertical.industryId))
-        }
-        onOpenCampaign={(campaign) =>
-          void goDiscovery(
-            campaignDetailSearch(
-              campaign.industryId,
-              campaign.verticalId,
-              campaign.id,
-            ),
-          )
-        }
-        selectedCampaign={
-          surface === "campaign" ? readModel.campaign : undefined
-        }
-        vertical={vertical}
-      />
+      <div className="space-y-4">
+        <div className="flex justify-end">
+          <Button onClick={() => setCreateCampaignOpen(true)} type="button">
+            Create campaign
+          </Button>
+        </div>
+        <EntitlementNotice entitlement={entitlement} />
+        <CampaignListView
+          campaigns={vertical.campaigns}
+          onBack={() =>
+            void goDiscovery(industryVerticalSearch(vertical.industryId))
+          }
+          onOpenCampaign={(campaign) =>
+            void goDiscovery(
+              campaignDetailSearch(
+                campaign.industryId,
+                campaign.verticalId,
+                campaign.id,
+              ),
+            )
+          }
+          selectedCampaign={selectedCampaign}
+          vertical={vertical}
+        />
+        {selectedCampaign ? (
+          <CampaignControls
+            campaign={selectedCampaign}
+            dataSource={dataSource}
+            entitlement={entitlement}
+            onRun={runDiscovery}
+            onUpdated={setCampaignOverride}
+            runNotice={runNotice}
+          />
+        ) : null}
+        <CreateCampaignSheet
+          dataSource={dataSource}
+          entitlement={entitlement}
+          industryName={industry?.name ?? vertical.industryId}
+          onCreated={(campaign) => {
+            setCreateCampaignOpen(false);
+            void goDiscovery(
+              campaignDetailSearch(
+                campaign.industryId,
+                campaign.verticalId,
+                campaign.id,
+              ),
+            );
+          }}
+          onOpenChange={setCreateCampaignOpen}
+          onRetryEntitlement={() => window.location.reload()}
+          open={createCampaignOpen}
+          vertical={vertical}
+        />
+      </div>
     );
   }
 
@@ -257,14 +427,7 @@ export function DiscoveryWorkspace({
           title="Choose a vertical"
           toolbarEntity="verticals"
         />
-        {accessMessage ? (
-          <p className="text-sm text-muted-foreground">
-            <Badge className="mr-2" variant="warning">
-              Access
-            </Badge>
-            {accessMessage}
-          </p>
-        ) : null}
+        <EntitlementNotice entitlement={entitlement} />
         <VerticalGrid
           industryName={industry.name}
           onSelect={(selectedVertical) =>
@@ -330,14 +493,7 @@ export function DiscoveryWorkspace({
         title="Discover businesses"
         toolbarEntity="industries"
       />
-      {accessMessage ? (
-        <p className="text-sm text-muted-foreground">
-          <Badge className="mr-2" variant="warning">
-            Access
-          </Badge>
-          {accessMessage}
-        </p>
-      ) : null}
+      <EntitlementNotice entitlement={entitlement} />
       <IndustryAudienceHint />
       <IndustryGrid
         industries={visibleIndustries}
