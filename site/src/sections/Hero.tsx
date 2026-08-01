@@ -3,7 +3,7 @@ import { ScatterField } from "@/brand/ScatterField";
 
 export function Hero() {
   return (
-    <section className="relative overflow-hidden bg-colony-canvas px-6 pb-16 pt-14 sm:px-10 sm:pb-24 sm:pt-16 lg:flex lg:min-h-screen lg:flex-col lg:justify-end lg:px-16 lg:pt-20">
+    <section className="relative overflow-hidden bg-colony-canvas px-6 pb-16 pt-14 sm:px-10 sm:pb-24 sm:pt-16 lg:flex lg:min-h-screen lg:flex-col lg:justify-center lg:px-16 lg:pt-20">
       <ScatterField />
       <div className="relative z-10 mx-auto flex max-w-7xl flex-col gap-10 lg:grid lg:max-w-[1600px] lg:grid-cols-[1.8fr_1fr] lg:items-center lg:gap-16">
         <div className="flex flex-col items-start">
