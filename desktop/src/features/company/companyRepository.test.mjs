@@ -1,0 +1,603 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+} from "nostr-tools/pure";
+
+import {
+  canonicalCompanyJson,
+  newestHead,
+  parseCompanyHead,
+  parseInitiativeHead,
+  parseTaskHead,
+} from "./contracts.ts";
+import {
+  createCompanyRepository,
+  resetCompanyRepositoryState,
+} from "./companyRepository.ts";
+import { createCompanyActionBroker } from "./workRepository.ts";
+
+const RELAY_SECRET = generateSecretKey();
+const RELAY_PUBKEY = getPublicKey(RELAY_SECRET);
+const IMPOSTOR_SECRET = generateSecretKey();
+
+const COMPANY = {
+  schema: "colony.company/v1",
+  id: "horizonlabs",
+  tradingName: "Horizon Labs",
+  legalName: null,
+  website: "https://horizonlabs.co.za",
+  summary: "Builds software for South African businesses.",
+  businessType: "agency",
+  services: [
+    { id: "web", name: "Web builds", description: "Sites and web apps." },
+  ],
+  customerSegments: ["small business"],
+  costCentres: [
+    { id: "cc-web", name: "Web builds", kind: "service", serviceId: "web" },
+    {
+      id: "cc-internal",
+      name: "Company coordination",
+      kind: "internal",
+      serviceId: null,
+    },
+  ],
+  sourceReportEventId: null,
+  onboardingStatus: "approved",
+  createdAt: 1_780_000_000,
+  updatedAt: 1_780_000_000,
+};
+
+const INITIATIVE = {
+  schema: "colony.initiative/v1",
+  id: "horizonlabs:launch-outbound",
+  companyId: "horizonlabs",
+  title: "Launch outbound",
+  summary: "Open a first outbound channel to small businesses.",
+  status: "proposed",
+  ownerPersonaId: "relay1:horizonlabs:chief-of-staff",
+  costCentreId: "cc-internal",
+  commercialPurpose: "sales",
+  clientOrganizationId: null,
+  expectedCostUsd: null,
+  sourceChannelId: "welcome",
+  sourceEventId: null,
+  createdAt: 1_780_000_000,
+  updatedAt: 1_780_000_000,
+};
+
+const TASK = {
+  schema: "colony.task/v1",
+  id: "horizonlabs:launch-outbound:draft-list",
+  companyId: "horizonlabs",
+  initiativeId: "horizonlabs:launch-outbound",
+  title: "Draft the first prospect list",
+  status: "ready",
+  owningTeamId: "relay1:horizonlabs:sales",
+  assigneePersonaIds: ["relay1:horizonlabs:sales-lead"],
+  qaPersonaId: "relay1:horizonlabs:sales-lead",
+  costCentreId: "cc-internal",
+  commercialPurpose: "sales",
+  clientOrganizationId: null,
+  sourceChannelId: "welcome",
+  sourceEventId: null,
+  implicit: false,
+  createdAt: 1_780_000_000,
+  updatedAt: 1_780_000_000,
+};
+
+/** Build the exact head the relay broker signs, so the parser is tested
+ * against the shape it will actually meet rather than a convenient one. */
+function head(
+  kind,
+  record,
+  tags,
+  secret = RELAY_SECRET,
+  createdAt = 1_780_000_100,
+) {
+  return finalizeEvent(
+    {
+      kind,
+      created_at: createdAt,
+      tags,
+      content: canonicalCompanyJson(record),
+    },
+    secret,
+  );
+}
+
+function companyHead(overrides = {}, options = {}) {
+  const record = { ...COMPANY, ...overrides };
+  return head(
+    30179,
+    record,
+    [
+      ["d", record.id],
+      ["c", record.id],
+      ["company", record.id],
+    ],
+    options.secret,
+    options.createdAt,
+  );
+}
+
+function initiativeHead(overrides = {}, options = {}) {
+  const record = { ...INITIATIVE, ...overrides };
+  return head(
+    30180,
+    record,
+    [
+      ["d", record.id],
+      ["c", record.companyId],
+      ["company", record.companyId],
+      ["cost-centre", record.costCentreId],
+    ],
+    options.secret,
+    options.createdAt,
+  );
+}
+
+function taskHead(overrides = {}, options = {}) {
+  const record = { ...TASK, ...overrides };
+  const tags = [
+    ["d", record.id],
+    ["c", record.companyId],
+    ["company", record.companyId],
+    ["team", record.owningTeamId],
+    ["cost-centre", record.costCentreId],
+  ];
+  if (record.initiativeId) tags.push(["initiative", record.initiativeId]);
+  return head(30181, record, tags, options.secret, options.createdAt);
+}
+
+test("a relay-authored company head parses into its exact record", () => {
+  const parsed = parseCompanyHead(companyHead(), RELAY_PUBKEY);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.value, COMPANY);
+});
+
+test("initiative and task heads parse into their exact records", () => {
+  const initiative = parseInitiativeHead(initiativeHead(), RELAY_PUBKEY);
+  assert.equal(initiative.ok, true);
+  assert.deepEqual(initiative.value, INITIATIVE);
+
+  const task = parseTaskHead(taskHead(), RELAY_PUBKEY);
+  assert.equal(task.ok, true);
+  assert.deepEqual(task.value, TASK);
+});
+
+// The whole point of relay-authored heads is that nobody else can mint one. A
+// parser that accepted a well-formed forgery would hand the app a company
+// record written by any member who can publish an event.
+test("a head signed by anyone other than the tenant relay is refused", () => {
+  const forged = companyHead({}, { secret: IMPOSTOR_SECRET });
+  const parsed = parseCompanyHead(forged, RELAY_PUBKEY);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, "wrong-author");
+});
+
+test("a tampered head fails signature verification", () => {
+  const event = companyHead();
+  const tampered = {
+    ...event,
+    content: canonicalCompanyJson({ ...COMPANY, tradingName: "Someone Else" }),
+  };
+  const parsed = parseCompanyHead(tampered, RELAY_PUBKEY);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, "invalid-event");
+});
+
+test("the d tag must match the record id exactly", () => {
+  const event = finalizeEvent(
+    {
+      kind: 30179,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", "someone-else"],
+        ["c", COMPANY.id],
+        ["company", COMPANY.id],
+      ],
+      content: canonicalCompanyJson(COMPANY),
+    },
+    RELAY_SECRET,
+  );
+  const parsed = parseCompanyHead(event, RELAY_PUBKEY);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, "invalid-head");
+});
+
+test("a task head's team and initiative tags must match its content", () => {
+  const record = { ...TASK };
+  const event = finalizeEvent(
+    {
+      kind: 30181,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", record.id],
+        ["c", record.companyId],
+        ["company", record.companyId],
+        ["team", "some-other-team"],
+        ["cost-centre", record.costCentreId],
+        ["initiative", record.initiativeId],
+      ],
+      content: canonicalCompanyJson(record),
+    },
+    RELAY_SECRET,
+  );
+  const parsed = parseTaskHead(event, RELAY_PUBKEY);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, "invalid-head");
+});
+
+test("wrong kinds never parse as company records", () => {
+  const asInitiative = parseInitiativeHead(companyHead(), RELAY_PUBKEY);
+  assert.equal(asInitiative.ok, false);
+  assert.equal(asInitiative.code, "invalid-event");
+});
+
+// Rust rejects unknown fields on every one of these records. A looser parser
+// here means the two implementations disagree about what is valid, and the
+// disagreement only shows up on real input.
+test("unknown and missing fields are both refused", () => {
+  const extra = companyHead({ favouriteColour: "violet" });
+  const parsedExtra = parseCompanyHead(extra, RELAY_PUBKEY);
+  assert.equal(parsedExtra.ok, false);
+  assert.equal(parsedExtra.code, "invalid-record");
+
+  const missing = { ...COMPANY };
+  delete missing.businessType;
+  const parsedMissing = parseCompanyHead(
+    head(30179, missing, [
+      ["d", COMPANY.id],
+      ["c", COMPANY.id],
+      ["company", COMPANY.id],
+    ]),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsedMissing.ok, false);
+  assert.equal(parsedMissing.code, "invalid-record");
+});
+
+test("statuses outside the contract are refused", () => {
+  const parsed = parseInitiativeHead(
+    initiativeHead({ status: "shipped" }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, "invalid-record");
+});
+
+test("non-canonical content is refused", () => {
+  const event = finalizeEvent(
+    {
+      kind: 30179,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", COMPANY.id],
+        ["c", COMPANY.id],
+        ["company", COMPANY.id],
+      ],
+      content: JSON.stringify(COMPANY),
+    },
+    RELAY_SECRET,
+  );
+  const parsed = parseCompanyHead(event, RELAY_PUBKEY);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, "invalid-record");
+});
+
+test("the newest head wins, and an id break settles a tie", () => {
+  const older = initiativeHead(
+    { status: "proposed" },
+    { createdAt: 1_780_000_100 },
+  );
+  const newer = initiativeHead(
+    { status: "approved" },
+    { createdAt: 1_780_000_200 },
+  );
+  const chosen = newestHead([newer, older]);
+  assert.equal(chosen?.id, newer.id);
+  assert.equal(newestHead([older, newer])?.id, newer.id);
+
+  // NIP-01 settles a same-timestamp replaceable tie on the lowest event id.
+  const a = initiativeHead(
+    { summary: "First wording." },
+    { createdAt: 1_780_000_300 },
+  );
+  const b = initiativeHead(
+    { summary: "Second wording." },
+    { createdAt: 1_780_000_300 },
+  );
+  const expected = a.id < b.id ? a.id : b.id;
+  assert.equal(newestHead([a, b])?.id, expected);
+  assert.equal(newestHead([b, a])?.id, expected);
+  assert.equal(newestHead([]), null);
+});
+
+test("every read query names its kinds and scopes to the tenant relay", async () => {
+  resetCompanyRepositoryState();
+  const filters = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      if (filter.kinds[0] === 30179) return [companyHead()];
+      if (filter.kinds[0] === 30180) return [initiativeHead()];
+      return [taskHead()];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  await repository.getCompany("horizonlabs");
+  await repository.listInitiatives("horizonlabs");
+  await repository.listTasks({ initiativeId: "horizonlabs:launch-outbound" });
+
+  assert.equal(filters.length, 3);
+  for (const filter of filters) {
+    assert.ok(Array.isArray(filter.kinds) && filter.kinds.length > 0);
+    assert.deepEqual(filter.authors, [RELAY_PUBKEY]);
+  }
+  assert.deepEqual(filters[0]["#d"], ["horizonlabs"]);
+  assert.deepEqual(filters[1]["#c"], ["horizonlabs"]);
+  assert.deepEqual(filters[2]["#initiative"], ["horizonlabs:launch-outbound"]);
+});
+
+test("listing initiatives keeps only the newest head per coordinate", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [
+      initiativeHead({ status: "proposed" }, { createdAt: 1_780_000_100 }),
+      initiativeHead({ status: "approved" }, { createdAt: 1_780_000_200 }),
+      initiativeHead(
+        { id: "horizonlabs:hire", title: "Hire a second engineer" },
+        { createdAt: 1_780_000_150 },
+      ),
+    ],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  const result = await repository.listInitiatives("horizonlabs");
+  assert.equal(result.ok, true);
+  assert.equal(result.value.length, 2);
+  const outbound = result.value.find(
+    (initiative) => initiative.id === "horizonlabs:launch-outbound",
+  );
+  assert.equal(outbound.status, "approved");
+});
+
+// A forged head sitting next to real ones must not take the whole list down
+// with it, and must not appear in it either.
+test("an unparseable head is dropped without failing the list", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [
+      initiativeHead(),
+      initiativeHead({ id: "horizonlabs:forged" }, { secret: IMPOSTOR_SECRET }),
+    ],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+  const result = await repository.listInitiatives("horizonlabs");
+  assert.equal(result.ok, true);
+  assert.equal(result.value.length, 1);
+  assert.equal(result.value[0].id, "horizonlabs:launch-outbound");
+});
+
+test("empty results are an empty list, not a failure", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+  const initiatives = await repository.listInitiatives("horizonlabs");
+  assert.equal(initiatives.ok, true);
+  assert.deepEqual(initiatives.value, []);
+
+  const company = await repository.getCompany("horizonlabs");
+  assert.equal(company.ok, false);
+  assert.equal(company.code, "missing-head");
+});
+
+test("a relay failure is reported, never treated as absence", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => {
+      throw new Error("socket is not connected");
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+  const result = await repository.listInitiatives("horizonlabs");
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "unavailable");
+});
+
+test("a community without a relay identity cannot be read from", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [companyHead()],
+    relaySelf: async () => null,
+  });
+  const result = await repository.getCompany("horizonlabs");
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "no-relay-identity");
+});
+
+// Switching community remounts React but leaves module state alone. A read
+// that started before the switch must not resolve into the new community.
+test("a read in flight across a community switch is cancelled", async () => {
+  resetCompanyRepositoryState();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const repository = createCompanyRepository({
+    fetchEvents: async () => {
+      await gate;
+      return [companyHead()];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  const pending = repository.getCompany("horizonlabs");
+  resetCompanyRepositoryState();
+  release();
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "cancelled");
+});
+
+const RECEIPT_TAGS = (actionEventId, outcome, requestId, idempotencyKey) => [
+  ["p", "f".repeat(64)],
+  ["e", actionEventId, "", "company-action"],
+  ["a", `30180:${RELAY_PUBKEY}:horizonlabs:launch-outbound`],
+  ["company-receipt", "1", requestId, idempotencyKey, outcome],
+];
+
+const REQUEST_ID = "6f1d2b3c-0000-4000-8000-000000000001";
+const IDEMPOTENCY_KEY = "6f1d2b3c-0000-4000-8000-000000000002";
+
+function receipt(actionEventId, outcome, headEventId) {
+  return finalizeEvent(
+    {
+      kind: 40014,
+      created_at: 1_780_000_200,
+      tags: RECEIPT_TAGS(actionEventId, outcome, REQUEST_ID, IDEMPOTENCY_KEY),
+      content: canonicalCompanyJson({
+        schema: "colony.company-receipt/v1",
+        headEventId: headEventId ?? null,
+      }),
+    },
+    RELAY_SECRET,
+  );
+}
+
+function signedAction() {
+  return finalizeEvent(
+    {
+      kind: 40013,
+      created_at: 1_780_000_150,
+      tags: [
+        ["p", RELAY_PUBKEY],
+        ["a", `30180:${RELAY_PUBKEY}:horizonlabs:launch-outbound`],
+        ["company-action", "1", "transition", REQUEST_ID, IDEMPOTENCY_KEY],
+      ],
+      content: "{}",
+    },
+    IMPOSTOR_SECRET,
+  );
+}
+
+test("an applied receipt resolves the head the relay authored", async () => {
+  const action = signedAction();
+  const applied = receipt(action.id, "applied", initiativeHead().id);
+  const broker = createCompanyActionBroker({
+    publish: async (event) => event,
+    fetchFirstEvent: async (filter) => {
+      if (filter.kinds[0] === 40014) return applied;
+      return initiativeHead({ status: "approved" });
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+
+  const outcome = await broker.submit(JSON.stringify(action));
+  assert.equal(outcome.status, "applied");
+  assert.equal(outcome.receiptEventId, applied.id);
+  assert.equal(outcome.headEventId, initiativeHead().id);
+});
+
+test("a conflict receipt is surfaced as a conflict, not a success", async () => {
+  const action = signedAction();
+  const conflict = receipt(action.id, "conflict", null);
+  const broker = createCompanyActionBroker({
+    publish: async (event) => event,
+    fetchFirstEvent: async () => conflict,
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+  const outcome = await broker.submit(JSON.stringify(action));
+  assert.equal(outcome.status, "conflict");
+});
+
+// A receipt is only meaningful because the relay signed it. Accepting one
+// signed by anyone else would let a member fake a successful company write.
+test("a receipt not signed by the tenant relay is ignored", async () => {
+  const action = signedAction();
+  const forged = finalizeEvent(
+    {
+      kind: 40014,
+      created_at: 1_780_000_200,
+      tags: RECEIPT_TAGS(action.id, "applied", REQUEST_ID, IDEMPOTENCY_KEY),
+      content: canonicalCompanyJson({
+        schema: "colony.company-receipt/v1",
+        headEventId: initiativeHead().id,
+      }),
+    },
+    IMPOSTOR_SECRET,
+  );
+  const broker = createCompanyActionBroker({
+    publish: async (event) => event,
+    fetchFirstEvent: async () => forged,
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+    attempts: 2,
+  });
+  const outcome = await broker.submit(JSON.stringify(action));
+  assert.equal(outcome.status, "no-receipt");
+});
+
+test("a receipt that never arrives is reported as unresolved, not as failure", async () => {
+  const action = signedAction();
+  let polls = 0;
+  const broker = createCompanyActionBroker({
+    publish: async (event) => event,
+    fetchFirstEvent: async () => {
+      polls += 1;
+      return null;
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+    attempts: 3,
+  });
+  const outcome = await broker.submit(JSON.stringify(action));
+  assert.equal(outcome.status, "no-receipt");
+  assert.equal(polls, 3);
+});
+
+test("only a company action can be submitted through the broker", async () => {
+  const broker = createCompanyActionBroker({
+    publish: async (event) => event,
+    fetchFirstEvent: async () => null,
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+  await assert.rejects(
+    () => broker.submit(JSON.stringify(initiativeHead())),
+    /company action/i,
+  );
+});
+
+// Company records are commercial state. Caching them in localStorage would
+// leave one community's task titles readable after switching to another.
+test("no company record is written to local storage", async () => {
+  resetCompanyRepositoryState();
+  const writes = [];
+  const previous = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: () => null,
+    setItem: (key, value) => writes.push([key, value]),
+    removeItem: () => {},
+  };
+  try {
+    const repository = createCompanyRepository({
+      fetchEvents: async () => [taskHead()],
+      relaySelf: async () => RELAY_PUBKEY,
+    });
+    await repository.listTasks({ companyId: "horizonlabs" });
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previous;
+  }
+  assert.deepEqual(writes, []);
+});

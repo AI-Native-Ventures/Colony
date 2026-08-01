@@ -6,6 +6,7 @@ import { relayClient } from "@/shared/api/relayClient";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 
 import { createBlueprintApprover } from "./approveBlueprint";
+import { postInitiativeCards } from "./postInitiativeCards";
 
 /**
  * Approving a Blueprint from the app.
@@ -64,6 +65,21 @@ export async function approveCompanyBlueprint(
         ? `Your team was created, but the company could not be announced: ${outcome.publishError} Approving again will finish it.`
         : "Your team was created, but the company could not be announced. Approving again will finish it.",
     );
+  }
+
+  // The initiatives now exist as records. A record nobody can see is not a
+  // proposal, so the cards that act on them go into the conversation the
+  // approval happened in. Posting is idempotent and deliberately not fatal:
+  // the company is created either way, and failing here would tell the owner
+  // that something went wrong with an approval that fully succeeded.
+  try {
+    await postInitiativeCards({
+      companyId: outcome.companyId,
+      channelId: input.channelId,
+    });
+  } catch {
+    // The initiatives are readable and startable regardless; a card that did
+    // not post is a missing prompt, not a missing record.
   }
 
   return outcome;

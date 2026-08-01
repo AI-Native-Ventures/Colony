@@ -16,6 +16,46 @@ just test               # unit + integration (starts Docker if needed)
 cargo test -p buzz-test-client -- --ignored
 ```
 
+### Colony company work (`e2e_company_work`)
+
+This suite proves the rules that only exist inside the relay process: that
+Company, Initiative, and Task heads are authored by the relay and by nobody
+else, that only the community owner can ask for one, and that compare-and-set,
+illegal transitions, and replays all reach deterministic receipts. It also runs
+the activation ladder `buzz-sdk::initiative_activation` produces against the
+real broker, which is the one thing unit tests over that function cannot
+establish.
+
+It needs its own relay, because the community owner is fixed at startup:
+
+```bash
+# 1. A database of its own, so a failed run never leaves state behind in yours.
+docker exec buzz-postgres psql -U buzz -d postgres -c "CREATE DATABASE buzz_company_proof;"
+
+# 2. The owner key the suite signs as. Print it rather than copying it:
+cargo test -p buzz-test-client --test e2e_company_work \
+  print_the_owner_pubkey -- --nocapture
+
+# 3. A relay that treats that key as the community owner.
+DATABASE_URL="postgres://buzz:buzz_dev@localhost:5432/buzz_company_proof" \
+REDIS_URL="redis://localhost:6379" \
+BUZZ_BIND_ADDR="127.0.0.1:3099" \
+RELAY_OWNER_PUBKEY="<the key printed above>" \
+cargo run -p buzz-relay
+
+# 4. The suite.
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_company_work -- --ignored --test-threads=1
+```
+
+`--test-threads=1` is not optional: every test in the file signs as the same
+owner, and the relay serializes company actions per owner.
+
+Starting the relay with any other `RELAY_OWNER_PUBKEY` makes the suite prove
+nothing — every action is refused for the right reason and the failures look
+like product bugs. If the whole file fails at the first company create, check
+that first.
+
 ---
 
 ## Live Local Relay

@@ -15,7 +15,7 @@ use nostr::{Event, Timestamp};
 
 use crate::state::AppState;
 
-const CORE_BLOCK_ASSETS: [(&str, &str); 21] = [
+const CORE_BLOCK_ASSETS: [(&str, &str); 22] = [
     (
         "primitives/section.json",
         include_str!("core_blocks/primitives/section.json"),
@@ -99,6 +99,10 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 21] = [
     (
         "composites/interview.json",
         include_str!("core_blocks/composites/interview.json"),
+    ),
+    (
+        "composites/initiative.json",
+        include_str!("core_blocks/composites/initiative.json"),
     ),
 ];
 
@@ -258,7 +262,7 @@ mod tests {
         "actions",
         "question",
     ];
-    const COMPOSITE_HANDLES: [&str; 10] = [
+    const COMPOSITE_HANDLES: [&str; 11] = [
         "lead-card",
         "approval",
         "agent-proposal",
@@ -269,6 +273,7 @@ mod tests {
         "company-brief",
         "company-blueprint",
         "interview",
+        "initiative",
     ];
 
     fn raw_assets() -> BTreeMap<String, Value> {
@@ -412,15 +417,15 @@ mod tests {
     }
 
     #[test]
-    fn loads_twenty_one_unique_valid_manifests_and_examples() {
+    fn loads_twenty_two_unique_valid_manifests_and_examples() {
         let manifests = core_block_manifests().expect("Core manifests should validate");
-        assert_eq!(manifests.len(), 21);
+        assert_eq!(manifests.len(), 22);
 
         let handles: BTreeSet<_> = manifests
             .iter()
             .map(|manifest| manifest.handle.as_str())
             .collect();
-        assert_eq!(handles.len(), 21);
+        assert_eq!(handles.len(), 22);
 
         let expected: BTreeSet<_> = PRIMITIVE_HANDLES
             .into_iter()
@@ -711,8 +716,8 @@ mod tests {
             ensure_core_blocks_with(&db, &relay_keys, community)
                 .await
                 .expect("first seed"),
-            42,
-            "the first seed inserts twenty-one manifests and twenty-one heads"
+            44,
+            "the first seed inserts twenty-two manifests and twenty-two heads"
         );
         assert_eq!(
             ensure_core_blocks_with(&db, &relay_keys, community)
@@ -742,8 +747,8 @@ mod tests {
             })
             .await
             .expect("stored heads");
-        assert_eq!(manifests.len(), 21);
-        assert_eq!(heads.len(), 21);
+        assert_eq!(manifests.len(), 22);
+        assert_eq!(heads.len(), 22);
 
         let mut newer_manifest = core_block_manifests()
             .expect("bundled manifests")

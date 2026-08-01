@@ -405,6 +405,48 @@ impl RestClient {
             .map_err(|e| RelayError::Http(e.to_string()))
     }
 
+    /// The relay's own signing key, from its NIP-11 document.
+    ///
+    /// Company records are only canonical because this key wrote them, so a
+    /// relay that advertises no usable `self` cannot have its company state
+    /// trusted at all. `None` says exactly that; it is not "not yet known".
+    pub async fn relay_self(&self) -> Result<Option<nostr::PublicKey>, RelayError> {
+        let response = self
+            .http
+            .get(&self.base_url)
+            .header("Accept", "application/nostr+json")
+            .send()
+            .await
+            .map_err(|error| RelayError::Http(error.to_string()))?;
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let document: Value = response
+            .json()
+            .await
+            .map_err(|_| RelayError::Http("relay returned a malformed NIP-11 document".into()))?;
+        let Some(relay_self) = document.get("self").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        Ok(nostr::PublicKey::from_hex(&relay_self.to_ascii_lowercase()).ok())
+    }
+
+    /// Read events matching the given filters, dropping anything unparseable.
+    ///
+    /// Every caller here is resolving a record it will treat as authoritative,
+    /// so a row that will not parse is silently absent rather than fatal: the
+    /// caller's own authorship and content checks decide what is usable.
+    pub async fn query_events(&self, filters: &[nostr::Filter]) -> Result<Vec<Event>, RelayError> {
+        let value = self.query(filters).await?;
+        let rows = value
+            .as_array()
+            .ok_or_else(|| RelayError::Http("expected JSON array from /query".into()))?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| serde_json::from_value::<Event>(row.clone()).ok())
+            .collect())
+    }
+
     /// Submit a signed event via the HTTP bridge: `POST /events` with NIP-98 auth.
     ///
     /// The event must already be signed. Returns the relay response JSON.

@@ -26,6 +26,12 @@ import {
   readBlueprintApproval,
   resolveBlueprintActionInputs,
 } from "@/features/company/blueprintApproval";
+import {
+  isInitiativeAction,
+  readInitiativeCardAction,
+  resolveInitiativeActionInputs,
+} from "@/features/company/initiativeCard";
+import { startInitiative } from "@/features/company/startInitiative";
 
 import type {
   BlockActionEnvironment,
@@ -124,6 +130,13 @@ export function BlockRenderProvider({
         : new Map<string, Record<string, unknown>>(),
     [data, manifest.handle],
   );
+  const initiativeInputs = React.useMemo(
+    () =>
+      manifest.handle === "initiative"
+        ? resolveInitiativeActionInputs(data)
+        : new Map<string, Record<string, unknown>>(),
+    [data, manifest.handle],
+  );
   const directActionInputs = React.useMemo(() => {
     const inputs = new Map<string, unknown>();
     if (approvalInputs?.ok) {
@@ -134,8 +147,11 @@ export function BlockRenderProvider({
     for (const [actionId, input] of blueprintInputs) {
       inputs.set(actionId, input);
     }
+    for (const [actionId, input] of initiativeInputs) {
+      inputs.set(actionId, input);
+    }
     return inputs;
-  }, [approvalInputs, blueprintInputs]);
+  }, [approvalInputs, blueprintInputs, initiativeInputs]);
   const directActionIds = React.useMemo(() => {
     if (manifest.handle === "agent-proposal") return new Set<string>();
     const direct = new Set(
@@ -209,6 +225,12 @@ export function BlockRenderProvider({
       if (derivedBlueprintInput) {
         currentInput = derivedBlueprintInput;
       }
+      const derivedInitiativeInput = initiativeInputs.get(
+        interaction.action_id,
+      );
+      if (derivedInitiativeInput) {
+        currentInput = derivedInitiativeInput;
+      }
       if (manifest.handle === "approval") {
         const currentApprovalInput = resolveApprovalActionInputForSubmission(
           data,
@@ -261,6 +283,43 @@ export function BlockRenderProvider({
         }
       }
 
+      // Starting an initiative is the other Block action with a local effect:
+      // it publishes the owner-signed company writes that approve it, activate
+      // it, and create its first Task. Like Blueprint approval it runs first,
+      // so a relay that refuses the record of the decision cannot leave the
+      // owner believing work started when it did not.
+      if (
+        manifest.handle === "initiative" &&
+        isInitiativeAction(interaction.action_id)
+      ) {
+        const request = readInitiativeCardAction(data, interaction.action_id);
+        if (!request) {
+          setActionError(
+            "This card is missing the initiative it refers to. Ask for it again.",
+          );
+          return;
+        }
+        try {
+          const outcome = await startInitiative(request);
+          if (outcome.status === "blocked") {
+            setActionError(outcome.message);
+            return;
+          }
+          if (outcome.status === "settled") {
+            setActionNotice(
+              `This initiative is already ${outcome.initiativeStatus}.`,
+            );
+          }
+        } catch (error) {
+          setActionError(
+            error instanceof Error
+              ? error.message
+              : "This initiative could not be started.",
+          );
+          return;
+        }
+      }
+
       const idempotencyKey = crypto.randomUUID();
       try {
         await submitBlockAction({
@@ -305,6 +364,7 @@ export function BlockRenderProvider({
     [
       blueprintInputs,
       data,
+      initiativeInputs,
       instance,
       manifest,
       message.id,

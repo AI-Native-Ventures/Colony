@@ -1,0 +1,182 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "initiative",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Initiative",
+  "description": "One proposed piece of company work. Nobody is assigned and nothing is spent until it is started.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "initiative_id",
+      "company_id",
+      "title",
+      "summary",
+      "status",
+      "owner",
+      "cost_centre",
+      "commercial_purpose"
+    ],
+    "properties": {
+      "initiative_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "The relay-authored initiative this card acts on."
+      },
+      "company_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+      "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+      "summary": { "type": "string", "maxLength": 4000 },
+      "status": {
+        "type": "string",
+        "enum": [
+          "proposed",
+          "approved",
+          "active",
+          "blocked",
+          "completed",
+          "cancelled"
+        ],
+        "description": "The status at the time this card was written. The relay-authored head is what actually decides."
+      },
+      "owner": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Who is accountable for it."
+      },
+      "cost_centre": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Where its costs land."
+      },
+      "commercial_purpose": {
+        "type": "string",
+        "enum": [
+          "clientDelivery",
+          "sales",
+          "marketing",
+          "administration",
+          "internalProduct",
+          "uncertain"
+        ]
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "{{title}}",
+    "description": "{{summary}}",
+    "children": [
+      {
+        "type": "status",
+        "label": "Status",
+        "state_path": "/status"
+      },
+      {
+        "type": "details",
+        "items": [
+          { "label": "Accountable", "value": "{{owner}}" },
+          { "label": "Costs land in", "value": "{{cost_centre}}" },
+          { "label": "Commercial purpose", "value": "{{commercial_purpose}}" }
+        ]
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Start this work",
+            "interaction": {
+              "type": "signed",
+              "action_id": "initiative.start",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Not now",
+            "interaction": {
+              "type": "signed",
+              "action_id": "initiative.decline",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "initiative.start",
+      "label": "Start this work",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["initiative_id"],
+        "properties": {
+          "initiative_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "initiative.start",
+        "resolves_attention": true
+      },
+      "permissions": ["initiative.start"]
+    },
+    {
+      "id": "initiative.decline",
+      "label": "Not now",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["initiative_id"],
+        "properties": {
+          "initiative_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "initiative.decline",
+        "resolves_attention": true
+      },
+      "permissions": ["initiative.start"]
+    }
+  ],
+  "permissions": [
+    {
+      "capability": "initiative.start",
+      "constraints": {
+        "exact_content": true,
+        "expires": true
+      }
+    }
+  ],
+  "fallback_template": "{{title}} — {{status}}\n\n{{summary}}\n\nAccountable: {{owner}}\nCosts land in: {{cost_centre}}\nCommercial purpose: {{commercial_purpose}}\n\nStart it to create its first task. Nothing is spent until you do.",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "status": 1,
+    "details": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Proposed outbound initiative",
+      "data": {
+        "initiative_id": "horizonlabs:launch-outbound",
+        "company_id": "horizonlabs",
+        "title": "Open a first outbound channel",
+        "summary": "Nothing currently brings new business in except referrals. One repeatable outbound motion is the smallest thing that changes that.",
+        "status": "proposed",
+        "owner": "Sales lead",
+        "cost_centre": "Company coordination",
+        "commercial_purpose": "sales"
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": true }
+}

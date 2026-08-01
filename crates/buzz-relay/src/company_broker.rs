@@ -76,11 +76,32 @@ fn canonical_content(value: &serde_json::Value) -> Result<String, String> {
         .map_err(|error| format!("failed to canonicalize company content: {error}"))
 }
 
+/// The `created_at` a replacement head must carry.
+///
+/// NIP-33 keeps the newer event at a coordinate, so a replacement written in
+/// the same second as the head it replaces loses the comparison and the write
+/// is refused. That is not a rare race: an owner walking an initiative from
+/// proposed to approved to active does it in well under a second, and every
+/// rung after the first would fail. The relay authors these heads, so the
+/// ordering guarantee is the relay's to keep — one second past the previous
+/// head when the clock has not moved on by itself.
+fn head_timestamp(previous_head: Option<&Event>) -> nostr::Timestamp {
+    let now = nostr::Timestamp::now();
+    match previous_head {
+        Some(previous) if previous.created_at >= now => previous.created_at + 1u64,
+        _ => now,
+    }
+}
+
 /// Rebuild head tags from validated CONTENT, never from the client's request.
 ///
 /// The action carries a target coordinate, but trusting its tags would let a
 /// requester point a validated payload at someone else's coordinate.
-fn build_head(relay: &Keys, payload: &CompanyActionPayload) -> Result<Event, String> {
+fn build_head(
+    relay: &Keys,
+    payload: &CompanyActionPayload,
+    previous_head: Option<&Event>,
+) -> Result<Event, String> {
     // Every head carries `c` alongside the readable `company` tag. Only
     // single-letter tags are indexed, so `#company` is a filter the relay
     // never receives: the nostr filter type drops it before parsing, and a
@@ -128,6 +149,7 @@ fn build_head(relay: &Keys, payload: &CompanyActionPayload) -> Result<Event, Str
         content.map_err(|error| format!("failed to serialize company payload: {error}"))?;
     EventBuilder::new(Kind::Custom(kind as u16), canonical_content(&content)?)
         .tags(tags)
+        .custom_created_at(head_timestamp(previous_head))
         .sign_with_keys(relay)
         .map_err(|error| format!("failed to sign company head: {error}"))
 }
@@ -497,7 +519,11 @@ pub(crate) async fn handle_company_action(
         return refuse(state, tenant, action_event, &action, message).await;
     }
 
-    let head = build_head(&state.relay_keypair, &action.payload)?;
+    let head = build_head(
+        &state.relay_keypair,
+        &action.payload,
+        previous_head.as_ref(),
+    )?;
     let receipt = build_receipt(
         &state.relay_keypair,
         action_event,
@@ -762,11 +788,54 @@ mod tests {
 
     /// The head the relay signs must round-trip through the SDK's strict
     /// parser, or clients could never read what the relay writes.
+    /// A replacement head must be strictly newer than the head it replaces.
+    ///
+    /// Found live rather than in review: starting an initiative walks proposed
+    /// to approved to active in well under a second, so every rung after the
+    /// first was refused with "company head lost NIP-33 replacement ordering"
+    /// and the feature did not work at all.
+    #[test]
+    fn a_replacement_head_is_always_newer_than_the_head_it_replaces() {
+        let relay = Keys::generate();
+        let first = build_head(
+            &relay,
+            &CompanyActionPayload::Company(sample_company()),
+            None,
+        )
+        .expect("build first head");
+        let mut changed = sample_company();
+        changed.trading_name = "Renamed".to_string();
+        changed.updated_at += 1;
+        let second = build_head(
+            &relay,
+            &CompanyActionPayload::Company(changed),
+            Some(&first),
+        )
+        .expect("build replacement head");
+
+        assert!(
+            second.created_at > first.created_at,
+            "a replacement written in the same second as its predecessor loses NIP-33 ordering"
+        );
+
+        // And a third in the same breath keeps climbing.
+        let mut again = sample_company();
+        again.trading_name = "Renamed Again".to_string();
+        again.updated_at += 2;
+        let third = build_head(&relay, &CompanyActionPayload::Company(again), Some(&second))
+            .expect("build third head");
+        assert!(third.created_at > second.created_at);
+    }
+
     #[test]
     fn relay_authored_company_head_round_trips_through_the_strict_parser() {
         let relay = Keys::generate();
-        let head = build_head(&relay, &CompanyActionPayload::Company(sample_company()))
-            .expect("build head");
+        let head = build_head(
+            &relay,
+            &CompanyActionPayload::Company(sample_company()),
+            None,
+        )
+        .expect("build head");
 
         assert_eq!(head.kind.as_u16() as u32, KIND_COMPANY_PROFILE);
         assert_eq!(head.pubkey, relay.public_key());
@@ -783,8 +852,12 @@ mod tests {
     #[test]
     fn create_and_replace_expectations_are_enforced_against_stored_state() {
         let relay = Keys::generate();
-        let head = build_head(&relay, &CompanyActionPayload::Company(sample_company()))
-            .expect("build head");
+        let head = build_head(
+            &relay,
+            &CompanyActionPayload::Company(sample_company()),
+            None,
+        )
+        .expect("build head");
         let mut action = CompanyAction {
             relay_pubkey: relay.public_key().to_hex(),
             operation: CompanyActionOperation::Create,
@@ -866,6 +939,7 @@ mod tests {
         let initiative_head = build_head(
             &relay,
             &CompanyActionPayload::Initiative(sample_initiative()),
+            None,
         )
         .expect("build initiative head");
         assert_eq!(initiative_head.kind.as_u16() as u32, KIND_INITIATIVE);
@@ -882,7 +956,7 @@ mod tests {
             .iter()
             .any(|tag| tag.as_slice()[0] == "client"));
 
-        let task_head = build_head(&relay, &CompanyActionPayload::Task(sample_task()))
+        let task_head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
             .expect("build task head");
         assert_eq!(task_head.kind.as_u16() as u32, KIND_TASK);
         assert!(!task_head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
@@ -914,7 +988,8 @@ mod tests {
         task.initiative_id = None;
         task.client_organization_id = None;
 
-        let head = build_head(&relay, &CompanyActionPayload::Task(task)).expect("build task head");
+        let head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
         for name in ["initiative", "client"] {
             assert!(
                 !head.tags.iter().any(|tag| tag.as_slice()[0] == name),
@@ -930,8 +1005,12 @@ mod tests {
     fn receipt_round_trips_and_an_applied_receipt_names_its_head() {
         let relay = Keys::generate();
         let owner = Keys::generate();
-        let head = build_head(&relay, &CompanyActionPayload::Company(sample_company()))
-            .expect("build head");
+        let head = build_head(
+            &relay,
+            &CompanyActionPayload::Company(sample_company()),
+            None,
+        )
+        .expect("build head");
         let action = CompanyAction {
             relay_pubkey: relay.public_key().to_hex(),
             operation: CompanyActionOperation::Create,
