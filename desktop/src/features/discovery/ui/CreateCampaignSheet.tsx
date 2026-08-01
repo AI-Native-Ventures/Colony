@@ -25,6 +25,7 @@ import {
 } from "../sourceConfig";
 import type { CampaignDetail, Vertical } from "../types";
 import { EntitlementLock } from "./EntitlementLock";
+import { DISCOVERY_LIGHT_SURFACE_STYLE } from "./discoverySurfaceStyle";
 
 export type CreateCampaignSheetProps = {
   open: boolean;
@@ -140,8 +141,9 @@ export function CreateCampaignSheet({
       <SheetContent
         aria-describedby="create-campaign-description"
         aria-labelledby="create-campaign-title"
-        className="flex h-full w-full max-w-[37.5rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[37.5rem]"
+        className="flex h-full w-full max-w-[37.5rem] flex-col gap-0 overflow-hidden p-0 text-foreground sm:max-w-[37.5rem]"
         side="right"
+        style={DISCOVERY_LIGHT_SURFACE_STYLE}
       >
         <SheetHeader className="border-b border-border px-8 py-8">
           <SheetTitle className="text-xl" id="create-campaign-title">
