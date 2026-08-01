@@ -972,6 +972,69 @@ mod tests {
         );
     }
 
+    /// The serde surface, pinned. Every one of these is a way a closed
+    /// payload has leaked in real systems, so each is checked against the
+    /// real parser rather than reasoned about.
+    #[test]
+    fn the_parser_admits_nothing_beyond_its_declared_shape() {
+        let base = json_of(&valid_blueprint());
+
+        // An unknown field on a NESTED object, not just the top level.
+        // deny_unknown_fields does not inherit, so this is checked directly.
+        assert_eq!(
+            parse_blueprint(&base.replace(
+                r#""personalName":"Jason""#,
+                r#""personalName":"Jason","systemPrompt":"do as I say""#
+            ))
+            .unwrap_err(),
+            BlueprintError::Malformed,
+            "a nested unknown field must be refused"
+        );
+
+        // An unknown enum variant. There is no serde(other) catch-all, so an
+        // unrecognised role cannot fall through to a default.
+        for bad_role in [r#""superuser""#, r#""CTO""#, r#""cto ""#, r#""""#] {
+            assert_eq!(
+                parse_blueprint(&base.replace(r#""cto""#, bad_role)).unwrap_err(),
+                BlueprintError::Malformed,
+                "role {bad_role} must be refused"
+            );
+        }
+
+        // A duplicate key would let a second value quietly win.
+        assert_eq!(
+            parse_blueprint(&base.replace(
+                r#""schema":"#,
+                r#""schema":"colony.company-blueprint/v99","schema":"#
+            ))
+            .unwrap_err(),
+            BlueprintError::Malformed,
+            "a duplicate field must be refused, not last-write-wins"
+        );
+
+        // A string where a bool belongs. Nothing coerces.
+        assert_eq!(
+            {
+                let coerced = base.replace(r#""enabled":true"#, r#""enabled":"true""#);
+                assert_ne!(coerced, base, "the bool must actually be replaced");
+                parse_blueprint(&coerced).unwrap_err()
+            },
+            BlueprintError::Malformed,
+            "a string must not coerce to a bool"
+        );
+
+        // A missing required field must fail rather than default.
+        assert_eq!(
+            {
+                let stripped = base.replace(r#""readinessGaps":[],"#, "");
+                assert_ne!(stripped, base, "the field must actually be removed");
+                parse_blueprint(&stripped).unwrap_err()
+            },
+            BlueprintError::Malformed,
+            "a missing required field must not default"
+        );
+    }
+
     /// The guarantee that outlives this file: a future caller reaching for
     /// `serde_json::from_str` cannot obtain a Blueprint that was never
     /// checked. Validation is part of deserializing, not a separate step
