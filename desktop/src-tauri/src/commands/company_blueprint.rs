@@ -9,16 +9,17 @@
 
 use buzz_core_pkg::company_roster::blueprint_hash;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
     app_state::AppState,
     company::{
+        actions::{company_action, initiative_actions, sign_action},
         seed::{seed_personas, seed_teams},
         transaction::{
             advance, begin, is_event_id, journal_path, load_journal, needs, planned_initiative_ids,
-            step_idempotency_key, transaction_lock, BlueprintCheckpoint, BlueprintJournal,
-            TransactionError,
+            transaction_lock, BlueprintCheckpoint, BlueprintJournal, TransactionError,
         },
     },
     managed_agents::{load_personas, load_teams, save_personas, save_teams},
@@ -40,10 +41,12 @@ pub struct CompanyBlueprintExecutionResult {
     pub team_ids: Vec<String>,
     /// Stable IDs the three Initiatives will carry.
     pub initiative_ids: Vec<String>,
-    /// Idempotency key for the Company head write.
-    pub company_idempotency_key: String,
-    /// Idempotency key per Initiative, in the same order as `initiative_ids`.
-    pub initiative_idempotency_keys: Vec<String>,
+    /// Signed Company Action events, ready to publish, company head first.
+    ///
+    /// Built and signed here because the envelope has a canonical encoding the
+    /// relay validates exactly; the caller transports these rather than
+    /// constructing them.
+    pub signed_actions: Vec<String>,
     /// How far the transaction got.
     pub checkpoint: String,
 }
@@ -54,23 +57,29 @@ pub struct CompanyBlueprintExecutionResult {
 /// than trusted from the caller, so the trusted-catalog and closed-payload
 /// rules apply to what actually executes, not to some earlier copy.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_company_blueprint(
     app: AppHandle,
     blueprint: String,
     request_id: String,
     community_scope: String,
     expected_hash: String,
+    relay_pubkey: String,
+    channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<CompanyBlueprintExecutionResult, String> {
     // Approving a company is an owner action. Reading the signing key proves
     // an owner identity is present and usable, and gives the key the journal
     // is scoped by. `signing_keys` also refuses while the identity is in
     // recovery mode, which is exactly when nothing should be created.
-    let owner_pubkey = state
+    let keys = state
         .signing_keys()
-        .map_err(|_| TransactionError::NotOwner.to_string())?
-        .public_key()
-        .to_hex();
+        .map_err(|_| TransactionError::NotOwner.to_string())?;
+    let owner_pubkey = keys.public_key().to_hex();
+
+    if !is_event_id(&relay_pubkey) {
+        return Err("relay pubkey is not a valid public key".to_string());
+    }
 
     let parsed = buzz_core_pkg::company_roster::parse_blueprint(&blueprint)
         .map_err(|error| error.to_string())?;
@@ -97,6 +106,8 @@ pub async fn execute_company_blueprint(
     let _guard = lock.lock().await;
 
     let app_for_blocking = app.clone();
+    let for_actions = parsed.clone();
+    let scope_for_actions = community_scope.clone();
     let journal = tokio::task::spawn_blocking(move || -> Result<BlueprintJournal, String> {
         let state = app_for_blocking.state::<AppState>();
         let _store_guard = state
@@ -156,13 +167,27 @@ pub async fn execute_company_blueprint(
     .await
     .map_err(|error| format!("spawn_blocking failed: {error}"))??;
 
-    let initiative_idempotency_keys = journal
-        .initiative_ids
-        .iter()
-        .map(|id| {
-            step_idempotency_key(&journal.request_id, &format!("initiative:{id}")).to_string()
-        })
-        .collect();
+    // Signed only after the local half, so the caller never holds publishable
+    // actions for a company whose employees do not exist yet.
+    //
+    // The timestamp is derived from the approval rather than read from the
+    // clock: a retry has to produce the same bytes as the first attempt, and
+    // `now` would make every attempt a different event.
+    let created_at = approval_timestamp(&journal.request_id);
+    let mut signed_actions = Vec::with_capacity(1 + for_actions.proposed_initiatives.len());
+    signed_actions.push(sign_action(
+        &company_action(&for_actions, &relay_pubkey, created_at)?,
+        &keys,
+    )?);
+    for action in initiative_actions(
+        &for_actions,
+        &scope_for_actions,
+        &relay_pubkey,
+        &channel_id,
+        created_at,
+    )? {
+        signed_actions.push(sign_action(&action, &keys)?);
+    }
 
     Ok(CompanyBlueprintExecutionResult {
         // `Validated` means a previous call already got past seeding, so this
@@ -176,13 +201,32 @@ pub async fn execute_company_blueprint(
         persona_ids: journal.persona_ids.clone(),
         team_ids: journal.team_ids.clone(),
         initiative_ids: journal.initiative_ids.clone(),
-        company_idempotency_key: step_idempotency_key(&journal.request_id, "company").to_string(),
-        initiative_idempotency_keys,
+        signed_actions,
         checkpoint: serde_json::to_value(journal.checkpoint)
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))
             .unwrap_or_default(),
     })
+}
+
+/// A stable `created_at` for one approval.
+///
+/// Derived from the request ID rather than read from the clock, so a retry
+/// rebuilds byte-identical events. Reading the clock would make every attempt
+/// a different event with a different ID, and the relay's duplicate
+/// suppression would be the only thing standing between a retry and a second
+/// company.
+///
+/// Anchored at a fixed date so the value is far enough in the past to be
+/// plausible and far enough forward to be ordered after the epoch.
+fn approval_timestamp(request_id: &str) -> i64 {
+    const COLONY_EPOCH: i64 = 1_767_225_600; // 2026-01-01T00:00:00Z
+    let mut hasher = Sha256::new();
+    hasher.update(request_id.as_bytes());
+    let digest = hasher.finalize();
+    let spread = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
+    // Within roughly a year of the epoch, so the value stays a sane timestamp.
+    COLONY_EPOCH + i64::from(spread % 31_536_000)
 }
 
 /// Record that the relay accepted the Company head and the Initiatives.

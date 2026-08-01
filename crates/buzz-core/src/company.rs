@@ -5,8 +5,10 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const COMPANY_SCHEMA: &str = "colony.company/v1";
-const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
+/// Schema string every Company profile carries.
+pub const COMPANY_SCHEMA: &str = "colony.company/v1";
+/// Schema string every Initiative carries.
+pub const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
 const TASK_SCHEMA: &str = "colony.task/v1";
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 200;
