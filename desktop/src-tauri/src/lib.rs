@@ -3,6 +3,7 @@ mod app_state;
 mod archive;
 mod builderlab;
 mod commands;
+mod company;
 mod deep_link;
 mod event_sync;
 mod events;
