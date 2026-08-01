@@ -32,6 +32,7 @@ pub mod kind;
 pub mod network;
 /// Agent observer frame helpers.
 pub mod observer;
+pub mod onboarding_facts;
 /// NIP-AB device pairing — crypto primitives, message types, and errors.
 pub mod pairing;
 /// Presence status types shared across crates.
