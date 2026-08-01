@@ -19,6 +19,15 @@ abstract final class EventKind {
   static const huddleReaction = 24810;
   static const readState = 30078;
   static const eventReminder = 30300;
+  // Colony company operating records. Relay-authored NIP-33 heads; a client
+  // never signs one. Mobile stays fallback-only for this phase and gains no
+  // company UI, but the numbers are pinned here so the two clients cannot
+  // disagree about which kind means what.
+  static const companyProfile = 30179;
+  static const initiative = 30180;
+  static const task = 30181;
+  static const companyAction = 40013;
+  static const companyReceipt = 40014;
   static const userStatus = 30315;
   static const dmVisibility = 30622;
   static const streamMessageV2 = 40002;

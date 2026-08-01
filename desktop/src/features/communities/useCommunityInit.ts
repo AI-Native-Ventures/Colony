@@ -27,6 +27,7 @@ import { resetAgentProposalReview } from "@/features/blocks/agentProposal";
 import { resetBlockActionQueue } from "@/features/blocks/blockActionQueue";
 import { resetInFlightBlockActions } from "@/features/blocks/blockActions";
 import { resetBlockRepository } from "@/features/blocks/blockRepository";
+import { resetCompanyRepositoryState } from "@/features/company/companyRepository";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
@@ -61,6 +62,7 @@ function resetCommunityState({
   resetInFlightBlockActions();
   resetBlockActionQueue();
   resetBlockRepository();
+  resetCompanyRepositoryState();
   if (resetAvatarState) {
     resetAvatarProfileSync();
     resetAvatarPresentations();

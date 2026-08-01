@@ -138,4 +138,15 @@ void main() {
       ['block-attention', '1', 'required'],
     ]);
   });
+
+  // Mobile does not render company records yet, but a client that disagreed
+  // with the relay about which number means "task" would read the wrong events
+  // the moment it did. Pinning them costs nothing and cannot drift silently.
+  test('Colony company kinds match the desktop mirror', () {
+    expect(EventKind.companyProfile, 30179);
+    expect(EventKind.initiative, 30180);
+    expect(EventKind.task, 30181);
+    expect(EventKind.companyAction, 40013);
+    expect(EventKind.companyReceipt, 40014);
+  });
 }
