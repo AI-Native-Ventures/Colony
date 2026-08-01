@@ -78,6 +78,7 @@ export default defineConfig({
         "**/workspace-rail.spec.ts",
         "**/community-rail.spec.ts",
         "**/boot-splash.spec.ts",
+        "**/colony-brand.spec.ts",
         "**/thread-reply-anchor-roleplay.spec.ts",
         "**/threadpane-ultrawide.spec.ts",
         "**/thread-focus-mode.spec.ts",
