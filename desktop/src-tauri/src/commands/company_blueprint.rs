@@ -7,6 +7,7 @@
 //! than generated: the relay recognises a repeat write by its key, so a retry
 //! from a client that lost its journal still cannot apply anything twice.
 
+use buzz_core_pkg::company_roster::blueprint_hash;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
@@ -15,9 +16,9 @@ use crate::{
     company::{
         seed::{seed_personas, seed_teams},
         transaction::{
-            advance, begin, blueprint_hash, is_event_id, journal_path, load_journal, needs,
-            planned_initiative_ids, step_idempotency_key, transaction_lock, BlueprintCheckpoint,
-            BlueprintJournal, TransactionError,
+            advance, begin, is_event_id, journal_path, load_journal, needs, planned_initiative_ids,
+            step_idempotency_key, transaction_lock, BlueprintCheckpoint, BlueprintJournal,
+            TransactionError,
         },
     },
     managed_agents::{load_personas, load_teams, save_personas, save_teams},

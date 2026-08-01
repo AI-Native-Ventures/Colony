@@ -31,7 +31,36 @@ pub async fn dispatch_company(command: CompanyCmd, client: &BuzzClient) -> Resul
         CompanyCmd::Put { file } => put_from_file(client, &file).await,
         // Routed before auth in `run`; unreachable here.
         CompanyCmd::Scan { url, max_pages } => scan_public_site(&url, max_pages).await,
+        // Routed before auth in `run`; unreachable here.
+        CompanyCmd::Blueprint { file } => check_blueprint(&file),
     }
+}
+
+/// Validate a proposed blueprint and print its stable hash.
+///
+/// Needs no relay. The point is to refuse a blueprint before an owner ever
+/// sees it, and to hand back the hash that binds their approval to this exact
+/// document.
+pub fn check_blueprint(file: &str) -> Result<(), CliError> {
+    let raw = std::fs::read_to_string(file)
+        .map_err(|error| CliError::Usage(format!("could not read {file}: {error}")))?;
+
+    let blueprint = buzz_core::company_roster::parse_blueprint(&raw)
+        .map_err(|error| CliError::Usage(error.to_string()))?;
+
+    let hash = buzz_core::company_roster::blueprint_hash(&blueprint);
+    println!(
+        "{}",
+        serde_json::json!({
+            "companyId": blueprint.company.id,
+            "blueprintHash": hash,
+            "requestId": blueprint.request_id,
+            "employees": blueprint.roster.iter().filter(|entry| entry.enabled).count(),
+            "teams": blueprint.teams.len(),
+            "initiatives": blueprint.proposed_initiatives.len(),
+        })
+    );
+    Ok(())
 }
 
 /// Collect public evidence from a company website.

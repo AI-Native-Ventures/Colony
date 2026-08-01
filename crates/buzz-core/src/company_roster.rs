@@ -750,6 +750,48 @@ fn is_safe_slug(value: &str, max_len: usize) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// Canonical hash of an approved Blueprint.
+///
+/// Lives here so the agent that proposes a Blueprint and the code that
+/// executes it hash with the same implementation. A second implementation
+/// elsewhere, in another language, would agree on ASCII and diverge on the
+/// first company name with an accent in it, rejecting a legitimate approval
+/// in production and nowhere else.
+pub fn blueprint_hash(blueprint: &ValidatedBlueprint) -> String {
+    let canonical =
+        canonical_json(&serde_json::to_value(blueprint.inner()).unwrap_or(serde_json::Value::Null));
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Serialize with object keys sorted, so two equal blueprints hash equal
+/// regardless of the order a client happened to emit them in.
+fn canonical_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let body: Vec<String> = keys
+                .into_iter()
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::String(key.clone()),
+                        canonical_json(&map[key])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", body.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let body: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", body.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
 /// The stable Persona ID a materialized role receives.
 ///
 /// Every component is derived, so approving the same Blueprint twice addresses

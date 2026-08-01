@@ -28,7 +28,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use buzz_core_pkg::company_roster::{materialized_persona_id, ValidatedBlueprint};
+use buzz_core_pkg::company_roster::{blueprint_hash, materialized_persona_id, ValidatedBlueprint};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -137,42 +137,6 @@ const COLONY_NAMESPACE: Uuid = Uuid::from_bytes([
 /// it a second time. This is the single most important function in the module.
 pub fn step_idempotency_key(request_id: &str, step: &str) -> Uuid {
     Uuid::new_v5(&COLONY_NAMESPACE, format!("{request_id}:{step}").as_bytes())
-}
-
-/// Canonical hash of an approved Blueprint.
-pub fn blueprint_hash(blueprint: &ValidatedBlueprint) -> String {
-    let canonical =
-        canonical_json(&serde_json::to_value(blueprint.inner()).unwrap_or(serde_json::Value::Null));
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-/// Serialize with object keys sorted, so two equal blueprints hash equal
-/// regardless of the order a client happened to emit them in.
-fn canonical_json(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let body: Vec<String> = keys
-                .into_iter()
-                .map(|key| {
-                    format!(
-                        "{}:{}",
-                        serde_json::Value::String(key.clone()),
-                        canonical_json(&map[key])
-                    )
-                })
-                .collect();
-            format!("{{{}}}", body.join(","))
-        }
-        serde_json::Value::Array(items) => {
-            let body: Vec<String> = items.iter().map(canonical_json).collect();
-            format!("[{}]", body.join(","))
-        }
-        other => other.to_string(),
-    }
 }
 
 /// Whether a string is a well-formed Nostr event ID.

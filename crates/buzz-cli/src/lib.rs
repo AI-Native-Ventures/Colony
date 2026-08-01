@@ -396,6 +396,17 @@ pub enum CompanyCmd {
     /// Evidence only: pages, brand assets, structured data and explicit gaps.
     /// Inferring what a business sells is the Chief of Staff's job, and it has
     /// to be able to cite sources.
+    /// Check a proposed blueprint and print its hash
+    ///
+    /// The hash the owner approves has to come from the same implementation
+    /// that verifies it at execution, so it is produced here rather than
+    /// recomputed by a client. This also refuses a blueprint outright before
+    /// it is ever shown to an owner.
+    Blueprint {
+        /// Path to the blueprint JSON.
+        #[arg(long)]
+        file: String,
+    },
     Scan {
         #[arg(long)]
         url: String,
@@ -1989,6 +2000,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     // before a company record exists. Same reasoning as Pack above.
     if let Cmd::Company(CompanyCmd::Scan { url, max_pages }) = &cli.command {
         return commands::company::scan_public_site(url, *max_pages).await;
+    }
+
+    // Checking a blueprint is a local read of a local file. Requiring a key
+    // would mean an agent could not tell whether its own proposal is valid
+    // until it tried to publish it.
+    if let Cmd::Company(CompanyCmd::Blueprint { file }) = &cli.command {
+        return commands::company::check_blueprint(file);
     }
 
     // Auth: private key is required for all relay operations.
