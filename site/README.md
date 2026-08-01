@@ -71,16 +71,15 @@ Deliberately out of scope for this phase. Deploys are manual, run from a develop
 with `wrangler`. Automating this (GitHub Actions, Pages' native Git integration, or similar)
 is a separate follow-up, not assumed by this runbook.
 
-## Known issues, resolve before DNS cutover
+## Resolved issues
 
-- **Download and GitHub links point at the wrong repo.** The primary call to action
-  ("Download Colony for macOS" in `site/src/sections/Download.tsx`) links to
+- **Download and GitHub links pointed at the wrong repo (fixed).** The primary call to
+  action ("Download Colony for macOS" in `site/src/sections/Download.tsx`) used to link to
   `https://github.com/block/buzz/releases/latest`, and the footer's GitHub link
-  (`site/src/sections/Footer.tsx`) points at `https://github.com/block/buzz`. This repo's
-  actual origin is `github.com/nocodeafrica/AI-Native-Ventures-App`. A button that reads
-  "Download Colony for macOS" and lands on a project called Buzz reads as broken to a visitor.
-  This has been escalated to the owner and was not fixed as part of the preview deploy.
-  Do not promote this site to `colony.ainative.ventures` until it is resolved.
+  (`site/src/sections/Footer.tsx`) used to point at `https://github.com/block/buzz`. Both now
+  point at this repo's actual origin, `https://github.com/nocodeafrica/AI-Native-Ventures-App`.
+  Since this fork has zero releases as of this fix, both links use the releases list
+  (`/releases`) rather than `/releases/latest`, which 404s with no releases published.
 
 ## Verification performed for this preview deploy
 

@@ -30,7 +30,10 @@ const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
   "manual-required",
 ]);
 
-const GITHUB_RELEASES_URL = "https://github.com/block/buzz/releases/latest";
+// This fork has no releases yet, so this points at the releases list rather
+// than /releases/latest, which 404s with zero releases.
+const GITHUB_RELEASES_URL =
+  "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases";
 
 function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
