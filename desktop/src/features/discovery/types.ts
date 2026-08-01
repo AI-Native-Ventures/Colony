@@ -229,6 +229,11 @@ export type DiscoveryEvent =
       lead?: Lead;
       reason: string;
     })
+  | (SourceDiscoveryEvent & {
+      type: "lead_duplicate";
+      lead: Lead;
+      reason: string;
+    })
   | (DiscoveryEventBase & { type: "target_reached"; targetReached: true })
   | (DiscoveryEventBase & {
       type: "session_completed";

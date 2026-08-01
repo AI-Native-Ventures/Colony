@@ -122,9 +122,9 @@ export const FIXTURE_CAMPAIGN: CampaignDetail = {
   },
   metrics: {
     companiesFound: 10,
-    contactsFound: 12,
-    emailsFound: 7,
-    missingWebsites: 3,
+    contactsFound: 11,
+    emailsFound: 3,
+    missingWebsites: 7,
   },
 };
 
