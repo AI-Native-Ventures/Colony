@@ -330,6 +330,9 @@ pub enum BlueprintError {
     /// would truncate it into a different identifier.
     #[error("an identifier is too long or contains unusable characters")]
     UnusableIdentifier,
+    /// The company it describes would be refused when it is created.
+    #[error("the company this describes would not be accepted")]
+    CompanyContract,
 }
 
 /// One service the company sells.
@@ -686,6 +689,47 @@ pub fn validate_blueprint(blueprint: &CompanyBlueprint) -> Result<(), BlueprintE
             return Err(BlueprintError::DuplicateIdentifier);
         }
     }
+    // A blueprint that would be refused when it is executed must be refused
+    // when it is proposed. Otherwise an owner reads a proposal, approves it,
+    // and the approval fails on a rule nobody showed them. Rather than mirror
+    // the company contract's limits here and let the two drift, the profile it
+    // would produce is built and put through that contract directly.
+    crate::company::validate_company(&crate::company::CompanyProfile {
+        schema: crate::company::COMPANY_SCHEMA.to_string(),
+        id: blueprint.company.id.clone(),
+        trading_name: blueprint.company.trading_name.clone(),
+        legal_name: blueprint.company.legal_name.clone(),
+        website: blueprint.company.website.clone(),
+        summary: blueprint.company.summary.clone(),
+        business_type: blueprint.company.business_type.clone(),
+        services: blueprint
+            .company
+            .services
+            .iter()
+            .map(|service| crate::company::CompanyService {
+                id: service.id.clone(),
+                name: service.name.clone(),
+                description: service.description.clone(),
+            })
+            .collect(),
+        customer_segments: blueprint.company.customer_segments.clone(),
+        cost_centres: blueprint
+            .cost_centres
+            .iter()
+            .map(|centre| crate::company::CostCentre {
+                id: centre.id.clone(),
+                name: centre.name.clone(),
+                kind: centre.kind,
+                service_id: centre.service_id.clone(),
+            })
+            .collect(),
+        source_report_event_id: None,
+        onboarding_status: crate::company::CompanyOnboardingStatus::Draft,
+        created_at: 0,
+        updated_at: 0,
+    })
+    .map_err(|_| BlueprintError::CompanyContract)?;
+
     Ok(())
 }
 
@@ -1260,6 +1304,36 @@ mod tests {
         assert_eq!(
             validate_blueprint(&blueprint).unwrap_err(),
             BlueprintError::UnusableIdentifier
+        );
+    }
+
+    /// A blueprint that would be refused when it is executed must be refused
+    /// when it is proposed. A real model wrote a 202-character businessType
+    /// against a 200-character limit: the blueprint validated, the owner
+    /// approved it, and the approval failed on a rule nobody had shown them.
+    #[test]
+    fn a_blueprint_the_company_contract_would_refuse_is_refused_here() {
+        let mut too_long = valid_blueprint();
+        too_long.company.business_type = "a".repeat(201);
+        assert_eq!(
+            validate_blueprint(&too_long).unwrap_err(),
+            BlueprintError::CompanyContract
+        );
+
+        let mut blank = valid_blueprint();
+        blank.company.trading_name = "   ".to_string();
+        assert_eq!(
+            validate_blueprint(&blank).unwrap_err(),
+            BlueprintError::CompanyContract
+        );
+
+        // And the structural refusals still report themselves, rather than
+        // being swallowed by the contract check that runs after them.
+        let mut ops = valid_blueprint();
+        ops.teams[0].name = "Operations".to_string();
+        assert_eq!(
+            validate_blueprint(&ops).unwrap_err(),
+            BlueprintError::GenericOperationsTeam
         );
     }
 

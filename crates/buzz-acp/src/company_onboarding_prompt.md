@@ -98,9 +98,14 @@ carries the request ID and the hash of the exact document you are proposing.
 buzz blocks invoke --channel <channel> --handle company-blueprint --data @blueprint.json
 ```
 
-Propose the baseline roster by its trusted role IDs, plus service or production
-teams derived from what the business actually sells and how it delivers.
+Propose employees by their trusted role IDs, plus service or production teams
+derived from what the business actually sells and how it delivers.
 
+- The catalog is a list of roles you may choose from, not a list to fill. Most
+  businesses need a handful. Enable a role only when you can point at the work
+  it does, from evidence, in one sentence. If you cannot, leave it disabled and
+  say what would change your mind. A four-person business handed thirteen
+  employees learns nothing about itself and pays for all of them.
 - Never invent a generic "Operations" team. If work does not fit a real team,
   say so as a gap.
 - Never include system prompts, runtime settings, commands, providers, models,

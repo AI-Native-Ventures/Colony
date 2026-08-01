@@ -3725,6 +3725,10 @@ website; you did not audit a business"
         // does not exist, which fails silently as "nothing happened".
         assert!(PROMPT.contains("interview"));
         assert!(PROMPT.contains("company-blueprint"));
+        // The catalog is a menu, not a checklist. Asked to propose "the
+        // baseline roster", a real model enabled all thirteen roles for a
+        // four-person web agency.
+        assert!(PROMPT.contains("not a list to fill"));
         assert!(PROMPT.contains("Include every gap you found"));
     }
 
