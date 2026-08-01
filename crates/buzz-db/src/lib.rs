@@ -6016,6 +6016,72 @@ mod tests {
         assert!(matches!(outcome, CompanyActionApply::StaleHead { .. }));
     }
 
+    /// A retry has to be answerable by key alone, before anything asks whether
+    /// the record already exists.
+    ///
+    /// This is what a dropped connection looks like: the relay committed, the
+    /// client never saw the answer, and it approves again. Without a lookup by
+    /// key the second attempt is refused as a conflict, and the client has no
+    /// way to learn it had already succeeded. Found by approving twice against
+    /// a running relay.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn a_retry_is_answerable_by_key_after_the_record_exists() {
+        let db = setup_company_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        seed_owner(&db.pool, *community.as_uuid(), &owner_hex).await;
+
+        let key = Uuid::new_v4();
+        assert_eq!(
+            db.find_company_action_claim(community, key)
+                .await
+                .expect("lookup"),
+            None,
+            "nothing is claimed before the first attempt"
+        );
+
+        let first = company_batch(&relay, &owner, "acme", 1_000, "create");
+        db.apply_company_action_once(
+            community,
+            &first.action,
+            &first.head,
+            &first.d_tag,
+            &first.receipt,
+            key,
+            &owner_hex,
+            None,
+        )
+        .await
+        .expect("first attempt applies")
+        .applied_or_panic();
+
+        // The record now exists, which is exactly when the create-vs-replace
+        // contract would refuse a retry. The claim must still answer.
+        let claim = db
+            .find_company_action_claim(community, key)
+            .await
+            .expect("lookup")
+            .expect("the applied action is claimed");
+        assert_eq!(
+            claim.action_event_id,
+            first.action.id.as_bytes().to_vec(),
+            "the claim names the attempt that won, so a retry can be told what happened"
+        );
+        assert!(claim.head_event_id.is_some());
+
+        // A different key on the same record is a genuinely new request and
+        // must not be mistaken for a retry.
+        assert_eq!(
+            db.find_company_action_claim(community, Uuid::new_v4())
+                .await
+                .expect("lookup"),
+            None
+        );
+    }
+
     /// Replaying one action ID must return the original result, not create a
     /// second record.
     #[tokio::test]
