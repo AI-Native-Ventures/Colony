@@ -391,6 +391,18 @@ pub enum CompanyCmd {
         #[arg(long)]
         file: String,
     },
+    /// Collect public evidence from a company website
+    ///
+    /// Evidence only: pages, brand assets, structured data and explicit gaps.
+    /// Inferring what a business sells is the Chief of Staff's job, and it has
+    /// to be able to cite sources.
+    Scan {
+        #[arg(long)]
+        url: String,
+        /// Pages to read at most. Clamped to a hard ceiling.
+        #[arg(long)]
+        max_pages: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1972,6 +1984,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         };
     }
 
+    // Scanning a public website touches no relay and reveals no identity, so
+    // requiring a key would block the Chief of Staff from gathering evidence
+    // before a company record exists. Same reasoning as Pack above.
+    if let Cmd::Company(CompanyCmd::Scan { url, max_pages }) = &cli.command {
+        return commands::company::scan_public_site(url, *max_pages).await;
+    }
+
     // Auth: private key is required for all relay operations.
     // The keypair IS the identity — no tokens, no other auth.
     let private_key_str = cli.private_key.ok_or_else(|| {
@@ -2043,6 +2062,16 @@ mod tests {
         let cases = vec![
             vec!["buzz", "company", "get", "--id", "horizon-labs"],
             vec!["buzz", "company", "put", "--file", "company.json"],
+            vec!["buzz", "company", "scan", "--url", "https://example.com"],
+            vec![
+                "buzz",
+                "company",
+                "scan",
+                "--url",
+                "https://example.com",
+                "--max-pages",
+                "12",
+            ],
             vec!["buzz", "initiatives", "list", "--company", "horizon-labs"],
             vec!["buzz", "initiatives", "get", "--id", "init-homepage"],
             vec!["buzz", "initiatives", "put", "--file", "initiative.json"],

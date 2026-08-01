@@ -29,6 +29,42 @@ pub async fn dispatch_company(command: CompanyCmd, client: &BuzzClient) -> Resul
     match command {
         CompanyCmd::Get { id } => get_company(client, &id).await,
         CompanyCmd::Put { file } => put_from_file(client, &file).await,
+        // Routed before auth in `run`; unreachable here.
+        CompanyCmd::Scan { url, max_pages } => scan_public_site(&url, max_pages).await,
+    }
+}
+
+/// Collect public evidence from a company website.
+///
+/// Needs no relay: this is a read of a public site, and keeping it independent
+/// means the Chief of Staff can gather evidence before a company record exists.
+pub async fn scan_public_site(url: &str, max_pages: Option<usize>) -> Result<(), CliError> {
+    let mut limits = crate::company_scan::fetch::ScanLimits::default();
+    if let Some(pages) = max_pages {
+        limits = limits.with_max_pages(pages);
+    }
+    match crate::company_scan::fetch::scan_site(url, limits).await {
+        Ok(result) => {
+            println!(
+                "{}",
+                serde_json::to_string(&result)
+                    .map_err(|error| CliError::Other(format!("cannot serialize scan: {error}")))?
+            );
+            // A site that served pages but no readable text is valid input that
+            // produced unusable evidence — a distinct outcome from a bad URL.
+            if result.pages.iter().all(|page| page.text.len() < 200) {
+                return Err(CliError::NotFound(
+                    "the site served no readable text; ask the user directly instead".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        Err(error) => match error {
+            crate::company_scan::fetch::ScanError::Rejected(rejection) => {
+                Err(CliError::Usage(rejection.to_string()))
+            }
+            other => Err(CliError::Other(other.to_string())),
+        },
     }
 }
 
