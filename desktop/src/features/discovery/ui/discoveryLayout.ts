@@ -59,6 +59,15 @@ export function discoverySurface(
   return "industries";
 }
 
+/** Infer the campaign tab for direct links that omit an explicit tab. */
+export function campaignTabForSearch(
+  search: DiscoverySearch,
+): NonNullable<DiscoverySearch["tab"]> {
+  if (search.tab) return search.tab;
+  if (search.surface === "leads" && search.campaignId) return "leads";
+  return "overview";
+}
+
 /** Keep transient search/filter state isolated to an addressable surface. */
 export function discoveryFilterKey(search: DiscoverySearch): string {
   return [

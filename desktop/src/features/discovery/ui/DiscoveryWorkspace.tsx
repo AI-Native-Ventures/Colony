@@ -32,6 +32,7 @@ import { DiscoveryHeader, type DiscoveryMode } from "./DiscoveryHeader";
 import { IndustryAudienceHint, IndustryGrid } from "./IndustryGrid";
 import { MetricCard } from "./MetricCard";
 import { VerticalGrid } from "./VerticalGrid";
+import { LeadsWorkspace } from "./LeadsWorkspace";
 
 /** The read models loaded by the route for the active addressable surface. */
 export type DiscoveryRouteReadModel = {
@@ -201,7 +202,7 @@ export function DiscoveryWorkspace({
   );
   const vertical = readModel.vertical;
 
-  if (mode === "people") {
+  if (mode === "people" && surface !== "leads") {
     return (
       <div className="space-y-5">
         <DiscoveryHeader
@@ -215,7 +216,7 @@ export function DiscoveryWorkspace({
     );
   }
 
-  if (surface === "campaign") {
+  if ((surface === "campaign" || surface === "leads") && search.campaignId) {
     if (!readModel.campaign) {
       return (
         <WorkspaceState
@@ -229,6 +230,7 @@ export function DiscoveryWorkspace({
         campaign={readModel.campaign}
         dataSource={dataSource}
         entitlement={entitlement}
+        leads={readModel.leads}
         onBack={() =>
           void goDiscovery(
             verticalCampaignsSearch(
@@ -364,24 +366,11 @@ export function DiscoveryWorkspace({
 
   if (surface === "leads") {
     return (
-      <div className="space-y-5">
-        <DiscoveryHeader
-          breadcrumb={industry?.name}
-          description="Lead tables will connect campaign results to the next action."
-          onBack={() =>
-            void goDiscovery(
-              search.verticalId && search.industryId
-                ? verticalCampaignsSearch(search.industryId, search.verticalId)
-                : { surface: "industries" },
-            )
-          }
-          title="Leads"
-        />
-        <WorkspaceState
-          description="The campaign and global lead tables arrive in the next Discovery surface."
-          title="Leads are coming soon"
-        />
-      </div>
+      <LeadsWorkspace
+        dataSource={dataSource}
+        initialLeads={readModel.leads}
+        scope="global"
+      />
     );
   }
 

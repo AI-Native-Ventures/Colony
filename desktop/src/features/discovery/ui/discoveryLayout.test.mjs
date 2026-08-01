@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  campaignTabForSearch,
   campaignDetailSearch,
   campaignProgressPercent,
   discoveryFilterKey,
@@ -11,6 +12,23 @@ import {
   isCampaignListSearch,
   verticalCampaignsSearch,
 } from "./discoveryLayout.ts";
+
+test("direct campaign leads links infer the leads tab when tab is omitted", () => {
+  assert.equal(
+    campaignTabForSearch({
+      surface: "leads",
+      campaignId: "auto-repair-johannesburg",
+    }),
+    "leads",
+  );
+  assert.equal(
+    campaignTabForSearch({
+      surface: "campaign",
+      campaignId: "auto-repair-johannesburg",
+    }),
+    "overview",
+  );
+});
 
 test("industry selection enters the vertical surface with only industry context", () => {
   assert.deepEqual(industryVerticalSearch("automotive"), {
