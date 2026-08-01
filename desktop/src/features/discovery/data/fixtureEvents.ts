@@ -25,6 +25,7 @@ const EVENT_ORIGIN = Date.parse("2026-08-01T09:00:00.000Z");
 type EventContext = {
   campaign: CampaignDetail;
   leads: Lead[];
+  existingLeadIds: ReadonlySet<string>;
   run: DiscoveryRun;
   index: number;
 };
@@ -69,7 +70,8 @@ type SourceEventPayload =
   | { type: "source_failed"; error: string }
   | { type: "source_skipped"; reason: string }
   | { type: "lead_stored"; lead: Lead }
-  | { type: "lead_rejected"; lead: Lead; reason: string };
+  | { type: "lead_rejected"; lead: Lead; reason: string }
+  | { type: "lead_duplicate"; lead: Lead; reason: string };
 
 function sourceEvent(
   context: EventContext,
@@ -99,6 +101,7 @@ function sourceEvent(
       return { ...common, ...payload };
     case "lead_stored":
     case "lead_rejected":
+    case "lead_duplicate":
       return { ...common, ...payload };
   }
 }
@@ -136,13 +139,14 @@ function createContext(
   campaign: CampaignDetail,
   leads: Lead[],
   scenario: FixtureScenario,
+  existingLeadIds: ReadonlySet<string>,
 ): EventContext {
   const run = createIdleDiscoveryRun(campaign);
   run.id = `${campaign.id}-run-${scenario}`;
   run.status = "running";
   run.phase = "initializing";
   run.startedAt = "2026-08-01T09:00:00.000Z";
-  return { campaign, leads, run, index: 0 };
+  return { campaign, leads, existingLeadIds, run, index: 0 };
 }
 
 function setCurrentSource(
@@ -193,6 +197,16 @@ function storeLead(
     context.leads.find((item) => item.source === source) ??
     context.leads[0];
   if (!lead) throw new Error("Fixture campaign has no leads");
+  if (context.existingLeadIds.has(lead.id)) {
+    const metric = metricFor(context, source);
+    metric.duplicates += 1;
+    context.run.duplicates += 1;
+    return sourceEvent(context, source, {
+      type: "lead_duplicate",
+      lead,
+      reason: "Lead already belongs to this campaign",
+    });
+  }
   metric.status = "active";
   metric.stored += 1;
   context.run.stored += 1;
@@ -327,8 +341,9 @@ export function createFixtureEventSequence(
   campaign: CampaignDetail,
   leads: Lead[],
   scenario: FixtureScenario,
+  existingLeadIds: ReadonlySet<string> = new Set(),
 ): DiscoveryEvent[] {
-  const context = createContext(campaign, leads, scenario);
+  const context = createContext(campaign, leads, scenario, existingLeadIds);
   const events: DiscoveryEvent[] = [
     sessionEvent(context, { type: "session_started" }),
   ];
@@ -361,12 +376,25 @@ export function createFixtureEventSequence(
       )) {
         events.push(storeLead(context, first, lead));
       }
-      context.run.targetReached = true;
+      context.run.targetReached = context.run.stored >= context.run.target;
       events.push(
-        sessionEvent(context, { type: "target_reached", targetReached: true }),
+        ...(context.run.targetReached
+          ? [
+              sessionEvent(context, {
+                type: "target_reached",
+                targetReached: true,
+              }),
+            ]
+          : []),
       );
       events.push(completeSource(context, first));
-      events.push(finish(context, "completed", true));
+      events.push(
+        finish(
+          context,
+          context.run.targetReached ? "completed" : "partial",
+          context.run.targetReached,
+        ),
+      );
       return events;
     case "fallback":
       events.push(startSource(context, first));

@@ -88,6 +88,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   private readonly defaultScenario: FixtureScenario;
   private readonly campaigns = new Map<string, CampaignDetail>();
   private readonly campaignLeads = new Map<string, Lead[]>();
+  private readonly campaignRunCounts = new Map<string, number>();
   private readonly activeRuns = new Map<string, ActiveDiscoveryRun>();
   private readonly campaignScenarios = new Map<string, FixtureScenario>();
   private nextCampaignNumber = 1;
@@ -101,6 +102,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     fixtureCampaign.run = createIdleDiscoveryRun(fixtureCampaign);
     this.campaigns.set(fixtureCampaign.id, fixtureCampaign);
     this.campaignLeads.set(fixtureCampaign.id, clone(FIXTURE_CAMPAIGN_LEADS));
+    this.campaignRunCounts.set(fixtureCampaign.id, 0);
     this.campaignScenarios.set(fixtureCampaign.id, this.defaultScenario);
   }
 
@@ -235,6 +237,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     campaign.run = createIdleDiscoveryRun(campaign);
     this.campaigns.set(id, campaign);
     this.campaignLeads.set(id, []);
+    this.campaignRunCounts.set(id, 0);
     this.campaignScenarios.set(id, this.defaultScenario);
     return clone(campaign);
   }
@@ -309,7 +312,18 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       campaignId === CAMPAIGN_FIXTURE.id
         ? FIXTURE_CAMPAIGN_LEADS
         : FIXTURE_GLOBAL_LEADS;
-    const events = createFixtureEventSequence(campaign, leads, scenario);
+    const existingLeadIds =
+      (this.campaignRunCounts.get(campaignId) ?? 0) > 0
+        ? new Set(
+            (this.campaignLeads.get(campaignId) ?? []).map((lead) => lead.id),
+          )
+        : new Set<string>();
+    const events = createFixtureEventSequence(
+      campaign,
+      leads,
+      scenario,
+      existingLeadIds,
+    );
     const runId = events[0]?.runId ?? `${campaignId}-run-${scenario}`;
     const token = `${campaignId}:${this.nextRunToken}`;
     this.nextRunToken += 1;
@@ -333,6 +347,10 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       if (activeRun.cancelled) {
         const cancelled = this.createCancellationEvent(campaignId, event);
         this.applyEvent(cancelled);
+        this.campaignRunCounts.set(
+          campaignId,
+          (this.campaignRunCounts.get(campaignId) ?? 0) + 1,
+        );
         this.activeRuns.delete(campaignId);
         yield cancelled;
         return;
@@ -340,6 +358,10 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       this.applyEvent(event);
       yield clone(event);
       if (isTerminalEvent(event)) {
+        this.campaignRunCounts.set(
+          campaignId,
+          (this.campaignRunCounts.get(campaignId) ?? 0) + 1,
+        );
         this.activeRuns.delete(campaignId);
         return;
       }

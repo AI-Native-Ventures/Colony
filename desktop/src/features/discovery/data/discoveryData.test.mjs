@@ -22,6 +22,21 @@ test("fixture source returns the SalesTeams-shaped discovery hierarchy", async (
   assert.equal(vertical.name, "Auto Repair");
   assert.equal(vertical.campaigns.length, 1);
   assert.equal(vertical.campaigns[0].id, "auto-repair-johannesburg");
+
+  const leads = await source.getLeads({
+    scope: "campaign",
+    campaignId: "auto-repair-johannesburg",
+  });
+  const campaign = await source.getCampaign("auto-repair-johannesburg");
+  assert.deepEqual(campaign.metrics, {
+    companiesFound: leads.total,
+    contactsFound: leads.leads.reduce(
+      (total, lead) => total + lead.contacts,
+      0,
+    ),
+    emailsFound: leads.leads.filter((lead) => Boolean(lead.email)).length,
+    missingWebsites: leads.leads.filter((lead) => !lead.website).length,
+  });
 });
 
 test("entitlement is provider-neutral and does not invent a price", async () => {
@@ -325,4 +340,42 @@ test("stored fixture leads persist in the campaign read model", async () => {
     detail.metrics.missingWebsites,
     after.leads.filter((lead) => !lead.website).length,
   );
+});
+
+test("repeated discovery emits duplicates without inflating campaign leads", async () => {
+  const source = createFixtureDiscoveryDataSource({
+    scenario: "waterfall-target",
+  });
+  const campaign = await source.createCampaign({
+    name: "Repeatable fixture campaign",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Johannesburg",
+    target: 2,
+  });
+  for await (const _event of source.startDiscovery(campaign.id)) {
+    // First run stores two deterministic leads.
+  }
+  const first = await source.getLeads({
+    scope: "campaign",
+    campaignId: campaign.id,
+  });
+  const secondEvents = [];
+  for await (const event of source.startDiscovery(campaign.id)) {
+    secondEvents.push(event);
+  }
+  const second = await source.getLeads({
+    scope: "campaign",
+    campaignId: campaign.id,
+  });
+  const terminal = secondEvents.at(-1);
+  assert.equal(first.total, 2);
+  assert.equal(second.total, first.total);
+  assert.equal(
+    secondEvents.filter((event) => event.type === "lead_duplicate").length,
+    2,
+  );
+  assert.equal(terminal?.run.stored, 0);
+  assert.equal(terminal?.run.duplicates, 2);
+  assert.equal(terminal?.targetReached, false);
 });
