@@ -17,6 +17,8 @@ pub mod api_token;
 pub mod archived_identities;
 /// Channel and membership persistence.
 pub mod channel;
+/// Private entitlement, authorization, and durable run persistence for Discovery.
+pub mod discovery;
 /// Direct message channel persistence.
 pub mod dm;
 /// Database error types.
