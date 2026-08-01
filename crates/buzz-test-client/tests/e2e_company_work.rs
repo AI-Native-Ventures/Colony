@@ -279,7 +279,7 @@ async fn publish_team(client: &mut BuzzTestClient, keys: &Keys, team: &CompanyTe
 }
 
 fn now() -> i64 {
-    Timestamp::now().as_u64() as i64
+    Timestamp::now().as_secs() as i64
 }
 
 /// One owner, one company, one team: the fixture every assertion runs against.
