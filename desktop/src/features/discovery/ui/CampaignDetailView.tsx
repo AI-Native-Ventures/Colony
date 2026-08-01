@@ -28,6 +28,7 @@ export type CampaignDetailViewProps = {
 };
 
 function statusVariant(status: CampaignDetail["status"]) {
+  if (status === "ready") return "success" as const;
   if (status === "completed") return "success" as const;
   if (status === "running") return "info" as const;
   if (status === "failed" || status === "cancelled")
@@ -132,14 +133,15 @@ export function CampaignDetailView({
   const activeTab: CampaignTab = campaignTabForSearch(search);
   const effectiveStatus =
     runState.run.status === "idle" ? campaignState.status : runState.run.status;
+  const displayStatus = effectiveStatus === "ready" ? "live" : effectiveStatus;
 
   return (
-    <div className="space-y-5">
+    <div className="mx-auto max-w-[65rem] px-[2.375rem] pb-16 pt-7">
       <header className="space-y-4 border-b border-border/50 pb-1">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0">
             <Button
-              className="-ml-2 mb-2"
+              className="-ml-2 mb-5"
               onClick={onBack}
               type="button"
               variant="ghost"
@@ -147,15 +149,15 @@ export function CampaignDetailView({
               <ArrowLeft aria-hidden="true" />
               Back to {campaignState.verticalName}
             </Button>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            <div className="mb-2.5 flex flex-wrap items-center gap-3">
+              <h1 className="font-serif text-title font-normal leading-none tracking-tight text-foreground">
                 {campaignState.name}
               </h1>
               <Badge variant={statusVariant(effectiveStatus)}>
-                {effectiveStatus}
+                {displayStatus}
               </Badge>
             </div>
-            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-2xs text-muted-foreground">
               <span>{campaignState.industryName}</span>
               <span aria-hidden="true">·</span>
               <span>{campaignState.verticalName}</span>
@@ -166,14 +168,17 @@ export function CampaignDetailView({
               </span>
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <EntitlementLock
-              actionLabel="Run Discovery"
-              entitlement={entitlement}
-              onRetry={() => window.location.reload()}
-              onRun={runState.start}
-            />
-          </div>
+          {activeTab !== "discovery" ? (
+            <div className="flex shrink-0 items-center gap-2 pt-1">
+              <EntitlementLock
+                actionLabel="Run Discovery"
+                entitlement={entitlement}
+                className="rounded-full px-5"
+                onRetry={() => window.location.reload()}
+                onRun={runState.start}
+              />
+            </div>
+          ) : null}
         </div>
         <CampaignTabs
           leadCount={campaignState.leadCount}
@@ -182,38 +187,40 @@ export function CampaignDetailView({
         />
       </header>
 
-      {activeTab === "overview" ? (
-        <OverviewTab
-          campaign={campaignState}
-          leadCount={Math.max(campaignState.leadCount, runState.run.stored)}
-        />
-      ) : null}
-      {activeTab === "discovery" ? (
-        <DiscoveryRunTab
-          campaign={campaignState}
-          entitlement={entitlement}
-          runState={runState}
-        />
-      ) : null}
-      {activeTab === "leads" ? (
-        <LeadsWorkspace
-          campaign={campaignState}
-          dataSource={dataSource}
-          initialLeads={leads}
-          scope="campaign"
-        />
-      ) : null}
-      {activeTab === "outreach" ||
-      activeTab === "conversations" ||
-      activeTab === "settings" ? (
-        <ViewOnlyTab
-          campaign={campaignState}
-          dataSource={dataSource}
-          entitlement={entitlement}
-          onUpdated={setCampaignState}
-          tab={activeTab}
-        />
-      ) : null}
+      <div className="pt-7">
+        {activeTab === "overview" ? (
+          <OverviewTab
+            campaign={campaignState}
+            leadCount={Math.max(campaignState.leadCount, runState.run.stored)}
+          />
+        ) : null}
+        {activeTab === "discovery" ? (
+          <DiscoveryRunTab
+            campaign={campaignState}
+            entitlement={entitlement}
+            runState={runState}
+          />
+        ) : null}
+        {activeTab === "leads" ? (
+          <LeadsWorkspace
+            campaign={campaignState}
+            dataSource={dataSource}
+            initialLeads={leads}
+            scope="campaign"
+          />
+        ) : null}
+        {activeTab === "outreach" ||
+        activeTab === "conversations" ||
+        activeTab === "settings" ? (
+          <ViewOnlyTab
+            campaign={campaignState}
+            dataSource={dataSource}
+            entitlement={entitlement}
+            onUpdated={setCampaignState}
+            tab={activeTab}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

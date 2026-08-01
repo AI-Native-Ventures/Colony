@@ -3,6 +3,7 @@ import { CheckCircle2, LockKeyhole, TriangleAlert } from "lucide-react";
 
 import { canStartDiscovery, type DiscoveryEntitlement } from "../entitlement";
 import { Button } from "@/shared/ui/button";
+import { cn } from "@/shared/lib/cn";
 import {
   Dialog,
   DialogClose,
@@ -18,6 +19,7 @@ export type EntitlementLockProps = {
   onRun: () => void;
   onRetry?: () => void;
   actionLabel?: string;
+  className?: string;
 };
 
 export function EntitlementLock({
@@ -25,13 +27,21 @@ export function EntitlementLock({
   onRun,
   onRetry,
   actionLabel = "Run discovery",
+  className,
 }: EntitlementLockProps) {
   const [open, setOpen] = React.useState(false);
   const state = entitlement?.state ?? "loading";
 
   if (canStartDiscovery({ state })) {
     return (
-      <Button onClick={onRun} type="button">
+      <Button
+        className={cn(
+          "bg-foreground text-background hover:bg-foreground/90",
+          className,
+        )}
+        onClick={onRun}
+        type="button"
+      >
         <CheckCircle2 aria-hidden="true" />
         {actionLabel}
       </Button>
@@ -73,6 +83,7 @@ export function EntitlementLock({
     <>
       <Button
         aria-haspopup="dialog"
+        className={className}
         onClick={() => setOpen(true)}
         type="button"
         variant="outline"

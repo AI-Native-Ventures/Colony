@@ -277,7 +277,7 @@ export function DiscoveryWorkspace({
       : verticals;
 
     return (
-      <div className="relative space-y-10 px-8 pb-12 pt-8">
+      <div className="relative space-y-6 px-9 pb-16 pt-9">
         <DiscoveryHeader
           breadcrumb="Industries"
           description={`${visibleVerticals.length} Verticals Available`}
@@ -375,7 +375,7 @@ export function DiscoveryWorkspace({
       : verticals;
 
     return (
-      <div className="space-y-10 px-8 pb-12 pt-8">
+      <div className="space-y-6 px-9 pb-16 pt-9">
         <DiscoveryHeader
           breadcrumb="Industries"
           description={`${visibleVerticals.length} Verticals Available`}
@@ -438,7 +438,7 @@ export function DiscoveryWorkspace({
     });
 
   return (
-    <div className="space-y-10 px-8 pb-12 pt-8">
+    <div className="space-y-6 px-9 pb-16 pt-9">
       <DiscoveryHeader
         description=""
         mode={mode}

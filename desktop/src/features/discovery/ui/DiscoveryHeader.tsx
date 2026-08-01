@@ -40,12 +40,20 @@ export function DiscoveryHeader({
   toolbarEntity = "industries",
 }: DiscoveryHeaderProps) {
   return (
-    <header className="space-y-8">
-      <div className="flex items-end justify-between gap-8">
+    <header className="space-y-6">
+      <div className="mb-6 flex items-end justify-between gap-6">
         <div className="min-w-0">
-          <h1 className="font-sans text-title font-semibold tracking-tight text-foreground">
+          <h1 className="font-serif text-5xl font-normal leading-none tracking-tight text-foreground">
             Millions of leads,{" "}
-            <em className="not-italic italic text-primary">one search away.</em>
+            <em
+              className="not-italic italic"
+              style={{
+                color:
+                  "color-mix(in srgb, hsl(var(--discovery-accent)) 55%, hsl(var(--foreground)) 45%)",
+              }}
+            >
+              one search away.
+            </em>
           </h1>
           <p className="mt-3 text-sm text-muted-foreground">
             {mode === "businesses" ? (
@@ -65,13 +73,13 @@ export function DiscoveryHeader({
         {onModeChange ? (
           <fieldset
             aria-label="Discovery audience"
-            className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-border bg-background p-1.5"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-xl border border-border bg-background p-1"
             data-testid="discovery-audience-toggle"
           >
             <legend className="sr-only">Discovery audience</legend>
             <button
               className={cn(
-                "inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors",
+                "inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors",
                 mode === "businesses"
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground",
@@ -101,7 +109,7 @@ export function DiscoveryHeader({
 
       {showToolbar ? (
         <label
-          className="flex items-center gap-3 rounded-2xl border border-border bg-background px-6 py-3 shadow-sm focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10"
+          className="mb-6 flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-2 shadow-sm focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10"
           htmlFor="discovery-search"
         >
           <Search
@@ -110,7 +118,7 @@ export function DiscoveryHeader({
           />
           <Input
             aria-label={`Search discovery ${toolbarEntity}`}
-            className="h-12 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+            className="h-11 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
             id="discovery-search"
             onChange={(event) => onQueryChange?.(event.target.value)}
             placeholder={
@@ -121,7 +129,7 @@ export function DiscoveryHeader({
             value={query}
           />
           <Button
-            className="h-12 rounded-xl bg-foreground px-7 text-sm font-semibold text-background hover:bg-foreground/90"
+            className="h-11 rounded-lg bg-foreground px-6 text-sm font-semibold text-background hover:bg-foreground/90"
             type="button"
           >
             Search

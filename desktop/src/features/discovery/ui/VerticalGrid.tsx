@@ -30,40 +30,40 @@ export function VerticalGrid({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4.5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {verticals.map((vertical) => {
         const active = vertical.status === "active";
         return (
           <button
             aria-label={`Explore ${vertical.name}`}
-            className="group overflow-hidden rounded-2xl border border-border bg-background text-left transition-all duration-200 hover:border-border/80 hover:shadow-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+            className="group overflow-hidden rounded-2xl border border-border bg-card text-left transition-all duration-200 hover:border-border/80 hover:shadow-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             data-testid={`discovery-vertical-card-${vertical.slug}`}
             key={vertical.id}
             onClick={() => onSelect(vertical)}
             type="button"
           >
-            <div className="relative aspect-[3/1] items-center justify-center overflow-hidden bg-gradient-to-br from-primary/10 to-background">
+            <div className="relative h-28 items-center justify-center overflow-hidden bg-gradient-to-br from-primary/10 to-background">
               <img
                 alt={vertical.name}
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                 src={resolveDiscoveryAsset(vertical.imageKey)}
               />
               <div className="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-black/20 to-transparent" />
-              <div className="absolute right-4 top-4">
+              <div className="absolute right-2.5 top-2.5">
                 {active ? (
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-primary-foreground">
                     <span className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />{" "}
                     Active
                   </span>
                 ) : (
-                  <span className="rounded-full border border-border bg-background px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="rounded-full border border-border bg-background px-2.5 py-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Available
                   </span>
                 )}
               </div>
             </div>
-            <div className="px-5 py-5">
-              <div className="mb-3 text-sm font-semibold leading-snug text-foreground">
+            <div className="px-4 py-4">
+              <div className="mb-2 text-sm font-semibold leading-snug text-foreground">
                 {vertical.name}
               </div>
               <div className="flex items-center justify-between font-mono text-2xs text-muted-foreground">
