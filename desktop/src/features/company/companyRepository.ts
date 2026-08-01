@@ -132,6 +132,39 @@ export function createCompanyRepository(
   }
 
   return {
+    /**
+     * The company this community operates as.
+     *
+     * A community has one. Rather than making every caller carry an ID it has
+     * no way to know, this asks the relay which company it authored. When more
+     * than one somehow exists, the oldest wins: that is the one the owner
+     * approved first, and picking the newest would let a later stray record
+     * quietly take over what work is charged to.
+     */
+    async getActiveCompany(): Promise<CompanyParseResult<CompanyProfile>> {
+      return read<CompanyProfile>(
+        (relaySelfPubkey) => ({
+          kinds: [KIND_COMPANY_PROFILE],
+          authors: [relaySelfPubkey],
+          limit: 16,
+        }),
+        (events, relaySelfPubkey) => {
+          const heads = collectHeads(events, relaySelfPubkey, parseCompanyHead);
+          const company = heads.sort(
+            (left, right) =>
+              left.createdAt - right.createdAt ||
+              left.id.localeCompare(right.id),
+          )[0];
+          return company
+            ? { ok: true, value: company }
+            : companyFailure<CompanyProfile>(
+                "missing-head",
+                "No company record exists on this community yet.",
+              );
+        },
+      );
+    },
+
     async getCompany(
       companyId: string,
     ): Promise<CompanyParseResult<CompanyProfile>> {

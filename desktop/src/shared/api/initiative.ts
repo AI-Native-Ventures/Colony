@@ -43,3 +43,37 @@ export async function advanceInitiative(
     intent: input.intent,
   });
 }
+
+/** The Task an agent-directed message will be charged to. */
+export type ChatTaskResult = {
+  taskId: string;
+  owningTeamId: string;
+  /** The signed Company Action that creates it. */
+  signedAction: string;
+};
+
+export type EnsureChatTaskInput = {
+  /** The relay-signed company head, exactly as it was read. */
+  companyHead: string;
+  channelId: string;
+  /** This client's stable identity for this send. A retry reuses it. */
+  sendId: string;
+  agentPubkey: string;
+  title: string;
+  clientOrganizationId: string | null;
+  relayPubkey: string;
+};
+
+export async function ensureChatTask(
+  input: EnsureChatTaskInput,
+): Promise<ChatTaskResult> {
+  return await invokeTauri<ChatTaskResult>("ensure_chat_task", {
+    companyHead: input.companyHead,
+    channelId: input.channelId,
+    sendId: input.sendId,
+    agentPubkey: input.agentPubkey,
+    title: input.title,
+    clientOrganizationId: input.clientOrganizationId,
+    relayPubkey: input.relayPubkey,
+  });
+}

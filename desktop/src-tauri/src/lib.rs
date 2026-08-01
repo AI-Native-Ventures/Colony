@@ -822,6 +822,7 @@ pub fn run() {
             commands::company_blueprint::execute_company_blueprint,
             commands::company_blueprint::complete_company_blueprint,
             commands::initiative::advance_initiative,
+            commands::initiative::ensure_chat_task,
             create_team,
             update_team,
             delete_team,

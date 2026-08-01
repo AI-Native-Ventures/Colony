@@ -11,13 +11,18 @@
 use buzz_sdk_pkg::{
     company::parse_company_event,
     company_blueprint::sign_action,
+    implicit_task::plan_implicit_task,
     initiative_activation::{next_step, InitiativeIntent, InitiativeStep},
 };
 use nostr::JsonUtil;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use crate::{app_state::AppState, company::transaction::is_event_id, managed_agents::load_teams};
+use crate::{
+    app_state::AppState,
+    company::transaction::is_event_id,
+    managed_agents::{load_teams, storage::load_managed_agents},
+};
 
 /// What the caller has to publish next, and what it will do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +42,28 @@ pub struct InitiativeStepResult {
     pub signed_action: Option<String>,
     /// Whether the initiative has reached a state with nothing left to publish.
     pub settled: bool,
+}
+
+/// This device's teams, projected into what the company contract validates.
+///
+/// These are the same records published as the Team projection the relay
+/// checks against. If they have drifted, the relay refuses the Task and says
+/// so in its receipt rather than this process guessing.
+fn company_team_refs(
+    app: &AppHandle,
+) -> Result<Vec<buzz_core_pkg::company::CompanyTeamRef>, String> {
+    Ok(load_teams(app)?
+        .into_iter()
+        .filter_map(|team| {
+            let lead = team.lead_persona_id?;
+            Some(buzz_core_pkg::company::CompanyTeamRef {
+                id: team.id,
+                lead_persona_id: lead,
+                persona_ids: team.persona_ids,
+            })
+        })
+        .filter(|team| buzz_core_pkg::company::validate_team_ref(team).is_ok())
+        .collect())
 }
 
 /// Read a relay-signed head, refusing anything the tenant relay did not write.
@@ -100,21 +127,7 @@ pub async fn advance_initiative(
     let initiative = buzz_sdk_pkg::company::parse_initiative_event(&initiative_event)
         .map_err(|error| format!("the initiative head is unreadable: {error}"))?;
 
-    // Teams come from this device's own records, which are the same ones
-    // published as the Team projection the relay validates against. If they
-    // have drifted, the relay refuses the Task and says so in its receipt.
-    let teams = load_teams(&app)?
-        .into_iter()
-        .filter_map(|team| {
-            let lead = team.lead_persona_id?;
-            Some(buzz_core_pkg::company::CompanyTeamRef {
-                id: team.id,
-                lead_persona_id: lead,
-                persona_ids: team.persona_ids,
-            })
-        })
-        .filter(|team| buzz_core_pkg::company::validate_team_ref(team).is_ok())
-        .collect::<Vec<_>>();
+    let teams = company_team_refs(&app)?;
 
     let status = serde_json::to_value(initiative.status)
         .ok()
@@ -169,4 +182,89 @@ pub async fn advance_initiative(
     };
 
     Ok(result)
+}
+
+/// The Task an agent-directed message will be charged to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTaskResult {
+    /// The stable Task identifier this send is charged to.
+    pub task_id: String,
+    /// The single team accountable for it.
+    pub owning_team_id: String,
+    /// The signed Company Action that creates it.
+    pub signed_action: String,
+}
+
+/// Build the Task for one agent-directed message.
+///
+/// Every paid agent turn is charged to a Task. Most instructions in chat do not
+/// name one, so Colony creates one rather than letting the turn run
+/// unattributed: an unattributed turn is money spent that no cost centre, team,
+/// or commercial purpose can be traced to, and the classification cannot be
+/// recovered afterwards.
+///
+/// `send_id` is the caller's stable identity for this send. Retrying the same
+/// send asks for the same Task, because the identifier is derived from it.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn ensure_chat_task(
+    app: AppHandle,
+    company_head: String,
+    channel_id: String,
+    send_id: String,
+    agent_pubkey: String,
+    title: String,
+    client_organization_id: Option<String>,
+    relay_pubkey: String,
+    state: State<'_, AppState>,
+) -> Result<ChatTaskResult, String> {
+    let keys = state
+        .signing_keys()
+        .map_err(|_| "recording company work requires the community owner".to_string())?;
+
+    if !is_event_id(&relay_pubkey) {
+        return Err("relay pubkey is not a valid public key".to_string());
+    }
+
+    let company_event = relay_head(&company_head, &relay_pubkey, "company")?;
+    let company = parse_company_event(&company_event)
+        .map_err(|error| format!("the company head is unreadable: {error}"))?;
+
+    // The mention flow knows agents by public key; the company contract knows
+    // them by persona. An agent with no persona has no place in any team, so it
+    // has nothing that could be held accountable for the work.
+    let normalized = agent_pubkey.trim().to_lowercase();
+    let agent_persona_id = load_managed_agents(&app)?
+        .into_iter()
+        .find(|agent| agent.pubkey.trim().to_lowercase() == normalized)
+        .and_then(|agent| agent.persona_id)
+        .ok_or_else(|| "that agent is not a company employee".to_string())?;
+
+    let teams = company_team_refs(&app)?;
+
+    // Derived from the send rather than read from the clock, so a retry
+    // produces the same bytes and the relay recognises the replay.
+    let now = buzz_core_pkg::company_roster::approval_timestamp(&format!(
+        "{}:{channel_id}:{send_id}",
+        company.id
+    ));
+
+    let plan = plan_implicit_task(
+        &company,
+        &teams,
+        &agent_persona_id,
+        &channel_id,
+        &send_id,
+        &title,
+        client_organization_id.as_deref(),
+        &relay_pubkey,
+        now,
+    )?;
+
+    Ok(ChatTaskResult {
+        task_id: plan.task_id,
+        owning_team_id: plan.owning_team_id,
+        signed_action: sign_action(&plan.action, &keys)?,
+    })
 }
