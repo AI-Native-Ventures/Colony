@@ -308,31 +308,32 @@ pub fn advance(
 /// a second Chief of Staff would leave the owner with two, one of which has no
 /// memory of the conversation that created the company.
 pub fn persona_id_for(
+    community_scope: &str,
     company_id: &str,
     role_id: buzz_core_pkg::company_roster::BaselineRoleId,
 ) -> String {
     if role_id == buzz_core_pkg::company_roster::BaselineRoleId::ChiefOfStaff {
         return "builtin:fizz".to_string();
     }
-    materialized_persona_id(company_id, role_id)
+    materialized_persona_id(community_scope, company_id, role_id)
 }
 
 /// Every Persona ID this Blueprint materializes, in Blueprint order.
-pub fn planned_persona_ids(blueprint: &CompanyBlueprint) -> Vec<String> {
+pub fn planned_persona_ids(community_scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
     blueprint
         .roster
         .iter()
         .filter(|entry| entry.enabled)
-        .map(|entry| persona_id_for(&blueprint.company.id, entry.role_id))
+        .map(|entry| persona_id_for(community_scope, &blueprint.company.id, entry.role_id))
         .collect()
 }
 
 /// Every Team ID this Blueprint materializes, in Blueprint order.
-pub fn planned_team_ids(blueprint: &CompanyBlueprint) -> Vec<String> {
+pub fn planned_team_ids(community_scope: &str, blueprint: &CompanyBlueprint) -> Vec<String> {
     blueprint
         .teams
         .iter()
-        .map(|team| materialized_team_id(&blueprint.company.id, &team.id))
+        .map(|team| materialized_team_id(community_scope, &blueprint.company.id, &team.id))
         .collect()
 }
 

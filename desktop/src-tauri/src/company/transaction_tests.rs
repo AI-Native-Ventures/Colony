@@ -126,7 +126,7 @@ fn run(
     }
 
     if needs(&journal, BlueprintCheckpoint::PersonasSeeded) {
-        let planned = planned_persona_ids(blueprint);
+        let planned = planned_persona_ids(SCOPE, blueprint);
         for id in &planned {
             effects.personas_created.fetch_add(1, Ordering::SeqCst);
             // Fizz already exists and is mid-conversation; only new employees
@@ -143,7 +143,7 @@ fn run(
     }
 
     if needs(&journal, BlueprintCheckpoint::TeamsSeeded) {
-        let planned = planned_team_ids(blueprint);
+        let planned = planned_team_ids(SCOPE, blueprint);
         effects
             .teams_created
             .fetch_add(planned.len(), Ordering::SeqCst);
@@ -318,20 +318,13 @@ fn idempotency_keys_are_derived_from_the_request_and_step() {
 fn materialized_ids_are_stable_across_runs() {
     let blueprint = blueprint();
     assert_eq!(
-        planned_persona_ids(&blueprint),
-        planned_persona_ids(&blueprint)
+        planned_persona_ids(SCOPE, &blueprint),
+        planned_persona_ids(SCOPE, &blueprint)
     );
-    assert_eq!(
-        planned_persona_ids(&blueprint),
-        vec![
-            "builtin:fizz".to_string(),
-            "company:horizon-labs:cto".to_string()
-        ]
-    );
-    assert_eq!(
-        planned_team_ids(&blueprint),
-        vec!["company-team:horizon-labs:engineering".to_string()]
-    );
+    let personas = planned_persona_ids(SCOPE, &blueprint);
+    assert_eq!(personas[0], "builtin:fizz");
+    assert!(personas[1].ends_with(":horizon-labs:cto"));
+    assert!(planned_team_ids(SCOPE, &blueprint)[0].ends_with(":horizon-labs:engineering"));
     assert_eq!(
         planned_initiative_ids(&blueprint),
         vec![
@@ -348,7 +341,9 @@ fn materialized_ids_are_stable_across_runs() {
 fn a_disabled_roster_entry_is_not_materialized() {
     let blueprint = blueprint();
     assert!(
-        !planned_persona_ids(&blueprint).contains(&"company:horizon-labs:cfo".to_string()),
+        !planned_persona_ids(SCOPE, &blueprint)
+            .iter()
+            .any(|id| id.ends_with(":cfo")),
         "the owner unchecked the CFO; it must not be created"
     );
 }
@@ -358,12 +353,12 @@ fn a_disabled_roster_entry_is_not_materialized() {
 #[test]
 fn the_existing_chief_of_staff_is_reused_rather_than_duplicated() {
     assert_eq!(
-        persona_id_for("horizon-labs", BaselineRoleId::ChiefOfStaff),
+        persona_id_for(SCOPE, "horizon-labs", BaselineRoleId::ChiefOfStaff),
         "builtin:fizz"
     );
     assert_eq!(
-        persona_id_for("horizon-labs", BaselineRoleId::Cto),
-        "company:horizon-labs:cto"
+        persona_id_for(SCOPE, "horizon-labs", BaselineRoleId::Cto),
+        materialized_persona_id(SCOPE, "horizon-labs", BaselineRoleId::Cto)
     );
 }
 
@@ -444,7 +439,7 @@ fn the_journal_holds_no_secrets_and_is_owner_only() {
     let path = journal_path(&dir, OWNER, SCOPE, REQUEST);
     let blueprint = blueprint();
     let mut journal = begin(None, OWNER, SCOPE, REQUEST, &blueprint).expect("begin");
-    journal.persona_ids = planned_persona_ids(&blueprint);
+    journal.persona_ids = planned_persona_ids(SCOPE, &blueprint);
     store_journal(&path, &journal).expect("store");
 
     let raw = std::fs::read_to_string(&path).expect("read");

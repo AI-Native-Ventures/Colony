@@ -7,6 +7,7 @@ use buzz_core_pkg::company_roster::{
 use super::*;
 
 const NOW: &str = "2026-08-01T09:00:00Z";
+const SCOPE: &str = "relay.example";
 
 fn blueprint() -> CompanyBlueprint {
     CompanyBlueprint {
@@ -107,20 +108,16 @@ fn fizz() -> AgentDefinition {
 #[test]
 fn a_first_run_creates_every_enabled_employee() {
     let blueprint = blueprint();
-    let outcome = seed_personas(&blueprint, &[fizz()], NOW);
+    let outcome = seed_personas(SCOPE, &blueprint, &[fizz()], NOW);
 
     let created: Vec<&str> = outcome
         .created_personas
         .iter()
         .map(|persona| persona.id.as_str())
         .collect();
-    assert_eq!(
-        created,
-        [
-            "company:horizon-labs:cto",
-            "company:horizon-labs:frontend-engineer"
-        ]
-    );
+    assert_eq!(created.len(), 2);
+    assert!(created[0].ends_with(":horizon-labs:cto"));
+    assert!(created[1].ends_with(":horizon-labs:frontend-engineer"));
     assert_eq!(outcome.reused_persona_ids, ["builtin:fizz"]);
 }
 
@@ -128,7 +125,7 @@ fn a_first_run_creates_every_enabled_employee() {
 /// not be created anyway.
 #[test]
 fn an_employee_the_owner_declined_is_not_created() {
-    let outcome = seed_personas(&blueprint(), &[fizz()], NOW);
+    let outcome = seed_personas(SCOPE, &blueprint(), &[fizz()], NOW);
     assert!(
         !outcome.persona_ids().iter().any(|id| id.ends_with(":cfo")),
         "the owner unchecked the CFO"
@@ -140,7 +137,7 @@ fn an_employee_the_owner_declined_is_not_created() {
 /// conversation that created the company.
 #[test]
 fn the_existing_chief_of_staff_is_reused_and_left_untouched() {
-    let outcome = seed_personas(&blueprint(), &[fizz()], NOW);
+    let outcome = seed_personas(SCOPE, &blueprint(), &[fizz()], NOW);
     assert_eq!(outcome.reused_persona_ids, ["builtin:fizz"]);
     assert!(
         !outcome
@@ -156,12 +153,12 @@ fn the_existing_chief_of_staff_is_reused_and_left_untouched() {
 #[test]
 fn a_second_pass_creates_nothing_and_changes_nothing() {
     let blueprint = blueprint();
-    let first = seed_personas(&blueprint, &[fizz()], NOW);
+    let first = seed_personas(SCOPE, &blueprint, &[fizz()], NOW);
 
     let mut now_existing = vec![fizz()];
     now_existing.extend(first.created_personas.clone());
 
-    let second = seed_personas(&blueprint, &now_existing, "2026-09-09T09:00:00Z");
+    let second = seed_personas(SCOPE, &blueprint, &now_existing, "2026-09-09T09:00:00Z");
     assert!(second.created_personas.is_empty(), "nothing left to create");
     assert_eq!(second.reused_persona_ids.len(), 3);
     assert_eq!(first.persona_ids(), {
@@ -179,7 +176,7 @@ fn a_second_pass_creates_nothing_and_changes_nothing() {
 #[test]
 fn an_employee_the_owner_edited_is_not_overwritten() {
     let blueprint = blueprint();
-    let mut edited = seed_personas(&blueprint, &[fizz()], NOW)
+    let mut edited = seed_personas(SCOPE, &blueprint, &[fizz()], NOW)
         .created_personas
         .clone();
     edited[0].display_name = "Renamed by the owner".to_string();
@@ -188,23 +185,24 @@ fn an_employee_the_owner_edited_is_not_overwritten() {
     let mut existing = vec![fizz()];
     existing.extend(edited.clone());
 
-    let outcome = seed_personas(&blueprint, &existing, NOW);
+    let outcome = seed_personas(SCOPE, &blueprint, &existing, NOW);
     assert!(outcome.created_personas.is_empty());
     // Nothing was produced that would replace the edited record.
     assert!(outcome
         .reused_persona_ids
-        .contains(&"company:horizon-labs:cto".to_string()));
+        .iter()
+        .any(|id| id.ends_with(":horizon-labs:cto")));
 }
 
 /// The system prompt is the part a Blueprint may not supply. It must come from
 /// the catalog every time.
 #[test]
 fn a_created_employee_takes_its_prompt_and_title_from_the_catalog() {
-    let outcome = seed_personas(&blueprint(), &[fizz()], NOW);
+    let outcome = seed_personas(SCOPE, &blueprint(), &[fizz()], NOW);
     let cto = outcome
         .created_personas
         .iter()
-        .find(|persona| persona.id == "company:horizon-labs:cto")
+        .find(|persona| persona.id.ends_with(":horizon-labs:cto"))
         .expect("cto created");
 
     assert_eq!(cto.role_title.as_deref(), Some("CTO"));
@@ -222,7 +220,7 @@ fn a_created_employee_takes_its_prompt_and_title_from_the_catalog() {
 /// unset is what keeps the ban meaningful.
 #[test]
 fn a_created_employee_pins_no_runtime_model_or_provider() {
-    let outcome = seed_personas(&blueprint(), &[fizz()], NOW);
+    let outcome = seed_personas(SCOPE, &blueprint(), &[fizz()], NOW);
     for persona in &outcome.created_personas {
         assert_eq!(persona.runtime, None, "{} pinned a runtime", persona.id);
         assert_eq!(persona.model, None, "{} pinned a model", persona.id);
@@ -235,22 +233,19 @@ fn a_created_employee_pins_no_runtime_model_or_provider() {
 #[test]
 fn teams_are_created_with_their_members_and_lead() {
     let blueprint = blueprint();
-    let outcome = seed_teams(&blueprint, &[], NOW).expect("seed teams");
+    let outcome = seed_teams(SCOPE, &blueprint, &[], NOW).expect("seed teams");
 
     assert_eq!(outcome.created_teams.len(), 1);
     let team = &outcome.created_teams[0];
-    assert_eq!(team.id, "company-team:horizon-labs:engineering");
+    assert!(team.id.ends_with(":horizon-labs:engineering"));
     assert_eq!(team.name, "Engineering");
-    assert_eq!(
-        team.persona_ids,
-        [
-            "company:horizon-labs:cto",
-            "company:horizon-labs:frontend-engineer"
-        ]
-    );
+    assert_eq!(team.persona_ids.len(), 2);
+    assert!(team.persona_ids[0].ends_with(":horizon-labs:cto"));
+    assert!(team.persona_ids[1].ends_with(":horizon-labs:frontend-engineer"));
     assert_eq!(
         team.lead_persona_id.as_deref(),
-        Some("company:horizon-labs:cto")
+        Some(team.persona_ids[0].as_str()),
+        "the lead is the CTO, and is also a member"
     );
     assert!(!team.is_builtin);
 }
@@ -262,7 +257,7 @@ fn a_team_whose_lead_is_not_a_member_is_refused() {
     let mut blueprint = blueprint();
     blueprint.teams[0].member_role_ids = vec![BaselineRoleId::FrontendEngineer];
     assert!(matches!(
-        seed_teams(&blueprint, &[], NOW),
+        seed_teams(SCOPE, &blueprint, &[], NOW),
         Err(TransactionError::Invalid(_))
     ));
 }
@@ -275,7 +270,7 @@ fn a_team_staffed_by_a_declined_role_is_refused_not_trimmed() {
     blueprint.teams[0].member_role_ids.push(BaselineRoleId::Cfo);
     assert!(
         matches!(
-            seed_teams(&blueprint, &[], NOW),
+            seed_teams(SCOPE, &blueprint, &[], NOW),
             Err(TransactionError::Invalid(_))
         ),
         "the CFO was declined; the team must be refused, not quietly trimmed"
@@ -285,14 +280,12 @@ fn a_team_staffed_by_a_declined_role_is_refused_not_trimmed() {
 #[test]
 fn an_existing_team_is_reused_rather_than_rebuilt() {
     let blueprint = blueprint();
-    let first = seed_teams(&blueprint, &[], NOW).expect("first");
-    let second = seed_teams(&blueprint, &first.created_teams, NOW).expect("second");
+    let first = seed_teams(SCOPE, &blueprint, &[], NOW).expect("first");
+    let second = seed_teams(SCOPE, &blueprint, &first.created_teams, NOW).expect("second");
 
     assert!(second.created_teams.is_empty());
-    assert_eq!(
-        second.reused_team_ids,
-        ["company-team:horizon-labs:engineering"]
-    );
+    assert_eq!(second.reused_team_ids.len(), 1);
+    assert!(second.reused_team_ids[0].ends_with(":horizon-labs:engineering"));
 }
 
 /// Two companies in one workspace must not collide, since the ID is what makes
@@ -302,8 +295,8 @@ fn ids_are_scoped_to_the_company() {
     let mut other = blueprint();
     other.company.id = "other-co".to_string();
 
-    let first = seed_personas(&blueprint(), &[fizz()], NOW);
-    let second = seed_personas(&other, &[fizz()], NOW);
+    let first = seed_personas(SCOPE, &blueprint(), &[fizz()], NOW);
+    let second = seed_personas(SCOPE, &other, &[fizz()], NOW);
 
     for id in first.created_personas.iter().map(|persona| &persona.id) {
         assert!(

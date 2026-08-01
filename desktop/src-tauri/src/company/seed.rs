@@ -11,7 +11,7 @@
 //! through this code, and in every case the owner's own edits survive. An
 //! employee the owner renamed stays renamed.
 
-use buzz_core_pkg::company_roster::{baseline_role, BaselineRoleId, CompanyBlueprint};
+use buzz_core_pkg::company_roster::{baseline_role, role_slug, BaselineRoleId, CompanyBlueprint};
 
 use crate::{
     company::transaction::{persona_id_for, TransactionError},
@@ -61,6 +61,7 @@ impl SeedOutcome {
 /// `now` is passed in rather than read, so the same inputs always produce the
 /// same output and the tests can assert on it.
 pub fn seed_personas(
+    community_scope: &str,
     blueprint: &CompanyBlueprint,
     existing: &[AgentDefinition],
     now: &str,
@@ -68,7 +69,7 @@ pub fn seed_personas(
     let mut outcome = SeedOutcome::default();
 
     for entry in blueprint.roster.iter().filter(|entry| entry.enabled) {
-        let id = persona_id_for(&blueprint.company.id, entry.role_id);
+        let id = persona_id_for(community_scope, &blueprint.company.id, entry.role_id);
         if existing.iter().any(|persona| persona.id == id) {
             // Already an employee. The Chief of Staff reaches here on a first
             // run (Fizz predates the company) and everyone reaches it on a
@@ -84,7 +85,7 @@ pub fn seed_personas(
         // decision, rather than silently taking a default.
         outcome.created_personas.push(AgentDefinition {
             id,
-            role_id: Some(role_id_slug(entry.role_id)),
+            role_id: Some(role_slug(entry.role_id)),
             role_title: Some(role.title.to_string()),
             // The one thing the Blueprint does supply.
             display_name: entry.personal_name.clone(),
@@ -127,6 +128,7 @@ pub fn seed_personas(
 /// `validate_blueprint` already refused any that did not, and this refuses
 /// again rather than silently dropping a member.
 pub fn seed_teams(
+    community_scope: &str,
     blueprint: &CompanyBlueprint,
     existing: &[TeamRecord],
     now: &str,
@@ -140,8 +142,11 @@ pub fn seed_teams(
         .collect();
 
     for team in &blueprint.teams {
-        let id =
-            buzz_core_pkg::company_roster::materialized_team_id(&blueprint.company.id, &team.id);
+        let id = buzz_core_pkg::company_roster::materialized_team_id(
+            community_scope,
+            &blueprint.company.id,
+            &team.id,
+        );
         if existing.iter().any(|record| record.id == id) {
             outcome.reused_team_ids.push(id);
             continue;
@@ -154,13 +159,18 @@ pub fn seed_teams(
                     "a team cannot be staffed by a role the roster does not create".to_string(),
                 ));
             }
-            persona_ids.push(persona_id_for(&blueprint.company.id, *role_id));
+            persona_ids.push(persona_id_for(
+                community_scope,
+                &blueprint.company.id,
+                *role_id,
+            ));
         }
 
         // A lead is always also a member. `validate_blueprint` enforces it on
         // the Blueprint; this keeps the invariant true of what we write, since
         // every team write path in the app asserts it.
-        let lead_persona_id = persona_id_for(&blueprint.company.id, team.lead_role_id);
+        let lead_persona_id =
+            persona_id_for(community_scope, &blueprint.company.id, team.lead_role_id);
         if !persona_ids.contains(&lead_persona_id) {
             return Err(TransactionError::Invalid(
                 "a team lead must also be a member of the team".to_string(),
@@ -185,14 +195,6 @@ pub fn seed_teams(
     }
 
     Ok(outcome)
-}
-
-/// The catalog role ID as the string a Persona record stores.
-fn role_id_slug(role_id: BaselineRoleId) -> String {
-    serde_json::to_value(role_id)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

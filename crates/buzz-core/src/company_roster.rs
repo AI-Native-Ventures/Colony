@@ -22,6 +22,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// A role in the fixed baseline catalog.
 ///
@@ -594,18 +595,48 @@ fn is_generic_operations(value: &str) -> bool {
     )
 }
 
+/// A short, stable discriminator for the community a company belongs to.
+///
+/// A company ID is only unique within its own community, because the relay
+/// scopes it. The desktop persona store is one file per install, shared by
+/// every community the user has joined. Without this component, two
+/// communities that both chose `acme` would share one set of employees, and
+/// approving the second company would silently adopt the first one's staff.
+///
+/// Twelve hex characters: enough that a single install will never collide,
+/// short enough that an ID stays readable in a log.
+fn community_discriminator(community_scope: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(community_scope.as_bytes());
+    hex::encode(hasher.finalize())[..12].to_string()
+}
+
 /// The stable Persona ID a materialized role receives.
-pub fn materialized_persona_id(company_id: &str, role_id: BaselineRoleId) -> String {
-    let role = serde_json::to_value(role_id)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default();
-    format!("company:{company_id}:{role}")
+///
+/// Every component is derived, so approving the same Blueprint twice addresses
+/// the same record instead of making a second one.
+pub fn materialized_persona_id(
+    community_scope: &str,
+    company_id: &str,
+    role_id: BaselineRoleId,
+) -> String {
+    let role = role_slug(role_id);
+    let scope = community_discriminator(community_scope);
+    format!("company:{scope}:{company_id}:{role}")
 }
 
 /// The stable Team ID a materialized team receives.
-pub fn materialized_team_id(company_id: &str, team_id: &str) -> String {
-    format!("company-team:{company_id}:{team_id}")
+pub fn materialized_team_id(community_scope: &str, company_id: &str, team_id: &str) -> String {
+    let scope = community_discriminator(community_scope);
+    format!("company-team:{scope}:{company_id}:{team_id}")
+}
+
+/// The catalog role ID as the string an ID and a Persona record use.
+pub fn role_slug(role_id: BaselineRoleId) -> String {
+    serde_json::to_value(role_id)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -902,19 +933,47 @@ mod tests {
 
     /// Materialized IDs are derived, so approving the same blueprint twice
     /// targets the same records rather than making a second set.
+    const SCOPE: &str = "relay.example";
+
     #[test]
     fn materialized_ids_are_stable_and_derived() {
         assert_eq!(
-            materialized_persona_id("horizon-labs", BaselineRoleId::ChiefOfStaff),
-            "company:horizon-labs:chief-of-staff"
+            materialized_persona_id(SCOPE, "horizon-labs", BaselineRoleId::ChiefOfStaff),
+            materialized_persona_id(SCOPE, "horizon-labs", BaselineRoleId::ChiefOfStaff),
+            "the same inputs must always give the same ID"
         );
-        assert_eq!(
-            materialized_persona_id("horizon-labs", BaselineRoleId::ContentCampaignSpecialist),
-            "company:horizon-labs:content-campaign-specialist"
+        assert!(
+            materialized_persona_id(SCOPE, "horizon-labs", BaselineRoleId::Cto)
+                .ends_with(":horizon-labs:cto"),
+            "an ID stays readable"
         );
-        assert_eq!(
-            materialized_team_id("horizon-labs", "engineering"),
-            "company-team:horizon-labs:engineering"
+        assert!(
+            materialized_team_id(SCOPE, "horizon-labs", "engineering").starts_with("company-team:")
+        );
+    }
+
+    /// The desktop persona store is one file per install, shared by every
+    /// community. Two communities that both chose `acme` must not end up
+    /// sharing employees: approving the second company would otherwise
+    /// silently adopt the first one's staff.
+    #[test]
+    fn two_communities_using_the_same_company_id_do_not_collide() {
+        assert_ne!(
+            materialized_persona_id("relay.one", "acme", BaselineRoleId::Cto),
+            materialized_persona_id("relay.two", "acme", BaselineRoleId::Cto)
+        );
+        assert_ne!(
+            materialized_team_id("relay.one", "acme", "engineering"),
+            materialized_team_id("relay.two", "acme", "engineering")
+        );
+    }
+
+    /// Two companies in ONE community must not collide either.
+    #[test]
+    fn two_companies_in_one_community_do_not_collide() {
+        assert_ne!(
+            materialized_persona_id(SCOPE, "acme", BaselineRoleId::Cto),
+            materialized_persona_id(SCOPE, "other-co", BaselineRoleId::Cto)
         );
     }
 
