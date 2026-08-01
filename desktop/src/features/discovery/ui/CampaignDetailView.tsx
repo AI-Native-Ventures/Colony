@@ -1,10 +1,9 @@
 import * as React from "react";
-import { ArrowLeft, CalendarDays, LockKeyhole } from "lucide-react";
+import { ArrowLeft, CalendarDays } from "lucide-react";
 
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
-import { Card } from "@/shared/ui/card";
 import type { DiscoveryEntitlement } from "../entitlement";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { CampaignDetail, LeadPage } from "../types";
@@ -16,6 +15,8 @@ import { OverviewTab } from "./OverviewTab";
 import { SourceConfigEditor } from "./SourceConfigEditor";
 import { LeadsWorkspace } from "./LeadsWorkspace";
 import { campaignTabForSearch } from "./discoveryLayout";
+import { CampaignOutreachTab } from "./CampaignOutreachTab";
+import { CampaignConversationsTab } from "./CampaignConversationsTab";
 
 export type CampaignDetailViewProps = {
   campaign: CampaignDetail;
@@ -47,72 +48,34 @@ function formatDate(value: string) {
   }).format(date);
 }
 
-function ViewOnlyTab({
-  tab,
+function SettingsTab({
   campaign,
   dataSource,
   entitlement,
   onUpdated,
 }: {
-  tab: Exclude<CampaignTab, "overview" | "discovery" | "leads">;
   campaign: CampaignDetail;
   dataSource: DiscoveryDataSource;
   entitlement: DiscoveryEntitlement | null;
   onUpdated: (campaign: CampaignDetail) => void;
 }) {
-  const copy: Record<typeof tab, { title: string; description: string }> = {
-    outreach: {
-      title: "Outreach is ready for the next phase",
-      description:
-        "Multichannel outreach will use this campaign's verified leads. Delivery controls are intentionally not connected in the fixture workspace.",
-    },
-    conversations: {
-      title: "Conversations will appear here",
-      description:
-        "Replies and handoffs will become visible here after outreach is connected. There are no fake messages in this view.",
-    },
-    settings: {
-      title: "Campaign settings",
-      description: "Manage the sources that this campaign uses for discovery.",
-    },
-  };
-  const content = copy[tab];
-  if (tab === "settings") {
-    return (
-      <div className="space-y-4">
-        <Card className="border-border/60 bg-card/70 p-5 shadow-none">
-          <h2 className="text-lg font-semibold text-foreground">
-            {content.title}
-          </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {content.description}
-          </p>
-        </Card>
-        <SourceConfigEditor
-          campaign={campaign}
-          dataSource={dataSource}
-          entitlement={entitlement}
-          onUpdated={onUpdated}
-        />
-      </div>
-    );
-  }
   return (
-    <Card className="border-dashed border-border/70 bg-background/30 p-8 text-center shadow-none">
-      <LockKeyhole
-        aria-hidden="true"
-        className="mx-auto h-8 w-8 text-muted-foreground"
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Campaign settings
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Manage discovery strategy, source order, and provider access.
+        </p>
+      </div>
+      <SourceConfigEditor
+        campaign={campaign}
+        dataSource={dataSource}
+        entitlement={entitlement}
+        onUpdated={onUpdated}
       />
-      <Badge className="mt-3" variant="secondary">
-        View only
-      </Badge>
-      <h2 className="mt-3 text-lg font-semibold text-foreground">
-        {content.title}
-      </h2>
-      <p className="mx-auto mt-1 max-w-xl text-sm text-muted-foreground">
-        {content.description}
-      </p>
-    </Card>
+    </div>
   );
 }
 
@@ -147,7 +110,7 @@ export function CampaignDetailView({
               variant="ghost"
             >
               <ArrowLeft aria-hidden="true" />
-              Back to {campaignState.verticalName}
+              Back to {campaignState.roleName ?? campaignState.verticalName}
             </Button>
             <div className="mb-2.5 flex flex-wrap items-center gap-3">
               <h1 className="font-serif text-title font-normal leading-none tracking-tight text-foreground">
@@ -158,9 +121,13 @@ export function CampaignDetailView({
               </Badge>
             </div>
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-2xs text-muted-foreground">
-              <span>{campaignState.industryName}</span>
+              <span>
+                {campaignState.fieldName ?? campaignState.industryName}
+              </span>
               <span aria-hidden="true">·</span>
-              <span>{campaignState.verticalName}</span>
+              <span>
+                {campaignState.roleName ?? campaignState.verticalName}
+              </span>
               <span aria-hidden="true">·</span>
               <span className="inline-flex items-center gap-1">
                 <CalendarDays aria-hidden="true" className="h-3.5 w-3.5" />
@@ -209,15 +176,24 @@ export function CampaignDetailView({
             scope="campaign"
           />
         ) : null}
-        {activeTab === "outreach" ||
-        activeTab === "conversations" ||
-        activeTab === "settings" ? (
-          <ViewOnlyTab
+        {activeTab === "outreach" ? (
+          <CampaignOutreachTab
+            campaign={campaignState}
+            dataSource={dataSource}
+          />
+        ) : null}
+        {activeTab === "conversations" ? (
+          <CampaignConversationsTab
+            campaign={campaignState}
+            dataSource={dataSource}
+          />
+        ) : null}
+        {activeTab === "settings" ? (
+          <SettingsTab
             campaign={campaignState}
             dataSource={dataSource}
             entitlement={entitlement}
             onUpdated={setCampaignState}
-            tab={activeTab}
           />
         ) : null}
       </div>

@@ -9,13 +9,19 @@ import {
 import type {
   CampaignDetail,
   CampaignDraft,
+  CampaignSummary,
   CampaignStatus,
+  ConversationThread,
   DiscoveryEvent,
   Industry,
   Lead,
   LeadPage,
   LeadScope,
-  CampaignSummary,
+  OutreachDraft,
+  OutreachStatus,
+  ProfessionalField,
+  ProfessionalRole,
+  ProfessionalRoleDetail,
   Vertical,
   VerticalDetail,
 } from "../types";
@@ -23,8 +29,14 @@ import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import {
   CAMPAIGN_FIXTURE,
   FIXTURE_CAMPAIGN_LEADS,
+  FIXTURE_FIELDS,
   FIXTURE_GLOBAL_LEADS,
   FIXTURE_INDUSTRIES,
+  FIXTURE_PEOPLE_CAMPAIGN,
+  FIXTURE_PEOPLE_LEADS,
+  FIXTURE_PRO_SERVICES_CAMPAIGN,
+  FIXTURE_PRO_SERVICES_LEADS,
+  FIXTURE_ROLE_DETAILS,
   FIXTURE_VERTICAL_DETAILS,
   createIdleDiscoveryRun,
 } from "./fixtures";
@@ -57,6 +69,65 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function seedOutreach(
+  campaign: CampaignDetail,
+  leads: readonly Lead[],
+): OutreachDraft[] {
+  return leads.slice(0, 5).map((lead, index) => {
+    const channel =
+      index % 3 === 0 ? "Email" : index % 3 === 1 ? "LinkedIn" : "WhatsApp";
+    const person =
+      lead.personName ?? lead.contactName ?? `Team at ${lead.companyName}`;
+    const company = lead.currentCompany ?? lead.companyName;
+    return {
+      id: `${campaign.id}-${lead.id}`,
+      campaignId: campaign.id,
+      leadId: lead.id,
+      lead: person,
+      company,
+      channel,
+      subject: `A quick idea for ${company}`,
+      body: `Hi ${person.split(" ")[0]}, I noticed ${company} while researching ${campaign.verticalName.toLowerCase()} teams in ${campaign.location}. I have a specific idea that could help—would a short conversation this week be useful?`,
+      status: index === 0 ? "Approved" : index === 1 ? "Scheduled" : "Draft",
+    };
+  });
+}
+
+function seedConversations(
+  campaign: CampaignDetail,
+  leads: readonly Lead[],
+): ConversationThread[] {
+  return leads.slice(0, 4).map((lead, index) => ({
+    id: `${campaign.id}-conversation-${lead.id}`,
+    campaignId: campaign.id,
+    leadId: lead.id,
+    name: lead.personName ?? lead.contactName ?? lead.companyName,
+    company: lead.currentCompany ?? lead.companyName,
+    channel: index % 2 === 0 ? "Email" : "WhatsApp",
+    unread: index < 2,
+    messages: [
+      {
+        id: `${campaign.id}-${lead.id}-message-1`,
+        direction: "inbound",
+        body:
+          index === 0
+            ? "Hi — thanks for reaching out. The idea sounds relevant."
+            : "Thanks for the note.",
+        sentAt: "2026-08-01T09:20:00.000Z",
+      },
+      {
+        id: `${campaign.id}-${lead.id}-message-2`,
+        direction: "inbound",
+        body:
+          index === 0
+            ? "Can you send over two examples before we book time?"
+            : "What would the first week look like?",
+        sentAt: "2026-08-01T09:25:00.000Z",
+      },
+    ],
+  }));
 }
 
 function campaignStatusForEvent(event: DiscoveryEvent): CampaignStatus {
@@ -92,6 +163,11 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   private readonly campaignRunCounts = new Map<string, number>();
   private readonly activeRuns = new Map<string, ActiveDiscoveryRun>();
   private readonly campaignScenarios = new Map<string, FixtureScenario>();
+  private readonly campaignOutreach = new Map<string, OutreachDraft[]>();
+  private readonly campaignConversations = new Map<
+    string,
+    ConversationThread[]
+  >();
   private nextCampaignNumber = 1;
   private nextRunToken = 1;
 
@@ -105,6 +181,47 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     this.campaignLeads.set(fixtureCampaign.id, clone(FIXTURE_CAMPAIGN_LEADS));
     this.campaignRunCounts.set(fixtureCampaign.id, 0);
     this.campaignScenarios.set(fixtureCampaign.id, this.defaultScenario);
+    this.campaignOutreach.set(
+      fixtureCampaign.id,
+      seedOutreach(fixtureCampaign, FIXTURE_CAMPAIGN_LEADS),
+    );
+    this.campaignConversations.set(
+      fixtureCampaign.id,
+      seedConversations(fixtureCampaign, FIXTURE_CAMPAIGN_LEADS),
+    );
+
+    const peopleCampaign = clone(FIXTURE_PEOPLE_CAMPAIGN);
+    peopleCampaign.run = createIdleDiscoveryRun(peopleCampaign);
+    this.campaigns.set(peopleCampaign.id, peopleCampaign);
+    this.campaignLeads.set(peopleCampaign.id, clone(FIXTURE_PEOPLE_LEADS));
+    this.campaignRunCounts.set(peopleCampaign.id, 0);
+    this.campaignScenarios.set(peopleCampaign.id, this.defaultScenario);
+    this.campaignOutreach.set(
+      peopleCampaign.id,
+      seedOutreach(peopleCampaign, FIXTURE_PEOPLE_LEADS),
+    );
+    this.campaignConversations.set(
+      peopleCampaign.id,
+      seedConversations(peopleCampaign, FIXTURE_PEOPLE_LEADS),
+    );
+
+    const servicesCampaign = clone(FIXTURE_PRO_SERVICES_CAMPAIGN);
+    servicesCampaign.run = createIdleDiscoveryRun(servicesCampaign);
+    this.campaigns.set(servicesCampaign.id, servicesCampaign);
+    this.campaignLeads.set(
+      servicesCampaign.id,
+      clone(FIXTURE_PRO_SERVICES_LEADS),
+    );
+    this.campaignRunCounts.set(servicesCampaign.id, 0);
+    this.campaignScenarios.set(servicesCampaign.id, this.defaultScenario);
+    this.campaignOutreach.set(
+      servicesCampaign.id,
+      seedOutreach(servicesCampaign, FIXTURE_PRO_SERVICES_LEADS),
+    );
+    this.campaignConversations.set(
+      servicesCampaign.id,
+      seedConversations(servicesCampaign, FIXTURE_PRO_SERVICES_LEADS),
+    );
   }
 
   async getEntitlement(): Promise<DiscoveryEntitlement> {
@@ -145,6 +262,39 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     return clone({ ...vertical, campaigns });
   }
 
+  async getFields(): Promise<ProfessionalField[]> {
+    return clone(FIXTURE_FIELDS);
+  }
+
+  async getRoles(fieldId: string): Promise<ProfessionalRole[]> {
+    return clone(
+      FIXTURE_ROLE_DETAILS.filter((role) => role.fieldId === fieldId).map(
+        ({ campaigns: _campaigns, ...role }) => role,
+      ),
+    );
+  }
+
+  async getRole(
+    fieldId: string,
+    roleId: string,
+  ): Promise<ProfessionalRoleDetail> {
+    const role = FIXTURE_ROLE_DETAILS.find(
+      (candidate) => candidate.fieldId === fieldId && candidate.id === roleId,
+    );
+    if (!role) {
+      throw new Error(`Unknown discovery role: ${fieldId}/${roleId}`);
+    }
+    const campaigns = [...this.campaigns.values()]
+      .filter(
+        (campaign) =>
+          campaign.targetType === "individual" &&
+          campaign.fieldId === fieldId &&
+          campaign.roleId === roleId,
+      )
+      .map((campaign) => toCampaignSummary(campaign));
+    return clone({ ...role, campaigns });
+  }
+
   async getCampaign(campaignId: string): Promise<CampaignDetail> {
     return clone(this.requireCampaign(campaignId));
   }
@@ -165,12 +315,29 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       leads = leads.filter((lead) => lead.industryId === scope.industryId);
     if (scope.verticalId)
       leads = leads.filter((lead) => lead.verticalId === scope.verticalId);
+    if (scope.targetType)
+      leads = leads.filter((lead) =>
+        scope.targetType === "individual"
+          ? lead.entityType === "person"
+          : lead.entityType !== "person",
+      );
+    if (scope.fieldId)
+      leads = leads.filter((lead) => lead.industryId === scope.fieldId);
+    if (scope.roleId)
+      leads = leads.filter((lead) => lead.verticalId === scope.roleId);
     if (scope.status)
       leads = leads.filter((lead) => lead.status === scope.status);
     if (scope.search) {
       const query = scope.search.toLowerCase();
       leads = leads.filter((lead) =>
-        [lead.companyName, lead.location, lead.contactName, lead.email]
+        [
+          lead.companyName,
+          lead.location,
+          lead.contactName,
+          lead.personName,
+          lead.roleName,
+          lead.email,
+        ]
           .filter(Boolean)
           .some((field) => field?.toLowerCase().includes(query)),
       );
@@ -188,7 +355,80 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     };
   }
 
+  async getOutreach(campaignId: string): Promise<OutreachDraft[]> {
+    this.requireCampaign(campaignId);
+    return clone(this.campaignOutreach.get(campaignId) ?? []);
+  }
+
+  async createOutreach(campaignId: string): Promise<OutreachDraft> {
+    const campaign = this.requireCampaign(campaignId);
+    const leads = this.campaignLeads.get(campaignId) ?? [];
+    const items = this.campaignOutreach.get(campaignId) ?? [];
+    const lead =
+      leads.find((candidate) =>
+        items.every((item) => item.leadId !== candidate.id),
+      ) ?? leads[0];
+    if (!lead) throw new Error("Create outreach after discovering a lead.");
+    const seeded = seedOutreach(campaign, [lead])[0];
+    const created: OutreachDraft = {
+      ...seeded,
+      id: `${seeded.id}-${items.length + 1}`,
+      status: "Draft",
+    };
+    items.unshift(created);
+    this.campaignOutreach.set(campaignId, items);
+    return clone(created);
+  }
+
+  async updateOutreachStatus(
+    campaignId: string,
+    outreachId: string,
+    status: OutreachStatus,
+  ): Promise<OutreachDraft> {
+    this.requireCampaign(campaignId);
+    const items = this.campaignOutreach.get(campaignId) ?? [];
+    const item = items.find((candidate) => candidate.id === outreachId);
+    if (!item) throw new Error(`Unknown outreach draft: ${outreachId}`);
+    item.status = status;
+    return clone(item);
+  }
+
+  async getConversations(campaignId: string): Promise<ConversationThread[]> {
+    this.requireCampaign(campaignId);
+    return clone(this.campaignConversations.get(campaignId) ?? []);
+  }
+
+  async markConversationRead(
+    campaignId: string,
+    conversationId: string,
+  ): Promise<ConversationThread> {
+    this.requireCampaign(campaignId);
+    const conversation = this.requireConversation(campaignId, conversationId);
+    conversation.unread = false;
+    return clone(conversation);
+  }
+
+  async sendConversationReply(
+    campaignId: string,
+    conversationId: string,
+    body: string,
+  ): Promise<ConversationThread> {
+    this.requireCampaign(campaignId);
+    const conversation = this.requireConversation(campaignId, conversationId);
+    const content = body.trim();
+    if (!content) throw new Error("A reply cannot be empty.");
+    conversation.messages.push({
+      id: `${conversation.id}-message-${conversation.messages.length + 1}`,
+      direction: "outbound",
+      body: content,
+      sentAt: "2026-08-01T10:15:00.000Z",
+    });
+    conversation.unread = false;
+    return clone(conversation);
+  }
+
   async createCampaign(input: CampaignDraft): Promise<CampaignDetail> {
+    const targetType = input.targetType ?? "business";
     const industry = FIXTURE_INDUSTRIES.find(
       (item) => item.id === input.industryId,
     );
@@ -196,9 +436,22 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       (item) =>
         item.industryId === input.industryId && item.id === input.verticalId,
     );
-    if (!industry || !vertical) {
+    const field = FIXTURE_FIELDS.find(
+      (item) => item.id === (input.fieldId ?? input.industryId),
+    );
+    const role = FIXTURE_ROLE_DETAILS.find(
+      (item) =>
+        item.fieldId === (input.fieldId ?? input.industryId) &&
+        item.id === (input.roleId ?? input.verticalId),
+    );
+    if (targetType === "business" && (!industry || !vertical)) {
       throw new Error(
         `Unknown discovery vertical: ${input.industryId}/${input.verticalId}`,
+      );
+    }
+    if (targetType === "individual" && (!field || !role)) {
+      throw new Error(
+        `Unknown discovery role: ${input.fieldId ?? input.industryId}/${input.roleId ?? input.verticalId}`,
       );
     }
     if (!Number.isFinite(input.target) || input.target <= 0) {
@@ -223,10 +476,23 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     const campaign: CampaignDetail = {
       id,
       name: input.name.trim() || "Untitled Discovery Campaign",
-      industryId: industry.id,
-      verticalId: vertical.id,
-      industryName: industry.name,
-      verticalName: vertical.name,
+      targetType,
+      industryId:
+        targetType === "individual" ? (field?.id ?? "") : (industry?.id ?? ""),
+      verticalId:
+        targetType === "individual" ? (role?.id ?? "") : (vertical?.id ?? ""),
+      industryName:
+        targetType === "individual"
+          ? (field?.name ?? "")
+          : (industry?.name ?? ""),
+      verticalName:
+        targetType === "individual"
+          ? (role?.name ?? "")
+          : (vertical?.name ?? ""),
+      fieldId: targetType === "individual" ? field?.id : undefined,
+      roleId: targetType === "individual" ? role?.id : undefined,
+      fieldName: targetType === "individual" ? field?.name : undefined,
+      roleName: targetType === "individual" ? role?.name : undefined,
       location: input.location.trim(),
       description: input.description,
       status: "ready",
@@ -235,7 +501,19 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       leadCount: 0,
       createdAt,
       updatedAt: createdAt,
-      sourceConfig: resolveSourceConfig(input.sourceConfig),
+      sourceConfig: resolveSourceConfig(
+        input.sourceConfig ??
+          (targetType === "individual"
+            ? {
+                mode: "waterfall",
+                order: [
+                  "linkedin_company_search",
+                  "brave_search",
+                  "exa_search",
+                ],
+              }
+            : undefined),
+      ),
       metrics: {
         companiesFound: 0,
         contactsFound: 0,
@@ -248,6 +526,8 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     this.campaignLeads.set(id, []);
     this.campaignRunCounts.set(id, 0);
     this.campaignScenarios.set(id, this.defaultScenario);
+    this.campaignOutreach.set(id, []);
+    this.campaignConversations.set(id, []);
     return clone(campaign);
   }
 
@@ -318,9 +598,15 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   ): AsyncIterable<DiscoveryEvent> {
     const campaign = this.requireCampaign(campaignId);
     const leads =
-      campaignId === CAMPAIGN_FIXTURE.id
-        ? FIXTURE_CAMPAIGN_LEADS
-        : FIXTURE_GLOBAL_LEADS;
+      campaign.targetType === "individual"
+        ? FIXTURE_PEOPLE_LEADS
+        : campaignId === CAMPAIGN_FIXTURE.id
+          ? FIXTURE_CAMPAIGN_LEADS
+          : campaignId === FIXTURE_PRO_SERVICES_CAMPAIGN.id
+            ? FIXTURE_PRO_SERVICES_LEADS
+            : FIXTURE_GLOBAL_LEADS.filter(
+                (lead) => lead.entityType !== "person",
+              );
     const existingLeadIds =
       (this.campaignRunCounts.get(campaignId) ?? 0) > 0
         ? new Set(
@@ -429,6 +715,19 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     const campaign = this.campaigns.get(campaignId);
     if (!campaign) throw new Error(`Unknown discovery campaign: ${campaignId}`);
     return campaign;
+  }
+
+  private requireConversation(
+    campaignId: string,
+    conversationId: string,
+  ): ConversationThread {
+    const conversation = (
+      this.campaignConversations.get(campaignId) ?? []
+    ).find((candidate) => candidate.id === conversationId);
+    if (!conversation) {
+      throw new Error(`Unknown discovery conversation: ${conversationId}`);
+    }
+    return conversation;
   }
 
   private getGlobalLeads(): Lead[] {

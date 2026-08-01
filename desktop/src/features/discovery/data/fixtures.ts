@@ -9,56 +9,68 @@ import type {
   DiscoveryRun,
   Industry,
   Lead,
+  ProfessionalField,
+  ProfessionalRole,
+  ProfessionalRoleDetail,
   Vertical,
   VerticalDetail,
 } from "../types";
 
-export const FIXTURE_INDUSTRIES: Industry[] = [
-  {
-    id: "automotive",
-    slug: "automotive",
-    name: "Automotive",
-    description: "Businesses that keep people and vehicles moving.",
-    imageKey: "industry.automotive",
-    verticalCount: 3,
-    leadCount: 10,
-    campaignCount: 1,
-    status: "active",
-  },
-  {
-    id: "professional-services",
-    slug: "professional-services",
-    name: "Professional Services",
-    description: "Specialist firms and trusted advisors.",
-    imageKey: "industry.professional-services",
-    verticalCount: 0,
-    leadCount: 0,
-    campaignCount: 0,
-    status: "available",
-  },
-  {
-    id: "agriculture",
-    slug: "agriculture",
-    name: "Agriculture",
-    description: "Producers, suppliers, and agricultural operators.",
-    imageKey: "industry.agriculture",
-    verticalCount: 0,
-    leadCount: 0,
-    campaignCount: 0,
-    status: "available",
-  },
-  {
-    id: "aviation-airlines",
-    slug: "aviation-airlines",
-    name: "Aviation & Airlines",
-    description: "The businesses behind safe, reliable air travel.",
-    imageKey: "industry.aviation-airlines",
-    verticalCount: 0,
-    leadCount: 0,
-    campaignCount: 0,
-    status: "available",
-  },
-];
+const INDUSTRY_DEFINITIONS = [
+  ["automotive", "Automotive", 10],
+  ["professional-services", "Professional Services", 18],
+  ["aerospace-defense", "Aerospace & Defense", 14],
+  ["agriculture", "Agriculture", 17],
+  ["aviation-airlines", "Aviation & Airlines", 14],
+  ["beauty-wellness", "Beauty & Wellness", 13],
+  ["chemicals", "Chemicals", 13],
+  ["construction", "Construction", 20],
+  ["education", "Education", 10],
+  ["energy", "Energy", 18],
+  ["environmental-services", "Environmental Services", 11],
+  ["fashion-apparel", "Fashion & Apparel", 7],
+  ["finance", "Finance", 18],
+  ["food-beverage", "Food & Beverage", 18],
+  ["gambling-casinos", "Gambling & Casinos", 7],
+  ["government-public-sector", "Government & Public Sector", 18],
+  ["healthcare", "Healthcare", 20],
+  ["human-resources", "Human Resources", 10],
+  ["insurance", "Insurance", 15],
+  ["legal", "Legal", 12],
+  ["manufacturing", "Manufacturing", 20],
+  ["marine-ports", "Marine & Ports", 10],
+  ["marketing-advertising", "Marketing & Advertising", 15],
+  ["media-entertainment", "Media & Entertainment", 16],
+  ["mining", "Mining", 12],
+  ["non-profit", "Non-Profit", 12],
+  ["pharmaceuticals-life-sciences", "Pharmaceuticals & Life Sciences", 18],
+  ["real-estate", "Real Estate", 18],
+  ["retail", "Retail", 18],
+  ["security", "Security", 12],
+  ["technology", "Technology", 20],
+  ["telecommunications", "Telecommunications", 14],
+  ["tourism", "Tourism", 12],
+  ["transportation", "Transportation", 20],
+] as const;
+
+export const FIXTURE_INDUSTRIES: Industry[] = INDUSTRY_DEFINITIONS.map(
+  ([id, name, verticalCount]) => ({
+    id,
+    slug: id,
+    name,
+    description: `Discover companies across ${name.toLowerCase()} verticals.`,
+    imageKey: `industry.${id}`,
+    verticalCount,
+    leadCount:
+      id === "automotive" ? 10 : id === "professional-services" ? 308 : 0,
+    campaignCount:
+      id === "automotive" || id === "professional-services" ? 1 : 0,
+    status:
+      id === "automotive" || id === "professional-services"
+        ? "active"
+        : "available",
+  }),
+);
 
 export const FIXTURE_VERTICALS: Vertical[] = [
   {
@@ -73,26 +85,347 @@ export const FIXTURE_VERTICALS: Vertical[] = [
     status: "active",
   },
   {
-    id: "car-dealerships",
-    slug: "car-dealerships",
+    id: "auto-manufacturing",
+    slug: "auto-manufacturing",
     industryId: "automotive",
-    name: "Car Dealerships",
-    imageKey: "vertical.car-dealerships",
+    name: "Auto Manufacturing",
+    imageKey: "vertical.auto-manufacturing",
     campaignCount: 0,
     leadCount: 0,
     status: "available",
   },
   {
-    id: "collision-repair",
-    slug: "collision-repair",
+    id: "auto-parts-stores",
+    slug: "auto-parts-stores",
     industryId: "automotive",
-    name: "Collision Repair",
-    imageKey: "vertical.collision-repair",
+    name: "Auto Parts Stores",
+    imageKey: "vertical.auto-parts-stores",
     campaignCount: 0,
     leadCount: 0,
     status: "available",
   },
+  ...[
+    ["auto-parts-suppliers", "Auto Parts Suppliers"],
+    ["car-dealerships", "Car Dealerships"],
+    ["car-rentals", "Car Rentals"],
+    ["engine-repair-garages", "Engine Repair Garages"],
+    ["fleet-vehicle-leasing-services", "Fleet & Vehicle Leasing Services"],
+    ["panel-beaters", "Panel Beaters"],
+    ["petrol-stations", "Petrol Stations"],
+  ].map(([id, name]) => ({
+    id,
+    slug: id,
+    industryId: "automotive",
+    name,
+    imageKey: `vertical.${id}`,
+    campaignCount: 0,
+    leadCount: 0,
+    status: "available" as const,
+  })),
+  ...[
+    "Accounting Practices",
+    "Architecture Firms",
+    "Audit Firms",
+    "Business Consultancies",
+    "Engineering Consultancies",
+    "Financial Advisory Firms",
+    "Human Resources Consultancies",
+    "Insurance Brokers",
+    "IT Consultancies",
+    "Law Firms",
+    "Management Consultancies",
+    "Marketing Agencies",
+    "Payroll Services",
+    "Public Relations Agencies",
+    "Recruitment Agencies",
+    "Tax Consultants",
+    "Training Providers",
+    "Virtual Assistant Services",
+  ].map((name) => {
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const active = id === "accounting-practices";
+    return {
+      id,
+      slug: id,
+      industryId: "professional-services",
+      name,
+      imageKey: "industry.professional-services",
+      campaignCount: active ? 1 : 0,
+      leadCount: active ? 308 : 0,
+      status: active ? ("active" as const) : ("available" as const),
+    };
+  }),
 ];
+
+const FIELD_DEFINITIONS = [
+  {
+    id: "engineering",
+    name: "Engineering",
+    imageKey: "field.engineering",
+    roles: [
+      "Frontend Engineer",
+      "Backend Engineer",
+      "Full Stack Engineer",
+      "Mobile Engineer",
+      "DevOps Engineer",
+      "Security Engineer",
+      "Engineering Manager",
+      "Chief Technology Officer",
+    ],
+  },
+  {
+    id: "marketing",
+    name: "Marketing",
+    imageKey: "field.marketing",
+    roles: [
+      "Marketing Director",
+      "Growth Marketer",
+      "Content Strategist",
+      "Brand Manager",
+      "Demand Generation Manager",
+      "Social Media Manager",
+      "Chief Marketing Officer",
+    ],
+  },
+  {
+    id: "medicine",
+    name: "Medicine",
+    imageKey: "field.medicine",
+    roles: [
+      "General Practitioner",
+      "Medical Specialist",
+      "Nurse Practitioner",
+      "Practice Manager",
+      "Clinical Director",
+      "Hospital Administrator",
+    ],
+  },
+  {
+    id: "law",
+    name: "Law",
+    imageKey: "field.law",
+    roles: [
+      "Attorney",
+      "Legal Counsel",
+      "Managing Partner",
+      "Compliance Officer",
+      "Paralegal",
+    ],
+  },
+  {
+    id: "finance",
+    name: "Finance",
+    imageKey: "field.finance",
+    roles: [
+      "Financial Analyst",
+      "Investment Manager",
+      "Finance Director",
+      "Treasury Manager",
+      "Controller",
+      "Chief Financial Officer",
+    ],
+  },
+  {
+    id: "sales",
+    name: "Sales",
+    imageKey: "field.sales",
+    roles: [
+      "Account Executive",
+      "Sales Development Representative",
+      "Sales Manager",
+      "Regional Sales Director",
+      "Partnerships Manager",
+      "Revenue Operations Manager",
+      "Chief Revenue Officer",
+    ],
+  },
+  {
+    id: "human-resources",
+    name: "Human Resources",
+    imageKey: "field.human-resources",
+    roles: [
+      "Recruiter",
+      "People Operations Manager",
+      "HR Business Partner",
+      "Talent Director",
+      "Chief People Officer",
+    ],
+  },
+  {
+    id: "accounting",
+    name: "Accounting",
+    imageKey: "field.accounting",
+    roles: [
+      "Accountant",
+      "Auditor",
+      "Tax Manager",
+      "Accounting Manager",
+      "Audit Partner",
+    ],
+  },
+  {
+    id: "agriculture",
+    name: "Agriculture",
+    imageKey: "field.agriculture",
+    roles: [
+      "Agronomist",
+      "Farm Manager",
+      "Agricultural Engineer",
+      "Food Production Manager",
+    ],
+  },
+  {
+    id: "politics",
+    name: "Politics",
+    imageKey: "field.politics",
+    roles: [
+      "Policy Advisor",
+      "Public Affairs Director",
+      "Campaign Manager",
+      "Government Relations Manager",
+    ],
+  },
+  {
+    id: "education",
+    name: "Education",
+    imageKey: "field.education",
+    roles: [
+      "Teacher",
+      "Lecturer",
+      "School Principal",
+      "Academic Director",
+      "Education Consultant",
+    ],
+  },
+  {
+    id: "design",
+    name: "Design",
+    imageKey: "field.design",
+    roles: [
+      "Product Designer",
+      "UX Designer",
+      "Creative Director",
+      "Graphic Designer",
+      "Design Lead",
+    ],
+  },
+  {
+    id: "research",
+    name: "Research",
+    imageKey: "field.research",
+    roles: [
+      "Research Scientist",
+      "Market Researcher",
+      "Research Director",
+      "Laboratory Manager",
+    ],
+  },
+  {
+    id: "consulting",
+    name: "Consulting",
+    imageKey: "field.consulting",
+    roles: [
+      "Management Consultant",
+      "Strategy Consultant",
+      "Principal Consultant",
+      "Consulting Partner",
+      "Transformation Director",
+    ],
+  },
+  {
+    id: "operations",
+    name: "Operations",
+    imageKey: "field.operations",
+    roles: [
+      "Operations Manager",
+      "Supply Chain Manager",
+      "Logistics Director",
+      "Procurement Manager",
+      "General Manager",
+      "Chief Operating Officer",
+    ],
+  },
+  {
+    id: "product-management",
+    name: "Product Management",
+    imageKey: "field.product-management",
+    roles: [
+      "Product Manager",
+      "Senior Product Manager",
+      "Product Director",
+      "Head of Product",
+      "Chief Product Officer",
+    ],
+  },
+  {
+    id: "customer-success",
+    name: "Customer Success",
+    imageKey: "field.customer-success",
+    roles: [
+      "Customer Success Manager",
+      "Implementation Manager",
+      "Customer Experience Director",
+      "Support Manager",
+      "VP Customer Success",
+    ],
+  },
+  {
+    id: "data-science",
+    name: "Data Science",
+    imageKey: "field.data-science",
+    roles: [
+      "Data Scientist",
+      "Machine Learning Engineer",
+      "Analytics Director",
+      "Head of Data",
+    ],
+  },
+] as const;
+
+function fixtureSlug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+const PEOPLE_CAMPAIGN_ID = "marketing-directors-united-states";
+
+export const FIXTURE_FIELDS: ProfessionalField[] = FIELD_DEFINITIONS.map(
+  (field) => {
+    const active = field.id === "marketing";
+    return {
+      id: field.id,
+      slug: field.id,
+      name: field.name,
+      description: `Professional roles across ${field.name.toLowerCase()}.`,
+      imageKey: field.imageKey,
+      roleCount: field.roles.length,
+      leadCount: active ? 8 : 0,
+      campaignCount: active ? 1 : 0,
+      status: active ? "active" : "available",
+    };
+  },
+);
+
+export const FIXTURE_ROLES: ProfessionalRole[] = FIELD_DEFINITIONS.flatMap(
+  (field) =>
+    field.roles.map((roleName) => {
+      const id = fixtureSlug(roleName);
+      const active = field.id === "marketing" && id === "marketing-director";
+      return {
+        id,
+        slug: id,
+        fieldId: field.id,
+        name: roleName,
+        description: `${roleName} professionals working across modern organizations.`,
+        imageKey: field.imageKey,
+        campaignCount: active ? 1 : 0,
+        leadCount: active ? 8 : 0,
+        status: active ? "active" : "available",
+      };
+    }),
+);
 
 const CAMPAIGN_ID = "auto-repair-johannesburg";
 const CAMPAIGN_CREATED_AT = "2026-08-01T08:00:00.000Z";
@@ -125,6 +458,75 @@ export const FIXTURE_CAMPAIGN: CampaignDetail = {
     contactsFound: 11,
     emailsFound: 3,
     missingWebsites: 7,
+  },
+};
+
+export const FIXTURE_PEOPLE_CAMPAIGN_SUMMARY: CampaignSummary = {
+  id: PEOPLE_CAMPAIGN_ID,
+  name: "Marketing Directors — United States",
+  targetType: "individual",
+  industryId: "marketing",
+  verticalId: "marketing-director",
+  industryName: "Marketing",
+  verticalName: "Marketing Director",
+  fieldId: "marketing",
+  roleId: "marketing-director",
+  fieldName: "Marketing",
+  roleName: "Marketing Director",
+  location: "United States",
+  description: "Find senior marketing leaders at growing US companies.",
+  status: "ready",
+  target: 25,
+  targetLeads: 25,
+  leadCount: 8,
+  createdAt: CAMPAIGN_CREATED_AT,
+  updatedAt: CAMPAIGN_CREATED_AT,
+};
+
+export const FIXTURE_PEOPLE_CAMPAIGN: CampaignDetail = {
+  ...FIXTURE_PEOPLE_CAMPAIGN_SUMMARY,
+  sourceConfig: {
+    mode: "waterfall",
+    order: ["linkedin_company_search", "brave_search", "exa_search"],
+  },
+  metrics: {
+    companiesFound: 7,
+    contactsFound: 8,
+    emailsFound: 6,
+    missingWebsites: 0,
+  },
+};
+
+export const FIXTURE_PRO_SERVICES_CAMPAIGN_SUMMARY: CampaignSummary = {
+  id: "accounting-practices-united-states",
+  name: "Accounting Practices — United States",
+  targetType: "business",
+  industryId: "professional-services",
+  verticalId: "accounting-practices",
+  industryName: "Professional Services",
+  verticalName: "Accounting Practices",
+  location: "United States",
+  description:
+    "Find independent accounting practices across the United States.",
+  status: "completed",
+  target: 300,
+  targetLeads: 300,
+  leadCount: 308,
+  createdAt: CAMPAIGN_CREATED_AT,
+  updatedAt: CAMPAIGN_CREATED_AT,
+};
+
+export const FIXTURE_PRO_SERVICES_CAMPAIGN: CampaignDetail = {
+  ...FIXTURE_PRO_SERVICES_CAMPAIGN_SUMMARY,
+  sourceConfig: {
+    mode: DEFAULT_SOURCE_CONFIG.mode,
+    order: [...DEFAULT_SOURCE_CONFIG.order],
+  },
+  metrics: {
+    companiesFound: 308,
+    contactsFound: 308,
+    emailsFound: 205,
+    missingWebsites: 51,
   },
 };
 
@@ -272,8 +674,161 @@ export const FIXTURE_CAMPAIGN_LEADS: Lead[] = [
   ),
 ];
 
+function fixturePerson(
+  id: string,
+  personName: string,
+  currentCompany: string,
+  location: string,
+  details: Partial<Lead> = {},
+): Lead {
+  return {
+    id,
+    entityType: "person",
+    companyName: currentCompany,
+    company: currentCompany,
+    contactName: personName,
+    personName,
+    contactTitle: "Marketing Director",
+    headline: `Marketing Director at ${currentCompany}`,
+    roleName: "Marketing Director",
+    currentCompany,
+    seniority: "Director",
+    contacts: 1,
+    location,
+    source: "linkedin_company_search",
+    sourceLabel: DISCOVERY_SOURCE_LABELS.linkedin_company_search,
+    linkedinUrl: `https://www.linkedin.com/in/${id}`,
+    score: 88,
+    industryId: "marketing",
+    verticalId: "marketing-director",
+    campaignIds: [PEOPLE_CAMPAIGN_ID],
+    status: "qualified",
+    addedAt: "2026-08-01T09:00:00.000Z",
+    ...details,
+  };
+}
+
+export const FIXTURE_PEOPLE_LEADS: Lead[] = [
+  fixturePerson(
+    "maya-thompson",
+    "Maya Thompson",
+    "Northstar Health",
+    "Austin, Texas",
+    {
+      email: "maya.thompson@northstar.example",
+      score: 96,
+    },
+  ),
+  fixturePerson(
+    "daniel-lee",
+    "Daniel Lee",
+    "Vertex Commerce",
+    "New York, New York",
+    {
+      contactTitle: "VP of Marketing",
+      headline: "VP of Marketing at Vertex Commerce",
+      roleName: "VP of Marketing",
+      seniority: "VP",
+      email: "daniel.lee@vertex.example",
+      score: 94,
+    },
+  ),
+  fixturePerson(
+    "sofia-martinez",
+    "Sofia Martinez",
+    "Brightline Energy",
+    "Miami, Florida",
+    {
+      email: "sofia.martinez@brightline.example",
+      score: 92,
+    },
+  ),
+  fixturePerson(
+    "jordan-williams",
+    "Jordan Williams",
+    "Arcadia Software",
+    "Seattle, Washington",
+    {
+      contactTitle: "Head of Growth",
+      headline: "Head of Growth at Arcadia Software",
+      roleName: "Head of Growth",
+      seniority: "Head",
+      score: 90,
+    },
+  ),
+  fixturePerson(
+    "aisha-patel",
+    "Aisha Patel",
+    "Common Ground Finance",
+    "Chicago, Illinois",
+    {
+      email: "aisha.patel@commonground.example",
+      score: 89,
+    },
+  ),
+  fixturePerson(
+    "ethan-brooks",
+    "Ethan Brooks",
+    "Harbor Logistics",
+    "Boston, Massachusetts",
+    { score: 86 },
+  ),
+  fixturePerson(
+    "nia-robinson",
+    "Nia Robinson",
+    "Solstice Learning",
+    "Denver, Colorado",
+    {
+      email: "nia.robinson@solstice.example",
+      score: 84,
+    },
+  ),
+  fixturePerson(
+    "lucas-garcia",
+    "Lucas Garcia",
+    "Evergreen Foods",
+    "Portland, Oregon",
+    {
+      email: "lucas.garcia@evergreen.example",
+      score: 82,
+    },
+  ),
+];
+
+export const FIXTURE_PRO_SERVICES_LEADS: Lead[] = Array.from(
+  { length: 308 },
+  (_, index) => {
+    const number = index + 1;
+    const source =
+      DEFAULT_SOURCE_CONFIG.order[index % DEFAULT_SOURCE_CONFIG.order.length];
+    return fixtureLead(
+      `accounting-practice-${number}`,
+      `Accounting Practice ${String(number).padStart(3, "0")}`,
+      ["New York", "Chicago", "Austin", "Seattle"][index % 4],
+      source,
+      {
+        industryId: "professional-services",
+        verticalId: "accounting-practices",
+        campaignIds: [FIXTURE_PRO_SERVICES_CAMPAIGN_SUMMARY.id],
+        email:
+          index < 205
+            ? `hello${number}@accounting-practice.example`
+            : undefined,
+        website:
+          index < 257
+            ? `https://accounting-practice-${number}.example`
+            : undefined,
+        score: 70 + (index % 27),
+        status: index % 4 === 0 ? "enriched" : "qualified",
+      },
+    );
+  },
+);
+
 export const FIXTURE_GLOBAL_LEADS: Lead[] = [
   ...FIXTURE_CAMPAIGN_LEADS,
+  ...FIXTURE_PEOPLE_LEADS,
+  ...FIXTURE_PRO_SERVICES_LEADS,
   fixtureLead(
     "lead-011",
     "Pretoria Fleet Fix",
@@ -300,20 +855,25 @@ export const FIXTURE_GLOBAL_LEADS: Lead[] = [
   ),
 ];
 
-export const FIXTURE_VERTICAL_DETAILS: VerticalDetail[] = [
-  {
-    ...FIXTURE_VERTICALS[0],
-    campaigns: [FIXTURE_CAMPAIGN_SUMMARY],
-  },
-  {
-    ...FIXTURE_VERTICALS[1],
-    campaigns: [],
-  },
-  {
-    ...FIXTURE_VERTICALS[2],
-    campaigns: [],
-  },
-];
+export const FIXTURE_VERTICAL_DETAILS: VerticalDetail[] = FIXTURE_VERTICALS.map(
+  (vertical) => ({
+    ...vertical,
+    campaigns:
+      vertical.id === "auto-repair"
+        ? [FIXTURE_CAMPAIGN_SUMMARY]
+        : vertical.id === "accounting-practices"
+          ? [FIXTURE_PRO_SERVICES_CAMPAIGN_SUMMARY]
+          : [],
+  }),
+);
+
+export const FIXTURE_ROLE_DETAILS: ProfessionalRoleDetail[] = FIXTURE_ROLES.map(
+  (role) => ({
+    ...role,
+    campaigns:
+      role.id === "marketing-director" ? [FIXTURE_PEOPLE_CAMPAIGN_SUMMARY] : [],
+  }),
+);
 
 export function createIdleDiscoveryRun(campaign: CampaignDetail): DiscoveryRun {
   return {

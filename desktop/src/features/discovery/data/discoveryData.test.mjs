@@ -14,26 +14,41 @@ test("fixture source returns the SalesTeams-shaped discovery hierarchy", async (
   const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
   const industries = await source.getIndustries();
 
-  assert.equal(industries.length, 4);
+  assert.equal(industries.length, 34);
   assert.equal(industries[0].slug, "automotive");
   assert.ok(industries[0].imageKey);
 
   const verticals = await source.getVerticals("automotive");
+  assert.equal(verticals.length, 10);
   assert.deepEqual(
     verticals.map(({ id, name, industryId }) => ({ id, name, industryId })),
     [
-      { id: "auto-repair", name: "Auto Repair", industryId: "automotive" },
-      {
-        id: "car-dealerships",
-        name: "Car Dealerships",
-        industryId: "automotive",
-      },
-      {
-        id: "collision-repair",
-        name: "Collision Repair",
-        industryId: "automotive",
-      },
-    ],
+      "Auto Repair",
+      "Auto Manufacturing",
+      "Auto Parts Stores",
+      "Auto Parts Suppliers",
+      "Car Dealerships",
+      "Car Rentals",
+      "Engine Repair Garages",
+      "Fleet & Vehicle Leasing Services",
+      "Panel Beaters",
+      "Petrol Stations",
+    ].map((name, index) => ({
+      id: [
+        "auto-repair",
+        "auto-manufacturing",
+        "auto-parts-stores",
+        "auto-parts-suppliers",
+        "car-dealerships",
+        "car-rentals",
+        "engine-repair-garages",
+        "fleet-vehicle-leasing-services",
+        "panel-beaters",
+        "petrol-stations",
+      ][index],
+      name,
+      industryId: "automotive",
+    })),
   );
 
   const vertical = await source.getVertical("automotive", "auto-repair");
@@ -55,6 +70,80 @@ test("fixture source returns the SalesTeams-shaped discovery hierarchy", async (
     emailsFound: leads.leads.filter((lead) => Boolean(lead.email)).length,
     missingWebsites: leads.leads.filter((lead) => !lead.website).length,
   });
+
+  const professionalServices = await source.getVerticals(
+    "professional-services",
+  );
+  assert.equal(professionalServices.length, 18);
+  const accounting = await source.getVertical(
+    "professional-services",
+    "accounting-practices",
+  );
+  assert.equal(accounting.campaigns[0].leadCount, 308);
+});
+
+test("fixture source returns the complete SalesTeams people hierarchy", async () => {
+  const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
+  const fields = await source.getFields();
+  assert.equal(fields.length, 18);
+  assert.equal(
+    fields.reduce((total, field) => total + field.roleCount, 0),
+    96,
+  );
+
+  const roles = await source.getRoles("marketing");
+  assert.equal(roles.length, 7);
+  assert.equal(roles[0].name, "Marketing Director");
+
+  const role = await source.getRole("marketing", "marketing-director");
+  assert.equal(role.campaigns.length, 1);
+  assert.equal(role.campaigns[0].targetType, "individual");
+
+  const people = await source.getLeads({
+    scope: "campaign",
+    campaignId: "marketing-directors-united-states",
+    targetType: "individual",
+  });
+  assert.equal(people.total, 8);
+  assert.ok(people.leads.every((lead) => lead.entityType === "person"));
+  assert.ok(people.leads.every((lead) => Boolean(lead.personName)));
+
+  const campaign = await source.getCampaign(
+    "marketing-directors-united-states",
+  );
+  assert.deepEqual(campaign.sourceConfig.order, [
+    "linkedin_company_search",
+    "brave_search",
+    "exa_search",
+  ]);
+});
+
+test("outreach and conversations persist through the fixture data source", async () => {
+  const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
+  const campaignId = "marketing-directors-united-states";
+  const outreach = await source.getOutreach(campaignId);
+  assert.equal(outreach.length, 5);
+  const updated = await source.updateOutreachStatus(
+    campaignId,
+    outreach.at(-1).id,
+    "Scheduled",
+  );
+  assert.equal(updated.status, "Scheduled");
+  assert.equal(
+    (await source.getOutreach(campaignId)).at(-1).status,
+    "Scheduled",
+  );
+
+  const conversations = await source.getConversations(campaignId);
+  const conversation = conversations[0];
+  await source.markConversationRead(campaignId, conversation.id);
+  const replied = await source.sendConversationReply(
+    campaignId,
+    conversation.id,
+    "Here are the examples.",
+  );
+  assert.equal(replied.unread, false);
+  assert.equal(replied.messages.at(-1).body, "Here are the examples.");
 });
 
 test("entitlement is provider-neutral and does not invent a price", async () => {

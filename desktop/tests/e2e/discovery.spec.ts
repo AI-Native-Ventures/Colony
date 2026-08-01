@@ -19,6 +19,13 @@ const SCREENSHOTS = [
   "discovery-campaign-leads.png",
   "discovery-global-leads.png",
   "discovery-source-config.png",
+  "discovery-people-fields.png",
+  "discovery-people-roles.png",
+  "discovery-people-campaign-list.png",
+  "discovery-people-campaign-drawer.png",
+  "discovery-people-leads.png",
+  "discovery-outreach.png",
+  "discovery-conversations.png",
   "discovery-laka-locked.png",
 ] as const;
 
@@ -90,6 +97,7 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(
     page.getByText("New Opportunities", { exact: true }),
   ).toBeVisible();
+  await expect(page.getByText("34 available", { exact: true })).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-industries.png");
 
   await page.getByTestId("discovery-industry-card-automotive").click();
@@ -98,7 +106,7 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
     page.getByText("Back to Industries", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("3 Verticals Available", { exact: true }),
+    page.getByText("10 Verticals Available", { exact: true }),
   ).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-verticals.png");
 
@@ -164,6 +172,90 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(page.getByRole("heading", { name: "Leads." })).toBeVisible();
   await expect(page.getByTestId("global-lead-table")).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-global-leads.png");
+
+  await page.goto("/#/discovery?entity=people&surface=leads");
+  await expect(page.getByRole("tab", { name: "People" })).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(page.getByTestId("global-people-table")).toBeVisible();
+
+  await page.goto("/#/discovery");
+  await page.getByRole("button", { name: "People", exact: true }).click();
+  await expect(
+    page.getByText(
+      "Explore 18 fields and 96 roles to find individual professionals.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(page.getByText("18 available", { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId("discovery-field-card-marketing"),
+  ).toBeVisible();
+  await capture(appWorkspace(page), page, "discovery-people-fields.png");
+
+  await page.getByTestId("discovery-field-card-marketing").click();
+  await expect(page.getByRole("heading", { name: "Marketing" })).toBeVisible();
+  await expect(
+    page.getByText("7 Roles Available", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("discovery-role-card-marketing-director"),
+  ).toBeVisible();
+  await capture(appWorkspace(page), page, "discovery-people-roles.png");
+
+  await page.getByTestId("discovery-role-card-marketing-director").click();
+  await expect(
+    page.getByTestId("discovery-role-campaign-sidebar"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open campaign Marketing Directors — United States",
+    }),
+  ).toBeVisible();
+  await capture(appWorkspace(page), page, "discovery-people-campaign-list.png");
+
+  await page.getByTestId("create-people-discovery-campaign").click();
+  const peopleCampaignDrawer = page.getByRole("dialog", {
+    name: /Tell Jen who to find and how many people you need/,
+  });
+  await expect(peopleCampaignDrawer).toContainText(
+    "What type of professional?",
+  );
+  await expect(peopleCampaignDrawer).toContainText("How many people?");
+  await capture(
+    peopleCampaignDrawer,
+    page,
+    "discovery-people-campaign-drawer.png",
+  );
+  await peopleCampaignDrawer.getByRole("button", { name: "Cancel" }).click();
+  await expect(peopleCampaignDrawer).not.toBeVisible();
+
+  await page
+    .getByRole("button", {
+      name: "Open campaign Marketing Directors — United States",
+    })
+    .click();
+  await page.getByRole("tab", { name: /Leads/ }).click();
+  await expect(page.getByTestId("campaign-people-table")).toBeVisible();
+  await expect(page.getByText("8 people found", { exact: true })).toBeVisible();
+  await capture(appWorkspace(page), page, "discovery-people-leads.png");
+
+  await page.getByRole("tab", { name: "Outreach" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Outreach", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "WhatsApp", exact: true }),
+  ).toBeVisible();
+  await capture(appWorkspace(page), page, "discovery-outreach.png");
+
+  await page.getByRole("tab", { name: "Conversations" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Conversations", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Reply" })).toBeVisible();
+  await capture(appWorkspace(page), page, "discovery-conversations.png");
 
   // The fixture source is entitled by default. The e2e-only init hook below
   // exercises the same persisted campaign route with the LAKA lock visible.

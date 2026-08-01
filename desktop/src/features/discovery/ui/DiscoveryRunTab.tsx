@@ -293,12 +293,14 @@ export function DiscoveryRunTab({
                 "color-mix(in srgb, hsl(var(--discovery-accent)) 55%, hsl(var(--foreground)) 45%)",
             }}
           >
-            {campaign.verticalName} in {campaign.location}.
+            {campaign.roleName ?? campaign.verticalName} in {campaign.location}.
           </em>
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Jen searches Google Maps, directories, and the web, validates every
-          result, and adds qualifying leads straight to this campaign.
+          Jen searches configured sources, validates every result, and adds
+          qualifying{" "}
+          {campaign.targetType === "individual" ? "people" : "businesses"}{" "}
+          straight to this campaign.
         </p>
       </div>
       <RunHero

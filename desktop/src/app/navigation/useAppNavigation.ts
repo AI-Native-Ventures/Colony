@@ -26,7 +26,17 @@ type NewMessageNavigationOptions = NavigationBehavior & {
   blockManifestId?: string;
 };
 export type DiscoveryNavigationOptions = NavigationBehavior &
-  Partial<Pick<DiscoverySearch, "industryId" | "verticalId" | "campaignId">> & {
+  Partial<
+    Pick<
+      DiscoverySearch,
+      | "entity"
+      | "industryId"
+      | "verticalId"
+      | "fieldId"
+      | "roleId"
+      | "campaignId"
+    >
+  > & {
     surface?: DiscoverySurface;
     tab?: DiscoveryTab;
   };
@@ -36,9 +46,12 @@ export function buildDiscoverySearch(
   options?: DiscoveryNavigationOptions,
 ): Record<string, string | undefined> {
   return {
+    ...(options?.entity ? { entity: options.entity } : {}),
     ...(options?.surface ? { surface: options.surface } : {}),
     ...(options?.industryId ? { industryId: options.industryId } : {}),
     ...(options?.verticalId ? { verticalId: options.verticalId } : {}),
+    ...(options?.fieldId ? { fieldId: options.fieldId } : {}),
+    ...(options?.roleId ? { roleId: options.roleId } : {}),
     ...(options?.campaignId ? { campaignId: options.campaignId } : {}),
     ...(options?.tab ? { tab: options.tab } : {}),
   };

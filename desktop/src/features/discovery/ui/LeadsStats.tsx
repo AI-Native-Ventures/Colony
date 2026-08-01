@@ -60,20 +60,29 @@ export function globalLeadStats(
   };
 }
 
-export function CampaignLeadStatsRow({ leads }: { leads: readonly Lead[] }) {
+export function CampaignLeadStatsRow({
+  leads,
+  people = false,
+}: {
+  leads: readonly Lead[];
+  people?: boolean;
+}) {
   const stats = campaignLeadStats(leads);
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border/60 bg-card/70 px-4 py-3 text-sm">
       <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
         <Users aria-hidden="true" className="h-4 w-4 text-emerald-600" />
-        {stats.companiesFound} companies found
+        {stats.companiesFound} {people ? "people" : "companies"} found
       </span>
       <span aria-hidden="true" className="text-muted-foreground">
         ·
       </span>
       <span className="inline-flex items-center gap-1.5 text-muted-foreground">
         <Users aria-hidden="true" className="h-4 w-4" />
-        {stats.contactsFound} contacts
+        {people
+          ? leads.filter((lead) => Boolean(lead.currentCompany)).length
+          : stats.contactsFound}{" "}
+        {people ? "current companies" : "contacts"}
       </span>
       <span className="inline-flex items-center gap-1.5 text-emerald-600">
         <Mail aria-hidden="true" className="h-4 w-4" />
@@ -81,13 +90,22 @@ export function CampaignLeadStatsRow({ leads }: { leads: readonly Lead[] }) {
       </span>
       <span className="inline-flex items-center gap-1.5 text-amber-600">
         <MapPin aria-hidden="true" className="h-4 w-4" />
-        {stats.missingWebsites} missing websites
+        {people
+          ? leads.filter((lead) => Boolean(lead.linkedinUrl)).length
+          : stats.missingWebsites}{" "}
+        {people ? "LinkedIn profiles" : "missing websites"}
       </span>
     </div>
   );
 }
 
-export function GlobalLeadStatsRow({ leads }: { leads: readonly Lead[] }) {
+export function GlobalLeadStatsRow({
+  leads,
+  people = false,
+}: {
+  leads: readonly Lead[];
+  people?: boolean;
+}) {
   const stats = globalLeadStats(leads);
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -95,7 +113,7 @@ export function GlobalLeadStatsRow({ leads }: { leads: readonly Lead[] }) {
         icon={<Users aria-hidden="true" />}
         label="Total Leads"
         value={stats.totalLeads}
-        hint="Discovered companies"
+        hint={people ? "Discovered professionals" : "Discovered companies"}
       />
       <MetricCard
         icon={<Database aria-hidden="true" />}
@@ -111,15 +129,15 @@ export function GlobalLeadStatsRow({ leads }: { leads: readonly Lead[] }) {
       />
       <MetricCard
         icon={<Building2 aria-hidden="true" />}
-        label="Top Industry"
+        label={people ? "Top Field" : "Top Industry"}
         value={stats.topIndustry}
-        hint={`${stats.topIndustry === "—" ? 0 : leads.filter((lead) => readableIndustry(lead.industryId) === stats.topIndustry).length} companies`}
+        hint={`${stats.topIndustry === "—" ? 0 : leads.filter((lead) => readableIndustry(lead.industryId) === stats.topIndustry).length} ${people ? "people" : "companies"}`}
       />
     </div>
   );
 }
 
-export function LeadsEmptyState({ people = false }: { people?: boolean }) {
+export function LeadsEmptyState() {
   return (
     <Card className="border-dashed border-border/70 bg-background/30 p-8 text-center shadow-none">
       <Users
@@ -127,12 +145,10 @@ export function LeadsEmptyState({ people = false }: { people?: boolean }) {
         className="mx-auto h-8 w-8 text-muted-foreground"
       />
       <h2 className="mt-3 text-base font-semibold text-foreground">
-        {people ? "People discovery is coming soon" : "No leads found"}
+        No leads found
       </h2>
       <p className="mx-auto mt-1 max-w-xl text-sm text-muted-foreground">
-        {people
-          ? "People discovery will use the same campaign and owner context once the provider contract is ready."
-          : "Run discovery or adjust your filters to add leads to this workspace."}
+        Run discovery or adjust your filters to add leads to this workspace.
       </p>
     </Card>
   );

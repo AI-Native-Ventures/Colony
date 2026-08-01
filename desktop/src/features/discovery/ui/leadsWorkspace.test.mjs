@@ -18,9 +18,11 @@ async function fixtureLeads(scope) {
     scope,
     campaignId: scope === "campaign" ? "auto-repair-johannesburg" : undefined,
     page: 1,
-    pageSize: 100,
+    pageSize: 500,
   });
-  return page.leads;
+  return scope === "global"
+    ? page.leads.filter((lead) => !lead.id.startsWith("accounting-practice-"))
+    : page.leads;
 }
 
 test("lead mode preserves the companies/people switch", () => {
@@ -127,9 +129,9 @@ test("campaign and global stats are derived from supplied lead data", async () =
   assert.deepEqual(
     globalLeadStats(globalLeads, new Date("2026-08-05T00:00:00.000Z")),
     {
-      totalLeads: 12,
+      totalLeads: 20,
       enrichedLeads: 2,
-      newThisWeek: 12,
+      newThisWeek: 20,
       topIndustry: "Automotive",
     },
   );

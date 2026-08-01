@@ -17,10 +17,15 @@ export type DiscoveryTab =
   | "conversations"
   | "settings";
 
+export type DiscoveryEntity = "businesses" | "people";
+
 export type DiscoverySearch = {
+  entity?: DiscoveryEntity;
   surface?: DiscoverySurface;
   industryId?: string;
   verticalId?: string;
+  fieldId?: string;
+  roleId?: string;
   campaignId?: string;
   tab?: DiscoveryTab;
 };
@@ -42,6 +47,8 @@ const DISCOVERY_TABS: readonly DiscoveryTab[] = [
   "settings",
 ];
 
+const DISCOVERY_ENTITIES: readonly DiscoveryEntity[] = ["businesses", "people"];
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -60,9 +67,12 @@ export function validateDiscoverySearch(
   search: Record<string, unknown>,
 ): DiscoverySearch {
   return {
+    entity: enumValue(search.entity, DISCOVERY_ENTITIES),
     surface: enumValue(search.surface, DISCOVERY_SURFACES),
     industryId: nonEmptyString(search.industryId),
     verticalId: nonEmptyString(search.verticalId),
+    fieldId: nonEmptyString(search.fieldId),
+    roleId: nonEmptyString(search.roleId),
     campaignId: nonEmptyString(search.campaignId),
     tab: enumValue(search.tab, DISCOVERY_TABS),
   };

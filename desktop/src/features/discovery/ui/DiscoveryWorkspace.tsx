@@ -1,5 +1,5 @@
 import * as React from "react";
-import { LockKeyhole, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
@@ -12,6 +12,9 @@ import type {
   CampaignDetail,
   Industry,
   LeadPage,
+  ProfessionalField,
+  ProfessionalRole,
+  ProfessionalRoleDetail,
   Vertical,
   VerticalDetail,
 } from "../types";
@@ -22,23 +25,33 @@ import {
   type DiscoveryFilterState,
   discoverySurface,
   EMPTY_DISCOVERY_FILTERS,
+  fieldRolesSearch,
   industryVerticalSearch,
+  peopleCampaignDetailSearch,
+  roleCampaignsSearch,
   verticalCampaignsSearch,
 } from "./discoveryLayout";
 import { CampaignListView } from "./CampaignListView";
 import { CampaignDetailView } from "./CampaignDetailView";
 import { CreateCampaignSheet } from "./CreateCampaignSheet";
+import { CreatePeopleCampaignSheet } from "./CreatePeopleCampaignSheet";
 import { DiscoveryHeader, type DiscoveryMode } from "./DiscoveryHeader";
 import { IndustryGrid } from "./IndustryGrid";
 import { DiscoveryListFilters } from "./DiscoveryListFilters";
 import { VerticalGrid } from "./VerticalGrid";
 import { LeadsWorkspace } from "./LeadsWorkspace";
+import { FieldGrid } from "./FieldGrid";
+import { RoleGrid } from "./RoleGrid";
+import { RoleCampaignListView } from "./RoleCampaignListView";
 
 /** The read models loaded by the route for the active addressable surface. */
 export type DiscoveryRouteReadModel = {
   industries: Industry[];
   verticals: Vertical[];
   vertical: VerticalDetail | null;
+  fields: ProfessionalField[];
+  roles: ProfessionalRole[];
+  role: ProfessionalRoleDetail | null;
   campaign: CampaignDetail | null;
   leads: LeadPage | null;
 };
@@ -90,16 +103,6 @@ function LoadingState() {
       </div>
       <span className="sr-only">Loading discovery surfaces</span>
     </div>
-  );
-}
-
-function PeopleSoonState() {
-  return (
-    <WorkspaceState
-      description="People discovery will layer contact discovery onto the same industry and vertical map. We are keeping this surface locked until the provider contract is ready."
-      icon={<LockKeyhole className="mx-auto h-8 w-8 text-muted-foreground" />}
-      title="People discovery is coming soon"
-    />
   );
 }
 
@@ -156,7 +159,8 @@ export function DiscoveryWorkspace({
   search,
 }: DiscoveryWorkspaceProps) {
   const { goDiscovery } = useAppNavigation();
-  const [mode, setMode] = React.useState<DiscoveryMode>("businesses");
+  const mode: DiscoveryMode =
+    search.entity === "people" ? "people" : "businesses";
   const [filters, setFilters] = React.useState<
     Record<string, DiscoveryFilterState>
   >({});
@@ -177,6 +181,15 @@ export function DiscoveryWorkspace({
       }));
     },
     [filterKey],
+  );
+  const changeMode = React.useCallback(
+    (nextMode: DiscoveryMode) => {
+      void goDiscovery({
+        entity: nextMode,
+        surface: "industries",
+      });
+    },
+    [goDiscovery],
   );
 
   if (isLoading || !readModel) {
@@ -201,20 +214,10 @@ export function DiscoveryWorkspace({
     (candidate) => candidate.id === search.industryId,
   );
   const vertical = readModel.vertical;
-
-  if (mode === "people" && surface !== "leads") {
-    return (
-      <div className="space-y-5">
-        <DiscoveryHeader
-          description="Choose an industry and vertical to find the right businesses for your next campaign."
-          mode={mode}
-          onModeChange={setMode}
-          title="Discover people"
-        />
-        <PeopleSoonState />
-      </div>
-    );
-  }
+  const field = readModel.fields.find(
+    (candidate) => candidate.id === search.fieldId,
+  );
+  const role = readModel.role;
 
   if ((surface === "campaign" || surface === "leads") && search.campaignId) {
     if (!readModel.campaign) {
@@ -231,25 +234,231 @@ export function DiscoveryWorkspace({
         dataSource={dataSource}
         entitlement={entitlement}
         leads={readModel.leads}
-        onBack={() =>
+        onBack={() => {
+          const campaign = readModel.campaign;
+          if (campaign?.targetType === "individual") {
+            void goDiscovery(
+              roleCampaignsSearch(
+                campaign.fieldId ?? campaign.industryId,
+                campaign.roleId ?? campaign.verticalId,
+              ),
+            );
+            return;
+          }
           void goDiscovery(
             verticalCampaignsSearch(
-              readModel.campaign?.industryId ?? search.industryId ?? "",
-              readModel.campaign?.verticalId ?? search.verticalId ?? "",
+              campaign?.industryId ?? search.industryId ?? "",
+              campaign?.verticalId ?? search.verticalId ?? "",
             ),
-          )
-        }
+          );
+        }}
         onTabChange={(tab) =>
-          void goDiscovery({
-            campaignId: readModel.campaign?.id ?? search.campaignId,
-            industryId: readModel.campaign?.industryId ?? search.industryId,
-            verticalId: readModel.campaign?.verticalId ?? search.verticalId,
-            surface: tab === "leads" ? "leads" : "campaign",
-            tab,
-          })
+          void goDiscovery(
+            readModel.campaign?.targetType === "individual"
+              ? {
+                  ...peopleCampaignDetailSearch(
+                    readModel.campaign.fieldId ?? readModel.campaign.industryId,
+                    readModel.campaign.roleId ?? readModel.campaign.verticalId,
+                    readModel.campaign.id,
+                  ),
+                  surface: tab === "leads" ? "leads" : "campaign",
+                  tab,
+                }
+              : {
+                  campaignId: readModel.campaign?.id ?? search.campaignId,
+                  industryId:
+                    readModel.campaign?.industryId ?? search.industryId,
+                  verticalId:
+                    readModel.campaign?.verticalId ?? search.verticalId,
+                  surface: tab === "leads" ? "leads" : "campaign",
+                  tab,
+                },
+          )
         }
         search={search}
       />
+    );
+  }
+
+  if (mode === "people" && surface === "campaigns") {
+    if (!role || !field) {
+      return (
+        <WorkspaceState
+          description="Choose a professional role before opening its campaign workspace."
+          title="Campaign list unavailable"
+        />
+      );
+    }
+    const normalizedQuery = query.trim().toLowerCase();
+    const visibleRoles = readModel.roles.filter((candidate) => {
+      if (statusFilter !== "all" && candidate.status !== statusFilter) {
+        return false;
+      }
+      if (!normalizedQuery) return true;
+      return [candidate.name, candidate.description]
+        .filter(Boolean)
+        .some((value) => value?.toLowerCase().includes(normalizedQuery));
+    });
+    return (
+      <div className="relative space-y-6 px-9 pb-16 pt-9">
+        <DiscoveryHeader
+          breadcrumb="Fields"
+          description={`${visibleRoles.length} Roles Available`}
+          mode={mode}
+          onBack={() =>
+            void goDiscovery({ entity: "people", surface: "industries" })
+          }
+          onModeChange={changeMode}
+          onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
+          query={query}
+          showToolbar
+          title={field.displayName ?? field.name}
+          toolbarEntity="roles"
+        />
+        <DiscoveryListFilters
+          entity="Fields"
+          onFilterChange={() => undefined}
+          onViewModeChange={() => undefined}
+          selectedFilter="All Fields"
+          showFilters={false}
+          total={visibleRoles.length}
+          viewMode="grid"
+        />
+        <RoleGrid
+          fieldName={field.name}
+          roles={visibleRoles}
+          onSelect={(selectedRole) =>
+            void goDiscovery(roleCampaignsSearch(field.id, selectedRole.id))
+          }
+        />
+        <EntitlementNotice entitlement={entitlement} />
+        <RoleCampaignListView
+          campaigns={role.campaigns}
+          fieldName={field.name}
+          onBack={() => void goDiscovery(fieldRolesSearch(field.id))}
+          onCreateCampaign={() => setCreateCampaignOpen(true)}
+          onOpenCampaign={(campaign) =>
+            void goDiscovery(
+              peopleCampaignDetailSearch(field.id, role.id, campaign.id),
+            )
+          }
+          role={role}
+        />
+        <CreatePeopleCampaignSheet
+          dataSource={dataSource}
+          entitlement={entitlement}
+          fieldName={field.name}
+          onCreated={(campaign) => {
+            setCreateCampaignOpen(false);
+            void goDiscovery(
+              peopleCampaignDetailSearch(field.id, role.id, campaign.id),
+            );
+          }}
+          onOpenChange={setCreateCampaignOpen}
+          onRetryEntitlement={() => window.location.reload()}
+          open={createCampaignOpen}
+          role={role}
+        />
+      </div>
+    );
+  }
+
+  if (mode === "people" && surface === "verticals") {
+    if (!field) {
+      return (
+        <WorkspaceState
+          description="This professional field is no longer available in the Discovery catalog."
+          title="Field not found"
+        />
+      );
+    }
+    const normalizedQuery = query.trim().toLowerCase();
+    const visibleRoles = readModel.roles.filter((candidate) => {
+      if (statusFilter !== "all" && candidate.status !== statusFilter)
+        return false;
+      return (
+        !normalizedQuery ||
+        [candidate.name, candidate.description]
+          .filter(Boolean)
+          .some((value) => value?.toLowerCase().includes(normalizedQuery))
+      );
+    });
+    return (
+      <div className="space-y-6 px-9 pb-16 pt-9">
+        <DiscoveryHeader
+          breadcrumb="Fields"
+          description={`${visibleRoles.length} Roles Available`}
+          mode={mode}
+          onBack={() =>
+            void goDiscovery({ entity: "people", surface: "industries" })
+          }
+          onModeChange={changeMode}
+          onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
+          query={query}
+          showToolbar
+          title={field.displayName ?? field.name}
+          toolbarEntity="roles"
+        />
+        <DiscoveryListFilters
+          entity="Fields"
+          onFilterChange={() => undefined}
+          onViewModeChange={() => undefined}
+          selectedFilter="All Fields"
+          showFilters={false}
+          total={visibleRoles.length}
+          viewMode="grid"
+        />
+        <EntitlementNotice entitlement={entitlement} />
+        <RoleGrid
+          fieldName={field.name}
+          roles={visibleRoles}
+          onSelect={(selectedRole) =>
+            void goDiscovery(roleCampaignsSearch(field.id, selectedRole.id))
+          }
+        />
+      </div>
+    );
+  }
+
+  if (mode === "people" && surface === "industries") {
+    const normalizedQuery = query.trim().toLowerCase();
+    const visibleFields = readModel.fields.filter((candidate) => {
+      if (statusFilter !== "all" && candidate.status !== statusFilter)
+        return false;
+      return (
+        !normalizedQuery ||
+        [candidate.name, candidate.displayName, candidate.description]
+          .filter(Boolean)
+          .some((value) => value?.toLowerCase().includes(normalizedQuery))
+      );
+    });
+    return (
+      <div className="space-y-6 px-9 pb-16 pt-9">
+        <DiscoveryHeader
+          mode={mode}
+          onModeChange={changeMode}
+          onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
+          query={query}
+          showToolbar
+          title=""
+          toolbarEntity="fields and roles"
+        />
+        <EntitlementNotice entitlement={entitlement} />
+        <DiscoveryListFilters
+          entity="Fields"
+          onFilterChange={() => undefined}
+          onViewModeChange={() => undefined}
+          selectedFilter="All Fields"
+          total={visibleFields.length}
+          viewMode="grid"
+        />
+        <FieldGrid
+          fields={visibleFields}
+          onSelect={(selectedField) =>
+            void goDiscovery(fieldRolesSearch(selectedField.id))
+          }
+        />
+      </div>
     );
   }
 
@@ -283,7 +492,7 @@ export function DiscoveryWorkspace({
           description={`${visibleVerticals.length} Verticals Available`}
           mode={mode}
           onBack={() => void goDiscovery({ surface: "industries" })}
-          onModeChange={setMode}
+          onModeChange={changeMode}
           onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
           query={query}
           showToolbar
@@ -381,7 +590,7 @@ export function DiscoveryWorkspace({
           description={`${visibleVerticals.length} Verticals Available`}
           mode={mode}
           onBack={() => void goDiscovery({ surface: "industries" })}
-          onModeChange={setMode}
+          onModeChange={changeMode}
           onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
           onStatusFilterChange={(nextStatus) =>
             updateFilters({ statusFilter: nextStatus })
@@ -419,6 +628,7 @@ export function DiscoveryWorkspace({
       <LeadsWorkspace
         dataSource={dataSource}
         initialLeads={readModel.leads}
+        initialMode={mode === "people" ? "people" : "companies"}
         scope="global"
       />
     );
@@ -442,7 +652,7 @@ export function DiscoveryWorkspace({
       <DiscoveryHeader
         description=""
         mode={mode}
-        onModeChange={setMode}
+        onModeChange={changeMode}
         onQueryChange={(nextQuery) => updateFilters({ query: nextQuery })}
         onStatusFilterChange={(nextStatus) =>
           updateFilters({ statusFilter: nextStatus })

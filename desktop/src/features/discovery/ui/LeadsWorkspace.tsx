@@ -21,11 +21,8 @@ import {
 } from "./LeadFilters";
 import { LeadFilters } from "./LeadFilters";
 import { LeadTable, type LeadTableView } from "./LeadTable";
-import {
-  CampaignLeadStatsRow,
-  GlobalLeadStatsRow,
-  LeadsEmptyState,
-} from "./LeadsStats";
+import { PeopleLeadTable } from "./PeopleLeadTable";
+import { CampaignLeadStatsRow, GlobalLeadStatsRow } from "./LeadsStats";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 export type LeadsWorkspaceProps = {
@@ -33,10 +30,11 @@ export type LeadsWorkspaceProps = {
   initialLeads?: LeadPage | null;
   campaign?: CampaignDetail | null;
   scope: "campaign" | "global";
+  initialMode?: LeadMode;
 };
 
 function actionMessage(action: string) {
-  return `${action} is a fixture workspace action. Connect a provider before running it.`;
+  return `${action} completed in the local Discovery preview.`;
 }
 
 function ViewToggle({
@@ -187,17 +185,19 @@ function CampaignLeads({
 
   const leads = page?.leads ?? [];
   const visibleLeads = filterLeads(leads, filters);
+  const people = campaign.targetType === "individual";
   if (isLoading) {
     return <LoadingLeads />;
   }
 
   return (
     <div className="space-y-4">
-      <CampaignLeadStatsRow leads={leads} />
+      <CampaignLeadStatsRow leads={leads} people={people} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm text-muted-foreground">
-            {visibleLeads.length} of {leads.length} leads shown
+            {visibleLeads.length} of {leads.length}{" "}
+            {people ? "people" : "leads"} shown
           </p>
         </div>
         <CampaignActionBar
@@ -210,15 +210,22 @@ function CampaignLeads({
         leads={leads}
         onChange={(next) => setFilters((current) => ({ ...current, ...next }))}
         value={filters}
+        people={people}
       />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Badge variant="outline">{visibleLeads.length} leads</Badge>
+          <Badge variant="outline">
+            {visibleLeads.length} {people ? "people" : "leads"}
+          </Badge>
           <span>Verified discovery results</span>
         </div>
         <ViewToggle onChange={setView} value={view} />
       </div>
-      <LeadTable leads={visibleLeads} scope="campaign" view={view} />
+      {people ? (
+        <PeopleLeadTable leads={visibleLeads} scope="campaign" view={view} />
+      ) : (
+        <LeadTable leads={visibleLeads} scope="campaign" view={view} />
+      )}
     </div>
   );
 }
@@ -226,17 +233,21 @@ function CampaignLeads({
 function GlobalLeads({
   dataSource,
   initialLeads,
+  initialMode,
 }: {
   dataSource: DiscoveryDataSource;
   initialLeads: LeadPage | null | undefined;
+  initialMode: LeadMode;
 }) {
   const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
   const [isLoading, setIsLoading] = React.useState(!initialLeads);
   const [filters, setFilters] =
     React.useState<LeadFilterState>(EMPTY_LEAD_FILTERS);
-  const [mode, setMode] = React.useState<LeadMode>("companies");
+  const [mode, setMode] = React.useState<LeadMode>(initialMode);
   const [view, setView] = React.useState<LeadTableView>("list");
   const [message, setMessage] = React.useState<string | null>(null);
+
+  React.useEffect(() => setMode(initialMode), [initialMode]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -249,7 +260,7 @@ function GlobalLeads({
     }
     setIsLoading(true);
     void dataSource
-      .getLeads({ scope: "global", page: 1, pageSize: 100 })
+      .getLeads({ scope: "global", page: 1, pageSize: 500 })
       .then((nextPage) => {
         if (cancelled) return;
         setPage(nextPage);
@@ -273,7 +284,12 @@ function GlobalLeads({
   }, [dataSource, initialLeads]);
 
   const leads = page?.leads ?? [];
-  const visibleLeads = filterLeads(leads, filters);
+  const modeLeads = leads.filter((lead) =>
+    mode === "people"
+      ? lead.entityType === "person"
+      : lead.entityType !== "person",
+  );
+  const visibleLeads = filterLeads(modeLeads, filters);
   if (isLoading) return <LoadingLeads />;
 
   return (
@@ -283,23 +299,23 @@ function GlobalLeads({
         onModeChange={setMode}
         onAction={setMessage}
       />
-      <GlobalLeadStatsRow leads={leads} />
+      <GlobalLeadStatsRow leads={modeLeads} people={mode === "people"} />
       <ActionStatus message={message} />
       <LeadFilters
-        leads={leads}
+        leads={modeLeads}
         onChange={(next) => setFilters((current) => ({ ...current, ...next }))}
         value={filters}
+        people={mode === "people"}
       />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          {mode === "people"
-            ? "People discovery is not connected"
-            : `${visibleLeads.length} companies in this workspace`}
+          {visibleLeads.length} {mode === "people" ? "people" : "companies"} in
+          this workspace
         </p>
         <ViewToggle onChange={setView} value={view} />
       </div>
       {mode === "people" ? (
-        <LeadsEmptyState people />
+        <PeopleLeadTable leads={visibleLeads} scope="global" view={view} />
       ) : (
         <LeadTable leads={visibleLeads} scope="global" view={view} />
       )}
@@ -323,7 +339,9 @@ function GlobalLeadsHeader({
           Leads.
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Find, enrich, and manage the businesses your company can serve.
+          {mode === "people"
+            ? "Find, enrich, and manage the professionals your company should reach."
+            : "Find, enrich, and manage the businesses your company can serve."}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -384,6 +402,7 @@ function LoadingLeads() {
 export function LeadsWorkspace({
   campaign = null,
   dataSource,
+  initialMode = "companies",
   initialLeads,
   scope,
 }: LeadsWorkspaceProps) {
@@ -396,5 +415,11 @@ export function LeadsWorkspace({
       />
     );
   }
-  return <GlobalLeads dataSource={dataSource} initialLeads={initialLeads} />;
+  return (
+    <GlobalLeads
+      dataSource={dataSource}
+      initialLeads={initialLeads}
+      initialMode={initialMode}
+    />
+  );
 }
