@@ -14,6 +14,8 @@ pub mod channel;
 /// Company, initiative, task, and agent work-attribution contracts.
 pub mod company;
 pub mod company_roster;
+/// Core contracts for Colony business Discovery runs.
+pub mod discovery;
 /// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
 /// body parse/serialize, envelope build/validate, head selection.
 pub mod engram;

@@ -8,8 +8,8 @@
 
 use buzz_core::{
     kind::{
-        AUTHOR_ONLY_KINDS, KIND_AGENT_TURN_METRIC, KIND_MEMBER_ADDED_NOTIFICATION,
-        KIND_MEMBER_REMOVED_NOTIFICATION, P_GATED_KINDS,
+        AUTHOR_ONLY_KINDS, KIND_AGENT_TURN_METRIC, KIND_DISCOVERY_ACTION, KIND_DISCOVERY_RECEIPT,
+        KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, P_GATED_KINDS,
     },
     CommunityId,
 };
@@ -1091,11 +1091,13 @@ async fn very_long_query_is_bounded_before_pg_parse() {
 ///   - 1059  = `KIND_GIFT_WRAP`      (NIP-17 ciphertext)
 ///   - 30300 = `KIND_EVENT_REMINDER` (in `AUTHOR_ONLY_KINDS`)
 ///   - 30622 = `KIND_DM_VISIBILITY`  (per-viewer private hide state)
+///   - 40017 = `KIND_DISCOVERY_ACTION` (author-only command)
+///   - 40018 = `KIND_DISCOVERY_RECEIPT` (requester-private receipt)
 ///   - 44100 = `KIND_MEMBER_ADDED_NOTIFICATION`  (p-gated membership notice)
 ///   - 44101 = `KIND_MEMBER_REMOVED_NOTIFICATION` (p-gated membership notice)
 ///   - 44200 = `KIND_AGENT_TURN_METRIC` (NIP-AM: p-gated encrypted turn metrics)
 ///
-/// All seven events are inserted with the same unique token in their content
+/// All nine events are inserted with the same unique token in their content
 /// so a single search query exercises every kind in one round-trip. Only
 /// the kind:9 control must surface — the excluded kinds must not.
 ///
@@ -1120,6 +1122,32 @@ async fn excluded_kinds_are_storage_level_unsearchable() {
         &format!("public chat — {token}"),
         None,
         1_700_000_000,
+    )
+    .await;
+
+    // kind:40017 Discovery action — author-only and MUST NOT be searchable.
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        KIND_DISCOVERY_ACTION as i32,
+        &format!("discovery action — {token}"),
+        None,
+        1_700_000_007,
+    )
+    .await;
+
+    // kind:40018 Discovery receipt — requester-private and MUST NOT be searchable.
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        KIND_DISCOVERY_RECEIPT as i32,
+        &format!("discovery receipt — {token}"),
+        None,
+        1_700_000_008,
     )
     .await;
 
@@ -1231,6 +1259,8 @@ async fn excluded_kinds_are_storage_level_unsearchable() {
         1059,
         30300,
         30622,
+        KIND_DISCOVERY_ACTION as i32,
+        KIND_DISCOVERY_RECEIPT as i32,
         KIND_MEMBER_ADDED_NOTIFICATION as i32,
         KIND_MEMBER_REMOVED_NOTIFICATION as i32,
         KIND_AGENT_TURN_METRIC as i32,

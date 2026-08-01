@@ -16,6 +16,7 @@ pub mod blocks;
 pub mod builders;
 pub mod company;
 pub mod company_blueprint;
+pub mod discovery;
 pub mod implicit_task;
 pub mod initiative_activation;
 pub mod mentions;
@@ -25,6 +26,7 @@ pub mod party_resolution;
 
 pub use builders::*;
 pub use company::*;
+pub use discovery::*;
 
 /// Re-export kind constants so consumers don't need buzz-core directly.
 pub use buzz_core::kind;
