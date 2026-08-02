@@ -210,9 +210,10 @@ export function AgentSessionTranscriptList({
           {isLoading ? (
             <FuzzyMark
               ariaLabel="Waiting for ACP activity"
-              // colony-logo--compact keeps the mark at indicator size; the
-              // unsized default is the 466px boot splash geometry.
-              className="colony-logo--compact mx-auto text-muted-foreground"
+              // Utility sizing, not `colony-logo--compact` — that rule lives
+              // in a code-split stylesheet and cannot be assumed loaded here.
+              // Unsized, the mark renders at its 466px boot-splash width.
+              className="mx-auto w-8! text-muted-foreground"
               fuzz={false}
               loop
             />
