@@ -136,6 +136,27 @@ impl OutscraperClient {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn for_local_test(
+        search_endpoint: String,
+        requests_endpoint: String,
+    ) -> Result<Self, OutscraperError> {
+        Self::with_config(
+            OutscraperEndpoints {
+                search: search_endpoint,
+                requests: requests_endpoint,
+            },
+            PollPolicy {
+                request_timeout: Duration::from_secs(2),
+                poll_interval: Duration::from_millis(25),
+                total_timeout: Duration::from_secs(10),
+                retry_backoff: Duration::from_millis(10),
+                max_retries: 2,
+                max_response_bytes: 1024 * 1024,
+            },
+        )
+    }
+
     pub(super) async fn submit(
         &self,
         search: &DiscoveryBusinessSearchSpec,
@@ -404,6 +425,7 @@ mod tests {
         ImmediateSuccess,
         Failure,
         Status(AxumStatus),
+        TransientStatus(AxumStatus),
         Malformed,
         Oversized,
         Delayed,
@@ -413,6 +435,7 @@ mod tests {
     struct TestState {
         scenario: Scenario,
         poll_count: AtomicUsize,
+        submit_count: AtomicUsize,
         paths: Mutex<Vec<String>>,
     }
 
@@ -421,6 +444,7 @@ mod tests {
         headers: HeaderMap,
         uri: axum::http::Uri,
     ) -> impl IntoResponse {
+        let submit_count = state.submit_count.fetch_add(1, Ordering::SeqCst);
         assert_eq!(
             headers
                 .get("x-api-key")
@@ -453,6 +477,10 @@ mod tests {
             Scenario::ImmediateSuccess => (AxumStatus::OK, success_body("job-1")).into_response(),
             Scenario::Failure => (AxumStatus::ACCEPTED, failure_body()).into_response(),
             Scenario::Status(status) => (status, "provider detail must not escape").into_response(),
+            Scenario::TransientStatus(status) if submit_count == 0 => {
+                (status, "temporary provider detail must not escape").into_response()
+            }
+            Scenario::TransientStatus(_) => (AxumStatus::OK, success_body("job-1")).into_response(),
             Scenario::Malformed => (AxumStatus::OK, "not-json").into_response(),
             Scenario::Oversized => (AxumStatus::OK, "x".repeat(1024)).into_response(),
             Scenario::Delayed => (AxumStatus::OK, success_body("job-1")).into_response(),
@@ -531,6 +559,7 @@ mod tests {
         let state = Arc::new(TestState {
             scenario,
             poll_count: AtomicUsize::new(0),
+            submit_count: AtomicUsize::new(0),
             paths: Mutex::new(Vec::new()),
         });
         let router = Router::new()
@@ -667,6 +696,27 @@ mod tests {
             assert!(!rendered.contains("test-key"));
             assert!(!rendered.contains("secret provider detail"));
             assert!(!rendered.contains("dentist"));
+            handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_rate_limit_and_server_failures_recover_with_bounded_retry() {
+        for status in [
+            AxumStatus::TOO_MANY_REQUESTS,
+            AxumStatus::INTERNAL_SERVER_ERROR,
+        ] {
+            let (client, state, handle) = server(Scenario::TransientStatus(status)).await;
+            let result = client
+                .submit(
+                    &search(),
+                    &Zeroizing::new("test-key".to_string()),
+                    &CancellationToken::new(),
+                )
+                .await
+                .expect("transient provider status must recover");
+            assert_eq!(result.ready.expect("ready after retry").len(), 1);
+            assert_eq!(state.submit_count.load(Ordering::SeqCst), 2);
             handle.abort();
         }
     }

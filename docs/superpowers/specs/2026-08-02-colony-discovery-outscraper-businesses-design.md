@@ -496,6 +496,45 @@ gate was running; integration must rebase them before a PR and rerun the gate.
 The separate `codex/discovery-engine` worktree remains clean at `fa52ff60d` and
 was not modified.
 
+## Outscraper source-gate evidence (2026-08-02)
+
+The production client and worker path are now implemented and proven against a
+loopback provider server. No request was sent to Outscraper and no provider
+usage cost was incurred.
+
+### Proven
+
+- The production client uses the fixed Google Maps Search and Requests paths,
+  sends the business query as query parameters, sends the credential only in
+  `X-API-KEY`, ignores provider-supplied result URLs, bounds time, response
+  bytes, retries, and polling, and retains only the normalized allowlist.
+- The loopback proof receives `dentists, Sandton, Johannesburg, South Africa`,
+  limit `3`, language `en`, and region `ZA`. It records header presence and the
+  sanitized request shape without retaining or printing the fixture secret.
+- The provider first returns `Pending`. The owned first host is terminated only
+  after the durable submitted checkpoint. The same worker identity reclaims the
+  run at attempt 2, polls the existing request, retains three normalized
+  observations, records item usage `3`, and succeeds with exactly one provider
+  submission.
+- Unit and relay proofs cover cancellation, entitlement revocation, lease loss,
+  `401`, `402`, `422`, bounded `429` and `5xx` retry/recovery, permanent `5xx`,
+  malformed and oversized payloads, provider failure, and poll exhaustion.
+- Terminal provider details are reduced to safe internal classifications. The
+  process-output scan, Nostr-event scan, checkpoint scan, observation path, and
+  Settings browser proof retain no fixture secret.
+- `scripts/discovery-outscraper-source-proof.sh` exits successfully with an
+  explicit PASS summary for request idempotency, restart recovery, normalized
+  persistence, returned usage, privacy, cancellation, entitlement fencing,
+  bounded retry, and failure classification.
+
+### Still not proven by this gate
+
+- a real Outscraper account, paid request, provider latency, or provider-side
+  billing behavior;
+- customer LLM qualification and automatic qualified-Lead persistence;
+- the relay-backed production `DiscoveryDataSource` and live Businesses UI;
+- merge, deployment, or customer use.
+
 ## Implementation ownership and sequence
 
 1. Rebase `codex/discovery-next` onto current `origin/develop` before product

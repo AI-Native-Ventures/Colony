@@ -1,11 +1,18 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
-        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
+        Arc, Mutex,
     },
 };
 
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    response::IntoResponse,
+    routing::{get, post},
+    Router,
+};
 use buzz_core_pkg::{
     discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState},
     discovery_worker::{
@@ -15,9 +22,115 @@ use buzz_core_pkg::{
     },
 };
 use chrono::Utc;
+use serde_json::json;
 
 use super::*;
 use crate::discovery_worker::protocol::ProtocolFuture;
+
+struct LocalOutscraperState {
+    allow_success: AtomicBool,
+    header_seen: AtomicBool,
+    poll_count: AtomicUsize,
+    request_shapes: Mutex<Vec<String>>,
+    submit_count: AtomicUsize,
+}
+
+async fn local_outscraper_submit(
+    State(state): State<Arc<LocalOutscraperState>>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> impl IntoResponse {
+    state.submit_count.fetch_add(1, AtomicOrdering::SeqCst);
+    state
+        .header_seen
+        .store(headers.contains_key("x-api-key"), AtomicOrdering::SeqCst);
+    state
+        .request_shapes
+        .lock()
+        .expect("request shapes")
+        .push(uri.to_string());
+    (
+        axum::http::StatusCode::ACCEPTED,
+        json!({"id": "local-job-1", "status": "Pending"}).to_string(),
+    )
+}
+
+async fn local_outscraper_poll(
+    State(state): State<Arc<LocalOutscraperState>>,
+    Path(request_id): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    assert_eq!(request_id, "local-job-1");
+    state.poll_count.fetch_add(1, AtomicOrdering::SeqCst);
+    state
+        .header_seen
+        .fetch_and(headers.contains_key("x-api-key"), AtomicOrdering::SeqCst);
+    if !state.allow_success.load(AtomicOrdering::SeqCst) {
+        return (
+            axum::http::StatusCode::OK,
+            json!({"id": "local-job-1", "status": "Pending"}).to_string(),
+        );
+    }
+    let businesses = [
+        ("Sandton Dental Studio", "place-sandton-1"),
+        ("Nelson Mandela Square Dental", "place-sandton-2"),
+        ("Rivonia Family Dentistry", "place-sandton-3"),
+    ]
+    .into_iter()
+    .map(|(name, place_id)| {
+        json!({
+            "name": name,
+            "place_id": place_id,
+            "site": format!("https://{place_id}.example.test"),
+            "full_address": "Sandton, Johannesburg, South Africa",
+            "country_code": "ZA",
+            "business_status": "OPERATIONAL"
+        })
+    })
+    .collect::<Vec<_>>();
+    (
+        axum::http::StatusCode::OK,
+        json!({
+            "id": "local-job-1",
+            "status": "Success",
+            "data": [businesses]
+        })
+        .to_string(),
+    )
+}
+
+async fn start_local_outscraper() -> (
+    OutscraperClient,
+    Arc<LocalOutscraperState>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = Arc::new(LocalOutscraperState {
+        allow_success: AtomicBool::new(false),
+        header_seen: AtomicBool::new(false),
+        poll_count: AtomicUsize::new(0),
+        request_shapes: Mutex::new(Vec::new()),
+        submit_count: AtomicUsize::new(0),
+    });
+    let router = Router::new()
+        .route("/google-maps-search", post(local_outscraper_submit))
+        .route("/requests/{id}", get(local_outscraper_poll))
+        .with_state(Arc::clone(&state));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind local Outscraper proof server");
+    let address = listener.local_addr().expect("local provider address");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("local Outscraper proof server");
+    });
+    let client = OutscraperClient::for_local_test(
+        format!("http://{address}/google-maps-search"),
+        format!("http://{address}/requests"),
+    )
+    .expect("local Outscraper client");
+    (client, state, handle)
+}
 
 struct FakeProtocol {
     outcomes: Mutex<VecDeque<DiscoveryWorkerReceiptOutcome>>,
@@ -560,6 +673,8 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
         .await
         .expect("relay signing identity");
     let worker_id = Uuid::new_v4();
+    let credential = Zeroizing::new(FIXTURE_SECRET.to_string());
+    let (provider, provider_state, provider_handle) = start_local_outscraper().await;
 
     let actions_before: i64 =
         sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40017")
@@ -640,11 +755,11 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     )
     .await
     .expect("first native host protocol");
-    let mut first_host = Box::pin(run_once_with_credential(
+    let mut first_host = Box::pin(run_production_once_with_credential(
         &first_protocol,
+        &provider,
         worker_id,
-        Duration::from_secs(2),
-        Zeroizing::new(FIXTURE_SECRET.to_string()),
+        &credential,
     ));
     loop {
         tokio::select! {
@@ -666,6 +781,9 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
         }
     }
     drop(first_host);
+    provider_state
+        .allow_success
+        .store(true, AtomicOrdering::SeqCst);
     tokio::time::sleep(Duration::from_secs(6)).await;
 
     let restarted_protocol = RelayWorkerProtocol::connect(
@@ -678,11 +796,11 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     .await
     .expect("restarted native host protocol");
     assert_eq!(
-        run_once_with_credential(
+        run_production_once_with_credential(
             &restarted_protocol,
+            &provider,
             worker_id,
-            Duration::ZERO,
-            Zeroizing::new(FIXTURE_SECRET.to_string()),
+            &credential,
         )
         .await
         .expect("restarted native host outcome"),
@@ -700,8 +818,8 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     assert_eq!(run_row.get::<String, _>("state"), "succeeded");
     assert_eq!(run_row.get::<i32, _>("attempt"), 2);
     assert_eq!(run_row.get::<i32, _>("completed_steps"), 1);
-    let checkpoints: Vec<i32> = sqlx::query_scalar(
-        "SELECT sequence FROM discovery_run_checkpoints \
+    let checkpoints: Vec<(i32, Option<i32>)> = sqlx::query_as(
+        "SELECT sequence,item_count FROM discovery_run_checkpoints \
              WHERE community_id=$1 AND run_id=$2 ORDER BY sequence",
     )
     .bind(community_id)
@@ -709,7 +827,45 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     .fetch_all(&pool)
     .await
     .expect("native checkpoints");
-    assert_eq!(checkpoints, vec![1, 2]);
+    assert_eq!(checkpoints, vec![(1, None), (2, Some(3))]);
+    let retained_observations: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM discovery_business_observations \
+             WHERE community_id=$1 AND first_run_id=$2",
+    )
+    .bind(community_id)
+    .bind(first_run)
+    .fetch_one(&pool)
+    .await
+    .expect("retained local provider observations");
+    assert_eq!(retained_observations, 3);
+    assert_eq!(
+        provider_state.submit_count.load(AtomicOrdering::SeqCst),
+        1,
+        "restart must not submit the paid provider job twice"
+    );
+    assert!(provider_state.poll_count.load(AtomicOrdering::SeqCst) >= 1);
+    assert!(provider_state.header_seen.load(AtomicOrdering::SeqCst));
+    {
+        let request_shapes = provider_state
+            .request_shapes
+            .lock()
+            .expect("request shapes");
+        assert_eq!(request_shapes.len(), 1);
+        let search_request = &request_shapes[0];
+        for expected in [
+            "query=dentists%2C+Sandton%2C+Johannesburg%2C+South+Africa",
+            "limit=3",
+            "language=en",
+            "region=ZA",
+            "async=true",
+            "fields=",
+        ] {
+            assert!(
+                search_request.contains(expected),
+                "provider request missing {expected}: {search_request}"
+            );
+        }
+    }
     let leaked_events: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM events WHERE community_id=$1 AND content LIKE '%' || $2 || '%'",
     )
@@ -728,4 +884,11 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     .await
     .expect("scan native checkpoints");
     assert_eq!((leaked_events, leaked_checkpoints), (0, 0));
+    assert!(provider_state
+        .request_shapes
+        .lock()
+        .expect("request shapes")
+        .iter()
+        .all(|shape| !shape.contains(FIXTURE_SECRET)));
+    provider_handle.abort();
 }

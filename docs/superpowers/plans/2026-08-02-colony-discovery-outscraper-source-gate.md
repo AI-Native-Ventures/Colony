@@ -249,7 +249,7 @@ pnpm build:e2e
 pnpm exec playwright test tests/e2e/discovery-settings.spec.ts --project=smoke
 ```
 
-- [ ] Commit with `git commit -s -m "feat(discovery): configure Outscraper on this device"`.
+- [x] Commit with `git commit -s -m "feat(discovery): configure Outscraper on this device"`.
 
 ## Task 7: Prove the source gate without spending customer money
 
@@ -259,13 +259,13 @@ pnpm exec playwright test tests/e2e/discovery-settings.spec.ts --project=smoke
 - Modify: `desktop/src-tauri/src/discovery_worker/worker_host.rs` ignored live test module.
 - Modify: `docs/superpowers/specs/2026-08-02-colony-discovery-outscraper-businesses-design.md`
 
-- [ ] Extend the isolated harness with a local provider server that records request count and sanitized request shape but never accepts or prints a real key.
-- [ ] Start a run carrying `dentists` + `Sandton, Johannesburg, South Africa`, limit `3`, language `en`, region `ZA`; prove the worker sends the correct fixed endpoint request and header presence without retaining the fixture secret.
-- [ ] Return `Pending`, terminate the first host after the submitted checkpoint, restart with the same worker ID, then return three results. Prove exactly one provider submission, resumed polling, three retained normalized observations, returned/stored usage `3`, attempt `2`, and success.
-- [ ] Repeat with cancellation, entitlement revocation, `401`, `402`, `422`, `429` recovery, terminal `5xx`, malformed payload, and source exhaustion. Prove truthful safe outcomes and zero later calls after lease loss.
-- [ ] Search process output, Nostr event content, Discovery tables, and screenshots for the fixture key; expect zero matches.
-- [ ] Run `scripts/discovery-outscraper-source-proof.sh`; require an explicit PASS summary naming request idempotency, restart recovery, persistence, usage, privacy, and failure classification.
-- [ ] Do not execute a real Outscraper request in this task. A real paid call requires the user's explicit spending approval after every no-cost proof passes.
+- [x] Extend the isolated harness with a local provider server that records request count and sanitized request shape but never accepts or prints a real key.
+- [x] Start a run carrying `dentists` + `Sandton, Johannesburg, South Africa`, limit `3`, language `en`, region `ZA`; prove the worker sends the correct fixed endpoint request and header presence without retaining the fixture secret.
+- [x] Return `Pending`, terminate the first host after the submitted checkpoint, restart with the same worker ID, then return three results. Prove exactly one provider submission, resumed polling, three retained normalized observations, returned/stored usage `3`, attempt `2`, and success.
+- [x] Repeat with cancellation, entitlement revocation, `401`, `402`, `422`, `429` recovery, terminal `5xx`, malformed payload, and source exhaustion. Prove truthful safe outcomes and zero later calls after lease loss.
+- [x] Search process output, Nostr event content, Discovery tables, and screenshots for the fixture key; expect zero matches.
+- [x] Run `scripts/discovery-outscraper-source-proof.sh`; require an explicit PASS summary naming request idempotency, restart recovery, persistence, usage, privacy, and failure classification.
+- [x] Do not execute a real Outscraper request in this task. A real paid call requires the user's explicit spending approval after every no-cost proof passes.
 
 ## Task 8: Run the full acceptance gate and record evidence
 
