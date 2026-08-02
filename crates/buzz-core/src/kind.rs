@@ -117,8 +117,12 @@ pub const KIND_PUSH_LEASE: u32 = 30350;
 ///
 /// Currently a tiny linear set. If this grows past ~4 kinds, convert to a
 /// compile-time bitset or sorted array with binary search for hot-path use.
-pub const AUTHOR_ONLY_KINDS: &[u32] =
-    &[KIND_EVENT_REMINDER, KIND_PUSH_LEASE, KIND_DISCOVERY_ACTION];
+pub const AUTHOR_ONLY_KINDS: &[u32] = &[
+    KIND_EVENT_REMINDER,
+    KIND_PUSH_LEASE,
+    KIND_DISCOVERY_ACTION,
+    KIND_DISCOVERY_WORKER_ACTION,
+];
 
 /// Kinds that require a result-level read gate beyond the filter-layer
 /// `#p` check: even a reader who knows an event id MUST match the event's
@@ -131,6 +135,7 @@ pub const RESULT_GATED_KINDS: &[u32] = &[
     KIND_DM_VISIBILITY,
     KIND_AGENT_TURN_METRIC,
     KIND_DISCOVERY_RECEIPT,
+    KIND_DISCOVERY_WORKER_RECEIPT,
 ];
 
 /// Kinds whose stored events have `#p`-bound read access — readable only by
@@ -155,6 +160,7 @@ pub const P_GATED_KINDS: &[u32] = &[
     KIND_GIFT_WRAP,
     KIND_DM_VISIBILITY,
     KIND_DISCOVERY_RECEIPT,
+    KIND_DISCOVERY_WORKER_RECEIPT,
     // NIP-AM: agent turn metrics are encrypted to the owner and must not be
     // readable by any unauthenticated or non-owner party, including via `ids`
     // filters — see NIP-AM §Relay Behavior.
@@ -241,6 +247,12 @@ pub const KIND_DISCOVERY_ACTION: u32 = 40017;
 
 /// Relay-signed, requester-private safe projection of a Discovery command result.
 pub const KIND_DISCOVERY_RECEIPT: u32 = 40018;
+
+/// Member-signed command from a trusted local Discovery worker.
+pub const KIND_DISCOVERY_WORKER_ACTION: u32 = 40019;
+
+/// Relay-signed, worker-private result of a local-worker command.
+pub const KIND_DISCOVERY_WORKER_RECEIPT: u32 = 40020;
 
 /// Returns `true` if `kind` uses the author-only-unless-shared read model
 /// (currently only `KIND_PERSONA` / 30175).
@@ -659,6 +671,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PARTY_RECEIPT,
     KIND_DISCOVERY_ACTION,
     KIND_DISCOVERY_RECEIPT,
+    KIND_DISCOVERY_WORKER_ACTION,
+    KIND_DISCOVERY_WORKER_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_REPORT,
@@ -828,6 +842,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_COMPANY_ACTION
             | KIND_PARTY_ACTION
             | KIND_DISCOVERY_ACTION
+            | KIND_DISCOVERY_WORKER_ACTION
     )
 }
 
@@ -851,6 +866,7 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_PARTY_RELATIONSHIP
             | KIND_PARTY_RECEIPT
             | KIND_DISCOVERY_RECEIPT
+            | KIND_DISCOVERY_WORKER_RECEIPT
     )
 }
 
@@ -904,6 +920,8 @@ const _: () = assert!(KIND_COMPANY_ACTION <= u16::MAX as u32);
 const _: () = assert!(KIND_COMPANY_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(KIND_DISCOVERY_ACTION <= u16::MAX as u32);
 const _: () = assert!(KIND_DISCOVERY_RECEIPT <= u16::MAX as u32);
+const _: () = assert!(KIND_DISCOVERY_WORKER_ACTION <= u16::MAX as u32);
+const _: () = assert!(KIND_DISCOVERY_WORKER_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_COMPANY_PROFILE));
 const _: () = assert!(!is_ephemeral(KIND_INITIATIVE));
 const _: () = assert!(!is_ephemeral(KIND_TASK));
@@ -1047,17 +1065,30 @@ mod tests {
     fn discovery_kinds_have_exact_private_classifications() {
         assert_eq!(KIND_DISCOVERY_ACTION, 40017);
         assert_eq!(KIND_DISCOVERY_RECEIPT, 40018);
+        assert_eq!(KIND_DISCOVERY_WORKER_ACTION, 40019);
+        assert_eq!(KIND_DISCOVERY_WORKER_RECEIPT, 40020);
         assert!(ALL_KINDS.contains(&KIND_DISCOVERY_ACTION));
         assert!(ALL_KINDS.contains(&KIND_DISCOVERY_RECEIPT));
+        assert!(ALL_KINDS.contains(&KIND_DISCOVERY_WORKER_ACTION));
+        assert!(ALL_KINDS.contains(&KIND_DISCOVERY_WORKER_RECEIPT));
         assert!(AUTHOR_ONLY_KINDS.contains(&KIND_DISCOVERY_ACTION));
+        assert!(AUTHOR_ONLY_KINDS.contains(&KIND_DISCOVERY_WORKER_ACTION));
         assert!(P_GATED_KINDS.contains(&KIND_DISCOVERY_RECEIPT));
+        assert!(P_GATED_KINDS.contains(&KIND_DISCOVERY_WORKER_RECEIPT));
         assert!(RESULT_GATED_KINDS.contains(&KIND_DISCOVERY_RECEIPT));
+        assert!(RESULT_GATED_KINDS.contains(&KIND_DISCOVERY_WORKER_RECEIPT));
         assert!(is_command_kind(KIND_DISCOVERY_ACTION));
+        assert!(is_command_kind(KIND_DISCOVERY_WORKER_ACTION));
         assert!(!is_relay_only_kind(KIND_DISCOVERY_ACTION));
+        assert!(!is_relay_only_kind(KIND_DISCOVERY_WORKER_ACTION));
         assert!(is_relay_only_kind(KIND_DISCOVERY_RECEIPT));
+        assert!(is_relay_only_kind(KIND_DISCOVERY_WORKER_RECEIPT));
         assert!(!is_command_kind(KIND_DISCOVERY_RECEIPT));
+        assert!(!is_command_kind(KIND_DISCOVERY_WORKER_RECEIPT));
         assert!(!is_parameterized_replaceable(KIND_DISCOVERY_ACTION));
         assert!(!is_parameterized_replaceable(KIND_DISCOVERY_RECEIPT));
+        assert!(!is_parameterized_replaceable(KIND_DISCOVERY_WORKER_ACTION));
+        assert!(!is_parameterized_replaceable(KIND_DISCOVERY_WORKER_RECEIPT));
     }
 
     #[test]
