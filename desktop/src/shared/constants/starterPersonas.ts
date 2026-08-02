@@ -20,9 +20,9 @@ export type StarterPersonaId =
   (typeof STARTER_PERSONA_IDS)[keyof typeof STARTER_PERSONA_IDS];
 
 export const STARTER_PERSONA_NAMES: Record<StarterPersonaId, string> = {
-  [STARTER_PERSONA_IDS.bumble]: "Bumble",
-  [STARTER_PERSONA_IDS.fizz]: "Fizz",
-  [STARTER_PERSONA_IDS.honey]: "Honey",
+  [STARTER_PERSONA_IDS.bumble]: "Tender",
+  [STARTER_PERSONA_IDS.fizz]: "Scout",
+  [STARTER_PERSONA_IDS.honey]: "Forager",
 };
 
 /** Kickoff display order: lead first, then teammates. */
@@ -38,9 +38,9 @@ export function starterPersonaName(id: StarterPersonaId): string {
 
 /** Animated onboarding APNGs (desktop/public), keyed by persona ID. */
 const STARTER_PERSONA_ANIMATIONS: Record<StarterPersonaId, string> = {
-  [STARTER_PERSONA_IDS.bumble]: "/onboarding/starter-team/bumble.png",
-  [STARTER_PERSONA_IDS.fizz]: "/onboarding/starter-team/fizz.png",
-  [STARTER_PERSONA_IDS.honey]: "/onboarding/starter-team/honey.png",
+  [STARTER_PERSONA_IDS.bumble]: "/onboarding/starter-team/tender.png",
+  [STARTER_PERSONA_IDS.fizz]: "/onboarding/starter-team/scout.png",
+  [STARTER_PERSONA_IDS.honey]: "/onboarding/starter-team/forager.png",
 };
 
 function isStarterPersonaId(id: string): id is StarterPersonaId {

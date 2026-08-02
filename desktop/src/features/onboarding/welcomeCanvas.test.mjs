@@ -9,8 +9,9 @@ import {
 test("welcome canvas explains name, role, and team mentions", () => {
   assert.match(WELCOME_CANVAS_CONTENT, /private channel is your home base/i);
   // The three ways to address an employee — the point of separating a personal
-  // name from a stable role.
-  assert.match(WELCOME_CANVAS_CONTENT, /@fizz/i);
+  // name from a stable role. The personal-name example must be the shipped
+  // guide name, whatever the brand currently calls it.
+  assert.match(WELCOME_CANVAS_CONTENT, /@scout/i);
   assert.match(WELCOME_CANVAS_CONTENT, /@chief-of-staff/i);
   assert.match(WELCOME_CANVAS_CONTENT, /@marketing/i);
   assert.match(WELCOME_CANVAS_CONTENT, /renaming someone never breaks/i);

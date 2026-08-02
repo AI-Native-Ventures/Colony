@@ -1,8 +1,10 @@
 use super::{
     built_in_persona_records, ensure_persona_ids_are_active, ensure_persona_is_active,
     merge_personas, migrate_retired_personas, validate_persona_activation_change,
-    validate_persona_deletion, BUILT_IN_PERSONAS, FIZZ_SYSTEM_PROMPT, LEGACY_FIZZ_SYSTEM_PROMPT,
-    RETIRED_PERSONAS,
+    validate_persona_deletion, BUILT_IN_PERSONAS, BUMBLE_SYSTEM_PROMPT, FIZZ_SYSTEM_PROMPT,
+    FORAGER_AVATAR, HONEY_SYSTEM_PROMPT, LEGACY_BUMBLE_BEE_AVATAR, LEGACY_BUMBLE_SYSTEM_PROMPT,
+    LEGACY_FIZZ_SYSTEM_PROMPT, LEGACY_HONEY_BEE_AVATAR, LEGACY_HONEY_SYSTEM_PROMPT,
+    RETIRED_PERSONAS, TENDER_AVATAR,
 };
 use crate::managed_agents::discovery::{default_agent_command, effective_agent_command};
 use crate::managed_agents::persona_events::{
@@ -130,7 +132,7 @@ fn builtin_fizz_keeps_personal_identity_and_has_chief_of_staff_role() {
         .expect("fizz built-in exists");
 
     assert_eq!(fizz.id, "builtin:fizz");
-    assert_eq!(fizz.display_name, "Fizz");
+    assert_eq!(fizz.display_name, "Scout");
     assert_eq!(fizz.role_id.as_deref(), Some("chief-of-staff"));
     assert_eq!(fizz.role_title.as_deref(), Some("Chief of Staff"));
     assert!(fizz.system_prompt.contains("explicit approval"));
@@ -150,7 +152,7 @@ fn merge_personas_adds_missing_built_ins() {
         .iter()
         .map(|record| record.display_name.as_str())
         .collect();
-    assert_eq!(display_names, vec!["Fizz", "Honey", "Bumble"]);
+    assert_eq!(display_names, vec!["Scout", "Forager", "Tender"]);
     let active_ids: Vec<&str> = records
         .iter()
         .filter(|record| record.is_active)
@@ -210,10 +212,72 @@ fn merge_personas_upgrades_unmodified_legacy_fizz_contract() {
         .iter()
         .find(|record| record.id == "builtin:fizz")
         .expect("fizz built-in should exist");
-    assert_eq!(fizz.display_name, "Fizz");
+    // The shipped bee-era name is a default, not a customization, so the
+    // rebrand renames it alongside the prompt upgrade.
+    assert_eq!(fizz.display_name, "Scout");
     assert_eq!(fizz.system_prompt, FIZZ_SYSTEM_PROMPT);
     assert_eq!(fizz.role_id.as_deref(), Some("chief-of-staff"));
     assert_eq!(fizz.role_title.as_deref(), Some("Chief of Staff"));
+}
+
+#[test]
+fn merge_personas_rebrands_unmodified_bee_era_starters() {
+    let mut legacy_honey = custom_persona("builtin:honey", "Honey");
+    legacy_honey.is_builtin = true;
+    legacy_honey.system_prompt = LEGACY_HONEY_SYSTEM_PROMPT.to_string();
+    legacy_honey.avatar_url = Some(LEGACY_HONEY_BEE_AVATAR.to_string());
+    legacy_honey.name_pool = vec!["Honey".to_string()];
+
+    let mut legacy_bumble = custom_persona("builtin:bumble", "Bumble");
+    legacy_bumble.is_builtin = true;
+    legacy_bumble.system_prompt = LEGACY_BUMBLE_SYSTEM_PROMPT.to_string();
+    legacy_bumble.avatar_url = Some(LEGACY_BUMBLE_BEE_AVATAR.to_string());
+    legacy_bumble.name_pool = vec!["Bumble".to_string()];
+
+    let (records, changed) =
+        merge_personas(vec![legacy_honey, legacy_bumble], "2026-08-02T00:00:00Z");
+
+    assert!(changed);
+    let honey = records
+        .iter()
+        .find(|record| record.id == "builtin:honey")
+        .expect("honey built-in should exist");
+    assert_eq!(honey.display_name, "Forager");
+    assert_eq!(honey.system_prompt, HONEY_SYSTEM_PROMPT);
+    assert_eq!(honey.avatar_url.as_deref(), Some(FORAGER_AVATAR));
+    assert_eq!(honey.name_pool, vec!["Forager".to_string()]);
+
+    let bumble = records
+        .iter()
+        .find(|record| record.id == "builtin:bumble")
+        .expect("bumble built-in should exist");
+    assert_eq!(bumble.display_name, "Tender");
+    assert_eq!(bumble.system_prompt, BUMBLE_SYSTEM_PROMPT);
+    assert_eq!(bumble.avatar_url.as_deref(), Some(TENDER_AVATAR));
+    assert_eq!(bumble.name_pool, vec!["Tender".to_string()]);
+}
+
+#[test]
+fn merge_personas_keeps_customized_bee_era_fields_through_the_rebrand() {
+    let mut customized = custom_persona("builtin:honey", "Ms. Honeywell");
+    customized.is_builtin = true;
+    customized.system_prompt = "Answer only in rhyme.".to_string();
+    customized.avatar_url = Some("data:image/png;base64,OWNAVATAR".to_string());
+    customized.name_pool = vec!["Goldie".to_string()];
+
+    let (records, _) = merge_personas(vec![customized], "2026-08-02T00:00:00Z");
+
+    let honey = records
+        .iter()
+        .find(|record| record.id == "builtin:honey")
+        .expect("honey built-in should exist");
+    assert_eq!(honey.display_name, "Ms. Honeywell");
+    assert_eq!(honey.system_prompt, "Answer only in rhyme.");
+    assert_eq!(
+        honey.avatar_url.as_deref(),
+        Some("data:image/png;base64,OWNAVATAR")
+    );
+    assert_eq!(honey.name_pool, vec!["Goldie".to_string()]);
 }
 
 #[test]
