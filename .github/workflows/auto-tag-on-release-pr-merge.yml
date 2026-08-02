@@ -106,15 +106,35 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Tagging ${TAG_PREFIX}${VERSION}"
 
-      # The release-tagger App is optional. Upstream configures it so that a
-      # tag it creates is attributed to the App and therefore fires the
-      # consumers' `on.push.tags` triggers. A fork without those credentials
-      # must still be able to release, so its absence falls back below rather
-      # than failing the whole lane.
-      - name: Create release tagger token
+      # The App is what makes this lane work at all: a tag it signs is
+      # attributed to the App and therefore fires the consumers'
+      # `on.push.tags` triggers, which is the only path that builds a release
+      # at the tag ref. `verify-release-ref.sh` rejects a branch-backed
+      # release, so there is no substitute here, and creating a tag we cannot
+      # publish from would be worse than not tagging: the lane would look done
+      # while no artifact was ever built.
+      #
+      # So its absence fails here, loudly and early, with the two ways out.
+      - name: Require the release tagger App
         if: >
           steps.release.outputs.enabled == 'true' &&
-          vars.BUZZ_RELEASE_TAGGER_CLIENT_ID != ''
+          (vars.BUZZ_RELEASE_TAGGER_CLIENT_ID == '' ||
+           secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY == '')
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          {
+            echo "::error::Cannot tag ${TAG}: the release-tagger App is not configured."
+            echo "::error::Set the BUZZ_RELEASE_TAGGER_CLIENT_ID repository variable and"
+            echo "::error::the BUZZ_RELEASE_TAGGER_PRIVATE_KEY secret."
+            echo "::error::To release without it, push the tag by hand at the release"
+            echo "::error::commit, which fires the publisher exactly as the App would:"
+            echo "::error::  git tag -a ${TAG} <sha> -m ${TAG} && git push origin ${TAG}"
+          } >&2
+          exit 1
+
+      - name: Create release tagger token
+        if: steps.release.outputs.enabled == 'true'
         id: release-tagger
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -125,7 +145,7 @@ jobs:
       - name: Create and push tag
         if: steps.release.outputs.enabled == 'true'
         env:
-          GH_TOKEN: ${{ steps.release-tagger.outputs.token || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.release-tagger.outputs.token }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
@@ -145,36 +165,3 @@ jobs:
             -f ref="refs/tags/$TAG" \
             -f sha="$GITHUB_SHA" \
             --silent
-
-      # A tag created with GITHUB_TOKEN deliberately does not trigger further
-      # workflows, which is the whole reason upstream signs it with an App. So
-      # when the fallback created the tag, the consumer has to be started
-      # explicitly, using the same rescue dispatch each one already documents.
-      #
-      # Without this the lane looks green while publishing nothing: the tag
-      # exists, no image or chart is ever built, and the gap is only noticed
-      # when someone goes looking for an artifact that was never made.
-      - name: Start the consumer when the tag could not trigger it
-        if: >
-          steps.release.outputs.enabled == 'true' &&
-          steps.release-tagger.outcome == 'skipped'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PREFIX: ${{ steps.release.outputs.prefix }}
-          VERSION: ${{ steps.release.outputs.version }}
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          case "$PREFIX" in
-            "v")             WORKFLOW="release.yml" ;               ARGS=(-f version="$VERSION") ;;
-            "relay-v")       WORKFLOW="docker.yml" ;                ARGS=(-f version="$VERSION") ;;
-            "chart-v")       WORKFLOW="helm-chart.yml" ;            ARGS=(-f version="$VERSION" -f ref="$TAG") ;;
-            "push-chart-v")  WORKFLOW="push-gateway-helm-chart.yml" ; ARGS=(-f version="$VERSION" -f ref="$TAG") ;;
-            *)
-              echo "::error::No consumer known for tag prefix '$PREFIX'"
-              exit 1 ;;
-          esac
-
-          echo "Tag $TAG was created without the release-tagger App, so it"
-          echo "cannot trigger $WORKFLOW on its own. Dispatching it directly."
-          gh workflow run "$WORKFLOW" --ref main "${ARGS[@]}"
