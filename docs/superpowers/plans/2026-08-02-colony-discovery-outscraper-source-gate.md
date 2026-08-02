@@ -104,11 +104,12 @@ cargo test -p buzz-relay discovery --no-fail-fast
 - Modify: `crates/buzz-sdk/src/discovery_worker.rs`
 - Modify: `crates/buzz-db/src/discovery.rs`
 - Modify: `crates/buzz-relay/src/discovery_worker_broker.rs`
-- Modify: `crates/buzz-relay/src/event_admission.rs`
+- Inspect unchanged: `crates/buzz-relay/src/event_admission.rs`
 - Create: `migrations/0033_discovery_business_observations.sql`
+- Modify: `schema/schema.sql`
 
-- [ ] Add failing strict-contract tests for a bounded observation batch, maximum string lengths, finite/ranged coordinates and rating, nonnegative counts, valid provider identifiers, and rejection of unknown/raw fields.
-- [ ] Define a business allowlist sufficient for the existing UI and later identity resolution:
+- [x] Add failing strict-contract tests for a bounded observation batch, maximum string lengths, finite/ranged coordinates and rating, nonnegative counts, valid provider identifiers, and rejection of unknown/raw fields.
+- [x] Define a business allowlist sufficient for the existing UI and later identity resolution:
 
 ```rust
 pub struct DiscoveryBusinessObservationInput {
@@ -131,7 +132,7 @@ pub struct DiscoveryBusinessObservationInput {
     pub subtypes: Vec<String>,
     pub rating_hundredths: Option<u16>,
     pub reviews_count: Option<u32>,
-    pub business_status: Option<String>,
+    pub business_status: Option<DiscoveryBusinessStatus>,
     pub verified: Option<bool>,
     pub source_url: Option<String>,
     pub image_url: Option<String>,
@@ -146,14 +147,14 @@ pub struct DiscoveryWorkerObservationBatchRequest {
 }
 ```
 
-- [ ] Add `StoreObservations` to the worker operation contract. Require batches of `1..=25`, a strict provider request ID, and deterministic `observation_id = UUIDv5(run_id, provider_record_id)` so retries are naturally idempotent.
-- [ ] Create `discovery_business_observations` and `discovery_usage` tables. Scope every key by community and run; enforce one normalized observation per provider record per run and one aggregate usage row per run.
-- [ ] Persist a complete business-relevant normalized record, not arbitrary provider JSON, response headers, request URLs, error bodies, or credentials.
-- [ ] Under the same transaction, verify the current worker/lease/fence, insert observations with conflict equality checks, and update returned/stored counts. Replaying the same batch succeeds; conflicting content for the same deterministic ID fails closed.
-- [ ] Return only safe accepted/existing counts in the private relay receipt. Extend result gating so observation actions and receipts remain visible only to their actor/worker and cannot enter full-text search.
-- [ ] Add database tests for replay, conflicting replay, stale lease, cancellation, revocation, cross-community access, usage totals, and secret absence.
-- [ ] Run the same core/SDK/database/relay commands from Task 2 and the existing search privacy test.
-- [ ] Commit with `git commit -s -m "feat(discovery): retain normalized source observations"`.
+- [x] Add `StoreObservations` to the worker operation contract. Require batches of `1..=25`, a strict provider request ID, and deterministic provider-scoped `observation_id` values so retries are naturally idempotent.
+- [x] Create `discovery_business_observations`, `discovery_observation_batches`, and `discovery_usage`. Scope every key by community; retain one Outscraper record per workspace even when later campaigns rediscover it, and keep one aggregate usage row per run.
+- [x] Persist a complete business-relevant normalized record, not arbitrary provider JSON, response headers, request URLs, error bodies, or credentials.
+- [x] Under the same transaction, verify the current worker/lease/fence, insert observations, and update returned/stored/existing counts. Replaying the same batch succeeds without inflating usage; conflicting content for an already committed batch index fails closed; a later campaign's updated copy of an existing provider record does not overwrite or duplicate the retained business.
+- [x] Return only safe accepted/existing counts in the private relay receipt. Verify the existing kind-level result gate keeps observation actions and receipts actor-private and outside full-text search.
+- [x] Add database tests for replay, conflicting replay, stale lease, cancellation, revocation, cross-community access, usage totals, and secret absence.
+- [x] Run the same core/SDK/database/relay commands from Task 2 and the existing search privacy test.
+- [x] Commit with `git commit -s -m "feat(discovery): retain normalized source observations"`.
 
 ## Task 4: Implement the current Outscraper asynchronous client
 

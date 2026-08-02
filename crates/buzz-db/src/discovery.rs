@@ -6,9 +6,10 @@ use buzz_core::{
         DiscoveryTerminalReason,
     },
     discovery_worker::{
-        DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerAction,
-        DiscoveryWorkerCheckpoint, DiscoveryWorkerLeaseProjection, DiscoveryWorkerOperation,
-        DiscoveryWorkerReceiptOutcome,
+        DiscoveryBusinessObservationInput, DiscoveryBusinessStatus, DiscoveryCheckpointKind,
+        DiscoveryProvider, DiscoveryWorkerAction, DiscoveryWorkerCheckpoint,
+        DiscoveryWorkerLeaseProjection, DiscoveryWorkerOperation, DiscoveryWorkerReceiptOutcome,
+        DiscoveryWorkerStoredObservationsProjection,
     },
     CommunityId, StoredEvent,
 };
@@ -597,7 +598,7 @@ impl Db {
         let mut tx = self.pool.begin().await?;
         require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
         let operation = action.operation();
-        let fingerprint = worker_action_fingerprint(action);
+        let fingerprint = worker_action_fingerprint(action)?;
         if let Some(row) = sqlx::query(
             "SELECT operation, request_fingerprint, action_event_id, receipt_event_id \
              FROM discovery_worker_action_claims \
@@ -1076,6 +1077,49 @@ async fn apply_worker_action_tx(
             .bind(action_event.id.as_bytes())
             .execute(&mut **tx)
             .await?;
+            if request.checkpoint.kind == DiscoveryCheckpointKind::ProviderResultsReady {
+                let provider_request_id: String = sqlx::query_scalar(
+                    "SELECT provider_request_id FROM discovery_run_checkpoints \
+                     WHERE community_id=$1 AND run_id=$2 \
+                       AND checkpoint_kind='provider_submitted' AND provider='outscraper' \
+                     ORDER BY sequence LIMIT 1",
+                )
+                .bind(community_id.as_uuid())
+                .bind(request.lease.run_id)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or_else(|| {
+                    DbError::InvalidData(
+                        "Discovery results require a submitted provider checkpoint".into(),
+                    )
+                })?;
+                let returned_count = item_count.ok_or_else(|| {
+                    DbError::InvalidData("Discovery results checkpoint is missing a count".into())
+                })?;
+                let usage_row = sqlx::query(
+                    "INSERT INTO discovery_usage \
+                     (community_id, run_id, provider, provider_request_id, returned_count) \
+                     VALUES ($1,$2,'outscraper',$3,$4) \
+                     ON CONFLICT (community_id, run_id) DO UPDATE SET \
+                       returned_count=EXCLUDED.returned_count, updated_at=now() \
+                     WHERE discovery_usage.provider=EXCLUDED.provider \
+                       AND discovery_usage.provider_request_id=EXCLUDED.provider_request_id \
+                       AND (discovery_usage.returned_count IS NULL \
+                            OR discovery_usage.returned_count=EXCLUDED.returned_count) \
+                     RETURNING run_id",
+                )
+                .bind(community_id.as_uuid())
+                .bind(request.lease.run_id)
+                .bind(provider_request_id)
+                .bind(returned_count)
+                .fetch_optional(&mut **tx)
+                .await?;
+                if usage_row.is_none() {
+                    return Err(DbError::AccessDenied(
+                        "Discovery returned usage conflicts with committed results".into(),
+                    ));
+                }
+            }
             let row = sqlx::query(
                 "UPDATE discovery_runs SET last_checkpoint_sequence=$5, lease_until=$6, \
                      updated_at=now() \
@@ -1096,6 +1140,173 @@ async fn apply_worker_action_tx(
             .fetch_one(&mut **tx)
             .await?;
             worker_lease_outcome_tx(tx, run_from_row(&row)?).await
+        }
+        DiscoveryWorkerAction::StoreObservations(request) => {
+            request
+                .validate()
+                .map_err(|error| DbError::InvalidData(error.to_string()))?;
+            let current = load_run_tx(tx, community_id, request.lease.run_id, true).await?;
+            if !worker_lease_matches(
+                &current,
+                actor_pubkey,
+                request.lease.worker_id,
+                request.lease.lease_id,
+            ) {
+                return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
+                    current.projection(),
+                ));
+            }
+            let submitted: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM discovery_run_checkpoints \
+                 WHERE community_id=$1 AND run_id=$2 \
+                   AND checkpoint_kind='provider_submitted' AND provider='outscraper' \
+                   AND provider_request_id=$3)",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.lease.run_id)
+            .bind(&request.provider_request_id)
+            .fetch_one(&mut **tx)
+            .await?;
+            if !submitted {
+                return Err(DbError::InvalidData(
+                    "Discovery observations require the matching submitted provider checkpoint"
+                        .into(),
+                ));
+            }
+
+            let batch_index = i16::try_from(request.batch_index).map_err(|_| {
+                DbError::InvalidData("Discovery observation batch index exceeds SMALLINT".into())
+            })?;
+            let batch_fingerprint = observation_batch_fingerprint(&request.observations)?;
+            let prior_batch = sqlx::query(
+                "SELECT batch_fingerprint, accepted_count, existing_count \
+                 FROM discovery_observation_batches \
+                 WHERE community_id=$1 AND run_id=$2 AND provider_request_id=$3 \
+                   AND batch_index=$4",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.lease.run_id)
+            .bind(&request.provider_request_id)
+            .bind(batch_index)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+            let (accepted_count, existing_count) = if let Some(row) = prior_batch {
+                let prior_fingerprint: Vec<u8> = row.try_get("batch_fingerprint")?;
+                if prior_fingerprint != batch_fingerprint.as_slice() {
+                    return Err(DbError::AccessDenied(
+                        "Discovery observation batch conflicts with committed results".into(),
+                    ));
+                }
+                let accepted: i16 = row.try_get("accepted_count")?;
+                let existing: i16 = row.try_get("existing_count")?;
+                (
+                    u16::try_from(accepted).map_err(|_| {
+                        DbError::InvalidData("Discovery accepted count cannot be negative".into())
+                    })?,
+                    u16::try_from(existing).map_err(|_| {
+                        DbError::InvalidData("Discovery existing count cannot be negative".into())
+                    })?,
+                )
+            } else {
+                let mut accepted_count = 0u16;
+                let mut existing_count = 0u16;
+                for observation in &request.observations {
+                    let fingerprint = observation_fingerprint(observation)?;
+                    let inserted = insert_business_observation_tx(
+                        tx,
+                        community_id,
+                        request.lease.run_id,
+                        observation,
+                        &fingerprint,
+                    )
+                    .await?;
+                    if inserted {
+                        accepted_count = accepted_count.checked_add(1).ok_or_else(|| {
+                            DbError::InvalidData("Discovery accepted count overflow".into())
+                        })?;
+                    } else {
+                        existing_count = existing_count.checked_add(1).ok_or_else(|| {
+                            DbError::InvalidData("Discovery existing count overflow".into())
+                        })?;
+                    }
+                }
+
+                let usage_row = sqlx::query(
+                    "INSERT INTO discovery_usage \
+                     (community_id, run_id, provider, provider_request_id, stored_count, existing_count) \
+                     VALUES ($1,$2,'outscraper',$3,$4,$5) \
+                     ON CONFLICT (community_id, run_id) DO UPDATE SET \
+                       stored_count=discovery_usage.stored_count + EXCLUDED.stored_count, \
+                       existing_count=discovery_usage.existing_count + EXCLUDED.existing_count, \
+                       updated_at=now() \
+                     WHERE discovery_usage.provider=EXCLUDED.provider \
+                       AND discovery_usage.provider_request_id=EXCLUDED.provider_request_id \
+                     RETURNING run_id",
+                )
+                .bind(community_id.as_uuid())
+                .bind(request.lease.run_id)
+                .bind(&request.provider_request_id)
+                .bind(i32::from(accepted_count))
+                .bind(i32::from(existing_count))
+                .fetch_optional(&mut **tx)
+                .await?;
+                if usage_row.is_none() {
+                    return Err(DbError::AccessDenied(
+                        "Discovery usage conflicts with a different provider request".into(),
+                    ));
+                }
+                sqlx::query(
+                    "INSERT INTO discovery_observation_batches \
+                     (community_id, run_id, provider_request_id, batch_index, batch_fingerprint, \
+                      accepted_count, existing_count) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                )
+                .bind(community_id.as_uuid())
+                .bind(request.lease.run_id)
+                .bind(&request.provider_request_id)
+                .bind(batch_index)
+                .bind(batch_fingerprint.as_slice())
+                .bind(i16::try_from(accepted_count).map_err(|_| {
+                    DbError::InvalidData("Discovery accepted count exceeds SMALLINT".into())
+                })?)
+                .bind(i16::try_from(existing_count).map_err(|_| {
+                    DbError::InvalidData("Discovery existing count exceeds SMALLINT".into())
+                })?)
+                .execute(&mut **tx)
+                .await?;
+                (accepted_count, existing_count)
+            };
+
+            let row = sqlx::query(
+                "UPDATE discovery_runs SET lease_until=$5, updated_at=now() \
+                 WHERE community_id=$1 AND id=$2 AND claim_id=$3 AND worker_id=$4 \
+                   AND lease_owner_pubkey=$6 AND state='running' AND lease_until >= now() \
+                 RETURNING id, community_id, campaign_id, requested_by, start_idempotency_key, \
+                 state, completed_steps, total_steps, cancel_requested, claim_id, lease_until, \
+                 worker_id, lease_owner_pubkey, last_checkpoint_sequence, attempt, \
+                 terminal_reason, created_at, updated_at",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.lease.run_id)
+            .bind(request.lease.lease_id)
+            .bind(request.lease.worker_id)
+            .bind(lease_until)
+            .bind(actor_pubkey.as_slice())
+            .fetch_optional(&mut **tx)
+            .await?;
+            let Some(row) = row else {
+                return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
+                    current.projection(),
+                ));
+            };
+            let lease = worker_lease_projection_tx(tx, run_from_row(&row)?).await?;
+            Ok(DiscoveryWorkerReceiptOutcome::ObservationsStored(
+                DiscoveryWorkerStoredObservationsProjection {
+                    lease,
+                    accepted_count,
+                    existing_count,
+                },
+            ))
         }
         DiscoveryWorkerAction::Complete(request) => {
             let current = load_run_tx(tx, community_id, request.run_id, true).await?;
@@ -1149,6 +1360,15 @@ async fn worker_lease_outcome_tx(
     tx: &mut Transaction<'_, Postgres>,
     run: DiscoveryRunRecord,
 ) -> Result<DiscoveryWorkerReceiptOutcome> {
+    Ok(DiscoveryWorkerReceiptOutcome::Lease(
+        worker_lease_projection_tx(tx, run).await?,
+    ))
+}
+
+async fn worker_lease_projection_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    run: DiscoveryRunRecord,
+) -> Result<DiscoveryWorkerLeaseProjection> {
     let worker_id = run.worker_id.ok_or_else(|| {
         DbError::InvalidData("external Discovery lease is missing worker identity".into())
     })?;
@@ -1160,17 +1380,15 @@ async fn worker_lease_outcome_tx(
         .ok_or_else(|| DbError::InvalidData("external Discovery lease is missing expiry".into()))?;
     let business_search = load_business_search_tx(tx, run.community_id, run.id).await?;
     let last_checkpoint = load_last_checkpoint_tx(tx, run.community_id, run.id).await?;
-    Ok(DiscoveryWorkerReceiptOutcome::Lease(
-        DiscoveryWorkerLeaseProjection {
-            worker_id,
-            lease_id,
-            attempt: run.attempt,
-            lease_until,
-            run: run.projection(),
-            business_search,
-            last_checkpoint,
-        },
-    ))
+    Ok(DiscoveryWorkerLeaseProjection {
+        worker_id,
+        lease_id,
+        attempt: run.attempt,
+        lease_until,
+        run: run.projection(),
+        business_search,
+        last_checkpoint,
+    })
 }
 
 async fn load_business_search_tx(
@@ -1246,12 +1464,113 @@ fn worker_outcome_run_id(outcome: &DiscoveryWorkerReceiptOutcome) -> Option<Uuid
     match outcome {
         DiscoveryWorkerReceiptOutcome::Idle => None,
         DiscoveryWorkerReceiptOutcome::Lease(lease) => Some(lease.run.run_id),
+        DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => Some(stored.lease.run.run_id),
         DiscoveryWorkerReceiptOutcome::LostLease(run)
         | DiscoveryWorkerReceiptOutcome::Completed(run) => Some(run.run_id),
     }
 }
 
-fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> [u8; 32] {
+async fn insert_business_observation_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+    observation: &DiscoveryBusinessObservationInput,
+    fingerprint: &[u8; 32],
+) -> Result<bool> {
+    let rating_hundredths = observation
+        .rating_hundredths
+        .map(i16::try_from)
+        .transpose()
+        .map_err(|_| DbError::InvalidData("Discovery rating exceeds SMALLINT".into()))?;
+    let reviews_count = observation.reviews_count.map(i64::from);
+    let inserted = sqlx::query(
+        "INSERT INTO discovery_business_observations (\
+         community_id, id, first_run_id, provider, provider_record_id, place_id, google_id, \
+         name, website, phone, full_address, city, state, postal_code, country, country_code, \
+         latitude_micros, longitude_micros, category, subtypes, rating_hundredths, reviews_count, \
+         business_status, verified, source_url, image_url, observation_fingerprint) \
+         VALUES ($1,$2,$3,'outscraper',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,\
+                 $18,$19,$20,$21,$22,$23,$24,$25,$26) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(community_id.as_uuid())
+    .bind(observation.observation_id)
+    .bind(run_id)
+    .bind(&observation.provider_record_id)
+    .bind(observation.place_id.as_deref())
+    .bind(observation.google_id.as_deref())
+    .bind(&observation.name)
+    .bind(observation.website.as_deref())
+    .bind(observation.phone.as_deref())
+    .bind(observation.full_address.as_deref())
+    .bind(observation.city.as_deref())
+    .bind(observation.state.as_deref())
+    .bind(observation.postal_code.as_deref())
+    .bind(observation.country.as_deref())
+    .bind(observation.country_code.as_deref())
+    .bind(observation.latitude_micros)
+    .bind(observation.longitude_micros)
+    .bind(observation.category.as_deref())
+    .bind(&observation.subtypes)
+    .bind(rating_hundredths)
+    .bind(reviews_count)
+    .bind(observation.business_status.map(business_status_text))
+    .bind(observation.verified)
+    .bind(observation.source_url.as_deref())
+    .bind(observation.image_url.as_deref())
+    .bind(fingerprint.as_slice())
+    .execute(&mut **tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if inserted {
+        return Ok(true);
+    }
+
+    let row = sqlx::query(
+        "SELECT id FROM discovery_business_observations \
+         WHERE community_id=$1 AND provider='outscraper' AND provider_record_id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(&observation.provider_record_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| {
+        DbError::InvalidData("Discovery observation conflict could not be resolved".into())
+    })?;
+    let stored_id: Uuid = row.try_get("id")?;
+    if stored_id != observation.observation_id {
+        return Err(DbError::AccessDenied(
+            "Discovery observation identity conflicts with an existing business".into(),
+        ));
+    }
+    Ok(false)
+}
+
+fn observation_fingerprint(observation: &DiscoveryBusinessObservationInput) -> Result<[u8; 32]> {
+    let encoded = serde_json::to_vec(observation).map_err(|error| {
+        DbError::InvalidData(format!(
+            "Discovery observation could not be encoded: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"colony.discovery-business-observation/v1\0");
+    hasher.update(encoded);
+    Ok(hasher.finalize().into())
+}
+
+fn observation_batch_fingerprint(
+    observations: &[DiscoveryBusinessObservationInput],
+) -> Result<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"colony.discovery-observation-batch/v1\0");
+    for observation in observations {
+        hasher.update(observation_fingerprint(observation)?);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(b"colony.discovery-worker-command/v1\0");
     hasher.update(worker_operation_text(action.operation()).as_bytes());
@@ -1268,8 +1587,18 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> [u8; 32] {
             hasher.update(request.lease.lease_id.as_bytes());
             hasher.update(checkpoint_fingerprint(&request.checkpoint));
         }
+        DiscoveryWorkerAction::StoreObservations(request) => {
+            hasher.update(request.lease.run_id.as_bytes());
+            hasher.update(request.lease.lease_id.as_bytes());
+            hasher.update(request.provider_request_id.as_bytes());
+            hasher.update([0]);
+            hasher.update(request.batch_index.to_be_bytes());
+            for observation in &request.observations {
+                hasher.update(observation_fingerprint(observation)?);
+            }
+        }
     }
-    hasher.finalize().into()
+    Ok(hasher.finalize().into())
 }
 
 fn checkpoint_fingerprint(checkpoint: &DiscoveryWorkerCheckpoint) -> [u8; 32] {
@@ -1295,7 +1624,16 @@ fn worker_operation_text(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Claim => "claim",
         DiscoveryWorkerOperation::Heartbeat => "heartbeat",
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
+        DiscoveryWorkerOperation::StoreObservations => "store_observations",
         DiscoveryWorkerOperation::Complete => "complete",
+    }
+}
+
+fn business_status_text(status: DiscoveryBusinessStatus) -> &'static str {
+    match status {
+        DiscoveryBusinessStatus::Operational => "operational",
+        DiscoveryBusinessStatus::TemporarilyClosed => "temporarily_closed",
+        DiscoveryBusinessStatus::PermanentlyClosed => "permanently_closed",
     }
 }
 
@@ -1628,15 +1966,16 @@ mod tests {
     use crate::DbConfig;
     use buzz_core::{
         discovery_worker::{
-            DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
-            DiscoveryWorkerLeaseRequest, DiscoveryWorkerReceipt,
+            deterministic_business_observation_id, DiscoveryWorkerCheckpointRequest,
+            DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
+            DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerReceipt,
         },
         CommunityId,
     };
     use buzz_sdk::discovery_worker::{
         build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
         build_discovery_worker_complete_action, build_discovery_worker_heartbeat_action,
-        build_discovery_worker_receipt,
+        build_discovery_worker_receipt, build_discovery_worker_store_observations_action,
     };
     use nostr::Keys;
     use uuid::Uuid;
@@ -1650,6 +1989,35 @@ mod tests {
             limit: 3,
             language: "en".to_owned(),
             region: Some("ZA".to_owned()),
+        }
+    }
+
+    fn business_observation(name: &str) -> DiscoveryBusinessObservationInput {
+        let provider_record_id = "0xabc:0xdef".to_owned();
+        DiscoveryBusinessObservationInput {
+            observation_id: deterministic_business_observation_id(&provider_record_id),
+            provider_record_id,
+            place_id: Some("ChIJ_test".to_owned()),
+            google_id: Some("0xabc:0xdef".to_owned()),
+            name: name.to_owned(),
+            website: Some("https://example.test".to_owned()),
+            phone: Some("+27 11 555 0100".to_owned()),
+            full_address: Some("1 Example Road, Sandton".to_owned()),
+            city: Some("Sandton".to_owned()),
+            state: Some("Gauteng".to_owned()),
+            postal_code: Some("2196".to_owned()),
+            country: Some("South Africa".to_owned()),
+            country_code: Some("ZA".to_owned()),
+            latitude_micros: Some(-26_107_600),
+            longitude_micros: Some(28_056_700),
+            category: Some("Dentist".to_owned()),
+            subtypes: vec!["Dental clinic".to_owned()],
+            rating_hundredths: Some(470),
+            reviews_count: Some(52),
+            business_status: Some(DiscoveryBusinessStatus::Operational),
+            verified: Some(true),
+            source_url: Some("https://maps.google.com/example".to_owned()),
+            image_url: Some("https://images.example.test/place.jpg".to_owned()),
         }
     }
 
@@ -1760,6 +2128,9 @@ mod tests {
             }
             DiscoveryWorkerAction::Checkpoint(request) => {
                 build_discovery_worker_checkpoint_action(relay.public_key(), request)
+            }
+            DiscoveryWorkerAction::StoreObservations(request) => {
+                build_discovery_worker_store_observations_action(relay.public_key(), request)
             }
             DiscoveryWorkerAction::Complete(request) => {
                 build_discovery_worker_complete_action(relay.public_key(), request)
@@ -2031,6 +2402,320 @@ mod tests {
             .execute(&db.pool)
             .await
             .expect("clean community fixture");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn observation_batches_replay_and_deduplicate_across_campaigns() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let relay = Keys::generate();
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(community.as_uuid())
+        .bind(actor.public_key().to_hex())
+        .execute(&db.pool)
+        .await
+        .expect("insert worker member");
+        sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker identity");
+        let other_community_uuid = Uuid::new_v4();
+        let other_community = CommunityId::from_uuid(other_community_uuid);
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(other_community_uuid)
+            .bind(format!("discovery-{}.test", Uuid::new_v4()))
+            .execute(&db.pool)
+            .await
+            .expect("insert second community");
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(other_community_uuid)
+        .bind(actor.public_key().to_hex())
+        .execute(&db.pool)
+        .await
+        .expect("insert second-community worker membership");
+        sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2)")
+            .bind(other_community_uuid)
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert second-community worker identity");
+        db.set_discovery_entitlement(other_community, true)
+            .await
+            .expect("entitle second community");
+
+        let first_run = match db
+            .create_discovery_run_once(
+                community,
+                &human,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                1,
+                &business_search(),
+            )
+            .await
+            .expect("create first run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let worker_id = Uuid::new_v4();
+        let first_lease = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id,
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("claim first run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(first_lease) = first_lease else {
+            panic!("first run must lease");
+        };
+        let provider_request_id = "provider-job-observations".to_owned();
+        applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Checkpoint(DiscoveryWorkerCheckpointRequest {
+                    lease: lease_request(worker_id, first_run, first_lease.lease_id),
+                    checkpoint: DiscoveryWorkerCheckpoint {
+                        sequence: 1,
+                        kind: DiscoveryCheckpointKind::ProviderSubmitted,
+                        provider: DiscoveryProvider::Outscraper,
+                        provider_request_id: Some(provider_request_id.clone()),
+                        item_count: None,
+                    },
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("checkpoint first provider request"),
+        );
+
+        let first_batch = DiscoveryWorkerObservationBatchRequest {
+            lease: lease_request(worker_id, first_run, first_lease.lease_id),
+            provider_request_id: provider_request_id.clone(),
+            batch_index: 0,
+            observations: vec![business_observation("Sandton Dental Studio")],
+        };
+        let stored = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::StoreObservations(first_batch.clone()),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("store first observation batch"),
+        );
+        let DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) = stored else {
+            panic!("observation batch must return counts");
+        };
+        assert_eq!((stored.accepted_count, stored.existing_count), (1, 0));
+
+        let mut cross_community = first_batch.clone();
+        cross_community.lease.request_id = Uuid::new_v4();
+        cross_community.lease.idempotency_key = Uuid::new_v4();
+        assert!(matches!(
+            apply_worker_action(
+                &db,
+                other_community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::StoreObservations(cross_community),
+                Duration::seconds(30),
+            )
+            .await,
+            Err(DbError::NotFound(_))
+        ));
+
+        let replay = DiscoveryWorkerObservationBatchRequest {
+            lease: DiscoveryWorkerLeaseRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                ..first_batch.lease.clone()
+            },
+            ..first_batch.clone()
+        };
+        let replayed = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::StoreObservations(replay),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("replay committed batch with a new command key"),
+        );
+        let DiscoveryWorkerReceiptOutcome::ObservationsStored(replayed) = replayed else {
+            panic!("batch replay must return original counts");
+        };
+        assert_eq!((replayed.accepted_count, replayed.existing_count), (1, 0));
+
+        let mut conflicting = first_batch.clone();
+        conflicting.lease.request_id = Uuid::new_v4();
+        conflicting.lease.idempotency_key = Uuid::new_v4();
+        conflicting.observations = vec![business_observation("Conflicting Dental Name")];
+        assert!(matches!(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::StoreObservations(conflicting),
+                Duration::seconds(30),
+            )
+            .await,
+            Err(DbError::AccessDenied(_))
+        ));
+
+        applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Complete(lease_request(
+                    worker_id,
+                    first_run,
+                    first_lease.lease_id,
+                )),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("complete first run"),
+        );
+
+        let second_run = match db
+            .create_discovery_run_once(
+                community,
+                &human,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                1,
+                &business_search(),
+            )
+            .await
+            .expect("create second campaign run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let second_lease = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id,
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("claim second run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(second_lease) = second_lease else {
+            panic!("second run must lease");
+        };
+        let second_provider_request = "provider-job-second".to_owned();
+        applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Checkpoint(DiscoveryWorkerCheckpointRequest {
+                    lease: lease_request(worker_id, second_run, second_lease.lease_id),
+                    checkpoint: DiscoveryWorkerCheckpoint {
+                        sequence: 1,
+                        kind: DiscoveryCheckpointKind::ProviderSubmitted,
+                        provider: DiscoveryProvider::Outscraper,
+                        provider_request_id: Some(second_provider_request.clone()),
+                        item_count: None,
+                    },
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("checkpoint second provider request"),
+        );
+        let deduplicated = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::StoreObservations(DiscoveryWorkerObservationBatchRequest {
+                    lease: lease_request(worker_id, second_run, second_lease.lease_id),
+                    provider_request_id: second_provider_request,
+                    batch_index: 0,
+                    observations: vec![business_observation("Fresh Provider Name Ignored")],
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("deduplicate across campaign runs"),
+        );
+        let DiscoveryWorkerReceiptOutcome::ObservationsStored(deduplicated) = deduplicated else {
+            panic!("deduplicated batch must return counts");
+        };
+        assert_eq!(
+            (deduplicated.accepted_count, deduplicated.existing_count),
+            (0, 1)
+        );
+
+        let observation_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM discovery_business_observations WHERE community_id=$1",
+        )
+        .bind(community.as_uuid())
+        .fetch_one(&db.pool)
+        .await
+        .expect("count retained businesses");
+        assert_eq!(observation_count, 1);
+        let retained_name: String = sqlx::query_scalar(
+            "SELECT name FROM discovery_business_observations WHERE community_id=$1",
+        )
+        .bind(community.as_uuid())
+        .fetch_one(&db.pool)
+        .await
+        .expect("load retained business name");
+        assert_eq!(retained_name, "Sandton Dental Studio");
+        let usage: Vec<(Uuid, i32, i32)> = sqlx::query_as(
+            "SELECT run_id, stored_count, existing_count FROM discovery_usage \
+             WHERE community_id=$1 ORDER BY run_id",
+        )
+        .bind(community.as_uuid())
+        .fetch_all(&db.pool)
+        .await
+        .expect("load source accounting");
+        assert_eq!(usage.len(), 2);
+        assert!(usage.contains(&(first_run, 1, 0)));
+        assert!(usage.contains(&(second_run, 0, 1)));
     }
 
     #[tokio::test]

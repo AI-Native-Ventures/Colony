@@ -3,9 +3,11 @@
 use buzz_core::{
     discovery::{DiscoveryRunProjection, DiscoveryRunState},
     discovery_worker::{
-        DiscoveryCheckpointKind, DiscoveryWorkerAction, DiscoveryWorkerCheckpoint,
-        DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
+        DiscoveryBusinessObservationInput, DiscoveryCheckpointKind, DiscoveryWorkerAction,
+        DiscoveryWorkerCheckpoint, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
+        DiscoveryWorkerLeaseRequest, DiscoveryWorkerObservationBatchRequest,
         DiscoveryWorkerOperation, DiscoveryWorkerReceipt, DiscoveryWorkerReceiptOutcome,
+        DiscoveryWorkerStoredObservationsProjection,
     },
     kind::{KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKER_RECEIPT},
 };
@@ -56,6 +58,9 @@ struct DiscoveryWorkerActionContent {
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
+    provider_request_id: Option<String>,
+    batch_index: Option<u32>,
+    observations: Option<Vec<DiscoveryBusinessObservationInput>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +85,9 @@ pub fn build_discovery_worker_claim_action(
         request.request_id,
         request.idempotency_key,
         request.worker_id,
+        None,
+        None,
+        None,
         None,
         None,
         None,
@@ -110,6 +118,32 @@ pub fn build_discovery_worker_checkpoint_action(
         Some(request.lease.run_id),
         Some(request.lease.lease_id),
         Some(request.checkpoint.clone()),
+        None,
+        None,
+        None,
+    )
+}
+
+/// Build a member-signable normalized observation batch action.
+pub fn build_discovery_worker_store_observations_action(
+    relay_pubkey: PublicKey,
+    request: &DiscoveryWorkerObservationBatchRequest,
+) -> Result<EventBuilder, DiscoverySdkError> {
+    request
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery observation batch"))?;
+    build_action(
+        relay_pubkey,
+        DiscoveryWorkerOperation::StoreObservations,
+        request.lease.request_id,
+        request.lease.idempotency_key,
+        request.lease.worker_id,
+        Some(request.lease.run_id),
+        Some(request.lease.lease_id),
+        None,
+        Some(request.provider_request_id.clone()),
+        Some(request.batch_index),
+        Some(request.observations.clone()),
     )
 }
 
@@ -136,6 +170,9 @@ fn build_lease_action(
         Some(request.run_id),
         Some(request.lease_id),
         None,
+        None,
+        None,
+        None,
     )
 }
 
@@ -149,6 +186,9 @@ fn build_action(
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
+    provider_request_id: Option<String>,
+    batch_index: Option<u32>,
+    observations: Option<Vec<DiscoveryBusinessObservationInput>>,
 ) -> Result<EventBuilder, DiscoverySdkError> {
     let relay_text = relay_pubkey.to_hex();
     let worker_text = worker_id.to_string();
@@ -164,6 +204,9 @@ fn build_action(
         run_id,
         lease_id,
         checkpoint,
+        provider_request_id,
+        batch_index,
+        observations,
     };
     let mut tags = vec![
         scalar_tag("p", &relay_text)?,
@@ -226,7 +269,8 @@ pub fn parse_discovery_worker_action(
         DiscoveryWorkerOperation::Claim
             if content.run_id.is_none()
                 && content.lease_id.is_none()
-                && content.checkpoint.is_none() =>
+                && content.checkpoint.is_none()
+                && content_has_no_observations(&content) =>
         {
             DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
                 request_id,
@@ -235,7 +279,7 @@ pub fn parse_discovery_worker_action(
             })
         }
         DiscoveryWorkerOperation::Heartbeat | DiscoveryWorkerOperation::Complete
-            if content.checkpoint.is_none() =>
+            if content.checkpoint.is_none() && content_has_no_observations(&content) =>
         {
             let request = parse_lease_content(event, &content)?;
             if operation == DiscoveryWorkerOperation::Heartbeat {
@@ -245,6 +289,11 @@ pub fn parse_discovery_worker_action(
             }
         }
         DiscoveryWorkerOperation::Checkpoint => {
+            if !content_has_no_observations(&content) {
+                return Err(DiscoverySdkError::TagContentMismatch(
+                    "discovery worker action",
+                ));
+            }
             let lease = parse_lease_content(event, &content)?;
             let checkpoint = content
                 .checkpoint
@@ -257,6 +306,26 @@ pub fn parse_discovery_worker_action(
                 checkpoint,
             })
         }
+        DiscoveryWorkerOperation::StoreObservations if content.checkpoint.is_none() => {
+            let lease = parse_lease_content(event, &content)?;
+            let request =
+                DiscoveryWorkerObservationBatchRequest {
+                    lease,
+                    provider_request_id: content.provider_request_id.ok_or(
+                        DiscoverySdkError::TagContentMismatch("discovery worker action"),
+                    )?,
+                    batch_index: content.batch_index.ok_or(
+                        DiscoverySdkError::TagContentMismatch("discovery worker action"),
+                    )?,
+                    observations: content.observations.ok_or(
+                        DiscoverySdkError::TagContentMismatch("discovery worker action"),
+                    )?,
+                };
+            request
+                .validate()
+                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery observation batch"))?;
+            DiscoveryWorkerAction::StoreObservations(request)
+        }
         _ => {
             return Err(DiscoverySdkError::TagContentMismatch(
                 "discovery worker action",
@@ -267,6 +336,12 @@ pub fn parse_discovery_worker_action(
         relay_pubkey,
         action,
     })
+}
+
+fn content_has_no_observations(content: &DiscoveryWorkerActionContent) -> bool {
+    content.provider_request_id.is_none()
+        && content.batch_index.is_none()
+        && content.observations.is_none()
 }
 
 fn parse_lease_content(
@@ -417,7 +492,9 @@ fn validate_checkpoint(checkpoint: &DiscoveryWorkerCheckpoint) -> Result<(), Dis
             }
         }
         DiscoveryCheckpointKind::ProviderResultsReady => {
-            if checkpoint.provider_request_id.is_some() || checkpoint.item_count.is_none() {
+            if checkpoint.provider_request_id.is_some()
+                || checkpoint.item_count.is_none_or(|count| count > 500)
+            {
                 return Err(DiscoverySdkError::InvalidEnvelope(
                     "provider results checkpoint",
                 ));
@@ -449,23 +526,53 @@ fn validate_receipt(receipt: &DiscoveryWorkerReceipt) -> Result<(), DiscoverySdk
     match &receipt.outcome {
         DiscoveryWorkerReceiptOutcome::Idle => {}
         DiscoveryWorkerReceiptOutcome::Lease(lease) => {
-            if lease.worker_id != receipt.worker_id || lease.attempt == 0 {
-                return Err(DiscoverySdkError::InvalidEnvelope(
-                    "discovery worker receipt",
-                ));
-            }
-            validate_uuid(lease.lease_id, "discovery worker receipt")?;
-            validate_run_projection(&lease.run)?;
-            lease
-                .business_search
-                .validate()
-                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker receipt"))?;
-            if let Some(checkpoint) = &lease.last_checkpoint {
-                validate_checkpoint(checkpoint)?;
-            }
+            validate_lease_projection(lease, receipt.worker_id)?;
+        }
+        DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
+            validate_stored_observations(stored, receipt.worker_id)?;
         }
         DiscoveryWorkerReceiptOutcome::LostLease(run)
         | DiscoveryWorkerReceiptOutcome::Completed(run) => validate_run_projection(run)?,
+    }
+    Ok(())
+}
+
+fn validate_lease_projection(
+    lease: &buzz_core::discovery_worker::DiscoveryWorkerLeaseProjection,
+    worker_id: Uuid,
+) -> Result<(), DiscoverySdkError> {
+    if lease.worker_id != worker_id || lease.attempt == 0 {
+        return Err(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ));
+    }
+    validate_uuid(lease.lease_id, "discovery worker receipt")?;
+    validate_run_projection(&lease.run)?;
+    lease
+        .business_search
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker receipt"))?;
+    if let Some(checkpoint) = &lease.last_checkpoint {
+        validate_checkpoint(checkpoint)?;
+    }
+    Ok(())
+}
+
+fn validate_stored_observations(
+    stored: &DiscoveryWorkerStoredObservationsProjection,
+    worker_id: Uuid,
+) -> Result<(), DiscoverySdkError> {
+    validate_lease_projection(&stored.lease, worker_id)?;
+    let total = stored
+        .accepted_count
+        .checked_add(stored.existing_count)
+        .ok_or(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ))?;
+    if total == 0 || total > 25 {
+        return Err(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ));
     }
     Ok(())
 }
@@ -491,6 +598,7 @@ fn operation_tag(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Claim => "claim",
         DiscoveryWorkerOperation::Heartbeat => "heartbeat",
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
+        DiscoveryWorkerOperation::StoreObservations => "store_observations",
         DiscoveryWorkerOperation::Complete => "complete",
     }
 }
@@ -500,6 +608,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkerOperation, DiscoverySdk
         "claim" => Ok(DiscoveryWorkerOperation::Claim),
         "heartbeat" => Ok(DiscoveryWorkerOperation::Heartbeat),
         "checkpoint" => Ok(DiscoveryWorkerOperation::Checkpoint),
+        "store_observations" => Ok(DiscoveryWorkerOperation::StoreObservations),
         "complete" => Ok(DiscoveryWorkerOperation::Complete),
         _ => Err(DiscoverySdkError::InvalidEnvelope(
             "discovery worker action",
@@ -513,7 +622,11 @@ mod tests {
     use buzz_core::discovery_worker::DiscoveryProvider;
     use buzz_core::{
         discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState},
-        discovery_worker::{DiscoveryWorkerLeaseProjection, DiscoveryWorkerReceiptOutcome},
+        discovery_worker::{
+            deterministic_business_observation_id, DiscoveryBusinessObservationInput,
+            DiscoveryWorkerLeaseProjection, DiscoveryWorkerObservationBatchRequest,
+            DiscoveryWorkerReceiptOutcome,
+        },
     };
     use chrono::{TimeZone, Utc};
     use nostr::{EventBuilder, JsonUtil, Keys, Tag};
@@ -552,6 +665,35 @@ mod tests {
         }
     }
 
+    fn observation() -> DiscoveryBusinessObservationInput {
+        let provider_record_id = "0xabc:0xdef".to_owned();
+        DiscoveryBusinessObservationInput {
+            observation_id: deterministic_business_observation_id(&provider_record_id),
+            provider_record_id,
+            place_id: None,
+            google_id: Some("0xabc:0xdef".to_owned()),
+            name: "Sandton Dental Studio".to_owned(),
+            website: Some("https://example.test".to_owned()),
+            phone: None,
+            full_address: None,
+            city: Some("Sandton".to_owned()),
+            state: Some("Gauteng".to_owned()),
+            postal_code: None,
+            country: Some("South Africa".to_owned()),
+            country_code: Some("ZA".to_owned()),
+            latitude_micros: None,
+            longitude_micros: None,
+            category: Some("Dentist".to_owned()),
+            subtypes: Vec::new(),
+            rating_hundredths: Some(470),
+            reviews_count: Some(52),
+            business_status: None,
+            verified: Some(true),
+            source_url: Some("https://maps.google.com/example".to_owned()),
+            image_url: None,
+        }
+    }
+
     #[test]
     fn every_worker_action_round_trips() {
         let relay = Keys::generate();
@@ -571,6 +713,12 @@ mod tests {
                 item_count: None,
             },
         };
+        let observations = DiscoveryWorkerObservationBatchRequest {
+            lease: lease(),
+            provider_request_id: "request_123".to_owned(),
+            batch_index: 0,
+            observations: vec![observation()],
+        };
         let events = [
             build_discovery_worker_claim_action(relay.public_key(), &claim)
                 .unwrap()
@@ -581,6 +729,10 @@ mod tests {
                 .sign_with_keys(&actor)
                 .unwrap(),
             build_discovery_worker_checkpoint_action(relay.public_key(), &checkpoint)
+                .unwrap()
+                .sign_with_keys(&actor)
+                .unwrap(),
+            build_discovery_worker_store_observations_action(relay.public_key(), &observations)
                 .unwrap()
                 .sign_with_keys(&actor)
                 .unwrap(),
@@ -603,6 +755,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_discovery_worker_action(&events[3]).unwrap().action,
+            DiscoveryWorkerAction::StoreObservations(_)
+        ));
+        assert!(matches!(
+            parse_discovery_worker_action(&events[4]).unwrap().action,
             DiscoveryWorkerAction::Complete(_)
         ));
     }
@@ -685,5 +841,37 @@ mod tests {
         assert!(!event
             .as_json()
             .contains("outscraper-secret-never-serialized"));
+    }
+
+    #[test]
+    fn stored_observation_receipt_counts_are_bounded() {
+        let lease_projection = DiscoveryWorkerLeaseProjection {
+            worker_id: Uuid::from_u128(3),
+            lease_id: Uuid::from_u128(5),
+            attempt: 1,
+            lease_until: Utc.timestamp_opt(1_800_000_030, 0).single().unwrap(),
+            run: run(),
+            business_search: business_search(),
+            last_checkpoint: None,
+        };
+        let mut receipt = DiscoveryWorkerReceipt {
+            operation: DiscoveryWorkerOperation::StoreObservations,
+            request_id: Uuid::from_u128(1),
+            idempotency_key: Uuid::from_u128(2),
+            worker_id: Uuid::from_u128(3),
+            outcome: DiscoveryWorkerReceiptOutcome::ObservationsStored(
+                DiscoveryWorkerStoredObservationsProjection {
+                    lease: lease_projection,
+                    accepted_count: 1,
+                    existing_count: 0,
+                },
+            ),
+        };
+        assert_eq!(validate_receipt(&receipt), Ok(()));
+        let DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) = &mut receipt.outcome else {
+            panic!("stored outcome fixture");
+        };
+        stored.accepted_count = 26;
+        assert!(validate_receipt(&receipt).is_err());
     }
 }

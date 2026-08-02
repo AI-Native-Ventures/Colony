@@ -172,6 +172,12 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
         {
             DiscoveryWorkerBrokerError::Conflict(message)
         }
+        buzz_db::DbError::InvalidData(message)
+            if message
+                .contains("observations require the matching submitted provider checkpoint") =>
+        {
+            DiscoveryWorkerBrokerError::Invalid(message)
+        }
         buzz_db::DbError::NotFound(_) => {
             DiscoveryWorkerBrokerError::Invalid("Discovery run not found".into())
         }
