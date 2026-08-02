@@ -19,6 +19,8 @@ pub mod archived_identities;
 pub mod channel;
 /// Private entitlement, authorization, and durable run persistence for Discovery.
 pub mod discovery;
+/// Private Discovery campaign and Lead workspace projections.
+pub mod discovery_workspace;
 /// Direct message channel persistence.
 pub mod dm;
 /// Database error types.

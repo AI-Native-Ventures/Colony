@@ -471,7 +471,7 @@ mod tests {
         assert!(!parameters.contains_key("enrichment"));
         state.paths.lock().expect("paths").push(uri.to_string());
         if matches!(state.scenario, Scenario::Delayed) {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         match state.scenario {
             Scenario::ImmediateSuccess => (AxumStatus::OK, success_body("job-1")).into_response(),
@@ -574,9 +574,9 @@ mod tests {
             axum::serve(listener, router).await.expect("test server");
         });
         let policy = PollPolicy {
-            request_timeout: Duration::from_millis(30),
+            request_timeout: Duration::from_millis(150),
             poll_interval: Duration::from_millis(5),
-            total_timeout: Duration::from_millis(80),
+            total_timeout: Duration::from_millis(350),
             retry_backoff: Duration::from_millis(1),
             max_retries: 1,
             max_response_bytes: 512,

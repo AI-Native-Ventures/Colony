@@ -200,6 +200,9 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryBrokerError {
                 "that idempotency key belongs to a different Discovery command".into(),
             )
         }
+        buzz_db::DbError::NotFound(message) if message.contains("campaign") => {
+            DiscoveryBrokerError::Invalid("Discovery campaign not found".into())
+        }
         buzz_db::DbError::NotFound(_) => {
             DiscoveryBrokerError::Invalid("Discovery run not found".into())
         }

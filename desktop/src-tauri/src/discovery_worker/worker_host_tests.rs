@@ -612,7 +612,14 @@ async fn lost_lease_during_paused_step_sends_no_checkpoint_or_completion() {
 #[tokio::test]
 async fn native_host_real_relay_completes_and_recovers_after_restart() {
     use buzz_core_pkg::discovery::{DiscoveryBusinessSearchSpec, DiscoveryStartRequest};
-    use buzz_sdk_pkg::discovery::build_discovery_start_action;
+    use buzz_core_pkg::discovery_workspace::{
+        DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryWorkspaceActionPayload,
+        DiscoveryWorkspaceRequest,
+    };
+    use buzz_sdk_pkg::{
+        discovery::build_discovery_start_action,
+        discovery_workspace::build_discovery_workspace_action,
+    };
     use sqlx::Row as _;
 
     const FIXTURE_SECRET: &str = "native-host-secret-never-crosses-relay";
@@ -677,7 +684,7 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     let (provider, provider_state, provider_handle) = start_local_outscraper().await;
 
     let actions_before: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40017")
+        sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40019")
             .bind(community_id)
             .fetch_one(&pool)
             .await
@@ -700,7 +707,7 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
         HostRunOutcome::NoCredential
     );
     let actions_after: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40017")
+        sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40019")
             .bind(community_id)
             .fetch_one(&pool)
             .await
@@ -712,11 +719,42 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
         actor: &nostr::Keys,
         relay_pubkey: nostr::PublicKey,
         api_base_url: &str,
-    ) -> Uuid {
+    ) -> (Uuid, Uuid) {
+        let campaign_id = Uuid::new_v4();
+        let campaign_request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
+                campaign: DiscoveryCampaignInput {
+                    campaign_id,
+                    name: "Sandton dentists".to_owned(),
+                    industry_id: "healthcare".to_owned(),
+                    industry_name: "Healthcare".to_owned(),
+                    vertical_id: "dentists".to_owned(),
+                    vertical_name: "Dentists".to_owned(),
+                    query: "dentists".to_owned(),
+                    location: "Sandton, Johannesburg, South Africa".to_owned(),
+                    target: 3,
+                    description: None,
+                    language: "en".to_owned(),
+                    region: Some("ZA".to_owned()),
+                },
+            },
+        };
+        let campaign_response = relay::submit_event_at_with_keys(
+            build_discovery_workspace_action(relay_pubkey, &campaign_request)
+                .expect("Discovery campaign builder"),
+            state,
+            api_base_url,
+            actor,
+        )
+        .await
+        .expect("create Discovery campaign");
+        assert!(campaign_response.accepted, "campaign action must commit");
         let request = DiscoveryStartRequest {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
-            campaign_id: Uuid::new_v4(),
+            campaign_id,
             business_search: DiscoveryBusinessSearchSpec {
                 query: "dentists".to_owned(),
                 location: "Sandton, Johannesburg, South Africa".to_owned(),
@@ -735,17 +773,18 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
         .expect("start Discovery run");
         let message: serde_json::Value =
             serde_json::from_str(&response.message).expect("start response");
-        Uuid::parse_str(
+        let run_id = Uuid::parse_str(
             message
                 .get("run")
                 .and_then(|run| run.get("run_id"))
                 .and_then(serde_json::Value::as_str)
                 .expect("started run id"),
         )
-        .expect("valid started run id")
+        .expect("valid started run id");
+        (run_id, campaign_id)
     }
 
-    let first_run = start_run(&state, &actor, relay_pubkey, &api_base_url).await;
+    let (first_run, campaign_id) = start_run(&state, &actor, relay_pubkey, &api_base_url).await;
     let first_protocol = RelayWorkerProtocol::connect(
         &state,
         actor.clone(),
@@ -838,6 +877,52 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     .await
     .expect("retained local provider observations");
     assert_eq!(retained_observations, 3);
+    let leads_request = DiscoveryWorkspaceRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        payload: DiscoveryWorkspaceActionPayload::ListLeads {
+            request: DiscoveryLeadListRequest {
+                campaign_id: Some(campaign_id),
+                industry_id: None,
+                vertical_id: None,
+                offset: 0,
+                limit: 100,
+            },
+        },
+    };
+    let leads_response = relay::submit_event_at_with_keys(
+        build_discovery_workspace_action(relay_pubkey, &leads_request)
+            .expect("Discovery Leads builder"),
+        &state,
+        &api_base_url,
+        &actor,
+    )
+    .await
+    .expect("list retained Discovery Leads");
+    let leads_message: serde_json::Value =
+        serde_json::from_str(&leads_response.message).expect("Leads response");
+    let lead_result = leads_message.get("result").expect("private Leads result");
+    assert_eq!(
+        lead_result
+            .get("result")
+            .and_then(serde_json::Value::as_str),
+        Some("leads")
+    );
+    assert_eq!(
+        lead_result
+            .get("page")
+            .and_then(|page| page.get("total"))
+            .and_then(serde_json::Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        lead_result
+            .get("page")
+            .and_then(|page| page.get("leads"))
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(3)
+    );
     assert_eq!(
         provider_state.submit_count.load(AtomicOrdering::SeqCst),
         1,

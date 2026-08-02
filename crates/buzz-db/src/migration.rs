@@ -561,7 +561,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -592,6 +592,16 @@ mod tests {
             .sql
             .as_str()
             .contains("CREATE TABLE discovery_business_observations"));
+        assert_eq!(migrations[33].version, 34);
+        assert!(migrations[33]
+            .sql
+            .as_str()
+            .contains("'store_observations', 'fail', 'complete'"));
+        assert_eq!(migrations[34].version, 35);
+        assert!(migrations[34]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE discovery_campaigns"));
         assert!(migrations[0]
             .sql
             .as_str()

@@ -90,7 +90,7 @@ BEGIN
 
     ALTER TABLE events DROP COLUMN search_tsv;
     EXECUTE format(
-        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN kind IN (40015, 40016) THEN NULL::tsvector ELSE (%s) END) STORED',
+        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN kind IN (40017, 40018) THEN NULL::tsvector ELSE (%s) END) STORED',
         existing_expression
     );
     CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);

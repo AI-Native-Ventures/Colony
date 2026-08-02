@@ -16,12 +16,12 @@ use buzz_core::kind::{
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BLOCK_ACTION,
     KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST, KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST,
     KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION, KIND_CONTACT_LIST, KIND_DELETION,
-    KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE,
-    KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EVENT_REMINDER, KIND_FOLLOW_SET,
-    KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE,
-    KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT,
-    KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED,
-    KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
+    KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
+    KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
+    KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
+    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
     KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED,
     KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT,
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN,
@@ -230,6 +230,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_PARTY_ACTION
         | KIND_DISCOVERY_ACTION
         | KIND_DISCOVERY_WORKER_ACTION
+        | KIND_DISCOVERY_WORKSPACE_ACTION
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
@@ -408,6 +409,7 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
         && kind != KIND_PARTY_ACTION
         && kind != KIND_DISCOVERY_ACTION
         && kind != KIND_DISCOVERY_WORKER_ACTION
+        && kind != KIND_DISCOVERY_WORKSPACE_ACTION
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -463,6 +465,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_PARTY_ACTION
             | KIND_DISCOVERY_ACTION
             | KIND_DISCOVERY_WORKER_ACTION
+            | KIND_DISCOVERY_WORKSPACE_ACTION
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
@@ -1862,6 +1865,70 @@ async fn ingest_event_inner(
                 .to_string(),
             }),
             crate::discovery_worker_broker::DiscoveryWorkerBrokerOutcome::Duplicate {
+                original_action_event_id,
+                receipt_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: serde_json::json!({
+                        "duplicate": true,
+                        "original_action_event_id": original_event_id_hex,
+                        "receipt_event_id": hex::encode(receipt_event_id),
+                    })
+                    .to_string(),
+                })
+            }
+        };
+    }
+
+    // Campaign and Lead records share Discovery's paid, community-global
+    // authority but use their own strict private action/receipt contract.
+    if crate::discovery_workspace_broker::is_discovery_workspace_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot operate Discovery".into(),
+            ));
+        }
+        let outcome = match crate::discovery_workspace_broker::handle_discovery_workspace_action(
+            tenant, state, &event,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Invalid(
+                message,
+            )) => return Err(IngestError::Rejected(format!("invalid: {message}"))),
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Restricted(
+                message,
+            )) => return Err(IngestError::AuthFailed(format!("restricted: {message}"))),
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Conflict(
+                message,
+            )) => return Err(IngestError::Rejected(format!("conflict: {message}"))),
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Internal(
+                detail,
+            )) => {
+                error!(%detail, "Discovery workspace broker internal failure");
+                return Err(IngestError::Internal(
+                    "error: Discovery is temporarily unavailable".into(),
+                ));
+            }
+        };
+        return match outcome {
+            crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerOutcome::Applied {
+                receipt_event_id,
+                result,
+            } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: serde_json::json!({
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                    "result": result,
+                })
+                .to_string(),
+            }),
+            crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerOutcome::Duplicate {
                 original_action_event_id,
                 receipt_event_id,
             } => {
@@ -3334,6 +3401,7 @@ mod tests {
             KIND_PARTY_ACTION,
             KIND_DISCOVERY_ACTION,
             KIND_DISCOVERY_WORKER_ACTION,
+            KIND_DISCOVERY_WORKSPACE_ACTION,
         ];
         for kind in brokered {
             assert!(

@@ -319,6 +319,13 @@ impl Db {
             .map_err(|error| DbError::InvalidData(error.to_string()))?;
         let mut tx = self.pool.begin().await?;
         require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
+        super::discovery_workspace::require_campaign_search_tx(
+            &mut tx,
+            community_id,
+            campaign_id,
+            business_search,
+        )
+        .await?;
         let run_id = deterministic_run_id(community_id, idempotency_key);
         let inserted = sqlx::query(
             "INSERT INTO discovery_runs \
@@ -443,6 +450,13 @@ impl Db {
                 business_search
                     .validate()
                     .map_err(|error| DbError::InvalidData(error.to_string()))?;
+                super::discovery_workspace::require_campaign_search_tx(
+                    &mut tx,
+                    community_id,
+                    campaign_id,
+                    &business_search,
+                )
+                .await?;
                 let row = sqlx::query(
                     "INSERT INTO discovery_runs \
                      (community_id, id, campaign_id, requested_by, start_idempotency_key, \
@@ -1812,7 +1826,7 @@ async fn discovery_authorization_pool(
     authorization_from_row(row.as_ref())
 }
 
-async fn require_discovery_authorized_tx(
+pub(crate) async fn require_discovery_authorized_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
     actor_pubkey: &[u8; 32],
@@ -1841,7 +1855,7 @@ async fn require_discovery_authorized_tx(
     require_authorization(authorization_from_row(row.as_ref())?)
 }
 
-async fn lock_discovery_authority_tx(
+pub(crate) async fn lock_discovery_authority_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
 ) -> Result<()> {
@@ -2027,6 +2041,34 @@ mod tests {
             language: "en".to_owned(),
             region: Some("ZA".to_owned()),
         }
+    }
+
+    async fn insert_test_campaign(
+        db: &Db,
+        community: CommunityId,
+        actor: &[u8; 32],
+        campaign_id: Uuid,
+        search: &DiscoveryBusinessSearchSpec,
+    ) {
+        sqlx::query(
+            "INSERT INTO discovery_campaigns \
+             (community_id,id,created_by,name,industry_id,industry_name,vertical_id,vertical_name,\
+              query,location,target,description,language,region) \
+             VALUES ($1,$2,$3,$4,'healthcare','Healthcare','dentists','Dentists',\
+                     $5,$6,$7,NULL,$8,$9)",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .bind(actor.as_slice())
+        .bind(format!("Discovery test {campaign_id}"))
+        .bind(&search.query)
+        .bind(&search.location)
+        .bind(i16::try_from(search.limit).expect("test target fits SMALLINT"))
+        .bind(&search.language)
+        .bind(search.region.as_deref())
+        .execute(&db.pool)
+        .await
+        .expect("insert persisted campaign fixture");
     }
 
     fn business_observation(name: &str) -> DiscoveryBusinessObservationInput {
@@ -2257,11 +2299,13 @@ mod tests {
             .expect("insert worker identity");
 
         let expected_search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &expected_search).await;
         let created = db
             .create_discovery_run_once(
                 community,
                 &human,
-                Uuid::new_v4(),
+                campaign_id,
                 Uuid::new_v4(),
                 1,
                 &expected_search,
@@ -2417,14 +2461,17 @@ mod tests {
         assert_eq!(completed.state, DiscoveryRunState::Succeeded);
         assert_eq!(completed.completed_steps, completed.total_steps);
 
+        let failed_campaign_id = Uuid::new_v4();
+        let failed_search = business_search();
+        insert_test_campaign(&db, community, &human, failed_campaign_id, &failed_search).await;
         let failed_run_id = match db
             .create_discovery_run_once(
                 community,
                 &human,
-                Uuid::new_v4(),
+                failed_campaign_id,
                 Uuid::new_v4(),
                 1,
-                &business_search(),
+                &failed_search,
             )
             .await
             .expect("create failure fixture run")
@@ -2554,14 +2601,17 @@ mod tests {
             .await
             .expect("entitle second community");
 
+        let first_campaign_id = Uuid::new_v4();
+        let first_search = business_search();
+        insert_test_campaign(&db, community, &human, first_campaign_id, &first_search).await;
         let first_run = match db
             .create_discovery_run_once(
                 community,
                 &human,
-                Uuid::new_v4(),
+                first_campaign_id,
                 Uuid::new_v4(),
                 1,
-                &business_search(),
+                &first_search,
             )
             .await
             .expect("create first run")
@@ -2709,14 +2759,17 @@ mod tests {
             .expect("complete first run"),
         );
 
+        let second_campaign_id = Uuid::new_v4();
+        let second_search = business_search();
+        insert_test_campaign(&db, community, &human, second_campaign_id, &second_search).await;
         let second_run = match db
             .create_discovery_run_once(
                 community,
                 &human,
-                Uuid::new_v4(),
+                second_campaign_id,
                 Uuid::new_v4(),
                 1,
-                &business_search(),
+                &second_search,
             )
             .await
             .expect("create second campaign run")
@@ -2856,13 +2909,15 @@ mod tests {
 
         let key = Uuid::new_v4();
         let campaign = Uuid::new_v4();
+        let campaign_search = business_search();
+        insert_test_campaign(&db, community, &human, campaign, &campaign_search).await;
         let first = db
-            .create_discovery_run_once(community, &human, campaign, key, 3, &business_search())
+            .create_discovery_run_once(community, &human, campaign, key, 3, &campaign_search)
             .await
             .expect("create run");
         assert!(matches!(first, DiscoveryRunCreate::Created(_)));
         let duplicate = db
-            .create_discovery_run_once(community, &agent, campaign, key, 3, &business_search())
+            .create_discovery_run_once(community, &agent, campaign, key, 3, &campaign_search)
             .await
             .expect("retry run");
         assert!(matches!(duplicate, DiscoveryRunCreate::Existing(_)));
@@ -2907,14 +2962,17 @@ mod tests {
             .expect("cancel fences the old worker immediately");
         assert!(matches!(stale_after_cancel, DiscoveryAdvance::LostLease));
 
+        let revoke_campaign_id = Uuid::new_v4();
+        let revoke_search = business_search();
+        insert_test_campaign(&db, community, &human, revoke_campaign_id, &revoke_search).await;
         let revoke = db
             .create_discovery_run_once(
                 community,
                 &human,
-                Uuid::new_v4(),
+                revoke_campaign_id,
                 Uuid::new_v4(),
                 2,
-                &business_search(),
+                &revoke_search,
             )
             .await
             .expect("create revocation run");
@@ -2954,14 +3012,17 @@ mod tests {
         db.set_discovery_entitlement(community, true)
             .await
             .expect("restore entitlement");
+        let lease_campaign_id = Uuid::new_v4();
+        let lease_search = business_search();
+        insert_test_campaign(&db, community, &human, lease_campaign_id, &lease_search).await;
         let lease = db
             .create_discovery_run_once(
                 community,
                 &human,
-                Uuid::new_v4(),
+                lease_campaign_id,
                 Uuid::new_v4(),
                 2,
-                &business_search(),
+                &lease_search,
             )
             .await
             .expect("create lease run");

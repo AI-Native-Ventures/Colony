@@ -12,7 +12,13 @@ use buzz_core::{
         DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
         DiscoveryWorkerReceiptOutcome,
     },
-    kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKER_RECEIPT},
+    discovery_workspace::{
+        DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryWorkspaceActionPayload,
+        DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
+    },
+    kind::{
+        KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKER_RECEIPT, KIND_DISCOVERY_WORKSPACE_RECEIPT,
+    },
 };
 use buzz_sdk::{
     discovery::{
@@ -23,6 +29,7 @@ use buzz_sdk::{
         build_discovery_worker_complete_action, build_discovery_worker_heartbeat_action,
         parse_discovery_worker_receipt, ParsedDiscoveryWorkerReceipt,
     },
+    discovery_workspace::{build_discovery_workspace_action, parse_discovery_workspace_receipt},
 };
 use buzz_test_client::{BuzzTestClient, RelayMessage};
 use nostr::{Alphabet, EventId, Filter, Keys, Kind, SingleLetterTag};
@@ -110,11 +117,50 @@ async fn submit_worker_action(
     parsed
 }
 
+async fn create_campaign(
+    client: &mut BuzzTestClient,
+    actor: &Keys,
+    relay: nostr::PublicKey,
+) -> Uuid {
+    let campaign_id = Uuid::new_v4();
+    let request = DiscoveryWorkspaceRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
+            campaign: DiscoveryCampaignInput {
+                campaign_id,
+                name: "Sandton Dentists".to_owned(),
+                industry_id: "healthcare".to_owned(),
+                industry_name: "Healthcare".to_owned(),
+                vertical_id: "dentists".to_owned(),
+                vertical_name: "Dentists".to_owned(),
+                query: "dentists".to_owned(),
+                location: "Sandton, Johannesburg, South Africa".to_owned(),
+                target: 3,
+                description: Some("Dental practices serving Sandton".to_owned()),
+                language: "en".to_owned(),
+                region: Some("ZA".to_owned()),
+            },
+        },
+    };
+    let event = build_discovery_workspace_action(relay, &request)
+        .expect("valid campaign action")
+        .sign_with_keys(actor)
+        .expect("sign campaign action");
+    let ok = client
+        .send_event(event)
+        .await
+        .expect("publish campaign action");
+    assert!(ok.accepted, "campaign creation rejected: {}", ok.message);
+    campaign_id
+}
+
 async fn start_run(client: &mut BuzzTestClient, actor: &Keys, relay: nostr::PublicKey) -> Uuid {
+    let campaign_id = create_campaign(client, actor, relay).await;
     let request = DiscoveryStartRequest {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
-        campaign_id: Uuid::new_v4(),
+        campaign_id,
         business_search: buzz_core::discovery::DiscoveryBusinessSearchSpec {
             query: "dentists".to_owned(),
             location: "Sandton, Johannesburg, South Africa".to_owned(),
@@ -188,10 +234,82 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
     )
     .expect("valid relay pubkey");
 
+    let mut actor_client = BuzzTestClient::connect(&relay_url(), &actor)
+        .await
+        .expect("authenticate actor");
+    sqlx::query(
+        "UPDATE discovery_entitlements SET active=FALSE,updated_at=now() WHERE community_id=$1",
+    )
+    .bind(community_id)
+    .execute(&pool)
+    .await
+    .expect("begin with inactive entitlement");
+    let access_request = DiscoveryWorkspaceRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        payload: DiscoveryWorkspaceActionPayload::Access,
+    };
+    let access_event = build_discovery_workspace_action(relay, &access_request)
+        .expect("access action")
+        .sign_with_keys(&actor)
+        .expect("sign access action");
+    let access_action_id = access_event.id;
+    let access_ok = actor_client
+        .send_event(access_event)
+        .await
+        .expect("publish inactive access read");
+    assert!(
+        access_ok.accepted,
+        "access read rejected: {}",
+        access_ok.message
+    );
+    let access_answer: Value =
+        serde_json::from_str(&access_ok.message).expect("structured access response");
+    let access_receipt_id = EventId::from_hex(
+        access_answer
+            .get("receipt_event_id")
+            .and_then(Value::as_str)
+            .expect("access receipt id"),
+    )
+    .expect("valid access receipt id");
+    let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+    actor_client
+        .subscribe(
+            "inactive-access-receipt",
+            vec![Filter::new()
+                .kind(Kind::Custom(KIND_DISCOVERY_WORKSPACE_RECEIPT as u16))
+                .id(access_receipt_id)
+                .event(access_action_id)
+                .custom_tags(p_tag, [actor.public_key().to_hex()])],
+        )
+        .await
+        .expect("subscribe to inactive access receipt");
+    let access_receipts = actor_client
+        .collect_until_eose("inactive-access-receipt", Duration::from_secs(5))
+        .await
+        .expect("collect inactive access receipt");
+    let parsed_access = parse_discovery_workspace_receipt(
+        access_receipts
+            .first()
+            .expect("inactive access receipt exists"),
+    )
+    .expect("strict inactive access receipt");
+    assert!(matches!(
+        parsed_access.receipt.result,
+        DiscoveryWorkspaceResult::Access { active: false }
+    ));
+    sqlx::query(
+        "UPDATE discovery_entitlements SET active=TRUE,updated_at=now() WHERE community_id=$1",
+    )
+    .bind(community_id)
+    .execute(&pool)
+    .await
+    .expect("activate entitlement after access proof");
+    let campaign_id = create_campaign(&mut actor_client, &actor, relay).await;
     let request = DiscoveryStartRequest {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
-        campaign_id: Uuid::new_v4(),
+        campaign_id,
         business_search: buzz_core::discovery::DiscoveryBusinessSearchSpec {
             query: "dentists".to_owned(),
             location: "Sandton, Johannesburg, South Africa".to_owned(),
@@ -204,9 +322,6 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
         .expect("valid start action")
         .sign_with_keys(&actor)
         .expect("sign start action");
-    let mut actor_client = BuzzTestClient::connect(&relay_url(), &actor)
-        .await
-        .expect("authenticate actor");
     let ok = actor_client
         .send_event(event)
         .await
@@ -288,6 +403,41 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
         "cleanup cancel rejected: {}",
         cleanup.message
     );
+
+    sqlx::query(
+        "UPDATE discovery_entitlements SET active=FALSE,updated_at=now() WHERE community_id=$1",
+    )
+    .bind(community_id)
+    .execute(&pool)
+    .await
+    .expect("revoke entitlement before retained-record read");
+    let list_request = DiscoveryWorkspaceRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        payload: DiscoveryWorkspaceActionPayload::ListLeads {
+            request: DiscoveryLeadListRequest {
+                campaign_id: None,
+                industry_id: None,
+                vertical_id: None,
+                offset: 0,
+                limit: 25,
+            },
+        },
+    };
+    let list_event = build_discovery_workspace_action(relay, &list_request)
+        .expect("list Leads action")
+        .sign_with_keys(&actor)
+        .expect("sign list Leads action");
+    match actor_client.send_event(list_event).await {
+        Ok(answer) => assert!(
+            !answer.accepted,
+            "inactive workspace must not read retained Leads"
+        ),
+        Err(error) => assert!(
+            error.to_string().contains("restricted") || error.to_string().contains("subscription"),
+            "unexpected inactive list error: {error}"
+        ),
+    }
 }
 
 #[tokio::test]

@@ -18,6 +18,8 @@ pub mod company_roster;
 pub mod discovery;
 /// Core contracts for trusted local Colony Discovery workers.
 pub mod discovery_worker;
+/// Private workspace records that connect Discovery campaigns and Leads.
+pub mod discovery_workspace;
 /// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
 /// body parse/serialize, envelope build/validate, head selection.
 pub mod engram;
