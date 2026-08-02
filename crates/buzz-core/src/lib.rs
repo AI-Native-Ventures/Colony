@@ -29,6 +29,9 @@ pub mod git_perms;
 pub mod invite;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+
+/// Colony cost ledger: pricing, attribution, and the deterministic engine.
+pub mod ledger;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
 /// Agent observer frame helpers.
