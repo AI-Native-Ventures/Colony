@@ -142,6 +142,7 @@ export default defineConfig({
       testMatch: [
         "**/agents.spec.ts",
         "**/agent-snapshot-recipient.spec.ts",
+        "**/company-work-context.spec.ts",
         "**/onboarding.spec.ts",
         "**/stream.spec.ts",
         "**/integration.spec.ts",
@@ -149,7 +150,6 @@ export default defineConfig({
         "**/profile.spec.ts",
         "**/sidebar.spec.ts",
         "**/sidebar-relay-card.spec.ts",
-        "**/tokens.spec.ts",
         "**/persona-env-vars.spec.ts",
         "**/persona-sync.spec.ts",
         "**/team-snapshot.spec.ts",

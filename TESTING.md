@@ -51,6 +51,50 @@ cargo test -p buzz-test-client --test e2e_company_work -- --ignored --test-threa
 `--test-threads=1` is not optional: every test in the file signs as the same
 owner, and the relay serializes company actions per owner.
 
+The suite also proves the attributed turn metric survives a real round trip:
+the agent registers itself as owned through NIP-OA, encrypts a `kind:44200` to
+the owner, and the owner reads it back and decrypts it. The relay stores a blob
+it cannot read, which the test asserts on directly, because a metric whose work
+context were legible to whoever runs the relay would expose the company's cost
+structure.
+
+### Live agent attribution (manual)
+
+The suite proves the metric contract. Proving that a *live harness* charges a
+real turn to real work needs a real model, so it is a runbook rather than a
+test:
+
+```bash
+# Seed the company, team, initiative, and Task the run charges against.
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_company_work \
+  seed_live_work_context -- --ignored --nocapture
+
+# Print the agent identity and the owner-signed auth tag the relay requires.
+cargo test -p buzz-test-client --test e2e_company_work \
+  print_live_agent_credentials -- --ignored --nocapture
+
+# Create a channel as the owner, have the agent join it, start buzz-acp with
+# that identity, then send it work-tagged instructions:
+buzz messages send --channel <uuid> --content "..." --mention <agent pubkey> \
+  --task livecompany:live-task \
+  --initiative livecompany:live-initiative \
+  --team live-team
+
+# Read back every metric addressed to the owner and print its work context.
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_company_work \
+  inspect_live_turn_metrics -- --ignored --nocapture
+```
+
+**Known gap, verified 2026-08-02:** neither `opencode acp` nor `goose acp`
+reports token usage over ACP on this machine, and `publish_agent_turn_metric`
+is a no-op without usage. Three live turns produced a correct agent reply and
+zero `kind:44200` events. So this runbook currently proves the turn runs and
+carries its work references, but the metric half cannot be observed until a
+harness that reports usage is available. That is pre-existing behaviour of the
+adapters, not of the attribution path.
+
 Starting the relay with any other `RELAY_OWNER_PUBKEY` makes the suite prove
 nothing — every action is refused for the right reason and the failures look
 like product bugs. If the whole file fails at the first company create, check

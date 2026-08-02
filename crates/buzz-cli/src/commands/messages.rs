@@ -569,6 +569,81 @@ pub struct SendMessageParams {
     pub broadcast: bool,
     pub files: Vec<String>,
     pub mentions: Vec<String>,
+    /// Company Task this message's work is charged to.
+    pub task: Option<String>,
+    /// Initiative containing that Task, when it has one.
+    pub initiative: Option<String>,
+    /// Team accountable for that Task.
+    pub team: Option<String>,
+}
+
+/// The exact work-context tags a message may carry.
+///
+/// `--task` and `--team` come as a pair: the Task says what the spend is for
+/// and the team says who is accountable for it, and a harness that received one
+/// without the other could not resolve the work at all. `--initiative` is
+/// optional because not all work belongs to one.
+fn work_context_tags(p: &SendMessageParams) -> Result<Vec<nostr::Tag>, CliError> {
+    let record_id = |value: &str| -> bool {
+        let mut bytes = value.bytes();
+        let Some(first) = bytes.next() else {
+            return false;
+        };
+        value.len() <= 128
+            && (first.is_ascii_lowercase() || first.is_ascii_digit())
+            && bytes.all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b':' | b'-')
+            })
+    };
+
+    let mut tags = Vec::new();
+    match (p.task.as_deref(), p.team.as_deref()) {
+        (None, None) => {
+            if p.initiative.is_some() {
+                return Err(CliError::Usage(
+                    "--initiative needs --task and --team: an initiative alone does not say what this turn is charged to".into(),
+                ));
+            }
+            return Ok(tags);
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(CliError::Usage(
+                "--task and --team go together: one names the work, the other names who is accountable for it".into(),
+            ));
+        }
+        (Some(task), Some(team)) => {
+            for (flag, value) in [("--task", task), ("--team", team)] {
+                if !record_id(value) {
+                    return Err(CliError::Usage(format!(
+                        "{flag} is not a company record id (lowercase, digits, and . _ : -)"
+                    )));
+                }
+            }
+            tags.push(
+                nostr::Tag::parse(["task", task])
+                    .map_err(|e| CliError::Other(format!("task tag: {e}")))?,
+            );
+            if let Some(initiative) = p.initiative.as_deref() {
+                if !record_id(initiative) {
+                    return Err(CliError::Usage(
+                        "--initiative is not a company record id (lowercase, digits, and . _ : -)"
+                            .into(),
+                    ));
+                }
+                tags.push(
+                    nostr::Tag::parse(["initiative", initiative])
+                        .map_err(|e| CliError::Other(format!("initiative tag: {e}")))?,
+                );
+            }
+            tags.push(
+                nostr::Tag::parse(["team", team])
+                    .map_err(|e| CliError::Other(format!("team tag: {e}")))?,
+            );
+        }
+    }
+    Ok(tags)
 }
 
 pub async fn cmd_send_message(
@@ -677,6 +752,7 @@ pub async fn cmd_send_message(
         }
     };
 
+    let builder = builder.tags(work_context_tags(&p)?);
     let event = client.sign_event(builder)?;
     let emitted_mentions = event_mention_pubkeys(&event);
     let resp = client.submit_event(event).await?;
@@ -880,6 +956,9 @@ pub async fn dispatch(
             broadcast,
             files,
             mentions,
+            task,
+            initiative,
+            team,
         } => {
             cmd_send_message(
                 client,
@@ -891,6 +970,9 @@ pub async fn dispatch(
                     broadcast,
                     files,
                     mentions,
+                    task,
+                    initiative,
+                    team,
                 },
             )
             .await
@@ -1371,5 +1453,95 @@ mod tests {
             profile_event(PK_VALID_A, Some("Aaron"), None),
         ];
         assert_eq!(match_profiles_by_name(&events, "Aaron").len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod work_context_flag_tests {
+    use super::*;
+
+    fn params(
+        task: Option<&str>,
+        initiative: Option<&str>,
+        team: Option<&str>,
+    ) -> SendMessageParams {
+        SendMessageParams {
+            channel_id: "c".to_string(),
+            content: "do the thing".to_string(),
+            kind: None,
+            reply_to: None,
+            broadcast: false,
+            files: Vec::new(),
+            mentions: Vec::new(),
+            task: task.map(str::to_owned),
+            initiative: initiative.map(str::to_owned),
+            team: team.map(str::to_owned),
+        }
+    }
+
+    fn names(tags: &[nostr::Tag]) -> Vec<Vec<String>> {
+        tags.iter().map(|tag| tag.as_slice().to_vec()).collect()
+    }
+
+    #[test]
+    fn an_ordinary_message_carries_no_work_context() {
+        assert!(work_context_tags(&params(None, None, None))
+            .expect("no work context is fine")
+            .is_empty());
+    }
+
+    #[test]
+    fn a_task_and_its_team_become_exactly_two_tags() {
+        let tags = work_context_tags(&params(Some("co:chat:1"), None, Some("team-a")))
+            .expect("task and team");
+        assert_eq!(
+            names(&tags),
+            vec![
+                vec!["task".to_string(), "co:chat:1".to_string()],
+                vec!["team".to_string(), "team-a".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn an_initiative_rides_between_them() {
+        let tags = work_context_tags(&params(
+            Some("co:chat:1"),
+            Some("co:launch"),
+            Some("team-a"),
+        ))
+        .expect("all three");
+        assert_eq!(
+            names(&tags),
+            vec![
+                vec!["task".to_string(), "co:chat:1".to_string()],
+                vec!["initiative".to_string(), "co:launch".to_string()],
+                vec!["team".to_string(), "team-a".to_string()],
+            ]
+        );
+    }
+
+    // A harness that got one without the other could not resolve the work at
+    // all, and would run the turn unattributed rather than refuse it.
+    #[test]
+    fn a_task_without_its_team_is_refused_and_so_is_the_reverse() {
+        assert!(work_context_tags(&params(Some("co:chat:1"), None, None)).is_err());
+        assert!(work_context_tags(&params(None, None, Some("team-a"))).is_err());
+        assert!(work_context_tags(&params(None, Some("co:launch"), None)).is_err());
+    }
+
+    #[test]
+    fn an_identifier_the_company_contract_would_reject_never_reaches_the_relay() {
+        for (task, initiative, team) in [
+            (Some("Co:Chat"), None, Some("team-a")),
+            (Some("co chat"), None, Some("team-a")),
+            (Some("co:chat"), None, Some("TEAM")),
+            (Some("co:chat"), Some("Launch"), Some("team-a")),
+        ] {
+            assert!(
+                work_context_tags(&params(task, initiative, team)).is_err(),
+                "{task:?}/{initiative:?}/{team:?} must be refused"
+            );
+        }
     }
 }
