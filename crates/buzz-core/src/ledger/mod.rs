@@ -7,6 +7,10 @@
 //! rules, corrected by the owner without ever rewriting the original record,
 //! and reconciled against what the provider says it billed.
 
+pub mod attribution;
 pub mod prices;
 
+pub use attribution::{
+    AttributionRule, Budget, Correction, CorrectionBook, RuleAssignment, Rulebook,
+};
 pub use prices::{PriceBook, PriceEntry, PriceRates};
