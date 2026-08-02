@@ -142,6 +142,7 @@ export default defineConfig({
       testMatch: [
         "**/agents.spec.ts",
         "**/agent-snapshot-recipient.spec.ts",
+        "**/company-work-context.spec.ts",
         "**/onboarding.spec.ts",
         "**/stream.spec.ts",
         "**/integration.spec.ts",

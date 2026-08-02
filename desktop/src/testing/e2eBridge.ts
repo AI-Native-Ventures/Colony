@@ -348,6 +348,14 @@ type E2eConfig = {
     // equals this is treated as a moderation DM (composer disabled). Absent →
     // fail open (no mod-DM detection), matching the Rust command's contract.
     relaySelf?: string | null;
+    /**
+     * Seed a Colony company so agent-directed sends have work to be charged to.
+     *
+     * Setting this also makes `get_relay_self` answer with the mock relay's own
+     * key, because company records are only canonical when that key signed
+     * them and a spec that had to keep the two in sync by hand would drift.
+     */
+    companyWorkContext?: CompanyWorkContextConfig;
     oaOwnerIsMe?: boolean;
     /** Whether the mock relay advertises NIP-43 membership support. Defaults to false. */
     relayRequiresMembership?: boolean;
@@ -1109,6 +1117,11 @@ declare global {
     __BUZZ_E2E_REPLACE_MOCK_BLOCK_EVENTS__?: (events: RelayEvent[]) => number;
     __BUZZ_E2E_CLEAR_MOCK_CHANNEL__?: (channelName: string) => boolean;
     __BUZZ_E2E_PUBLISHED_EVENTS__?: RelayEvent[];
+    __BUZZ_E2E_MOCK_COMPANY_BROKER__?: () => {
+      actionEventIds: string[];
+      receiptOutcomes: string[];
+      headKinds: number[];
+    };
     __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
       content: string;
       createdAt?: number;
@@ -2880,12 +2893,285 @@ const mockChannels: MockChannel[] = [
   }),
 ];
 
+/** The Colony company an E2E spec seeds for agent-directed sends. */
+export type CompanyWorkContextConfig = {
+  companyId: string;
+  /** Present when the seeded work belongs to an initiative. */
+  initiativeId?: string;
+  /** The Task the send flow will create and the message will reference. */
+  taskId: string;
+  owningTeamId: string;
+  qaPersonaId: string;
+  costCentreId: string;
+  tradingName?: string;
+  /**
+   * How the mock relay answers the Company Action. `applied` writes the Task
+   * head; `rejected` and `failed` answer with a receipt and no head;
+   * `no-receipt` answers with nothing at all, which is the case a client must
+   * not mistake for success.
+   */
+  refuseWith?: "rejected" | "failed" | "no-receipt";
+};
+
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockBlockEvents: RelayEvent[] = [];
 const mockUserStatuses: RelayEvent[] = [];
 const mockReminderEvents: RelayEvent[] = [];
 const mockPersonaEvents: RelayEvent[] = [];
+
+/**
+ * The Colony company records a spec can seed.
+ *
+ * Company, Initiative, and Task heads are relay-authored: the app refuses any
+ * that this relay did not sign, so the mock relay signs them here with a fixed
+ * key rather than handing back unsigned fixtures the reader would reject. The
+ * Task head is deliberately NOT seeded — it comes into existence only when the
+ * owner's Company Action arrives, which is the ordering the send flow exists to
+ * guarantee.
+ */
+const MOCK_RELAY_SECRET = new Uint8Array(32).fill(0x2b);
+const MOCK_RELAY_SELF_PUBKEY = getPublicKey(MOCK_RELAY_SECRET);
+const mockCompanyHeads: RelayEvent[] = [];
+const mockCompanyReceipts: RelayEvent[] = [];
+const mockCompanyActions: RelayEvent[] = [];
+
 let mockRelayMembers: RawRelayMember[] = [];
+
+// --- Colony company work context ------------------------------------------
+//
+// The send flow refuses to let an agent-directed message out until a Task
+// exists and the relay has confirmed it. Proving that needs a relay that
+// answers: it must author heads, answer Company Actions with receipts, and
+// serve both back. Everything below is that relay, and nothing more.
+
+/** Byte-for-byte the encoding the relay signs company content as. */
+function canonicalCompanyMockJson(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalCompanyMockJson).join(",")}]`;
+  }
+  const entries = Object.keys(value as Record<string, unknown>).sort();
+  return `{${entries
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${canonicalCompanyMockJson(
+          (value as Record<string, unknown>)[key],
+        )}`,
+    )
+    .join(",")}}`;
+}
+
+function signAsMockRelay(
+  kind: number,
+  record: unknown,
+  tags: string[][],
+): RelayEvent {
+  return finalizeEvent(
+    {
+      kind,
+      created_at: Math.floor(Date.now() / 1000),
+      tags,
+      content: canonicalCompanyMockJson(record),
+    },
+    MOCK_RELAY_SECRET,
+  ) as unknown as RelayEvent;
+}
+
+function mockCompanyRecord(config: CompanyWorkContextConfig) {
+  return {
+    schema: "colony.company/v1",
+    id: config.companyId,
+    tradingName: config.tradingName ?? "Horizon Labs",
+    legalName: null,
+    website: null,
+    summary: "Software for South African businesses.",
+    businessType: "agency",
+    services: [],
+    customerSegments: [],
+    costCentres: [
+      {
+        id: config.costCentreId,
+        name: "Company coordination",
+        kind: "internal",
+        serviceId: null,
+      },
+    ],
+    sourceReportEventId: null,
+    onboardingStatus: "approved",
+    createdAt: 1_780_000_000,
+    updatedAt: 1_780_000_000,
+  };
+}
+
+function mockInitiativeRecord(config: CompanyWorkContextConfig) {
+  return {
+    schema: "colony.initiative/v1",
+    id: config.initiativeId as string,
+    companyId: config.companyId,
+    title: "Launch outbound",
+    summary: "Open a first outbound channel.",
+    status: "active",
+    ownerPersonaId: config.qaPersonaId,
+    costCentreId: config.costCentreId,
+    commercialPurpose: "sales",
+    clientOrganizationId: null,
+    expectedCostUsd: null,
+    sourceChannelId: "welcome",
+    sourceEventId: null,
+    createdAt: 1_780_000_000,
+    updatedAt: 1_780_000_000,
+  };
+}
+
+function mockTaskRecord(config: CompanyWorkContextConfig, title: string) {
+  return {
+    schema: "colony.task/v1",
+    id: config.taskId,
+    companyId: config.companyId,
+    initiativeId: config.initiativeId ?? null,
+    title,
+    status: "inProgress",
+    owningTeamId: config.owningTeamId,
+    assigneePersonaIds: [],
+    qaPersonaId: config.qaPersonaId,
+    costCentreId: config.costCentreId,
+    commercialPurpose: "administration",
+    clientOrganizationId: null,
+    sourceChannelId: "welcome",
+    sourceEventId: null,
+    implicit: true,
+    createdAt: 1_780_000_000,
+    updatedAt: 1_780_000_000,
+  };
+}
+
+/** Seed the company (and its initiative). The Task is not seeded on purpose. */
+function seedMockCompanyRecords(config: CompanyWorkContextConfig | undefined) {
+  mockCompanyHeads.length = 0;
+  mockCompanyReceipts.length = 0;
+  mockCompanyActions.length = 0;
+  if (!config) return;
+
+  const company = mockCompanyRecord(config);
+  mockCompanyHeads.push(
+    signAsMockRelay(30179, company, [
+      ["d", company.id],
+      ["c", company.id],
+      ["company", company.id],
+    ]),
+  );
+  if (config.initiativeId) {
+    const initiative = mockInitiativeRecord(config);
+    mockCompanyHeads.push(
+      signAsMockRelay(30180, initiative, [
+        ["d", initiative.id],
+        ["c", initiative.companyId],
+        ["company", initiative.companyId],
+        ["cost-centre", initiative.costCentreId],
+      ]),
+    );
+  }
+}
+
+/** Answer one owner Company Action the way the relay broker would. */
+/** What the mock relay received and answered, for specs to assert on. */
+function readMockCompanyBrokerLog() {
+  return {
+    actionEventIds: mockCompanyActions.map((event) => event.id),
+    receiptOutcomes: mockCompanyReceipts.map(
+      (event) =>
+        event.tags.find((tag) => tag[0] === "company-receipt")?.[4] ?? "",
+    ),
+    headKinds: mockCompanyHeads.map((event) => event.kind),
+  };
+}
+
+function brokerMockCompanyAction(event: RelayEvent): boolean {
+  const config = getConfig()?.mock?.companyWorkContext;
+  if (!config) return false;
+  mockCompanyActions.push(event);
+
+  const tuple = event.tags.find((tag) => tag[0] === "company-action");
+  const target = event.tags.find((tag) => tag[0] === "a")?.[1] ?? "";
+  const requestId = tuple?.[3] ?? "";
+  const idempotencyKey = tuple?.[4] ?? "";
+
+  // A refusal still gets a durable receipt: the owner is owed an answer, and
+  // the send flow has to stop rather than proceed on a Task nobody recorded.
+  const outcome = config.refuseWith ?? "applied";
+  if (outcome === "no-receipt") return true;
+
+  let headEventId: string | null = null;
+  if (outcome === "applied") {
+    const title =
+      (
+        JSON.parse(event.content || "{}") as {
+          payload?: { record?: { title?: string } };
+        }
+      )?.payload?.record?.title ?? "Chat work";
+    const task = mockTaskRecord(config, title);
+    const tags: string[][] = [
+      ["d", task.id],
+      ["c", task.companyId],
+      ["company", task.companyId],
+      ["team", task.owningTeamId],
+      ["cost-centre", task.costCentreId],
+    ];
+    if (task.initiativeId) tags.push(["initiative", task.initiativeId]);
+    const head = signAsMockRelay(30181, task, tags);
+    mockCompanyHeads.push(head);
+    headEventId = head.id;
+  }
+
+  mockCompanyReceipts.push(
+    finalizeEvent(
+      {
+        kind: 40014,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ["p", event.pubkey],
+          ["e", event.id, "", "company-action"],
+          ["a", target],
+          ["company-receipt", "1", requestId, idempotencyKey, outcome],
+        ],
+        content: canonicalCompanyMockJson({
+          headEventId,
+          schema: "colony.company-receipt/v1",
+        }),
+      },
+      MOCK_RELAY_SECRET,
+    ) as unknown as RelayEvent,
+  );
+  return true;
+}
+
+/** Serve company heads and receipts for one REQ filter. */
+function filterMockCompanyEvents(filter: MockFilter): RelayEvent[] {
+  const kinds = filter.kinds ?? [];
+  const pool = kinds.includes(40014) ? mockCompanyReceipts : mockCompanyHeads;
+  return pool.filter((event) => {
+    if (!kinds.includes(event.kind)) return false;
+    for (const [key, values] of Object.entries(filter)) {
+      if (!key.startsWith("#") || !Array.isArray(values)) continue;
+      const name = key.slice(1);
+      const carried = event.tags
+        .filter((tag) => tag[0] === name)
+        .map((tag) => tag[1]);
+      if (!carried.some((value) => (values as string[]).includes(value))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 const mockSockets = new Map<number, MockSocket>();
 let mockWebsocketSendMutexWedged = false;
 let mockClosedChannelLiveSubscription = false;
@@ -9403,6 +9689,15 @@ function sendToMockSocket(args: {
 
     const filter = rest[1] as MockFilter;
     if (
+      filter.kinds?.some((kind) => [30179, 30180, 30181, 40014].includes(kind))
+    ) {
+      for (const event of filterMockCompanyEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+    if (
       filter.kinds?.some((kind) =>
         mockBlockEvents.some((event) => event.kind === kind),
       ) ||
@@ -9577,6 +9872,17 @@ function sendToMockSocket(args: {
 
     if (event.kind === 9033) {
       sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
+    if (event.kind === 40013) {
+      const brokered = brokerMockCompanyAction(event);
+      sendWsText(socket.handler, [
+        "OK",
+        event.id,
+        brokered,
+        brokered ? "" : "no company is seeded on this relay",
+      ]);
       return;
     }
 
@@ -9784,6 +10090,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockManagedAgents(config);
   resetMockPersonas(config);
   resetMockTeams(config);
+  seedMockCompanyRecords(config.mock?.companyWorkContext);
   seedMockSearchProfiles(config);
   resetMockWorkflows();
   resetMockMesh();
@@ -9799,6 +10106,7 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
   window.__BUZZ_E2E_PUBLISHED_EVENTS__ = [];
+  window.__BUZZ_E2E_MOCK_COMPANY_BROKER__ = readMockCompanyBrokerLog;
   window.__BUZZ_E2E_WEBVIEW_ZOOM__ = 1;
   for (const fixture of config.mock?.blockTimelineEvents ?? []) {
     const channel = mockChannels.find(
@@ -11704,6 +12012,42 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetEvent>[0],
           activeConfig,
         );
+      case "ensure_chat_task": {
+        // The Rust command decides which team owns the work and what it is
+        // charged to; that decision is proven in `implicit_task.rs`. What the
+        // desktop has to prove is the ordering around it, so this returns the
+        // envelope the send flow transports and nothing more.
+        const config = activeConfig?.mock?.companyWorkContext;
+        if (!config) {
+          throw new Error("no company is seeded for this send");
+        }
+        const request = payload as { title?: string };
+        const action = await signWithIdentity(
+          identity ?? DEFAULT_REAL_IDENTITY,
+          {
+            kind: 40013,
+            content: JSON.stringify({
+              payload: { record: { title: request.title ?? "Chat work" } },
+            }),
+            tags: [
+              ["p", MOCK_RELAY_SELF_PUBKEY],
+              ["a", `30181:${MOCK_RELAY_SELF_PUBKEY}:${config.taskId}`],
+              [
+                "company-action",
+                "1",
+                "create",
+                "6f1d2b3c-0000-4000-8000-000000000001",
+                "6f1d2b3c-0000-4000-8000-000000000002",
+              ],
+            ],
+          },
+        );
+        return {
+          taskId: config.taskId,
+          owningTeamId: config.owningTeamId,
+          signedAction: JSON.stringify(action),
+        };
+      }
       case "sign_event":
         window.__BUZZ_E2E_SIGNED_EVENTS__?.push({
           content: (payload as { content: string }).content,
@@ -11905,7 +12249,12 @@ export function maybeInstallE2eTauriMocks() {
             ),
           );
         }
-        return activeConfig?.mock?.relaySelf ?? null;
+        return (
+          activeConfig?.mock?.relaySelf ??
+          (activeConfig?.mock?.companyWorkContext
+            ? MOCK_RELAY_SELF_PUBKEY
+            : null)
+        );
       case "archive_identity":
       case "unarchive_identity":
         // The spec only verifies UI state, not the submitted request shape;
