@@ -22,18 +22,18 @@ use buzz_core::kind::{
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
     KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
     KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED,
-    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT,
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN,
-    KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN,
-    KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
-    KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
-    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
+    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LEDGER_ACTION, KIND_LONG_FORM,
+    KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT,
+    KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP,
+    KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA,
+    KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
     KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PARTY_ACTION, KIND_PERSONA,
     KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION,
     KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
     KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
     KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM,
-    KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    KIND_TEXT_NOTE, KIND_USAGE_RECORD, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
     RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
     RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
@@ -223,15 +223,18 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_TEAM
         | KIND_MANAGED_AGENT
         | KIND_BLOCK_MANIFEST
-        // Company and party mutations carry owner authority; the actual owner
-        // check is made under `FOR UPDATE` inside the broker's transaction.
+        // Company, party, and ledger mutations carry owner authority; the
+        // actual owner check is made under `FOR UPDATE` inside the broker's
+        // transaction.
         | KIND_COMPANY_ACTION
         | KIND_PARTY_ACTION
+        | KIND_LEDGER_ACTION
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
-        // NIP-AM: agent turn metrics are agent-authored global events (encrypted to owner).
-        KIND_AGENT_TURN_METRIC => Ok(Scope::MessagesWrite),
+        // NIP-AM turn metrics and NIP-CL usage records are agent-authored
+        // global events, encrypted to the owner.
+        KIND_AGENT_TURN_METRIC | KIND_USAGE_RECORD => Ok(Scope::MessagesWrite),
         // NIP-56 reports are ordinary member writes into the mod-only queue.
         // Ingest persists them to `moderation_reports` and suppresses public
         // storage/fanout; reports are signals, never enforcement triggers.
@@ -403,6 +406,7 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
     buzz_core::kind::is_command_kind(kind)
         && kind != KIND_COMPANY_ACTION
         && kind != KIND_PARTY_ACTION
+        && kind != KIND_LEDGER_ACTION
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -456,6 +460,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_BLOCK_CATALOG_ENTRY
             | KIND_COMPANY_ACTION
             | KIND_PARTY_ACTION
+            | KIND_LEDGER_ACTION
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
@@ -489,9 +494,11 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // events. A stray `h` tag must not channel-scope them.
             | KIND_IA_ARCHIVE_REQUEST
             | KIND_IA_UNARCHIVE_REQUEST
-            // NIP-AM: agent turn metrics are owner-scoped global events.
-            // Channel identity is encrypted inside the payload — no `h` tag.
+            // NIP-AM turn metrics and NIP-CL usage records are owner-scoped
+            // global events. Channel identity is encrypted inside the payload,
+            // so there is no `h` tag.
             | KIND_AGENT_TURN_METRIC
+            | KIND_USAGE_RECORD
             // NIP-PL leases are author-owned, addressable global state.
             | super::push_lease::KIND_PUSH_LEASE
     )
@@ -3187,13 +3194,17 @@ mod tests {
         assert!(!buzz_core::kind::is_relay_only_kind(KIND_COMPANY_ACTION));
     }
 
-    /// Company and Party Actions are command kinds, but they must NOT take the
-    /// generic command branch: that branch returns before the ban/timeout
-    /// write-block, so routing them there would let a banned owner mutate
-    /// company or party state.
+    /// Company, Party, and Ledger Actions are command kinds, but they must NOT
+    /// take the generic command branch: that branch returns before the
+    /// ban/timeout write-block, so routing them there would let a banned owner
+    /// mutate company, party, or ledger state.
     #[test]
     fn brokered_actions_are_excluded_from_the_generic_command_branch() {
-        let brokered = [KIND_COMPANY_ACTION, KIND_PARTY_ACTION];
+        let brokered = [
+            KIND_COMPANY_ACTION,
+            KIND_PARTY_ACTION,
+            buzz_core::kind::KIND_LEDGER_ACTION,
+        ];
         for kind in brokered {
             assert!(
                 buzz_core::kind::is_command_kind(kind),
@@ -3242,6 +3253,48 @@ mod tests {
             assert!(buzz_core::kind::is_relay_only_kind(kind));
         }
         assert!(!buzz_core::kind::is_relay_only_kind(KIND_PARTY_ACTION));
+    }
+
+    /// The routing a ledger action and a usage record need to reach the relay
+    /// at all. Same failure mode the party gate found: unclassified kinds are
+    /// refused as unknown, which reads exactly like an authorization failure.
+    #[test]
+    fn ledger_kinds_have_pinned_scope_and_channel_classification() {
+        use buzz_core::kind::{KIND_LEDGER_ACTION, KIND_USAGE_RECORD};
+
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_LEDGER_ACTION, &dummy).unwrap(),
+            Scope::UsersWrite,
+            "ledger actions carry owner authority; the owner check is in the broker"
+        );
+        assert_eq!(
+            required_scope_for_kind(KIND_USAGE_RECORD, &dummy).unwrap(),
+            Scope::MessagesWrite,
+            "usage records are published by agents on the message-write scope"
+        );
+
+        for kind in [KIND_LEDGER_ACTION, KIND_USAGE_RECORD] {
+            assert!(
+                is_global_only_kind(kind),
+                "{kind} is company-wide, not channel-scoped"
+            );
+            assert!(!requires_h_channel_scope(kind));
+        }
+
+        // Books and receipts are relay-authored. A client that could sign a
+        // price entry could rewrite what its own spending cost.
+        for kind in [
+            buzz_core::kind::KIND_LEDGER_RECEIPT,
+            buzz_core::kind::KIND_PRICE_BOOK,
+            buzz_core::kind::KIND_ATTRIBUTION_RULEBOOK,
+            buzz_core::kind::KIND_CORRECTION_BOOK,
+            buzz_core::kind::KIND_LEDGER_BUDGET,
+        ] {
+            assert!(buzz_core::kind::is_relay_only_kind(kind));
+        }
+        assert!(!buzz_core::kind::is_relay_only_kind(KIND_LEDGER_ACTION));
+        assert!(!buzz_core::kind::is_relay_only_kind(KIND_USAGE_RECORD));
     }
 
     #[test]
