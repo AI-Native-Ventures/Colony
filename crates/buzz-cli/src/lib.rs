@@ -192,6 +192,9 @@ enum Cmd {
     /// Read and request changes to cross-team Initiatives
     #[command(subcommand)]
     Initiatives(InitiativesCmd),
+    /// Read Parties and the Lead and Client views of them
+    #[command(subcommand)]
+    Parties(PartiesCmd),
     /// Read and request changes to single-team Tasks
     #[command(subcommand)]
     Tasks(TasksCmd),
@@ -373,6 +376,60 @@ pub enum BlockReceiptStatusArg {
     Failed,
     #[value(name = "timed-out")]
     TimedOut,
+}
+
+/// Colony Party access: the businesses and people a company deals with.
+///
+/// One Party per real-world entity. Lead and Client are views over it, not
+/// separate records, so a business that converts keeps its history instead of
+/// being retyped. Writes never author a canonical head; they publish an
+/// owner-signed Party Action and the relay brokers it.
+#[derive(Subcommand)]
+pub enum PartiesCmd {
+    /// List a company's parties, and separately the handles merges retired
+    List {
+        #[arg(long)]
+        company: String,
+    },
+    /// Get one party with its views, following any merges that retired the handle
+    Get {
+        #[arg(long)]
+        id: String,
+    },
+    /// Request a party create or replacement from a complete JSON record
+    Create {
+        #[arg(long)]
+        file: String,
+    },
+    /// Request a Lead or Client view create or replacement from a complete JSON record
+    Relate {
+        #[arg(long)]
+        file: String,
+    },
+    /// Decide whether observed identifiers belong to a party already known
+    ///
+    /// Reads only. A match is exact agreement on a typed identifier; names are
+    /// never evidence, and more than one candidate is reported as a decision
+    /// for a human rather than resolved automatically.
+    Resolve {
+        #[arg(long)]
+        company: String,
+        /// Path to a JSON array of observed identifiers.
+        #[arg(long)]
+        file: String,
+    },
+    /// Fold one party into another, retiring its handle
+    ///
+    /// The retired handle keeps resolving to the survivor, so references handed
+    /// out under it still arrive. Relationships move with the identity.
+    Merge {
+        /// Handle that survives and absorbs the evidence.
+        #[arg(long)]
+        survivor: String,
+        /// Handle to retire.
+        #[arg(long)]
+        retire: String,
+    },
 }
 
 /// Colony company profile access.
@@ -2069,6 +2126,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Agents(sub) => commands::agents::dispatch(sub, &client).await,
         Cmd::Blocks(sub) => commands::blocks::dispatch(sub, &client).await,
         Cmd::Company(sub) => commands::company::dispatch_company(sub, &client).await,
+        Cmd::Parties(sub) => commands::parties::dispatch_parties(sub, &client).await,
         Cmd::Initiatives(sub) => commands::company::dispatch_initiatives(sub, &client).await,
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
