@@ -951,6 +951,63 @@ mod tests {
         assert_ne!(lead.id, client.id, "each view has its own coordinate");
     }
 
+    /// Sales owns the pipeline and Accounts owns the engagement. They are
+    /// different people with different work, so one identity has to be able to
+    /// carry both without either one deciding the other's owner.
+    #[test]
+    fn each_view_of_one_party_keeps_its_own_status_and_its_own_owner() {
+        let record = party("acme-industries");
+        let mut lead = relationship(
+            "acme-industries",
+            RelationshipKind::Lead,
+            RelationshipStatus::Qualified,
+        );
+        lead.owner_persona_id = "company-role:abc:horizonlabs:sales-lead".to_string();
+        let mut client = relationship(
+            "acme-industries",
+            RelationshipKind::Client,
+            RelationshipStatus::Active,
+        );
+        client.owner_persona_id = "company-role:abc:horizonlabs:account-lead".to_string();
+
+        validate_relationship(&lead, &record).expect("lead view is valid");
+        validate_relationship(&client, &record).expect("client view is valid");
+        assert_ne!(lead.owner_persona_id, client.owner_persona_id);
+        assert_ne!(lead.status, client.status);
+        assert_ne!(lead.id, client.id);
+    }
+
+    /// Losing the deal does not end the account. Because each view is its own
+    /// NIP-33 coordinate, ending one cannot reach the other -- there is no
+    /// shared record for it to touch.
+    #[test]
+    fn ending_the_lead_leaves_the_client_view_untouched() {
+        let record = party("acme-industries");
+        let client = relationship(
+            "acme-industries",
+            RelationshipKind::Client,
+            RelationshipStatus::Active,
+        );
+        let lead = relationship(
+            "acme-industries",
+            RelationshipKind::Lead,
+            RelationshipStatus::Qualified,
+        );
+        let mut disqualified = lead.clone();
+        disqualified.status = RelationshipStatus::Disqualified;
+        disqualified.updated_at = lead.updated_at + 1;
+
+        validate_relationship_update(&lead, &disqualified, &record)
+            .expect("qualified leads may be disqualified");
+        assert_eq!(
+            validate_relationship(&client, &record),
+            Ok(()),
+            "the client view is still valid after the lead ends"
+        );
+        assert_eq!(client.status, RelationshipStatus::Active);
+        assert_ne!(disqualified.id, client.id);
+    }
+
     #[test]
     fn a_client_status_on_a_lead_view_is_refused() {
         let record = party("acme-industries");
@@ -995,9 +1052,6 @@ mod tests {
         );
     }
 
-    /// The coordinate is what makes a second Lead on the same party impossible,
-    /// so an ID that does not derive from the party and the view would let one
-    /// exist.
     /// The retired handle's view has to arrive at the survivor's coordinate,
     /// or the merge leaves a Lead hanging off a handle that only redirects.
     #[test]
@@ -1139,6 +1193,9 @@ mod tests {
         }
     }
 
+    /// The coordinate is what makes a second Lead on the same party impossible,
+    /// so an ID that does not derive from the party and the view would let one
+    /// exist.
     #[test]
     fn a_relationship_id_that_is_not_derived_from_its_coordinate_is_refused() {
         let record = party("acme-industries");
