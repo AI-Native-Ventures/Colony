@@ -10,6 +10,7 @@
 pub mod attribution;
 pub mod engine;
 pub mod prices;
+pub mod reconcile;
 
 pub use attribution::{
     AttributionRule, Budget, Correction, CorrectionBook, RuleAssignment, Rulebook,
@@ -19,3 +20,4 @@ pub use engine::{
     LedgerException, LedgerReport, MissingSide, StoredUsageRecord,
 };
 pub use prices::{PriceBook, PriceEntry, PriceRates};
+pub use reconcile::{diagnose, reconcile, ProviderDailyCost};
