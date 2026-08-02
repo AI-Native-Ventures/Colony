@@ -1751,7 +1751,7 @@ mod tests {
                 &actor,
                 &relay,
                 first_claim,
-                Duration::milliseconds(60),
+                Duration::seconds(1),
             )
             .await
             .expect("first worker claim"),
@@ -1781,7 +1781,7 @@ mod tests {
                 &actor,
                 &relay,
                 checkpoint,
-                Duration::milliseconds(60),
+                Duration::seconds(1),
             )
             .await
             .expect("commit provider reference"),
@@ -1791,7 +1791,7 @@ mod tests {
         };
         assert_eq!(checkpointed.last_checkpoint, Some(submitted.clone()));
 
-        tokio::time::sleep(std::time::Duration::from_millis(90)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
         let second_worker = Uuid::new_v4();
         let second = applied_worker_outcome(
             apply_worker_action(
