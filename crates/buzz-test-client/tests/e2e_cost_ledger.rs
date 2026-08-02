@@ -228,12 +228,11 @@ async fn price_book(client: &mut BuzzTestClient, relay: &str) -> Option<(String,
 }
 
 /// Publish one usage record encrypted to the owner, as the harness would.
-async fn publish_usage_record(
-    client: &mut BuzzTestClient,
-    agent: &Keys,
-    owner: &Keys,
-    payload: &UsageRecordPayload,
-) -> String {
+async fn publish_usage_record(agent: &Keys, owner: &Keys, payload: &UsageRecordPayload) -> String {
+    // The relay refuses an event whose author is not the authenticated
+    // identity, so the agent publishes over its own connection. That is also
+    // what happens in production: the harness signs as the agent.
+    let mut client = connect(agent).await;
     let ciphertext =
         encrypt_usage_record(agent, &owner.public_key(), payload).expect("record encrypts");
     let event = EventBuilder::new(Kind::Custom(KIND_USAGE_RECORD as u16), ciphertext)
@@ -327,11 +326,11 @@ fn work_context(purpose: CommercialPurpose, client_org: Option<&str>) -> AgentWo
 }
 
 async fn connect(keys: &Keys) -> BuzzTestClient {
-    let mut client = BuzzTestClient::connect(&relay_url(), keys)
+    // `connect` performs the NIP-42 handshake itself; calling `authenticate`
+    // again afterwards waits for a challenge that has already been answered.
+    BuzzTestClient::connect(&relay_url(), keys)
         .await
-        .expect("connect to relay");
-    client.authenticate(keys).await.expect("NIP-42 auth");
-    client
+        .expect("connect to relay")
 }
 
 // ── Authority ─────────────────────────────────────────────────────────────
@@ -526,14 +525,14 @@ async fn a_republished_record_is_counted_once() {
     };
     let payload = wire_record("anthropic", &request_id, "e2e-priced", tokens);
 
-    let first = publish_usage_record(&mut client, &agent, &owner, &payload).await;
-    let second = publish_usage_record(&mut client, &agent, &owner, &payload).await;
+    let first = publish_usage_record(&agent, &owner, &payload).await;
+    let second = publish_usage_record(&agent, &owner, &payload).await;
     assert_ne!(first, second, "two publishes are two distinct events");
 
     // Same request id, different provider: real, separate spend.
     let mut other_provider = payload.clone();
     other_provider.provider = "openai".to_string();
-    publish_usage_record(&mut client, &agent, &owner, &other_provider).await;
+    publish_usage_record(&agent, &owner, &other_provider).await;
 
     let records = stored_records(&mut client, &owner).await;
     let mine: Vec<StoredUsageRecord> = records
@@ -588,7 +587,7 @@ async fn an_unpriced_model_is_flagged_then_priced_without_republishing() {
             output_tokens: 500,
         },
     );
-    publish_usage_record(&mut client, &agent, &owner, &payload).await;
+    publish_usage_record(&agent, &owner, &payload).await;
 
     let mine: Vec<StoredUsageRecord> = stored_records(&mut client, &owner)
         .await
@@ -681,7 +680,7 @@ async fn a_correction_moves_a_record_without_erasing_what_it_said() {
     );
     // Captured as internal admin work.
     payload.work_context = Some(work_context(CommercialPurpose::Administration, None));
-    let record_id = publish_usage_record(&mut client, &agent, &owner, &payload).await;
+    let record_id = publish_usage_record(&agent, &owner, &payload).await;
 
     let book = PriceBook {
         entries: vec![PriceEntry {
@@ -806,7 +805,7 @@ async fn a_rule_attributes_a_record_that_named_no_work() {
         },
     );
     payload.harness = Some(harness.clone());
-    publish_usage_record(&mut client, &agent, &owner, &payload).await;
+    publish_usage_record(&agent, &owner, &payload).await;
 
     let rule_id = format!("e2e-rule-{}", Uuid::new_v4());
     let existing = head(&mut client, &relay, KIND_ATTRIBUTION_RULEBOOK, "rulebook")
@@ -875,7 +874,6 @@ async fn a_rule_attributes_a_record_that_named_no_work() {
 async fn another_member_cannot_read_the_companys_spend() {
     let owner = owner_keys();
     let agent = Keys::generate();
-    let mut client = connect(&owner).await;
 
     let request_id = format!("req-{}", Uuid::new_v4());
     let payload = wire_record(
@@ -890,7 +888,7 @@ async fn another_member_cannot_read_the_companys_spend() {
             output_tokens: 56,
         },
     );
-    publish_usage_record(&mut client, &agent, &owner, &payload).await;
+    publish_usage_record(&agent, &owner, &payload).await;
 
     // A different member asks for the same kind, addressed to themselves.
     let stranger = Keys::generate();

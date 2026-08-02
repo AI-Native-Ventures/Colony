@@ -134,8 +134,22 @@ fn build_head(
     let content = build_head_content(payload, previous)?;
     let d_tag = payload.head_d_tag();
     let tags = vec![Tag::parse(["d", &d_tag]).map_err(|error| format!("invalid d tag: {error}"))?];
+
+    // NIP-33 replacement keeps the newest event at a coordinate, so a head
+    // that is not strictly newer than the one it replaces is discarded. Two
+    // appends inside the same second would otherwise collide and the second
+    // would be lost, which for a price book means a published price silently
+    // failing to land. Step past the stored head when the clock has not.
+    let mut created_at = nostr::Timestamp::now();
+    if let Some(previous) = previous {
+        if created_at <= previous.created_at {
+            created_at = previous.created_at + 1_u64;
+        }
+    }
+
     EventBuilder::new(Kind::Custom(payload.head_kind() as u16), content)
         .tags(tags)
+        .custom_created_at(created_at)
         .sign_with_keys(relay_keypair)
         .map_err(|error| format!("failed to sign ledger head: {error}"))
 }
@@ -225,6 +239,22 @@ pub(crate) async fn handle_ledger_action(
         .ensure_user(tenant.community(), &action_event.pubkey.to_bytes())
         .await
         .map_err(|error| format!("database error registering ledger actor: {error}"))?;
+
+    // Authority before anything else. The authoritative check runs inside the
+    // commit transaction under `FOR UPDATE`, which is what makes it safe
+    // against a concurrent ownership transfer, but leaving it as the only
+    // check means a stranger's request first consumes validation work and
+    // leaves a stored action behind. It also answers them with whichever
+    // validation failed first, which reads as a real conflict rather than as
+    // the refusal it is.
+    if !state
+        .db
+        .is_community_human_owner(tenant.community(), &action_event.pubkey.to_hex())
+        .await
+        .map_err(|error| format!("database error checking ledger authority: {error}"))?
+    {
+        return Err("ledger actions require the community owner".into());
+    }
 
     let d_tag = action.payload.head_d_tag();
     let previous_head = load_head(tenant, state, action.payload.head_kind(), &d_tag).await?;
@@ -431,6 +461,44 @@ mod tests {
             ),
             "the relay must only ever extend a published book"
         );
+    }
+
+    /// Two appends inside the same second must both land.
+    ///
+    /// Found by the live gate: NIP-33 keeps the newest event at a coordinate,
+    /// so a replacement that is not strictly newer is discarded. Back-to-back
+    /// price entries collided and the second was refused with "lost NIP-33
+    /// replacement ordering", which for a price book means a published price
+    /// silently failing to take effect.
+    #[test]
+    fn a_replacement_head_is_always_newer_than_the_one_it_replaces() {
+        let keys = relay_keys();
+        let first = head_event(&keys, &price_payload("m", 100, 1_000), None);
+        let second = head_event(&keys, &price_payload("m", 200, 500), Some(&first));
+        assert!(
+            second.created_at > first.created_at,
+            "second head ({}) must be newer than the first ({})",
+            second.created_at,
+            first.created_at
+        );
+
+        // And again, so a burst of appends keeps stepping forward rather than
+        // stalling on one shared second.
+        let third = head_event(&keys, &price_payload("m", 300, 250), Some(&second));
+        assert!(third.created_at > second.created_at);
+
+        // A head already stamped in the future still gets stepped past rather
+        // than replaced by an older one.
+        let future = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_PRICE_BOOK as u16),
+            first.content.clone(),
+        )
+        .tags([Tag::parse(["d", "pricebook"]).expect("d")])
+        .custom_created_at(nostr::Timestamp::now() + 3_600_u64)
+        .sign_with_keys(&keys)
+        .expect("sign");
+        let after_future = head_event(&keys, &price_payload("m", 400, 100), Some(&future));
+        assert!(after_future.created_at > future.created_at);
     }
 
     #[test]

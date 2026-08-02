@@ -2807,6 +2807,44 @@ impl Db {
         })
     }
 
+    /// Whether `pubkey_hex` is the community's current human owner.
+    ///
+    /// A cheap read used to refuse an unauthorized request before it can
+    /// consume validation work or leave a stored event behind. It is NOT the
+    /// authority check: that runs inside the commit transaction under
+    /// `FOR UPDATE`, because only there is it safe against a concurrent
+    /// ownership transfer.
+    pub async fn is_community_human_owner(
+        &self,
+        community: CommunityId,
+        pubkey_hex: &str,
+    ) -> Result<bool> {
+        let actor = pubkey_hex.to_ascii_lowercase();
+        let is_owner: Option<bool> = sqlx::query_scalar(
+            "SELECT true FROM relay_members \
+             WHERE community_id = $1 AND lower(pubkey) = $2 AND role = 'owner'",
+        )
+        .bind(community.as_uuid())
+        .bind(&actor)
+        .fetch_optional(&self.pool)
+        .await?;
+        if is_owner != Some(true) {
+            return Ok(false);
+        }
+
+        // An owner row alone does not prove humanity: nothing structurally
+        // stops an agent pubkey occupying one.
+        let actor_is_agent: Option<bool> = sqlx::query_scalar(
+            "SELECT agent_owner_pubkey IS NOT NULL FROM users \
+             WHERE community_id = $1 AND pubkey = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(hex::decode(&actor).unwrap_or_default())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(!actor_is_agent.unwrap_or(false))
+    }
+
     /// Find a durable ledger action claim by community-scoped retry key.
     pub async fn find_ledger_action_claim(
         &self,
