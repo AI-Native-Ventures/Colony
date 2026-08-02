@@ -273,8 +273,8 @@ pnpm exec playwright test tests/e2e/discovery-settings.spec.ts --project=smoke
 - Modify only files required to correct failures attributable to this branch.
 - Modify: `docs/superpowers/specs/2026-08-02-colony-discovery-outscraper-businesses-design.md`
 
-- [ ] Run focused core, SDK, database, relay, desktop worker, credential, Settings, and Playwright commands from Tasks 2-7.
-- [ ] Run `git diff --check` and the production marker scan:
+- [x] Run focused core, SDK, database, relay, desktop worker, credential, Settings, and Playwright commands from Tasks 2-7.
+- [x] Run `git diff --check` and the production marker scan:
 
 ```bash
 rg -n "T[O]DO|T[B]D|place[h]older|example\.com|sk-[A-Za-z0-9]" \
@@ -288,12 +288,15 @@ rg -n "T[O]DO|T[B]D|place[h]older|example\.com|sk-[A-Za-z0-9]" \
   desktop/src/features/settings/ui/DiscoverySettingsCard.tsx
 ```
 
-Expected: zero incomplete markers or secret-like fixtures in production code.
+Result: `git diff --check` passed. The scan found only two benign matches: the
+Tailwind `placeholder:` modifier/JSX `placeholder` attribute in the Settings
+input, and an adversarial secret-shaped value inside an SDK unit test. No
+incomplete marker or secret-like fixture exists in a production path.
 
-- [ ] Run `just ci`; require exit `0` or document a clean-`origin/develop` baseline failure without claiming it as fixed.
-- [ ] Record implemented/tested/committed separately from real-provider-tested, pushed, merged, deployed, and customer-proven.
-- [ ] Recheck the parallel `discovery-engine` worktree and record that it remained untouched.
-- [ ] Commit with `git commit -s -m "docs(discovery): record Outscraper source gate"`.
+- [x] Run `just ci`; require exit `0` or document a clean-`origin/develop` baseline failure without claiming it as fixed.
+- [x] Record implemented/tested/committed separately from real-provider-tested, pushed, merged, deployed, and customer-proven.
+- [x] Recheck the parallel `discovery-engine` worktree and record that it remained untouched.
+- [x] Commit with `git commit -s -m "docs(discovery): record Outscraper source gate"`.
 
 ## Acceptance gate result
 

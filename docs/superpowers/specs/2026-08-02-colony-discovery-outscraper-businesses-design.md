@@ -535,6 +535,28 @@ usage cost was incurred.
 - the relay-backed production `DiscoveryDataSource` and live Businesses UI;
 - merge, deployment, or customer use.
 
+### Final source-gate acceptance record
+
+The branch was rebased onto the fetched `origin/develop` and the full gate was
+rerun from that integrated state. `just ci` exited `0`, covering repository
+formatting and linting, Rust workspace checks and tests, desktop React and
+Tauri checks/tests/build, web checks/build, and mobile analysis/tests. The
+mobile suite ended with 914 passing tests and one skipped test; the desktop
+Tauri suite ended with 1,997 passing tests and 17 ignored tests.
+
+`git diff --check` passed. The production marker scan produced only the
+Settings input's CSS/JSX `placeholder` tokens and an intentionally
+secret-shaped value inside an SDK adversarial unit test. Neither is an
+incomplete implementation marker or a production credential.
+
+The deterministic source proof passed without contacting Outscraper or making
+a paid request. The implementation is committed locally through `0798f77fa`.
+It is not pushed, merged, deployed, real-provider-tested, or customer-proven.
+The relay-backed live UI and automatic Lead projection remain the next phase.
+
+The separate `codex/discovery-engine` worktree was rechecked after the gate. It
+remains clean at `fa52ff60d` and was not modified.
+
 ## Implementation ownership and sequence
 
 1. Rebase `codex/discovery-next` onto current `origin/develop` before product
