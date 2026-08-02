@@ -456,6 +456,10 @@ fn validate_receipt(receipt: &DiscoveryWorkerReceipt) -> Result<(), DiscoverySdk
             }
             validate_uuid(lease.lease_id, "discovery worker receipt")?;
             validate_run_projection(&lease.run)?;
+            lease
+                .business_search
+                .validate()
+                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker receipt"))?;
             if let Some(checkpoint) = &lease.last_checkpoint {
                 validate_checkpoint(checkpoint)?;
             }
@@ -508,7 +512,7 @@ mod tests {
     use super::*;
     use buzz_core::discovery_worker::DiscoveryProvider;
     use buzz_core::{
-        discovery::{DiscoveryRunProjection, DiscoveryRunState},
+        discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState},
         discovery_worker::{DiscoveryWorkerLeaseProjection, DiscoveryWorkerReceiptOutcome},
     };
     use chrono::{TimeZone, Utc};
@@ -535,6 +539,16 @@ mod tests {
             terminal_reason: None,
             created_at: Utc.timestamp_opt(1_800_000_000, 0).single().unwrap(),
             updated_at: Utc.timestamp_opt(1_800_000_000, 0).single().unwrap(),
+        }
+    }
+
+    fn business_search() -> DiscoveryBusinessSearchSpec {
+        DiscoveryBusinessSearchSpec {
+            query: "dentists".to_owned(),
+            location: "Sandton, Johannesburg, South Africa".to_owned(),
+            limit: 3,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
         }
     }
 
@@ -655,6 +669,7 @@ mod tests {
                 attempt: 1,
                 lease_until: Utc.timestamp_opt(1_800_000_030, 0).single().unwrap(),
                 run: run(),
+                business_search: business_search(),
                 last_checkpoint: None,
             }),
         };

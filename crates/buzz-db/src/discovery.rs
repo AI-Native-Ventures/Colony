@@ -2,7 +2,8 @@
 
 use buzz_core::{
     discovery::{
-        DiscoveryOperation, DiscoveryRunProjection, DiscoveryRunState, DiscoveryTerminalReason,
+        DiscoveryBusinessSearchSpec, DiscoveryOperation, DiscoveryRunProjection, DiscoveryRunState,
+        DiscoveryTerminalReason,
     },
     discovery_worker::{
         DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerAction,
@@ -133,12 +134,14 @@ pub enum DiscoveryAdvance {
 }
 
 /// State mutation associated with one validated signed Discovery command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscoveryCommandMutation {
     /// Insert a deterministic queued run.
     Start {
         /// Campaign reference copied from the action.
         campaign_id: Uuid,
+        /// Validated immutable provider input copied from the action.
+        business_search: DiscoveryBusinessSearchSpec,
         /// Server-configured fake executor step count.
         total_steps: u32,
         /// Timestamp already embedded in the relay-signed queued receipt.
@@ -158,7 +161,7 @@ pub enum DiscoveryCommandMutation {
 
 impl DiscoveryCommandMutation {
     /// Operation represented by this mutation.
-    pub const fn operation(self) -> DiscoveryOperation {
+    pub const fn operation(&self) -> DiscoveryOperation {
         match self {
             Self::Start { .. } => DiscoveryOperation::Start,
             Self::Status { .. } => DiscoveryOperation::Status,
@@ -166,10 +169,10 @@ impl DiscoveryCommandMutation {
         }
     }
 
-    fn target_id(self, community_id: CommunityId, idempotency_key: Uuid) -> Uuid {
+    fn target_id(&self, community_id: CommunityId, idempotency_key: Uuid) -> Uuid {
         match self {
             Self::Start { .. } => deterministic_run_id(community_id, idempotency_key),
-            Self::Status { run_id } | Self::Cancel { run_id } => run_id,
+            Self::Status { run_id } | Self::Cancel { run_id } => *run_id,
         }
     }
 }
@@ -207,7 +210,7 @@ pub enum DiscoveryWorkerCommandApply {
         /// Stored relay-signed private receipt.
         receipt: Box<StoredEvent>,
         /// Safe result signed into the receipt.
-        outcome: DiscoveryWorkerReceiptOutcome,
+        outcome: Box<DiscoveryWorkerReceiptOutcome>,
     },
     /// The same logical worker command already committed.
     Duplicate {
@@ -303,12 +306,16 @@ impl Db {
         campaign_id: Uuid,
         idempotency_key: Uuid,
         total_steps: u32,
+        business_search: &DiscoveryBusinessSearchSpec,
     ) -> Result<DiscoveryRunCreate> {
         if total_steps == 0 || total_steps > i32::MAX as u32 {
             return Err(DbError::InvalidData(
                 "Discovery total steps must be between 1 and i32::MAX".into(),
             ));
         }
+        business_search
+            .validate()
+            .map_err(|error| DbError::InvalidData(error.to_string()))?;
         let mut tx = self.pool.begin().await?;
         require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
         let run_id = deterministic_run_id(community_id, idempotency_key);
@@ -328,13 +335,35 @@ impl Db {
         .fetch_optional(&mut *tx)
         .await?
         .is_some();
+        if inserted {
+            sqlx::query(
+                "INSERT INTO discovery_run_business_searches \
+                 (community_id, run_id, query, location, result_limit, language, region) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            )
+            .bind(community_id.as_uuid())
+            .bind(run_id)
+            .bind(&business_search.query)
+            .bind(&business_search.location)
+            .bind(i16::try_from(business_search.limit).map_err(|_| {
+                DbError::InvalidData("Discovery result limit exceeds SMALLINT".into())
+            })?)
+            .bind(&business_search.language)
+            .bind(business_search.region.as_deref())
+            .execute(&mut *tx)
+            .await?;
+        }
         let row = sqlx::query(DISCOVERY_RUN_SELECT_BY_IDEMPOTENCY)
             .bind(community_id.as_uuid())
             .bind(idempotency_key)
             .fetch_one(&mut *tx)
             .await?;
         let run = run_from_row(&row)?;
-        if run.campaign_id != campaign_id || run.total_steps != total_steps {
+        let stored_search = load_business_search_tx(&mut tx, community_id, run.id).await?;
+        if run.campaign_id != campaign_id
+            || run.total_steps != total_steps
+            || stored_search != *business_search
+        {
             return Err(DbError::AccessDenied(
                 "Discovery idempotency key conflicts with an existing start".into(),
             ));
@@ -369,7 +398,7 @@ impl Db {
         require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
         let operation = mutation.operation();
         let target_id = mutation.target_id(community_id, idempotency_key);
-        let fingerprint = command_fingerprint(operation, target_id);
+        let fingerprint = command_fingerprint(&mutation, target_id);
         if let Some(row) = sqlx::query(
             "SELECT operation, request_fingerprint, action_event_id, receipt_event_id, run_id \
              FROM discovery_action_claims WHERE community_id=$1 AND idempotency_key=$2",
@@ -401,6 +430,7 @@ impl Db {
         let run = match mutation {
             DiscoveryCommandMutation::Start {
                 campaign_id,
+                business_search,
                 total_steps,
                 accepted_at,
             } => {
@@ -409,6 +439,9 @@ impl Db {
                         "Discovery total steps must be between 1 and i32::MAX".into(),
                     ));
                 }
+                business_search
+                    .validate()
+                    .map_err(|error| DbError::InvalidData(error.to_string()))?;
                 let row = sqlx::query(
                     "INSERT INTO discovery_runs \
                      (community_id, id, campaign_id, requested_by, start_idempotency_key, \
@@ -428,7 +461,24 @@ impl Db {
                 .bind(accepted_at)
                 .fetch_one(&mut *tx)
                 .await?;
-                run_from_row(&row)?
+                let run = run_from_row(&row)?;
+                sqlx::query(
+                    "INSERT INTO discovery_run_business_searches \
+                     (community_id, run_id, query, location, result_limit, language, region) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                )
+                .bind(community_id.as_uuid())
+                .bind(run.id)
+                .bind(&business_search.query)
+                .bind(&business_search.location)
+                .bind(i16::try_from(business_search.limit).map_err(|_| {
+                    DbError::InvalidData("Discovery result limit exceeds SMALLINT".into())
+                })?)
+                .bind(&business_search.language)
+                .bind(business_search.region.as_deref())
+                .execute(&mut *tx)
+                .await?;
+                run
             }
             DiscoveryCommandMutation::Status { run_id } => {
                 load_run_tx(&mut tx, community_id, run_id, false).await?
@@ -632,7 +682,7 @@ impl Db {
         Ok(DiscoveryWorkerCommandApply::Applied {
             action: Box::new(stored_action),
             receipt: Box::new(stored_receipt),
-            outcome,
+            outcome: Box::new(outcome),
         })
     }
 
@@ -899,6 +949,8 @@ async fn apply_worker_action_tx(
                      SELECT id FROM discovery_runs \
                      WHERE community_id=$1 AND state IN ('queued','running') \
                        AND (claim_id IS NULL OR lease_until < now()) \
+                       AND EXISTS (SELECT 1 FROM discovery_run_business_searches s \
+                                   WHERE s.community_id=$1 AND s.run_id=discovery_runs.id) \
                      ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1 \
                  ) \
                  UPDATE discovery_runs r \
@@ -1106,6 +1158,7 @@ async fn worker_lease_outcome_tx(
     let lease_until = run
         .lease_until
         .ok_or_else(|| DbError::InvalidData("external Discovery lease is missing expiry".into()))?;
+    let business_search = load_business_search_tx(tx, run.community_id, run.id).await?;
     let last_checkpoint = load_last_checkpoint_tx(tx, run.community_id, run.id).await?;
     Ok(DiscoveryWorkerReceiptOutcome::Lease(
         DiscoveryWorkerLeaseProjection {
@@ -1114,9 +1167,40 @@ async fn worker_lease_outcome_tx(
             attempt: run.attempt,
             lease_until,
             run: run.projection(),
+            business_search,
             last_checkpoint,
         },
     ))
+}
+
+async fn load_business_search_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+) -> Result<DiscoveryBusinessSearchSpec> {
+    let row = sqlx::query(
+        "SELECT query, location, result_limit, language, region \
+         FROM discovery_run_business_searches WHERE community_id=$1 AND run_id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| DbError::InvalidData("Discovery run is missing business search input".into()))?;
+    let result_limit: i16 = row.try_get("result_limit")?;
+    let search = DiscoveryBusinessSearchSpec {
+        query: row.try_get("query")?,
+        location: row.try_get("location")?,
+        limit: u16::try_from(result_limit).map_err(|_| {
+            DbError::InvalidData("Discovery result limit cannot be negative".into())
+        })?,
+        language: row.try_get("language")?,
+        region: row.try_get("region")?,
+    };
+    search
+        .validate()
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    Ok(search)
 }
 
 async fn load_last_checkpoint_tx(
@@ -1247,12 +1331,32 @@ fn parse_provider(value: &str) -> Result<DiscoveryProvider> {
     }
 }
 
-fn command_fingerprint(operation: DiscoveryOperation, target_id: Uuid) -> [u8; 32] {
+fn command_fingerprint(mutation: &DiscoveryCommandMutation, target_id: Uuid) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"colony.discovery-command/v1\0");
+    let operation = mutation.operation();
     hasher.update(operation_text(operation).as_bytes());
     hasher.update([0]);
     hasher.update(target_id.as_bytes());
+    if let DiscoveryCommandMutation::Start {
+        campaign_id,
+        business_search,
+        ..
+    } = mutation
+    {
+        hasher.update(campaign_id.as_bytes());
+        for value in [
+            business_search.query.as_str(),
+            business_search.location.as_str(),
+            business_search.language.as_str(),
+            business_search.region.as_deref().unwrap_or(""),
+        ] {
+            hasher.update([0]);
+            hasher.update(value.as_bytes());
+        }
+        hasher.update([0]);
+        hasher.update(business_search.limit.to_be_bytes());
+    }
     hasher.finalize().into()
 }
 
@@ -1539,6 +1643,16 @@ mod tests {
 
     static DISCOVERY_DB_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    fn business_search() -> DiscoveryBusinessSearchSpec {
+        DiscoveryBusinessSearchSpec {
+            query: "dentists".to_owned(),
+            location: "Sandton, Johannesburg, South Africa".to_owned(),
+            limit: 3,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
+        }
+    }
+
     #[test]
     fn deterministic_run_ids_are_tenant_scoped() {
         let key = Uuid::from_u128(42);
@@ -1698,7 +1812,7 @@ mod tests {
         result: DiscoveryWorkerCommandApply,
     ) -> DiscoveryWorkerReceiptOutcome {
         match result {
-            DiscoveryWorkerCommandApply::Applied { outcome, .. } => outcome,
+            DiscoveryWorkerCommandApply::Applied { outcome, .. } => *outcome,
             DiscoveryWorkerCommandApply::Duplicate { .. } => {
                 panic!("test action unexpectedly reused an idempotency key")
             }
@@ -1731,8 +1845,16 @@ mod tests {
             .await
             .expect("insert worker identity");
 
+        let expected_search = business_search();
         let created = db
-            .create_discovery_run_once(community, &human, Uuid::new_v4(), Uuid::new_v4(), 1)
+            .create_discovery_run_once(
+                community,
+                &human,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                1,
+                &expected_search,
+            )
             .await
             .expect("create external-worker run");
         let run_id = match created {
@@ -1761,6 +1883,7 @@ mod tests {
         };
         assert_eq!(first_lease.run.run_id, run_id);
         assert_eq!(first_lease.attempt, 1);
+        assert_eq!(first_lease.business_search, expected_search);
         assert_eq!(first_lease.last_checkpoint, None);
 
         let submitted = DiscoveryWorkerCheckpoint {
@@ -1949,15 +2072,22 @@ mod tests {
         let key = Uuid::new_v4();
         let campaign = Uuid::new_v4();
         let first = db
-            .create_discovery_run_once(community, &human, campaign, key, 3)
+            .create_discovery_run_once(community, &human, campaign, key, 3, &business_search())
             .await
             .expect("create run");
         assert!(matches!(first, DiscoveryRunCreate::Created(_)));
         let duplicate = db
-            .create_discovery_run_once(community, &agent, campaign, key, 3)
+            .create_discovery_run_once(community, &agent, campaign, key, 3, &business_search())
             .await
             .expect("retry run");
         assert!(matches!(duplicate, DiscoveryRunCreate::Existing(_)));
+        let mut conflicting_search = business_search();
+        conflicting_search.query = "orthodontists".to_owned();
+        assert!(matches!(
+            db.create_discovery_run_once(community, &human, campaign, key, 3, &conflicting_search,)
+                .await,
+            Err(DbError::AccessDenied(_))
+        ));
 
         let claimed = db
             .claim_discovery_run(Duration::seconds(5))
@@ -1993,7 +2123,14 @@ mod tests {
         assert!(matches!(stale_after_cancel, DiscoveryAdvance::LostLease));
 
         let revoke = db
-            .create_discovery_run_once(community, &human, Uuid::new_v4(), Uuid::new_v4(), 2)
+            .create_discovery_run_once(
+                community,
+                &human,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                2,
+                &business_search(),
+            )
             .await
             .expect("create revocation run");
         let revoke_id = match revoke {
@@ -2033,7 +2170,14 @@ mod tests {
             .await
             .expect("restore entitlement");
         let lease = db
-            .create_discovery_run_once(community, &human, Uuid::new_v4(), Uuid::new_v4(), 2)
+            .create_discovery_run_once(
+                community,
+                &human,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                2,
+                &business_search(),
+            )
             .await
             .expect("create lease run");
         let lease_id = match lease {

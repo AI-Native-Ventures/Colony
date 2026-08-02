@@ -1,7 +1,7 @@
 //! Agent-first commands for the shared Discovery primitive.
 
 use buzz_core::{
-    discovery::{DiscoveryRunRequest, DiscoveryStartRequest},
+    discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunRequest, DiscoveryStartRequest},
     kind::KIND_DISCOVERY_RECEIPT,
 };
 use buzz_sdk::discovery::{
@@ -19,6 +19,11 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
     match command {
         DiscoveryCmd::Start {
             campaign,
+            query,
+            location,
+            limit,
+            language,
+            region,
             idempotency_key,
         } => {
             let relay = relay_self(client).await?;
@@ -26,6 +31,13 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                 request_id: Uuid::new_v4(),
                 idempotency_key: idempotency_key.unwrap_or_else(Uuid::new_v4),
                 campaign_id: campaign,
+                business_search: DiscoveryBusinessSearchSpec {
+                    query: query.trim().to_owned(),
+                    location: location.trim().to_owned(),
+                    limit,
+                    language: language.trim().to_ascii_lowercase(),
+                    region: region.map(|value| value.trim().to_ascii_uppercase()),
+                },
             };
             let builder = build_discovery_start_action(relay, &request)
                 .map_err(|error| CliError::Usage(error.to_string()))?;

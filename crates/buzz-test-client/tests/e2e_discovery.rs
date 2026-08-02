@@ -115,6 +115,13 @@ async fn start_run(client: &mut BuzzTestClient, actor: &Keys, relay: nostr::Publ
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         campaign_id: Uuid::new_v4(),
+        business_search: buzz_core::discovery::DiscoveryBusinessSearchSpec {
+            query: "dentists".to_owned(),
+            location: "Sandton, Johannesburg, South Africa".to_owned(),
+            limit: 3,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
+        },
     };
     let event = build_discovery_start_action(relay, &request)
         .expect("valid start action")
@@ -185,6 +192,13 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         campaign_id: Uuid::new_v4(),
+        business_search: buzz_core::discovery::DiscoveryBusinessSearchSpec {
+            query: "dentists".to_owned(),
+            location: "Sandton, Johannesburg, South Africa".to_owned(),
+            limit: 3,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
+        },
     };
     let event = build_discovery_start_action(relay, &request)
         .expect("valid start action")

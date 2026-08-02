@@ -27,7 +27,7 @@ pub(crate) enum DiscoveryWorkerBrokerOutcome {
     /// This signed action committed its mutation and receipt.
     Applied {
         receipt_event_id: Vec<u8>,
-        outcome: DiscoveryWorkerReceiptOutcome,
+        outcome: Box<DiscoveryWorkerReceiptOutcome>,
     },
     /// This retry key was already committed.
     Duplicate {

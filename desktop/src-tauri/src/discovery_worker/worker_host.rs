@@ -207,7 +207,7 @@ mod tests {
     use std::{collections::VecDeque, sync::Mutex};
 
     use buzz_core_pkg::{
-        discovery::{DiscoveryRunProjection, DiscoveryRunState},
+        discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState},
         discovery_worker::{DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerCheckpoint},
     };
     use chrono::Utc;
@@ -277,6 +277,13 @@ mod tests {
             attempt: 1,
             lease_until: Utc::now() + chrono::Duration::seconds(30),
             run: run_projection(),
+            business_search: DiscoveryBusinessSearchSpec {
+                query: "dentists".to_owned(),
+                location: "Sandton, Johannesburg, South Africa".to_owned(),
+                limit: 3,
+                language: "en".to_owned(),
+                region: Some("ZA".to_owned()),
+            },
             last_checkpoint,
         }
     }
@@ -397,7 +404,7 @@ mod tests {
     #[ignore = "requires isolated Postgres, Redis, and relay with external workers enabled"]
     #[tokio::test]
     async fn native_host_real_relay_completes_and_recovers_after_restart() {
-        use buzz_core_pkg::discovery::DiscoveryStartRequest;
+        use buzz_core_pkg::discovery::{DiscoveryBusinessSearchSpec, DiscoveryStartRequest};
         use buzz_sdk_pkg::discovery::build_discovery_start_action;
         use sqlx::Row as _;
 
@@ -502,6 +509,13 @@ mod tests {
                 request_id: Uuid::new_v4(),
                 idempotency_key: Uuid::new_v4(),
                 campaign_id: Uuid::new_v4(),
+                business_search: DiscoveryBusinessSearchSpec {
+                    query: "dentists".to_owned(),
+                    location: "Sandton, Johannesburg, South Africa".to_owned(),
+                    limit: 3,
+                    language: "en".to_owned(),
+                    region: Some("ZA".to_owned()),
+                },
             };
             let response = relay::submit_event_at_with_keys(
                 build_discovery_start_action(relay_pubkey, &request)

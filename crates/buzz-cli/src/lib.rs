@@ -501,6 +501,21 @@ pub enum DiscoveryCmd {
         /// Campaign UUID owned by the Discovery work surface.
         #[arg(long)]
         campaign: Uuid,
+        /// Business category or Google Maps search phrase.
+        #[arg(long)]
+        query: String,
+        /// Geography included in the Google Maps query.
+        #[arg(long)]
+        location: String,
+        /// Maximum organizations requested from Outscraper.
+        #[arg(long, default_value_t = 100)]
+        limit: u16,
+        /// ISO 639-1 language code.
+        #[arg(long, default_value = "en")]
+        language: String,
+        /// Optional ISO 3166-1 alpha-2 country code.
+        #[arg(long)]
+        region: Option<String>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -2238,7 +2253,17 @@ mod tests {
         let run = "8797229a-3c2c-4bd0-8e2e-48e13f9bcc6f";
         let retry = "43ad3fa8-5bf8-4d87-909d-92cb998ddf1c";
         for args in [
-            vec!["buzz", "discovery", "start", "--campaign", campaign],
+            vec![
+                "buzz",
+                "discovery",
+                "start",
+                "--campaign",
+                campaign,
+                "--query",
+                "dentists",
+                "--location",
+                "Sandton, South Africa",
+            ],
             vec!["buzz", "discovery", "status", "--run", run],
             vec![
                 "buzz",
@@ -2258,6 +2283,9 @@ mod tests {
         }
         assert!(
             Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", "dentists"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", campaign,]).is_err()
         );
         assert!(Cli::try_parse_from(["buzz", "discovery", "status"]).is_err());
     }

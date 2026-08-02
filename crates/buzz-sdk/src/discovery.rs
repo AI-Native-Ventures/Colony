@@ -5,8 +5,8 @@ use std::str::FromStr;
 use buzz_core::{
     block::canonical_json,
     discovery::{
-        DiscoveryAction, DiscoveryOperation, DiscoveryReceipt, DiscoveryRunRequest,
-        DiscoveryStartRequest,
+        DiscoveryAction, DiscoveryBusinessSearchSpec, DiscoveryOperation, DiscoveryReceipt,
+        DiscoveryRunRequest, DiscoveryStartRequest,
     },
     kind::{KIND_DISCOVERY_ACTION, KIND_DISCOVERY_RECEIPT},
 };
@@ -75,6 +75,7 @@ struct DiscoveryActionContent {
     idempotency_key: Uuid,
     campaign_id: Option<Uuid>,
     run_id: Option<Uuid>,
+    business_search: Option<DiscoveryBusinessSearchSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +94,10 @@ pub fn build_discovery_start_action(
     validate_uuid(request.request_id, "discovery action")?;
     validate_uuid(request.idempotency_key, "discovery action")?;
     validate_uuid(request.campaign_id, "discovery action")?;
+    request
+        .business_search
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery action"))?;
     build_action(
         relay_pubkey,
         DiscoveryOperation::Start,
@@ -100,6 +105,7 @@ pub fn build_discovery_start_action(
         request.idempotency_key,
         Some(request.campaign_id),
         None,
+        Some(request.business_search.clone()),
     )
 }
 
@@ -173,6 +179,7 @@ fn build_run_action(
         request.idempotency_key,
         None,
         Some(request.run_id),
+        None,
     )
 }
 
@@ -183,6 +190,7 @@ fn build_action(
     idempotency_key: Uuid,
     campaign_id: Option<Uuid>,
     run_id: Option<Uuid>,
+    business_search: Option<DiscoveryBusinessSearchSpec>,
 ) -> Result<EventBuilder, DiscoverySdkError> {
     let target = campaign_id
         .or(run_id)
@@ -204,6 +212,7 @@ fn build_action(
         idempotency_key,
         campaign_id,
         run_id,
+        business_search,
     };
     let tags = [
         scalar_tag("p", &relay_text)?,
@@ -261,16 +270,27 @@ pub fn parse_discovery_action(event: &Event) -> Result<ParsedDiscoveryAction, Di
     }
     let action = match operation {
         DiscoveryOperation::Start
-            if content.campaign_id == Some(target_id) && content.run_id.is_none() =>
+            if content.campaign_id == Some(target_id)
+                && content.run_id.is_none()
+                && content.business_search.is_some() =>
         {
+            let business_search = content
+                .business_search
+                .ok_or(DiscoverySdkError::InvalidEnvelope("discovery action"))?;
+            business_search
+                .validate()
+                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery action"))?;
             DiscoveryAction::Start(DiscoveryStartRequest {
                 request_id,
                 idempotency_key,
                 campaign_id: target_id,
+                business_search,
             })
         }
         DiscoveryOperation::Status
-            if content.run_id == Some(target_id) && content.campaign_id.is_none() =>
+            if content.run_id == Some(target_id)
+                && content.campaign_id.is_none()
+                && content.business_search.is_none() =>
         {
             DiscoveryAction::Status(DiscoveryRunRequest {
                 request_id,
@@ -279,7 +299,9 @@ pub fn parse_discovery_action(event: &Event) -> Result<ParsedDiscoveryAction, Di
             })
         }
         DiscoveryOperation::Cancel
-            if content.run_id == Some(target_id) && content.campaign_id.is_none() =>
+            if content.run_id == Some(target_id)
+                && content.campaign_id.is_none()
+                && content.business_search.is_none() =>
         {
             DiscoveryAction::Cancel(DiscoveryRunRequest {
                 request_id,
@@ -507,12 +529,22 @@ pub(crate) fn required_tuple_tag<'a>(
 mod tests {
     use super::*;
     use buzz_core::discovery::{
-        DiscoveryAction, DiscoveryOperation, DiscoveryReceipt, DiscoveryRunProjection,
-        DiscoveryRunRequest, DiscoveryRunState, DiscoveryStartRequest,
+        DiscoveryAction, DiscoveryBusinessSearchSpec, DiscoveryOperation, DiscoveryReceipt,
+        DiscoveryRunProjection, DiscoveryRunRequest, DiscoveryRunState, DiscoveryStartRequest,
     };
     use chrono::TimeZone;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use uuid::Uuid;
+
+    fn business_search() -> DiscoveryBusinessSearchSpec {
+        DiscoveryBusinessSearchSpec {
+            query: "dentists".to_owned(),
+            location: "Sandton, Johannesburg, South Africa".to_owned(),
+            limit: 3,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
+        }
+    }
 
     #[test]
     fn start_action_round_trips_with_exact_tags() {
@@ -522,6 +554,7 @@ mod tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
+            business_search: business_search(),
         };
         let event = build_discovery_start_action(relay_keys.public_key(), &request)
             .expect("test event must build")
@@ -571,10 +604,49 @@ mod tests {
             request_id: Uuid::nil(),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
+            business_search: business_search(),
         };
         assert!(matches!(
             build_discovery_start_action(Keys::generate().public_key(), &request),
             Err(DiscoverySdkError::InvalidEnvelope("discovery action"))
+        ));
+    }
+
+    #[test]
+    fn start_action_rejects_invalid_or_secret_shaped_search_content() {
+        let mut request = DiscoveryStartRequest {
+            request_id: Uuid::from_u128(1),
+            idempotency_key: Uuid::from_u128(2),
+            campaign_id: Uuid::from_u128(3),
+            business_search: business_search(),
+        };
+        request.business_search.limit = 0;
+        assert!(matches!(
+            build_discovery_start_action(Keys::generate().public_key(), &request),
+            Err(DiscoverySdkError::InvalidEnvelope("discovery action"))
+        ));
+
+        request.business_search = business_search();
+        let original = build_discovery_start_action(Keys::generate().public_key(), &request)
+            .expect("valid action builds")
+            .sign_with_keys(&Keys::generate())
+            .expect("valid action signs");
+        let mut content: serde_json::Value =
+            serde_json::from_str(&original.content).expect("valid content");
+        content
+            .as_object_mut()
+            .expect("action object")
+            .insert("api_key".to_owned(), serde_json::json!("must-not-fit"));
+        let tampered = EventBuilder::new(
+            Kind::Custom(KIND_DISCOVERY_ACTION as u16),
+            canonical_json(&content).expect("canonical test content"),
+        )
+        .tags(original.tags.iter().cloned())
+        .sign_with_keys(&Keys::generate())
+        .expect("tampered action signs");
+        assert!(matches!(
+            parse_discovery_action(&tampered),
+            Err(DiscoverySdkError::InvalidContent("discovery action"))
         ));
     }
 
@@ -585,6 +657,7 @@ mod tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
+            business_search: business_search(),
         };
         let original = build_discovery_start_action(relay.public_key(), &request)
             .expect("action builds")
@@ -610,6 +683,7 @@ mod tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
+            business_search: business_search(),
         };
         let original = build_discovery_start_action(relay.public_key(), &request)
             .expect("action builds")
@@ -622,6 +696,7 @@ mod tests {
             idempotency_key: request.idempotency_key,
             campaign_id: Some(Uuid::from_u128(99)),
             run_id: None,
+            business_search: Some(request.business_search.clone()),
         };
         let event = EventBuilder::new(
             Kind::Custom(KIND_DISCOVERY_ACTION as u16),

@@ -2,7 +2,83 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use uuid::Uuid;
+
+const MAX_DISCOVERY_SEARCH_TEXT_BYTES: usize = 256;
+
+/// Why a non-secret Businesses search snapshot was refused.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DiscoverySearchSpecError {
+    /// A named field is empty, untrimmed, malformed, or outside its bound.
+    #[error("invalid Discovery business search field: {0}")]
+    InvalidField(&'static str),
+}
+
+/// Immutable, non-secret provider input captured when a Businesses run starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryBusinessSearchSpec {
+    /// Business category or search phrase.
+    pub query: String,
+    /// Human-readable geography included in the Google Maps query.
+    pub location: String,
+    /// Maximum organizations requested from Outscraper.
+    pub limit: u16,
+    /// Lowercase ISO 639-1 language code.
+    pub language: String,
+    /// Optional uppercase ISO 3166-1 alpha-2 country code.
+    pub region: Option<String>,
+}
+
+impl DiscoveryBusinessSearchSpec {
+    /// Validate the strict, bounded shape accepted by Colony's live source.
+    pub fn validate(&self) -> Result<(), DiscoverySearchSpecError> {
+        validate_search_text(&self.query, "query")?;
+        validate_search_text(&self.location, "location")?;
+        if !(1..=500).contains(&self.limit) {
+            return Err(DiscoverySearchSpecError::InvalidField("limit"));
+        }
+        if !is_ascii_code(&self.language, false) {
+            return Err(DiscoverySearchSpecError::InvalidField("language"));
+        }
+        if self
+            .region
+            .as_deref()
+            .is_some_and(|value| !is_ascii_code(value, true))
+        {
+            return Err(DiscoverySearchSpecError::InvalidField("region"));
+        }
+        Ok(())
+    }
+
+    /// Render the only provider query form allowed by the production worker.
+    pub fn provider_query(&self) -> String {
+        format!("{}, {}", self.query, self.location)
+    }
+}
+
+fn validate_search_text(value: &str, field: &'static str) -> Result<(), DiscoverySearchSpecError> {
+    if value.is_empty()
+        || value != value.trim()
+        || value.len() > MAX_DISCOVERY_SEARCH_TEXT_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(DiscoverySearchSpecError::InvalidField(field));
+    }
+    Ok(())
+}
+
+fn is_ascii_code(value: &str, uppercase: bool) -> bool {
+    value.len() == 2
+        && value.bytes().all(|byte| {
+            if uppercase {
+                byte.is_ascii_uppercase()
+            } else {
+                byte.is_ascii_lowercase()
+            }
+        })
+}
 
 /// Operation requested through a signed Discovery action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +137,8 @@ pub struct DiscoveryStartRequest {
     pub idempotency_key: Uuid,
     /// Opaque reference to the campaign that owns the run.
     pub campaign_id: Uuid,
+    /// Immutable Businesses search used by the local provider worker.
+    pub business_search: DiscoveryBusinessSearchSpec,
 }
 
 /// Payload of a signed status or cancel request.
@@ -154,6 +232,65 @@ pub struct DiscoveryReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn business_search() -> DiscoveryBusinessSearchSpec {
+        DiscoveryBusinessSearchSpec {
+            query: "dentists".to_owned(),
+            location: "Sandton, Johannesburg, South Africa".to_owned(),
+            limit: 100,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
+        }
+    }
+
+    #[test]
+    fn business_search_contract_is_bounded_and_non_secret() {
+        let valid = business_search();
+        assert_eq!(valid.validate(), Ok(()));
+
+        for invalid in [
+            DiscoveryBusinessSearchSpec {
+                query: "dentists ".to_owned(),
+                ..valid.clone()
+            },
+            DiscoveryBusinessSearchSpec {
+                query: "é".repeat(129),
+                ..valid.clone()
+            },
+            DiscoveryBusinessSearchSpec {
+                location: "Sandton\nJohannesburg".to_owned(),
+                ..valid.clone()
+            },
+            DiscoveryBusinessSearchSpec {
+                limit: 0,
+                ..valid.clone()
+            },
+            DiscoveryBusinessSearchSpec {
+                limit: 501,
+                ..valid.clone()
+            },
+            DiscoveryBusinessSearchSpec {
+                language: "eng".to_owned(),
+                ..valid.clone()
+            },
+            DiscoveryBusinessSearchSpec {
+                region: Some("ZAF".to_owned()),
+                ..valid.clone()
+            },
+        ] {
+            assert!(invalid.validate().is_err(), "invalid search was accepted");
+        }
+
+        let serialized = serde_json::to_string(&valid).expect("serialize search");
+        assert_eq!(
+            valid.provider_query(),
+            "dentists, Sandton, Johannesburg, South Africa"
+        );
+        assert!(!serialized.contains("api_key"));
+        assert!(!serialized.contains("credential"));
+        assert!(!serialized.contains("http://"));
+        assert!(!serialized.contains("https://"));
+    }
 
     #[test]
     fn terminal_states_are_terminal() {

@@ -87,6 +87,7 @@ pub(crate) async fn handle_discovery_action(
             }
             DiscoveryCommandMutation::Start {
                 campaign_id: request.campaign_id,
+                business_search: request.business_search,
                 total_steps: if state.config.discovery.fake_executor_enabled {
                     state.config.discovery.fake_total_steps
                 } else {
@@ -209,7 +210,7 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryBrokerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::discovery::DiscoveryStartRequest;
+    use buzz_core::discovery::{DiscoveryBusinessSearchSpec, DiscoveryStartRequest};
     use buzz_sdk::discovery::build_discovery_start_action;
     use nostr::Keys;
     use uuid::Uuid;
@@ -222,6 +223,13 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             campaign_id: Uuid::new_v4(),
+            business_search: DiscoveryBusinessSearchSpec {
+                query: "dentists".to_owned(),
+                location: "Sandton, Johannesburg, South Africa".to_owned(),
+                limit: 3,
+                language: "en".to_owned(),
+                region: Some("ZA".to_owned()),
+            },
         };
         let event = build_discovery_start_action(relay.public_key(), &request)
             .expect("valid builder")

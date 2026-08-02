@@ -30,11 +30,11 @@ Exa, Colony credits, pricing, or checkout.
 **Files:**
 - No intended product-file changes.
 
-- [ ] Recheck `/Users/mac/Desktop/Billion/AI-Native-Ventures-App-worktrees/discovery-engine` with `git status --short --branch` and `git log -5 --oneline`; require clean `fa52ff60d` unless new evidence appears.
-- [ ] Inspect `git diff --name-status HEAD...origin/develop`; confirm the five incoming profile/onboarding/test commits do not touch Discovery.
-- [ ] Run `. ./bin/activate-hermit && git rebase origin/develop` from `discovery-next`.
-- [ ] Run `git status --short --branch` and `git rev-list --left-right --count origin/develop...HEAD`; expect a clean worktree and `0` commits behind.
-- [ ] Run the existing focused foundation tests before new code:
+- [x] Recheck `/Users/mac/Desktop/Billion/AI-Native-Ventures-App-worktrees/discovery-engine` with `git status --short --branch` and `git log -5 --oneline`; require clean `fa52ff60d` unless new evidence appears.
+- [x] Inspect `git diff --name-status HEAD...origin/develop`; confirm the five incoming profile/onboarding/test commits do not touch Discovery.
+- [x] Run `. ./bin/activate-hermit && git rebase origin/develop` from `discovery-next`.
+- [x] Run `git status --short --branch` and `git rev-list --left-right --count origin/develop...HEAD`; expect a clean worktree and `0` commits behind.
+- [x] Run the existing focused foundation tests before new code:
 
 ```bash
 cargo test -p buzz-core discovery
@@ -43,7 +43,7 @@ cargo test --manifest-path desktop/src-tauri/Cargo.toml discovery_
 cd desktop && node --test src/shared/api/discoveryCredentials.test.mjs
 ```
 
-- [ ] Record any rebased commit-hash corrections in the existing evidence document before later evidence refers to them.
+- [x] Record any rebased commit-hash corrections in the existing evidence document before later evidence refers to them.
 
 ## Task 2: Add a bounded Businesses search snapshot to the signed run contract
 
@@ -56,10 +56,10 @@ cd desktop && node --test src/shared/api/discoveryCredentials.test.mjs
 - Modify: `crates/buzz-cli/src/commands/discovery.rs`
 - Modify: `crates/buzz-relay/src/discovery_broker.rs`
 - Modify: `crates/buzz-db/src/discovery.rs`
-- Create: `migrations/0032_discovery_outscraper_source.sql`
+- Create: `migrations/0032_discovery_business_search.sql`
 
-- [ ] Add failing core tests for trimmed query/location validation, maximum lengths, result limit `1..=500`, lowercase ISO language, uppercase ISO region, and strict serialization with no credential-shaped field.
-- [ ] Define the shared non-secret snapshot and require it on new starts:
+- [x] Add failing core tests for trimmed query/location validation, maximum lengths, result limit `1..=500`, lowercase ISO language, uppercase ISO region, and strict serialization with no credential-shaped field.
+- [x] Define the shared non-secret snapshot and require it on new starts:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,12 +80,12 @@ pub struct DiscoveryStartRequest {
 }
 ```
 
-- [ ] Validate before signing and again at relay admission. Build the final provider query as `"{query}, {location}"`; do not accept an arbitrary URL, endpoint, headers, enrichment list, or provider name from an event.
-- [ ] Add nullable search snapshot columns to existing runs so historical rows remain readable, while every newly started run writes a complete validated snapshot. External workers may claim only runs with a complete snapshot.
-- [ ] Include `business_search: Option<DiscoveryBusinessSearchSpec>` in `DiscoveryRunProjection`; old rows project `None`, new live runs project `Some`.
-- [ ] Extend CLI start with `--query`, `--location`, `--limit`, `--language`, and optional `--region`. Keep `--campaign` as the stable Campaign reference.
-- [ ] Update SDK canonical-envelope tests so mutation of any search field breaks tag/content validation and unknown secret fields are rejected.
-- [ ] Run:
+- [x] Validate before signing and again at relay admission. Build the final provider query as `"{query}, {location}"`; do not accept an arbitrary URL, endpoint, headers, enrichment list, or provider name from an event.
+- [x] Store the snapshot in a separate `discovery_run_business_searches` row so historical foundation runs remain readable. External workers may claim only runs with a complete snapshot.
+- [x] Include `business_search: DiscoveryBusinessSearchSpec` only in `DiscoveryWorkerLeaseProjection`. Do not expose user-authored search terms through the ordinary run/status receipt.
+- [x] Extend CLI start with `--query`, `--location`, `--limit`, `--language`, and optional `--region`. Keep `--campaign` as the stable Campaign reference.
+- [x] Update SDK canonical-envelope tests so invalid search fields and unknown secret-shaped fields are rejected. The signed event authenticates the complete canonical content.
+- [x] Run:
 
 ```bash
 cargo test -p buzz-core discovery
@@ -95,7 +95,7 @@ cargo test -p buzz-db discovery --no-fail-fast
 cargo test -p buzz-relay discovery --no-fail-fast
 ```
 
-- [ ] Commit with `git commit -s -m "feat(discovery): carry business search into worker leases"`.
+- [x] Commit with `git commit -s -m "feat(discovery): carry business search into worker leases"`.
 
 ## Task 3: Add strict normalized observations and idempotent relay persistence
 
@@ -105,7 +105,7 @@ cargo test -p buzz-relay discovery --no-fail-fast
 - Modify: `crates/buzz-db/src/discovery.rs`
 - Modify: `crates/buzz-relay/src/discovery_worker_broker.rs`
 - Modify: `crates/buzz-relay/src/event_admission.rs`
-- Modify: `migrations/0032_discovery_outscraper_source.sql`
+- Create: `migrations/0033_discovery_business_observations.sql`
 
 - [ ] Add failing strict-contract tests for a bounded observation batch, maximum string lengths, finite/ranged coordinates and rating, nonnegative counts, valid provider identifiers, and rejection of unknown/raw fields.
 - [ ] Define a business allowlist sufficient for the existing UI and later identity resolution:

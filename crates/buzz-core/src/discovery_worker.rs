@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::discovery::DiscoveryRunProjection;
+use crate::discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection};
 
 /// Operation requested by a trusted local Discovery worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +159,8 @@ pub struct DiscoveryWorkerLeaseProjection {
     pub lease_until: DateTime<Utc>,
     /// Safe run projection.
     pub run: DiscoveryRunProjection,
+    /// Immutable non-secret Businesses query captured when the run started.
+    pub business_search: DiscoveryBusinessSearchSpec,
     /// Latest durable restart checkpoint, when present.
     pub last_checkpoint: Option<DiscoveryWorkerCheckpoint>,
 }
