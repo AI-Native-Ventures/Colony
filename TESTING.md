@@ -105,10 +105,48 @@ cargo test -p buzz-test-client --test e2e_company_work \
 **Known gap, verified 2026-08-02:** neither `opencode acp` nor `goose acp`
 reports token usage over ACP on this machine, and `publish_agent_turn_metric`
 is a no-op without usage. Three live turns produced a correct agent reply and
-zero `kind:44200` events. So this runbook currently proves the turn runs and
-carries its work references, but the metric half cannot be observed until a
-harness that reports usage is available. That is pre-existing behaviour of the
+zero `kind:44200` events. So this runbook proves the turn runs and carries its
+work references, but the NIP-AM metric half cannot be observed until a harness
+that reports usage is available. That is pre-existing behaviour of the
 adapters, not of the attribution path.
+
+**Superseded for accounting purposes (NIP-CL, 2026-08-02).** That gap is why
+the cost ledger does not depend on an agent reporting its own usage at all.
+Token counts are captured at the provider wire by the metering checkpoint, so
+a harness that reports nothing is still fully metered. See the live proof
+below; NIP-AM remains useful as a cross-check but is no longer the source of
+record.
+
+### Cost ledger live provider proof (`buzz-meter`)
+
+The one test in this repo that spends real money. Every other metering test
+feeds the parsers a fixture, which proves the parser matches a response *we*
+wrote. This proves it matches a response a real provider actually sent.
+
+```bash
+BUZZ_METER_LIVE_KEY=<real provider key> \
+BUZZ_METER_LIVE_UPSTREAM=https://api.deepseek.com \
+BUZZ_METER_LIVE_MODEL=deepseek-chat \
+cargo test -p buzz-meter --test live_provider -- --ignored --nocapture
+```
+
+Works against any OpenAI-compatible provider; set `BUZZ_METER_LIVE_UPSTREAM`
+and `BUZZ_METER_LIVE_MODEL` to match the key. Costs a fraction of a cent.
+
+**Result, 2026-08-02, DeepSeek:** the agent authenticated with a
+`colony-vk-` virtual key, the real credential never left the checkpoint, and
+the recorded call carried the provider's own itemization (10 uncached input
+tokens, 2 output tokens) under `provider: "deepseek"`.
+
+Two defects were found by running it rather than by reasoning about it:
+
+1. The record originally said `provider: "openai"`, because DeepSeek is
+   reached through the OpenAI-compatible route. Reconciliation compares per
+   provider, so that spend would have been checked against an OpenAI invoice
+   that never contained it. The slug is now derived from the upstream host.
+2. That derivation then produced `"0"` for a `127.0.0.1` test upstream. An
+   address is not a vendor, so IP-literal and `localhost` upstreams now fall
+   back to the route's own slug.
 
 Starting the relay with any other `RELAY_OWNER_PUBKEY` makes the suite prove
 nothing — every action is refused for the right reason and the failures look
