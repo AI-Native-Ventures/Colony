@@ -318,6 +318,49 @@ async fn percent_encoded_path_segments_reach_upstream_unchanged() {
     handle.shutdown();
 }
 
+// An agent that asks for a compressed response must still be metered.
+//
+// Most provider SDKs send `accept-encoding: gzip` by default. If that reached
+// upstream, the response body would be compressed, unparseable, and the call
+// would be silently unmetered: correctly proxied, invisible to the ledger, and
+// indistinguishable from an agent that made no calls at all. Silent
+// invisibility is the exact failure the checkpoint exists to prevent, so the
+// forwarded request asks for identity encoding.
+#[tokio::test]
+async fn an_agent_requesting_compression_is_still_metered() {
+    let fake = FakeUpstream::start(UpstreamReply::json(ANTHROPIC_JSON)).await;
+    let (port, mut rx, handle) = meter_for_anthropic(&fake).await;
+    let key = handle.issue_virtual_key("scout");
+
+    let response = client()
+        .post(format!("http://127.0.0.1:{port}/anthropic/v1/messages"))
+        .header("x-api-key", &key)
+        .header("accept-encoding", "gzip, deflate, br")
+        .body(r#"{"model":"claude-sonnet-4-5"}"#)
+        .send()
+        .await
+        .expect("proxied request");
+    let _ = response.bytes().await.expect("drain body");
+
+    let forwarded = fake.requests();
+    assert_eq!(forwarded.len(), 1);
+    let accept_encoding = forwarded[0].header("accept-encoding");
+    assert!(
+        accept_encoding
+            .as_deref()
+            .is_none_or(|value| value.eq_ignore_ascii_case("identity")),
+        "the checkpoint must not ask upstream for a body it cannot read, got {accept_encoding:?}"
+    );
+
+    let call = rx.recv().await.expect("a metered call must arrive");
+    assert!(
+        call.tokens.is_some(),
+        "a compression-requesting agent must not be silently unmetered"
+    );
+
+    handle.shutdown();
+}
+
 // (f) No credential gets a local 401 and upstream sees nothing.
 #[tokio::test]
 async fn missing_credential_is_rejected_locally() {

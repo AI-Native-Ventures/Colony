@@ -365,6 +365,13 @@ async fn forward(
         }
         outbound_headers.append(name.clone(), value.clone());
     }
+    // Ask upstream for a body the checkpoint can read. Stated explicitly
+    // rather than merely omitted, because an absent accept-encoding lets a
+    // server choose compression on its own.
+    outbound_headers.insert(
+        HeaderName::from_static("accept-encoding"),
+        HeaderValue::from_static("identity"),
+    );
     outbound_headers.insert(credential_name, credential_value);
 
     let mut url = format!(
@@ -502,11 +509,18 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// the caller's semantic request: the host is now the provider, and the body
 /// length can change when `stream_options` is merged. The two credential
 /// headers are replaced with the real key.
+///
+/// `accept-encoding` is replaced with `identity`. Most provider SDKs ask for
+/// gzip by default; a compressed body cannot be parsed, and an unparseable
+/// body means a call that is correctly proxied, invisible to the ledger, and
+/// indistinguishable from an agent that spent nothing. Silent invisibility is
+/// the one outcome the checkpoint exists to prevent, so it declines the
+/// compression rather than declining to measure.
 fn is_stripped_request_header(name: &HeaderName) -> bool {
     is_hop_by_hop(name)
         || matches!(
             name.as_str(),
-            "host" | "content-length" | "x-api-key" | "authorization"
+            "host" | "content-length" | "x-api-key" | "authorization" | "accept-encoding"
         )
 }
 
