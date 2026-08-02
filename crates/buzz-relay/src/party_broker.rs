@@ -18,7 +18,7 @@ use std::sync::Arc;
 use buzz_core::kind::{KIND_PARTY, KIND_PARTY_ACTION, KIND_PARTY_RECEIPT, KIND_PARTY_RELATIONSHIP};
 use buzz_core::party::{
     relationship_coordinate, repoint_relationship, validate_party_update, validate_relationship,
-    validate_relationship_update, Party, PartyRelationship, ALL_RELATIONSHIP_KINDS,
+    validate_relationship_update, Party, PartyAlias, PartyRelationship, ALL_RELATIONSHIP_KINDS,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::PartyActionApply;
@@ -109,13 +109,24 @@ fn build_head(
 }
 
 /// Build the alias head a merge leaves at the retired coordinate.
+///
+/// The alias names the action that authorized it, and the relay writes that
+/// field itself rather than trusting the caller's copy. A caller cannot know
+/// the ID before signing -- it is the hash of the event the alias travels
+/// inside -- so anything they sent is a guess at best, and at worst points the
+/// audit trail at an unrelated event that really exists.
 fn build_alias_head(
     relay: &Keys,
     payload: &PartyActionPayload,
+    action_event: &Event,
     previous_head: Option<&Event>,
 ) -> Result<Option<Event>, String> {
     let PartyActionPayload::Merge { alias, .. } = payload else {
         return Ok(None);
+    };
+    let alias = &PartyAlias {
+        merge_action_event_id: action_event.id.to_hex(),
+        ..alias.clone()
     };
     let content = serde_json::to_value(alias)
         .map_err(|error| format!("failed to serialize alias: {error}"))?;
@@ -432,6 +443,7 @@ pub(crate) async fn handle_party_action(
     let alias_head = build_alias_head(
         &state.relay_keypair,
         &action.payload,
+        action_event,
         alias_previous.as_ref(),
     )?;
     let alias_d_tag = match &action.payload {
@@ -607,6 +619,66 @@ mod tests {
             created_at: 1_785_369_600,
             updated_at: 1_785_369_600,
         }
+    }
+
+    /// The alias is the record of who authorized retiring a handle. A caller
+    /// cannot know that event ID before signing, so whatever they send is a
+    /// guess -- and a guess that happens to name a real unrelated event would
+    /// leave the audit trail confidently pointing at the wrong thing.
+    #[test]
+    fn the_relay_binds_the_alias_to_the_action_that_actually_authorized_it() {
+        let relay = Keys::generate();
+        let owner = Keys::generate();
+        // The survivor is the merged record, which is what the SDK requires: it
+        // has to already list the handle it is retiring.
+        let mut retired = sample_party("acme-old");
+        retired.provenance[0].id = "prov-02".to_string();
+        let survivor = buzz_core::party::merge_parties(&sample_party("acme-industries"), &retired)
+            .expect("merge");
+        let alias = PartyAlias {
+            schema: buzz_core::party::PARTY_ALIAS_SCHEMA.to_string(),
+            id: "acme-old".to_string(),
+            company_id: "horizonlabs".to_string(),
+            resolves_to: "acme-industries".to_string(),
+            merged_at: 1_785_369_600,
+            // A well-formed event ID that has nothing to do with this action.
+            merge_action_event_id: "b".repeat(64),
+        };
+        let payload = PartyActionPayload::Merge {
+            survivor,
+            alias: alias.clone(),
+        };
+        let action = PartyAction {
+            relay_pubkey: relay.public_key().to_hex(),
+            operation: PartyActionOperation::Merge,
+            request_id: uuid::Uuid::new_v4(),
+            idempotency_key: uuid::Uuid::new_v4(),
+            target: format!(
+                "{KIND_PARTY}:{}:acme-industries",
+                relay.public_key().to_hex()
+            ),
+            expected_head: Some("c".repeat(64)),
+            expected_references: Vec::new(),
+            payload: payload.clone(),
+        };
+        let action_event = buzz_sdk::party::build_party_action(&action)
+            .expect("build action")
+            .sign_with_keys(&owner)
+            .expect("sign action");
+
+        let head = build_alias_head(&relay, &payload, &action_event, None)
+            .expect("build alias")
+            .expect("a merge produces an alias");
+        let written = match parse_party_event(&head).expect("parse alias") {
+            PartyHead::Alias(written) => written,
+            other => panic!("expected an alias, got {other:?}"),
+        };
+        assert_eq!(written.merge_action_event_id, action_event.id.to_hex());
+        assert_ne!(written.merge_action_event_id, alias.merge_action_event_id);
+        // Everything the caller is entitled to decide survives untouched.
+        assert_eq!(written.id, alias.id);
+        assert_eq!(written.resolves_to, alias.resolves_to);
+        assert_eq!(written.merged_at, alias.merged_at);
     }
 
     #[test]
