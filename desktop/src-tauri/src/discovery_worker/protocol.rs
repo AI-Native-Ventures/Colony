@@ -208,7 +208,10 @@ impl WorkerProtocol for RelayWorkerProtocol<'_> {
     }
 }
 
-async fn fetch_relay_pubkey(state: &AppState, api_base_url: &str) -> Result<PublicKey, String> {
+pub(super) async fn fetch_relay_pubkey(
+    state: &AppState,
+    api_base_url: &str,
+) -> Result<PublicKey, String> {
     let response = state
         .http_client
         .get(api_base_url)

@@ -393,4 +393,235 @@ mod tests {
             .iter()
             .any(|call| *call == "checkpoint" || *call == "complete"));
     }
+
+    #[ignore = "requires isolated Postgres, Redis, and relay with external workers enabled"]
+    #[tokio::test]
+    async fn native_host_real_relay_completes_and_recovers_after_restart() {
+        use buzz_core_pkg::discovery::DiscoveryStartRequest;
+        use buzz_sdk_pkg::discovery::build_discovery_start_action;
+        use sqlx::Row as _;
+
+        const FIXTURE_SECRET: &str = "native-host-secret-never-crosses-relay";
+        let relay_url =
+            std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3030".to_string());
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5471/buzz".to_string());
+        let pool = sqlx::PgPool::connect(&database_url)
+            .await
+            .expect("connect isolated Postgres");
+        let host = buzz_core_pkg::tenant::relay_url_authority(&relay_url);
+        let community_id: Uuid =
+            sqlx::query("SELECT id FROM communities WHERE lower(host)=lower($1)")
+                .bind(&host)
+                .fetch_one(&pool)
+                .await
+                .expect("isolated community")
+                .try_get("id")
+                .expect("community id");
+        let actor = nostr::Keys::generate();
+        let actor_bytes = actor.public_key().to_bytes();
+        let actor_hex = actor.public_key().to_hex();
+        sqlx::query(
+            "INSERT INTO users (community_id,pubkey,display_name) \
+             VALUES ($1,$2,'Native Discovery Host') \
+             ON CONFLICT (community_id,pubkey) DO NOTHING",
+        )
+        .bind(community_id)
+        .bind(actor_bytes.as_slice())
+        .execute(&pool)
+        .await
+        .expect("provision native host user");
+        sqlx::query(
+            "INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member') \
+             ON CONFLICT (community_id,pubkey) DO NOTHING",
+        )
+        .bind(community_id)
+        .bind(&actor_hex)
+        .execute(&pool)
+        .await
+        .expect("provision native host member");
+        sqlx::query(
+            "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
+             VALUES ($1,TRUE,now()) ON CONFLICT (community_id) \
+             DO UPDATE SET active=TRUE,updated_at=now()",
+        )
+        .bind(community_id)
+        .execute(&pool)
+        .await
+        .expect("enable Discovery entitlement");
+
+        let state = crate::app_state::build_app_state();
+        *state.keys.lock().expect("state keys") = actor.clone();
+        *state.relay_url_override.lock().expect("workspace relay") = Some(relay_url.clone());
+        crate::discovery_worker::workspace_changed();
+        let generation = crate::discovery_worker::workspace_generation();
+        let api_base_url = relay::relay_http_base_url(&relay_url);
+        let relay_pubkey = super::super::protocol::fetch_relay_pubkey(&state, &api_base_url)
+            .await
+            .expect("relay signing identity");
+        let worker_id = Uuid::new_v4();
+
+        let actions_before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40017")
+                .bind(community_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count worker actions before missing credential");
+        let no_credential_protocol = RelayWorkerProtocol::connect(
+            &state,
+            actor.clone(),
+            api_base_url.clone(),
+            worker_id,
+            generation,
+        )
+        .await
+        .expect("missing-credential protocol");
+        assert_eq!(
+            run_once_with_loader(&no_credential_protocol, worker_id, Duration::ZERO, || Ok(
+                None
+            ),)
+            .await
+            .expect("missing credential outcome"),
+            HostRunOutcome::NoCredential
+        );
+        let actions_after: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40017")
+                .bind(community_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count worker actions after missing credential");
+        assert_eq!(actions_before, actions_after);
+
+        async fn start_run(
+            state: &AppState,
+            actor: &nostr::Keys,
+            relay_pubkey: nostr::PublicKey,
+            api_base_url: &str,
+        ) -> Uuid {
+            let request = DiscoveryStartRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                campaign_id: Uuid::new_v4(),
+            };
+            let response = relay::submit_event_at_with_keys(
+                build_discovery_start_action(relay_pubkey, &request)
+                    .expect("Discovery start builder"),
+                state,
+                api_base_url,
+                actor,
+            )
+            .await
+            .expect("start Discovery run");
+            let message: serde_json::Value =
+                serde_json::from_str(&response.message).expect("start response");
+            Uuid::parse_str(
+                message
+                    .get("run")
+                    .and_then(|run| run.get("run_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .expect("started run id"),
+            )
+            .expect("valid started run id")
+        }
+
+        let first_run = start_run(&state, &actor, relay_pubkey, &api_base_url).await;
+        let first_protocol = RelayWorkerProtocol::connect(
+            &state,
+            actor.clone(),
+            api_base_url.clone(),
+            worker_id,
+            generation,
+        )
+        .await
+        .expect("first native host protocol");
+        let first_host = run_once_with_credential(
+            &first_protocol,
+            worker_id,
+            Duration::from_secs(2),
+            Zeroizing::new(FIXTURE_SECRET.to_string()),
+        );
+        tokio::pin!(first_host);
+        loop {
+            tokio::select! {
+                result = &mut first_host => panic!("first host exited before restart point: {result:?}"),
+                () = tokio::time::sleep(Duration::from_millis(50)) => {
+                    let submitted: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM discovery_run_checkpoints \
+                         WHERE community_id=$1 AND run_id=$2 AND sequence=1",
+                    )
+                    .bind(community_id)
+                    .bind(first_run)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("poll provider-submitted checkpoint");
+                    if submitted == 1 {
+                        break;
+                    }
+                }
+            }
+        }
+        drop(first_host);
+        tokio::time::sleep(Duration::from_secs(6)).await;
+
+        let restarted_protocol = RelayWorkerProtocol::connect(
+            &state,
+            actor.clone(),
+            api_base_url.clone(),
+            worker_id,
+            generation,
+        )
+        .await
+        .expect("restarted native host protocol");
+        assert_eq!(
+            run_once_with_credential(
+                &restarted_protocol,
+                worker_id,
+                Duration::ZERO,
+                Zeroizing::new(FIXTURE_SECRET.to_string()),
+            )
+            .await
+            .expect("restarted native host outcome"),
+            HostRunOutcome::Completed
+        );
+        let run_row = sqlx::query(
+            "SELECT state,attempt,completed_steps FROM discovery_runs \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(first_run)
+        .fetch_one(&pool)
+        .await
+        .expect("completed native run");
+        assert_eq!(run_row.get::<String, _>("state"), "succeeded");
+        assert_eq!(run_row.get::<i32, _>("attempt"), 2);
+        assert_eq!(run_row.get::<i32, _>("completed_steps"), 1);
+        let checkpoints: Vec<i32> = sqlx::query_scalar(
+            "SELECT sequence FROM discovery_run_checkpoints \
+             WHERE community_id=$1 AND run_id=$2 ORDER BY sequence",
+        )
+        .bind(community_id)
+        .bind(first_run)
+        .fetch_all(&pool)
+        .await
+        .expect("native checkpoints");
+        assert_eq!(checkpoints, vec![1, 2]);
+        let leaked_events: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM events WHERE community_id=$1 AND content LIKE '%' || $2 || '%'",
+        )
+        .bind(community_id)
+        .bind(FIXTURE_SECRET)
+        .fetch_one(&pool)
+        .await
+        .expect("scan native event contents");
+        let leaked_checkpoints: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM discovery_run_checkpoints WHERE community_id=$1 \
+             AND coalesce(provider_request_id,'') LIKE '%' || $2 || '%'",
+        )
+        .bind(community_id)
+        .bind(FIXTURE_SECRET)
+        .fetch_one(&pool)
+        .await
+        .expect("scan native checkpoints");
+        assert_eq!((leaked_events, leaked_checkpoints), (0, 0));
+    }
 }
