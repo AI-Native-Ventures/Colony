@@ -21,6 +21,7 @@ pub mod initiative_activation;
 pub mod mentions;
 pub mod nip_oa;
 pub mod party;
+pub mod party_resolution;
 
 pub use builders::*;
 pub use company::*;
