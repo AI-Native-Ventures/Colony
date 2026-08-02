@@ -231,14 +231,14 @@ provider_results_ready -> complete without provider traffic
 - Create: `desktop/tests/e2e/discovery-settings.spec.ts`
 - Modify: `desktop/playwright.config.ts`
 
-- [ ] Add failing contract tests for a `discovery` Settings section and a card that imports only save/status/delete—not an API that can reveal a stored value.
-- [ ] Add Discovery under the App settings group with a Compass icon and render `DiscoverySettingsCard`.
-- [ ] Implement four explicit states: loading, not configured, configured on this device, and keychain unavailable. Use a password input only for a new/replacement key; clear React state immediately after save settles.
-- [ ] Provide Save/Replace and Remove actions with inline success/error copy. Never display a prefix, suffix, character count, last four characters, raw Tauri error, or a reveal button for the stored key.
-- [ ] Explain in user-facing copy that Outscraper charges the customer's account and Colony neither receives nor synchronizes the key. Do not invent price estimates.
-- [ ] Mock the three Tauri commands in the E2E bridge. Prove initial missing, successful save/configured, reload/configured without secret recovery, remove/missing, unavailable, trimmed-empty rejection, and disabled duplicate submissions.
-- [ ] Capture one focused Settings screenshot after animations complete; verify no secret value appears in DOM text, accessibility snapshot, console, or image fixture names.
-- [ ] Run:
+- [x] Add failing contract tests for a `discovery` Settings section and a card that imports only save/status/delete—not an API that can reveal a stored value.
+- [x] Add Discovery under the App settings group with a Telescope icon and render `DiscoverySettingsCard`.
+- [x] Implement four explicit states: loading, not configured, configured on this device, and keychain unavailable. Use a password input only for a new/replacement key; clear React state immediately after save settles.
+- [x] Provide Save/Replace and Remove actions with inline success/error copy. Never display a prefix, suffix, character count, last four characters, raw Tauri error, or a reveal button for the stored key.
+- [x] Explain in user-facing copy that Outscraper charges the customer's account and Colony neither receives nor synchronizes the key. Do not invent price estimates.
+- [x] Mock the three Tauri commands in the E2E bridge. Prove initial missing, successful save/configured, reload/configured without secret recovery, remove/missing, unavailable, trimmed-empty rejection, and disabled duplicate submissions.
+- [x] Capture focused Settings screenshots after animations complete; verify no secret value appears in DOM text, accessibility snapshot, console, or image fixture names.
+- [x] Run:
 
 ```bash
 cd desktop

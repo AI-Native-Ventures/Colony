@@ -6,6 +6,7 @@ type SettingsSection =
   | "agents"
   | "channel-templates"
   | "compute"
+  | "discovery"
   | "appearance"
   | "shortcuts"
   | "hosted-communities"
