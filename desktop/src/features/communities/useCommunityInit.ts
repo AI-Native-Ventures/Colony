@@ -28,6 +28,7 @@ import { resetBlockActionQueue } from "@/features/blocks/blockActionQueue";
 import { resetInFlightBlockActions } from "@/features/blocks/blockActions";
 import { resetBlockRepository } from "@/features/blocks/blockRepository";
 import { resetCompanyRepositoryState } from "@/features/company/companyRepository";
+import { resetPartyRepositoryState } from "@/features/parties/partyRepository";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
@@ -63,6 +64,7 @@ function resetCommunityState({
   resetBlockActionQueue();
   resetBlockRepository();
   resetCompanyRepositoryState();
+  resetPartyRepositoryState();
   if (resetAvatarState) {
     resetAvatarProfileSync();
     resetAvatarPresentations();

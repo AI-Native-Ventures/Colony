@@ -3,8 +3,14 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Bot, Check } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
+import {
+  STARTER_PERSONA_IDS,
+  starterPersonaName,
+} from "@/shared/constants/starterPersonas";
 
-const WELCOME_PERSONA_NAMES = ["Fizz"] as const;
+const WELCOME_PERSONA_NAMES = [
+  starterPersonaName(STARTER_PERSONA_IDS.fizz),
+] as const;
 export const WELCOME_PERSONA_ROTATION_MS = 3200;
 export const WELCOME_PERSONA_EASE = [0.22, 1, 0.36, 1] as const;
 const WELCOME_PERSONA_EXIT_EASE = [0.64, 0, 0.78, 0] as const;

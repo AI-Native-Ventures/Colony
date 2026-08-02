@@ -30,13 +30,20 @@ export type CampaignTabsProps = {
   value: CampaignTab;
   onValueChange: (value: CampaignTab) => void;
   leadCount?: number;
+  liveBusinessPhase?: boolean;
 };
 
 export function CampaignTabs({
   value,
   onValueChange,
   leadCount,
+  liveBusinessPhase = false,
 }: CampaignTabsProps) {
+  const visibleTabs = liveBusinessPhase
+    ? CAMPAIGN_TABS.filter(
+        (tab) => tab.value !== "outreach" && tab.value !== "conversations",
+      )
+    : CAMPAIGN_TABS;
   return (
     <Tabs
       aria-label="Campaign workspace"
@@ -48,7 +55,7 @@ export function CampaignTabs({
       value={value}
     >
       <TabsList className="h-auto w-full justify-center gap-1 overflow-x-auto rounded-none border-b border-border/50 bg-transparent p-0 text-muted-foreground">
-        {CAMPAIGN_TABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <TabsTrigger
             className="gap-2 rounded-none border-b-2 border-transparent px-3.5 py-2.5 text-sm font-semibold data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
             key={tab.value}

@@ -10,6 +10,10 @@ import {
 } from "./e2eBridgeCustomHarnesses.ts";
 
 import { relayClient } from "@/shared/api/relayClient";
+import {
+  STARTER_PERSONA_IDS,
+  starterPersonaName,
+} from "@/shared/constants/starterPersonas";
 import type { ConnectionState } from "@/shared/api/relayClientShared";
 import type { ChannelTemplate, RelayEvent } from "@/shared/api/types";
 import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
@@ -337,6 +341,10 @@ type E2eConfig = {
     websocketConnectErrors?: string[];
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
+    /** Device-local Discovery credential state. No secret value is modeled. */
+    discoveryCredentialStatus?: "configured" | "missing" | "unavailable";
+    /** Delay a credential save so specs can prove duplicate submission fencing. */
+    discoveryCredentialSaveDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
     // semantics. These three drive the archive-button gate matrix in
     // tests/e2e/identity-archive.spec.ts; they're plumbed into:
@@ -2230,26 +2238,26 @@ function resetMockPersonas(config?: E2eConfig) {
   const activePersonaIds = new Set(config?.mock?.activePersonaIds ?? []);
   const builtInPersonas = [
     {
-      id: "builtin:fizz",
-      display_name: "Fizz",
-      // Fizz keeps its personal name and stable ID; the Chief of Staff role is
-      // separate identity, mirroring the native built-in definition.
+      id: STARTER_PERSONA_IDS.fizz,
+      display_name: starterPersonaName(STARTER_PERSONA_IDS.fizz),
+      // The guide keeps its personal name and stable ID; the Chief of Staff
+      // role is separate identity, mirroring the native built-in definition.
       role_id: "chief-of-staff",
       role_title: "Chief of Staff",
       avatar_url: null,
-      system_prompt: "You are Fizz.",
+      system_prompt: `You are ${starterPersonaName(STARTER_PERSONA_IDS.fizz)}.`,
     },
     {
-      id: "builtin:honey",
-      display_name: "Honey",
+      id: STARTER_PERSONA_IDS.honey,
+      display_name: starterPersonaName(STARTER_PERSONA_IDS.honey),
       avatar_url: null,
-      system_prompt: "You are Honey.",
+      system_prompt: `You are ${starterPersonaName(STARTER_PERSONA_IDS.honey)}.`,
     },
     {
-      id: "builtin:bumble",
-      display_name: "Bumble",
+      id: STARTER_PERSONA_IDS.bumble,
+      display_name: starterPersonaName(STARTER_PERSONA_IDS.bumble),
       avatar_url: null,
-      system_prompt: "You are Bumble.",
+      system_prompt: `You are ${starterPersonaName(STARTER_PERSONA_IDS.bumble)}.`,
     },
   ];
   mockPersonas = builtInPersonas.map((persona) => ({
@@ -10435,6 +10443,41 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_discovery_outscraper_credential_status": {
+        const persistedStatus = window.sessionStorage.getItem(
+          "__buzz_e2e_discovery_credential_status",
+        );
+        return (
+          persistedStatus ??
+          activeConfig?.mock?.discoveryCredentialStatus ??
+          "missing"
+        );
+      }
+      case "save_discovery_outscraper_credential": {
+        const value = (payload as { value?: string } | null)?.value?.trim();
+        if (!value) throw new Error("Outscraper API key cannot be empty");
+        const delayMs = activeConfig?.mock?.discoveryCredentialSaveDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        if (activeConfig?.mock) {
+          activeConfig.mock.discoveryCredentialStatus = "configured";
+        }
+        window.sessionStorage.setItem(
+          "__buzz_e2e_discovery_credential_status",
+          "configured",
+        );
+        return "configured";
+      }
+      case "delete_discovery_outscraper_credential":
+        if (activeConfig?.mock) {
+          activeConfig.mock.discoveryCredentialStatus = "missing";
+        }
+        window.sessionStorage.setItem(
+          "__buzz_e2e_discovery_credential_status",
+          "missing",
+        );
+        return "missing";
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {

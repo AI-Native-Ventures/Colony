@@ -66,6 +66,23 @@ export const KIND_INITIATIVE = 30180;
 export const KIND_TASK = 30181;
 export const KIND_COMPANY_ACTION = 40013;
 export const KIND_COMPANY_RECEIPT = 40014;
+// Canonical external parties and the company's Lead/Client views over them.
+// Relay-authored like the company kinds; a client never signs one. KIND_PARTY
+// carries both a party and the alias a retired handle leaves behind, told apart
+// by `schema`, so every handle ever issued keeps resolving at its own
+// coordinate. Mirror of buzz-core's KIND_PARTY etc.
+export const KIND_PARTY = 30182;
+export const KIND_PARTY_RELATIONSHIP = 30183;
+export const KIND_PARTY_ACTION = 40015;
+export const KIND_PARTY_RECEIPT = 40016;
+// Private Discovery control plane. Actions are signed by a workspace member;
+// receipts are signed by the tenant relay and routed only to that requester.
+export const KIND_DISCOVERY_ACTION = 40017;
+export const KIND_DISCOVERY_RECEIPT = 40018;
+export const KIND_DISCOVERY_WORKER_ACTION = 40019;
+export const KIND_DISCOVERY_WORKER_RECEIPT = 40020;
+export const KIND_DISCOVERY_WORKSPACE_ACTION = 40021;
+export const KIND_DISCOVERY_WORKSPACE_RECEIPT = 40022;
 export const KIND_USER_STATUS = 30315;
 export const KIND_AGENT_OBSERVER_FRAME = 24200;
 export const KIND_AGENT_TURN_METRIC = 44200;

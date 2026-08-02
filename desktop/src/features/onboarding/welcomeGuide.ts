@@ -19,16 +19,21 @@ import type {
   ManagedAgent,
 } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import {
+  STARTER_PERSONA_IDS,
+  starterPersonaName,
+} from "@/shared/constants/starterPersonas";
 
-export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
-export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
+export const WELCOME_GUIDE_PERSONA_ID = STARTER_PERSONA_IDS.fizz;
+export const WELCOME_GUIDE_AGENT_NAME = starterPersonaName(
+  WELCOME_GUIDE_PERSONA_ID,
+);
 export const WELCOME_TEAM_ID = "builtin-team:welcome";
 export const WELCOME_GUIDE_INTRO_MARKER = "buzz-welcome-intro.v1";
 const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Sprout's friendly welcome guide. Help new users understand the community, channels, messages, and agents. Keep introductions concise, practical, and warm.";
-export const WELCOME_GUIDE_INTRO_MESSAGE =
-  "Hi, I'm Fizz, your Chief of Staff.\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or start work until you approve the blueprint.";
+export const WELCOME_GUIDE_INTRO_MESSAGE = `Hi, I'm ${WELCOME_GUIDE_AGENT_NAME}, your Chief of Staff.\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or start work until you approve the blueprint.`;
 
 export type WelcomeTeamRole = "lead" | "teammate";
 
@@ -53,8 +58,8 @@ export type WelcomeTeamStarterDefinition = Readonly<{
  */
 export const WELCOME_TEAM_STARTERS = [
   {
-    name: "Fizz",
-    personaId: "builtin:fizz",
+    name: starterPersonaName(STARTER_PERSONA_IDS.fizz),
+    personaId: STARTER_PERSONA_IDS.fizz,
     role: "lead",
     roleId: "chief-of-staff",
   },

@@ -7,8 +7,8 @@ use tracing::{debug, warn};
 
 use buzz_core::filter::filters_match;
 use buzz_core::kind::{
-    is_unshared_persona_event, AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_AGENT_TURN_METRIC,
-    KIND_DM_VISIBILITY, KIND_PERSONA, P_GATED_KINDS, RESULT_GATED_KINDS,
+    is_unshared_persona_event, AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_PERSONA, P_GATED_KINDS,
+    RESULT_GATED_KINDS,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::EventQuery;
@@ -1056,10 +1056,8 @@ pub(crate) fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: 
         // (NIP-AM §Relay Behavior). Only filters that explicitly name the kind
         // lose the exemption — a kindless `ids` lookup is unaffected.
         let explicitly_no_ids_exemption = filter.kinds.as_ref().is_some_and(|ks| {
-            ks.iter().any(|kind| {
-                let k = kind.as_u16() as u32;
-                k == KIND_DM_VISIBILITY || k == KIND_AGENT_TURN_METRIC
-            })
+            ks.iter()
+                .any(|kind| RESULT_GATED_KINDS.contains(&(kind.as_u16() as u32)))
         });
         if !explicitly_no_ids_exemption && filter.ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
             return true;
@@ -1155,7 +1153,7 @@ pub(crate) fn filter_can_match_persona_shared_kinds(filter: &Filter) -> bool {
 /// Returns `true` if the filter CAN match result-gated kinds — meaning it
 /// either has no `kinds` constraint (wildcard) or includes at least one kind
 /// that carries a per-event result-level read gate (currently
-/// `KIND_DM_VISIBILITY` and `KIND_AGENT_TURN_METRIC`).
+/// any kind listed in `RESULT_GATED_KINDS`).
 ///
 /// Used by the COUNT handler to force the per-event fallback path instead of
 /// the fast SQL `count_events()`, which cannot enforce the owner-only result
@@ -1526,6 +1524,34 @@ mod tests {
             ))
             .id(nostr::EventId::from_hex(snapshot_id).unwrap());
         assert!(p_gated_filters_authorized(&[member_notif_ids], authed));
+    }
+
+    #[test]
+    fn discovery_receipts_require_matching_p_even_with_known_id() {
+        let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+        let actor = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let event_id = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        for kind in [
+            buzz_core::kind::KIND_DISCOVERY_RECEIPT,
+            buzz_core::kind::KIND_DISCOVERY_WORKER_RECEIPT,
+        ] {
+            let receipt_kind = nostr::Kind::Custom(kind as u16);
+            let ids_only = Filter::new()
+                .kind(receipt_kind)
+                .id(nostr::EventId::from_hex(event_id).unwrap());
+            let wrong_actor = Filter::new()
+                .kind(receipt_kind)
+                .id(nostr::EventId::from_hex(event_id).unwrap())
+                .custom_tags(p_tag, [other]);
+            let own_receipt = Filter::new()
+                .kind(receipt_kind)
+                .id(nostr::EventId::from_hex(event_id).unwrap())
+                .custom_tags(p_tag, [actor]);
+            assert!(!p_gated_filters_authorized(&[ids_only], actor));
+            assert!(!p_gated_filters_authorized(&[wrong_actor], actor));
+            assert!(p_gated_filters_authorized(&[own_receipt], actor));
+        }
     }
 
     /// NIP-AM: kind 44200 must deny `{kinds:[44200], ids:[...]}` by non-owner.

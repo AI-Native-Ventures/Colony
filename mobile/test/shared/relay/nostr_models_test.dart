@@ -149,4 +149,11 @@ void main() {
     expect(EventKind.companyAction, 40013);
     expect(EventKind.companyReceipt, 40014);
   });
+
+  test('Colony party kinds match the desktop mirror', () {
+    expect(EventKind.party, 30182);
+    expect(EventKind.partyRelationship, 30183);
+    expect(EventKind.partyAction, 40015);
+    expect(EventKind.partyReceipt, 40016);
+  });
 }

@@ -642,23 +642,23 @@ test("send message to DM channel p-tags the recipient", async ({ page }) => {
     .toContainEqual(["p", TEST_IDENTITIES.alice.pubkey]);
 });
 
-// Quarantined: passes locally on every run, fails on CI on every run, with
-// `message-avatar-image` never appearing. Radix only mounts that <img> after a
-// successful load, so on CI the image never loads.
+// Formerly quarantined; root cause found by reproducing the CI failure in a
+// Linux Playwright container and reading the CI trace frame-by-frame.
 //
-// What is ruled out: it is not a timing budget. A 15s budget was tried and the
-// run failed at 17.3s, so no window is long enough. It is also not the avatar
-// probe: MessageRow reads `message.avatarUrl` directly and never goes through
-// avatarPresentationStore, so the probe path is not involved here at all.
+// The avatar editor opened via requestAnimationFrame and its shell was
+// `inert` until that frame fired. On CI the fill landed inside that window:
+// Playwright set the DOM value on the inert input and reported success, but
+// React never received the change, so the controlled input reverted to its
+// placeholder (visible at 1879ms in the CI trace), `hasProfileChanges`
+// stayed false, and Done closed the editor without saving. The profile
+// never carried the avatar, which is why no assertion budget could help.
+// Locally the rAF always won the ~30ms gap, so it never reproduced.
 //
-// The remaining suspect is the profile-save to message-render propagation:
-// the test sets the avatar through the settings UI, then immediately sends a
-// message and expects the new avatar on it. That propagation is what differs
-// between local and CI.
-//
-// Unquarantine by reproducing the CI environment rather than by widening a
-// timeout: masking this once already turned a real defect into a silent pass.
-test.fixme("shows your avatar on your own message when profile avatar is set", async ({
+// Fixed by making the editor interactive while opening (inert only when
+// closed or closing) in ProfileSettingsCard. Playwright 1.61+ also refuses
+// to act on inert elements, which independently masks the window; the
+// product fix stands on its own.
+test("shows your avatar on your own message when profile avatar is set", async ({
   page,
 }) => {
   const message = `Avatar message ${Date.now()}`;

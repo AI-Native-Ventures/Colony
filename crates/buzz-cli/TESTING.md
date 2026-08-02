@@ -643,6 +643,163 @@ Compact output works as a **global** flag, before the subcommand:
 buzz --format compact tasks list --company horizon-labs
 ```
 
+## 7c. Colony parties, and the views over them
+
+A Party is one real-world business or person. Lead and Client are **views** over
+that identity, not separate records, so a lead that converts keeps its history
+instead of being retyped as a client. Party, alias, and relationship heads are
+all relay-authored (kinds 30182 / 30183); the CLI never signs one. Writes
+publish an owner-signed Party Action (kind 40015) and the relay returns a
+receipt (kind 40016). Mutations require the community's current **human owner**.
+
+Use placeholder ids and no real client data below.
+
+### Create a party and give it a Lead view
+
+```bash
+cat > /tmp/party.json <<'JSON'
+{
+  "schema": "colony.party/v1",
+  "id": "acme-industries",
+  "companyId": "horizon-labs",
+  "kind": "organization",
+  "displayName": "Acme Industries",
+  "legalName": null,
+  "identifiers": [
+    { "scheme": "domain", "value": "acme.example", "confidence": "asserted" }
+  ],
+  "provenance": [
+    {
+      "id": "prov-01",
+      "source": "discovery:google-maps",
+      "observedAt": 1785369600,
+      "sourceRef": null,
+      "fields": ["displayName"]
+    }
+  ],
+  "retiredHandles": [],
+  "createdAt": 1785369600,
+  "updatedAt": 1785369600
+}
+JSON
+
+buzz parties create --file /tmp/party.json
+buzz parties get --id acme-industries
+```
+
+The Lead view lives at the derived coordinate `<partyId>:lead`. Any other `id`
+is refused — that derivation is what makes a second Lead on one party
+structurally impossible. `ownerPersonaId` must be a persona that exists.
+
+```bash
+cat > /tmp/lead.json <<'JSON'
+{
+  "schema": "colony.party.relationship/v1",
+  "id": "acme-industries:lead",
+  "companyId": "horizon-labs",
+  "partyId": "acme-industries",
+  "relationship": "lead",
+  "status": "candidate",
+  "ownerPersonaId": "<a persona id from `buzz agents`>",
+  "sourceChannelId": "<channel id>",
+  "createdAt": 1785369600,
+  "updatedAt": 1785369600
+}
+JSON
+
+buzz parties relate --file /tmp/lead.json
+buzz parties get --id acme-industries    # party plus its views
+```
+
+### Both views at once
+
+Change `relationship` to `client`, `status` to `active`, and `id` to
+`acme-industries:client`, then `relate` again. `parties get` now returns both,
+each with its own status and its own accountable persona. Disqualifying the
+Lead leaves the Client untouched — they are separate coordinates.
+
+### Resolve an observation before creating a duplicate
+
+`resolve` reads only. It never writes on the strength of its own answer.
+
+```bash
+echo '[{"scheme":"domain","value":"acme.example","confidence":"asserted"}]' \
+  > /tmp/observed.json
+buzz parties resolve --company horizon-labs --file /tmp/observed.json
+# {"resolution":"resolved","handle":"acme-industries","matched_on":{...}}
+```
+
+Worth confirming by hand, because these are the decisions that determine
+whether a business ends up as one record or two:
+
+```bash
+# Same text under a different scheme is NOT a match — two different claims.
+echo '[{"scheme":"email","value":"acme.example","confidence":"asserted"}]' \
+  > /tmp/wrong-scheme.json
+buzz parties resolve --company horizon-labs --file /tmp/wrong-scheme.json
+# {"resolution":"no-match"}
+
+# Identifiers spread across two parties are ambiguous, never a pick.
+# Create a second party holding one of the identifiers, then resolve both.
+# {"resolution":"ambiguous","candidates":["...","..."],"next":"..."}
+```
+
+### Merge, and the handle that has to survive it
+
+Create `acme-old` carrying an identifier the first party lacks, give it a Lead
+view, then fold it in:
+
+```bash
+buzz parties merge --survivor acme-industries --retire acme-old
+
+# The retired handle still arrives. This is the whole point: a reference
+# handed out months ago, in a task or an agent's work context, must resolve.
+buzz parties get --id acme-old
+# {"requested":"acme-old","handle":"acme-industries","merges_followed":1,...}
+
+# Identifiers and provenance from both sides survive, deduplicated.
+# The Lead view moved with the identity: acme-industries:lead now holds it.
+buzz parties list --company horizon-labs
+# retired_handles lists acme-old separately — it is not a party.
+```
+
+Chain a second merge (`acme-industries` into a third handle) and confirm
+`buzz parties get --id acme-old` still resolves, now with `merges_followed: 2`.
+
+### Expected refusals
+
+```bash
+# Merging a handle that is already retired.
+buzz parties merge --survivor acme-industries --retire acme-old
+
+# Merging a party into itself, directly or through an alias.
+buzz parties merge --survivor acme-industries --retire acme-industries
+
+# Parties from different companies never merge.
+buzz parties merge --survivor acme-industries --retire <party-in-another-company>
+
+# A relationship whose party does not exist.
+buzz parties relate --file /tmp/lead-for-unknown-party.json
+
+# A relationship id that is not derived from its coordinate.
+# (edit /tmp/lead.json to id "acme-industries:prospect")
+buzz parties relate --file /tmp/lead.json
+
+# A Client status on a Lead view, e.g. "active" on relationship "lead".
+buzz parties relate --file /tmp/confused-lead.json
+
+# An ended view meeting a live one on merge. Set acme-old's Lead to
+# "disqualified" and acme-industries' Lead to "qualified", then merge:
+# refused with a signed receipt, because both answers are wrong in a way
+# nobody would notice. A human settles it first.
+buzz parties merge --survivor acme-industries --retire acme-old
+
+# A non-owner (e.g. a managed agent key) cannot mutate.
+BUZZ_PRIVATE_KEY=$AGENT_KEY buzz parties create --file /tmp/party.json
+```
+
+---
+
 ## 8. Error Path Testing
 
 Verify the CLI produces correct JSON on stderr and correct exit codes.
@@ -780,3 +937,9 @@ buzz channels delete --channel "$FORUM_ID" | jq .
 | 60 | `notes ls` | ☐ | Own, --author all, --tag, --limit |
 | 61 | `notes rm` | ☐ | Delete→get 404, double-delete idempotent, missing slug → NotFound |
 | 62 | `users set-status` | ☐ | Text+emoji, text only, emoji-only (`--text ""`), `--clear`, `--clear` + `--text` → exit 1 |
+| 63 | `parties create` | ☐ | Create; replace via CAS; unknown schema → exit 1 |
+| 64 | `parties get` | ☐ | Live handle; retired handle resolves with `merges_followed`; chained merges |
+| 65 | `parties list` | ☐ | Scoped to one company; retired handles listed separately |
+| 66 | `parties relate` | ☐ | Lead and Client at once; wrong coordinate refused; cross-view status refused |
+| 67 | `parties resolve` | ☐ | Exact typed match; different scheme → no-match; two candidates → ambiguous |
+| 68 | `parties merge` | ☐ | Alias written; views re-pointed; already-retired, self, cross-company, ended-vs-live all refused |

@@ -14,6 +14,12 @@ pub mod channel;
 /// Company, initiative, task, and agent work-attribution contracts.
 pub mod company;
 pub mod company_roster;
+/// Core contracts for Colony business Discovery runs.
+pub mod discovery;
+/// Core contracts for trusted local Colony Discovery workers.
+pub mod discovery_worker;
+/// Private workspace records that connect Discovery campaigns and Leads.
+pub mod discovery_workspace;
 /// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
 /// body parse/serialize, envelope build/validate, head selection.
 pub mod engram;
@@ -35,6 +41,8 @@ pub mod network;
 pub mod observer;
 pub mod onboarding_facts;
 /// NIP-AB device pairing — crypto primitives, message types, and errors.
+pub mod party;
+
 pub mod pairing;
 /// Presence status types shared across crates.
 pub mod presence;

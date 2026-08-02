@@ -296,7 +296,7 @@ test("onboarding provisions only the Chief of Staff", () => {
   assert.equal(WELCOME_TEAM_ID, "builtin-team:welcome");
   assert.deepEqual(WELCOME_TEAM_STARTERS, [
     {
-      name: "Fizz",
+      name: WELCOME_GUIDE_AGENT_NAME,
       personaId: "builtin:fizz",
       role: "lead",
       roleId: "chief-of-staff",

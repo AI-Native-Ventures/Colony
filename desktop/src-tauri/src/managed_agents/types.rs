@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf, process::Child};
 pub struct AgentDefinition {
     pub id: String,
     /// Stable company role identifier, independent of the persona's personal
-    /// display name (for example `chief-of-staff` while the person is `Fizz`).
+    /// display name (for example `chief-of-staff` while the person is `Scout`).
     /// Role ID and title are always both present or both absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role_id: Option<String>,

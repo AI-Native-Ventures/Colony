@@ -4,6 +4,15 @@ import type {
   PersonaBehaviorInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
+import {
+  STARTER_PERSONA_IDS,
+  starterPersonaName,
+} from "@/shared/constants/starterPersonas";
+
+/** Example name shown in the empty display-name field. */
+export const PERSONA_NAME_PLACEHOLDER = starterPersonaName(
+  STARTER_PERSONA_IDS.fizz,
+);
 
 export type PersonaDialogState = {
   description: string;
