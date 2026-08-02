@@ -22,6 +22,8 @@
 //! below are deliberately permissive stubs so the contract tests fail against
 //! them rather than against a compile error.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -32,18 +34,10 @@ pub const PARTY_ALIAS_SCHEMA: &str = "colony.party-alias/v1";
 /// Schema string every Lead or Client relationship carries.
 pub const PARTY_RELATIONSHIP_SCHEMA: &str = "colony.party-relationship/v1";
 
-// The bounds the contract tests pin. Task 2's validators are what enforce
-// them; until then they are referenced only from tests, which the lib target
-// does not see.
-#[allow(dead_code)]
 const MAX_ID_LEN: usize = 128;
-#[allow(dead_code)]
 const MAX_NAME_LEN: usize = 200;
-#[allow(dead_code)]
 const MAX_IDENTIFIERS: usize = 50;
-#[allow(dead_code)]
 const MAX_PROVENANCE: usize = 200;
-#[allow(dead_code)]
 const MAX_RETIRED_HANDLES: usize = 100;
 
 /// Whether a party is an organization or an individual.
@@ -305,66 +299,430 @@ pub enum PartyContractError {
     AlreadyRetired,
 }
 
-// ---------------------------------------------------------------------------
-// Task 2 implements everything below. The stubs accept whatever they are given
-// so the contract tests fail on the rule they describe rather than on a missing
-// symbol. `is_*_transition_allowed` return `true` for the same reason.
-// ---------------------------------------------------------------------------
+/// Whether a string is a usable stable identifier.
+///
+/// Same grammar the company contract accepts: anything that could be
+/// case-folded, normalized, or truncated into a different identifier is refused
+/// rather than repaired, because these strings end up in relay coordinates.
+fn is_record_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    value.len() <= MAX_ID_LEN
+        && (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+}
+
+fn validate_id(value: &str, field: &'static str) -> Result<(), PartyContractError> {
+    if is_record_id(value) {
+        Ok(())
+    } else {
+        Err(PartyContractError::InvalidIdentifier(field))
+    }
+}
+
+fn validate_required_text(
+    value: &str,
+    field: &'static str,
+    max_len: usize,
+) -> Result<(), PartyContractError> {
+    if value.trim().is_empty() || value.len() > max_len {
+        return Err(PartyContractError::InvalidText(field));
+    }
+    Ok(())
+}
+
+fn validate_optional_text(
+    value: Option<&str>,
+    field: &'static str,
+    max_len: usize,
+) -> Result<(), PartyContractError> {
+    match value {
+        Some(text) => validate_required_text(text, field, max_len),
+        None => Ok(()),
+    }
+}
+
+fn validate_schema(
+    value: &str,
+    expected: &str,
+    label: &'static str,
+) -> Result<(), PartyContractError> {
+    if value == expected {
+        Ok(())
+    } else {
+        Err(PartyContractError::InvalidSchema(label))
+    }
+}
+
+fn is_event_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn validate_timestamps(created_at: i64, updated_at: i64) -> Result<(), PartyContractError> {
+    if created_at <= 0 || updated_at < created_at {
+        return Err(PartyContractError::InvalidText("timestamps"));
+    }
+    Ok(())
+}
+
+fn validate_replacement_timestamps(
+    previous_created_at: i64,
+    previous_updated_at: i64,
+    replacement_created_at: i64,
+    replacement_updated_at: i64,
+) -> Result<(), PartyContractError> {
+    if previous_created_at != replacement_created_at {
+        return Err(PartyContractError::ImmutableField("createdAt"));
+    }
+    if replacement_updated_at <= previous_updated_at {
+        return Err(PartyContractError::UpdatedAtNotMonotonic);
+    }
+    Ok(())
+}
+
+fn validate_immutable(
+    previous: &str,
+    replacement: &str,
+    field: &'static str,
+) -> Result<(), PartyContractError> {
+    if previous == replacement {
+        Ok(())
+    } else {
+        Err(PartyContractError::ImmutableField(field))
+    }
+}
 
 /// Validate one canonical party.
-pub fn validate_party(_party: &Party) -> Result<(), PartyContractError> {
+pub fn validate_party(party: &Party) -> Result<(), PartyContractError> {
+    validate_schema(&party.schema, PARTY_SCHEMA, "party")?;
+    validate_id(&party.id, "party.id")?;
+    validate_id(&party.company_id, "party.companyId")?;
+    validate_required_text(&party.display_name, "party.displayName", MAX_NAME_LEN)?;
+    validate_optional_text(party.legal_name.as_deref(), "party.legalName", MAX_NAME_LEN)?;
+    validate_timestamps(party.created_at, party.updated_at)?;
+
+    if party.identifiers.len() > MAX_IDENTIFIERS {
+        return Err(PartyContractError::TooManyEntries("party.identifiers"));
+    }
+    let mut claims = HashSet::new();
+    for identifier in &party.identifiers {
+        validate_required_text(&identifier.value, "party.identifiers.value", MAX_NAME_LEN)?;
+        // Typed: the same text under two schemes is two different claims, and
+        // both can legitimately be true of one business.
+        if !claims.insert((identifier.scheme, identifier.value.as_str())) {
+            return Err(PartyContractError::DuplicateIdentifier);
+        }
+    }
+
+    // A field nobody observed is a claim nobody made, and once it is written
+    // down it is indistinguishable from a fact.
+    if party.provenance.is_empty() {
+        return Err(PartyContractError::MissingProvenance);
+    }
+    if party.provenance.len() > MAX_PROVENANCE {
+        return Err(PartyContractError::TooManyEntries("party.provenance"));
+    }
+    let mut observation_ids = HashSet::new();
+    for entry in &party.provenance {
+        validate_id(&entry.id, "party.provenance.id")?;
+        validate_required_text(&entry.source, "party.provenance.source", MAX_NAME_LEN)?;
+        validate_optional_text(
+            entry.source_ref.as_deref(),
+            "party.provenance.sourceRef",
+            MAX_NAME_LEN,
+        )?;
+        if entry.observed_at <= 0 {
+            return Err(PartyContractError::InvalidText(
+                "party.provenance.observedAt",
+            ));
+        }
+        if !observation_ids.insert(entry.id.as_str()) {
+            return Err(PartyContractError::InvalidIdentifier("party.provenance.id"));
+        }
+        for field in &entry.fields {
+            if !PROVENANCE_FIELDS.contains(&field.as_str()) {
+                return Err(PartyContractError::UnknownProvenanceField);
+            }
+        }
+    }
+
+    if party.retired_handles.len() > MAX_RETIRED_HANDLES {
+        return Err(PartyContractError::TooManyEntries("party.retiredHandles"));
+    }
+    let mut retired = HashSet::new();
+    for handle in &party.retired_handles {
+        validate_id(handle, "party.retiredHandles")?;
+        if handle == &party.id {
+            return Err(PartyContractError::CircularAlias);
+        }
+        if !retired.insert(handle.as_str()) {
+            return Err(PartyContractError::InvalidIdentifier(
+                "party.retiredHandles",
+            ));
+        }
+    }
+
     Ok(())
 }
 
 /// Validate a replacement party against the version it replaces.
 pub fn validate_party_update(
-    _previous: &Party,
-    _replacement: &Party,
+    previous: &Party,
+    replacement: &Party,
 ) -> Result<(), PartyContractError> {
+    validate_party(replacement)?;
+    validate_immutable(&previous.schema, &replacement.schema, "party.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "party.id")?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "party.companyId",
+    )?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    // Evidence is append-only: a replacement may add observations but never
+    // drop the ones that justified what is already recorded.
+    for entry in &previous.provenance {
+        if !replacement
+            .provenance
+            .iter()
+            .any(|candidate| candidate.id == entry.id)
+        {
+            return Err(PartyContractError::MissingProvenance);
+        }
+    }
     Ok(())
 }
 
 /// Validate one retired-handle alias.
-pub fn validate_alias(_alias: &PartyAlias) -> Result<(), PartyContractError> {
+pub fn validate_alias(alias: &PartyAlias) -> Result<(), PartyContractError> {
+    validate_schema(&alias.schema, PARTY_ALIAS_SCHEMA, "party alias")?;
+    validate_id(&alias.id, "alias.id")?;
+    validate_id(&alias.company_id, "alias.companyId")?;
+    validate_id(&alias.resolves_to, "alias.resolvesTo")?;
+    if alias.id == alias.resolves_to {
+        return Err(PartyContractError::CircularAlias);
+    }
+    if alias.merged_at <= 0 {
+        return Err(PartyContractError::InvalidText("alias.mergedAt"));
+    }
+    // An alias with no auditable merge behind it is a redirect nobody
+    // authorized.
+    if !is_event_id(&alias.merge_action_event_id) {
+        return Err(PartyContractError::InvalidIdentifier(
+            "alias.mergeActionEventId",
+        ));
+    }
     Ok(())
 }
 
 /// Validate one Lead or Client relationship against its party.
 pub fn validate_relationship(
-    _relationship: &PartyRelationship,
-    _party: &Party,
+    relationship: &PartyRelationship,
+    party: &Party,
 ) -> Result<(), PartyContractError> {
+    validate_party(party)?;
+    validate_schema(
+        &relationship.schema,
+        PARTY_RELATIONSHIP_SCHEMA,
+        "party relationship",
+    )?;
+    validate_id(&relationship.id, "relationship.id")?;
+    validate_id(&relationship.company_id, "relationship.companyId")?;
+    validate_id(&relationship.party_id, "relationship.partyId")?;
+    validate_id(
+        &relationship.owner_persona_id,
+        "relationship.ownerPersonaId",
+    )?;
+    validate_id(
+        &relationship.source_channel_id,
+        "relationship.sourceChannelId",
+    )?;
+    validate_timestamps(relationship.created_at, relationship.updated_at)?;
+
+    if relationship.party_id != party.id {
+        return Err(PartyContractError::MismatchedReference(
+            "relationship.partyId",
+        ));
+    }
+    if relationship.company_id != party.company_id {
+        return Err(PartyContractError::MismatchedReference(
+            "relationship.companyId",
+        ));
+    }
+    // The coordinate is what makes a second Lead on one party impossible, so an
+    // ID that does not derive from the party and the view would let one exist.
+    let expected = format!(
+        "{}:{}",
+        relationship.party_id,
+        relationship.relationship.slug()
+    );
+    if relationship.id != expected {
+        return Err(PartyContractError::MismatchedReference("relationship.id"));
+    }
+    if !relationship.status.belongs_to(relationship.relationship) {
+        return Err(PartyContractError::StatusNotOnRelationship);
+    }
     Ok(())
 }
 
 /// Validate a replacement relationship against the version it replaces.
 pub fn validate_relationship_update(
-    _previous: &PartyRelationship,
-    _replacement: &PartyRelationship,
-    _party: &Party,
+    previous: &PartyRelationship,
+    replacement: &PartyRelationship,
+    party: &Party,
 ) -> Result<(), PartyContractError> {
+    validate_relationship(replacement, party)?;
+    validate_immutable(&previous.schema, &replacement.schema, "relationship.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "relationship.id")?;
+    validate_immutable(
+        &previous.party_id,
+        &replacement.party_id,
+        "relationship.partyId",
+    )?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "relationship.companyId",
+    )?;
+    if previous.relationship != replacement.relationship {
+        return Err(PartyContractError::ImmutableField(
+            "relationship.relationship",
+        ));
+    }
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    if !is_relationship_transition_allowed(
+        replacement.relationship,
+        previous.status,
+        replacement.status,
+    ) {
+        return Err(PartyContractError::InvalidStatusTransition("relationship"));
+    }
     Ok(())
 }
 
 /// Whether a relationship lifecycle transition is permitted.
+///
+/// Same-status replacement is allowed so content edits do not need a
+/// transition. A disqualified Lead and a former Client are terminal: both are
+/// re-entered by a new decision rather than by editing the old record back to
+/// where it was, so the history of the first outcome survives.
 pub const fn is_relationship_transition_allowed(
-    _relationship: RelationshipKind,
-    _from: RelationshipStatus,
-    _to: RelationshipStatus,
+    relationship: RelationshipKind,
+    from: RelationshipStatus,
+    to: RelationshipStatus,
 ) -> bool {
-    true
+    if !from.belongs_to(relationship) || !to.belongs_to(relationship) {
+        return false;
+    }
+    if from as u8 == to as u8 {
+        return true;
+    }
+    use RelationshipStatus::*;
+    matches!(
+        (from, to),
+        (Candidate, Accepted | Disqualified)
+            | (Accepted, Qualified | Disqualified | Dormant)
+            | (Qualified, Dormant | Disqualified)
+            | (Dormant, Qualified | Disqualified)
+            | (Active, Paused | Former)
+            | (Paused, Active | Former)
+    )
 }
 
 /// Merge one party into another, losing nothing.
+///
+/// The survivor keeps its handle and absorbs the other's claims, evidence, and
+/// retired handles. Nothing is dropped: a merge is how a duplicate is fixed,
+/// and a fix that lost evidence would cost more than the duplicate did.
 pub fn merge_parties(survivor: &Party, retired: &Party) -> Result<Party, PartyContractError> {
-    let _ = retired;
-    Ok(survivor.clone())
+    validate_party(survivor)?;
+    validate_party(retired)?;
+
+    if survivor.company_id != retired.company_id {
+        return Err(PartyContractError::MismatchedReference("party.companyId"));
+    }
+    if survivor.id == retired.id {
+        return Err(PartyContractError::CircularAlias);
+    }
+    if retired.retired_handles.contains(&survivor.id) {
+        return Err(PartyContractError::CircularAlias);
+    }
+    if survivor.retired_handles.contains(&retired.id) {
+        return Err(PartyContractError::AlreadyRetired);
+    }
+
+    let mut merged = survivor.clone();
+
+    let mut claims: HashSet<(IdentifierScheme, String)> = survivor
+        .identifiers
+        .iter()
+        .map(|identifier| (identifier.scheme, identifier.value.clone()))
+        .collect();
+    for identifier in &retired.identifiers {
+        if claims.insert((identifier.scheme, identifier.value.clone())) {
+            merged.identifiers.push(identifier.clone());
+        }
+    }
+
+    let mut observations: HashSet<String> = survivor
+        .provenance
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    for entry in &retired.provenance {
+        if observations.insert(entry.id.clone()) {
+            merged.provenance.push(entry.clone());
+        }
+    }
+
+    let mut handles: HashSet<String> = survivor.retired_handles.iter().cloned().collect();
+    for handle in retired
+        .retired_handles
+        .iter()
+        .cloned()
+        .chain(std::iter::once(retired.id.clone()))
+    {
+        if handle != merged.id && handles.insert(handle.clone()) {
+            merged.retired_handles.push(handle);
+        }
+    }
+
+    if merged.display_name.trim().is_empty() {
+        merged.display_name = retired.display_name.clone();
+    }
+    if merged.legal_name.is_none() {
+        merged.legal_name = retired.legal_name.clone();
+    }
+    merged.updated_at = survivor
+        .updated_at
+        .max(retired.updated_at)
+        .saturating_add(1);
+
+    validate_party(&merged)?;
+    Ok(merged)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
 
     /// One named way of breaking a fixture, so a table of them stays readable.
