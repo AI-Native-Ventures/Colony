@@ -194,6 +194,21 @@ pub const KIND_INITIATIVE: u32 = 30180;
 /// Colony single-team task (parameterized replaceable, relay-authored canonical head).
 pub const KIND_TASK: u32 = 30181;
 
+/// Canonical external Organization or Person, and the aliases retired handles
+/// leave behind (parameterized replaceable, relay-authored canonical head).
+///
+/// One kind carries both because a retired handle has to keep resolving at the
+/// coordinate it was handed out under. The `schema` field distinguishes a party
+/// from a pointer to one.
+pub const KIND_PARTY: u32 = 30182;
+
+/// A company's Lead or Client view over one Party (parameterized replaceable,
+/// relay-authored canonical head).
+///
+/// A view, never a copy: the same party may be both at once, so each
+/// relationship is its own head rather than a field on the party.
+pub const KIND_PARTY_RELATIONSHIP: u32 = 30183;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -208,6 +223,12 @@ pub const KIND_COMPANY_ACTION: u32 = 40013;
 
 /// Relay-signed auditable result of a Colony company action.
 pub const KIND_COMPANY_RECEIPT: u32 = 40014;
+
+/// Owner-signed request to create or mutate canonical Colony party state.
+pub const KIND_PARTY_ACTION: u32 = 40015;
+
+/// Relay-signed auditable result of a Colony party action.
+pub const KIND_PARTY_RECEIPT: u32 = 40016;
 
 /// Returns `true` if `kind` uses the author-only-unless-shared read model
 /// (currently only `KIND_PERSONA` / 30175).
@@ -620,6 +641,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_BLOCK_MANIFEST,
     KIND_COMPANY_ACTION,
     KIND_COMPANY_RECEIPT,
+    KIND_PARTY,
+    KIND_PARTY_RELATIONSHIP,
+    KIND_PARTY_ACTION,
+    KIND_PARTY_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_REPORT,
@@ -787,6 +812,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_APPROVAL_GRANT
             | KIND_APPROVAL_DENY
             | KIND_COMPANY_ACTION
+            | KIND_PARTY_ACTION
     )
 }
 
@@ -806,6 +832,9 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_INITIATIVE
             | KIND_TASK
             | KIND_COMPANY_RECEIPT
+            | KIND_PARTY
+            | KIND_PARTY_RELATIONSHIP
+            | KIND_PARTY_RECEIPT
     )
 }
 
@@ -828,6 +857,8 @@ const _: () = assert!(is_parameterized_replaceable(KIND_BLOCK_CATALOG_ENTRY)); /
 const _: () = assert!(is_parameterized_replaceable(KIND_COMPANY_PROFILE)); // 30179 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_INITIATIVE)); // 30180 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TASK)); // 30181 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PARTY)); // 30182 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PARTY_RELATIONSHIP)); // 30183 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
@@ -900,6 +931,71 @@ mod tests {
         ] {
             assert!(!unique.contains(&existing));
         }
+    }
+
+    /// The party kinds are addressable, distinct, and not colliding with any
+    /// kind already in use.
+    ///
+    /// A number reused by accident is the one mistake here that cannot be
+    /// migrated away from: every relay that stored an event under it keeps
+    /// serving it under the old meaning.
+    #[test]
+    fn party_kinds_are_addressable_and_distinct() {
+        let kinds = [KIND_PARTY, KIND_PARTY_RELATIONSHIP];
+        assert_eq!(kinds, [30182, 30183]);
+        for kind in kinds {
+            assert!(is_parameterized_replaceable(kind));
+            assert!(!is_ephemeral(kind));
+            assert!(kind <= u16::MAX as u32);
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        for existing in [
+            KIND_PERSONA,
+            KIND_TEAM,
+            KIND_MANAGED_AGENT,
+            KIND_BLOCK_CATALOG_ENTRY,
+            KIND_COMPANY_PROFILE,
+            KIND_INITIATIVE,
+            KIND_TASK,
+        ] {
+            assert!(
+                !kinds.contains(&existing),
+                "party kinds collide with {existing}"
+            );
+        }
+    }
+
+    #[test]
+    fn party_authority_kinds_have_exact_classifications() {
+        assert_eq!(KIND_PARTY_ACTION, 40015);
+        assert_eq!(KIND_PARTY_RECEIPT, 40016);
+
+        // Regular, not replaceable: an action and its receipt are evidence of
+        // one request and must never be overwritten by a later one.
+        for kind in [KIND_PARTY_ACTION, KIND_PARTY_RECEIPT] {
+            assert!(!is_parameterized_replaceable(kind));
+            assert!(!is_replaceable(kind));
+            assert!(!is_ephemeral(kind));
+            assert!(ALL_KINDS.contains(&kind));
+        }
+
+        let company = [KIND_COMPANY_ACTION, KIND_COMPANY_RECEIPT];
+        for kind in [KIND_PARTY_ACTION, KIND_PARTY_RECEIPT] {
+            assert!(!company.contains(&kind));
+        }
+
+        // Classification is what the relay routes on. Defining the integers
+        // without it makes every party kind an unknown kind at ingest, which is
+        // a refusal that reads exactly like a correct authorization failure.
+        for head in [KIND_PARTY, KIND_PARTY_RELATIONSHIP] {
+            assert!(is_relay_only_kind(head), "a client must not author {head}");
+            assert!(!is_command_kind(head));
+        }
+        assert!(is_command_kind(KIND_PARTY_ACTION));
+        assert!(!is_relay_only_kind(KIND_PARTY_ACTION));
+        assert!(is_relay_only_kind(KIND_PARTY_RECEIPT));
+        assert!(!is_command_kind(KIND_PARTY_RECEIPT));
     }
 
     #[test]

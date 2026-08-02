@@ -28,6 +28,13 @@ abstract final class EventKind {
   static const task = 30181;
   static const companyAction = 40013;
   static const companyReceipt = 40014;
+  // Canonical external parties and the Lead/Client views over them. Mobile
+  // stays fallback-only and gains no party UI, but the numbers are pinned so
+  // the two clients cannot disagree about which kind means what.
+  static const party = 30182;
+  static const partyRelationship = 30183;
+  static const partyAction = 40015;
+  static const partyReceipt = 40016;
   static const userStatus = 30315;
   static const dmVisibility = 30622;
   static const streamMessageV2 = 40002;

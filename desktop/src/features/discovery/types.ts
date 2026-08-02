@@ -155,6 +155,21 @@ export type Lead = {
   campaignIds: string[];
   status: LeadStatus;
   addedAt: string;
+  /**
+   * The Colony Party this lead is a view of, once it has been resolved to one.
+   *
+   * Optional because Discovery produces observations before anything decides
+   * whether they are somebody the company already knows. A lead that carries a
+   * handle is the same identity as the Client of that handle -- that is the
+   * point of Party -- so converting one keeps its history instead of creating a
+   * second record for the same business.
+   *
+   * Resolution is deliberately not automatic. See
+   * `buzz_sdk::party_resolution`: more than one candidate is a decision for a
+   * human, because a wrong automatic match fuses two customers' histories and
+   * nothing downstream can tell that it happened.
+   */
+  partyHandle?: string;
 };
 
 export type LeadScope = {

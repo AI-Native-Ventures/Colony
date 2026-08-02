@@ -40,8 +40,23 @@ cargo test -p buzz-test-client --test e2e_company_work \
 DATABASE_URL="postgres://buzz:buzz_dev@localhost:5432/buzz_company_proof" \
 REDIS_URL="redis://localhost:6379" \
 BUZZ_BIND_ADDR="127.0.0.1:3099" \
+RELAY_URL="http://127.0.0.1:3099" \
+BUZZ_AUTO_MIGRATE=true \
+BUZZ_RELAY_PRIVATE_KEY="<any 64-hex secret>" \
 RELAY_OWNER_PUBKEY="<the key printed above>" \
 cargo run -p buzz-relay
+
+# Already running your own relay? Add BUZZ_METRICS_PORT and BUZZ_HEALTH_PORT
+# to avoid colliding with it.
+```
+
+`BUZZ_AUTO_MIGRATE=true` is required on a fresh database and its absence is
+quiet: the relay logs one INFO line, serves NIP-11 happily, and then every
+write fails with `relation "events" does not exist`. `BUZZ_RELAY_PRIVATE_KEY`
+is what makes the relay advertise a `self` key, without which the suites cannot
+resolve the head author and prove nothing.
+
+```bash
 
 # 4. The suite.
 RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
@@ -99,6 +114,46 @@ Starting the relay with any other `RELAY_OWNER_PUBKEY` makes the suite prove
 nothing — every action is refused for the right reason and the failures look
 like product bugs. If the whole file fails at the first company create, check
 that first.
+
+### Colony party identity (`e2e_party_identity`)
+
+A Party is one real-world business or person; Lead and Client are views over
+that identity rather than separate records. This suite proves the parts of that
+which only exist inside the relay process: that party, alias, and relationship
+heads are authored by the relay and by nobody else, that a merge writes the
+survivor, the retired handle's pointer, and every re-pointed view in one
+transaction, and that a merge the relay cannot decide safely is refused with a
+signed receipt instead of resolved.
+
+The load-bearing assertion is that a retired handle still arrives. A handle
+written into a task, a message, or an agent's work context months ago has to
+keep resolving to whichever party absorbed it, and no unit test over a mock can
+establish that the stored alias does so.
+
+Uses the same relay setup as `e2e_company_work` above — same owner key, same
+`RELAY_OWNER_PUBKEY` requirement, same reason:
+
+```bash
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_party_identity -- --ignored --test-threads=1
+```
+
+`--test-threads=1` is not optional: every test signs as the same owner, and the
+relay serializes party actions per owner.
+
+Each test isolates itself with a generated company and handle prefix, so a
+failed run leaves records behind but never collides with the next one.
+
+**Start a fresh relay process for each full run.** Running either E2E suite
+repeatedly against one long-lived relay produces intermittent read and publish
+timeouts that have nothing to do with the records under test: a subscription
+never receives its EOSE, or a published event never receives its OK, while the
+same test passes alone and in pairs against the same relay and the same data.
+Verified 2026-08-02 by running `e2e_company_work` against the same process,
+which fails the same way, so this is in the shared WebSocket harness rather
+than in anything company- or party-specific. It is not diagnosed. `head` in
+`e2e_party_identity` retries a timed-out read once, which is enough for a
+single run on a fresh relay but does not make repeat runs reliable.
 
 ---
 
