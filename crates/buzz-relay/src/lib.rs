@@ -7,11 +7,11 @@ mod block_broker;
 /// Validation for chat-native Block event envelopes.
 pub mod blocks;
 mod company_broker;
-mod party_broker;
 mod discovery_broker;
 /// Restart-safe Discovery worker runtime.
 pub mod discovery_runtime;
 mod discovery_worker_broker;
+mod party_broker;
 
 /// REST API route handlers.
 pub mod api;
