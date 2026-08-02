@@ -198,6 +198,9 @@ enum Cmd {
     /// Read Parties and the Lead and Client views of them
     #[command(subcommand)]
     Parties(PartiesCmd),
+    /// Colony cost ledger: prices, attribution, corrections, budgets, reports
+    #[command(subcommand)]
+    Ledger(LedgerCmd),
     /// Read and request changes to single-team Tasks
     #[command(subcommand)]
     Tasks(TasksCmd),
@@ -387,6 +390,118 @@ pub enum BlockReceiptStatusArg {
 /// separate records, so a business that converts keeps its history instead of
 /// being retyped. Writes never author a canonical head; they publish an
 /// owner-signed Party Action and the relay brokers it.
+#[derive(Subcommand)]
+pub enum LedgerCmd {
+    /// Add an effective-dated price row for one model
+    PricesAdd {
+        #[arg(long)]
+        model: String,
+        /// Uncached input, dollars per million tokens
+        #[arg(long)]
+        input: String,
+        /// Cache reads, dollars per million tokens
+        #[arg(long, default_value = "0")]
+        cache_read: String,
+        /// 5-minute cache writes, dollars per million tokens
+        #[arg(long, default_value = "0")]
+        cache_write_5m: String,
+        /// 1-hour cache writes, dollars per million tokens
+        #[arg(long, default_value = "0")]
+        cache_write_1h: String,
+        /// Output, dollars per million tokens
+        #[arg(long)]
+        output: String,
+        /// RFC 3339 instant this price takes effect. Defaults to now.
+        #[arg(long)]
+        effective_from: Option<String>,
+        /// Free note, e.g. "80% cut" or "promo ends"
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Print the current price book
+    PricesList,
+    /// Print the current attribution rulebook
+    RulesList,
+    /// Print the current correction book
+    CorrectionsList,
+    /// Add an attribution rule
+    RulesAdd {
+        #[arg(long)]
+        id: String,
+        /// Higher wins; ties resolve to the earliest added rule
+        #[arg(long, default_value_t = 0)]
+        priority: u32,
+        #[arg(long)]
+        match_provider: Option<String>,
+        #[arg(long)]
+        match_harness: Option<String>,
+        #[arg(long)]
+        match_model: Option<String>,
+        #[arg(long)]
+        match_channel: Option<String>,
+        #[arg(long)]
+        match_agent: Option<String>,
+        #[arg(long)]
+        company: String,
+        #[arg(long)]
+        cost_centre: String,
+        #[arg(long)]
+        team: String,
+        /// clientDelivery, sales, marketing, administration, internalProduct, uncertain
+        #[arg(long)]
+        purpose: String,
+        #[arg(long)]
+        client_org: Option<String>,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Re-attribute one usage record without altering it
+    Correct {
+        /// Hex event id of the kind 44210 record
+        #[arg(long)]
+        record: String,
+        #[arg(long)]
+        company: String,
+        #[arg(long)]
+        cost_centre: String,
+        #[arg(long)]
+        team: String,
+        #[arg(long)]
+        purpose: String,
+        #[arg(long)]
+        client_org: Option<String>,
+        #[arg(long)]
+        task: Option<String>,
+        /// Why this record was moved. Required.
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        corrected_at: Option<String>,
+    },
+    /// Set one cost centre's budget for one month
+    BudgetSet {
+        #[arg(long)]
+        cost_centre: String,
+        /// Month as YYYY-MM
+        #[arg(long)]
+        period: String,
+        /// Budget in dollars
+        #[arg(long)]
+        amount: String,
+    },
+    /// Compute the ledger from usage records and the books
+    Report,
+    /// Compare the ledger against a provider's own daily cost export
+    Reconcile {
+        /// CSV with columns provider,day,amount_usd
+        #[arg(long)]
+        provider_costs: String,
+        /// Allowed absolute difference per provider-day, in dollars
+        #[arg(long, default_value = "0.01")]
+        tolerance: String,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum PartiesCmd {
     /// List a company's parties, and separately the handles merges retired
@@ -2273,6 +2388,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Blocks(sub) => commands::blocks::dispatch(sub, &client).await,
         Cmd::Company(sub) => commands::company::dispatch_company(sub, &client).await,
         Cmd::Parties(sub) => commands::parties::dispatch_parties(sub, &client).await,
+        Cmd::Ledger(sub) => commands::ledger::dispatch_ledger(sub, &client).await,
         Cmd::Discovery(sub) => commands::discovery::dispatch(sub, &client).await,
         Cmd::Initiatives(sub) => commands::company::dispatch_initiatives(sub, &client).await,
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
@@ -2647,6 +2763,7 @@ mod tests {
             "feed",
             "initiatives",
             "issues",
+            "ledger",
             "media",
             "mem",
             "messages",
