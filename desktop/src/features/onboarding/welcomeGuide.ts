@@ -20,7 +20,7 @@ import type {
 } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
-export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
+export const WELCOME_GUIDE_AGENT_NAME = "Scout";
 export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
 export const WELCOME_TEAM_ID = "builtin-team:welcome";
 export const WELCOME_GUIDE_INTRO_MARKER = "buzz-welcome-intro.v1";
@@ -28,7 +28,7 @@ const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Sprout's friendly welcome guide. Help new users understand the community, channels, messages, and agents. Keep introductions concise, practical, and warm.";
 export const WELCOME_GUIDE_INTRO_MESSAGE =
-  "Hi, I'm Fizz, your Chief of Staff.\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or start work until you approve the blueprint.";
+  "Hi, I'm Scout, your Chief of Staff.\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or start work until you approve the blueprint.";
 
 export type WelcomeTeamRole = "lead" | "teammate";
 
@@ -47,13 +47,13 @@ export type WelcomeTeamStarterDefinition = Readonly<{
  * to need and created on approval, so nothing is deployed, started, or paid for
  * on the user's behalf before they have agreed to it.
  *
- * Honey and Bumble are deliberately absent. Their built-in definitions still
+ * Forager and Tender are deliberately absent. Their built-in definitions still
  * exist and any customization a user already made is untouched — they are
  * simply no longer auto-provisioned.
  */
 export const WELCOME_TEAM_STARTERS = [
   {
-    name: "Fizz",
+    name: "Scout",
     personaId: "builtin:fizz",
     role: "lead",
     roleId: "chief-of-staff",
@@ -151,7 +151,7 @@ export async function getWelcomeTeamAgentPubkeys(relayUrl?: string | null) {
     .map((agent) => agent.pubkey);
 }
 
-/** Legacy Fizz/Kit lookup retained for existing channel reuse checks. */
+/** Legacy Scout/Kit lookup retained for existing channel reuse checks. */
 export async function getWelcomeGuideAgentPubkeys(relayUrl?: string | null) {
   return (await listManagedAgents())
     .filter(

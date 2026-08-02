@@ -69,7 +69,7 @@ test("pickWelcomeGuideAgent reuses a legacy Kit guide", () => {
   assert.equal(pickWelcomeGuideAgent([legacyKit]), legacyKit);
 });
 
-test("pickWelcomeGuideAgent prefers a running legacy guide over stopped builtin Fizz", () => {
+test("pickWelcomeGuideAgent prefers a running legacy guide over stopped builtin Scout", () => {
   const stoppedBuiltinFizz = makeAgent({
     pubkey: PUB_A,
     personaId: WELCOME_GUIDE_PERSONA_ID,
@@ -102,7 +102,7 @@ test("pickWelcomeGuideAgent ignores non-Kit agents with the legacy prompt", () =
   assert.equal(pickWelcomeGuideAgent([nonKit, fizz]), fizz);
 });
 
-test("pickWelcomeGuideAgentForRelay ignores Fizz agents from other communities", () => {
+test("pickWelcomeGuideAgentForRelay ignores Scout agents from other communities", () => {
   const otherCommunityFizz = makeAgent({
     pubkey: PUB_A,
     personaId: WELCOME_GUIDE_PERSONA_ID,
@@ -125,7 +125,7 @@ test("pickWelcomeGuideAgentForRelay ignores Fizz agents from other communities",
   );
 });
 
-test("pickWelcomeGuideAgentForRelay returns null when Fizz only exists in another community", () => {
+test("pickWelcomeGuideAgentForRelay returns null when Scout only exists in another community", () => {
   const otherCommunityFizz = makeAgent({
     pubkey: PUB_A,
     personaId: WELCOME_GUIDE_PERSONA_ID,
@@ -222,7 +222,7 @@ test("existing Welcome starter rematerializes runtime-specific fields atomically
 
   assert.deepEqual(
     welcomeStarterRuntimeUpdate(existing, {
-      name: "Fizz",
+      name: "Scout",
       agentCommand: "codex-acp",
       agentArgs: ["--new"],
       mcpCommand: "buzz-dev-mcp",
@@ -252,7 +252,7 @@ test("existing Welcome starter clears stale model and provider for Claude", () =
 
   assert.deepEqual(
     welcomeStarterRuntimeUpdate(existing, {
-      name: "Fizz",
+      name: "Scout",
       agentCommand: "claude-agent-acp",
       agentArgs: [],
       mcpCommand: "",
@@ -278,7 +278,7 @@ test("existing Welcome starter needs no update when runtime already matches", ()
 
   assert.equal(
     welcomeStarterRuntimeUpdate(existing, {
-      name: "Fizz",
+      name: "Scout",
       agentCommand: "codex-acp",
       agentArgs: ["--same"],
       mcpCommand: "buzz-dev-mcp",
@@ -296,7 +296,7 @@ test("onboarding provisions only the Chief of Staff", () => {
   assert.equal(WELCOME_TEAM_ID, "builtin-team:welcome");
   assert.deepEqual(WELCOME_TEAM_STARTERS, [
     {
-      name: "Fizz",
+      name: "Scout",
       personaId: "builtin:fizz",
       role: "lead",
       roleId: "chief-of-staff",
@@ -304,7 +304,7 @@ test("onboarding provisions only the Chief of Staff", () => {
   ]);
 });
 
-test("Honey and Bumble are no longer auto-provisioned", () => {
+test("Forager and Tender are no longer auto-provisioned", () => {
   // Their built-in definitions still exist and any user customization is
   // untouched — they are simply not part of first run any more.
   const personaIds = WELCOME_TEAM_STARTERS.map((s) => s.personaId);
@@ -328,7 +328,7 @@ test("starter matching ignores user agents with a Welcome persona", () => {
 test("starter matching uses persona identity rather than display name", () => {
   const honey = WELCOME_TEAM_STARTERS[0];
   const renamedHoney = makeAgent({
-    name: "Fizz the Helper",
+    name: "Scout the Helper",
     personaId: honey.personaId,
   });
   const nameOnlyHoney = makeAgent({ name: honey.name, pubkey: PUB_B });
