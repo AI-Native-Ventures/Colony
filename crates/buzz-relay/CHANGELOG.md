@@ -34,6 +34,12 @@ Colony cost ledger, party identity, and Discovery.
   so promoting to main cannot revert them.
   ([#19](https://github.com/AI-Native-Ventures/Colony/pull/19),
   [#21](https://github.com/AI-Native-Ventures/Colony/pull/21))
+- feat(desktop): cost ledger read layer. Money is `bigint` nanoUSD end to end
+  and an amount past exact integer range is refused rather than displayed,
+  because JSON parsing has already rounded it.
+  ([#23](https://github.com/AI-Native-Ventures/Colony/pull/23))
+- ci: back-merge `main` into `develop` on every push to `main`, so a fix landed
+  straight on `main` cannot be silently reverted by the next promotion.
 - fix(desktop): avatar editor interactivity, working-indicator sizing, and
   bee-era agent avatar refresh.
   ([#10](https://github.com/AI-Native-Ventures/Colony/pull/10),
