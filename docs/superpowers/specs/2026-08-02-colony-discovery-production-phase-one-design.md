@@ -2,7 +2,11 @@
 
 **Date:** 2026-08-02
 
-**Status:** Design approved; written specification awaiting user review
+**Status:** Foundation implemented; live execution narrowed by the approved
+Outscraper slice specification
+
+**Live-slice specification:**
+[`2026-08-02-colony-discovery-outscraper-businesses-design.md`](./2026-08-02-colony-discovery-outscraper-businesses-design.md)
 
 **Repository:** `nocodeafrica/Colony`
 
@@ -122,7 +126,8 @@ SalesTeams currently provides:
 - Live Discovery requires a paid monthly LAKA subscription.
 - Colony does not charge usage fees or resell provider or LLM credits in Phase
   One.
-- Customers bring their own Outscraper, Brave, Exa, and LLM credentials.
+- Customers bring their own Outscraper and LLM credentials for the first live
+  slice. Future provider adapters require their own customer credentials.
 - Free users see a clearly labelled, fixture-backed demo that makes no paid or
   production-store calls.
 - Public price, billing vendor, and checkout are separate founder decisions.
@@ -154,10 +159,12 @@ SalesTeams currently provides:
 
 ### Credentials and usage
 
-- Credentials are workspace integrations configured by workspace
-  administrators.
-- Credentials are encrypted at rest with deployment-managed envelope
-  encryption.
+- Provider and LLM credentials remain exclusively on the user's trusted
+  device and are stored through the operating-system keychain.
+- The Colony relay does not custody, encrypt, synchronize, or back up these
+  credentials.
+- A live run therefore requires an online trusted Colony desktop/local worker
+  with the required keys configured.
 - Secret values never enter Nostr events, chat, agent context, Campaign data,
   logs, exports, or provider receipts.
 - Provider and LLM usage is recorded for transparency, debugging, budgets, and
@@ -165,33 +172,31 @@ SalesTeams currently provides:
 - Workspace administrators set hard usage ceilings. Campaigns may choose lower
   limits but cannot exceed workspace ceilings.
 
-### Live providers
+### Live-provider sequence
 
-Phase One requires exactly three external provider adapters:
-
-1. Google Maps business discovery through Outscraper.
-2. Brave Search for broad web discovery.
-3. Exa for semantic company discovery.
-
-DataForSEO, OpenStreetMap, saved directories, LinkedIn company search, and
-other providers remain disabled adapter slots rather than Phase One launch
-dependencies.
+The first production slice has exactly one live business source: Google Maps
+business discovery through Outscraper. Brave and Exa remain the next proposed
+source adapters, but each requires a later acceptance gate. DataForSEO,
+OpenStreetMap, saved directories, LinkedIn company search, and other providers
+remain disabled adapter slots.
 
 ### Source execution
 
-- Both waterfall and concurrent execution are supported.
-- Waterfall is the default and follows the configured source order.
-- Waterfall stops starting later sources when the net-new Lead target is met.
-- Concurrent execution is an explicit faster option and runs enabled sources
-  together within provider and workspace limits.
-- Source ordering is editable only for waterfall mode.
+- The Outscraper slice has one source, so waterfall and concurrent modes have
+  identical execution semantics.
+- The existing source-mode contract remains intact for future adapters, but
+  disabled future sources cannot be selected for a live run.
+- Multi-source waterfall ordering and concurrent execution are proven only in
+  later source-adapter gates.
 
 ### Qualification
 
 - Direct LLM qualification uses a customer-supplied key and supports bounded
   concurrency.
 - Agent CLI processes do not perform bulk qualification in Phase One.
-- AI qualification may be disabled in favor of deterministic rules only.
+- Live qualification requires a locally configured customer LLM key in this
+  slice. Deterministic hard filters reduce unnecessary calls but do not replace
+  the qualification verdict.
 - Hard filters run before an LLM call.
 - An AI verdict is structured, versioned, and preserves its reasons, supporting
   evidence, model identity, and prompt version.
@@ -247,11 +252,12 @@ flowchart LR
     Nostr --> Guard["Authentication + capability + entitlement guard"]
     Guard --> Control["Discovery control plane"]
     Control --> Queue["Durable run queue"]
-    Queue --> Worker["Discovery worker"]
+    Queue --> Worker["Trusted local Discovery worker"]
 
-    Worker --> Sources["Outscraper / Brave / Exa"]
+    Keychain["OS keychain"] --> Worker
+    Worker --> Sources["Outscraper"]
     Worker --> LLM["Customer-supplied LLM"]
-    Worker --> Store["Private Colony Discovery store"]
+    Worker --> Store["Private relay Discovery projections"]
     Worker --> Progress["Nostr progress and receipts"]
 
     Progress --> UI
@@ -289,20 +295,23 @@ Colony-owned Postgres tables hold:
 - qualified Leads and failed or uncertain candidates;
 - qualification inputs, outputs, evidence, model, and prompt version;
 - usage units and provider receipts;
-- encrypted workspace integration credentials.
+- provider job references and non-secret usage evidence.
 
 The tables are accessed only through authenticated Colony services. They do not
 copy SalesTeams Supabase clients, schemas, RLS, RPC, or service-role patterns.
 
 ### Durable execution worker
 
-A bounded worker executes Discovery outside the relay request path. A
-Postgres-backed queue with leases, heartbeats, idempotency keys, and checkpoints
-avoids adding Trigger.dev, Supabase Realtime, Redis, or another required
-infrastructure vendor.
+A bounded local worker executes paid provider and LLM calls outside the relay
+request path. The relay retains the Postgres-backed queue, leases, fencing,
+heartbeats, idempotency keys, and checkpoints. The Tauri worker is the first
+implementation of a transport-neutral worker contract so a user-hosted daemon
+can be added later without changing Campaign or agent commands.
 
-The worker may initially ship in the Colony relay deployment, but its module and
-resource pool remain isolated so it can scale as a separate process later.
+If no trusted local worker is online, the run remains queued. If the worker
+disconnects, it stops starting paid calls. A provider request identifier may be
+checkpointed with the relay so a newly leased worker can resume polling an
+already-paid request instead of submitting it again.
 
 ### Production adapter
 
@@ -311,7 +320,8 @@ The native frontend continues to depend on `DiscoveryDataSource`.
 - Free and test contexts use the existing deterministic fixture adapter.
 - Entitled workspaces use a production adapter backed by signed Colony
   operations.
-- UI code never calls providers or decrypts workspace keys directly.
+- UI feature code never calls providers and never receives a stored secret back
+  from the local credential service.
 
 This preserves the frontend contract while replacing its data and execution
 implementation.
@@ -325,16 +335,16 @@ implementation.
 3. Authentication, workspace membership, Discovery capability, entitlement,
    credential readiness, idempotency, and limits are checked.
 4. The control plane creates a durable run and enqueues it atomically.
-5. The worker claims the run through a lease and executes waterfall or
-   concurrent source tasks.
+5. The local worker claims the run through a lease and executes the enabled
+   Outscraper source task.
 6. Each provider batch records its usage receipt, and each returned candidate
    is normalized and identity-resolved.
 7. Workspace duplicates record only a duplicate encounter against the existing
    identity; they do not create another business payload or Campaign link and
    are suppressed before hard filters or LLM calls.
 8. Hard filters reject obvious mismatches.
-9. AI-enabled Campaigns run bounded direct LLM qualification; rules-only
-   Campaigns skip this step.
+9. Remaining candidates run through bounded direct LLM qualification with the
+   customer's locally configured key.
 10. A pass atomically preserves the new provider record, creates the canonical
     Business and Lead, and increments the Campaign's net-new result count.
 11. A fail or uncertain verdict preserves the new purchased record in the audit
@@ -373,9 +383,9 @@ paid batches or Leads.
 
 - Business Discovery.
 - Existing industry and vertical taxonomy.
-- Outscraper, Brave, and Exa live adapters.
-- Optional direct BYOK LLM qualification and rules-only mode.
-- Concurrent and waterfall execution.
+- Outscraper as the only live provider adapter.
+- Direct qualification through a locally configured customer LLM key.
+- One-source execution while preserving the future multi-source contract.
 - Durable, restart-safe Campaigns and runs.
 - Live progress, cancellation, partial completion, and bounded retries.
 - Workspace-wide suppression and net-new targets.
@@ -407,14 +417,14 @@ Phase One is production-capable only when all of the following are proven:
 
 1. A paid pilot workspace configures real provider and LLM credentials without
    exposing them in events, chat, logs, or agent context.
-2. A real waterfall run produces net-new qualified Leads through at least two
-   live providers and stops at its target.
-3. A real concurrent run exercises all three live providers within configured
-   limits.
+2. A real Outscraper run produces net-new qualified Leads and stops at its
+   target or reports truthful source exhaustion.
+3. The relay never receives or stores the Outscraper or LLM secret values.
 4. A second overlapping Campaign skips existing Leads, dismissed candidates,
    rejected candidates, and Clients and continues toward net-new results.
 5. Duplicate candidates do not receive unnecessary LLM calls.
-6. Rules-only and AI-qualified Campaigns both complete.
+6. Batched LLM qualification uses the configured local key and does not run for
+   candidates already suppressed by workspace deduplication.
 7. Timeout, rate-limit, invalid-credential, and partial-source failures preserve
    completed work and produce truthful terminal states.
 8. Killing and restarting the worker resumes safely without duplicate provider
@@ -442,24 +452,27 @@ operation, and native UI proof.
 Commit this specification on `codex/discovery-next`. Do not begin product code
 until the user reviews the written specification.
 
-### 2. Coordinate with the engine session
+### 2. Recheck the engine worktree
 
-Before backend work, the other Claude session must inventory changes made after
-the `fa52ff60d` snapshot. It should work from current `origin/develop`, not stack
-new backend work on already-merged UI history. That session owns protocol,
-persistence, worker, provider, qualification, and backend tests.
+Before each implementation phase, inspect the other Discovery worktree for new
+changes after the `fa52ff60d` snapshot. Do not modify it and do not duplicate
+new work found there. At the approved live-slice design gate it remained clean
+and contained only the already merged UI parity history.
 
-### 3. Prove a backend foundation vertical slice
+### 3. Preserve the proven backend foundation vertical slice
 
-Implement signed start, status, and cancel operations; private run persistence;
+Signed start, status, and cancel operations; private run persistence;
 entitlement enforcement; a durable leased job; deterministic fake-source
-progress; restart recovery; and matching CLI access. Do not add live providers
-or LLM calls until this slice passes its fault-injected gate.
+progress; restart recovery; and matching CLI access are implemented on
+`codex/discovery-next`. Keep this foundation green while extending its worker
+contract; do not rebuild it in the other worktree.
 
-### 4. Add live execution
+### 4. Add the first live execution slice
 
-Implement Outscraper, Brave, and Exa adapters, then concurrent and waterfall
-orchestration, retries, rate limits, ceilings, and provider receipts.
+Implement the trusted local worker contract and Outscraper adapter, then
+bounded retries, cancellation, checkpoints, local keychain access, usage
+evidence, qualification, global suppression, and Lead persistence. Brave,
+Exa, and multi-source orchestration are separate later gates.
 
 ### 5. Add qualification and persistence
 
@@ -469,10 +482,9 @@ conversion.
 
 ### 6. Integrate human and agent surfaces
 
-Land the backend contract in `develop`. Rebase `discovery-next` afterward, then
-implement the production `DiscoveryDataSource`, business-only live boundaries,
-CLI/agent operations, and chat reference resolution. This order prevents both
-worktrees from editing the same frontend contracts concurrently.
+Implement the production `DiscoveryDataSource`, business-only live boundaries,
+generic CLI/agent operations, and stable reference resolution against the same
+landed contract. Keep the other Discovery worktree read-only.
 
 ### 7. Run the acceptance gate
 
@@ -482,21 +494,16 @@ live-proven states separately.
 
 ## Next concrete worktree task
 
-The first product-code task belongs to the `discovery-engine` session:
+After the Outscraper slice specification is reviewed and its implementation
+plan is approved, rebase `codex/discovery-next` onto current `origin/develop` and
+extend the proven foundation with the transport-neutral local-worker claim,
+heartbeat, checkpoint, and fenced-result protocol. Exclude the actual
+Outscraper and LLM calls from that first implementation commit.
 
-> From current `origin/develop`, build a restart-safe, entitlement-gated
-> Discovery foundation vertical slice: signed Nostr start/status/cancel
-> operations, private run persistence, a durable leased job, deterministic
-> fake-source progress, and matching CLI access. Exclude live providers, LLM
-> calls, and frontend rewrites.
-
-Its gate is a run started from the CLI, observed through the relay, interrupted
-by a worker restart, resumed exactly once, cancelled successfully, and locked
-immediately when entitlement is removed.
-
-The `discovery-next` worktree should perform no product implementation until the
-engine contract lands. Its immediate responsibility is this design record and
-later frontend integration against the landed contract.
+Its gate is a simulated local worker that claims a queued run, checkpoints a
+non-secret provider job reference, survives disconnect/restart without duplicate
+submission, rejects stale results, cancels immediately, and never sends a
+fixture secret to the relay.
 
 ## Deferred founder decisions
 
