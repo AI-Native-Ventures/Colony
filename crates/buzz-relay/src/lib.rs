@@ -7,6 +7,7 @@ mod block_broker;
 /// Validation for chat-native Block event envelopes.
 pub mod blocks;
 mod company_broker;
+mod ledger_broker;
 mod party_broker;
 
 /// REST API route handlers.

@@ -1815,6 +1815,42 @@ async fn ingest_event_inner(
         };
     }
 
+    // Ledger actions carry owner authority over what the company believes it
+    // spent, routed here for the same reason party actions are: after the
+    // ban/timeout write-block, so a restricted owner cannot rewrite prices.
+    if crate::ledger_broker::is_ledger_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot mutate ledger state".into(),
+            ));
+        }
+        return match crate::ledger_broker::handle_ledger_action(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::ledger_broker::LedgerBrokerOutcome::Applied => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: String::new(),
+            }),
+            crate::ledger_broker::LedgerBrokerOutcome::Duplicate {
+                original_action_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original action {original_event_id_hex}"),
+                })
+            }
+            crate::ledger_broker::LedgerBrokerOutcome::Refused { message } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: false,
+                message: format!("conflict: {message}"),
+            }),
+        };
+    }
+
     // Reserved catalog actions are community-global governance requests, not
     // chat messages and not actions against a synthetic Block instance. Route
     // every event that names a reserved action before channel derivation so a
