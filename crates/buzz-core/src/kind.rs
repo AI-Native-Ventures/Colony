@@ -812,6 +812,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_APPROVAL_GRANT
             | KIND_APPROVAL_DENY
             | KIND_COMPANY_ACTION
+            | KIND_PARTY_ACTION
     )
 }
 
@@ -831,6 +832,9 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_INITIATIVE
             | KIND_TASK
             | KIND_COMPANY_RECEIPT
+            | KIND_PARTY
+            | KIND_PARTY_RELATIONSHIP
+            | KIND_PARTY_RECEIPT
     )
 }
 
@@ -980,6 +984,18 @@ mod tests {
         for kind in [KIND_PARTY_ACTION, KIND_PARTY_RECEIPT] {
             assert!(!company.contains(&kind));
         }
+
+        // Classification is what the relay routes on. Defining the integers
+        // without it makes every party kind an unknown kind at ingest, which is
+        // a refusal that reads exactly like a correct authorization failure.
+        for head in [KIND_PARTY, KIND_PARTY_RELATIONSHIP] {
+            assert!(is_relay_only_kind(head), "a client must not author {head}");
+            assert!(!is_command_kind(head));
+        }
+        assert!(is_command_kind(KIND_PARTY_ACTION));
+        assert!(!is_relay_only_kind(KIND_PARTY_ACTION));
+        assert!(is_relay_only_kind(KIND_PARTY_RECEIPT));
+        assert!(!is_command_kind(KIND_PARTY_RECEIPT));
     }
 
     #[test]

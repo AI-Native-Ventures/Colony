@@ -170,7 +170,7 @@ async fn broker(
     keys: &Keys,
     relay: &str,
     action: &PartyAction,
-) -> (PartyReceiptOutcome, Option<String>) {
+) -> (PartyReceiptOutcome, Option<String>, String) {
     let event = build_party_action(action)
         .expect("action builds")
         .sign_with_keys(keys)
@@ -213,7 +213,7 @@ async fn broker(
                 receipt.action_event_id, action_id,
                 "a receipt must name the action it answers"
             );
-            return (receipt.outcome, receipt.head_event_id);
+            return (receipt.outcome, receipt.head_event_id, ok.message.clone());
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -221,28 +221,42 @@ async fn broker(
 }
 
 /// Read one relay-authored head by coordinate.
+///
+/// Retries once on a read timeout. Running the whole file back to back, one
+/// read occasionally never sees its EOSE, while the same test passes alone and
+/// in pairs against the same relay and the same data; the cause is in the
+/// shared WebSocket test harness rather than in anything party-specific, and it
+/// is not diagnosed. The retry is bounded and deliberately narrow: it only
+/// covers a missing EOSE, so a head that genuinely does not exist still comes
+/// back as `None` and every assertion about content is unaffected.
 async fn head(
     client: &mut BuzzTestClient,
     relay: &str,
     kind: u32,
     d_tag: &str,
 ) -> Option<nostr::Event> {
-    let id = sub_id("head");
-    let filter = Filter::new()
-        .kind(Kind::Custom(kind as u16))
-        .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
-        .identifier(d_tag)
-        .limit(1);
-    client
-        .subscribe(&id, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = client
-        .collect_until_eose(&id, Duration::from_secs(5))
-        .await
-        .expect("collect");
-    let _ = client.close_subscription(&id).await;
-    events.into_iter().next()
+    for attempt in 0..2 {
+        let id = sub_id("head");
+        let filter = Filter::new()
+            .kind(Kind::Custom(kind as u16))
+            .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
+            .identifier(d_tag)
+            .limit(1);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        let collected = client.collect_until_eose(&id, Duration::from_secs(5)).await;
+        let _ = client.close_subscription(&id).await;
+        match collected {
+            Ok(events) => return events.into_iter().next(),
+            Err(error) if attempt == 0 => {
+                eprintln!("head read for {d_tag} timed out ({error}); retrying once");
+            }
+            Err(error) => panic!("head read for {d_tag} failed twice: {error}"),
+        }
+    }
+    None
 }
 
 async fn stored_party(client: &mut BuzzTestClient, relay: &str, id: &str) -> Option<PartyHead> {
@@ -273,7 +287,7 @@ async fn create_party(
     relay: &str,
     record: &Party,
 ) -> String {
-    let (outcome, head_id) = broker(
+    let (outcome, head_id, _) = broker(
         client,
         owner,
         relay,
@@ -299,8 +313,8 @@ async fn create_view(
     owner: &Keys,
     relay: &str,
     view: &PartyRelationship,
-) -> PartyReceiptOutcome {
-    let (outcome, _) = broker(
+) -> (PartyReceiptOutcome, Option<String>, String) {
+    let (outcome, head_id, message) = broker(
         client,
         owner,
         relay,
@@ -313,7 +327,7 @@ async fn create_view(
         ),
     )
     .await;
-    outcome
+    (outcome, head_id, message)
 }
 
 /// Ask the relay to fold `retired` into `survivor`.
@@ -329,7 +343,7 @@ async fn merge(
     retired: &Party,
     survivor_head_id: &str,
     stamp: i64,
-) -> (PartyReceiptOutcome, Party, PartyAction) {
+) -> (PartyReceiptOutcome, Party, PartyAction, String) {
     let merged = merge_parties(survivor, retired).expect("the merge is well formed");
     let alias = PartyAlias {
         schema: PARTY_ALIAS_SCHEMA.to_string(),
@@ -351,8 +365,8 @@ async fn merge(
         coordinate(KIND_PARTY, relay, &merged.id),
         Some(survivor_head_id.to_string()),
     );
-    let (outcome, _) = broker(client, owner, relay, &request).await;
-    (outcome, merged, request)
+    let (outcome, _, message) = broker(client, owner, relay, &request).await;
+    (outcome, merged, request, message)
 }
 
 struct Fixture {
@@ -457,50 +471,21 @@ async fn lead_and_client_are_views_over_one_identity() {
         "account-lead",
         stamp,
     );
-    assert_eq!(
-        create_view(&mut client, &fixture.owner, &fixture.relay, &lead).await,
-        PartyReceiptOutcome::Applied
-    );
-    assert_eq!(
-        create_view(&mut client, &fixture.owner, &fixture.relay, &client_view).await,
-        PartyReceiptOutcome::Applied
-    );
+    let (outcome, lead_head, _) =
+        create_view(&mut client, &fixture.owner, &fixture.relay, &lead).await;
+    assert_eq!(outcome, PartyReceiptOutcome::Applied);
+    let lead_head = lead_head.expect("an applied receipt names its head");
+    let (outcome, _, _) =
+        create_view(&mut client, &fixture.owner, &fixture.relay, &client_view).await;
+    assert_eq!(outcome, PartyReceiptOutcome::Applied);
 
-    let stored_lead = stored_view(
-        &mut client,
-        &fixture.relay,
-        &fixture.survivor_id,
-        RelationshipKind::Lead,
-    )
-    .await
-    .expect("the lead view exists");
-    let stored_client = stored_view(
-        &mut client,
-        &fixture.relay,
-        &fixture.survivor_id,
-        RelationshipKind::Client,
-    )
-    .await
-    .expect("the client view exists");
-    assert_ne!(
-        stored_lead.id, stored_client.id,
-        "each view has its own coordinate"
-    );
-    assert_ne!(stored_lead.owner_persona_id, stored_client.owner_persona_id);
-
-    // Losing the deal does not end the account.
-    let mut disqualified = stored_lead.clone();
+    // Losing the deal does not end the account. The compare-and-set token is
+    // the head the relay just named, rather than one read back: a read between
+    // two writes buys nothing here and the receipt is the authoritative answer.
+    let mut disqualified = lead.clone();
     disqualified.status = RelationshipStatus::Disqualified;
     disqualified.updated_at = stamp + 1;
-    let lead_head = head(
-        &mut client,
-        &fixture.relay,
-        KIND_PARTY_RELATIONSHIP,
-        &stored_lead.id,
-    )
-    .await
-    .expect("lead head");
-    let (outcome, _) = broker(
+    let (outcome, _, _) = broker(
         &mut client,
         &fixture.owner,
         &fixture.relay,
@@ -508,23 +493,49 @@ async fn lead_and_client_are_views_over_one_identity() {
             &fixture.relay,
             PartyActionOperation::Transition,
             PartyActionPayload::Relationship(disqualified),
-            coordinate(KIND_PARTY_RELATIONSHIP, &fixture.relay, &stored_lead.id),
-            Some(lead_head.id.to_hex()),
+            coordinate(KIND_PARTY_RELATIONSHIP, &fixture.relay, &lead.id),
+            Some(lead_head),
         ),
     )
     .await;
     assert_eq!(outcome, PartyReceiptOutcome::Applied);
 
-    let after = stored_view(
-        &mut client,
+    // Read on a fresh connection. The writer's socket has closed subscriptions
+    // the relay may still be publishing these very heads to, and a reader that
+    // has to filter another session's leftover frames is not the reader any
+    // client actually is. A second connection is also closer to the truth: the
+    // desktop reads these views without having written them.
+    let mut reader = BuzzTestClient::connect(&relay_url(), &fixture.owner)
+        .await
+        .expect("connect a reader");
+    let stored_lead = stored_view(
+        &mut reader,
+        &fixture.relay,
+        &fixture.survivor_id,
+        RelationshipKind::Lead,
+    )
+    .await
+    .expect("the lead view exists");
+    let stored_client = stored_view(
+        &mut reader,
         &fixture.relay,
         &fixture.survivor_id,
         RelationshipKind::Client,
     )
     .await
-    .expect("the client view survives the lead ending");
+    .expect("the client view exists");
+
+    assert_ne!(
+        stored_lead.id, stored_client.id,
+        "each view has its own coordinate"
+    );
+    assert_ne!(
+        stored_lead.owner_persona_id, stored_client.owner_persona_id,
+        "Sales owns the pipeline and Accounts owns the engagement"
+    );
+    assert_eq!(stored_lead.status, RelationshipStatus::Disqualified);
     assert_eq!(
-        after.status,
+        stored_client.status,
         RelationshipStatus::Active,
         "ending one view must not reach the other"
     );
@@ -570,7 +581,9 @@ async fn a_merge_retires_a_handle_and_the_views_follow_the_identity() {
         stamp,
     );
     assert_eq!(
-        create_view(&mut client, &fixture.owner, &fixture.relay, &retired_client).await,
+        create_view(&mut client, &fixture.owner, &fixture.relay, &retired_client)
+            .await
+            .0,
         PartyReceiptOutcome::Applied
     );
     // Both sides carry a Lead, so the merge has to collapse them rather than
@@ -596,12 +609,14 @@ async fn a_merge_retires_a_handle_and_the_views_follow_the_identity() {
             stamp,
         );
         assert_eq!(
-            create_view(&mut client, &fixture.owner, &fixture.relay, &view).await,
+            create_view(&mut client, &fixture.owner, &fixture.relay, &view)
+                .await
+                .0,
             PartyReceiptOutcome::Applied
         );
     }
 
-    let (outcome, merged, _) = merge(
+    let (outcome, merged, _, _) = merge(
         &mut client,
         &fixture.owner,
         &fixture.relay,
@@ -714,7 +729,7 @@ async fn a_replayed_merge_returns_the_original_answer_and_merges_once() {
     let survivor_head = create_party(&mut client, &fixture.owner, &fixture.relay, &survivor).await;
     create_party(&mut client, &fixture.owner, &fixture.relay, &retired).await;
 
-    let (outcome, merged, request) = merge(
+    let (outcome, merged, request, _) = merge(
         &mut client,
         &fixture.owner,
         &fixture.relay,
@@ -860,13 +875,15 @@ async fn an_ended_view_meeting_a_live_one_refuses_the_merge() {
             stamp,
         );
         assert_eq!(
-            create_view(&mut client, &fixture.owner, &fixture.relay, &view).await,
+            create_view(&mut client, &fixture.owner, &fixture.relay, &view)
+                .await
+                .0,
             PartyReceiptOutcome::Applied,
             "both views are individually valid"
         );
     }
 
-    let (outcome, _, _) = merge(
+    let (outcome, _, _, message) = merge(
         &mut client,
         &fixture.owner,
         &fixture.relay,
@@ -878,8 +895,14 @@ async fn an_ended_view_meeting_a_live_one_refuses_the_merge() {
     .await;
     assert_eq!(
         outcome,
-        PartyReceiptOutcome::Rejected,
+        PartyReceiptOutcome::Conflict,
         "an ended view meeting a live one is a decision, not something to resolve silently"
+    );
+    // The outcome alone would pass on any refusal, including one for an
+    // unrelated reason. What is under test is that the relay refused *this*.
+    assert!(
+        message.contains("ended on one side and live on the other"),
+        "the relay must say why it refused, got {message:?}"
     );
 
     // Refused means nothing moved: the retired handle is still a party.
@@ -911,9 +934,12 @@ async fn a_relationship_without_its_party_is_refused() {
         "sales-lead",
         stamp,
     );
-    assert_eq!(
-        create_view(&mut client, &fixture.owner, &fixture.relay, &orphan).await,
-        PartyReceiptOutcome::Rejected
+    let (outcome, _, message) =
+        create_view(&mut client, &fixture.owner, &fixture.relay, &orphan).await;
+    assert_eq!(outcome, PartyReceiptOutcome::Conflict);
+    assert!(
+        message.contains("referenced party does not exist"),
+        "the relay must say why it refused, got {message:?}"
     );
     assert!(
         stored_view(

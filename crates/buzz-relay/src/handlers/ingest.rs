@@ -28,13 +28,14 @@ use buzz_core::kind::{
     KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
     KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
     KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
-    KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST,
-    KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
-    KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
-    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USER_STATUS,
-    KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
-    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PARTY_ACTION, KIND_PERSONA,
+    KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION,
+    KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
+    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
+    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM,
+    KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -222,9 +223,10 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_TEAM
         | KIND_MANAGED_AGENT
         | KIND_BLOCK_MANIFEST
-        // Company mutations carry owner authority; the actual owner check is
-        // made under `FOR UPDATE` inside the broker's transaction.
+        // Company and party mutations carry owner authority; the actual owner
+        // check is made under `FOR UPDATE` inside the broker's transaction.
         | KIND_COMPANY_ACTION
+        | KIND_PARTY_ACTION
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
@@ -393,12 +395,14 @@ pub(crate) async fn derive_reaction_channel(
 
 /// Whether a command kind is handled by the generic command executor.
 ///
-/// Company Actions are command kinds but are deliberately excluded: this branch
-/// returns BEFORE the ban/timeout write-block, so routing them here would let a
-/// banned or timed-out owner mutate company state. They are brokered further
-/// down, past that gate.
+/// Company and Party Actions are command kinds but are deliberately excluded:
+/// this branch returns BEFORE the ban/timeout write-block, so routing them here
+/// would let a banned or timed-out owner mutate company or party state. They are
+/// brokered further down, past that gate.
 pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
-    buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION
+    buzz_core::kind::is_command_kind(kind)
+        && kind != KIND_COMPANY_ACTION
+        && kind != KIND_PARTY_ACTION
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -451,6 +455,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_BLOCK_MANIFEST
             | KIND_BLOCK_CATALOG_ENTRY
             | KIND_COMPANY_ACTION
+            | KIND_PARTY_ACTION
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
@@ -3182,28 +3187,61 @@ mod tests {
         assert!(!buzz_core::kind::is_relay_only_kind(KIND_COMPANY_ACTION));
     }
 
-    /// Company Actions are a command kind, but they must NOT take the generic
-    /// command branch: that branch returns before the ban/timeout write-block,
-    /// so routing them there would let a banned owner mutate company state.
+    /// Company and Party Actions are command kinds, but they must NOT take the
+    /// generic command branch: that branch returns before the ban/timeout
+    /// write-block, so routing them there would let a banned owner mutate
+    /// company or party state.
     #[test]
-    fn company_actions_are_excluded_from_the_generic_command_branch() {
-        assert!(
-            buzz_core::kind::is_command_kind(KIND_COMPANY_ACTION),
-            "company actions remain a transactional command kind"
-        );
-        assert!(
-            !takes_generic_command_branch(KIND_COMPANY_ACTION),
-            "routing company actions through handle_command would skip the ban gate"
-        );
+    fn brokered_actions_are_excluded_from_the_generic_command_branch() {
+        let brokered = [KIND_COMPANY_ACTION, KIND_PARTY_ACTION];
+        for kind in brokered {
+            assert!(
+                buzz_core::kind::is_command_kind(kind),
+                "{kind} remains a transactional command kind"
+            );
+            assert!(
+                !takes_generic_command_branch(kind),
+                "routing {kind} through handle_command would skip the ban gate"
+            );
+        }
         // Every other command kind still takes that branch.
         for &kind in buzz_core::kind::ALL_KINDS {
-            if buzz_core::kind::is_command_kind(kind) && kind != KIND_COMPANY_ACTION {
+            if buzz_core::kind::is_command_kind(kind) && !brokered.contains(&kind) {
                 assert!(
                     takes_generic_command_branch(kind),
                     "command kind {kind} must still reach handle_command"
                 );
             }
         }
+    }
+
+    /// The routing a party action needs to reach its broker at all.
+    ///
+    /// Found by the live gate: the kinds existed and the broker was wired, but
+    /// nothing classified them, so every party action was refused as an unknown
+    /// kind -- a message indistinguishable from a correct authorization
+    /// failure, which is why two E2E tests passed for the wrong reason.
+    #[test]
+    fn party_kinds_have_pinned_scope_and_channel_classification() {
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_PARTY_ACTION, &dummy).unwrap(),
+            Scope::UsersWrite,
+            "party actions carry owner authority; the owner check is in the broker"
+        );
+        assert!(is_global_only_kind(KIND_PARTY_ACTION));
+        assert!(!requires_h_channel_scope(KIND_PARTY_ACTION));
+
+        // Heads and receipts are relay-authored. A client that could sign one
+        // would split the coordinate the moment ownership changed.
+        for kind in [
+            buzz_core::kind::KIND_PARTY,
+            buzz_core::kind::KIND_PARTY_RELATIONSHIP,
+            buzz_core::kind::KIND_PARTY_RECEIPT,
+        ] {
+            assert!(buzz_core::kind::is_relay_only_kind(kind));
+        }
+        assert!(!buzz_core::kind::is_relay_only_kind(KIND_PARTY_ACTION));
     }
 
     #[test]
