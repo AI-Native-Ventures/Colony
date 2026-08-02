@@ -5,6 +5,7 @@ mod builderlab;
 mod commands;
 mod company;
 mod deep_link;
+mod discovery_credentials;
 mod event_sync;
 mod events;
 mod huddle;
@@ -39,6 +40,7 @@ use deep_link::{
     acknowledge_pending_community_deep_link, handle_deep_link_url,
     take_pending_community_deep_link, PendingCommunityDeepLinks,
 };
+use discovery_credentials::*;
 use huddle::audio_output::{
     get_audio_output_device, list_audio_output_devices, set_audio_output_device,
 };
@@ -657,6 +659,9 @@ pub fn run() {
             transfer_builderlab_community,
             title_bar_double_click,
             get_identity,
+            save_discovery_outscraper_credential,
+            get_discovery_outscraper_credential_status,
+            delete_discovery_outscraper_credential,
             get_nsec,
             import_identity,
             persist_current_identity,
