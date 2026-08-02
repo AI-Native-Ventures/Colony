@@ -298,3 +298,34 @@ fn refresh_builtin_agent_avatars_updates_uploaded_media_urls() {
     assert_eq!(migrated[3]["avatar_url"], embedded_hash_url);
     assert_eq!(migrated[3]["updated_at"], "before");
 }
+
+/// The Colony rebrand's bee-era generation must refresh through the SHIPPED
+/// legacy table, not just a synthetic one: an instance still pointing at the
+/// bee avatar's relay upload gets the current entity avatar, and a second
+/// superseded generation for the same persona is reachable (regression for
+/// the matcher stopping at the first persona_id hit).
+#[test]
+fn shipped_legacy_table_refreshes_bee_era_uploaded_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("managed-agents.json");
+    // The observed bee-era relay upload digest from a real deployment.
+    let bee_media_sha256 = "e6025a21c864750f4b3828c9035bafdbe68ec73bd247745c78309b82fedcbed5";
+    let records = serde_json::json!([
+        {
+            "pubkey": "instance-pubkey",
+            "persona_id": "builtin:fizz",
+            "avatar_url": format!("https://relay.example/media/{bee_media_sha256}.png"),
+            "persona_source_version": "bee-era-version",
+            "updated_at": "before"
+        }
+    ]);
+    std::fs::write(&path, serde_json::to_string(&records).unwrap()).unwrap();
+
+    refresh_builtin_agent_avatars_in_file(&path, LEGACY_BUILTIN_AVATARS, "after");
+
+    let migrated: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let new_fizz = crate::managed_agents::built_in_persona_avatar_url("builtin:fizz").unwrap();
+    assert_eq!(migrated[0]["avatar_url"], new_fizz);
+    assert_eq!(migrated[0]["updated_at"], "after");
+}
