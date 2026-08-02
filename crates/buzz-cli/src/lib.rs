@@ -496,6 +496,102 @@ pub enum CompanyCmd {
 /// Workspace-scoped business Discovery operations.
 #[derive(Subcommand)]
 pub enum DiscoveryCmd {
+    /// Read whether this workspace can use live Discovery
+    Access {
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Create a durable Businesses campaign
+    CampaignCreate {
+        /// Stable campaign UUID. Generated when omitted.
+        #[arg(long)]
+        campaign: Option<Uuid>,
+        /// Human-readable campaign name.
+        #[arg(long)]
+        name: String,
+        /// Stable industry taxonomy id.
+        #[arg(long)]
+        industry: String,
+        /// Human-readable industry label.
+        #[arg(long)]
+        industry_name: String,
+        /// Stable vertical taxonomy id.
+        #[arg(long)]
+        vertical: String,
+        /// Human-readable vertical label.
+        #[arg(long)]
+        vertical_name: String,
+        /// Business category or Google Maps search phrase.
+        #[arg(long)]
+        query: String,
+        /// Geography included in the Google Maps query.
+        #[arg(long)]
+        location: String,
+        /// Maximum unique new Leads requested.
+        #[arg(long, default_value_t = 100)]
+        target: u16,
+        /// Optional ideal-customer description.
+        #[arg(long)]
+        description: Option<String>,
+        /// ISO 639-1 language code.
+        #[arg(long, default_value = "en")]
+        language: String,
+        /// Optional ISO 3166-1 alpha-2 country code.
+        #[arg(long)]
+        region: Option<String>,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Read one durable campaign
+    CampaignGet {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// List durable campaigns
+    CampaignList {
+        /// Optional industry taxonomy id.
+        #[arg(long)]
+        industry: Option<String>,
+        /// Optional vertical taxonomy id.
+        #[arg(long)]
+        vertical: Option<String>,
+        /// Zero-based row offset.
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+        /// Page size from 1 through 100.
+        #[arg(long, default_value_t = 25)]
+        limit: u16,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// List normalized retained business Leads
+    LeadsList {
+        /// Optional campaign that first retained each Lead.
+        #[arg(long)]
+        campaign: Option<Uuid>,
+        /// Optional industry taxonomy id.
+        #[arg(long)]
+        industry: Option<String>,
+        /// Optional vertical taxonomy id.
+        #[arg(long)]
+        vertical: Option<String>,
+        /// Zero-based row offset.
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+        /// Page size from 1 through 100.
+        #[arg(long, default_value_t = 25)]
+        limit: u16,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
     /// Start a durable run for an existing campaign reference
     Start {
         /// Campaign UUID owned by the Discovery work surface.
@@ -2253,6 +2349,31 @@ mod tests {
         let run = "8797229a-3c2c-4bd0-8e2e-48e13f9bcc6f";
         let retry = "43ad3fa8-5bf8-4d87-909d-92cb998ddf1c";
         for args in [
+            vec!["buzz", "discovery", "access"],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-create",
+                "--campaign",
+                campaign,
+                "--name",
+                "Sandton dentists",
+                "--industry",
+                "healthcare",
+                "--industry-name",
+                "Healthcare",
+                "--vertical",
+                "dentists",
+                "--vertical-name",
+                "Dentists",
+                "--query",
+                "dentists",
+                "--location",
+                "Sandton, South Africa",
+            ],
+            vec!["buzz", "discovery", "campaign-get", "--campaign", campaign],
+            vec!["buzz", "discovery", "campaign-list", "--limit", "100"],
+            vec!["buzz", "discovery", "leads-list", "--campaign", campaign],
             vec![
                 "buzz",
                 "discovery",
