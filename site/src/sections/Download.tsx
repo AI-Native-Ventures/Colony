@@ -1,9 +1,10 @@
 // site/src/sections/Download.tsx
-// Download URL: matches GITHUB_RELEASES_URL in
-// desktop/src/features/settings/hooks/use-updater.ts, the URL the desktop
-// app's own in-app updater points at when it falls back to a manual
-// download. This fork has no releases yet, so it points at the releases
-// list rather than /releases/latest, which 404s with zero releases.
+// One-click download. Every release publishes the macOS dmg under the
+// stable asset name `Colony_aarch64.dmg` alongside the versioned one, so
+// this URL always serves the latest build without a site redeploy per
+// release. The releases page stays available as the secondary link.
+const DOWNLOAD_URL =
+  "https://github.com/AI-Native-Ventures/colony-releases/releases/latest/download/Colony_aarch64.dmg";
 const RELEASES_URL =
   "https://github.com/AI-Native-Ventures/colony-releases/releases";
 
@@ -22,12 +23,20 @@ export function Download() {
           start building with agents today.
         </p>
         <a
-          href={RELEASES_URL}
+          href={DOWNLOAD_URL}
           className="mt-8 inline-flex items-center justify-center rounded-full bg-colony-ink px-8 py-3 text-base font-medium text-colony-canvas transition hover:opacity-90"
         >
           Download Colony for macOS
         </a>
-        <p className="mt-3 text-sm text-colony-ink/60">Apple Silicon macOS</p>
+        <p className="mt-3 text-sm text-colony-ink/60">
+          Apple Silicon macOS ·{" "}
+          <a
+            href={RELEASES_URL}
+            className="underline underline-offset-4 transition hover:text-colony-ink"
+          >
+            release notes
+          </a>
+        </p>
 
         <details className="mx-auto mt-8 max-w-md text-left">
           <summary className="cursor-pointer text-center text-sm text-colony-ink/60 underline underline-offset-4 transition hover:text-colony-ink">
