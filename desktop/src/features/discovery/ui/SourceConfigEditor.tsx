@@ -223,6 +223,28 @@ export function SourceConfigEditor({
     source,
   });
 
+  if (entitlement?.experience === "live") {
+    return (
+      <Card className="space-y-4 border-border/60 bg-card/80 p-4 shadow-none">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">
+            Discovery source
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            The first production phase uses your connected Outscraper account.
+            Colony does not add usage credits or provider markup.
+          </p>
+        </div>
+        <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 p-3">
+          <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
+            {DISCOVERY_SOURCE_LABELS.google_maps}
+          </span>
+          <Switch aria-label="Outscraper is enabled" checked disabled />
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card className="space-y-4 border-border/60 bg-card/80 p-4 shadow-none">
       <div className="flex flex-wrap items-start justify-between gap-3">

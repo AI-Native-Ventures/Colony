@@ -17,6 +17,10 @@ pub mod api_token;
 pub mod archived_identities;
 /// Channel and membership persistence.
 pub mod channel;
+/// Private entitlement, authorization, and durable run persistence for Discovery.
+pub mod discovery;
+/// Private Discovery campaign and Lead workspace projections.
+pub mod discovery_workspace;
 /// Direct message channel persistence.
 pub mod dm;
 /// Database error types.
@@ -362,6 +366,56 @@ pub async fn insert_mentions(
     qb.push(" ON CONFLICT DO NOTHING");
 
     qb.build().execute(pool).await?;
+    Ok(())
+}
+
+/// Insert an event's `p`-tag mention projection inside an existing transaction.
+///
+/// Relay-owned brokers use this variant so a private receipt and the indexed
+/// owner route used to read it become visible atomically.
+pub async fn insert_mentions_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    event: &nostr::Event,
+    channel_id: Option<Uuid>,
+) -> Result<()> {
+    let valid_pubkeys: Vec<String> = event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let values = tag.as_slice();
+            (values.len() >= 2 && values[0] == "p").then(|| values[1].as_str())
+        })
+        .filter(|pubkey| {
+            pubkey.len() == 64
+                && pubkey
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit())
+        })
+        .map(str::to_ascii_lowercase)
+        .collect();
+    if valid_pubkeys.is_empty() {
+        return Ok(());
+    }
+    let created_at_secs = event.created_at.as_secs() as i64;
+    let created_at = DateTime::from_timestamp(created_at_secs, 0)
+        .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
+    let event_id = event.id.as_bytes();
+    let kind = event.kind.as_u16() as i32;
+    let mut query = QueryBuilder::<Postgres>::new(
+        "INSERT INTO event_mentions \
+         (community_id, pubkey_hex, event_id, event_created_at, channel_id, event_kind) ",
+    );
+    query.push_values(&valid_pubkeys, |mut row, pubkey| {
+        row.push_bind(community_id.as_uuid())
+            .push_bind(pubkey)
+            .push_bind(event_id.as_slice())
+            .push_bind(created_at)
+            .push_bind(channel_id)
+            .push_bind(kind);
+    });
+    query.push(" ON CONFLICT DO NOTHING");
+    query.build().execute(&mut **tx).await?;
     Ok(())
 }
 

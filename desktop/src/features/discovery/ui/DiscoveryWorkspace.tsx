@@ -210,6 +210,17 @@ export function DiscoveryWorkspace({
     );
   }
 
+  if (mode === "people" && entitlement?.experience === "live") {
+    return (
+      <div className="px-9 pb-16 pt-9">
+        <WorkspaceState
+          description="The first production phase focuses on finding businesses and retaining them automatically as Leads. People discovery will follow after that path is proven."
+          title="People discovery is preview-only for now"
+        />
+      </div>
+    );
+  }
+
   const industry = readModel.industries.find(
     (candidate) => candidate.id === search.industryId,
   );

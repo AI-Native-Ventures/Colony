@@ -4,6 +4,7 @@ import { ArrowLeft, CalendarDays } from "lucide-react";
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import { Card } from "@/shared/ui/card";
 import type { DiscoveryEntitlement } from "../entitlement";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { CampaignDetail, LeadPage } from "../types";
@@ -94,6 +95,10 @@ export function CampaignDetailView({
   }, [campaign]);
   const runState = useDiscoveryRun(campaignState, dataSource, entitlement);
   const activeTab: CampaignTab = campaignTabForSearch(search);
+  const liveBusinessPhase = entitlement?.experience === "live";
+  const outsideLivePhase =
+    liveBusinessPhase &&
+    (activeTab === "outreach" || activeTab === "conversations");
   const effectiveStatus =
     runState.run.status === "idle" ? campaignState.status : runState.run.status;
   const displayStatus = effectiveStatus === "ready" ? "live" : effectiveStatus;
@@ -149,12 +154,25 @@ export function CampaignDetailView({
         </div>
         <CampaignTabs
           leadCount={campaignState.leadCount}
+          liveBusinessPhase={liveBusinessPhase}
           onValueChange={onTabChange}
           value={activeTab}
         />
       </header>
 
       <div className="pt-7">
+        {outsideLivePhase ? (
+          <Card className="border-border/60 bg-card/80 p-8 text-center shadow-none">
+            <h2 className="text-xl font-semibold text-foreground">
+              This stays in the preview for now
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+              Live Discovery ends when a unique business is retained as a Lead.
+              Multichannel Outreach and Conversations are separate production
+              phases, so this campaign cannot send from them yet.
+            </p>
+          </Card>
+        ) : null}
         {activeTab === "overview" ? (
           <OverviewTab
             campaign={campaignState}
@@ -176,13 +194,13 @@ export function CampaignDetailView({
             scope="campaign"
           />
         ) : null}
-        {activeTab === "outreach" ? (
+        {activeTab === "outreach" && !outsideLivePhase ? (
           <CampaignOutreachTab
             campaign={campaignState}
             dataSource={dataSource}
           />
         ) : null}
-        {activeTab === "conversations" ? (
+        {activeTab === "conversations" && !outsideLivePhase ? (
           <CampaignConversationsTab
             campaign={campaignState}
             dataSource={dataSource}

@@ -12,9 +12,8 @@ pub fn filters_match(filters: &[Filter], event: &StoredEvent) -> bool {
 }
 
 /// Result-level read authorization for relay-signed events whose content is
-/// private to a single viewer. Currently gates `KIND_DM_VISIBILITY` and
-/// `KIND_AGENT_TURN_METRIC`: the reader MUST equal the event's `#p` tag
-/// (owner). Returns `true` for every other kind.
+/// private to a single viewer. Every kind in `RESULT_GATED_KINDS` requires the
+/// reader to equal the event's `#p` tag. Returns `true` for every other kind.
 ///
 /// This guards every delivery surface — WS historical pull (`req.rs`), HTTP
 /// bridge (`bridge.rs`), and live fan-out (`event.rs`) — so a query that
@@ -22,7 +21,7 @@ pub fn filters_match(filters: &[Filter], event: &StoredEvent) -> bool {
 /// a known event id) still cannot read another user's private event.
 pub fn reader_authorized_for_event(event: &nostr::Event, reader_pubkey_hex: &str) -> bool {
     let kind = crate::kind::event_kind_u32(event);
-    if kind != crate::kind::KIND_DM_VISIBILITY && kind != crate::kind::KIND_AGENT_TURN_METRIC {
+    if !crate::kind::RESULT_GATED_KINDS.contains(&kind) {
         return true;
     }
     let p = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
@@ -296,5 +295,23 @@ mod tests {
             !reader_authorized_for_event(&metric, &agent_keys.public_key().to_hex()),
             "the authoring agent must NOT be authorized to read its own metric event (owner-only)"
         );
+    }
+
+    #[test]
+    fn every_result_gated_kind_requires_matching_p_tag() {
+        let relay = Keys::generate();
+        let owner = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let attacker = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        for kind in crate::kind::RESULT_GATED_KINDS {
+            let event = EventBuilder::new(Kind::Custom(*kind as u16), "private")
+                .tags([Tag::parse(["p", owner]).unwrap()])
+                .sign_with_keys(&relay)
+                .expect("sign result-gated event");
+            assert!(reader_authorized_for_event(&event, owner));
+            assert!(
+                !reader_authorized_for_event(&event, attacker),
+                "kind {kind} leaked to a non-owner reader"
+            );
+        }
     }
 }

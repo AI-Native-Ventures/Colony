@@ -9,6 +9,8 @@ export type DiscoveryEntitlement = {
   state: DiscoveryEntitlementState;
   planName?: string;
   manageUrl?: string;
+  /** Whether this read model is the cost-free preview or persisted live data. */
+  experience?: "demo" | "live";
 };
 
 export function canStartDiscovery(

@@ -3,6 +3,7 @@ pub mod blocks;
 pub mod channel_templates;
 pub mod channels;
 pub mod company;
+pub mod discovery;
 pub mod dms;
 pub mod emoji;
 pub mod feed;

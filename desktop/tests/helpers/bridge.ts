@@ -137,6 +137,10 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /** Device-local Discovery credential state returned by the Tauri mock. */
+  discoveryCredentialStatus?: "configured" | "missing" | "unavailable";
+  /** Delay a credential save so specs can prove duplicate submission fencing. */
+  discoveryCredentialSaveDelayMs?: number;
   /** Signed Block manifests/catalog events served by the mock relay. */
   blockEvents?: RelayEvent[];
   /** Signed Block timeline events seeded before the app subscribes. */

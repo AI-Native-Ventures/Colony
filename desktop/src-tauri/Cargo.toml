@@ -2,7 +2,7 @@
 
 [package]
 name = "buzz-desktop"
-version = "0.5.2"
+version = "0.6.0"
 description = "Buzz desktop app"
 authors = ["you"]
 edition = "2021"
@@ -138,3 +138,4 @@ tokio = { version = "1", features = ["test-util"] }
 # The relay's media validation, so the snapshot-sharing tests can prove the
 # full export → sanitize → relay-accept → import contract end to end.
 buzz_media_pkg = { package = "buzz-media", path = "../../crates/buzz-media" }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }

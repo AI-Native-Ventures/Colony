@@ -16,6 +16,7 @@ use buzz_core::kind::{
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BLOCK_ACTION,
     KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST, KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST,
     KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION, KIND_CONTACT_LIST, KIND_DELETION,
+    KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
     KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
     KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
     KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
@@ -229,6 +230,9 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_COMPANY_ACTION
         | KIND_PARTY_ACTION
         | KIND_LEDGER_ACTION
+        | KIND_DISCOVERY_ACTION
+        | KIND_DISCOVERY_WORKER_ACTION
+        | KIND_DISCOVERY_WORKSPACE_ACTION
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
@@ -398,7 +402,7 @@ pub(crate) async fn derive_reaction_channel(
 
 /// Whether a command kind is handled by the generic command executor.
 ///
-/// Company and Party Actions are command kinds but are deliberately excluded:
+/// Company, Party, and Discovery Actions are command kinds but are deliberately excluded:
 /// this branch returns BEFORE the ban/timeout write-block, so routing them here
 /// would let a banned or timed-out owner mutate company or party state. They are
 /// brokered further down, past that gate.
@@ -407,6 +411,9 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
         && kind != KIND_COMPANY_ACTION
         && kind != KIND_PARTY_ACTION
         && kind != KIND_LEDGER_ACTION
+        && kind != KIND_DISCOVERY_ACTION
+        && kind != KIND_DISCOVERY_WORKER_ACTION
+        && kind != KIND_DISCOVERY_WORKSPACE_ACTION
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -461,6 +468,9 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_COMPANY_ACTION
             | KIND_PARTY_ACTION
             | KIND_LEDGER_ACTION
+            | KIND_DISCOVERY_ACTION
+            | KIND_DISCOVERY_WORKER_ACTION
+            | KIND_DISCOVERY_WORKSPACE_ACTION
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
@@ -1851,6 +1861,197 @@ async fn ingest_event_inner(
         };
     }
 
+    // A local Discovery worker uses the same community-global authorization
+    // boundary as native and agent-started runs. Worker commands are strict,
+    // private, and atomically receipted rather than entering generic storage.
+    if crate::discovery_worker_broker::is_discovery_worker_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot operate Discovery".into(),
+            ));
+        }
+        let outcome = match crate::discovery_worker_broker::handle_discovery_worker_action(
+            tenant, state, &event,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Invalid(message)) => {
+                return Err(IngestError::Rejected(format!("invalid: {message}")));
+            }
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Restricted(
+                message,
+            )) => {
+                return Err(IngestError::AuthFailed(format!("restricted: {message}")));
+            }
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Conflict(message)) => {
+                return Err(IngestError::Rejected(format!("conflict: {message}")));
+            }
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Internal(detail)) => {
+                error!(%detail, "Discovery worker broker internal failure");
+                return Err(IngestError::Internal(
+                    "error: Discovery worker is temporarily unavailable".into(),
+                ));
+            }
+        };
+        return match outcome {
+            crate::discovery_worker_broker::DiscoveryWorkerBrokerOutcome::Applied {
+                receipt_event_id,
+                outcome,
+            } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: serde_json::json!({
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                    "outcome": outcome,
+                })
+                .to_string(),
+            }),
+            crate::discovery_worker_broker::DiscoveryWorkerBrokerOutcome::Duplicate {
+                original_action_event_id,
+                receipt_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: serde_json::json!({
+                        "duplicate": true,
+                        "original_action_event_id": original_event_id_hex,
+                        "receipt_event_id": hex::encode(receipt_event_id),
+                    })
+                    .to_string(),
+                })
+            }
+        };
+    }
+
+    // Campaign and Lead records share Discovery's paid, community-global
+    // authority but use their own strict private action/receipt contract.
+    if crate::discovery_workspace_broker::is_discovery_workspace_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot operate Discovery".into(),
+            ));
+        }
+        let outcome = match crate::discovery_workspace_broker::handle_discovery_workspace_action(
+            tenant, state, &event,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Invalid(
+                message,
+            )) => return Err(IngestError::Rejected(format!("invalid: {message}"))),
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Restricted(
+                message,
+            )) => return Err(IngestError::AuthFailed(format!("restricted: {message}"))),
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Conflict(
+                message,
+            )) => return Err(IngestError::Rejected(format!("conflict: {message}"))),
+            Err(crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerError::Internal(
+                detail,
+            )) => {
+                error!(%detail, "Discovery workspace broker internal failure");
+                return Err(IngestError::Internal(
+                    "error: Discovery is temporarily unavailable".into(),
+                ));
+            }
+        };
+        return match outcome {
+            crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerOutcome::Applied {
+                receipt_event_id,
+                result,
+            } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: serde_json::json!({
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                    "result": result,
+                })
+                .to_string(),
+            }),
+            crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerOutcome::Duplicate {
+                original_action_event_id,
+                receipt_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: serde_json::json!({
+                        "duplicate": true,
+                        "original_action_event_id": original_event_id_hex,
+                        "receipt_event_id": hex::encode(receipt_event_id),
+                    })
+                    .to_string(),
+                })
+            }
+        };
+    }
+
+    // Discovery is a community-global paid primitive. The signed command is
+    // authorized and atomically receipted by the broker after restrictions
+    // have been enforced, never by the generic command path.
+    if crate::discovery_broker::is_discovery_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot operate Discovery".into(),
+            ));
+        }
+        let outcome =
+            match crate::discovery_broker::handle_discovery_action(tenant, state, &event).await {
+                Ok(outcome) => outcome,
+                Err(crate::discovery_broker::DiscoveryBrokerError::Invalid(message)) => {
+                    return Err(IngestError::Rejected(format!("invalid: {message}")));
+                }
+                Err(crate::discovery_broker::DiscoveryBrokerError::Restricted(message)) => {
+                    return Err(IngestError::AuthFailed(format!("restricted: {message}")));
+                }
+                Err(crate::discovery_broker::DiscoveryBrokerError::Conflict(message)) => {
+                    return Err(IngestError::Rejected(format!("conflict: {message}")));
+                }
+                Err(crate::discovery_broker::DiscoveryBrokerError::Internal(detail)) => {
+                    error!(%detail, "Discovery broker internal failure");
+                    return Err(IngestError::Internal(
+                        "error: Discovery is temporarily unavailable".into(),
+                    ));
+                }
+            };
+        return match outcome {
+            crate::discovery_broker::DiscoveryBrokerOutcome::Applied {
+                receipt_event_id,
+                run,
+            } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: serde_json::json!({
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                    "run": run,
+                })
+                .to_string(),
+            }),
+            crate::discovery_broker::DiscoveryBrokerOutcome::Duplicate {
+                original_action_event_id,
+                receipt_event_id,
+                run,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: serde_json::json!({
+                        "duplicate": true,
+                        "original_action_event_id": original_event_id_hex,
+                        "receipt_event_id": hex::encode(receipt_event_id),
+                        "run": run,
+                    })
+                    .to_string(),
+                })
+            }
+        };
+    }
+
     // Reserved catalog actions are community-global governance requests, not
     // chat messages and not actions against a synthetic Block instance. Route
     // every event that names a reserved action before channel derivation so a
@@ -3217,6 +3418,7 @@ mod tests {
             buzz_core::kind::KIND_INITIATIVE,
             buzz_core::kind::KIND_TASK,
             buzz_core::kind::KIND_COMPANY_RECEIPT,
+            buzz_core::kind::KIND_DISCOVERY_WORKER_RECEIPT,
         ] {
             assert!(
                 buzz_core::kind::is_relay_only_kind(kind),
@@ -3230,15 +3432,19 @@ mod tests {
         assert!(!buzz_core::kind::is_relay_only_kind(KIND_COMPANY_ACTION));
     }
 
-    /// Company, Party, and Ledger Actions are command kinds, but they must NOT
-    /// take the generic command branch: that branch returns before the
-    /// ban/timeout write-block, so routing them there would let a banned owner
-    /// mutate company, party, or ledger state.
+    /// Company, Party, and Discovery Actions are command kinds, but they must
+    /// NOT take the
+    /// generic command branch: that branch returns before the ban/timeout
+    /// write-block, so routing them there would let a banned owner mutate
+    /// company or party state.
     #[test]
     fn brokered_actions_are_excluded_from_the_generic_command_branch() {
         let brokered = [
             KIND_COMPANY_ACTION,
             KIND_PARTY_ACTION,
+            KIND_DISCOVERY_ACTION,
+            KIND_DISCOVERY_WORKER_ACTION,
+            KIND_DISCOVERY_WORKSPACE_ACTION,
             buzz_core::kind::KIND_LEDGER_ACTION,
         ];
         for kind in brokered {
@@ -3248,7 +3454,7 @@ mod tests {
             );
             assert!(
                 !takes_generic_command_branch(kind),
-                "routing {kind} through handle_command would skip the ban gate"
+                "routing brokered action {kind} through handle_command would skip the ban gate"
             );
         }
         // Every other command kind still takes that branch.

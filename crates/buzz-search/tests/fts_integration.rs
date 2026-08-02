@@ -8,8 +8,10 @@
 
 use buzz_core::{
     kind::{
-        AUTHOR_ONLY_KINDS, KIND_AGENT_TURN_METRIC, KIND_MEMBER_ADDED_NOTIFICATION,
-        KIND_MEMBER_REMOVED_NOTIFICATION, P_GATED_KINDS,
+        AUTHOR_ONLY_KINDS, KIND_AGENT_TURN_METRIC, KIND_DISCOVERY_ACTION, KIND_DISCOVERY_RECEIPT,
+        KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKER_RECEIPT,
+        KIND_DISCOVERY_WORKSPACE_ACTION, KIND_DISCOVERY_WORKSPACE_RECEIPT,
+        KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, P_GATED_KINDS,
     },
     CommunityId,
 };
@@ -28,7 +30,12 @@ const MIGRATION_0007_SQL: &str = include_str!("../../../migrations/0007_nip_rs_r
 const MIGRATION_0008_SQL: &str =
     include_str!("../../../migrations/0008_fresh_install_search_allowlist.sql");
 const MIGRATION_0014_SQL: &str = include_str!("../../../migrations/0014_push_lease_fts.sql");
-const MIGRATION_0031_SQL: &str = include_str!("../../../migrations/0031_usage_record_fts.sql");
+const MIGRATION_0031_SQL: &str = include_str!("../../../migrations/0031_discovery_foundation.sql");
+const MIGRATION_0032_SQL: &str =
+    include_str!("../../../migrations/0032_discovery_local_worker_protocol.sql");
+const MIGRATION_0036_SQL: &str =
+    include_str!("../../../migrations/0036_discovery_workspace_records.sql");
+const MIGRATION_0037_SQL: &str = include_str!("../../../migrations/0037_usage_record_fts.sql");
 
 async fn setup() -> (PgPool, String) {
     let url = std::env::var("BUZZ_TEST_DATABASE_URL").unwrap_or_else(|_| TEST_DB_URL.to_string());
@@ -85,6 +92,15 @@ async fn setup() -> (PgPool, String) {
     pool.execute(MIGRATION_0031_SQL)
         .await
         .expect("apply 0031 migration");
+    pool.execute(MIGRATION_0032_SQL)
+        .await
+        .expect("apply 0032 migration");
+    pool.execute(MIGRATION_0036_SQL)
+        .await
+        .expect("apply 0036 migration");
+    pool.execute(MIGRATION_0037_SQL)
+        .await
+        .expect("apply 0037 migration");
     (pool, schema)
 }
 
@@ -1095,11 +1111,17 @@ async fn very_long_query_is_bounded_before_pg_parse() {
 ///   - 1059  = `KIND_GIFT_WRAP`      (NIP-17 ciphertext)
 ///   - 30300 = `KIND_EVENT_REMINDER` (in `AUTHOR_ONLY_KINDS`)
 ///   - 30622 = `KIND_DM_VISIBILITY`  (per-viewer private hide state)
+///   - 40017 = `KIND_DISCOVERY_ACTION` (author-only command)
+///   - 40018 = `KIND_DISCOVERY_RECEIPT` (requester-private receipt)
+///   - 40019 = `KIND_DISCOVERY_WORKER_ACTION` (author-only local-worker command)
+///   - 40020 = `KIND_DISCOVERY_WORKER_RECEIPT` (worker-private receipt)
+///   - 40021 = `KIND_DISCOVERY_WORKSPACE_ACTION` (author-only workspace command)
+///   - 40022 = `KIND_DISCOVERY_WORKSPACE_RECEIPT` (requester-private result)
 ///   - 44100 = `KIND_MEMBER_ADDED_NOTIFICATION`  (p-gated membership notice)
 ///   - 44101 = `KIND_MEMBER_REMOVED_NOTIFICATION` (p-gated membership notice)
 ///   - 44200 = `KIND_AGENT_TURN_METRIC` (NIP-AM: p-gated encrypted turn metrics)
 ///
-/// All seven events are inserted with the same unique token in their content
+/// All thirteen events are inserted with the same unique token in their content
 /// so a single search query exercises every kind in one round-trip. Only
 /// the kind:9 control must surface — the excluded kinds must not.
 ///
@@ -1124,6 +1146,64 @@ async fn excluded_kinds_are_storage_level_unsearchable() {
         &format!("public chat — {token}"),
         None,
         1_700_000_000,
+    )
+    .await;
+
+    // Local-worker action and receipt are private control-plane records.
+    for (kind, label, created_at) in [
+        (KIND_DISCOVERY_WORKER_ACTION, "worker action", 1_700_000_009),
+        (
+            KIND_DISCOVERY_WORKER_RECEIPT,
+            "worker receipt",
+            1_700_000_010,
+        ),
+        (
+            KIND_DISCOVERY_WORKSPACE_ACTION,
+            "workspace action",
+            1_700_000_011,
+        ),
+        (
+            KIND_DISCOVERY_WORKSPACE_RECEIPT,
+            "workspace receipt",
+            1_700_000_012,
+        ),
+    ] {
+        insert_event(
+            &pool,
+            c,
+            rand_bytes32(),
+            rand_bytes32(),
+            kind as i32,
+            &format!("{label} — {token}"),
+            None,
+            created_at,
+        )
+        .await;
+    }
+
+    // kind:40017 Discovery action — author-only and MUST NOT be searchable.
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        KIND_DISCOVERY_ACTION as i32,
+        &format!("discovery action — {token}"),
+        None,
+        1_700_000_007,
+    )
+    .await;
+
+    // kind:40018 Discovery receipt — requester-private and MUST NOT be searchable.
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        KIND_DISCOVERY_RECEIPT as i32,
+        &format!("discovery receipt — {token}"),
+        None,
+        1_700_000_008,
     )
     .await;
 
@@ -1235,6 +1315,12 @@ async fn excluded_kinds_are_storage_level_unsearchable() {
         1059,
         30300,
         30622,
+        KIND_DISCOVERY_ACTION as i32,
+        KIND_DISCOVERY_RECEIPT as i32,
+        KIND_DISCOVERY_WORKER_ACTION as i32,
+        KIND_DISCOVERY_WORKER_RECEIPT as i32,
+        KIND_DISCOVERY_WORKSPACE_ACTION as i32,
+        KIND_DISCOVERY_WORKSPACE_RECEIPT as i32,
         KIND_MEMBER_ADDED_NOTIFICATION as i32,
         KIND_MEMBER_REMOVED_NOTIFICATION as i32,
         KIND_AGENT_TURN_METRIC as i32,
