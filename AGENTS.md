@@ -88,6 +88,25 @@ See CONTRIBUTING.md for full setup details and dependency requirements.
 
 ---
 
+## Branch Model and the Promotion Gate
+
+This repo runs a two-branch promotion model. It is a hard contract for every
+agent; branch protection may not mechanically enforce all of it, so agents
+enforce it themselves.
+
+- **`develop`** is the default and integration branch. All day-to-day PRs
+  target it. PRs into develop run **no CI**; the local gates below are the
+  only check, so never skip them.
+- **`main`** is production. The only thing that merges into main is a
+  promotion PR from develop, and it runs the full CI matrix.
+- **Never merge a promotion PR while any check is failing or still running.**
+  Verify with `gh pr checks <pr>` and require every non-skipped check to
+  read `pass` before `gh pr merge`. A red or pending gate is an absolute
+  stop, regardless of how unrelated the failure looks. If the failure is
+  genuinely infrastructure, say so to the human and let them decide.
+- Never push directly to main, never force-push main, and never bypass the
+  gate because a change "only touches docs".
+
 ## Quality Gates
 
 Run `just ci` before every PR — it runs `fmt` + `clippy` + desktop lint +

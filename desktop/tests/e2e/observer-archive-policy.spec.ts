@@ -226,7 +226,12 @@ test.describe("observer archive policy — reconciliation gate", () => {
   }) => {
     await installMockBridge(page, {
       observerArchiveDefaultEnabled: true,
-      observerArchiveDefaultEnabledDelayMs: 500,
+      // Held, not delayed. A fixed delay raced app boot: once first render
+      // took longer than the timer, the policy resolved on its own and
+      // archive sync started legitimately, so the "did not start early"
+      // assertion below failed for a reason that had nothing to do with the
+      // behaviour under test.
+      observerArchiveDefaultEnabledHold: true,
       saveSubscriptions: [
         {
           scope_type: "owner_p",
@@ -271,6 +276,15 @@ test.describe("observer archive policy — reconciliation gate", () => {
       "deadbeef".repeat(8),
     );
     expect(hasSubscriptionWhilePending).toBe(false);
+
+    // Release the policy; only now may archive sync start.
+    await page.evaluate(() => {
+      (
+        window as Window & {
+          __BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__?: () => void;
+        }
+      ).__BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__?.();
+    });
 
     // After the policy resolves, both the IPC call and the live filter
     // appear.

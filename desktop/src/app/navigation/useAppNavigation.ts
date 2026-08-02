@@ -8,6 +8,11 @@ import {
 
 import { cacheSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { resolveSearchHitDestination } from "@/app/navigation/resolveSearchHitDestination";
+import type {
+  DiscoverySearch,
+  DiscoverySurface,
+  DiscoveryTab,
+} from "@/app/routes/discovery";
 import type { SearchHit } from "@/shared/api/types";
 
 type NavigationBehavior = {
@@ -20,6 +25,37 @@ type NewMessageNavigationOptions = NavigationBehavior & {
   blockHandle?: string;
   blockManifestId?: string;
 };
+export type DiscoveryNavigationOptions = NavigationBehavior &
+  Partial<
+    Pick<
+      DiscoverySearch,
+      | "entity"
+      | "industryId"
+      | "verticalId"
+      | "fieldId"
+      | "roleId"
+      | "campaignId"
+    >
+  > & {
+    surface?: DiscoverySurface;
+    tab?: DiscoveryTab;
+  };
+
+/** Keep Discovery deep links explicit and limited to the validated search shape. */
+export function buildDiscoverySearch(
+  options?: DiscoveryNavigationOptions,
+): Record<string, string | undefined> {
+  return {
+    ...(options?.entity ? { entity: options.entity } : {}),
+    ...(options?.surface ? { surface: options.surface } : {}),
+    ...(options?.industryId ? { industryId: options.industryId } : {}),
+    ...(options?.verticalId ? { verticalId: options.verticalId } : {}),
+    ...(options?.fieldId ? { fieldId: options.fieldId } : {}),
+    ...(options?.roleId ? { roleId: options.roleId } : {}),
+    ...(options?.campaignId ? { campaignId: options.campaignId } : {}),
+    ...(options?.tab ? { tab: options.tab } : {}),
+  };
+}
 
 export function useAppNavigation() {
   const router = useRouter();
@@ -81,6 +117,18 @@ export function useAppNavigation() {
           to: "/blocks",
         },
         behavior,
+      ),
+    [commitNavigation],
+  );
+
+  const goDiscovery = React.useCallback(
+    (options?: DiscoveryNavigationOptions) =>
+      commitNavigation(
+        {
+          to: "/discovery",
+          search: buildDiscoverySearch(options),
+        },
+        options,
       ),
     [commitNavigation],
   );
@@ -325,6 +373,7 @@ export function useAppNavigation() {
     goAgents,
     goBlocks,
     goChannel,
+    goDiscovery,
     goForumPost,
     goHome,
     goNewMessage,

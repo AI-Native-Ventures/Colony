@@ -51,7 +51,10 @@ class _PairingWelcomeView extends StatelessWidget {
                     color: Color(0x4DFFFFFF),
                   ),
                   child: const TappableFlappingAnt(
-                    width: 76,
+                    // Sized against the 136 circle above. The mark's artwork is
+                    // 466x309, so its rendered height is ~2/3 of this width;
+                    // 76 left it reading as a speck rather than a logo.
+                    width: 104,
                     color: _onboardingInk,
                   ),
                 ),

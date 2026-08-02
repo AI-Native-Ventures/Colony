@@ -47,6 +47,14 @@ function wait(delayMs: number): Promise<void> {
 }
 
 function buildProbeUrl(remoteUrl: string, attempt: number): string {
+  // `data:` URLs carry their payload inline and have no query component, so
+  // appending a cache-buster writes the parameter into the document itself:
+  // `...%3C/svg%3E?buzz_avatar_probe=...` is invalid SVG, the image fails to
+  // decode, every probe attempt errors, and the avatar never leaves `pending`.
+  // There is nothing to cache-bust on an inline payload anyway.
+  if (remoteUrl.startsWith("data:")) {
+    return remoteUrl;
+  }
   try {
     const url = new URL(remoteUrl);
     url.searchParams.set(

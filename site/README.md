@@ -77,7 +77,7 @@ is a separate follow-up, not assumed by this runbook.
   action ("Download Colony for macOS" in `site/src/sections/Download.tsx`) used to link to
   `https://github.com/block/buzz/releases/latest`, and the footer's GitHub link
   (`site/src/sections/Footer.tsx`) used to point at `https://github.com/block/buzz`. Both now
-  point at this repo's actual origin, `https://github.com/nocodeafrica/AI-Native-Ventures-App`.
+  point at this repo's actual origin, `https://github.com/AI-Native-Ventures/colony-releases`.
   Since this fork has zero releases as of this fix, both links use the releases list
   (`/releases`) rather than `/releases/latest`, which 404s with no releases published.
 

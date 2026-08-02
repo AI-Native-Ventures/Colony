@@ -12,6 +12,7 @@ import {
 } from "@/features/agents/hooks";
 import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
 import { useAddChannelMembersMutation } from "@/features/channels/hooks";
+import { attachWorkContext } from "@/features/company/attachWorkContext";
 import { filterEffectiveExplicitAgentPubkeys } from "@/features/messages/lib/effectiveExplicitAgentPubkeys";
 import type { UseChannelLinksResult } from "@/features/messages/lib/useChannelLinks";
 import type { UseEmojiAutocompleteResult } from "@/features/messages/lib/useEmojiAutocomplete";
@@ -499,6 +500,35 @@ export function useMentionSendFlow({
           return;
         }
 
+        // A paid agent turn with no work context is money spent that no cost
+        // centre, team, or commercial purpose can be traced to, and the
+        // classification cannot be recovered afterwards. So the Task is created
+        // and confirmed by the relay before the instruction goes out. This runs
+        // before the composer is cleared, so a failure leaves the draft where
+        // the owner left it.
+        let sendTags = outgoingTags;
+        if (agentMentionPubkeys.length > 0) {
+          try {
+            sendTags = await attachWorkContext({
+              channelId: sendChannelId ?? draft.capturedChannelId ?? "",
+              content: draft.finalContent,
+              agentPubkeys: agentMentionPubkeys,
+              outgoingTags: outgoingTags ?? [],
+            });
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : "This message could not be recorded as company work, so it was not sent.";
+            setNonMemberPromptError(message);
+            toast.error(message);
+            return;
+          }
+          if (!isMountedRef.current) {
+            return;
+          }
+        }
+
         const effectiveExplicitAgentPubkeys =
           filterEffectiveExplicitAgentPubkeys(
             draft.explicitAgentPubkeys,
@@ -518,7 +548,7 @@ export function useMentionSendFlow({
           await onSendRef.current(
             draft.finalContent,
             mentionPubkeys,
-            outgoingTags,
+            sendTags,
             sendChannelId,
             draft.capturedThreadContext,
           );

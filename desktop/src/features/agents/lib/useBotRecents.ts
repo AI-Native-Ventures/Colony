@@ -5,9 +5,16 @@ import type { AgentPersona } from "@/shared/api/types";
 const STORAGE_KEY = "buzz:bot-recents";
 const MAX_RECENTS = 8;
 
-// Default persona display names to seed the list when empty.
-// These are resolved to IDs by the consumer.
-export const DEFAULT_PERSONA_NAMES = ["Fizz", "Honey", "Bumble"] as const;
+// Starter personas seeded into the quick-bot list when there are no recents,
+// in the order they should appear. Matched by persona ID, not display name:
+// IDs are stable and persisted relay-side, while display names are branding
+// and can change. Matching on the name made this silently fall back to
+// catalog order the moment the starter team was renamed, with no error.
+export const DEFAULT_PERSONA_IDS = [
+  "builtin:fizz",
+  "builtin:honey",
+  "builtin:bumble",
+] as const;
 
 export function pickQuickBotPersonas(
   personas: readonly AgentPersona[],
@@ -36,16 +43,12 @@ export function pickQuickBotPersonas(
     addPersona(personas.find((persona) => persona.id === id));
   }
 
-  for (const name of DEFAULT_PERSONA_NAMES) {
+  for (const personaId of DEFAULT_PERSONA_IDS) {
     if (resolved.length >= maxCount) {
       break;
     }
 
-    addPersona(
-      personas.find(
-        (persona) => persona.displayName.toLowerCase() === name.toLowerCase(),
-      ),
-    );
+    addPersona(personas.find((persona) => persona.id === personaId));
   }
 
   for (const persona of personas) {

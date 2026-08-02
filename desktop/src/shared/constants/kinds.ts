@@ -56,6 +56,16 @@ export const KIND_CHANNEL_SORT = 30078;
 export const KIND_PERSONA = 30175;
 export const KIND_TEAM = 30176;
 export const KIND_MANAGED_AGENT = 30177;
+// Colony company operating records. These three are NIP-33 heads authored by
+// the tenant relay itself and are never signed by a client: the owner asks for
+// a change with a KIND_COMPANY_ACTION and the relay answers with a
+// KIND_COMPANY_RECEIPT naming the head it wrote. Mirror of buzz-core's
+// KIND_COMPANY_PROFILE etc.
+export const KIND_COMPANY_PROFILE = 30179;
+export const KIND_INITIATIVE = 30180;
+export const KIND_TASK = 30181;
+export const KIND_COMPANY_ACTION = 40013;
+export const KIND_COMPANY_RECEIPT = 40014;
 export const KIND_USER_STATUS = 30315;
 export const KIND_AGENT_OBSERVER_FRAME = 24200;
 export const KIND_AGENT_TURN_METRIC = 44200;

@@ -173,6 +173,22 @@ type MockBridgeOptions = {
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */
   relaySelf?: string | null;
+  /**
+   * Seed a Colony company so agent-directed sends have work to be charged to.
+   *
+   * Setting this also makes `get_relay_self` answer with the mock relay's own
+   * key: company records are only canonical when that key signed them.
+   */
+  companyWorkContext?: {
+    companyId: string;
+    initiativeId?: string;
+    taskId: string;
+    owningTeamId: string;
+    qaPersonaId: string;
+    costCentreId: string;
+    tradingName?: string;
+    refuseWith?: "rejected" | "failed" | "no-receipt";
+  };
   /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
   builderlabAuth?: { email?: string; name?: string; expiresAt: string } | null;
   /** Optional policy returned by the native join-policy discovery command. */
@@ -335,6 +351,13 @@ type MockBridgeOptions = {
    * `list_save_subscriptions` call yet) before the policy resolves.
    */
   observerArchiveDefaultEnabledDelayMs?: number;
+  /**
+   * Hold the policy unresolved until the test calls
+   * `window.__BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__()`. Prefer this over
+   * the delay when asserting work has not started: a fixed delay races app
+   * boot, so a slower first render resolves the policy early.
+   */
+  observerArchiveDefaultEnabledHold?: boolean;
   /**
    * When set, `observer_archive_default_enabled` throws with this message —
    * drives the fail-closed path when the policy check itself fails.

@@ -20,9 +20,15 @@ bool isColonyTheme(String themeName) =>
 
 /// Gradient stops, matching desktop's `--buzz-gradient-*` custom properties.
 /// Desktop has not renamed those properties, so the reference is deliberate.
-const _lightTop = Color(0xFFE6E6B6);
+///
+/// Derived from the brand violet `hsl(258 90% 66%)` so the app's dominant
+/// surface matches the mark and the marketing site. The top stops carry the
+/// hue; the bottom stops are unchanged, because the gradient's job is to fade
+/// the brand color out into the neutral canvas, not to tint the whole screen.
+/// All four clear WCAG AAA against their respective body text.
+const _lightTop = Color(0xFFD9CDF3);
 const _lightBottom = Color(0xFFC4D0DA);
-const _darkTop = Color(0xFF4A4616);
+const _darkTop = Color(0xFF2A1E48);
 const _darkBottom = Color(0xFF0A1423);
 
 /// The Colony gradient for the app's top section, or null when [themeName] is

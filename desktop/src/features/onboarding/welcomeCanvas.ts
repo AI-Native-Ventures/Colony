@@ -23,7 +23,7 @@ stay referenceable, and keep their state if you close the app mid-review.
 Colony will not create the company, hire the rest of the roster, or start work
 until you approve the blueprint.
 
-Ask the team a question here, or read the [Colony user guide](https://github.com/nocodeafrica/AI-Native-Ventures-App#readme).
+Ask the team a question here, or read the [Colony user guide](https://github.com/AI-Native-Ventures/colony-releases#readme).
 `;
 
 type WelcomeCanvasClient = {

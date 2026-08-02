@@ -47,10 +47,15 @@
     --sidebar-accent-foreground: 234 16.02% 35.49%;
     --sidebar-border: 225 13.56% 76.86%;
     --sidebar-ring: 225 13.56% 76.86%;
-    /* Exact Buzz palette tokens; components consume these semantically. */
-    --buzz-gradient-light-top: #e6e6b6;
+    /* First-party gradient tokens; components consume these semantically.
+       The custom property names still say buzz (renaming them is part of the
+       deferred technical pass), but the values are Colony's: derived from the
+       brand violet hsl(258 90% 66%) so the app's dominant surface matches the
+       mark and the marketing site. Mobile mirrors these in
+       mobile/lib/shared/theme/colony_theme.dart; change both together. */
+    --buzz-gradient-light-top: #d9cdf3;
     --buzz-gradient-light-bottom: #c4d0da;
-    --buzz-gradient-dark-top: #4a4616;
+    --buzz-gradient-dark-top: #2a1e48;
     --buzz-gradient-dark-bottom: #0a1423;
     --buzz-content-dark: 0 0% 10.1960784314%;
     /* Hosted-community onboarding intentionally keeps this light palette in

@@ -16,6 +16,90 @@ just test               # unit + integration (starts Docker if needed)
 cargo test -p buzz-test-client -- --ignored
 ```
 
+### Colony company work (`e2e_company_work`)
+
+This suite proves the rules that only exist inside the relay process: that
+Company, Initiative, and Task heads are authored by the relay and by nobody
+else, that only the community owner can ask for one, and that compare-and-set,
+illegal transitions, and replays all reach deterministic receipts. It also runs
+the activation ladder `buzz-sdk::initiative_activation` produces against the
+real broker, which is the one thing unit tests over that function cannot
+establish.
+
+It needs its own relay, because the community owner is fixed at startup:
+
+```bash
+# 1. A database of its own, so a failed run never leaves state behind in yours.
+docker exec buzz-postgres psql -U buzz -d postgres -c "CREATE DATABASE buzz_company_proof;"
+
+# 2. The owner key the suite signs as. Print it rather than copying it:
+cargo test -p buzz-test-client --test e2e_company_work \
+  print_the_owner_pubkey -- --nocapture
+
+# 3. A relay that treats that key as the community owner.
+DATABASE_URL="postgres://buzz:buzz_dev@localhost:5432/buzz_company_proof" \
+REDIS_URL="redis://localhost:6379" \
+BUZZ_BIND_ADDR="127.0.0.1:3099" \
+RELAY_OWNER_PUBKEY="<the key printed above>" \
+cargo run -p buzz-relay
+
+# 4. The suite.
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_company_work -- --ignored --test-threads=1
+```
+
+`--test-threads=1` is not optional: every test in the file signs as the same
+owner, and the relay serializes company actions per owner.
+
+The suite also proves the attributed turn metric survives a real round trip:
+the agent registers itself as owned through NIP-OA, encrypts a `kind:44200` to
+the owner, and the owner reads it back and decrypts it. The relay stores a blob
+it cannot read, which the test asserts on directly, because a metric whose work
+context were legible to whoever runs the relay would expose the company's cost
+structure.
+
+### Live agent attribution (manual)
+
+The suite proves the metric contract. Proving that a *live harness* charges a
+real turn to real work needs a real model, so it is a runbook rather than a
+test:
+
+```bash
+# Seed the company, team, initiative, and Task the run charges against.
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_company_work \
+  seed_live_work_context -- --ignored --nocapture
+
+# Print the agent identity and the owner-signed auth tag the relay requires.
+cargo test -p buzz-test-client --test e2e_company_work \
+  print_live_agent_credentials -- --ignored --nocapture
+
+# Create a channel as the owner, have the agent join it, start buzz-acp with
+# that identity, then send it work-tagged instructions:
+buzz messages send --channel <uuid> --content "..." --mention <agent pubkey> \
+  --task livecompany:live-task \
+  --initiative livecompany:live-initiative \
+  --team live-team
+
+# Read back every metric addressed to the owner and print its work context.
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_company_work \
+  inspect_live_turn_metrics -- --ignored --nocapture
+```
+
+**Known gap, verified 2026-08-02:** neither `opencode acp` nor `goose acp`
+reports token usage over ACP on this machine, and `publish_agent_turn_metric`
+is a no-op without usage. Three live turns produced a correct agent reply and
+zero `kind:44200` events. So this runbook currently proves the turn runs and
+carries its work references, but the metric half cannot be observed until a
+harness that reports usage is available. That is pre-existing behaviour of the
+adapters, not of the attribution path.
+
+Starting the relay with any other `RELAY_OWNER_PUBKEY` makes the suite prove
+nothing — every action is refused for the right reason and the failures look
+like product bugs. If the whole file fails at the first company create, check
+that first.
+
 ---
 
 ## Live Local Relay

@@ -1,7 +1,7 @@
 // site/src/sections/Footer.tsx
 import { AntMark } from "@/brand/AntMark";
 
-const GITHUB_URL = "https://github.com/nocodeafrica/AI-Native-Ventures-App";
+const GITHUB_URL = "https://github.com/AI-Native-Ventures/colony-releases";
 
 export function Footer() {
   return (
