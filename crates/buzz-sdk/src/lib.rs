@@ -18,6 +18,7 @@ pub mod company;
 pub mod company_blueprint;
 pub mod implicit_task;
 pub mod initiative_activation;
+pub mod ledger;
 pub mod mentions;
 pub mod nip_oa;
 pub mod party;
