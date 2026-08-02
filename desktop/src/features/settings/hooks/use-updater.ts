@@ -30,10 +30,11 @@ const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
   "manual-required",
 ]);
 
-// This fork has no releases yet, so this points at the releases list rather
-// than /releases/latest, which 404s with zero releases.
+// Public releases repo: the application repo is private, so the updater
+// cannot read releases from it. Points at the releases list rather than
+// /releases/latest, which 404s until the first release exists.
 const GITHUB_RELEASES_URL =
-  "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases";
+  "https://github.com/AI-Native-Ventures/colony-releases/releases";
 
 function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

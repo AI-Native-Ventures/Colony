@@ -120,7 +120,7 @@ New to Buzz? Pick the path that matches you.
 
 ### I just want to try the app
 
-Grab a packaged macOS build (`.dmg`) from the [releases page](https://github.com/nocodeafrica/AI-Native-Ventures-App/releases) and install it like any other app. This fork currently ships macOS only; Linux and Windows are not part of this release yet.
+Grab a packaged macOS build (`.dmg`) from the [releases page](https://github.com/AI-Native-Ventures/colony-releases/releases) and install it like any other app. Releases are published from the public [colony-releases](https://github.com/AI-Native-Ventures/colony-releases) repo; this repository holds the source.
 
 By default the app connects to `ws://localhost:3000`. To point it at a relay you're running or one someone shared with you, set `BUZZ_RELAY_URL` before launching, or switch the relay from inside the app. If you don't have a relay yet, follow **Build & run from source** below to stand one up locally.
 
@@ -142,7 +142,7 @@ You'll need [Docker](https://docs.docker.com/get-docker/) and [Hermit](https://c
 
 **Once:**
 ```bash
-git clone https://github.com/nocodeafrica/AI-Native-Ventures-App.git && cd AI-Native-Ventures-App
+git clone https://github.com/AI-Native-Ventures/Colony.git && cd Colony
 . ./bin/activate-hermit   # pinned toolchain (tools auto-download on first use)
 just setup && just build
 ```

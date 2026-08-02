@@ -1,11 +1,14 @@
-// This fork has no releases yet, so this points at the releases list rather
-// than /releases/latest, which 404s with zero releases. Matches
-// GITHUB_RELEASES_URL in desktop/src/features/settings/hooks/use-updater.ts
-// and RELEASES_URL in site/src/sections/Download.tsx.
+// Release artifacts live in the public AI-Native-Ventures/colony-releases
+// repo, not in this one: the application repo is private, so anonymous
+// download and update requests would 404 against it. Points at the
+// releases list rather than /releases/latest, which 404s until the first
+// release exists. Matches GITHUB_RELEASES_URL in
+// desktop/src/features/settings/hooks/use-updater.ts and RELEASES_URL in
+// site/src/sections/Download.tsx.
 export const BUZZ_RELEASES_URL =
-  "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases";
+  "https://github.com/AI-Native-Ventures/colony-releases/releases";
 const BUZZ_RELEASES_API_URL =
-  "https://api.github.com/repos/nocodeafrica/AI-Native-Ventures-App/releases?per_page=10";
+  "https://api.github.com/repos/AI-Native-Ventures/colony-releases/releases?per_page=10";
 const CACHE_KEY = "buzz.latestDownload.v1";
 const CACHE_TTL_MS = 60 * 60 * 1000;
 

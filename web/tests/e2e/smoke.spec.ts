@@ -44,22 +44,22 @@ test("invite requires age and legal consent before opening Colony", async ({
             {
               name: "Colony_0.4.9_aarch64.dmg",
               browser_download_url:
-                "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases/download/v0.4.9/Colony_0.4.9_aarch64.dmg",
+                "https://github.com/AI-Native-Ventures/colony-releases/releases/download/v0.4.9/Colony_0.4.9_aarch64.dmg",
             },
             {
               name: "Colony_0.4.9_x64.dmg",
               browser_download_url:
-                "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases/download/v0.4.9/Colony_0.4.9_x64.dmg",
+                "https://github.com/AI-Native-Ventures/colony-releases/releases/download/v0.4.9/Colony_0.4.9_x64.dmg",
             },
             {
               name: "Colony_0.4.9_amd64.AppImage",
               browser_download_url:
-                "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases/download/v0.4.9/Colony_0.4.9_amd64.AppImage",
+                "https://github.com/AI-Native-Ventures/colony-releases/releases/download/v0.4.9/Colony_0.4.9_amd64.AppImage",
             },
             {
               name: "Colony_0.4.9_x64-setup_alpha-unsigned.exe",
               browser_download_url:
-                "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases/download/v0.4.9/Colony_0.4.9_x64-setup_alpha-unsigned.exe",
+                "https://github.com/AI-Native-Ventures/colony-releases/releases/download/v0.4.9/Colony_0.4.9_x64-setup_alpha-unsigned.exe",
             },
           ],
         },
@@ -72,7 +72,7 @@ test("invite requires age and legal consent before opening Colony", async ({
     page.getByRole("link", { name: "Download it now" }),
   ).toHaveAttribute(
     "href",
-    "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases/download/v0.4.9/Colony_0.4.9_x64-setup_alpha-unsigned.exe",
+    "https://github.com/AI-Native-Ventures/colony-releases/releases/download/v0.4.9/Colony_0.4.9_x64-setup_alpha-unsigned.exe",
   );
 
   const ageConfirmation = page.getByLabel("I am 18 years of age or older.");
@@ -249,7 +249,7 @@ test("invite asks Safari users to choose their Mac download", async ({
   const openedPage = await openedPagePromise;
   await expect(chooser).toBeHidden();
   await expect(openedPage).toHaveURL(
-    "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases",
+    "https://github.com/AI-Native-Ventures/colony-releases/releases",
   );
   await expect(page).toHaveURL(/\/invite\/demo-code$/);
   await openedPage.close();
@@ -328,12 +328,12 @@ test("invite download falls back for mobile and non-desktop devices", async ({
               {
                 name: "Colony_0.4.9_x64.dmg",
                 browser_download_url:
-                  "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases/download/v0.4.9/Colony_0.4.9_x64.dmg",
+                  "https://github.com/AI-Native-Ventures/colony-releases/releases/download/v0.4.9/Colony_0.4.9_x64.dmg",
               },
               {
                 name: "Colony_0.4.9_amd64.AppImage",
                 browser_download_url:
-                  "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases/download/v0.4.9/Colony_0.4.9_amd64.AppImage",
+                  "https://github.com/AI-Native-Ventures/colony-releases/releases/download/v0.4.9/Colony_0.4.9_amd64.AppImage",
               },
             ],
           },
@@ -347,7 +347,7 @@ test("invite download falls back for mobile and non-desktop devices", async ({
       device.name,
     ).toHaveAttribute(
       "href",
-      "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases",
+      "https://github.com/AI-Native-Ventures/colony-releases/releases",
     );
     await context.close();
   }

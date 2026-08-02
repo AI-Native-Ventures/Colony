@@ -5,7 +5,7 @@
 // download. This fork has no releases yet, so it points at the releases
 // list rather than /releases/latest, which 404s with zero releases.
 const RELEASES_URL =
-  "https://github.com/nocodeafrica/AI-Native-Ventures-App/releases";
+  "https://github.com/AI-Native-Ventures/colony-releases/releases";
 
 export function Download() {
   return (
