@@ -67,8 +67,8 @@ The phase passes only when all of the following are proven against a real local 
 Reserve two persistent kinds in `buzz-core`:
 
 ```rust
-pub const KIND_DISCOVERY_ACTION: u32 = 40015;
-pub const KIND_DISCOVERY_RECEIPT: u32 = 40016;
+pub const KIND_DISCOVERY_ACTION: u32 = 40017;
+pub const KIND_DISCOVERY_RECEIPT: u32 = 40018;
 ```
 
 No ephemeral progress kind is needed in this slice. Durable progress is queried through a signed `status` action. This keeps the first contract small; realtime fan-out can be added without changing the run state model.
@@ -76,7 +76,7 @@ No ephemeral progress kind is needed in this slice. Durable progress is queried 
 Actions use canonical JSON content and exact tags:
 
 ```text
-kind: 40015
+kind: 40017
 tags:
   ["p", "<relay pubkey>"]
   ["discovery-action", "start|status|cancel", "<request uuid>", "<idempotency uuid>"]
@@ -88,7 +88,7 @@ content: canonical JSON matching the tag values
 Receipts are signed by the relay and contain:
 
 ```text
-kind: 40016
+kind: 40018
 tags:
   ["p", "<requesting actor pubkey>"]
   ["e", "<action event id>"]
@@ -151,11 +151,11 @@ Expected: exact local and remote commit IDs are recorded. Do not reset, rebase, 
 - [ ] **Step 3: Confirm kind and migration numbers are still free**
 
 ```bash
-rg "40015|40016|DISCOVERY_(ACTION|RECEIPT)" crates desktop migrations
+rg "40017|40018|DISCOVERY_(ACTION|RECEIPT)" crates desktop migrations
 rg --files migrations | sort | tail -10
 ```
 
-Expected: no existing use of kinds `40015`/`40016`, and migration `0030` is available. If either has been allocated, select the next free values consistently and update this plan before implementation.
+Expected: no existing use of kinds `40017`/`40018`, and migration `0030` is available. If either has been allocated, select the next free values consistently and update this plan before implementation.
 
 - [ ] **Step 4: Establish baseline checks**
 
@@ -276,7 +276,7 @@ fn discovery_receipts_are_privacy_gated() {
 }
 ```
 
-Update the fresh-install expression in both `schema/schema.sql` and `migrations/0001_initial_schema.sql` so kinds `40015` and `40016` produce a NULL `search_tsv`. Extend `excluded_kinds_are_storage_level_unsearchable` in `crates/buzz-search/tests/fts_integration.rs` with both kinds. The upgrade for existing databases belongs in migration `0030` in Task 2.
+Update the fresh-install expression in both `schema/schema.sql` and `migrations/0001_initial_schema.sql` so kinds `40017` and `40018` produce a NULL `search_tsv`. Extend `excluded_kinds_are_storage_level_unsearchable` in `crates/buzz-search/tests/fts_integration.rs` with both kinds. The upgrade for existing databases belongs in migration `0030` in Task 2.
 
 - [ ] **Step 4: Write failing SDK builder/parser tests**
 
@@ -370,7 +370,7 @@ git commit -s -m "feat(discovery): define signed run protocol"
 
 **Files:**
 
-- Create: `migrations/0030_discovery_foundation.sql`
+- Create: `migrations/0031_discovery_foundation.sql`
 - Create: `crates/buzz-db/src/discovery.rs`
 - Modify: `crates/buzz-db/src/lib.rs`
 - Test: `crates/buzz-db/src/discovery.rs`
@@ -459,7 +459,7 @@ BEGIN
 
     ALTER TABLE events DROP COLUMN search_tsv;
     EXECUTE format(
-        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN kind IN (40015, 40016) THEN NULL::tsvector ELSE (%s) END) STORED',
+        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN kind IN (40017, 40018) THEN NULL::tsvector ELSE (%s) END) STORED',
         existing_expression
     );
     CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);
@@ -703,12 +703,12 @@ cargo test -p buzz-search --test fts_integration excluded_kinds_are_storage_leve
 cargo test -p buzz-search --test fts_integration p_gated_persistent_kinds_have_storage_null_tsvector -- --ignored --nocapture
 ```
 
-Expected: all Discovery database tests PASS against the configured test database, and both storage-level search privacy tripwires PASS with kinds `40015` and `40016`.
+Expected: all Discovery database tests PASS against the configured test database, and both storage-level search privacy tripwires PASS with kinds `40017` and `40018`.
 
 - [ ] **Step 8: Commit private persistence**
 
 ```bash
-git add migrations/0030_discovery_foundation.sql crates/buzz-db/src/discovery.rs crates/buzz-db/src/lib.rs
+git add migrations/0031_discovery_foundation.sql crates/buzz-db/src/discovery.rs crates/buzz-db/src/lib.rs
 git commit -s -m "feat(discovery): persist entitled restart-safe runs"
 ```
 
@@ -818,7 +818,7 @@ Extend existing relay query-policy tests so:
 - a receipt query without matching authenticated `p` access is rejected;
 - an authenticated actor can query their own receipt by event ID;
 - another member cannot query that receipt;
-- open-ended result queries cannot include kind `40016`.
+- open-ended result queries cannot include kind `40018`.
 
 - [ ] **Step 5: Run focused relay tests**
 

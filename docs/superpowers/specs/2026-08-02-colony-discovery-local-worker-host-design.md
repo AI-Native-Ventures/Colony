@@ -27,7 +27,7 @@ Colony already has the required platform capabilities:
 - Colony already masks secret-shaped build configuration and excludes agent
   private keys, environment credentials, and provider configuration from relay
   snapshots.
-- Discovery kinds `40017` and `40018` already provide private signed worker
+- Discovery kinds `40019` and `40020` already provide private signed worker
   actions and relay-authored receipts with leases, checkpoints, fencing,
   cancellation, revocation, and restart recovery.
 

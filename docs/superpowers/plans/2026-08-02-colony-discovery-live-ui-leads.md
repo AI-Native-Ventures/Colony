@@ -9,7 +9,7 @@ Design: `docs/superpowers/specs/2026-08-02-colony-discovery-live-ui-leads-design
 - [ ] Add workspace action/receipt event kinds to every write/read/search/privacy
   classification and drift test.
 - [ ] Add SDK builders/parsers for exact signed workspace envelopes.
-- [ ] Add migration `0035_discovery_workspace_records.sql` for campaigns and
+- [ ] Add migration `0036_discovery_workspace_records.sql` for campaigns and
   idempotent action claims.
 - [ ] Add database authorization, create/get/list campaign, list Lead, and
   action/receipt transaction operations.

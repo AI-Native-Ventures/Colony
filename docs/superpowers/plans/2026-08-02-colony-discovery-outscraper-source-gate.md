@@ -56,7 +56,7 @@ cd desktop && node --test src/shared/api/discoveryCredentials.test.mjs
 - Modify: `crates/buzz-cli/src/commands/discovery.rs`
 - Modify: `crates/buzz-relay/src/discovery_broker.rs`
 - Modify: `crates/buzz-db/src/discovery.rs`
-- Create: `migrations/0032_discovery_business_search.sql`
+- Create: `migrations/0033_discovery_business_search.sql`
 
 - [x] Add failing core tests for trimmed query/location validation, maximum lengths, result limit `1..=500`, lowercase ISO language, uppercase ISO region, and strict serialization with no credential-shaped field.
 - [x] Define the shared non-secret snapshot and require it on new starts:
@@ -105,7 +105,7 @@ cargo test -p buzz-relay discovery --no-fail-fast
 - Modify: `crates/buzz-db/src/discovery.rs`
 - Modify: `crates/buzz-relay/src/discovery_worker_broker.rs`
 - Inspect unchanged: `crates/buzz-relay/src/event_admission.rs`
-- Create: `migrations/0033_discovery_business_observations.sql`
+- Create: `migrations/0034_discovery_business_observations.sql`
 - Modify: `schema/schema.sql`
 
 - [x] Add failing strict-contract tests for a bounded observation batch, maximum string lengths, finite/ranged coordinates and rating, nonnegative counts, valid provider identifiers, and rejection of unknown/raw fields.

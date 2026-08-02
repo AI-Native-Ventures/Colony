@@ -8,8 +8,8 @@ checkpoint, and complete a run without sending provider or LLM secrets to the
 relay.
 
 **Architecture:** Keep human and agent run control on Discovery action/receipt
-kinds `40015/40016`, and add a separate strict local-worker action/receipt plane
-on kinds `40017/40018`. The relay remains authoritative for entitlement,
+kinds `40017/40018`, and add a separate strict local-worker action/receipt plane
+on kinds `40019/40020`. The relay remains authoritative for entitlement,
 leases, fencing, checkpoints, cancellation, and completion; this plan uses a
 simulated worker and makes no Outscraper or LLM calls.
 
@@ -46,8 +46,8 @@ This phase passes only when a simulated local worker can:
 - `crates/buzz-core/src/discovery_worker.rs` — provider-neutral worker request,
   checkpoint, lease, and receipt types with no arbitrary secret-bearing fields.
 - `crates/buzz-sdk/src/discovery_worker.rs` — exact event envelopes, builders,
-  strict parsers, canonical JSON, and validation for kinds `40017/40018`.
-- `migrations/0031_discovery_local_worker_protocol.sql` — lease ownership,
+  strict parsers, canonical JSON, and validation for kinds `40019/40020`.
+- `migrations/0032_discovery_local_worker_protocol.sql` — lease ownership,
   durable monotonic checkpoints, worker-command idempotency, and FTS exclusion.
 - `crates/buzz-relay/src/discovery_worker_broker.rs` — authenticated worker
   command broker and relay-signed private receipt dispatch.
@@ -55,7 +55,7 @@ This phase passes only when a simulated local worker can:
 ### Modify
 
 - `crates/buzz-core/src/lib.rs` — export the worker contract module.
-- `crates/buzz-core/src/kind.rs` — register and gate kinds `40017/40018`.
+- `crates/buzz-core/src/kind.rs` — register and gate kinds `40019/40020`.
 - `crates/buzz-sdk/src/lib.rs` — export strict worker envelope helpers.
 - `schema/schema.sql` — keep the reference schema's FTS privacy skip-set aligned
   with the migration-installed expression.
@@ -113,8 +113,8 @@ Add these assertions to the existing Discovery kind test in
 `crates/buzz-core/src/kind.rs`:
 
 ```rust
-assert_eq!(KIND_DISCOVERY_WORKER_ACTION, 40017);
-assert_eq!(KIND_DISCOVERY_WORKER_RECEIPT, 40018);
+assert_eq!(KIND_DISCOVERY_WORKER_ACTION, 40019);
+assert_eq!(KIND_DISCOVERY_WORKER_RECEIPT, 40020);
 assert!(ALL_KINDS.contains(&KIND_DISCOVERY_WORKER_ACTION));
 assert!(ALL_KINDS.contains(&KIND_DISCOVERY_WORKER_RECEIPT));
 assert!(AUTHOR_ONLY_KINDS.contains(&KIND_DISCOVERY_WORKER_ACTION));
@@ -142,14 +142,14 @@ Add to `crates/buzz-core/src/kind.rs`:
 
 ```rust
 /// Member-signed command from a trusted local Discovery worker.
-pub const KIND_DISCOVERY_WORKER_ACTION: u32 = 40017;
+pub const KIND_DISCOVERY_WORKER_ACTION: u32 = 40019;
 
 /// Relay-signed, worker-private result of a local-worker command.
-pub const KIND_DISCOVERY_WORKER_RECEIPT: u32 = 40018;
+pub const KIND_DISCOVERY_WORKER_RECEIPT: u32 = 40020;
 ```
 
-Register `40017` beside `KIND_DISCOVERY_ACTION` in `AUTHOR_ONLY_KINDS`,
-`is_command_kind`, and `ALL_KINDS`. Register `40018` beside
+Register `40019` beside `KIND_DISCOVERY_ACTION` in `AUTHOR_ONLY_KINDS`,
+`is_command_kind`, and `ALL_KINDS`. Register `40020` beside
 `KIND_DISCOVERY_RECEIPT` in `P_GATED_KINDS`, `RESULT_GATED_KINDS`,
 `is_relay_only_kind`, and `ALL_KINDS`. Add compile-time `u16` assertions beside
 the existing Discovery assertions.
@@ -563,14 +563,14 @@ git commit -s -m "feat(discovery): sign local worker exchanges"
 
 **Files:**
 
-- Create: `migrations/0031_discovery_local_worker_protocol.sql`
+- Create: `migrations/0032_discovery_local_worker_protocol.sql`
 - Modify: `crates/buzz-db/src/migration.rs`
 - Modify: `schema/schema.sql`
 - Modify: `crates/buzz-search/tests/fts_integration.rs`
 
 - [ ] **Step 1: Write the migration with strict shapes**
 
-Create `migrations/0031_discovery_local_worker_protocol.sql`:
+Create `migrations/0032_discovery_local_worker_protocol.sql`:
 
 ```sql
 ALTER TABLE discovery_runs
@@ -645,7 +645,7 @@ BEGIN
 
     ALTER TABLE events DROP COLUMN search_tsv;
     EXECUTE format(
-        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN kind IN (40017, 40018) THEN NULL::tsvector ELSE (%s) END) STORED',
+        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN kind IN (40019, 40020) THEN NULL::tsvector ELSE (%s) END) STORED',
         existing_expression
     );
     CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);
@@ -655,20 +655,20 @@ END $$;
 - [ ] **Step 2: Add migration drift assertions**
 
 In `crates/buzz-db/src/migration.rs`, extend the existing migration-count and
-ordered-name assertions to include `0031_discovery_local_worker_protocol.sql`.
+ordered-name assertions to include `0032_discovery_local_worker_protocol.sql`.
 Add an assertion that its SQL contains both `discovery_run_checkpoints` and
-`40017, 40018`.
+`40019, 40020`.
 
 Extend the `schema/schema.sql` `search_tsv` skip-set from:
 
 ```sql
-40013, 40014, 40015, 40016, 44100
+40013, 40014, 40015, 40016, 40017, 40018, 44100
 ```
 
 to:
 
 ```sql
-40013, 40014, 40015, 40016, 40017, 40018, 44100
+40013, 40014, 40015, 40016, 40017, 40018, 40019, 40020, 44100
 ```
 
 In `crates/buzz-search/tests/fts_integration.rs`, import both worker kind
@@ -692,7 +692,7 @@ Expected: migration ordering, checksum, and structural assertions pass.
 - [ ] **Step 4: Commit persistence schema**
 
 ```bash
-git add migrations/0031_discovery_local_worker_protocol.sql crates/buzz-db/src/migration.rs schema/schema.sql crates/buzz-search/tests/fts_integration.rs
+git add migrations/0032_discovery_local_worker_protocol.sql crates/buzz-db/src/migration.rs schema/schema.sql crates/buzz-search/tests/fts_integration.rs
 git commit -s -m "feat(discovery): persist local worker checkpoints"
 ```
 

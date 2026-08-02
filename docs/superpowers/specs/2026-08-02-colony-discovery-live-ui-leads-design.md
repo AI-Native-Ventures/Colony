@@ -45,10 +45,10 @@ direct desktop database access is introduced.
 
 Two new strict event kinds separate workspace records from run execution:
 
-- `40019` — member/agent-signed Discovery workspace action;
-- `40020` — relay-signed, `p`-gated Discovery workspace receipt.
+- `40021` — member/agent-signed Discovery workspace action;
+- `40022` — relay-signed, `p`-gated Discovery workspace receipt.
 
-Run actions remain `40015`/`40016`; worker actions remain `40017`/`40018`.
+Run actions use `40017`/`40018`; worker actions use `40019`/`40020`.
 The new kinds inherit the same author-only action storage, result-level read
 gate, null full-text index, exact tag envelope, canonical JSON, signature
 verification, membership check, entitlement check, and agent capability check.

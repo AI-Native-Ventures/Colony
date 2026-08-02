@@ -84,7 +84,7 @@
 
 - [x] Add tests that build signed claim, heartbeat, checkpoint, and complete actions with the existing `buzz-sdk` builders.
 - [x] Add adversarial receipt tests for wrong author, wrong `p` recipient, wrong action event ID, wrong worker/request/idempotency IDs, invalid signature, wrong kind, and missing receipt timeout. Every case must fail closed.
-- [x] Implement `RelayWorkerProtocol`: snapshot current signing keys and relay base URL, fetch and validate the relay's NIP-11 `self` pubkey, submit an action, parse the returned `receipt_event_id`, query kind `40018` by exact ID/author/recipient, verify the Nostr signature, and parse with `parse_discovery_worker_receipt`.
+- [x] Implement `RelayWorkerProtocol`: snapshot current signing keys and relay base URL, fetch and validate the relay's NIP-11 `self` pubkey, submit an action, parse the returned `receipt_event_id`, query kind `40020` by exact ID/author/recipient, verify the Nostr signature, and parse with `parse_discovery_worker_receipt`.
 - [x] Match the receipt to the submitted action before returning its `DiscoveryWorkerReceiptOutcome`; never trust the submit response's embedded outcome as the authority.
 - [x] Keep logs metadata-only: operation, run ID, worker ID, and safe correlation IDs. Do not log event content, provider responses, command bodies, or keychain errors.
 - [x] Run `cargo test --manifest-path desktop/src-tauri/Cargo.toml discovery_worker::protocol`; expect all focused tests to pass.

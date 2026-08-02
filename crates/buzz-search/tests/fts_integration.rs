@@ -30,11 +30,11 @@ const MIGRATION_0007_SQL: &str = include_str!("../../../migrations/0007_nip_rs_r
 const MIGRATION_0008_SQL: &str =
     include_str!("../../../migrations/0008_fresh_install_search_allowlist.sql");
 const MIGRATION_0014_SQL: &str = include_str!("../../../migrations/0014_push_lease_fts.sql");
-const MIGRATION_0030_SQL: &str = include_str!("../../../migrations/0030_discovery_foundation.sql");
-const MIGRATION_0031_SQL: &str =
-    include_str!("../../../migrations/0031_discovery_local_worker_protocol.sql");
-const MIGRATION_0035_SQL: &str =
-    include_str!("../../../migrations/0035_discovery_workspace_records.sql");
+const MIGRATION_0031_SQL: &str = include_str!("../../../migrations/0031_discovery_foundation.sql");
+const MIGRATION_0032_SQL: &str =
+    include_str!("../../../migrations/0032_discovery_local_worker_protocol.sql");
+const MIGRATION_0036_SQL: &str =
+    include_str!("../../../migrations/0036_discovery_workspace_records.sql");
 
 async fn setup() -> (PgPool, String) {
     let url = std::env::var("BUZZ_TEST_DATABASE_URL").unwrap_or_else(|_| TEST_DB_URL.to_string());
@@ -88,15 +88,15 @@ async fn setup() -> (PgPool, String) {
     pool.execute(MIGRATION_0014_SQL)
         .await
         .expect("apply 0014 migration");
-    pool.execute(MIGRATION_0030_SQL)
-        .await
-        .expect("apply 0030 migration");
     pool.execute(MIGRATION_0031_SQL)
         .await
         .expect("apply 0031 migration");
-    pool.execute(MIGRATION_0035_SQL)
+    pool.execute(MIGRATION_0032_SQL)
         .await
-        .expect("apply 0035 migration");
+        .expect("apply 0032 migration");
+    pool.execute(MIGRATION_0036_SQL)
+        .await
+        .expect("apply 0036 migration");
     (pool, schema)
 }
 
