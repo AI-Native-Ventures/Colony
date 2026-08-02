@@ -1249,3 +1249,255 @@ mod tests {
         assert_eq!(unique.len(), 1, "the fixture really does collide");
     }
 }
+
+/// How far a handle may be chased through aliases before a reader gives up.
+///
+/// Merges chain: a handle merged into one that was later merged again resolves
+/// in two hops. A cap keeps a cycle that slipped past validation survivable at
+/// read time, because a reader that looped would hang rather than report a
+/// broken record.
+pub const MAX_ALIAS_HOPS: usize = 8;
+
+/// What a handle resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandleResolution {
+    /// The handle is a live party.
+    Live {
+        /// The handle asked for, which is also the one that answered.
+        handle: String,
+    },
+    /// The handle was merged away and now points somewhere else.
+    Redirected {
+        /// The live handle at the end of the chain.
+        handle: String,
+        /// How many aliases were followed to get there.
+        hops: usize,
+    },
+    /// Nothing is stored at that coordinate.
+    Unknown,
+    /// The chain did not end within [`MAX_ALIAS_HOPS`].
+    ///
+    /// Reported rather than followed further: a caller needs to know its
+    /// reference is unusable, and the alternative is an unbounded loop.
+    Broken {
+        /// Where the chase gave up.
+        handle: String,
+    },
+}
+
+/// One coordinate's current occupant, as a resolver sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandleOccupant {
+    /// A live party.
+    Party,
+    /// A pointer to another handle.
+    Alias {
+        /// The handle it points at.
+        resolves_to: String,
+    },
+}
+
+/// Chase a handle to the live party it names.
+///
+/// `load` answers what is stored at one coordinate. Kept as a closure so the
+/// chase is testable without a relay and reusable by anything that can read a
+/// head: the relay, the CLI, and the desktop all follow the same rule.
+pub fn resolve_party_handle<F>(start: &str, mut load: F) -> HandleResolution
+where
+    F: FnMut(&str) -> Option<HandleOccupant>,
+{
+    let mut handle = start.to_owned();
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(handle.clone());
+
+    for hops in 0..=MAX_ALIAS_HOPS {
+        match load(&handle) {
+            None => {
+                return if hops == 0 {
+                    HandleResolution::Unknown
+                } else {
+                    // An alias pointing at nothing is a dangling reference, not
+                    // an absent one: something was merged into a handle that no
+                    // longer resolves.
+                    HandleResolution::Broken { handle }
+                };
+            }
+            Some(HandleOccupant::Party) => {
+                return if hops == 0 {
+                    HandleResolution::Live { handle }
+                } else {
+                    HandleResolution::Redirected { handle, hops }
+                };
+            }
+            Some(HandleOccupant::Alias { resolves_to }) => {
+                if !seen.insert(resolves_to.clone()) {
+                    return HandleResolution::Broken {
+                        handle: resolves_to,
+                    };
+                }
+                handle = resolves_to;
+            }
+        }
+    }
+    HandleResolution::Broken { handle }
+}
+
+/// The status a merged relationship keeps.
+///
+/// The further-progressed state wins. A party that was already a qualified Lead
+/// under one handle does not become a fresh candidate because the other handle
+/// had never been worked, and a disqualification is not undone by a merge: it
+/// was a decision somebody made, and only a new decision reverses it.
+pub const fn merge_relationship_status(
+    left: RelationshipStatus,
+    right: RelationshipStatus,
+) -> RelationshipStatus {
+    if progress_rank(left) >= progress_rank(right) {
+        left
+    } else {
+        right
+    }
+}
+
+/// How far through its lifecycle a status sits, for merge comparison only.
+const fn progress_rank(status: RelationshipStatus) -> u8 {
+    use RelationshipStatus::*;
+    match status {
+        Candidate => 0,
+        Dormant | Paused => 1,
+        Accepted => 2,
+        Qualified | Active => 3,
+        Disqualified | Former => 4,
+    }
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn resolver(entries: &[(&str, HandleOccupant)]) -> impl FnMut(&str) -> Option<HandleOccupant> {
+        let map: HashMap<String, HandleOccupant> = entries
+            .iter()
+            .map(|(handle, occupant)| ((*handle).to_string(), occupant.clone()))
+            .collect();
+        move |handle: &str| map.get(handle).cloned()
+    }
+
+    fn alias(to: &str) -> HandleOccupant {
+        HandleOccupant::Alias {
+            resolves_to: to.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_live_handle_resolves_to_itself_with_no_hops() {
+        let resolution = resolve_party_handle(
+            "acme-industries",
+            resolver(&[("acme-industries", HandleOccupant::Party)]),
+        );
+        assert_eq!(
+            resolution,
+            HandleResolution::Live {
+                handle: "acme-industries".to_string()
+            }
+        );
+    }
+
+    /// The whole reason merging is safe: a reference handed out before a merge
+    /// still lands on the party that absorbed it.
+    #[test]
+    fn a_retired_handle_still_reaches_the_survivor() {
+        let resolution = resolve_party_handle(
+            "acme-inc",
+            resolver(&[
+                ("acme-inc", alias("acme-industries")),
+                ("acme-industries", HandleOccupant::Party),
+            ]),
+        );
+        assert_eq!(
+            resolution,
+            HandleResolution::Redirected {
+                handle: "acme-industries".to_string(),
+                hops: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn merges_chain_and_the_oldest_handle_still_arrives() {
+        let resolution = resolve_party_handle(
+            "acme-old",
+            resolver(&[
+                ("acme-old", alias("acme-inc")),
+                ("acme-inc", alias("acme-industries")),
+                ("acme-industries", HandleOccupant::Party),
+            ]),
+        );
+        assert_eq!(
+            resolution,
+            HandleResolution::Redirected {
+                handle: "acme-industries".to_string(),
+                hops: 2,
+            }
+        );
+    }
+
+    /// Validation refuses cycles, but a reader must survive one that slipped
+    /// past rather than loop forever.
+    ///
+    /// Asserts the exact handle rather than only the variant. The hop cap stops
+    /// a cycle on its own, so a `matches!(Broken { .. })` test passes with the
+    /// revisit check deleted and proves nothing about it. What the revisit check
+    /// buys is naming where the loop closed instead of wherever the ninth
+    /// pointless load happened to land.
+    #[test]
+    fn a_cycle_is_reported_where_it_closes_not_where_the_cap_runs_out() {
+        let resolution =
+            resolve_party_handle("a", resolver(&[("a", alias("b")), ("b", alias("a"))]));
+        assert_eq!(
+            resolution,
+            HandleResolution::Broken {
+                handle: "a".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_chain_longer_than_the_cap_is_reported_as_broken() {
+        let mut entries: Vec<(String, HandleOccupant)> = (0..MAX_ALIAS_HOPS + 2)
+            .map(|index| (format!("h{index}"), alias(&format!("h{}", index + 1))))
+            .collect();
+        entries.push((format!("h{}", MAX_ALIAS_HOPS + 2), HandleOccupant::Party));
+        let map: HashMap<String, HandleOccupant> = entries.into_iter().collect();
+        let resolution = resolve_party_handle("h0", |handle| map.get(handle).cloned());
+        assert!(matches!(resolution, HandleResolution::Broken { .. }));
+    }
+
+    #[test]
+    fn an_unknown_handle_and_a_dangling_alias_are_different_answers() {
+        assert_eq!(
+            resolve_party_handle("nobody", resolver(&[])),
+            HandleResolution::Unknown
+        );
+        assert!(matches!(
+            resolve_party_handle("acme-inc", resolver(&[("acme-inc", alias("gone"))])),
+            HandleResolution::Broken { .. }
+        ));
+    }
+
+    #[test]
+    fn merging_relationship_status_keeps_the_further_progressed_state() {
+        use RelationshipStatus::*;
+        assert_eq!(merge_relationship_status(Candidate, Qualified), Qualified);
+        assert_eq!(merge_relationship_status(Qualified, Candidate), Qualified);
+        assert_eq!(merge_relationship_status(Accepted, Dormant), Accepted);
+        // A decision to disqualify is not undone by a merge.
+        assert_eq!(
+            merge_relationship_status(Disqualified, Qualified),
+            Disqualified
+        );
+        assert_eq!(merge_relationship_status(Active, Paused), Active);
+        assert_eq!(merge_relationship_status(Former, Active), Former);
+    }
+}
