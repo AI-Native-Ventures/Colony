@@ -289,8 +289,8 @@ async function expectWelcomePersonaMention(page: Page) {
   const banner = page.getByTestId("welcome-composer-guide-banner");
   const personaMention = page.getByTestId("welcome-composer-persona-mention");
   await expect(personaMention).toBeVisible();
-  await expect(personaMention).toHaveAttribute("data-persona-options", "Fizz");
-  await expect(personaMention).toHaveAttribute("data-active-persona", "Fizz");
+  await expect(personaMention).toHaveAttribute("data-persona-options", "Scout");
+  await expect(personaMention).toHaveAttribute("data-active-persona", "Scout");
   await expect(personaMention).toHaveAttribute(
     "data-animation-target",
     "per-character",
@@ -426,7 +426,7 @@ async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
   const banner = page.getByTestId("welcome-composer-guide-banner");
   const channelIntro = page.getByTestId("message-channel-intro");
 
-  await page.getByTestId("message-input").fill("Thanks @Fizz");
+  await page.getByTestId("message-input").fill("Thanks @Scout");
   await page.getByTestId("send-message").click();
 
   await expect(banner).toHaveAttribute("data-state", "complete");
@@ -598,7 +598,8 @@ async function expectWelcomeGuideIntro(
         >(page, "list_managed_agents"),
       ]);
       const fizz = agents.find(
-        (agent) => agent.name === "Fizz" && agent.persona_id === "builtin:fizz",
+        (agent) =>
+          agent.name === "Scout" && agent.persona_id === "builtin:fizz",
       );
       const fizzMember = fizz
         ? members.members.find((member) => member.pubkey === fizz.pubkey)
@@ -2773,7 +2774,7 @@ test("first-run onboarding posts the live Chief of Staff kickoff", async ({
   // Greeted by the name typed above — the @mention pill also files the opener
   // into the new user's Inbox mentions feed.
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi @Morty QA, I'm Fizz, your Chief of Staff.",
+    "Hi @Morty QA, I'm Scout, your Chief of Staff.",
   );
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Send me the company website.",
@@ -2797,7 +2798,7 @@ test("first-run onboarding lands before Welcome team bootstrap completes", async
   await expectPrivateWelcomeLanding(page);
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi @Morty QA, I'm Fizz, your Chief of Staff.",
+    "Hi @Morty QA, I'm Scout, your Chief of Staff.",
   );
   await page.waitForTimeout(1_500);
   expect(await commandCount(page, "create_managed_agent")).toBe(1);
