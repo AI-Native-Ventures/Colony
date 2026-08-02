@@ -8,6 +8,69 @@
 
 **Tech Stack:** Rust (buzz-core, buzz-relay, buzz-meter [new crate], buzz-acp, buzz-cli), axum/hyper for the meter proxy, NIP-44 v2 encryption (existing `observer.rs` helpers), NIP-33 parameterized-replaceable heads, React/TS for the minimal desktop slice.
 
+## Status: complete, 2026-08-02
+
+All thirteen tasks are done and merged to `develop`, shipping in relay
+`v0.3.0`.
+
+**The proof that mattered.** A real DeepSeek call was captured at the wire with
+the provider's own itemization (10 uncached input tokens, 2 output), recorded
+under `provider: "deepseek"`, while the caller held only a `colony-vk-` virtual
+key and the real credential never left the checkpoint. That closes the gap this
+phase existed to close: neither `opencode acp` nor `goose acp` reports usage
+over ACP on this machine, and the ledger no longer needs them to.
+
+**Seven defects found by running things rather than reasoning about them.**
+None were visible to unit tests that already passed:
+
+1. *Kind classification.* Every ledger action was refused `restricted: unknown
+   event kind`, the same defect the party phase shipped and only found at a
+   live gate. Caught here by a classification test written before the code,
+   along with a ban-gate bypass on the ledger action.
+2. *Credential leak across headers.* Swapping the expected credential header
+   was not enough: a credential placed in the other provider's header was
+   forwarded upstream intact. Found by mutation, since nothing pinned it.
+3. *Compression hid spend.* Most provider SDKs request gzip by default and a
+   compressed body could not be parsed, so real agents would have been largely
+   unmetered while every test kept passing. The checkpoint now requests
+   identity encoding.
+4. *Wrong vendor on the record.* A live DeepSeek call was recorded as
+   `provider: "openai"` because DeepSeek uses the OpenAI-compatible route.
+   Reconciliation compares per provider, so that spend would have been checked
+   against an invoice that never contained it.
+5. *Nonsense vendor from an address.* The fix for (4) then derived vendor `"0"`
+   from a `127.0.0.1` upstream. An address is not a vendor.
+6. *A published price could silently fail to take effect.* Two appends inside
+   the same second collided under NIP-33 replacement ordering, so the second
+   was discarded.
+7. *The broker did not honour its own contract.* Its doc comment said "not the
+   owner" means refuse without storing; only the transaction-internal check
+   enforced that, and it ran last. Visible only on a **second** run against the
+   same database.
+
+**Deviations from the plan, all deliberate.**
+
+- The action and receipt envelope went in `buzz-sdk`, not `buzz-core`, mirroring
+  `party.rs`.
+- Ledger kinds are 40023/40024, not 40017/40018: Discovery merged first and
+  claimed those. Migrations renumbered to 0037/0038 past Discovery's.
+- `canonical_json` is `buzz_core::block::canonical_json`.
+- Adding a kind to `P_GATED_KINDS` carries a storage obligation: it must also be
+  excluded from the FTS generated column, and new FTS migrations must be
+  appended to the `fts_integration` chain.
+- Task 11 shipped a data layer with no UI component. Parties and company both
+  shipped that way; chat is the surface, and a view with no mount point is dead
+  code.
+- The live E2E suite cannot isolate itself, because the books are singleton
+  coordinates and append-only. It must run against a disposable relay and
+  database, never a shared or deployed one.
+
+**Follow-ups not done here.** Codex base-URL injection, since codex reads
+providers from `CODEX_CONFIG` rather than env and its agents are therefore
+currently unmetered; automated fetch of provider cost exports for
+reconciliation; a desktop corrections UI; and a cross-check report comparing
+NIP-AM self-reports against wire records.
+
 ## Owner decisions locked (2026-08-02)
 
 These were decided explicitly by the owner in review; do not re-litigate:
