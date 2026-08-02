@@ -2,6 +2,7 @@ import * as React from "react";
 
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { createFixtureDiscoveryDataSource } from "../data/FixtureDiscoveryDataSource";
+import { createRelayDiscoveryDataSource } from "../data/RelayDiscoveryDataSource";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { DiscoveryEntitlementState } from "../entitlement";
 import type {
@@ -143,9 +144,12 @@ async function loadReadModel(
 export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
   const dataSourceRef = React.useRef<DiscoveryDataSource | null>(null);
   if (!dataSourceRef.current) {
-    dataSourceRef.current = createFixtureDiscoveryDataSource({
-      entitlement: fixtureEntitlementOverride(),
-    });
+    dataSourceRef.current =
+      import.meta.env.MODE === "e2e"
+        ? createFixtureDiscoveryDataSource({
+            entitlement: fixtureEntitlementOverride(),
+          })
+        : createRelayDiscoveryDataSource();
   }
   const dataSource = dataSourceRef.current;
   const [state, setState] = React.useState<DiscoveryRouteState>(() => ({

@@ -80,6 +80,7 @@ export function CreateCampaignSheet({
   );
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const liveBusinessPhase = entitlement?.experience === "live";
 
   React.useEffect(() => {
     if (!open) return;
@@ -90,13 +91,14 @@ export function CreateCampaignSheet({
     setHasWebsite(true);
     setHasPhone(true);
     setHasEmail(true);
-    setSourceMode(DEFAULT_SOURCE_CONFIG.mode);
-    setEnabledSources([...DEFAULT_SOURCE_CONFIG.order]);
+    setSourceMode(liveBusinessPhase ? "waterfall" : DEFAULT_SOURCE_CONFIG.mode);
+    setEnabledSources(
+      liveBusinessPhase ? ["google_maps"] : [...DEFAULT_SOURCE_CONFIG.order],
+    );
     setError(null);
-  }, [open, vertical]);
+  }, [liveBusinessPhase, open, vertical]);
 
   const targetNumber = Math.max(0, Number.parseInt(target, 10) || 0);
-  const estimatedCredits = targetNumber * 300;
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -240,14 +242,14 @@ export function CreateCampaignSheet({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm text-muted-foreground">
-                    Estimated cost
+                    Provider usage
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    ~300 credits per lead (varies by enrichment depth)
+                    Billed directly by your connected source account.
                   </p>
                 </div>
-                <span className="font-mono text-lg font-semibold text-primary">
-                  {estimatedCredits.toLocaleString()} credits
+                <span className="text-right text-sm font-semibold text-primary">
+                  No Colony usage credits
                 </span>
               </div>
             </div>
@@ -256,60 +258,81 @@ export function CreateCampaignSheet({
               <summary className="cursor-pointer text-sm font-semibold text-foreground">
                 Advanced: Data Sources
               </summary>
-              <div className="mt-4 space-y-4">
-                <Tabs
-                  onValueChange={(value) => {
-                    if (value === "waterfall" || value === "concurrent")
-                      setSourceMode(value);
-                  }}
-                  value={sourceMode}
-                >
-                  <TabsList aria-label="Campaign source mode">
-                    <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
-                    <TabsTrigger value="concurrent">Concurrent</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <div className="space-y-2">
-                  {DISCOVERY_SOURCES.map(({ key }) => {
-                    const enabled = enabledSources.includes(key);
-                    const paidLocked =
-                      key === "linkedin_company_search" &&
-                      entitlement?.state !== "entitled";
-                    return (
-                      <div
-                        className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/50 p-2.5"
-                        key={key}
-                      >
-                        <span className="min-w-0 flex-1 text-sm text-foreground">
-                          {DISCOVERY_SOURCE_LABELS[key]}
-                        </span>
-                        <Switch
-                          aria-label={`${enabled ? "Disable" : "Enable"} ${DISCOVERY_SOURCE_LABELS[key]}`}
-                          checked={enabled}
-                          disabled={paidLocked}
-                          onCheckedChange={() =>
-                            setEnabledSources(
-                              (current) =>
-                                toggleSource(
-                                  { mode: sourceMode, order: current },
-                                  key,
-                                ).order,
-                            )
-                          }
-                        />
-                        {paidLocked ? (
-                          <EntitlementLock
-                            actionLabel="Unlock source"
-                            entitlement={entitlement}
-                            onRetry={onRetryEntitlement}
-                            onRun={() => undefined}
-                          />
-                        ) : null}
-                      </div>
-                    );
-                  })}
+              {liveBusinessPhase ? (
+                <div className="mt-4 space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    The first live phase uses your Outscraper key for Google
+                    Maps business discovery. Additional sources and execution
+                    modes remain in the preview until their production gates
+                    pass.
+                  </p>
+                  <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/50 p-2.5">
+                    <span className="min-w-0 flex-1 text-sm text-foreground">
+                      {DISCOVERY_SOURCE_LABELS.google_maps}
+                    </span>
+                    <Switch
+                      aria-label="Outscraper is enabled"
+                      checked
+                      disabled
+                    />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="mt-4 space-y-4">
+                  <Tabs
+                    onValueChange={(value) => {
+                      if (value === "waterfall" || value === "concurrent")
+                        setSourceMode(value);
+                    }}
+                    value={sourceMode}
+                  >
+                    <TabsList aria-label="Campaign source mode">
+                      <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
+                      <TabsTrigger value="concurrent">Concurrent</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <div className="space-y-2">
+                    {DISCOVERY_SOURCES.map(({ key }) => {
+                      const enabled = enabledSources.includes(key);
+                      const paidLocked =
+                        key === "linkedin_company_search" &&
+                        entitlement?.state !== "entitled";
+                      return (
+                        <div
+                          className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/50 p-2.5"
+                          key={key}
+                        >
+                          <span className="min-w-0 flex-1 text-sm text-foreground">
+                            {DISCOVERY_SOURCE_LABELS[key]}
+                          </span>
+                          <Switch
+                            aria-label={`${enabled ? "Disable" : "Enable"} ${DISCOVERY_SOURCE_LABELS[key]}`}
+                            checked={enabled}
+                            disabled={paidLocked}
+                            onCheckedChange={() =>
+                              setEnabledSources(
+                                (current) =>
+                                  toggleSource(
+                                    { mode: sourceMode, order: current },
+                                    key,
+                                  ).order,
+                              )
+                            }
+                          />
+                          {paidLocked ? (
+                            <EntitlementLock
+                              actionLabel="Unlock source"
+                              entitlement={entitlement}
+                              onRetry={onRetryEntitlement}
+                              onRun={() => undefined}
+                            />
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </details>
 
             <section className="space-y-4">
