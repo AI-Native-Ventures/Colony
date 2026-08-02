@@ -282,6 +282,10 @@ pub enum PartyContractError {
     /// A status does not belong to the relationship view it appears on.
     #[error("that status does not belong to this relationship")]
     StatusNotOnRelationship,
+    /// A merge found the same relationship ended on one side and live on the
+    /// other, and no automatic answer is safe.
+    #[error("that relationship is ended on one side and live on the other")]
+    ConflictingRelationshipStatuses,
     /// A lifecycle transition is not permitted.
     #[error("invalid {0} status transition")]
     InvalidStatusTransition(&'static str),
@@ -565,11 +569,7 @@ pub fn validate_relationship(
     }
     // The coordinate is what makes a second Lead on one party impossible, so an
     // ID that does not derive from the party and the view would let one exist.
-    let expected = format!(
-        "{}:{}",
-        relationship.party_id,
-        relationship.relationship.slug()
-    );
+    let expected = relationship_coordinate(&relationship.party_id, relationship.relationship);
     if relationship.id != expected {
         return Err(PartyContractError::MismatchedReference("relationship.id"));
     }
@@ -998,6 +998,147 @@ mod tests {
     /// The coordinate is what makes a second Lead on the same party impossible,
     /// so an ID that does not derive from the party and the view would let one
     /// exist.
+    /// The retired handle's view has to arrive at the survivor's coordinate,
+    /// or the merge leaves a Lead hanging off a handle that only redirects.
+    #[test]
+    fn a_relationship_with_no_counterpart_moves_to_the_survivor_intact() {
+        let retired = relationship(
+            "acme-old",
+            RelationshipKind::Lead,
+            RelationshipStatus::Qualified,
+        );
+        let moved = repoint_relationship(&retired, None, "acme-industries", 1_785_400_000)
+            .expect("no counterpart is not a conflict");
+        assert_eq!(moved.id, "acme-industries:lead");
+        assert_eq!(moved.party_id, "acme-industries");
+        assert_eq!(moved.status, RelationshipStatus::Qualified);
+        assert_eq!(moved.owner_persona_id, retired.owner_persona_id);
+        assert_eq!(moved.created_at, retired.created_at);
+        assert_eq!(moved.updated_at, 1_785_400_000);
+    }
+
+    /// Which handle survived a merge is an accident of who typed the command.
+    /// It must not decide how far along the company thinks the relationship is.
+    #[test]
+    fn a_collision_keeps_the_further_progressed_status_either_way_round() {
+        let behind = relationship(
+            "acme-old",
+            RelationshipKind::Lead,
+            RelationshipStatus::Candidate,
+        );
+        let ahead = relationship(
+            "acme-industries",
+            RelationshipKind::Lead,
+            RelationshipStatus::Qualified,
+        );
+        let survivor_ahead = repoint_relationship(&behind, Some(&ahead), "acme-industries", 1)
+            .expect("both live merges");
+        let survivor_behind = repoint_relationship(&ahead, Some(&behind), "acme-industries", 1)
+            .expect("both live merges");
+        assert_eq!(survivor_ahead.status, RelationshipStatus::Qualified);
+        assert_eq!(survivor_behind.status, RelationshipStatus::Qualified);
+    }
+
+    /// A merge is a discovery that two records are one party. It is not a
+    /// reassignment, so the survivor's accountable persona keeps the work.
+    #[test]
+    fn a_collision_leaves_accountability_with_the_surviving_record() {
+        let retired = relationship(
+            "acme-old",
+            RelationshipKind::Lead,
+            RelationshipStatus::Qualified,
+        );
+        let mut existing = relationship(
+            "acme-industries",
+            RelationshipKind::Lead,
+            RelationshipStatus::Accepted,
+        );
+        existing.owner_persona_id = "company-role:abc:horizonlabs:account-lead".to_string();
+        existing.source_channel_id = "accounts".to_string();
+        let merged = repoint_relationship(&retired, Some(&existing), "acme-industries", 1)
+            .expect("both live merges");
+        assert_eq!(merged.owner_persona_id, existing.owner_persona_id);
+        assert_eq!(merged.source_channel_id, existing.source_channel_id);
+    }
+
+    /// The relationship is as old as the first evidence of it, whichever handle
+    /// that evidence happened to arrive under.
+    #[test]
+    fn a_collision_dates_the_relationship_from_the_earlier_side() {
+        let mut retired = relationship(
+            "acme-old",
+            RelationshipKind::Client,
+            RelationshipStatus::Active,
+        );
+        retired.created_at = 1_700_000_000;
+        let mut existing = relationship(
+            "acme-industries",
+            RelationshipKind::Client,
+            RelationshipStatus::Active,
+        );
+        existing.created_at = 1_785_369_600;
+        let merged = repoint_relationship(&retired, Some(&existing), "acme-industries", 1)
+            .expect("both live merges");
+        assert_eq!(merged.created_at, 1_700_000_000);
+    }
+
+    /// Both answers here are wrong in a way nobody would notice, so the merge
+    /// stops in front of the human who can settle it.
+    #[test]
+    fn an_ended_relationship_meeting_a_live_one_refuses_rather_than_picking() {
+        for (left, right) in [
+            (RelationshipStatus::Active, RelationshipStatus::Former),
+            (RelationshipStatus::Former, RelationshipStatus::Active),
+            (
+                RelationshipStatus::Qualified,
+                RelationshipStatus::Disqualified,
+            ),
+            (
+                RelationshipStatus::Disqualified,
+                RelationshipStatus::Candidate,
+            ),
+        ] {
+            assert_eq!(
+                merge_relationship_status(left, right),
+                Err(PartyContractError::ConflictingRelationshipStatuses),
+                "{left:?} against {right:?} must not resolve silently"
+            );
+        }
+    }
+
+    /// Each view has exactly one terminal state, so two ended sides are the
+    /// same state and merging them decides nothing.
+    #[test]
+    fn two_ended_sides_are_the_same_state_and_merge_cleanly() {
+        for status in [RelationshipStatus::Former, RelationshipStatus::Disqualified] {
+            assert_eq!(merge_relationship_status(status, status), Ok(status));
+        }
+    }
+
+    /// Enumerating kinds is how a merge finds every relationship coordinate a
+    /// retired handle could hold. A kind missing from the list is a view that
+    /// silently fails to follow the merge.
+    #[test]
+    fn every_relationship_kind_is_enumerable_for_a_merge() {
+        for kind in ALL_RELATIONSHIP_KINDS {
+            let record = party("acme-industries");
+            let view = relationship(
+                "acme-industries",
+                kind,
+                match kind {
+                    RelationshipKind::Lead => RelationshipStatus::Candidate,
+                    RelationshipKind::Client => RelationshipStatus::Active,
+                },
+            );
+            assert_eq!(validate_relationship(&view, &record), Ok(()));
+            assert_eq!(
+                view.id,
+                relationship_coordinate("acme-industries", kind),
+                "the coordinate a merge would look under must be the one in use"
+            );
+        }
+    }
+
     #[test]
     fn a_relationship_id_that_is_not_derived_from_its_coordinate_is_refused() {
         let record = party("acme-industries");
@@ -1342,21 +1483,101 @@ where
     HandleResolution::Broken { handle }
 }
 
-/// The status a merged relationship keeps.
+/// Whether a status is the end of its lifecycle.
 ///
-/// The further-progressed state wins. A party that was already a qualified Lead
-/// under one handle does not become a fresh candidate because the other handle
-/// had never been worked, and a disqualification is not undone by a merge: it
-/// was a decision somebody made, and only a new decision reverses it.
+/// Each view has exactly one: a Lead ends Disqualified, a Client ends Former.
+pub const fn is_terminal_status(status: RelationshipStatus) -> bool {
+    matches!(
+        status,
+        RelationshipStatus::Disqualified | RelationshipStatus::Former
+    )
+}
+
+/// The status a merged relationship keeps, or a refusal to choose.
+///
+/// Among live states the further-progressed one wins. A party that was already
+/// a qualified Lead under one handle does not become a fresh candidate because
+/// the other handle had never been worked.
+///
+/// An ended state facing a live one is refused rather than resolved. Both
+/// answers are wrong in a way nobody would see: taking the ended side marks a
+/// paying client former, and taking the live side quietly undoes a
+/// disqualification somebody decided on. Since each view has one terminal
+/// state, two ended sides are the same state and merge cleanly -- only the
+/// mixed case stops, and it stops in front of the human who can settle it.
 pub const fn merge_relationship_status(
     left: RelationshipStatus,
     right: RelationshipStatus,
-) -> RelationshipStatus {
-    if progress_rank(left) >= progress_rank(right) {
+) -> Result<RelationshipStatus, PartyContractError> {
+    if is_terminal_status(left) != is_terminal_status(right) {
+        return Err(PartyContractError::ConflictingRelationshipStatuses);
+    }
+    Ok(if progress_rank(left) >= progress_rank(right) {
         left
     } else {
         right
-    }
+    })
+}
+
+/// Every relationship kind a party can carry.
+///
+/// A merge has to find the retired handle's relationships to re-point them, and
+/// the coordinate is derived, so the finite set of kinds enumerates every
+/// coordinate that could exist. That is a bounded pair of lookups instead of a
+/// scan, and it cannot miss one the way a prefix query over live data can.
+pub const ALL_RELATIONSHIP_KINDS: [RelationshipKind; 2] =
+    [RelationshipKind::Lead, RelationshipKind::Client];
+
+/// The coordinate a relationship lives at.
+///
+/// Deriving it, rather than letting a caller name it, is what makes a second
+/// Lead on one party structurally impossible: there is nowhere else to put it.
+pub fn relationship_coordinate(party_id: &str, kind: RelationshipKind) -> String {
+    format!("{party_id}:{}", kind.slug())
+}
+
+/// Move a retired party's relationship onto the survivor of a merge.
+///
+/// A relationship is a view over an identity. When two identities turn out to
+/// be one, the views have to follow, or the company is left with a Lead hanging
+/// off a coordinate that now only redirects and a Client on the survivor that
+/// does not know about it.
+///
+/// `survivor_existing` is the relationship already at the destination, if any.
+/// When both sides carry the same kind the two collapse into one:
+///
+/// - Status takes the further-progressed side, so a merge never demotes a live
+///   customer to a lead because of which handle happened to survive. An ended
+///   state facing a live one refuses instead, and the merge stops with it.
+/// - Accountability stays with the survivor's persona and channel. The survivor
+///   is the record the company keeps working, and a merge is not a reassignment.
+/// - `created_at` takes the earlier side. The relationship is as old as the
+///   first evidence of it, whichever handle that evidence arrived under.
+pub fn repoint_relationship(
+    retired: &PartyRelationship,
+    survivor_existing: Option<&PartyRelationship>,
+    survivor_id: &str,
+    now: i64,
+) -> Result<PartyRelationship, PartyContractError> {
+    let kind = retired.relationship;
+    Ok(match survivor_existing {
+        Some(existing) => PartyRelationship {
+            id: relationship_coordinate(survivor_id, kind),
+            party_id: survivor_id.to_owned(),
+            status: merge_relationship_status(existing.status, retired.status)?,
+            owner_persona_id: existing.owner_persona_id.clone(),
+            source_channel_id: existing.source_channel_id.clone(),
+            created_at: existing.created_at.min(retired.created_at),
+            updated_at: now,
+            ..existing.clone()
+        },
+        None => PartyRelationship {
+            id: relationship_coordinate(survivor_id, kind),
+            party_id: survivor_id.to_owned(),
+            updated_at: now,
+            ..retired.clone()
+        },
+    })
 }
 
 /// How far through its lifecycle a status sits, for merge comparison only.
@@ -1487,17 +1708,17 @@ mod handle_tests {
     }
 
     #[test]
-    fn merging_relationship_status_keeps_the_further_progressed_state() {
+    fn merging_relationship_status_keeps_the_further_progressed_live_state() {
         use RelationshipStatus::*;
-        assert_eq!(merge_relationship_status(Candidate, Qualified), Qualified);
-        assert_eq!(merge_relationship_status(Qualified, Candidate), Qualified);
-        assert_eq!(merge_relationship_status(Accepted, Dormant), Accepted);
-        // A decision to disqualify is not undone by a merge.
         assert_eq!(
-            merge_relationship_status(Disqualified, Qualified),
-            Disqualified
+            merge_relationship_status(Candidate, Qualified),
+            Ok(Qualified)
         );
-        assert_eq!(merge_relationship_status(Active, Paused), Active);
-        assert_eq!(merge_relationship_status(Former, Active), Former);
+        assert_eq!(
+            merge_relationship_status(Qualified, Candidate),
+            Ok(Qualified)
+        );
+        assert_eq!(merge_relationship_status(Accepted, Dormant), Ok(Accepted));
+        assert_eq!(merge_relationship_status(Active, Paused), Ok(Active));
     }
 }
