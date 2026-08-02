@@ -1,8 +1,43 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export const HOSTED_COMMUNITY_SUFFIX = "communities.buzz.xyz";
+export const HOSTED_COMMUNITY_SUFFIX = "colony.ainative.ventures";
 export const HOSTED_COMMUNITY_LIMIT = 3;
 export const VALID_HOSTED_COMMUNITY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// ── Colony self-serve provisioning ──────────────────────────────────────────
+// These talk to the active relay's own /api/communities surface (NIP-98
+// signed with the local identity) instead of Builderlab. The relay enforces
+// membership, the per-owner limit, and name rules; commands reject with a
+// readable message on failure.
+
+export type ColonyAvailability = {
+  name?: string;
+  normalized_host?: string;
+  available?: boolean;
+  reason?: string;
+};
+
+export type ColonyCreateResponse = {
+  community?: HostedCommunity;
+  warning?: string | null;
+};
+
+export type ColonyCommunitiesResponse = {
+  owner_pubkey?: string;
+  communities?: (HostedCommunity & { archived_at?: string | null })[];
+};
+
+export function checkColonyCommunityName(name: string) {
+  return invoke<ColonyAvailability>("colony_check_community_name", { name });
+}
+
+export function createColonyCommunity(name: string) {
+  return invoke<ColonyCreateResponse>("colony_create_community", { name });
+}
+
+export function listColonyCommunities() {
+  return invoke<ColonyCommunitiesResponse>("colony_list_my_communities");
+}
 
 export type BuilderlabAuth = {
   email?: string;

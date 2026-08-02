@@ -10534,6 +10534,25 @@ export function maybeInstallE2eTauriMocks() {
           },
         };
       }
+      case "colony_check_community_name":
+        return {
+          name: (payload as { name?: string })?.name ?? "community",
+          normalized_host: `${(payload as { name?: string })?.name ?? "community"}.colony.ainative.ventures`,
+          available: true,
+        };
+      case "colony_create_community": {
+        const colonyName = (payload as { name?: string })?.name ?? "community";
+        return {
+          community: {
+            id: `colony-${colonyName}`,
+            name: colonyName,
+            slug: colonyName,
+            normalized_host: `${colonyName}.colony.ainative.ventures`,
+          },
+        };
+      }
+      case "colony_list_my_communities":
+        return { communities: [] };
       case "mesh_installed_models":
         return mockMeshState.models;
       case "mesh_node_status":

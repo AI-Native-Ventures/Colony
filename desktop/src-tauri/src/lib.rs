@@ -2,6 +2,7 @@
 mod app_state;
 mod archive;
 mod builderlab;
+mod colony_provisioning;
 mod commands;
 mod company;
 mod deep_link;
@@ -36,6 +37,7 @@ mod util;
 pub mod webkit_rendering;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use builderlab::*;
+use colony_provisioning::*;
 use commands::*;
 use deep_link::{
     acknowledge_pending_community_deep_link, handle_deep_link_url,
@@ -661,6 +663,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
+            colony_check_community_name,
+            colony_create_community,
+            colony_list_my_communities,
             start_builderlab_login,
             cancel_builderlab_login,
             get_builderlab_auth,

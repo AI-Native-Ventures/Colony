@@ -30,6 +30,11 @@ BUZZ_REQUIRE_RELAY_MEMBERSHIP = "true"
 BUZZ_REQUIRE_AUTH_TOKEN = "true"
 BUZZ_ALLOW_NIP_OA_AUTH = "true"
 BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
+# Member self-serve community creation: any relay member may create
+# <slug>.colony.ainative.ventures via POST /api/communities (NIP-98 with
+# their own key). Wildcard DNS + the Fly wildcard cert cover every slug.
+BUZZ_SELF_PROVISION_DOMAIN = "colony.ainative.ventures"
+BUZZ_MAX_COMMUNITIES_PER_OWNER = "10"
 
 [[mounts]]
 source = "colony_relay_data"

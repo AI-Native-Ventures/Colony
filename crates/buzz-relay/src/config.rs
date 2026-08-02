@@ -235,6 +235,20 @@ pub struct Config {
     /// Default: `false`. Set via `BUZZ_ALLOW_NIP_OA_AUTH=true`.
     pub allow_nip_oa_auth: bool,
 
+    /// Domain suffix for member self-serve community creation.
+    ///
+    /// When set (e.g. `colony.ainative.ventures`), any authenticated relay
+    /// member of an existing community may create new communities named
+    /// `<slug>.<domain>` through `POST /api/communities`, becoming their
+    /// owner. The per-owner cap from `BUZZ_MAX_COMMUNITIES_PER_OWNER` applies.
+    /// Unlike the operator API, no deployment-root authority is involved:
+    /// requests are NIP-98 signed by the member's own key and can only create
+    /// hosts under this fixed suffix.
+    ///
+    /// `None` (the default) disables the self-serve surface entirely — fail
+    /// closed. Set via `BUZZ_SELF_PROVISION_DOMAIN`.
+    pub self_provision_domain: Option<String>,
+
     /// Media storage configuration (S3/MinIO).
     pub media: buzz_media::MediaConfig,
     /// Maximum concurrent media uploads handled by one relay process.
@@ -629,6 +643,37 @@ impl Config {
         let allow_nip_oa_auth = std::env::var("BUZZ_ALLOW_NIP_OA_AUTH")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
+
+        // Lowercased; a scheme, path, port, or leading dot is a config error
+        // rather than a silently dead surface. The full host built from it is
+        // re-validated per-request by the provisioning host validator.
+        let self_provision_domain = std::env::var("BUZZ_SELF_PROVISION_DOMAIN")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('.').to_lowercase())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                let valid = !s.starts_with('.')
+                    && !s.contains("://")
+                    && !s.contains('/')
+                    && !s.contains(':')
+                    && s.split('.').all(|label| {
+                        !label.is_empty()
+                            && label.len() <= 63
+                            && label
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                    });
+                if valid {
+                    Ok(s)
+                } else {
+                    Err(ConfigError::InvalidValue(format!(
+                        "BUZZ_SELF_PROVISION_DOMAIN is not a bare domain: {s:?}"
+                    )))
+                }
+            })
+            .transpose()?;
 
         // Note: intentionally not prefixed with BUZZ_ — this is a relay-identity
         // config that may be shared across multiple services (e.g., ACP agent).
@@ -1044,6 +1089,7 @@ impl Config {
             relay_operator_api_origin,
             relay_operator_pubkeys,
             allow_nip_oa_auth,
+            self_provision_domain,
             media,
             media_max_concurrent_uploads,
             media_max_concurrent_uploads_per_pubkey,
