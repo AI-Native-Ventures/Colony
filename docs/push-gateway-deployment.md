@@ -121,9 +121,9 @@ git push -u origin push-chart-release/X.Y.Z
 ```
 
 When that PR merges, `.github/workflows/auto-tag-on-release-pr-merge.yml`
-creates `push-chart-vX.Y.Z` and dispatches
-`.github/workflows/push-gateway-helm-chart.yml` with that immutable tag and bare
-version. The publisher verifies the checked-out commit is the tag target and the
+creates `push-chart-vX.Y.Z`, and that tag push triggers
+`.github/workflows/push-gateway-helm-chart.yml` on that immutable tag. The
+publisher verifies the checked-out commit is the tag target and the
 chart version equals `X.Y.Z` before pushing
 `oci://ghcr.io/block/buzz/charts/buzz-push-gateway`. A manually pushed
 `push-chart-vX.Y.Z` tag is the documented rescue path and runs the same checks.
