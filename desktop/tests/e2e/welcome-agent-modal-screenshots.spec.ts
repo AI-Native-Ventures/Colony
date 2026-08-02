@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, openCreateChannelDialog } from "../helpers/bridge";
+import { GUIDE_NAME, STARTER_PERSONA_IDS } from "../helpers/starterTeam";
 
 const SHOTS = "test-results/welcome-agent-modal";
 const FIZZ_PUBKEY = "f".repeat(64);
@@ -52,12 +53,12 @@ async function openAgentPicker(page: Page, channel = "random") {
 test.describe("welcome and channel agent entry points", () => {
   test("welcome offers chat-first creation", async ({ page }) => {
     await installMockBridge(page, {
-      activePersonaIds: ["builtin:fizz"],
+      activePersonaIds: [STARTER_PERSONA_IDS.fizz],
       managedAgents: [
         {
           pubkey: FIZZ_PUBKEY,
-          name: "Fizz",
-          personaId: "builtin:fizz",
+          name: GUIDE_NAME,
+          personaId: STARTER_PERSONA_IDS.fizz,
           status: "running",
           channelNames: ["Welcome"],
         },
@@ -87,7 +88,7 @@ test.describe("welcome and channel agent entry points", () => {
     await page.getByTestId("welcome-create-agent-in-chat").click();
     await expect(dialog).not.toBeVisible();
     await expect(page.getByTestId("message-timeline")).toContainText(
-      "Fizz, help me create a new agent.",
+      `${GUIDE_NAME}, help me create a new agent.`,
     );
   });
 
@@ -95,12 +96,12 @@ test.describe("welcome and channel agent entry points", () => {
     page,
   }) => {
     await installMockBridge(page, {
-      activePersonaIds: ["builtin:fizz"],
+      activePersonaIds: [STARTER_PERSONA_IDS.fizz],
       managedAgents: [
         {
           pubkey: FIZZ_PUBKEY,
-          name: "Fizz",
-          personaId: "builtin:fizz",
+          name: GUIDE_NAME,
+          personaId: STARTER_PERSONA_IDS.fizz,
           status: "running",
           channelNames: ["Welcome"],
         },
@@ -196,14 +197,14 @@ test.describe("welcome and channel agent entry points", () => {
     await expect(page.getByTestId("chat-title")).toHaveText("random");
   });
 
-  test("only Fizz is already in the channel", async ({ page }) => {
+  test(`only ${GUIDE_NAME} is already in the channel`, async ({ page }) => {
     await installMockBridge(page, {
-      activePersonaIds: ["builtin:fizz"],
+      activePersonaIds: [STARTER_PERSONA_IDS.fizz],
       managedAgents: [
         {
           pubkey: FIZZ_PUBKEY,
-          name: "Fizz",
-          personaId: "builtin:fizz",
+          name: GUIDE_NAME,
+          personaId: STARTER_PERSONA_IDS.fizz,
           status: "running",
           channelNames: ["random"],
         },
@@ -218,13 +219,13 @@ test.describe("welcome and channel agent entry points", () => {
 
   test("some personal agents are available", async ({ page }) => {
     await installMockBridge(page, {
-      activePersonaIds: ["builtin:fizz"],
+      activePersonaIds: [STARTER_PERSONA_IDS.fizz],
       personas: [scoutPersona, editorPersona],
       managedAgents: [
         {
           pubkey: FIZZ_PUBKEY,
-          name: "Fizz",
-          personaId: "builtin:fizz",
+          name: GUIDE_NAME,
+          personaId: STARTER_PERSONA_IDS.fizz,
           status: "running",
           channelNames: ["random"],
         },
@@ -251,13 +252,13 @@ test.describe("welcome and channel agent entry points", () => {
 
   test("all personal agents are already in the channel", async ({ page }) => {
     await installMockBridge(page, {
-      activePersonaIds: ["builtin:fizz"],
+      activePersonaIds: [STARTER_PERSONA_IDS.fizz],
       personas: [scoutPersona, editorPersona],
       managedAgents: [
         {
           pubkey: FIZZ_PUBKEY,
-          name: "Fizz",
-          personaId: "builtin:fizz",
+          name: GUIDE_NAME,
+          personaId: STARTER_PERSONA_IDS.fizz,
           status: "running",
           channelNames: ["random"],
         },
