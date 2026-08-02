@@ -39,7 +39,6 @@ const ANTS: Ant[] = [
   { top: "88%", left: "80%", size: 32, rotate: 14, color: COLONY_HUES[0] },
   { top: "92%", left: "10%", size: 26, rotate: -8, color: COLONY_HUES[1] },
   { top: "3%", left: "42%", size: 22, rotate: 14, color: COLONY_HUES[2] },
-  { top: "9%", left: "5%", size: 24, rotate: -22, color: COLONY_HUES[3] },
   { top: "16%", left: "62%", size: 30, rotate: -4, color: COLONY_HUES[4] },
   { top: "20%", left: "30%", size: 22, rotate: 12, color: COLONY_HUES[0] },
   { top: "26%", left: "52%", size: 26, rotate: -14, color: COLONY_HUES[1] },

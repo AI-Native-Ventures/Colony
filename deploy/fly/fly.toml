@@ -21,6 +21,15 @@ BUZZ_MEDIA_SERVER_DOMAIN = "relay.colony.ainative.ventures"
 BUZZ_CORS_ORIGINS = "https://relay.colony.ainative.ventures"
 BUZZ_S3_ENDPOINT = "https://fly.storage.tigris.dev"
 BUZZ_S3_BUCKET = "colony-relay-media"
+# Production identity and posture. Without RELAY_URL the relay advertises
+# ws://localhost:3000; without REQUIRE_RELAY_MEMBERSHIP anyone who finds the
+# host can join. BUZZ_RELAY_PRIVATE_KEY (secret) keeps the relay's own
+# identity stable across restarts.
+RELAY_URL = "wss://relay.colony.ainative.ventures"
+BUZZ_REQUIRE_RELAY_MEMBERSHIP = "true"
+BUZZ_REQUIRE_AUTH_TOKEN = "true"
+BUZZ_ALLOW_NIP_OA_AUTH = "true"
+BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
 
 [[mounts]]
 source = "colony_relay_data"
@@ -37,11 +46,11 @@ min_machines_running = 1
 size = "shared-cpu-1x"
 memory = "512mb"
 
-# The relay's readiness endpoint lives on the separate health port.
+# The in-container health port binds localhost only; probe the public
+# relay port instead.
 [checks.readiness]
-type = "http"
-port = 8080
-path = "/_readiness"
+type = "tcp"
+port = 3000
 interval = "15s"
 timeout = "5s"
 grace_period = "30s"

@@ -152,10 +152,13 @@ export function MachineOnboardingFlow({
               effect="mask-reveal-up"
               transitionKey="machine-identity"
             >
+              {/* SVG, not the PNG beside it: the raster master is 777px wide
+                  and renders visibly soft at this 600px display width on a
+                  Retina panel (effectively 1200 device pixels). */}
               <img
                 alt="Colony"
                 className="w-full max-w-[600px]"
-                src="/landing/colony-wordmark.png"
+                src="/landing/colony-wordmark.svg"
               />
               <p className="mt-2 max-w-[560px] text-center text-2xl font-normal leading-none text-foreground">
                 Your people, your agents, your projects —<br />
