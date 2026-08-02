@@ -605,6 +605,19 @@ pub enum MessagesCmd {
         /// Pubkey to mention (hex or npub; repeatable). Supplying any explicit identity permits unresolved or ambiguous @Name text as presentation-only; uniquely resolved member names still notify.
         #[arg(long = "mention")]
         mentions: Vec<String>,
+        /// Company Task this message's work is charged to
+        ///
+        /// A paid agent turn with no Task is spend that no cost centre, team,
+        /// or commercial purpose can be traced to. Requires --team; the two
+        /// name the record and who is accountable for it.
+        #[arg(long)]
+        task: Option<String>,
+        /// Initiative containing that Task, when it has one
+        #[arg(long)]
+        initiative: Option<String>,
+        /// Team accountable for that Task
+        #[arg(long)]
+        team: Option<String>,
     },
     /// Send a code diff / patch to a channel
     SendDiff {

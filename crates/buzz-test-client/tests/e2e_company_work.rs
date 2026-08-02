@@ -891,3 +891,194 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
     agent_client.disconnect().await.ok();
     client.disconnect().await.ok();
 }
+
+/// Seed one company, team, initiative, and Task with fixed identifiers, then
+/// print the flags a live agent run needs.
+///
+/// Not an assertion suite: this is the setup step for the live NIP-AM run in
+/// TESTING.md, kept here because it goes through the same owner-signed action
+/// path everything else in this file does. Seeding by hand through a second
+/// implementation would prove the harness against records the relay would
+/// never have accepted.
+#[tokio::test]
+#[ignore = "seeds live fixtures; run explicitly before a live agent turn"]
+async fn seed_live_work_context() {
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let relay = relay_self().await;
+    let stamp = now();
+
+    let company_id = "livecompany".to_string();
+    let team = CompanyTeamRef {
+        id: "live-team".to_string(),
+        lead_persona_id: "live-lead".to_string(),
+        persona_ids: vec!["live-lead".to_string()],
+    };
+    let initiative_id = format!("{company_id}:live-initiative");
+    let task_id = format!("{company_id}:live-task");
+
+    publish_team(&mut client, &owner, &team).await;
+
+    for action in [
+        action(
+            &relay,
+            CompanyActionOperation::Create,
+            CompanyActionPayload::Company(company(&company_id, stamp)),
+            coordinate(KIND_COMPANY_PROFILE, &relay, &company_id),
+            None,
+        ),
+        action(
+            &relay,
+            CompanyActionOperation::Create,
+            CompanyActionPayload::Initiative(initiative(
+                &company_id,
+                &initiative_id,
+                &team.lead_persona_id,
+                stamp,
+            )),
+            coordinate(KIND_INITIATIVE, &relay, &initiative_id),
+            None,
+        ),
+        action(
+            &relay,
+            CompanyActionOperation::Create,
+            CompanyActionPayload::Task({
+                let mut record = task(&company_id, &task_id, &team, stamp);
+                record.initiative_id = Some(initiative_id.clone());
+                // Client delivery for a named client, so the classification the
+                // live run reads back is COGS rather than the default.
+                record.commercial_purpose = CommercialPurpose::ClientDelivery;
+                record.client_organization_id = Some("acme".to_string());
+                record.status = TaskStatus::InProgress;
+                record
+            }),
+            coordinate(KIND_TASK, &relay, &task_id),
+            None,
+        ),
+    ] {
+        let (outcome, _) = broker(&mut client, &owner, &relay, &action).await;
+        assert!(
+            matches!(
+                outcome,
+                CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+            ),
+            "seeding must either write the record or find it already there, got {outcome:?}"
+        );
+    }
+
+    println!("LIVE_TASK={task_id}");
+    println!("LIVE_INITIATIVE={initiative_id}");
+    println!("LIVE_TEAM={}", team.id);
+    println!("LIVE_COMPANY={company_id}");
+    client.disconnect().await.ok();
+}
+
+/// Print the agent credentials a live ACP run needs.
+///
+/// The auth tag is what tells the relay this agent is owned by this owner;
+/// without it the relay refuses the agent's turn metric outright. Computed
+/// through `nip_oa::compute_auth_tag`, the same function the desktop uses, so
+/// a live run is authorized exactly the way a real agent launch is.
+///
+/// Set `LIVE_AGENT_SECRET` to keep an agent identity stable across runs.
+#[test]
+#[ignore = "prints live agent credentials; run explicitly before a live agent turn"]
+fn print_live_agent_credentials() {
+    let owner = owner_keys();
+    let agent = match std::env::var("LIVE_AGENT_SECRET") {
+        Ok(secret) => Keys::parse(&secret).expect("LIVE_AGENT_SECRET must be a 64-hex secret"),
+        Err(_) => Keys::parse("2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a")
+            .expect("default live agent key"),
+    };
+    let auth_tag = buzz_sdk::nip_oa::compute_auth_tag(&owner, &agent.public_key(), "kind=9")
+        .expect("the owner signs the agent's auth tag");
+    println!("LIVE_AGENT_PUBKEY={}", agent.public_key().to_hex());
+    println!("LIVE_AGENT_SECRET={}", agent.secret_key().to_secret_hex());
+    println!("LIVE_AGENT_AUTH_TAG={auth_tag}");
+    println!("LIVE_OWNER_PUBKEY={}", owner.public_key().to_hex());
+}
+
+/// Read every turn metric addressed to the owner and print its work context.
+///
+/// The inspection half of the live NIP-AM run: after a real agent turn, this is
+/// what tells you whether the harness actually charged it to anything. It
+/// asserts nothing about which turns exist, because that depends on what was
+/// run; it asserts that anything it does find decrypts and is internally
+/// consistent.
+#[tokio::test]
+#[ignore = "inspects live turn metrics; run after a live agent turn"]
+async fn inspect_live_turn_metrics() {
+    use buzz_core::agent_turn_metric::decrypt_agent_turn_metric;
+    use buzz_core::company::classify_cost;
+    use buzz_core::kind::KIND_AGENT_TURN_METRIC;
+
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+
+    let id = sub_id("inspect");
+    let filter = Filter::new()
+        .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))
+        .pubkey(owner.public_key())
+        .limit(50);
+    client
+        .subscribe(&id, vec![filter])
+        .await
+        .expect("subscribe");
+    let events = client
+        .collect_until_eose(&id, Duration::from_secs(10))
+        .await
+        .expect("collect");
+    let _ = client.close_subscription(&id).await;
+
+    println!("METRICS_FOUND={}", events.len());
+    let mut attributed = 0usize;
+    for event in &events {
+        let payload = match decrypt_agent_turn_metric(&owner, event) {
+            Ok(payload) => payload,
+            Err(error) => {
+                println!("METRIC {} undecryptable: {error}", &event.id.to_hex()[..12]);
+                continue;
+            }
+        };
+        match payload.work_context {
+            Some(work) => {
+                attributed += 1;
+                // The classification is derived, so it must agree with the
+                // purpose and client it was derived from. A metric that
+                // disagreed with itself would be an unauditable number.
+                assert_eq!(
+                    work.cost_classification,
+                    classify_cost(
+                        work.commercial_purpose,
+                        work.client_organization_id.as_deref()
+                    ),
+                    "a stored classification must match what its own fields imply"
+                );
+                println!(
+                    "METRIC {} harness={} stop={:?} task={} initiative={:?} team={} cost_centre={} purpose={:?} classification={:?} client={:?}",
+                    &event.id.to_hex()[..12],
+                    payload.harness,
+                    payload.stop_reason,
+                    work.task_id,
+                    work.initiative_id,
+                    work.owning_team_id,
+                    work.cost_centre_id,
+                    work.commercial_purpose,
+                    work.cost_classification,
+                    work.client_organization_id,
+                );
+            }
+            None => println!(
+                "METRIC {} harness={} UNATTRIBUTED",
+                &event.id.to_hex()[..12],
+                payload.harness
+            ),
+        }
+    }
+    println!("METRICS_ATTRIBUTED={attributed}");
+    client.disconnect().await.ok();
+}
