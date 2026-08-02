@@ -264,6 +264,57 @@ async fn seed_core_blocks_warning(
     }
 }
 
+/// Create-only community creation with atomic owner bootstrap.
+///
+/// Shared by the operator API's `create_only` mode and the member self-serve
+/// surface (`POST /api/communities`). The host must already be validated by
+/// the caller's gate (operator allowlist + [`validate_host`], or the
+/// self-serve slug builder). Never rotates an existing owner: a host
+/// collision surfaces as `community already exists`.
+///
+/// `actor_hex` is the authenticated signer, logged for audit alongside the
+/// (possibly different) `owner_hex`.
+pub(crate) async fn create_community_for_owner(
+    state: &Arc<AppState>,
+    host: &str,
+    owner_hex: &str,
+    actor_hex: &str,
+) -> Result<ProvisionCommunityResponse, String> {
+    let record = match state
+        .db
+        .create_community_with_owner(host, owner_hex)
+        .await
+        .map_err(|e| format!("failed to create community: {e}"))?
+    {
+        buzz_db::CreateCommunityWithOwnerResult::Created(record) => record,
+        buzz_db::CreateCommunityWithOwnerResult::HostExists => {
+            return Err("community already exists".to_string());
+        }
+        buzz_db::CreateCommunityWithOwnerResult::LimitReached => {
+            return Err(
+                "limit_reached: owner already owns the maximum number of communities".to_string(),
+            );
+        }
+    };
+
+    info!(
+        actor = %actor_hex,
+        community = %record.id,
+        host = %record.host,
+        owner = %owner_hex,
+        "community created via provisioning endpoint"
+    );
+    publish_membership_snapshot_if_required(state, record.id, &record.host).await;
+    let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
+    Ok(ProvisionCommunityResponse {
+        community_id: record.id.to_string(),
+        host: record.host,
+        status: "created",
+        owner_pubkey: Some(owner_hex.to_string()),
+        warning,
+    })
+}
+
 /// Validate and execute a relay-operator community provisioning request.
 ///
 /// The caller is an HTTP operator endpoint, not the Nostr event ingest path.
@@ -316,40 +367,7 @@ pub async fn provision_community(
         let owner_hex = initial_owner.as_deref().ok_or_else(|| {
             "initial_owner_pubkey is required when create_only is true".to_string()
         })?;
-        let record = match state
-            .db
-            .create_community_with_owner(&request.host, owner_hex)
-            .await
-            .map_err(|e| format!("failed to create community: {e}"))?
-        {
-            buzz_db::CreateCommunityWithOwnerResult::Created(record) => record,
-            buzz_db::CreateCommunityWithOwnerResult::HostExists => {
-                return Err("community already exists".to_string());
-            }
-            buzz_db::CreateCommunityWithOwnerResult::LimitReached => {
-                return Err(
-                    "limit_reached: owner already owns the maximum number of communities"
-                        .to_string(),
-                );
-            }
-        };
-
-        info!(
-            operator = %operator_hex,
-            community = %record.id,
-            host = %record.host,
-            owner = %owner_hex,
-            "community created via operator endpoint"
-        );
-        publish_membership_snapshot_if_required(state, record.id, &record.host).await;
-        let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
-        return Ok(ProvisionCommunityResponse {
-            community_id: record.id.to_string(),
-            host: record.host,
-            status: "created",
-            owner_pubkey: initial_owner,
-            warning,
-        });
+        return create_community_for_owner(state, &request.host, owner_hex, &operator_hex).await;
     }
 
     // Legacy convergence mode remains available to deployment operators and
