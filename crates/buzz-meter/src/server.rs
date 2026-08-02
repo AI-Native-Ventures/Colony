@@ -57,6 +57,41 @@ impl Provider {
     }
 }
 
+/// Derive a vendor slug from an upstream base URL.
+///
+/// `https://api.deepseek.com` becomes `deepseek`; `https://api.openai.com`
+/// becomes `openai`. Returns `None` when the host yields no usable label.
+fn provider_slug_from_upstream(upstream: &str) -> Option<String> {
+    let without_scheme = upstream
+        .split_once("://")
+        .map_or(upstream, |(_, rest)| rest);
+    // A bracketed IPv6 literal has no vendor name and would otherwise be
+    // split apart by the port separator below.
+    if without_scheme.starts_with('[') {
+        return None;
+    }
+    let host = without_scheme
+        .split(['/', ':'])
+        .next()
+        .filter(|host| !host.is_empty())?;
+
+    // An address is not a vendor. A local or IP-literal upstream has no name
+    // to record, so the caller falls back to the route's own slug rather than
+    // inventing one out of an octet.
+    if host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok() {
+        return None;
+    }
+
+    let labels: Vec<&str> = host.split('.').filter(|part| !part.is_empty()).collect();
+    // Take the registrable label: `api.deepseek.com` reduces to `deepseek`.
+    let vendor = match labels.as_slice() {
+        [] => return None,
+        [single] => *single,
+        labels => *labels.get(labels.len() - 2)?,
+    };
+    (!vendor.is_empty()).then(|| vendor.to_ascii_lowercase())
+}
+
 /// One observed provider call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeteredCall {
@@ -108,6 +143,18 @@ impl MeterConfig {
             Provider::Anthropic => &self.anthropic_upstream,
             Provider::OpenAi => &self.openai_upstream,
         }
+    }
+
+    /// The vendor slug recorded on a usage record for this route.
+    ///
+    /// Derived from the upstream host, not the API dialect. An
+    /// OpenAI-compatible vendor like DeepSeek is reached through the
+    /// `/openai` route but sends its own invoice, and reconciliation compares
+    /// per provider. Recording that spend as "openai" would compare it
+    /// against the wrong bill.
+    fn provider_slug(&self, provider: Provider) -> String {
+        provider_slug_from_upstream(self.upstream(provider))
+            .unwrap_or_else(|| provider.slug().to_string())
     }
 
     fn credential(&self, provider: Provider) -> Option<&str> {
@@ -318,6 +365,13 @@ async fn forward(
         }
         outbound_headers.append(name.clone(), value.clone());
     }
+    // Ask upstream for a body the checkpoint can read. Stated explicitly
+    // rather than merely omitted, because an absent accept-encoding lets a
+    // server choose compression on its own.
+    outbound_headers.insert(
+        HeaderName::from_static("accept-encoding"),
+        HeaderValue::from_static("identity"),
+    );
     outbound_headers.insert(credential_name, credential_value);
 
     let mut url = format!(
@@ -368,6 +422,7 @@ async fn forward(
 
     let meta = CallMeta {
         provider,
+        provider_slug: state.config.provider_slug(provider),
         agent_label,
         http_status: status,
         header_request_id: header_request_id(&upstream_headers),
@@ -454,11 +509,18 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// the caller's semantic request: the host is now the provider, and the body
 /// length can change when `stream_options` is merged. The two credential
 /// headers are replaced with the real key.
+///
+/// `accept-encoding` is replaced with `identity`. Most provider SDKs ask for
+/// gzip by default; a compressed body cannot be parsed, and an unparseable
+/// body means a call that is correctly proxied, invisible to the ledger, and
+/// indistinguishable from an agent that spent nothing. Silent invisibility is
+/// the one outcome the checkpoint exists to prevent, so it declines the
+/// compression rather than declining to measure.
 fn is_stripped_request_header(name: &HeaderName) -> bool {
     is_hop_by_hop(name)
         || matches!(
             name.as_str(),
-            "host" | "content-length" | "x-api-key" | "authorization"
+            "host" | "content-length" | "x-api-key" | "authorization" | "accept-encoding"
         )
 }
 
@@ -487,6 +549,10 @@ fn is_event_stream(headers: &HeaderMap) -> bool {
 /// Everything needed to turn a finished response body into a [`MeteredCall`].
 struct CallMeta {
     provider: Provider,
+    /// Vendor slug recorded on the usage record. Derived from the upstream
+    /// host rather than the route, so an OpenAI-compatible vendor is not
+    /// recorded as OpenAI and reconciled against the wrong invoice.
+    provider_slug: String,
     agent_label: String,
     http_status: StatusCode,
     header_request_id: Option<String>,
@@ -573,7 +639,7 @@ impl Tee {
         self.buffer = Vec::new();
 
         let call = MeteredCall {
-            provider: meta.provider.slug().to_string(),
+            provider: meta.provider_slug.clone(),
             request_id: meta.resolve_request_id(parsed.request_id),
             model: parsed.model,
             http_status: meta.http_status.as_u16(),
@@ -623,5 +689,65 @@ impl Drop for Tee {
     /// is recorded with whatever the status line said.
     fn drop(&mut self) {
         self.emit();
+    }
+}
+
+#[cfg(test)]
+mod slug_tests {
+    use super::*;
+
+    #[test]
+    fn a_vendor_slug_comes_from_the_upstream_host_not_the_route() {
+        // Found by the live proof: a real DeepSeek call was recorded as
+        // "openai" because it uses the OpenAI-compatible route. Reconciliation
+        // compares per provider, so that record would have been checked
+        // against an OpenAI invoice that never contained it.
+        assert_eq!(
+            provider_slug_from_upstream("https://api.deepseek.com").as_deref(),
+            Some("deepseek")
+        );
+        assert_eq!(
+            provider_slug_from_upstream("https://api.openai.com").as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            provider_slug_from_upstream("https://api.anthropic.com").as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(
+            provider_slug_from_upstream("https://openrouter.ai/api/v1").as_deref(),
+            Some("openrouter")
+        );
+        assert_eq!(provider_slug_from_upstream("").as_deref(), None);
+
+        // An address is not a vendor name. Recording "0" for 127.0.0.1 would
+        // put test traffic under a provider that does not exist.
+        for not_a_vendor in [
+            "http://127.0.0.1:8080/v1",
+            "http://localhost:3000",
+            "http://[::1]:9000",
+        ] {
+            assert_eq!(
+                provider_slug_from_upstream(not_a_vendor).as_deref(),
+                None,
+                "{not_a_vendor} has no vendor name to record"
+            );
+        }
+    }
+
+    #[test]
+    fn config_falls_back_to_the_route_slug_when_the_host_is_unusable() {
+        let config = MeterConfig {
+            openai_upstream: String::new(),
+            ..MeterConfig::default()
+        };
+        assert_eq!(config.provider_slug(Provider::OpenAi), "openai");
+        assert_eq!(config.provider_slug(Provider::Anthropic), "anthropic");
+
+        let deepseek = MeterConfig {
+            openai_upstream: "https://api.deepseek.com".to_string(),
+            ..MeterConfig::default()
+        };
+        assert_eq!(deepseek.provider_slug(Provider::OpenAi), "deepseek");
     }
 }

@@ -338,6 +338,27 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_NO_MENTION_FILTER")]
     pub no_mention_filter: bool,
 
+    /// Disable wire metering. Agents then hold real provider credentials and
+    /// their spend is invisible to the cost ledger, so this is an explicit
+    /// opt-out rather than a side effect of configuration.
+    #[arg(long, env = "BUZZ_ACP_NO_METER")]
+    pub no_meter: bool,
+
+    /// Real Anthropic credential. Held by the metering checkpoint and never
+    /// placed in an agent's environment.
+    #[arg(long, env = "BUZZ_METER_ANTHROPIC_KEY", hide_env_values = true)]
+    pub meter_anthropic_key: Option<String>,
+
+    /// Real OpenAI credential. Held by the metering checkpoint and never
+    /// placed in an agent's environment.
+    #[arg(long, env = "BUZZ_METER_OPENAI_KEY", hide_env_values = true)]
+    pub meter_openai_key: Option<String>,
+
+    /// Record usage as subscription-backed shadow cost rather than money
+    /// spent. Tokens are still counted and priced at API-equivalent rates.
+    #[arg(long, env = "BUZZ_ACP_IMPUTED_COST")]
+    pub imputed_cost: bool,
+
     #[arg(long, env = "BUZZ_ACP_CONFIG", default_value = "./buzz-acp.toml")]
     pub config: PathBuf,
 
@@ -546,6 +567,14 @@ pub struct Config {
     pub session_title: Option<String>,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
+    /// Wire metering is off; agents keep their own provider credentials.
+    pub no_meter: bool,
+    /// Real Anthropic credential for the metering checkpoint.
+    pub meter_anthropic_key: Option<String>,
+    /// Real OpenAI credential for the metering checkpoint.
+    pub meter_openai_key: Option<String>,
+    /// Usage is subscription-backed shadow cost, not metered money.
+    pub imputed_cost: bool,
     /// Inbound author gate mode.
     pub respond_to: RespondTo,
     /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
@@ -1093,6 +1122,10 @@ impl Config {
             kinds_override: args.kinds,
             channels_override: args.channels,
             no_mention_filter: args.no_mention_filter,
+            no_meter: args.no_meter,
+            meter_anthropic_key: args.meter_anthropic_key.clone(),
+            meter_openai_key: args.meter_openai_key.clone(),
+            imputed_cost: args.imputed_cost,
             config_path: args.config,
             context_message_limit: args.context_message_limit,
             max_turns_per_session: args.max_turns_per_session,
@@ -1454,6 +1487,10 @@ mod tests {
             kinds_override: None,
             channels_override: None,
             no_mention_filter: false,
+            no_meter: true,
+            meter_anthropic_key: None,
+            meter_openai_key: None,
+            imputed_cost: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
             max_turns_per_session: 0,

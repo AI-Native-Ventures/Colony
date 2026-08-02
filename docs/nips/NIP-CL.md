@@ -309,6 +309,11 @@ reconciliation names the case where a company key is used outside it.
 
 ## Security considerations
 
+- The checkpoint forwards `accept-encoding: identity`. A compressed response
+  cannot be parsed, and an unparseable response is a call that is correctly
+  proxied but invisible to the ledger, which is indistinguishable from an agent
+  that spent nothing. Declining the compression is preferred to declining to
+  measure.
 - Real provider credentials live only with the checkpoint. Agents receive
   per-agent virtual keys and the checkpoint's address; the harness overwrites
   the standard provider key environment variables so an inherited real key

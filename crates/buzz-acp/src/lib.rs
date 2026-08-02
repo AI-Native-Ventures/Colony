@@ -4,6 +4,8 @@ mod acp;
 mod config;
 mod engram_fetch;
 mod filter;
+mod meter_env;
+mod meter_publish;
 mod observer;
 mod pool;
 mod pool_lifecycle;
@@ -1391,6 +1393,91 @@ async fn tokio_main() -> Result<()> {
     }
     let owner_cache = OwnerCache::new(startup_owner.clone());
 
+    // ── Wire metering checkpoint ──────────────────────────────────────────────
+    //
+    // Started before any agent spawns, because an agent that starts first would
+    // spawn unmetered and spend money the ledger never sees. Metering needs an
+    // owner to encrypt records to; without one there is nobody who could read
+    // them, so it stays off rather than publishing records nobody can decrypt.
+    let mut meter_publisher_task = if config.no_meter {
+        tracing::warn!(
+            "wire metering disabled (--no-meter): agent spend will not reach the cost ledger"
+        );
+        None
+    } else if let Some(owner_pubkey) = startup_owner
+        .as_deref()
+        .and_then(|hex| nostr::PublicKey::from_hex(hex).ok())
+    {
+        let meter_config = buzz_meter::MeterConfig {
+            anthropic_api_key: config.meter_anthropic_key.clone(),
+            openai_api_key: config.meter_openai_key.clone(),
+            ..buzz_meter::MeterConfig::default()
+        };
+        match buzz_meter::start_meter(meter_config).await {
+            Ok((port, mut calls, handle)) => {
+                if meter_env::set_active_meter(meter_env::ActiveMeter { port, handle }).is_err() {
+                    tracing::error!("metering checkpoint was already installed");
+                }
+                tracing::info!(port, "metering checkpoint listening on loopback");
+
+                let publish_context = meter_publish::PublishContext {
+                    harness: crate::config::normalize_agent_command_identity(&config.agent_command),
+                    payment_mode: if config.imputed_cost {
+                        buzz_core::usage_record::PaymentMode::Imputed
+                    } else {
+                        buzz_core::usage_record::PaymentMode::Metered
+                    },
+                };
+                let agent_keys = config.keys.clone();
+                let rest = relay.rest_client();
+                Some(tokio::spawn(async move {
+                    while let Some(call) = calls.recv().await {
+                        let Some(built) = meter_publish::build_usage_record_event(
+                            call,
+                            &agent_keys,
+                            &owner_pubkey,
+                            &publish_context,
+                        ) else {
+                            continue;
+                        };
+                        let event = match built {
+                            Ok(event) => event,
+                            Err(error) => {
+                                tracing::warn!(target: "meter::publish", "{error}");
+                                continue;
+                            }
+                        };
+                        // A publish failure must not stall metering or the
+                        // agent; the record is lost and reconciliation is what
+                        // surfaces the gap.
+                        const PUBLISH_TIMEOUT: Duration = Duration::from_secs(3);
+                        match tokio::time::timeout(PUBLISH_TIMEOUT, rest.submit_event(&event)).await
+                        {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(error)) => tracing::warn!(
+                                target: "meter::publish",
+                                "usage record publish failed: {error}"
+                            ),
+                            Err(_) => tracing::warn!(
+                                target: "meter::publish",
+                                "usage record publish timed out"
+                            ),
+                        }
+                    }
+                }))
+            }
+            Err(error) => {
+                tracing::error!("metering checkpoint failed to start: {error}");
+                None
+            }
+        }
+    } else {
+        tracing::warn!(
+            "wire metering off: no agent owner resolved, so usage records would be unreadable"
+        );
+        None
+    };
+
     let mut relay_observer_control_rx = None;
     let mut relay_observer_publisher_task = None;
     let mut relay_observer_publisher = None;
@@ -2732,6 +2819,15 @@ async fn tokio_main() -> Result<()> {
         handle.abort();
     }
 
+    // Stop serving provider traffic before the publisher goes away, so a call
+    // cannot complete with nothing left to record it.
+    if let Some(meter) = meter_env::active_meter() {
+        meter.handle.shutdown();
+    }
+    if let Some(handle) = meter_publisher_task.take() {
+        handle.abort();
+    }
+
     // Graceful relay shutdown — sends WebSocket close frame and waits up to 5s
     // for the background task to finish, rather than aborting immediately (#40).
     relay.shutdown().await;
@@ -4005,11 +4101,13 @@ async fn initialize_agent_pool(
     // Attempt each spawn under a 60-second timeout; a partial pool is valid.
     let mut agent_slots: Vec<Option<OwnedAgent>> = Vec::with_capacity(startup.agents as usize);
     for i in 0..startup.agents as usize {
+        let meter = meter_env::issue_for_agent(&format!("agent-{i}"));
         let spawn_result = AcpClient::spawn(
             &startup.command,
             &startup.args,
             &startup.extra_env,
             startup.has_generated_codex_config,
+            meter.as_ref(),
         )
         .await;
         match spawn_result {
@@ -4113,9 +4211,19 @@ async fn spawn_and_init(
     agent_index: usize,
     observer: Option<observer::ObserverHandle>,
 ) -> Result<(AcpClient, u32, String)> {
-    let mut acp = AcpClient::spawn(command, args, extra_env, has_generated_codex_config)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
+    // Metering is a property of the harness process, not of any one spawn
+    // path, so every respawn and refill route is covered without threading a
+    // handle through each of them. `None` means metering is off.
+    let meter = meter_env::issue_for_agent(&format!("agent-{agent_index}"));
+    let mut acp = AcpClient::spawn(
+        command,
+        args,
+        extra_env,
+        has_generated_codex_config,
+        meter.as_ref(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
     acp.set_observer(observer, agent_index);
 
     match acp.initialize().await {
@@ -4144,7 +4252,7 @@ async fn spawn_and_init(
 
 async fn spawn_auth_client(agent: &AuthAgentArgs) -> Result<AcpClient, acp::AcpError> {
     let agent_args = config::normalize_agent_args(&agent.agent_command, agent.agent_args.clone());
-    AcpClient::spawn(&agent.agent_command, &agent_args, &[], false).await
+    AcpClient::spawn(&agent.agent_command, &agent_args, &[], false, None).await
 }
 
 fn extract_auth_methods(init_result: &serde_json::Value) -> Vec<serde_json::Value> {
@@ -4274,7 +4382,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     // Spawn outside the timeout so we always own the child for cleanup.
     // `models` subcommand doesn't use persona packs — no extra env, no codex config.
     let mut client =
-        match AcpClient::spawn(&args.agent.agent_command, &agent_args, &[], false).await {
+        match AcpClient::spawn(&args.agent.agent_command, &agent_args, &[], false, None).await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("error: failed to spawn agent: {e}");
@@ -5238,6 +5346,10 @@ mod build_mcp_servers_tests {
             kinds_override: None,
             channels_override: None,
             no_mention_filter: false,
+            no_meter: true,
+            meter_anthropic_key: None,
+            meter_openai_key: None,
+            imputed_cost: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
             max_turns_per_session: 0,
@@ -5459,6 +5571,10 @@ mod error_outcome_emission_tests {
             kinds_override: None,
             channels_override: None,
             no_mention_filter: false,
+            no_meter: true,
+            meter_anthropic_key: None,
+            meter_openai_key: None,
+            imputed_cost: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
             max_turns_per_session: 0,
@@ -5503,7 +5619,7 @@ mod error_outcome_emission_tests {
     async fn dummy_agent(index: usize) -> OwnedAgent {
         OwnedAgent {
             index,
-            acp: AcpClient::spawn("cat", &[], &[], false)
+            acp: AcpClient::spawn("cat", &[], &[], false, None)
                 .await
                 .expect("spawn cat as inert agent"),
             state: Default::default(),
