@@ -44,6 +44,9 @@ pub mod presence;
 pub mod relay;
 /// Tenant identity — the server-resolved community key carried on scoped paths.
 pub mod tenant;
+
+/// Colony cost ledger: immutable per-request usage records (kind 44210).
+pub mod usage_record;
 /// Schnorr signature and event ID verification.
 pub mod verification;
 
