@@ -1,5 +1,49 @@
 # Changelog
 
+## relay-v0.3.0
+
+Colony cost ledger, party identity, and Discovery.
+
+- feat(nips,core,relay,acp,cli): NIP-CL deterministic cost ledger. Agent spend
+  is measured at the model-provider wire rather than self-reported: a metering
+  checkpoint holds the real provider credentials, issues each agent a virtual
+  key, and records the provider's own token itemization as immutable
+  `kind:44210` usage records encrypted to the owner. Adds effective-dated
+  pricing in integer nanoUSD, attribution rules, owner corrections that never
+  rewrite the record they correct, budgets, and reconciliation against the
+  provider's own cost export. Owner-only authority is enforced inside the
+  commit transaction. ([#15](https://github.com/AI-Native-Ventures/Colony/pull/15),
+  [#17](https://github.com/AI-Native-Ventures/Colony/pull/17),
+  [#20](https://github.com/AI-Native-Ventures/Colony/pull/20))
+- feat(discovery): production businesses discovery, with restart-safe local
+  worker runs, Outscraper source integration, and private campaign and Lead
+  records. ([#11](https://github.com/AI-Native-Ventures/Colony/pull/11))
+- feat(colony): party identity, with Lead and Client as views over one Party
+  rather than separate records, evidence-backed merge, and reference handles
+  that keep resolving after a merge retires them.
+  ([#7](https://github.com/AI-Native-Ventures/Colony/pull/7),
+  [#8](https://github.com/AI-Native-Ventures/Colony/pull/8))
+- fix(relay): a ledger book head is always newer than the head it replaces.
+  Two appends inside the same second collided under NIP-33 replacement, so a
+  published price could silently fail to take effect.
+  ([#20](https://github.com/AI-Native-Ventures/Colony/pull/20))
+- fix(relay): ledger authority is checked before validation, so a non-owner is
+  refused for the real reason and leaves no stored event behind.
+  ([#20](https://github.com/AI-Native-Ventures/Colony/pull/20))
+- fix(deps): carry the nostr and nostr-relay-pool RUSTSEC patches onto develop,
+  so promoting to main cannot revert them.
+  ([#19](https://github.com/AI-Native-Ventures/Colony/pull/19),
+  [#21](https://github.com/AI-Native-Ventures/Colony/pull/21))
+- fix(desktop): avatar editor interactivity, working-indicator sizing, and
+  bee-era agent avatar refresh.
+  ([#10](https://github.com/AI-Native-Ventures/Colony/pull/10),
+  [#16](https://github.com/AI-Native-Ventures/Colony/pull/16))
+
+New event kinds: 44210 usage record, 40023/40024 ledger action and receipt,
+30184-30187 price book, attribution rulebook, correction book, and budgets.
+Migrations 0031 through 0038.
+
+
 ## relay-v0.2.1
 
 - Initial release

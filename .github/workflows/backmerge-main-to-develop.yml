@@ -1,0 +1,115 @@
+name: Back-merge main into develop
+
+# `develop` collects finished work and `main` is the promotion target, so
+# anything that lands on `main` without also landing on `develop` becomes
+# drift: the next promotion silently reverts it.
+#
+# That is not hypothetical. Relay release 0.2.1 patched two RUSTSEC advisories
+# straight to `main`. Nothing carried them back, so `develop` kept the
+# vulnerable versions, and promoting `develop` would have reshipped them with
+# nothing in the diff saying so. It was caught by hand, by comparing lockfile
+# versions. This workflow is what makes that a control rather than luck.
+#
+# On every push to `main` it tries a fast-forward-or-merge back into
+# `develop`. When the merge is clean it pushes directly. When it conflicts it
+# opens a PR instead, because a conflicted back-merge needs a human and a
+# silent failure here recreates the exact problem the workflow exists to
+# prevent.
+
+on:
+  push:
+    branches: [main]
+  # Lets an operator reconcile the branches without waiting for a push, e.g.
+  # after resolving a back-merge PR by hand.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # One back-merge at a time. Two overlapping runs would race the same push.
+  group: backmerge-main-to-develop
+  cancel-in-progress: false
+
+jobs:
+  backmerge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@v4
+        with:
+          # Both branches and their common ancestry are needed to merge.
+          fetch-depth: 0
+          ref: develop
+
+      - name: Identify the merge author
+        run: |
+          git config user.name "buzz-backmerge-bot"
+          git config user.email "buzz-backmerge-bot@users.noreply.github.com"
+
+      - name: Merge main into develop
+        id: merge
+        run: |
+          set -euo pipefail
+          git fetch origin main develop
+
+          if git merge-base --is-ancestor origin/main origin/develop; then
+            echo "develop already contains main; nothing to back-merge"
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge --no-edit origin/main; then
+            echo "status=merged" >> "$GITHUB_OUTPUT"
+          else
+            # Leave the working tree clean so the conflict PR step starts from
+            # a known state rather than a half-finished merge.
+            git merge --abort || true
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the back-merge
+        if: steps.merge.outputs.status == 'merged'
+        run: git push origin HEAD:develop
+
+      - name: Open a PR when the back-merge conflicts
+        if: steps.merge.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          branch="backmerge/main-to-develop-${GITHUB_SHA::12}"
+          git checkout -B "$branch" origin/main
+          git push --force-with-lease origin "$branch"
+
+          if gh pr list --base develop --head "$branch" --state open \
+               --json number --jq 'length' | grep -qv '^0$'; then
+            echo "a back-merge PR for this commit is already open"
+            exit 0
+          fi
+
+          {
+            echo '`main` moved and the automatic back-merge into `develop` hit'
+            echo 'conflicts, so it needs a human.'
+            echo
+            echo 'Until this merges, `develop` is missing something `main` has.'
+            echo 'The next promotion of `develop` to `main` would revert it, and'
+            echo 'the diff would not obviously say so. That is the drift this'
+            echo 'automation exists to prevent, so please resolve rather than'
+            echo 'close.'
+          } > backmerge-body.md
+
+          gh pr create \
+            --base develop \
+            --head "$branch" \
+            --title "back-merge: main into develop (conflicts)" \
+            --body-file backmerge-body.md
+
+      - name: Report
+        run: |
+          case "${{ steps.merge.outputs.status }}" in
+            up-to-date) echo "develop already contained main" ;;
+            merged)     echo "back-merged main into develop" ;;
+            conflict)   echo "conflicts: opened a back-merge PR" ; exit 1 ;;
+          esac
