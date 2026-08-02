@@ -51,6 +51,8 @@ pub struct JoinPolicyConfig {
 pub struct DiscoveryConfig {
     /// Whether the deterministic fake executor is available.
     pub fake_executor_enabled: bool,
+    /// Whether signed local-worker commands are accepted by the relay.
+    pub external_worker_enabled: bool,
     /// Fixed number of durable steps in each fake run.
     pub fake_total_steps: u32,
     /// Deterministic delay before each fake step boundary, in milliseconds.
@@ -67,6 +69,7 @@ impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
             fake_executor_enabled: false,
+            external_worker_enabled: false,
             fake_total_steps: 5,
             fake_step_millis: 100,
             worker_count: 1,
@@ -708,6 +711,7 @@ impl Config {
         let relay_private_key = std::env::var("BUZZ_RELAY_PRIVATE_KEY").ok();
         let discovery = DiscoveryConfig {
             fake_executor_enabled: parse_bool("BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED", false)?,
+            external_worker_enabled: parse_bool("BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED", false)?,
             fake_total_steps: bounded_u64_from_env("BUZZ_DISCOVERY_FAKE_TOTAL_STEPS", 5, 1, 100)?
                 as u32,
             fake_step_millis: bounded_u64_from_env(
@@ -720,6 +724,13 @@ impl Config {
             lease_seconds: bounded_u64_from_env("BUZZ_DISCOVERY_LEASE_SECONDS", 30, 5, 3_600)?,
             poll_millis: bounded_u64_from_env("BUZZ_DISCOVERY_POLL_MILLIS", 500, 50, 60_000)?,
         };
+        if discovery.fake_executor_enabled && discovery.external_worker_enabled {
+            return Err(ConfigError::InvalidValue(
+                "BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED and \
+                 BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED cannot both be enabled"
+                    .into(),
+            ));
+        }
 
         let uds_path = std::env::var("BUZZ_UDS_PATH")
             .ok()
@@ -1083,6 +1094,7 @@ mod tests {
         assert_eq!(config.max_frame_bytes, DEFAULT_MAX_FRAME_BYTES);
         assert!(config.slow_client_grace_limit > 0);
         assert!(!config.discovery.fake_executor_enabled);
+        assert!(!config.discovery.external_worker_enabled);
         assert_eq!(config.discovery.fake_total_steps, 5);
         assert_eq!(config.discovery.fake_step_millis, 100);
         assert_eq!(config.discovery.worker_count, 1);
@@ -1127,6 +1139,31 @@ mod tests {
             config.huddle_audio_available,
             "huddle_audio_available should default to true so single-pod (N=1) keeps today's huddle behavior"
         );
+    }
+
+    #[test]
+    fn discovery_executor_modes_are_mutually_exclusive() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let fake_previous = std::env::var_os("BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED");
+        let external_previous = std::env::var_os("BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED");
+        std::env::set_var("BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED", "true");
+        std::env::set_var("BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED", "true");
+        let result = Config::from_env();
+        if let Some(value) = fake_previous {
+            std::env::set_var("BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED", value);
+        } else {
+            std::env::remove_var("BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED");
+        }
+        if let Some(value) = external_previous {
+            std::env::set_var("BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED", value);
+        } else {
+            std::env::remove_var("BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED");
+        }
+        assert!(matches!(
+            result,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("cannot both be enabled")
+        ));
     }
 
     #[test]

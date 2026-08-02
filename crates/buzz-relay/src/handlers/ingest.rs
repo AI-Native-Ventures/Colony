@@ -1811,6 +1811,71 @@ async fn ingest_event_inner(
         };
     }
 
+    // A local Discovery worker uses the same community-global authorization
+    // boundary as native and agent-started runs. Worker commands are strict,
+    // private, and atomically receipted rather than entering generic storage.
+    if crate::discovery_worker_broker::is_discovery_worker_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot operate Discovery".into(),
+            ));
+        }
+        let outcome = match crate::discovery_worker_broker::handle_discovery_worker_action(
+            tenant, state, &event,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Invalid(message)) => {
+                return Err(IngestError::Rejected(format!("invalid: {message}")));
+            }
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Restricted(
+                message,
+            )) => {
+                return Err(IngestError::AuthFailed(format!("restricted: {message}")));
+            }
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Conflict(message)) => {
+                return Err(IngestError::Rejected(format!("conflict: {message}")));
+            }
+            Err(crate::discovery_worker_broker::DiscoveryWorkerBrokerError::Internal(detail)) => {
+                error!(%detail, "Discovery worker broker internal failure");
+                return Err(IngestError::Internal(
+                    "error: Discovery worker is temporarily unavailable".into(),
+                ));
+            }
+        };
+        return match outcome {
+            crate::discovery_worker_broker::DiscoveryWorkerBrokerOutcome::Applied {
+                receipt_event_id,
+                outcome,
+            } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: serde_json::json!({
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                    "outcome": outcome,
+                })
+                .to_string(),
+            }),
+            crate::discovery_worker_broker::DiscoveryWorkerBrokerOutcome::Duplicate {
+                original_action_event_id,
+                receipt_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: serde_json::json!({
+                        "duplicate": true,
+                        "original_action_event_id": original_event_id_hex,
+                        "receipt_event_id": hex::encode(receipt_event_id),
+                    })
+                    .to_string(),
+                })
+            }
+        };
+    }
+
     // Discovery is a community-global paid primitive. The signed command is
     // authorized and atomically receipted by the broker after restrictions
     // have been enforced, never by the generic command path.

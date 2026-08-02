@@ -11,6 +11,7 @@ mod party_broker;
 mod discovery_broker;
 /// Restart-safe Discovery worker runtime.
 pub mod discovery_runtime;
+mod discovery_worker_broker;
 
 /// REST API route handlers.
 pub mod api;

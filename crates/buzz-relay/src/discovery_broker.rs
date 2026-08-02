@@ -78,14 +78,20 @@ pub(crate) async fn handle_discovery_action(
     let idempotency_key = parsed.action.idempotency_key();
     let mutation = match parsed.action {
         DiscoveryAction::Start(request) => {
-            if !state.config.discovery.fake_executor_enabled {
+            if !state.config.discovery.fake_executor_enabled
+                && !state.config.discovery.external_worker_enabled
+            {
                 return Err(DiscoveryBrokerError::Invalid(
                     "Discovery execution is not enabled on this relay".into(),
                 ));
             }
             DiscoveryCommandMutation::Start {
                 campaign_id: request.campaign_id,
-                total_steps: state.config.discovery.fake_total_steps,
+                total_steps: if state.config.discovery.fake_executor_enabled {
+                    state.config.discovery.fake_total_steps
+                } else {
+                    1
+                },
                 accepted_at: chrono::Utc::now(),
             }
         }
