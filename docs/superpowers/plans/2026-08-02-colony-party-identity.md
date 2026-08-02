@@ -239,6 +239,30 @@ heads in one transaction.
 
 ---
 
+## Owner decisions, 2026-08-02
+
+**Who may merge two parties: the owner only.** Agents surface duplicates in
+chat and the owner decides. This is what is already built and proven, so no
+work follows from it. Automatic merging on an exact identifier match was
+considered and declined: a wrong match fuses two customers' histories and
+nothing downstream can tell it happened.
+
+**Person contact details stay in plaintext on the relay for now.** The owner
+operates the relay, so nobody else reads them, and keeping them legible keeps
+them searchable. This becomes a real decision again the moment Colony is hosted
+for somebody else, and the encryption path already exists in the codebase (NIP-AM
+turn metrics are encrypted to the owner the same way).
+
+**Expected party volume: not answered, and made moot instead.** The question
+only existed because handle resolution reads every party head and walks the
+alias chain in memory, which is fine at hundreds and breaks past a few thousand.
+Rather than ask the owner to predict lead volume a year out, the follow-up is a
+relay-side resolution endpoint so the ceiling does not exist. Until that lands,
+`load_occupants` in the CLI and `loadOccupants` in the desktop repository are
+the two places that would need to change.
+
+---
+
 ## Status as of 2026-08-02
 
 All ten tasks are implemented, committed, and proven against a real relay.
