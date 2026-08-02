@@ -14,7 +14,7 @@
 
 use buzz_core::kind::{KIND_PARTY, KIND_PARTY_RECEIPT, KIND_PARTY_RELATIONSHIP};
 use buzz_core::party::{
-    merge_parties, resolve_party_handle, HandleOccupant, HandleResolution, Party, PartyAlias,
+    merge_parties, resolve_party_handle_async, HandleOccupant, HandleResolution, Party, PartyAlias,
     PartyIdentifier, PartyRelationship, ALL_RELATIONSHIP_KINDS, MAX_ALIAS_HOPS, PARTY_ALIAS_SCHEMA,
     PARTY_RELATIONSHIP_SCHEMA, PARTY_SCHEMA,
 };
@@ -25,7 +25,7 @@ use buzz_sdk::party::{
 use buzz_sdk::party_resolution::{resolve_observation, PartyResolution};
 use nostr::{Event, JsonUtil, PublicKey};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
 use uuid::Uuid;
 
 use crate::client::BuzzClient;
@@ -84,56 +84,61 @@ async fn fetch_head(
         .map_err(|error| CliError::Other(format!("{label} head is not a valid event: {error}")))
 }
 
-/// Every party head the relay has authored, keyed by handle.
+/// What sits at one party coordinate right now.
 ///
-/// Resolution has to follow a chain of unknown length, and the pure resolver
-/// takes a synchronous loader, so the chain is fetched up front rather than one
-/// hop at a time. That keeps the CLI using the same tested resolver as every
-/// other client instead of reimplementing the walk against a network call, at
-/// the cost of reading the party set. Party volume is an open question for the
-/// owner; if it grows past what one read can hold this becomes a relay-side
-/// resolution endpoint, not a second copy of the algorithm.
-async fn load_occupants(client: &BuzzClient) -> Result<BTreeMap<String, HandleOccupant>, CliError> {
-    let relay = relay_self(client).await?;
-    let events = client
-        .query_all(json!({
-            "kinds": [KIND_PARTY],
-            "authors": [relay.to_hex()]
-        }))
-        .await?;
-    let mut occupants = BTreeMap::new();
-    for raw in &events {
-        let Ok(event) = Event::from_json(raw.to_string()) else {
-            continue;
-        };
-        // A head this parser rejects is one no client can read. Skipping it
-        // means a resolution through it reports Broken, which is the truth.
-        match parse_party_event(&event) {
-            Ok(PartyHead::Party(party)) => {
-                occupants.insert(party.id.clone(), HandleOccupant::Party);
-            }
-            Ok(PartyHead::Alias(alias)) => {
-                occupants.insert(
-                    alias.id.clone(),
-                    HandleOccupant::Alias {
-                        resolves_to: alias.resolves_to.clone(),
-                    },
-                );
-            }
-            Err(_) => continue,
-        }
-    }
-    Ok(occupants)
+/// `Ok(None)` means nothing readable is there, which the walk reads as an
+/// unknown or dangling handle. A head the strict parser rejects is reported the
+/// same way rather than guessed at: no client can read it either.
+async fn occupant_at(
+    client: &BuzzClient,
+    handle: &str,
+) -> Result<Option<HandleOccupant>, CliError> {
+    let event = match fetch_head(client, KIND_PARTY, handle, "party").await {
+        Ok(event) => event,
+        Err(CliError::NotFound(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(match parse_party_event(&event) {
+        Ok(PartyHead::Party(_)) => Some(HandleOccupant::Party),
+        Ok(PartyHead::Alias(alias)) => Some(HandleOccupant::Alias {
+            resolves_to: alias.resolves_to,
+        }),
+        Err(_) => None,
+    })
 }
 
 /// Follow a handle to the party it currently names.
 ///
+/// One read per hop, bounded by `MAX_ALIAS_HOPS`, so this costs at most nine
+/// reads and in practice one or two however many parties a company holds.
 /// Returns the live handle and how many merges it took to get there, so a
 /// caller that landed on a redirect can record the survivor instead of writing
 /// again to a coordinate that only forwards.
 async fn resolve_handle(client: &BuzzClient, start: &str) -> Result<(String, usize), CliError> {
-    let occupants = load_occupants(client).await?;
-    match resolve_party_handle(start, |handle| occupants.get(handle).cloned()) {
+    // The walk's loader has nowhere to report a transport failure, so one is
+    // parked here and raised after. Letting a dropped connection look like "no
+    // such handle" would turn an outage into a confident wrong answer.
+    let failure: RefCell<Option<CliError>> = RefCell::new(None);
+    let resolution = resolve_party_handle_async(start, |handle: String| {
+        let failure = &failure;
+        async move {
+            if failure.borrow().is_some() {
+                return None;
+            }
+            match occupant_at(client, &handle).await {
+                Ok(found) => found,
+                Err(error) => {
+                    *failure.borrow_mut() = Some(error);
+                    None
+                }
+            }
+        }
+    })
+    .await;
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    match resolution {
         HandleResolution::Live { handle } => Ok((handle, 0)),
         HandleResolution::Redirected { handle, hops } => Ok((handle, hops)),
         HandleResolution::Unknown => Err(CliError::NotFound(format!("party {start} not found"))),
