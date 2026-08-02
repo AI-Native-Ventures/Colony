@@ -664,19 +664,9 @@ test("shows your avatar on your own message when profile avatar is set", async (
 
   const lastMessage = page.getByTestId("message-row").last();
   await expect(lastMessage).toContainText(message);
-  // The avatar only renders once avatarPresentationStore's probe resolves, and
-  // that probe retries on a fixed schedule: PROBE_DELAYS_MS = [0, 750, 1500,
-  // 3000] with a PROBE_TIMEOUT_MS of 3000 each. A slow first attempt can
-  // therefore legitimately push the first successful paint past 5s of pure
-  // waiting, which is Playwright's default expect timeout, so the default left
-  // this assertion sitting on the boundary: it passed locally at ~7.6s total
-  // and failed every run on CI, including on 4 vCPU runners, because the delay
-  // is timer-driven rather than CPU-bound. Budget covers the full probe
-  // schedule plus paint.
   await expect(lastMessage.getByTestId("message-avatar-image")).toHaveAttribute(
     "src",
     avatarUrl,
-    { timeout: 15_000 },
   );
 });
 
