@@ -2,12 +2,12 @@ import { getCanvas, setCanvas } from "@/shared/api/tauri";
 
 export const WELCOME_CANVAS_CONTENT = `# Welcome to Colony
 
-This private channel is your home base. Scout, your Chief of Staff, will learn how
+This private channel is your home base. Fizz, your Chief of Staff, will learn how
 the business works and propose the smallest useful team to run it.
 
 ## Address your team
 
-- \`@scout\` reaches an employee by name.
+- \`@fizz\` reaches an employee by name.
 - \`@chief-of-staff\` reaches whoever currently holds that role.
 - \`@marketing\` reaches every member of a team at once.
 

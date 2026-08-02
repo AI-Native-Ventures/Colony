@@ -2231,25 +2231,25 @@ function resetMockPersonas(config?: E2eConfig) {
   const builtInPersonas = [
     {
       id: "builtin:fizz",
-      display_name: "Scout",
-      // Scout keeps its personal name and stable ID; the Chief of Staff role is
+      display_name: "Fizz",
+      // Fizz keeps its personal name and stable ID; the Chief of Staff role is
       // separate identity, mirroring the native built-in definition.
       role_id: "chief-of-staff",
       role_title: "Chief of Staff",
       avatar_url: null,
-      system_prompt: "You are Scout.",
+      system_prompt: "You are Fizz.",
     },
     {
       id: "builtin:honey",
-      display_name: "Forager",
+      display_name: "Honey",
       avatar_url: null,
-      system_prompt: "You are Forager.",
+      system_prompt: "You are Honey.",
     },
     {
       id: "builtin:bumble",
-      display_name: "Tender",
+      display_name: "Bumble",
       avatar_url: null,
-      system_prompt: "You are Tender.",
+      system_prompt: "You are Bumble.",
     },
   ];
   mockPersonas = builtInPersonas.map((persona) => ({

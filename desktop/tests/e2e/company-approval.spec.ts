@@ -36,7 +36,7 @@ const BLUEPRINT = canonicalJson({
     customerSegments: ["smb"],
   },
   roster: [
-    { roleId: "chief-of-staff", personalName: "Scout", enabled: true },
+    { roleId: "chief-of-staff", personalName: "Fizz", enabled: true },
     { roleId: "cto", personalName: "Jason", enabled: true },
   ],
   teams: [
@@ -89,7 +89,7 @@ function blueprintData(overrides: Record<string, unknown> = {}) {
     ],
     initiatives: [1, 2, 3].map((index) => ({
       title: `Initiative ${index}`,
-      owner: "Scout (Chief of Staff)",
+      owner: "Fizz (Chief of Staff)",
       why_first: "Worth doing first",
     })),
     gaps: [{ label: "Pricing", cost_of_leaving_open: "No margin visibility." }],

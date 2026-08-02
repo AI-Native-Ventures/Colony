@@ -8,8 +8,8 @@ const MAX_RECENTS = 8;
 // Starter personas seeded into the quick-bot list when there are no recents,
 // in the order they should appear. Matched by persona ID, not display name:
 // IDs are stable and persisted relay-side, while display names are branding
-// and change. Matching on the name silently degraded this to catalog order
-// the moment the starter team was renamed.
+// and can change. Matching on the name made this silently fall back to
+// catalog order the moment the starter team was renamed, with no error.
 export const DEFAULT_PERSONA_IDS = [
   "builtin:fizz",
   "builtin:honey",
