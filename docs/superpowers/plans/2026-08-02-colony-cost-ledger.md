@@ -19,7 +19,7 @@ These were decided explicitly by the owner in review; do not re-litigate:
 5. **Subscription usage is recorded at API-equivalent prices.** Every record is tagged `metered` (real money) or `imputed` (subscription seat, shadow cost). Unit economics uses both; cash view uses metered only.
 6. **Prices are data on the relay, never an app update.** Effective-dated append-only entries; promo stacking (e.g. 80% cut then 50% promo on top, promo later removed) is three entries. Unknown model = recorded but unpriced + Needs Review, never zero or wrong.
 7. **Reconciliation catches everything else.** Ledger daily sums are compared against the provider's own cost report; drift is an exception, flagged, then repriced from stored raw tokens.
-8. **Only Colony-launched agents are counted.** The meter sees traffic solely because the harness injected its address into an agent it spawned. The owner's personal tools (their own CLI sessions, editors, anything not launched by the harness) talk straight to providers, never touch the meter, and never appear in the ledger. The corollary is operational: Colony must use its own provider API key (an Anthropic workspace key or OpenAI project key), because a key shared with personal usage makes the provider's cost report a superset of the ledger and reconciliation would flag permanent phantom drift.
+8. **Only Colony-launched agents are counted, and agents never hold a real provider key.** The owner rejected key discipline as a guardrail ("agents will find a key; the user might use the same key"). So key custody is structural: the real provider key is entered once into Colony config and lives only with the meter. Each spawned agent receives a per-agent VIRTUAL key (an opaque token the meter issued) plus the meter's address; the meter authenticates the virtual key, swaps in the real key when forwarding, and rejects anything else. An agent that goes hunting finds only virtual keys, which route through the meter anyway (found = still counted); a direct call to the provider fails because the agent possesses nothing real. The owner's personal tools never touch the meter and never appear in the ledger. Per-virtual-key identity also gives wire-level per-agent attribution without trusting the agent. Residual risk, detection not prevention: an agent could find the owner's PERSONAL key on disk; that spend hits the personal key, not Colony's, and sustained provider-above-ledger reconciliation drift is diagnosed in the exception message as "key used outside Colony".
 
 ## Global Constraints
 
@@ -1115,6 +1115,8 @@ pub fn reconcile(
 
 - [ ] **Step 4: Run tests, clippy, verify pass.**
 
+Display-layer note (Tasks 10 and 11 consume this): when rendering a `ReconcileDrift` where `provider_nanousd > ledger_nanousd`, append the diagnosis hint `provider reports more than the ledger: the provider key is being used outside Colony, or wire records are missing`. The engine stays numeric; the hint lives in CLI/desktop formatting.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -1177,11 +1179,19 @@ pub struct MeteredCall {
     pub http_status: u16,
     pub tokens: Option<UsageBreakdown>, // None for non-2xx or usage-less responses
     pub timestamp: String,         // RFC 3339, captured at response completion
+    /// Label bound to the virtual key that authenticated this call
+    /// (the spawning harness sets it to the agent's hex pubkey).
+    pub agent_label: String,
 }
 
 pub struct MeterConfig {
     pub anthropic_upstream: String, // default "https://api.anthropic.com"
     pub openai_upstream: String,    // default "https://api.openai.com"
+    /// Real provider credentials. Custody rule: these live HERE and are
+    /// attached at forward time; they are never placed in an agent's
+    /// environment and never appear in a MeteredCall or log line.
+    pub anthropic_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
 }
 
 /// Bind 127.0.0.1 on an ephemeral port. Returns the bound port and a stream
@@ -1191,8 +1201,23 @@ pub async fn start_meter(config: MeterConfig) -> Result<(u16, tokio::sync::mpsc:
 
 /// Owns the server task; `MeterHandle::shutdown()` stops listening and closes
 /// the channel. Dropping it also shuts down (abort-on-drop).
-pub struct MeterHandle { /* JoinHandle + shutdown signal */ }
+pub struct MeterHandle { /* JoinHandle + shutdown signal + issued-key registry */ }
+
+impl MeterHandle {
+    /// Mint a per-agent virtual key: an opaque `colony-vk-` prefixed random
+    /// token (32 bytes, hex) bound to `label`. The agent authenticates to the
+    /// meter with THIS; it never sees a real key.
+    pub fn issue_virtual_key(&self, label: &str) -> String;
+    /// Revoke on agent shutdown so a leaked token dies with the process.
+    pub fn revoke_virtual_key(&self, key: &str);
+}
 ```
+
+Virtual-key authentication (the custody contract):
+
+- The meter reads the caller's credential from the standard provider header (`x-api-key` for Anthropic paths, `Authorization: Bearer` for OpenAI paths). If it is a currently issued virtual key: strip it, attach the real key for that provider from `MeterConfig`, forward, and stamp the key's `label` into the resulting `MeteredCall`.
+- Anything else (no credential, unknown token, revoked token): respond 401 locally with a JSON error body naming the meter (`{"error":"colony-meter: unknown virtual key"}`). NEVER forward, never fall back to the real key.
+- Missing real key for a routed provider: 401 locally (`colony-meter: no provider credential configured`), never forward the virtual key upstream.
 
 - Consumes: `buzz_core::usage_record::UsageBreakdown`.
 
@@ -1210,7 +1235,7 @@ Transparency rule: the bytes the agent receives must be byte-identical to what t
 
 - [ ] **Step 1: Failing parser tests** (pure functions first, no server): fixture JSON/SSE strings for all four shapes above with exact expected `UsageBreakdown`s; SSE fixtures must include multiple `message_delta`s to prove last-wins; the OpenAI `stream_options` merge test proves existing keys survive.
 - [ ] **Step 2: Run, watch fail; implement parsers in `anthropic.rs`/`openai.rs`; watch pass.**
-- [ ] **Step 3: Failing server tests**: spin an in-process axum fake upstream returning a fixture (one per shape); point the meter at it; make a reqwest call through the meter; assert (a) the client saw byte-identical body and status, (b) one `MeteredCall` arrived with exact counts, (c) a 429 upstream response yields `MeteredCall { http_status: 429, tokens: None }` and passes the body through, (d) an unroutable path returns 502 without panicking.
+- [ ] **Step 3: Failing server tests**: spin an in-process axum fake upstream returning a fixture (one per shape); point the meter at it; make a reqwest call through the meter authenticated with an issued virtual key; assert (a) the client saw byte-identical body and status, (b) one `MeteredCall` arrived with exact counts and the issuing label, (c) a 429 upstream response yields `MeteredCall { http_status: 429, tokens: None }` and passes the body through, (d) an unroutable path returns 502 without panicking, (e) the fake upstream received the REAL key and never the virtual token (capture headers in the fake), (f) a call with no credential, an unknown token, or a revoked token gets a local 401 and the fake upstream records zero requests, (g) with no real key configured the virtual key is never forwarded upstream.
 - [ ] **Step 4: Implement `server.rs` + `start_meter`; watch pass.** Streaming forward: use `reqwest` with `.bytes_stream()`, forward chunks as they arrive, accumulate a copy for parsing (cap the parse buffer at 8 MiB; past the cap, keep forwarding but abandon usage parsing and emit `tokens: None` with a `tracing::warn!` so a pathological response can never OOM the harness).
 - [ ] **Step 5: `cargo test -p buzz-meter && cargo clippy -p buzz-meter -- -D warnings`**
 - [ ] **Step 6: Commit**
@@ -1241,8 +1266,13 @@ Env injection map (inject ALL of these in `AcpClient::spawn`, pointing at the me
 | `OPENAI_BASE_URL` | `http://127.0.0.1:{port}/openai/v1` | OpenAI SDKs |
 | `OPENAI_HOST` | `http://127.0.0.1:{port}/openai` | goose |
 | `OPENAI_API_BASE` | `http://127.0.0.1:{port}/openai/v1` | older OpenAI SDKs |
+| `ANTHROPIC_API_KEY` | per-agent virtual key from `issue_virtual_key(agent_pubkey_hex)` | all Anthropic SDKs |
+| `OPENAI_API_KEY` | the same virtual key | all OpenAI SDKs |
+| `OPENROUTER_API_KEY` | the same virtual key | openrouter-configured harnesses |
 
-Precedence must follow the existing `spawn` convention (`spawn_applies_runtime_env_defaults_with_extra_env_precedence` test): explicit extra_env wins over meter defaults, so an operator can opt a single agent out. Codex reads providers from `CODEX_CONFIG` model_providers, not env; codex coverage is OUT of this plan's gate (record it in the PR body and TESTING.md as a known gap with the follow-up: merge a `model_providers` base_url override into `build_codex_config_env`).
+**Key custody in spawn:** the real provider keys are read by the harness from its own config (the same place `global-agent-config.json`-style provider keys already live; `--anthropic-api-key` / `BUZZ_METER_ANTHROPIC_KEY` and the OpenAI equivalents feed `MeterConfig`). The key-name env vars above are ALWAYS set on the child to the virtual key when metering is on, deliberately masking any real key inherited from the parent environment: the agent process must never be able to read a real provider credential from its env. Issue one virtual key per agent at spawn (label = agent hex pubkey), revoke it when the agent exits.
+
+Precedence must follow the existing `spawn` convention (`spawn_applies_runtime_env_defaults_with_extra_env_precedence` test): explicit extra_env wins over meter defaults, so an operator can opt a single agent out. Exception: when metering is ON, the four key-name vars are NOT overridable by extra_env (an override would hand the agent a real key and silently un-meter it); opting out is `--no-meter` per harness invocation, an explicit choice, never a side effect. Codex reads providers from `CODEX_CONFIG` model_providers, not env; codex coverage is OUT of this plan's gate (record it in the PR body and TESTING.md as a known gap with the follow-up: merge a `model_providers` base_url override into `build_codex_config_env`).
 
 Work-context snapshot: `pool.rs` already computes the per-turn `AgentWorkContext` it gives `publish_agent_turn_metric`. Hold the current turn's context in an `Arc<std::sync::RwLock<Option<AgentWorkContext>>>` owned by the pool: set it where the turn begins (the same place the 44200 path resolves it), clear it at turn end. The meter consumer task reads the snapshot at each `MeteredCall` arrival. Calls landing between turns publish with `work_context: None` (the rulebook or Needs Review picks them up; that is correct, not a bug).
 
@@ -1266,7 +1296,9 @@ while let Some(call) = meter_rx.recv().await {
         turn_id: current_turn_id(),
         http_status: Some(call.http_status),
         description: None,
-        agent_pubkey: Some(ctx.agent_keys.public_key().to_hex()),
+        // agent_label was bound at issue_virtual_key time; prefer it over
+        // ambient context (it is wire-authenticated, not inferred).
+        agent_pubkey: Some(call.agent_label),
         channel_id: current_channel_id().map(|id| id.to_string()),
         work_context: work_context_snapshot.read().ok().and_then(|g| g.clone()),
     };
@@ -1279,7 +1311,7 @@ while let Some(call) = meter_rx.recv().await {
 
 `--payment-mode` is a new harness flag (`metered` default, `imputed` for subscription-backed agents), stored in config beside the existing agent flags.
 
-- [ ] **Step 1: Failing env-injection test**: extend the `spawn_named_and_read_child_env` harness (`acp.rs` tests) to assert a spawned agent sees `ANTHROPIC_BASE_URL` pointing at the configured meter port, and that explicit extra_env overrides it.
+- [ ] **Step 1: Failing env-injection tests**: extend the `spawn_named_and_read_child_env` harness (`acp.rs` tests) to assert (a) a spawned agent sees `ANTHROPIC_BASE_URL` pointing at the configured meter port, (b) with a real `ANTHROPIC_API_KEY` present in the PARENT environment and metering on, the child sees the `colony-vk-` virtual key and NOT the parent's value (the masking test: this is the guardrail, watch it fail first), (c) extra_env overrides base URLs but cannot override the four key-name vars while metering is on, (d) with `--no-meter` none of the meter vars are set and parent inheritance behaves as today.
 - [ ] **Step 2: Failing publisher test**: pure function `build_usage_record_event(call, snapshot, ctx_bits) -> Result<nostr::Event>` extracted so it is testable without a relay: feed a `MeteredCall`, assert kind 44210, `p`/`agent` tags, and that the owner key decrypts to the expected payload including the snapshot context.
 - [ ] **Step 3: Implement**: meter startup in `main.rs` (skipped under `--no-meter`), env injection in `spawn`, snapshot wiring, consumer task, `--payment-mode`.
 - [ ] **Step 4: buzz-agent base-URL check**: run the grep above; patch only if hardcoded; add a unit test that the client host comes from the env var when set.
