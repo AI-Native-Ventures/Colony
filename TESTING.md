@@ -105,15 +105,114 @@ cargo test -p buzz-test-client --test e2e_company_work \
 **Known gap, verified 2026-08-02:** neither `opencode acp` nor `goose acp`
 reports token usage over ACP on this machine, and `publish_agent_turn_metric`
 is a no-op without usage. Three live turns produced a correct agent reply and
-zero `kind:44200` events. So this runbook currently proves the turn runs and
-carries its work references, but the metric half cannot be observed until a
-harness that reports usage is available. That is pre-existing behaviour of the
+zero `kind:44200` events. So this runbook proves the turn runs and carries its
+work references, but the NIP-AM metric half cannot be observed until a harness
+that reports usage is available. That is pre-existing behaviour of the
 adapters, not of the attribution path.
+
+**Superseded for accounting purposes (NIP-CL, 2026-08-02).** That gap is why
+the cost ledger does not depend on an agent reporting its own usage at all.
+Token counts are captured at the provider wire by the metering checkpoint, so
+a harness that reports nothing is still fully metered. See the live proof
+below; NIP-AM remains useful as a cross-check but is no longer the source of
+record.
+
+### Cost ledger live provider proof (`buzz-meter`)
+
+The one test in this repo that spends real money. Every other metering test
+feeds the parsers a fixture, which proves the parser matches a response *we*
+wrote. This proves it matches a response a real provider actually sent.
+
+```bash
+BUZZ_METER_LIVE_KEY=<real provider key> \
+BUZZ_METER_LIVE_UPSTREAM=https://api.deepseek.com \
+BUZZ_METER_LIVE_MODEL=deepseek-chat \
+cargo test -p buzz-meter --test live_provider -- --ignored --nocapture
+```
+
+Works against any OpenAI-compatible provider; set `BUZZ_METER_LIVE_UPSTREAM`
+and `BUZZ_METER_LIVE_MODEL` to match the key. Costs a fraction of a cent.
+
+**Result, 2026-08-02, DeepSeek:** the agent authenticated with a
+`colony-vk-` virtual key, the real credential never left the checkpoint, and
+the recorded call carried the provider's own itemization (10 uncached input
+tokens, 2 output tokens) under `provider: "deepseek"`.
+
+Two defects were found by running it rather than by reasoning about it:
+
+1. The record originally said `provider: "openai"`, because DeepSeek is
+   reached through the OpenAI-compatible route. Reconciliation compares per
+   provider, so that spend would have been checked against an OpenAI invoice
+   that never contained it. The slug is now derived from the upstream host.
+2. That derivation then produced `"0"` for a `127.0.0.1` test upstream. An
+   address is not a vendor, so IP-literal and `localhost` upstreams now fall
+   back to the route's own slug.
 
 Starting the relay with any other `RELAY_OWNER_PUBKEY` makes the suite prove
 nothing — every action is refused for the right reason and the failures look
 like product bugs. If the whole file fails at the first company create, check
 that first.
+
+### Colony cost ledger (`e2e_cost_ledger`)
+
+Proves what only exists inside a relay process: that book heads are authored
+by the relay and nobody else, that only the human owner can append a price or
+a correction, that a republished usage record is counted once while two
+providers issuing the same request id stay distinct, that an unpriced model is
+flagged and becomes countable when the price arrives without republishing
+anything, that a correction re-attributes a record without rewriting it, and
+that spend history is unreadable by another member.
+
+> **Run against a disposable relay and database only.** Unlike the party
+> suite, this one cannot isolate itself. A party test scopes to a generated
+> company and handle prefix; the price book, rulebook, and correction book are
+> single coordinates per community and append-only by design, so every test
+> price lands in the same book a real company would use and there is no delete.
+> Never point this at a shared or deployed relay.
+
+```bash
+docker exec buzz-postgres psql -U buzz -d postgres \
+  -c "DROP DATABASE IF EXISTS colony_ledger_e2e WITH (FORCE);" \
+  -c "CREATE DATABASE colony_ledger_e2e OWNER buzz;"
+
+DATABASE_URL="postgres://buzz:buzz_dev@localhost:5432/colony_ledger_e2e" \
+REDIS_URL="redis://localhost:6379" \
+BUZZ_BIND_ADDR="127.0.0.1:3099" \
+RELAY_URL="http://localhost:3099" \
+BUZZ_AUTO_MIGRATE=true \
+BUZZ_RELAY_PRIVATE_KEY="<any 64-hex secret>" \
+RELAY_OWNER_PUBKEY="<printed by e2e_company_work print_the_owner_pubkey>" \
+BUZZ_METRICS_PORT=9899 BUZZ_HEALTH_PORT=8899 \
+cargo run -p buzz-relay
+
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_cost_ledger -- --ignored --test-threads=1
+```
+
+`RELAY_URL` on the relay must name the same host the tests connect to. The
+community is seeded for the host derived from that URL, so starting with
+`http://127.0.0.1:3099` while the tests dial `ws://localhost:3099` produces
+`relay: no community is configured for this host` on every test.
+
+`--test-threads=1` is not optional: the books are singleton coordinates, so
+concurrent appends race each other's compare-and-set.
+
+**Two defects this gate found, 2026-08-02**, neither visible to unit tests:
+
+1. Two appends inside the same second collided. NIP-33 keeps the newest event
+   at a coordinate, so a replacement that is not strictly newer is discarded,
+   and the second price entry was refused with "lost NIP-33 replacement
+   ordering". For a price book that means a published price silently failing to
+   take effect. Heads now step past the stored head when the clock has not.
+2. A non-owner's action was answered with whichever validation failed first
+   rather than with the refusal it was, and their event was stored on the way.
+   The broker's own contract said "not the owner" means refuse without storing;
+   only the transaction-internal check enforced it. Authority is now checked
+   first, cheaply, with the authoritative `FOR UPDATE` check still inside the
+   commit where it is safe against concurrent ownership transfer.
+
+Defect 2 only appears on a **second** run against the same database, because
+the first run creates the books. Run the suite twice before believing it.
 
 ### Colony party identity (`e2e_party_identity`)
 

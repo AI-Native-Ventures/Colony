@@ -12,6 +12,7 @@ mod discovery_broker;
 pub mod discovery_runtime;
 mod discovery_worker_broker;
 mod discovery_workspace_broker;
+mod ledger_broker;
 mod party_broker;
 
 /// REST API route handlers.

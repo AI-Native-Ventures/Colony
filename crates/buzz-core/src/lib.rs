@@ -35,6 +35,9 @@ pub mod git_perms;
 pub mod invite;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+
+/// Colony cost ledger: pricing, attribution, and the deterministic engine.
+pub mod ledger;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
 /// Agent observer frame helpers.
@@ -50,6 +53,9 @@ pub mod presence;
 pub mod relay;
 /// Tenant identity — the server-resolved community key carried on scoped paths.
 pub mod tenant;
+
+/// Colony cost ledger: immutable per-request usage records (kind 44210).
+pub mod usage_record;
 /// Schnorr signature and event ID verification.
 pub mod verification;
 

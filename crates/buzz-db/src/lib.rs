@@ -61,7 +61,8 @@ pub mod workflow;
 pub use error::{DbError, Result};
 pub use event::{
     BlockActionInsert, BlockCatalogActionApply, CompanyActionApply, CompanyActionClaim, EventQuery,
-    PartyActionApply, PartyActionClaim, ReactionEventInsertOutcome,
+    LedgerActionApply, LedgerActionClaim, PartyActionApply, PartyActionClaim,
+    ReactionEventInsertOutcome,
 };
 
 use chrono::{DateTime, Utc};
@@ -2806,6 +2807,267 @@ impl Db {
         })
     }
 
+    /// Whether `pubkey_hex` is the community's current human owner.
+    ///
+    /// A cheap read used to refuse an unauthorized request before it can
+    /// consume validation work or leave a stored event behind. It is NOT the
+    /// authority check: that runs inside the commit transaction under
+    /// `FOR UPDATE`, because only there is it safe against a concurrent
+    /// ownership transfer.
+    pub async fn is_community_human_owner(
+        &self,
+        community: CommunityId,
+        pubkey_hex: &str,
+    ) -> Result<bool> {
+        let actor = pubkey_hex.to_ascii_lowercase();
+        let is_owner: Option<bool> = sqlx::query_scalar(
+            "SELECT true FROM relay_members \
+             WHERE community_id = $1 AND lower(pubkey) = $2 AND role = 'owner'",
+        )
+        .bind(community.as_uuid())
+        .bind(&actor)
+        .fetch_optional(&self.pool)
+        .await?;
+        if is_owner != Some(true) {
+            return Ok(false);
+        }
+
+        // An owner row alone does not prove humanity: nothing structurally
+        // stops an agent pubkey occupying one.
+        let actor_is_agent: Option<bool> = sqlx::query_scalar(
+            "SELECT agent_owner_pubkey IS NOT NULL FROM users \
+             WHERE community_id = $1 AND pubkey = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(hex::decode(&actor).unwrap_or_default())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(!actor_is_agent.unwrap_or(false))
+    }
+
+    /// Find a durable ledger action claim by community-scoped retry key.
+    pub async fn find_ledger_action_claim(
+        &self,
+        community: CommunityId,
+        idempotency_key: Uuid,
+    ) -> Result<Option<LedgerActionClaim>> {
+        type ClaimRow = (Vec<u8>, Vec<u8>, Vec<u8>);
+        let row: Option<ClaimRow> = sqlx::query_as(
+            r#"
+            SELECT action_event_id, head_event_id, receipt_event_id
+            FROM ledger_action_claims
+            WHERE community_id = $1 AND idempotency_key = $2
+            "#,
+        )
+        .bind(community.as_uuid())
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(
+            |(action_event_id, head_event_id, receipt_event_id)| LedgerActionClaim {
+                action_event_id,
+                head_event_id,
+                receipt_event_id,
+            },
+        ))
+    }
+
+    /// Commit one owner-signed ledger action with its book head and receipt.
+    ///
+    /// Authority is checked inside the transaction under the same `FOR UPDATE`
+    /// that ownership transfer takes, so the two serialize rather than race.
+    /// The head is compare-and-set against what is stored right now, which is
+    /// what stops two concurrent appends from losing one.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn apply_ledger_action_once(
+        &self,
+        community: CommunityId,
+        action_event: &nostr::Event,
+        head_event: &nostr::Event,
+        head_d_tag: &str,
+        receipt_event: &nostr::Event,
+        idempotency_key: Uuid,
+        actor_pubkey_hex: &str,
+        expected_head_event_id: Option<&[u8]>,
+    ) -> Result<LedgerActionApply> {
+        for (event, expected_kind, label) in [
+            (
+                action_event,
+                buzz_core::kind::KIND_LEDGER_ACTION,
+                "ledger action",
+            ),
+            (
+                receipt_event,
+                buzz_core::kind::KIND_LEDGER_RECEIPT,
+                "ledger receipt",
+            ),
+        ] {
+            if event.kind.as_u16() as u32 != expected_kind {
+                return Err(DbError::InvalidData(format!(
+                    "{label} has kind {}, expected {expected_kind}",
+                    event.kind.as_u16()
+                )));
+            }
+        }
+
+        let head_kind = head_event.kind.as_u16() as u32;
+        if !matches!(
+            head_kind,
+            buzz_core::kind::KIND_PRICE_BOOK
+                | buzz_core::kind::KIND_ATTRIBUTION_RULEBOOK
+                | buzz_core::kind::KIND_CORRECTION_BOOK
+                | buzz_core::kind::KIND_LEDGER_BUDGET
+        ) {
+            return Err(DbError::InvalidData(format!(
+                "ledger head has kind {head_kind}, expected a ledger book head"
+            )));
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        // Authority first, under the same `FOR UPDATE` that ownership transfer
+        // takes, so the two serialize instead of racing.
+        let owners: Vec<String> = sqlx::query_scalar(
+            "SELECT pubkey FROM relay_members \
+             WHERE community_id = $1 AND role = 'owner' \
+             FOR UPDATE",
+        )
+        .bind(community.as_uuid())
+        .fetch_all(&mut *tx)
+        .await?;
+        let actor = actor_pubkey_hex.to_ascii_lowercase();
+        if !owners.iter().any(|owner| owner == &actor) {
+            tx.rollback().await?;
+            return Ok(LedgerActionApply::NotOwner);
+        }
+
+        // An owner row alone is not enough: nothing structurally stops an agent
+        // pubkey occupying one. The ledger decides what the company believes it
+        // spent, so an agent must never be able to rewrite its own prices.
+        let actor_is_agent: Option<bool> = sqlx::query_scalar(
+            "SELECT agent_owner_pubkey IS NOT NULL FROM users \
+             WHERE community_id = $1 AND pubkey = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(hex::decode(&actor).unwrap_or_default())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if actor_is_agent.unwrap_or(true) {
+            tx.rollback().await?;
+            return Ok(LedgerActionApply::NotOwner);
+        }
+
+        let claimed: Option<Vec<u8>> = sqlx::query_scalar(
+            r#"
+            INSERT INTO ledger_action_claims
+                (community_id, idempotency_key, action_event_id, head_event_id,
+                 receipt_event_id)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            RETURNING action_event_id
+            "#,
+        )
+        .bind(community.as_uuid())
+        .bind(idempotency_key)
+        .bind(action_event.id.as_bytes().as_slice())
+        .bind(head_event.id.as_bytes().as_slice())
+        .bind(receipt_event.id.as_bytes().as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if claimed.is_none() {
+            let original: Option<Vec<u8>> = sqlx::query_scalar(
+                r#"
+                SELECT action_event_id
+                FROM ledger_action_claims
+                WHERE community_id = $1 AND idempotency_key = $2
+                "#,
+            )
+            .bind(community.as_uuid())
+            .bind(idempotency_key)
+            .fetch_optional(&mut *tx)
+            .await?;
+            tx.rollback().await?;
+            return original
+                .map(|original_action_event_id| LedgerActionApply::Duplicate {
+                    original_action_event_id,
+                })
+                .ok_or_else(|| {
+                    DbError::InvalidData(
+                        "ledger action claim conflict had no durable winning row".to_owned(),
+                    )
+                });
+        }
+
+        // Compare-and-set against the head stored right now, read with the same
+        // ordering the replacement uses so the row checked is the row that
+        // would be superseded.
+        let current_head_event_id: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT id FROM events \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 \
+               AND deleted_at IS NULL \
+             ORDER BY created_at DESC, id ASC LIMIT 1",
+        )
+        .bind(community.as_uuid())
+        .bind(head_kind as i32)
+        .bind(head_event.pubkey.to_bytes().as_slice())
+        .bind(head_d_tag)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if current_head_event_id.as_deref() != expected_head_event_id {
+            tx.rollback().await?;
+            return Ok(LedgerActionApply::StaleHead {
+                current_head_event_id,
+            });
+        }
+
+        let (action, action_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            action_event,
+            None,
+            None,
+        )
+        .await?;
+        if !action_inserted {
+            tx.rollback().await?;
+            return Ok(LedgerActionApply::ActionAlreadyStored);
+        }
+
+        let (head, head_inserted) =
+            replace_parameterized_event_tx(&mut tx, community, head_event, head_d_tag, None)
+                .await?;
+        if !head_inserted {
+            tx.rollback().await?;
+            return Err(DbError::InvalidData(
+                "ledger book head lost NIP-33 replacement ordering".to_owned(),
+            ));
+        }
+
+        let (receipt, receipt_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            receipt_event,
+            None,
+            None,
+        )
+        .await?;
+        if !receipt_inserted {
+            tx.rollback().await?;
+            return Err(DbError::InvalidData(
+                "ledger receipt event was already stored".to_owned(),
+            ));
+        }
+
+        tx.commit().await?;
+        Ok(LedgerActionApply::Applied {
+            action,
+            head,
+            receipt,
+        })
+    }
+
     /// The durable claim for one party action's retry key, if it already won.
     pub async fn find_party_action_claim(
         &self,
@@ -3140,6 +3402,66 @@ impl Db {
                 receipt_event,
                 buzz_core::kind::KIND_PARTY_RECEIPT,
                 "party receipt",
+            ),
+        ] {
+            if event.kind.as_u16() as u32 != expected_kind {
+                return Err(DbError::InvalidData(format!(
+                    "{label} has kind {}, expected {expected_kind}",
+                    event.kind.as_u16()
+                )));
+            }
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let (action, action_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            action_event,
+            None,
+            None,
+        )
+        .await?;
+        if !action_inserted {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        let (receipt, _) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            receipt_event,
+            None,
+            None,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(Some((action, receipt)))
+    }
+
+    /// Store one owner-signed ledger action beside its relay-signed failure
+    /// receipt, touching no book head.
+    ///
+    /// Only reached for a request that was well-formed and genuinely from the
+    /// owner but lost on validation or compare-and-set. The owner still needs
+    /// a durable, auditable answer for a refusal.
+    ///
+    /// Returns `None` when the action was already stored, so a replay is a
+    /// no-op rather than a duplicate receipt.
+    pub async fn store_ledger_failure_receipt(
+        &self,
+        community: CommunityId,
+        action_event: &nostr::Event,
+        receipt_event: &nostr::Event,
+    ) -> Result<Option<(StoredEvent, StoredEvent)>> {
+        for (event, expected_kind, label) in [
+            (
+                action_event,
+                buzz_core::kind::KIND_LEDGER_ACTION,
+                "ledger action",
+            ),
+            (
+                receipt_event,
+                buzz_core::kind::KIND_LEDGER_RECEIPT,
+                "ledger receipt",
             ),
         ] {
             if event.kind.as_u16() as u32 != expected_kind {

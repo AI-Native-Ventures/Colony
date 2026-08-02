@@ -787,6 +787,7 @@ dependencies = [
  "anyhow",
  "base64",
  "buzz-core",
+ "buzz-meter",
  "buzz-persona",
  "buzz-sdk",
  "chrono",
@@ -1047,6 +1048,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "buzz-meter"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "buzz-core",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures-util",
+ "hex",
+ "rand 0.10.1",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "buzz-pair-relay"
 version = "0.1.0"
 dependencies = [
@@ -1147,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-relay"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-compression",

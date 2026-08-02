@@ -75,6 +75,18 @@ export const KIND_PARTY = 30182;
 export const KIND_PARTY_RELATIONSHIP = 30183;
 export const KIND_PARTY_ACTION = 40015;
 export const KIND_PARTY_RECEIPT = 40016;
+// Colony cost ledger. Usage records are NIP-44 ciphertext addressed to the
+// owner and carry the company's entire spend history, so they are `#p`-gated
+// and unsearchable; the four books are relay-authored plaintext state. The
+// agent that spent the money does not author the counts: they are captured at
+// the model-provider wire. Mirror of buzz-core's KIND_USAGE_RECORD etc.
+export const KIND_USAGE_RECORD = 44210;
+export const KIND_LEDGER_ACTION = 40023;
+export const KIND_LEDGER_RECEIPT = 40024;
+export const KIND_PRICE_BOOK = 30184;
+export const KIND_ATTRIBUTION_RULEBOOK = 30185;
+export const KIND_CORRECTION_BOOK = 30186;
+export const KIND_LEDGER_BUDGET = 30187;
 // Private Discovery control plane. Actions are signed by a workspace member;
 // receipts are signed by the tenant relay and routed only to that requester.
 export const KIND_DISCOVERY_ACTION = 40017;

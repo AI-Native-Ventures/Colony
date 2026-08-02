@@ -30,7 +30,9 @@ export function TurnLivenessIndicator({
       >
         <FuzzyMark
           ariaLabel="Agent turn in progress"
-          className="text-foreground"
+          // colony-logo--compact: without it the mark takes the 466px boot
+          // splash default and fills the whole panel.
+          className="colony-logo--compact text-foreground"
           fuzz={fuzz}
           loop
           loopRestSeconds={2}

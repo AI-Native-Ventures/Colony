@@ -135,6 +135,7 @@ pub const AUTHOR_ONLY_KINDS: &[u32] = &[
 pub const RESULT_GATED_KINDS: &[u32] = &[
     KIND_DM_VISIBILITY,
     KIND_AGENT_TURN_METRIC,
+    KIND_USAGE_RECORD,
     KIND_DISCOVERY_RECEIPT,
     KIND_DISCOVERY_WORKER_RECEIPT,
     KIND_DISCOVERY_WORKSPACE_RECEIPT,
@@ -168,6 +169,9 @@ pub const P_GATED_KINDS: &[u32] = &[
     // readable by any unauthenticated or non-owner party, including via `ids`
     // filters — see NIP-AM §Relay Behavior.
     KIND_AGENT_TURN_METRIC,
+    // NIP-CL: usage records are encrypted to the owner and together disclose
+    // the company's entire spend history — same read gates as turn metrics.
+    KIND_USAGE_RECORD,
 ];
 
 /// NIP-AP: Agent Persona (parameterized replaceable, owner-authored).
@@ -224,6 +228,30 @@ pub const KIND_PARTY: u32 = 30182;
 /// relationship is its own head rather than a field on the party.
 pub const KIND_PARTY_RELATIONSHIP: u32 = 30183;
 
+/// Colony cost ledger: append-only model price book (NIP-33 head, `d=pricebook`).
+///
+/// Relay-authored. Content is the full effective-dated price table in integer
+/// nanoUSD per token. Prices are data, not code: a new model or a promotional
+/// rate is an appended entry, never an app release.
+pub const KIND_PRICE_BOOK: u32 = 30184;
+
+/// Colony cost ledger: attribution rulebook (NIP-33 head, `d=rulebook`).
+///
+/// Relay-authored. Ordered rules mapping observed usage to a company, cost
+/// centre, team, and commercial purpose when a record carries no explicit
+/// work context.
+pub const KIND_ATTRIBUTION_RULEBOOK: u32 = 30185;
+
+/// Colony cost ledger: CFO correction log (NIP-33 head, `d=corrections`).
+///
+/// Relay-authored, append-only. A correction re-attributes one usage record;
+/// it never modifies the record, so the original evidence survives.
+pub const KIND_CORRECTION_BOOK: u32 = 30186;
+
+/// Colony cost ledger: per-cost-centre budget (NIP-33 head,
+/// `d={cost_centre_id}:{period}` where period is `YYYY-MM`).
+pub const KIND_LEDGER_BUDGET: u32 = 30187;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -262,6 +290,15 @@ pub const KIND_DISCOVERY_WORKSPACE_ACTION: u32 = 40021;
 
 /// Relay-signed, requester-private Discovery campaign or Lead projection.
 pub const KIND_DISCOVERY_WORKSPACE_RECEIPT: u32 = 40022;
+
+/// Colony cost ledger: owner-signed ledger command.
+///
+/// Adds a price entry, attribution rule, correction, or budget. Brokered by
+/// the relay, which validates it and authors the resulting book head.
+pub const KIND_LEDGER_ACTION: u32 = 40023;
+
+/// Colony cost ledger: relay-signed receipt for a ledger action.
+pub const KIND_LEDGER_RECEIPT: u32 = 40024;
 
 /// Returns `true` if `kind` uses the author-only-unless-shared read model
 /// (currently only `KIND_PERSONA` / 30175).
@@ -565,6 +602,14 @@ pub const KIND_MEMBER_REMOVED_NOTIFICATION: u32 = 44101;
 /// See `docs/nips/NIP-AM.md`.
 pub const KIND_AGENT_TURN_METRIC: u32 = 44200;
 
+/// Colony cost ledger: immutable usage record for one provider API call.
+///
+/// Captured at the wire by the metering checkpoint, or entered by the owner
+/// for non-token costs. Content is NIP-44 ciphertext addressed to the owner.
+/// The agent that spent the money does not author the counts: the checkpoint
+/// reads them from the provider's own response.
+pub const KIND_USAGE_RECORD: u32 = 44210;
+
 // Forum / social (45000–45999)
 // V1 used addressable range (30001–30003) — wrong.
 /// A forum post (thread root).
@@ -684,6 +729,12 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_DISCOVERY_WORKER_RECEIPT,
     KIND_DISCOVERY_WORKSPACE_ACTION,
     KIND_DISCOVERY_WORKSPACE_RECEIPT,
+    KIND_PRICE_BOOK,
+    KIND_ATTRIBUTION_RULEBOOK,
+    KIND_CORRECTION_BOOK,
+    KIND_LEDGER_BUDGET,
+    KIND_LEDGER_ACTION,
+    KIND_LEDGER_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_REPORT,
@@ -754,6 +805,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_AGENT_TURN_METRIC,
+    KIND_USAGE_RECORD,
     KIND_WORKFLOW_DEF,
     KIND_LONG_FORM,
     KIND_USER_STATUS,
@@ -852,6 +904,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_APPROVAL_DENY
             | KIND_COMPANY_ACTION
             | KIND_PARTY_ACTION
+            | KIND_LEDGER_ACTION
             | KIND_DISCOVERY_ACTION
             | KIND_DISCOVERY_WORKER_ACTION
             | KIND_DISCOVERY_WORKSPACE_ACTION
@@ -877,6 +930,11 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_PARTY
             | KIND_PARTY_RELATIONSHIP
             | KIND_PARTY_RECEIPT
+            | KIND_LEDGER_RECEIPT
+            | KIND_PRICE_BOOK
+            | KIND_ATTRIBUTION_RULEBOOK
+            | KIND_CORRECTION_BOOK
+            | KIND_LEDGER_BUDGET
             | KIND_DISCOVERY_RECEIPT
             | KIND_DISCOVERY_WORKER_RECEIPT
             | KIND_DISCOVERY_WORKSPACE_RECEIPT
@@ -1045,6 +1103,95 @@ mod tests {
         assert!(!is_relay_only_kind(KIND_PARTY_ACTION));
         assert!(is_relay_only_kind(KIND_PARTY_RECEIPT));
         assert!(!is_command_kind(KIND_PARTY_RECEIPT));
+    }
+
+    #[test]
+    fn ledger_kinds_have_exact_classifications() {
+        assert_eq!(KIND_USAGE_RECORD, 44210);
+        assert_eq!(KIND_LEDGER_ACTION, 40023);
+        assert_eq!(KIND_LEDGER_RECEIPT, 40024);
+        assert_eq!(KIND_PRICE_BOOK, 30184);
+        assert_eq!(KIND_ATTRIBUTION_RULEBOOK, 30185);
+        assert_eq!(KIND_CORRECTION_BOOK, 30186);
+        assert_eq!(KIND_LEDGER_BUDGET, 30187);
+
+        for kind in [
+            KIND_USAGE_RECORD,
+            KIND_LEDGER_ACTION,
+            KIND_LEDGER_RECEIPT,
+            KIND_PRICE_BOOK,
+            KIND_ATTRIBUTION_RULEBOOK,
+            KIND_CORRECTION_BOOK,
+            KIND_LEDGER_BUDGET,
+        ] {
+            assert!(
+                ALL_KINDS.contains(&kind),
+                "kind {kind} missing from registry"
+            );
+        }
+
+        // A usage record is evidence of one paid API call. Overwriting one
+        // would erase money that was actually spent, so it is a regular
+        // stored kind, never replaceable.
+        assert!(!is_replaceable(KIND_USAGE_RECORD));
+        assert!(!is_parameterized_replaceable(KIND_USAGE_RECORD));
+        assert!(!is_ephemeral(KIND_USAGE_RECORD));
+
+        // Action and receipt are evidence of one request, same as party.
+        for kind in [KIND_LEDGER_ACTION, KIND_LEDGER_RECEIPT] {
+            assert!(!is_parameterized_replaceable(kind));
+            assert!(!is_replaceable(kind));
+            assert!(!is_ephemeral(kind));
+        }
+
+        // The four books are NIP-33 heads: current state, addressed by d tag.
+        for head in [
+            KIND_PRICE_BOOK,
+            KIND_ATTRIBUTION_RULEBOOK,
+            KIND_CORRECTION_BOOK,
+            KIND_LEDGER_BUDGET,
+        ] {
+            assert!(is_parameterized_replaceable(head));
+        }
+
+        // Classification is what the relay routes on. Defining the integers
+        // without it makes every ledger kind an unknown kind at ingest, a
+        // refusal that reads exactly like a correct authorization failure.
+        assert!(is_command_kind(KIND_LEDGER_ACTION));
+        assert!(!is_relay_only_kind(KIND_LEDGER_ACTION));
+        assert!(!is_command_kind(KIND_LEDGER_RECEIPT));
+        assert!(!is_command_kind(KIND_USAGE_RECORD));
+        assert!(!is_relay_only_kind(KIND_USAGE_RECORD));
+        for relay_authored in [
+            KIND_LEDGER_RECEIPT,
+            KIND_PRICE_BOOK,
+            KIND_ATTRIBUTION_RULEBOOK,
+            KIND_CORRECTION_BOOK,
+            KIND_LEDGER_BUDGET,
+        ] {
+            assert!(
+                is_relay_only_kind(relay_authored),
+                "a client must not author {relay_authored}"
+            );
+            assert!(!is_command_kind(relay_authored));
+        }
+
+        // Usage records are NIP-44 ciphertext addressed to the owner. They
+        // carry the company's entire spend history, so they get the same read
+        // gates as turn metrics: `#p`-bound at the filter layer and closed to
+        // the kindless `{ids:[…]}` path.
+        assert!(P_GATED_KINDS.contains(&KIND_USAGE_RECORD));
+        assert!(RESULT_GATED_KINDS.contains(&KIND_USAGE_RECORD));
+        // The books are relay-authored plaintext state, readable community-wide
+        // like the party heads, so they are deliberately not p-gated.
+        for plaintext_head in [
+            KIND_PRICE_BOOK,
+            KIND_ATTRIBUTION_RULEBOOK,
+            KIND_CORRECTION_BOOK,
+            KIND_LEDGER_BUDGET,
+        ] {
+            assert!(!P_GATED_KINDS.contains(&plaintext_head));
+        }
     }
 
     #[test]
