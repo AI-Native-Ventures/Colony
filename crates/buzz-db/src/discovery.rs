@@ -1308,6 +1308,38 @@ async fn apply_worker_action_tx(
                 },
             ))
         }
+        DiscoveryWorkerAction::Fail(request) => {
+            let current = load_run_tx(tx, community_id, request.run_id, true).await?;
+            if !worker_lease_matches(&current, actor_pubkey, request.worker_id, request.lease_id) {
+                return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
+                    current.projection(),
+                ));
+            }
+            let row = sqlx::query(
+                "UPDATE discovery_runs SET state='failed', terminal_reason='executor_failed', \
+                     claim_id=NULL, lease_until=NULL, worker_id=NULL, lease_owner_pubkey=NULL, \
+                     updated_at=now() \
+                 WHERE community_id=$1 AND id=$2 AND claim_id=$3 AND worker_id=$4 \
+                   AND lease_owner_pubkey=$5 AND state='running' AND lease_until >= now() \
+                 RETURNING id, community_id, campaign_id, requested_by, start_idempotency_key, \
+                 state, completed_steps, total_steps, cancel_requested, claim_id, lease_until, \
+                 worker_id, lease_owner_pubkey, last_checkpoint_sequence, attempt, \
+                 terminal_reason, created_at, updated_at",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.run_id)
+            .bind(request.lease_id)
+            .bind(request.worker_id)
+            .bind(actor_pubkey.as_slice())
+            .fetch_optional(&mut **tx)
+            .await?;
+            Ok(match row {
+                Some(row) => {
+                    DiscoveryWorkerReceiptOutcome::Failed(run_from_row(&row)?.projection())
+                }
+                None => DiscoveryWorkerReceiptOutcome::LostLease(current.projection()),
+            })
+        }
         DiscoveryWorkerAction::Complete(request) => {
             let current = load_run_tx(tx, community_id, request.run_id, true).await?;
             if !worker_lease_matches(&current, actor_pubkey, request.worker_id, request.lease_id) {
@@ -1466,7 +1498,8 @@ fn worker_outcome_run_id(outcome: &DiscoveryWorkerReceiptOutcome) -> Option<Uuid
         DiscoveryWorkerReceiptOutcome::Lease(lease) => Some(lease.run.run_id),
         DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => Some(stored.lease.run.run_id),
         DiscoveryWorkerReceiptOutcome::LostLease(run)
-        | DiscoveryWorkerReceiptOutcome::Completed(run) => Some(run.run_id),
+        | DiscoveryWorkerReceiptOutcome::Completed(run)
+        | DiscoveryWorkerReceiptOutcome::Failed(run) => Some(run.run_id),
     }
 }
 
@@ -1578,7 +1611,9 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]>
     hasher.update(action.worker_id().as_bytes());
     match action {
         DiscoveryWorkerAction::Claim(_) => {}
-        DiscoveryWorkerAction::Heartbeat(request) | DiscoveryWorkerAction::Complete(request) => {
+        DiscoveryWorkerAction::Heartbeat(request)
+        | DiscoveryWorkerAction::Fail(request)
+        | DiscoveryWorkerAction::Complete(request) => {
             hasher.update(request.run_id.as_bytes());
             hasher.update(request.lease_id.as_bytes());
         }
@@ -1625,6 +1660,7 @@ fn worker_operation_text(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Heartbeat => "heartbeat",
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
         DiscoveryWorkerOperation::StoreObservations => "store_observations",
+        DiscoveryWorkerOperation::Fail => "fail",
         DiscoveryWorkerOperation::Complete => "complete",
     }
 }
@@ -1974,8 +2010,9 @@ mod tests {
     };
     use buzz_sdk::discovery_worker::{
         build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
-        build_discovery_worker_complete_action, build_discovery_worker_heartbeat_action,
-        build_discovery_worker_receipt, build_discovery_worker_store_observations_action,
+        build_discovery_worker_complete_action, build_discovery_worker_fail_action,
+        build_discovery_worker_heartbeat_action, build_discovery_worker_receipt,
+        build_discovery_worker_store_observations_action,
     };
     use nostr::Keys;
     use uuid::Uuid;
@@ -2131,6 +2168,9 @@ mod tests {
             }
             DiscoveryWorkerAction::StoreObservations(request) => {
                 build_discovery_worker_store_observations_action(relay.public_key(), request)
+            }
+            DiscoveryWorkerAction::Fail(request) => {
+                build_discovery_worker_fail_action(relay.public_key(), request)
             }
             DiscoveryWorkerAction::Complete(request) => {
                 build_discovery_worker_complete_action(relay.public_key(), request)
@@ -2376,6 +2416,66 @@ mod tests {
         };
         assert_eq!(completed.state, DiscoveryRunState::Succeeded);
         assert_eq!(completed.completed_steps, completed.total_steps);
+
+        let failed_run_id = match db
+            .create_discovery_run_once(
+                community,
+                &human,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                1,
+                &business_search(),
+            )
+            .await
+            .expect("create failure fixture run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let failure_worker = Uuid::new_v4();
+        let failure_claim = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id: failure_worker,
+                }),
+                Duration::seconds(5),
+            )
+            .await
+            .expect("claim failure fixture run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(failure_lease) = failure_claim else {
+            panic!("failure fixture must be leased");
+        };
+        assert_eq!(failure_lease.run.run_id, failed_run_id);
+        let failed = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Fail(lease_request(
+                    failure_worker,
+                    failed_run_id,
+                    failure_lease.lease_id,
+                )),
+                Duration::seconds(5),
+            )
+            .await
+            .expect("fail current lease"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Failed(failed) = failed else {
+            panic!("current failure must succeed");
+        };
+        assert_eq!(failed.state, DiscoveryRunState::Failed);
+        assert_eq!(
+            failed.terminal_reason,
+            Some(DiscoveryTerminalReason::ExecutorFailed)
+        );
 
         sqlx::query("DELETE FROM event_mentions WHERE community_id=$1")
             .bind(community.as_uuid())

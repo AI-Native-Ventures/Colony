@@ -21,6 +21,8 @@ pub enum DiscoveryWorkerOperation {
     Checkpoint,
     /// Persist a bounded batch of normalized provider observations.
     StoreObservations,
+    /// Mark a currently leased run failed without retaining provider details.
+    Fail,
     /// Mark a currently owned run successful.
     Complete,
 }
@@ -443,6 +445,8 @@ pub enum DiscoveryWorkerAction {
     Checkpoint(DiscoveryWorkerCheckpointRequest),
     /// Persist normalized observations.
     StoreObservations(DiscoveryWorkerObservationBatchRequest),
+    /// Fail a current run without a provider error payload.
+    Fail(DiscoveryWorkerLeaseRequest),
     /// Complete a current run.
     Complete(DiscoveryWorkerLeaseRequest),
 }
@@ -455,6 +459,7 @@ impl DiscoveryWorkerAction {
             Self::Heartbeat(_) => DiscoveryWorkerOperation::Heartbeat,
             Self::Checkpoint(_) => DiscoveryWorkerOperation::Checkpoint,
             Self::StoreObservations(_) => DiscoveryWorkerOperation::StoreObservations,
+            Self::Fail(_) => DiscoveryWorkerOperation::Fail,
             Self::Complete(_) => DiscoveryWorkerOperation::Complete,
         }
     }
@@ -463,7 +468,7 @@ impl DiscoveryWorkerAction {
     pub const fn request_id(&self) -> Uuid {
         match self {
             Self::Claim(value) => value.request_id,
-            Self::Heartbeat(value) | Self::Complete(value) => value.request_id,
+            Self::Heartbeat(value) | Self::Fail(value) | Self::Complete(value) => value.request_id,
             Self::Checkpoint(value) => value.lease.request_id,
             Self::StoreObservations(value) => value.lease.request_id,
         }
@@ -473,7 +478,9 @@ impl DiscoveryWorkerAction {
     pub const fn idempotency_key(&self) -> Uuid {
         match self {
             Self::Claim(value) => value.idempotency_key,
-            Self::Heartbeat(value) | Self::Complete(value) => value.idempotency_key,
+            Self::Heartbeat(value) | Self::Fail(value) | Self::Complete(value) => {
+                value.idempotency_key
+            }
             Self::Checkpoint(value) => value.lease.idempotency_key,
             Self::StoreObservations(value) => value.lease.idempotency_key,
         }
@@ -483,7 +490,7 @@ impl DiscoveryWorkerAction {
     pub const fn worker_id(&self) -> Uuid {
         match self {
             Self::Claim(value) => value.worker_id,
-            Self::Heartbeat(value) | Self::Complete(value) => value.worker_id,
+            Self::Heartbeat(value) | Self::Fail(value) | Self::Complete(value) => value.worker_id,
             Self::Checkpoint(value) => value.lease.worker_id,
             Self::StoreObservations(value) => value.lease.worker_id,
         }
@@ -524,6 +531,8 @@ pub enum DiscoveryWorkerReceiptOutcome {
     LostLease(DiscoveryRunProjection),
     /// The current lease completed its run.
     Completed(DiscoveryRunProjection),
+    /// The current lease ended with a privacy-safe executor failure.
+    Failed(DiscoveryRunProjection),
 }
 
 /// Relay-signed result of one local worker command.
@@ -595,6 +604,11 @@ mod tests {
             serde_json::to_string(&DiscoveryWorkerOperation::Checkpoint)
                 .expect("serialize operation"),
             "\"checkpoint\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DiscoveryWorkerOperation::Fail)
+                .expect("serialize failure operation"),
+            "\"fail\""
         );
     }
 

@@ -147,6 +147,14 @@ pub fn build_discovery_worker_store_observations_action(
     )
 }
 
+/// Build a member-signable privacy-safe failure action.
+pub fn build_discovery_worker_fail_action(
+    relay_pubkey: PublicKey,
+    request: &DiscoveryWorkerLeaseRequest,
+) -> Result<EventBuilder, DiscoverySdkError> {
+    build_lease_action(relay_pubkey, DiscoveryWorkerOperation::Fail, request)
+}
+
 /// Build a member-signable completion action.
 pub fn build_discovery_worker_complete_action(
     relay_pubkey: PublicKey,
@@ -278,14 +286,17 @@ pub fn parse_discovery_worker_action(
                 worker_id,
             })
         }
-        DiscoveryWorkerOperation::Heartbeat | DiscoveryWorkerOperation::Complete
+        DiscoveryWorkerOperation::Heartbeat
+        | DiscoveryWorkerOperation::Fail
+        | DiscoveryWorkerOperation::Complete
             if content.checkpoint.is_none() && content_has_no_observations(&content) =>
         {
             let request = parse_lease_content(event, &content)?;
-            if operation == DiscoveryWorkerOperation::Heartbeat {
-                DiscoveryWorkerAction::Heartbeat(request)
-            } else {
-                DiscoveryWorkerAction::Complete(request)
+            match operation {
+                DiscoveryWorkerOperation::Heartbeat => DiscoveryWorkerAction::Heartbeat(request),
+                DiscoveryWorkerOperation::Fail => DiscoveryWorkerAction::Fail(request),
+                DiscoveryWorkerOperation::Complete => DiscoveryWorkerAction::Complete(request),
+                _ => unreachable!("guarded worker lease operation"),
             }
         }
         DiscoveryWorkerOperation::Checkpoint => {
@@ -532,7 +543,8 @@ fn validate_receipt(receipt: &DiscoveryWorkerReceipt) -> Result<(), DiscoverySdk
             validate_stored_observations(stored, receipt.worker_id)?;
         }
         DiscoveryWorkerReceiptOutcome::LostLease(run)
-        | DiscoveryWorkerReceiptOutcome::Completed(run) => validate_run_projection(run)?,
+        | DiscoveryWorkerReceiptOutcome::Completed(run)
+        | DiscoveryWorkerReceiptOutcome::Failed(run) => validate_run_projection(run)?,
     }
     Ok(())
 }
@@ -599,6 +611,7 @@ fn operation_tag(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Heartbeat => "heartbeat",
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
         DiscoveryWorkerOperation::StoreObservations => "store_observations",
+        DiscoveryWorkerOperation::Fail => "fail",
         DiscoveryWorkerOperation::Complete => "complete",
     }
 }
@@ -609,6 +622,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkerOperation, DiscoverySdk
         "heartbeat" => Ok(DiscoveryWorkerOperation::Heartbeat),
         "checkpoint" => Ok(DiscoveryWorkerOperation::Checkpoint),
         "store_observations" => Ok(DiscoveryWorkerOperation::StoreObservations),
+        "fail" => Ok(DiscoveryWorkerOperation::Fail),
         "complete" => Ok(DiscoveryWorkerOperation::Complete),
         _ => Err(DiscoverySdkError::InvalidEnvelope(
             "discovery worker action",
@@ -736,6 +750,10 @@ mod tests {
                 .unwrap()
                 .sign_with_keys(&actor)
                 .unwrap(),
+            build_discovery_worker_fail_action(relay.public_key(), &lease())
+                .unwrap()
+                .sign_with_keys(&actor)
+                .unwrap(),
             build_discovery_worker_complete_action(relay.public_key(), &lease())
                 .unwrap()
                 .sign_with_keys(&actor)
@@ -759,6 +777,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_discovery_worker_action(&events[4]).unwrap().action,
+            DiscoveryWorkerAction::Fail(_)
+        ));
+        assert!(matches!(
+            parse_discovery_worker_action(&events[5]).unwrap().action,
             DiscoveryWorkerAction::Complete(_)
         ));
     }

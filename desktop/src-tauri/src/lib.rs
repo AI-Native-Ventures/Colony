@@ -431,6 +431,13 @@ pub fn run() {
                     .load(std::sync::atomic::Ordering::Acquire),
             ) {
                 discovery_worker::start_fake_local_worker(app_handle.clone());
+            } else if discovery_worker::should_start_production_local_worker(
+                recovery_mode,
+                state
+                    .reset_failed
+                    .load(std::sync::atomic::Ordering::Acquire),
+            ) {
+                discovery_worker::start_production_local_worker(app_handle.clone());
             }
 
             // Backfill the pinned persona snapshot for any pre-existing agent

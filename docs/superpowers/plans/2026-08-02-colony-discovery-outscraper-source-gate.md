@@ -198,10 +198,10 @@ pub struct OutscraperClient {
 - Modify: `desktop/src-tauri/src/lib.rs`
 - Modify: `desktop/src-tauri/src/app_state.rs` only if the shared HTTP client cannot satisfy provider limits.
 
-- [ ] Introduce an injected provider trait whose production implementation is `OutscraperClient` and whose deterministic fake remains available only behind the explicit proof flag.
-- [ ] Start the production host by default after successful workspace setup, except during shutdown or identity/keyring/reset recovery. Missing credentials must cause zero claims and zero provider traffic.
-- [ ] Require `lease.run.business_search`; leave legacy proof runs without it unclaimed/idle rather than inventing a query.
-- [ ] Implement exact resume behavior:
+- [x] Introduce an injected provider trait whose production implementation is `OutscraperClient` and whose deterministic fake remains available only behind the explicit proof flag.
+- [x] Start the production host by default after successful workspace setup, except during shutdown or identity/keyring/reset recovery. Missing credentials cause zero claims and zero provider traffic.
+- [x] Require the relay-issued immutable `lease.business_search`; the relay leaves runs without that private search contract unclaimed rather than inventing a query.
+- [x] Implement exact resume behavior:
 
 ```text
 no checkpoint -> submit once -> checkpoint provider_submitted
@@ -210,12 +210,13 @@ all batches stored -> checkpoint provider_results_ready
 provider_results_ready -> complete without provider traffic
 ```
 
-- [ ] Heartbeat throughout submit, polling, normalization, and observation batching. Cancellation, entitlement loss, workspace generation change, or shutdown cancels pending work and prevents every later action.
-- [ ] Add `store_observations` to `WorkerProtocol` and strict signed-receipt matching. A stale or mismatched receipt must cancel the attempt.
-- [ ] Test crash points after provider acceptance, after batch persistence, and after results checkpoint. Prove one provider submission, idempotent observation replay, and one completion.
-- [ ] Keep the fake-worker proof path network-incapable and explicit; the production path must not be selected when the fake flag is enabled.
-- [ ] Run all `discovery_worker` tests and `scripts/discovery-worker-live-proof.sh`.
-- [ ] Commit with `git commit -s -m "feat(discovery): execute restart-safe Outscraper runs"`.
+- [x] Heartbeat immediately before and throughout submit and polling, and renew the lease on every observation write. Cancellation, entitlement loss, workspace generation change, credential change, or shutdown cancels pending work and prevents every later action.
+- [x] Add `store_observations` to `WorkerProtocol` and strict signed-receipt matching. A stale or mismatched receipt cancels the attempt.
+- [x] Add a privacy-safe `fail` worker operation so a terminal provider error cannot leave a paid run retrying forever; retain only the generic `executor_failed` reason.
+- [x] Test restart points after provider checkpointing, batch persistence, and results checkpoint. Prove one provider submission after the durable provider reference, idempotent observation replay, and one completion.
+- [x] Keep the fake-worker proof path network-incapable and explicit; the production path is not selected when the fake flag is enabled.
+- [x] Run all `discovery_worker` tests, a fresh-database worker failure proof, strict Clippy for core/SDK/database/relay/desktop, and `scripts/discovery-worker-live-proof.sh`.
+- [x] Commit with `git commit -s -m "feat(discovery): execute restart-safe Outscraper runs"`.
 
 ## Task 6: Add safe Discovery credential controls to Colony Settings
 

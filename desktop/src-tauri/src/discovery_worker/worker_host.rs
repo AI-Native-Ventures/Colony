@@ -1,28 +1,34 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{future::Future, pin::Pin, sync::atomic::Ordering, time::Duration};
 
 use buzz_core_pkg::discovery_worker::{
+    DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerCheckpoint,
     DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseProjection,
-    DiscoveryWorkerLeaseRequest, DiscoveryWorkerReceiptOutcome,
+    DiscoveryWorkerLeaseRequest, DiscoveryWorkerObservationBatchRequest,
+    DiscoveryWorkerReceiptOutcome,
 };
 use tauri::{AppHandle, Manager as _};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::{
     adapter::FakeOutscraperAdapter,
     installation::load_or_create_worker_id,
+    outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission},
     protocol::{RelayWorkerProtocol, WorkerProtocol},
 };
 use crate::{app_state::AppState, discovery_credentials, relay};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const FAKE_STEP_DELAY: Duration = Duration::from_millis(250);
+const OBSERVATION_BATCH_SIZE: usize = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HostRunOutcome {
     NoCredential,
     Idle,
     LostLease,
+    Failed,
     Completed,
 }
 
@@ -79,6 +85,360 @@ pub(crate) fn start_fake_local_worker(app: AppHandle) {
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     });
+}
+
+pub(crate) fn start_production_local_worker(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let app_data_dir = match app.path().app_data_dir() {
+            Ok(path) => path,
+            Err(_) => return,
+        };
+        let worker_id = match load_or_create_worker_id(&app_data_dir) {
+            Ok(id) => id,
+            Err(error) => {
+                eprintln!("buzz-desktop: Discovery worker identity unavailable: {error}");
+                return;
+            }
+        };
+        let provider = match OutscraperClient::production() {
+            Ok(provider) => provider,
+            Err(error) => {
+                eprintln!("buzz-desktop: Discovery source unavailable: {error}");
+                return;
+            }
+        };
+
+        loop {
+            let state = app.state::<AppState>();
+            if state.shutdown_started.load(Ordering::Acquire) {
+                return;
+            }
+            let credential = match discovery_credentials::load_outscraper_credential() {
+                Ok(Some(credential)) => credential,
+                Ok(None) | Err(_) => {
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                    continue;
+                }
+            };
+            let relay_url = state
+                .relay_url_override
+                .lock()
+                .ok()
+                .and_then(|value| value.clone());
+            let Some(relay_url) = relay_url else {
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            };
+            let keys = match state.signing_keys() {
+                Ok(keys) => keys,
+                Err(_) => return,
+            };
+            let generation = super::workspace_generation();
+            let api_base_url = relay::relay_http_base_url(&relay_url);
+            let protocol = match RelayWorkerProtocol::connect(
+                &state,
+                keys,
+                api_base_url,
+                worker_id,
+                generation,
+            )
+            .await
+            {
+                Ok(protocol) => protocol,
+                Err(_) => {
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                    continue;
+                }
+            };
+            if let Err(error) =
+                run_production_once_with_credential(&protocol, &provider, worker_id, &credential)
+                    .await
+            {
+                eprintln!("buzz-desktop: Discovery run paused safely: {error}");
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    });
+}
+
+type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, OutscraperError>> + Send + 'a>>;
+
+trait BusinessDiscoveryProvider: Send + Sync {
+    fn submit<'a>(
+        &'a self,
+        search: &'a buzz_core_pkg::discovery::DiscoveryBusinessSearchSpec,
+        credential: &'a Zeroizing<String>,
+        cancellation: &'a CancellationToken,
+    ) -> ProviderFuture<'a, OutscraperSubmission>;
+
+    fn poll<'a>(
+        &'a self,
+        request_id: &'a str,
+        credential: &'a Zeroizing<String>,
+        cancellation: &'a CancellationToken,
+    ) -> ProviderFuture<'a, Vec<buzz_core_pkg::discovery_worker::DiscoveryBusinessObservationInput>>;
+}
+
+impl BusinessDiscoveryProvider for OutscraperClient {
+    fn submit<'a>(
+        &'a self,
+        search: &'a buzz_core_pkg::discovery::DiscoveryBusinessSearchSpec,
+        credential: &'a Zeroizing<String>,
+        cancellation: &'a CancellationToken,
+    ) -> ProviderFuture<'a, OutscraperSubmission> {
+        Box::pin(OutscraperClient::submit(
+            self,
+            search,
+            credential,
+            cancellation,
+        ))
+    }
+
+    fn poll<'a>(
+        &'a self,
+        request_id: &'a str,
+        credential: &'a Zeroizing<String>,
+        cancellation: &'a CancellationToken,
+    ) -> ProviderFuture<'a, Vec<buzz_core_pkg::discovery_worker::DiscoveryBusinessObservationInput>>
+    {
+        Box::pin(OutscraperClient::poll_until_ready(
+            self,
+            request_id,
+            credential,
+            cancellation,
+        ))
+    }
+}
+
+async fn run_production_once_with_credential<P, D>(
+    protocol: &P,
+    provider: &D,
+    worker_id: Uuid,
+    credential: &Zeroizing<String>,
+) -> Result<HostRunOutcome, String>
+where
+    P: WorkerProtocol,
+    D: BusinessDiscoveryProvider,
+{
+    let claim = DiscoveryWorkerClaimRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        worker_id,
+    };
+    let mut lease = match protocol.claim(claim).await? {
+        DiscoveryWorkerReceiptOutcome::Idle => return Ok(HostRunOutcome::Idle),
+        DiscoveryWorkerReceiptOutcome::Lease(lease) => lease,
+        _ => return Err("Discovery claim returned an invalid outcome".to_string()),
+    };
+
+    if matches!(
+        lease.last_checkpoint.as_ref().map(|value| value.kind),
+        Some(DiscoveryCheckpointKind::ProviderResultsReady)
+    ) {
+        return complete_current_lease(protocol, &mut lease).await;
+    }
+
+    let (provider_request_id, ready) = match lease.last_checkpoint.clone() {
+        None => {
+            let cancellation = CancellationToken::new();
+            let business_search = lease.business_search.clone();
+            let submission = match drive_provider_step(
+                protocol,
+                &mut lease,
+                &cancellation,
+                provider.submit(&business_search, credential, &cancellation),
+            )
+            .await?
+            {
+                ProviderStep::Value(value) => value,
+                ProviderStep::LostLease => return Ok(HostRunOutcome::LostLease),
+                ProviderStep::ProviderError => {
+                    return fail_current_lease(protocol, &lease).await;
+                }
+            };
+            let checkpoint = DiscoveryWorkerCheckpoint {
+                sequence: 1,
+                kind: DiscoveryCheckpointKind::ProviderSubmitted,
+                provider: DiscoveryProvider::Outscraper,
+                provider_request_id: Some(submission.request_id.clone()),
+                item_count: None,
+            };
+            if !commit_checkpoint(protocol, &mut lease, checkpoint).await? {
+                return Ok(HostRunOutcome::LostLease);
+            }
+            (submission.request_id, submission.ready)
+        }
+        Some(checkpoint)
+            if checkpoint.kind == DiscoveryCheckpointKind::ProviderSubmitted
+                && checkpoint.provider == DiscoveryProvider::Outscraper =>
+        {
+            let request_id = checkpoint
+                .provider_request_id
+                .ok_or_else(|| "Discovery provider checkpoint is incomplete".to_string())?;
+            (request_id, None)
+        }
+        Some(_) => return Err("Discovery checkpoint cannot be resumed safely".to_string()),
+    };
+
+    let observations = if let Some(ready) = ready {
+        ready
+    } else {
+        let cancellation = CancellationToken::new();
+        match drive_provider_step(
+            protocol,
+            &mut lease,
+            &cancellation,
+            provider.poll(&provider_request_id, credential, &cancellation),
+        )
+        .await?
+        {
+            ProviderStep::Value(value) => value,
+            ProviderStep::LostLease => return Ok(HostRunOutcome::LostLease),
+            ProviderStep::ProviderError => {
+                return fail_current_lease(protocol, &lease).await;
+            }
+        }
+    };
+
+    if observations.len() > 500 {
+        return fail_current_lease(protocol, &lease).await;
+    }
+
+    for (batch_index, observations) in observations.chunks(OBSERVATION_BATCH_SIZE).enumerate() {
+        let request = DiscoveryWorkerObservationBatchRequest {
+            lease: lease_request(&lease),
+            provider_request_id: provider_request_id.clone(),
+            batch_index: u32::try_from(batch_index)
+                .map_err(|_| "Discovery source returned too many batches".to_string())?,
+            observations: observations.to_vec(),
+        };
+        match protocol.store_observations(request).await? {
+            DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
+                lease = stored.lease;
+            }
+            DiscoveryWorkerReceiptOutcome::LostLease(_) => {
+                return Ok(HostRunOutcome::LostLease);
+            }
+            _ => return Err("Discovery observation write returned an invalid outcome".to_string()),
+        }
+    }
+
+    let item_count = u32::try_from(observations.len())
+        .map_err(|_| "Discovery source returned too many businesses".to_string())?;
+    let results_ready = DiscoveryWorkerCheckpoint {
+        sequence: 2,
+        kind: DiscoveryCheckpointKind::ProviderResultsReady,
+        provider: DiscoveryProvider::Outscraper,
+        provider_request_id: None,
+        item_count: Some(item_count),
+    };
+    if !commit_checkpoint(protocol, &mut lease, results_ready).await? {
+        return Ok(HostRunOutcome::LostLease);
+    }
+    complete_current_lease(protocol, &mut lease).await
+}
+
+enum ProviderStep<T> {
+    Value(T),
+    LostLease,
+    ProviderError,
+}
+
+async fn drive_provider_step<P, F, T>(
+    protocol: &P,
+    lease: &mut DiscoveryWorkerLeaseProjection,
+    cancellation: &CancellationToken,
+    future: F,
+) -> Result<ProviderStep<T>, String>
+where
+    P: WorkerProtocol,
+    F: Future<Output = Result<T, OutscraperError>>,
+{
+    match protocol.heartbeat(lease_request(lease)).await {
+        Ok(DiscoveryWorkerReceiptOutcome::Lease(updated)) => *lease = updated,
+        Ok(DiscoveryWorkerReceiptOutcome::LostLease(_)) => {
+            cancellation.cancel();
+            return Ok(ProviderStep::LostLease);
+        }
+        Ok(_) => {
+            cancellation.cancel();
+            return Err("Discovery heartbeat returned an invalid outcome".to_string());
+        }
+        Err(error) => {
+            cancellation.cancel();
+            return Err(error);
+        }
+    }
+    tokio::pin!(future);
+    loop {
+        let interval = heartbeat_interval(lease);
+        tokio::select! {
+            result = &mut future => {
+                return Ok(match result {
+                    Ok(value) => ProviderStep::Value(value),
+                    Err(_) => ProviderStep::ProviderError,
+                });
+            }
+            () = tokio::time::sleep(interval) => {
+                match protocol.heartbeat(lease_request(lease)).await {
+                    Ok(DiscoveryWorkerReceiptOutcome::Lease(updated)) => *lease = updated,
+                    Ok(DiscoveryWorkerReceiptOutcome::LostLease(_)) => {
+                        cancellation.cancel();
+                        return Ok(ProviderStep::LostLease);
+                    }
+                    Ok(_) => {
+                        cancellation.cancel();
+                        return Err("Discovery heartbeat returned an invalid outcome".to_string());
+                    }
+                    Err(error) => {
+                        cancellation.cancel();
+                        return Err(error);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn commit_checkpoint<P: WorkerProtocol>(
+    protocol: &P,
+    lease: &mut DiscoveryWorkerLeaseProjection,
+    checkpoint: DiscoveryWorkerCheckpoint,
+) -> Result<bool, String> {
+    let request = DiscoveryWorkerCheckpointRequest {
+        lease: lease_request(lease),
+        checkpoint,
+    };
+    match protocol.checkpoint(request).await? {
+        DiscoveryWorkerReceiptOutcome::Lease(updated) => {
+            *lease = updated;
+            Ok(true)
+        }
+        DiscoveryWorkerReceiptOutcome::LostLease(_) => Ok(false),
+        _ => Err("Discovery checkpoint returned an invalid outcome".to_string()),
+    }
+}
+
+async fn complete_current_lease<P: WorkerProtocol>(
+    protocol: &P,
+    lease: &mut DiscoveryWorkerLeaseProjection,
+) -> Result<HostRunOutcome, String> {
+    match protocol.complete(lease_request(lease)).await? {
+        DiscoveryWorkerReceiptOutcome::Completed(_) => Ok(HostRunOutcome::Completed),
+        DiscoveryWorkerReceiptOutcome::LostLease(_) => Ok(HostRunOutcome::LostLease),
+        _ => Err("Discovery completion returned an invalid outcome".to_string()),
+    }
+}
+
+async fn fail_current_lease<P: WorkerProtocol>(
+    protocol: &P,
+    lease: &DiscoveryWorkerLeaseProjection,
+) -> Result<HostRunOutcome, String> {
+    match protocol.fail(lease_request(lease)).await? {
+        DiscoveryWorkerReceiptOutcome::Failed(_) => Ok(HostRunOutcome::Failed),
+        DiscoveryWorkerReceiptOutcome::LostLease(_) => Ok(HostRunOutcome::LostLease),
+        _ => Err("Discovery failure returned an invalid outcome".to_string()),
+    }
 }
 
 async fn run_once<P: WorkerProtocol>(
@@ -189,7 +549,7 @@ fn heartbeat_interval(lease: &DiscoveryWorkerLeaseProjection) -> Duration {
     let remaining = (lease.lease_until - chrono::Utc::now())
         .to_std()
         .unwrap_or(Duration::from_millis(150));
-    (remaining / 3).clamp(Duration::from_millis(50), Duration::from_secs(5))
+    (remaining / 3).clamp(Duration::from_millis(50), Duration::from_secs(2))
 }
 
 fn lease_request(lease: &DiscoveryWorkerLeaseProjection) -> DiscoveryWorkerLeaseRequest {
@@ -204,11 +564,21 @@ fn lease_request(lease: &DiscoveryWorkerLeaseProjection) -> DiscoveryWorkerLease
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, sync::Mutex};
+    use std::{
+        collections::VecDeque,
+        sync::{
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+            Mutex,
+        },
+    };
 
     use buzz_core_pkg::{
         discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState},
-        discovery_worker::{DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerCheckpoint},
+        discovery_worker::{
+            deterministic_business_observation_id, DiscoveryBusinessObservationInput,
+            DiscoveryBusinessStatus, DiscoveryCheckpointKind, DiscoveryProvider,
+            DiscoveryWorkerCheckpoint, DiscoveryWorkerStoredObservationsProjection,
+        },
     };
     use chrono::Utc;
 
@@ -251,8 +621,114 @@ mod tests {
             Box::pin(async { self.next("checkpoint") })
         }
 
+        fn store_observations(
+            &self,
+            _: DiscoveryWorkerObservationBatchRequest,
+        ) -> ProtocolFuture<'_> {
+            Box::pin(async { self.next("store_observations") })
+        }
+
+        fn fail(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
+            Box::pin(async { self.next("fail") })
+        }
+
         fn complete(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
             Box::pin(async { self.next("complete") })
+        }
+    }
+
+    struct FakeProvider {
+        submit_calls: AtomicUsize,
+        poll_calls: AtomicUsize,
+        ready_on_submit: bool,
+        wait_for_cancellation: bool,
+        submit_error: Option<OutscraperError>,
+        observations: Vec<DiscoveryBusinessObservationInput>,
+    }
+
+    impl FakeProvider {
+        fn immediate(observations: Vec<DiscoveryBusinessObservationInput>) -> Self {
+            Self {
+                submit_calls: AtomicUsize::new(0),
+                poll_calls: AtomicUsize::new(0),
+                ready_on_submit: true,
+                wait_for_cancellation: false,
+                submit_error: None,
+                observations,
+            }
+        }
+
+        fn polled(observations: Vec<DiscoveryBusinessObservationInput>) -> Self {
+            Self {
+                submit_calls: AtomicUsize::new(0),
+                poll_calls: AtomicUsize::new(0),
+                ready_on_submit: false,
+                wait_for_cancellation: false,
+                submit_error: None,
+                observations,
+            }
+        }
+
+        fn pending_forever() -> Self {
+            Self {
+                submit_calls: AtomicUsize::new(0),
+                poll_calls: AtomicUsize::new(0),
+                ready_on_submit: false,
+                wait_for_cancellation: true,
+                submit_error: None,
+                observations: Vec::new(),
+            }
+        }
+
+        fn rejected() -> Self {
+            Self {
+                submit_calls: AtomicUsize::new(0),
+                poll_calls: AtomicUsize::new(0),
+                ready_on_submit: false,
+                wait_for_cancellation: false,
+                submit_error: Some(OutscraperError::CredentialRejected),
+                observations: Vec::new(),
+            }
+        }
+    }
+
+    impl BusinessDiscoveryProvider for FakeProvider {
+        fn submit<'a>(
+            &'a self,
+            _: &'a DiscoveryBusinessSearchSpec,
+            _: &'a Zeroizing<String>,
+            cancellation: &'a CancellationToken,
+        ) -> ProviderFuture<'a, OutscraperSubmission> {
+            self.submit_calls.fetch_add(1, AtomicOrdering::SeqCst);
+            Box::pin(async move {
+                if self.wait_for_cancellation {
+                    cancellation.cancelled().await;
+                    return Err(OutscraperError::Cancelled);
+                }
+                if let Some(error) = self.submit_error {
+                    return Err(error);
+                }
+                Ok(OutscraperSubmission {
+                    request_id: "fixture-request".to_string(),
+                    ready: self.ready_on_submit.then(|| self.observations.clone()),
+                })
+            })
+        }
+
+        fn poll<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a Zeroizing<String>,
+            cancellation: &'a CancellationToken,
+        ) -> ProviderFuture<'a, Vec<DiscoveryBusinessObservationInput>> {
+            self.poll_calls.fetch_add(1, AtomicOrdering::SeqCst);
+            Box::pin(async move {
+                if self.wait_for_cancellation {
+                    cancellation.cancelled().await;
+                    return Err(OutscraperError::Cancelled);
+                }
+                Ok(self.observations.clone())
+            })
         }
     }
 
@@ -292,6 +768,44 @@ mod tests {
         DiscoveryWorkerReceiptOutcome::Lease(value.clone())
     }
 
+    fn observation(provider_record_id: &str) -> DiscoveryBusinessObservationInput {
+        DiscoveryBusinessObservationInput {
+            observation_id: deterministic_business_observation_id(provider_record_id),
+            provider_record_id: provider_record_id.to_string(),
+            place_id: Some(provider_record_id.to_string()),
+            google_id: None,
+            name: format!("Business {provider_record_id}"),
+            website: None,
+            phone: None,
+            full_address: None,
+            city: None,
+            state: None,
+            postal_code: None,
+            country: None,
+            country_code: None,
+            latitude_micros: None,
+            longitude_micros: None,
+            category: None,
+            subtypes: Vec::new(),
+            rating_hundredths: None,
+            reviews_count: None,
+            business_status: Some(DiscoveryBusinessStatus::Operational),
+            verified: None,
+            source_url: None,
+            image_url: None,
+        }
+    }
+
+    fn stored_outcome(lease: &DiscoveryWorkerLeaseProjection) -> DiscoveryWorkerReceiptOutcome {
+        DiscoveryWorkerReceiptOutcome::ObservationsStored(
+            DiscoveryWorkerStoredObservationsProjection {
+                lease: lease.clone(),
+                accepted_count: 1,
+                existing_count: 0,
+            },
+        )
+    }
+
     #[tokio::test]
     async fn missing_credential_sends_zero_claim_actions() {
         let protocol = FakeProtocol::new(Vec::new());
@@ -300,6 +814,157 @@ mod tests {
             .expect("missing credential is not an error");
         assert_eq!(outcome, HostRunOutcome::NoCredential);
         assert!(protocol.calls.lock().expect("calls").is_empty());
+    }
+
+    #[tokio::test]
+    async fn production_run_checkpoints_before_storing_and_completing() {
+        let lease = lease(None);
+        let protocol = FakeProtocol::new(vec![
+            lease_outcome(&lease),
+            lease_outcome(&lease),
+            lease_outcome(&lease),
+            stored_outcome(&lease),
+            lease_outcome(&lease),
+            DiscoveryWorkerReceiptOutcome::Completed(lease.run.clone()),
+        ]);
+        let provider = FakeProvider::immediate(vec![observation("place-one")]);
+        let outcome = run_production_once_with_credential(
+            &protocol,
+            &provider,
+            lease.worker_id,
+            &Zeroizing::new("fixture".to_string()),
+        )
+        .await
+        .expect("production run");
+        assert_eq!(outcome, HostRunOutcome::Completed);
+        assert_eq!(provider.submit_calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(provider.poll_calls.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(
+            *protocol.calls.lock().expect("calls"),
+            [
+                "claim",
+                "heartbeat",
+                "checkpoint",
+                "store_observations",
+                "checkpoint",
+                "complete"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn production_resume_polls_existing_request_without_resubmitting() {
+        let submitted = DiscoveryWorkerCheckpoint {
+            sequence: 1,
+            kind: DiscoveryCheckpointKind::ProviderSubmitted,
+            provider: DiscoveryProvider::Outscraper,
+            provider_request_id: Some("fixture-request".to_string()),
+            item_count: None,
+        };
+        let lease = lease(Some(submitted));
+        let protocol = FakeProtocol::new(vec![
+            lease_outcome(&lease),
+            lease_outcome(&lease),
+            stored_outcome(&lease),
+            lease_outcome(&lease),
+            DiscoveryWorkerReceiptOutcome::Completed(lease.run.clone()),
+        ]);
+        let provider = FakeProvider::polled(vec![observation("place-one")]);
+        let outcome = run_production_once_with_credential(
+            &protocol,
+            &provider,
+            lease.worker_id,
+            &Zeroizing::new("fixture".to_string()),
+        )
+        .await
+        .expect("resumed production run");
+        assert_eq!(outcome, HostRunOutcome::Completed);
+        assert_eq!(provider.submit_calls.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(provider.poll_calls.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn results_ready_resume_completes_with_zero_provider_traffic() {
+        let ready = DiscoveryWorkerCheckpoint {
+            sequence: 2,
+            kind: DiscoveryCheckpointKind::ProviderResultsReady,
+            provider: DiscoveryProvider::Outscraper,
+            provider_request_id: None,
+            item_count: Some(1),
+        };
+        let lease = lease(Some(ready));
+        let protocol = FakeProtocol::new(vec![
+            lease_outcome(&lease),
+            DiscoveryWorkerReceiptOutcome::Completed(lease.run.clone()),
+        ]);
+        let provider = FakeProvider::polled(Vec::new());
+        let outcome = run_production_once_with_credential(
+            &protocol,
+            &provider,
+            lease.worker_id,
+            &Zeroizing::new("fixture".to_string()),
+        )
+        .await
+        .expect("results-ready resume");
+        assert_eq!(outcome, HostRunOutcome::Completed);
+        assert_eq!(provider.submit_calls.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(provider.poll_calls.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(
+            *protocol.calls.lock().expect("calls"),
+            ["claim", "complete"]
+        );
+    }
+
+    #[tokio::test]
+    async fn lost_lease_cancels_an_inflight_provider_request() {
+        let mut lease = lease(None);
+        lease.lease_until = Utc::now() + chrono::Duration::milliseconds(120);
+        let protocol = FakeProtocol::new(vec![
+            lease_outcome(&lease),
+            DiscoveryWorkerReceiptOutcome::LostLease(lease.run.clone()),
+        ]);
+        let provider = FakeProvider::pending_forever();
+        let outcome = run_production_once_with_credential(
+            &protocol,
+            &provider,
+            lease.worker_id,
+            &Zeroizing::new("fixture".to_string()),
+        )
+        .await
+        .expect("lost lease");
+        assert_eq!(outcome, HostRunOutcome::LostLease);
+        assert_eq!(
+            *protocol.calls.lock().expect("calls"),
+            ["claim", "heartbeat"]
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_provider_error_fails_once_without_persisting_details() {
+        let lease = lease(None);
+        let mut failed_run = lease.run.clone();
+        failed_run.state = DiscoveryRunState::Failed;
+        failed_run.terminal_reason =
+            Some(buzz_core_pkg::discovery::DiscoveryTerminalReason::ExecutorFailed);
+        let protocol = FakeProtocol::new(vec![
+            lease_outcome(&lease),
+            lease_outcome(&lease),
+            DiscoveryWorkerReceiptOutcome::Failed(failed_run),
+        ]);
+        let provider = FakeProvider::rejected();
+        let outcome = run_production_once_with_credential(
+            &protocol,
+            &provider,
+            lease.worker_id,
+            &Zeroizing::new("fixture-secret".to_string()),
+        )
+        .await
+        .expect("terminal provider failure");
+        assert_eq!(outcome, HostRunOutcome::Failed);
+        assert_eq!(
+            *protocol.calls.lock().expect("calls"),
+            ["claim", "heartbeat", "fail"]
+        );
     }
 
     #[tokio::test]

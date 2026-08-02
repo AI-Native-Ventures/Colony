@@ -113,9 +113,11 @@ fn fake_local_worker_enabled_value(value: Option<&str>) -> bool {
 pub async fn save_discovery_outscraper_credential(
     value: String,
 ) -> Result<DiscoveryCredentialStatus, String> {
-    tokio::task::spawn_blocking(move || save_with(shared_store(), value))
+    let status = tokio::task::spawn_blocking(move || save_with(shared_store(), value))
         .await
-        .map_err(|_| UNAVAILABLE_MESSAGE.to_string())?
+        .map_err(|_| UNAVAILABLE_MESSAGE.to_string())??;
+    crate::discovery_worker::workspace_changed();
+    Ok(status)
 }
 
 /// Return only whether the Outscraper credential is usable, absent, or blocked.
@@ -130,9 +132,11 @@ pub async fn get_discovery_outscraper_credential_status(
 /// Delete the device-local Outscraper credential idempotently.
 #[tauri::command]
 pub async fn delete_discovery_outscraper_credential() -> Result<DiscoveryCredentialStatus, String> {
-    tokio::task::spawn_blocking(|| delete_with(shared_store()))
+    let status = tokio::task::spawn_blocking(|| delete_with(shared_store()))
         .await
-        .map_err(|_| UNAVAILABLE_MESSAGE.to_string())?
+        .map_err(|_| UNAVAILABLE_MESSAGE.to_string())??;
+    crate::discovery_worker::workspace_changed();
+    Ok(status)
 }
 
 #[cfg(test)]

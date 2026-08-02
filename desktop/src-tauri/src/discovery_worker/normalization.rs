@@ -49,10 +49,12 @@ pub(super) struct RawOutscraperPlace {
 pub(super) fn normalize_places(
     values: Vec<serde_json::Value>,
 ) -> Vec<DiscoveryBusinessObservationInput> {
+    let mut provider_ids = HashSet::new();
     values
         .into_iter()
         .filter_map(|value| serde_json::from_value::<RawOutscraperPlace>(value).ok())
         .filter_map(normalize_place)
+        .filter(|observation| provider_ids.insert(observation.provider_record_id.clone()))
         .collect()
 }
 
@@ -230,5 +232,15 @@ mod tests {
     fn normalization_rejects_missing_identity_or_name() {
         assert!(normalize_places(vec![serde_json::json!({"name": "No identity"})]).is_empty());
         assert!(normalize_places(vec![serde_json::json!({"place_id": "ChIJ_test"})]).is_empty());
+    }
+
+    #[test]
+    fn normalization_deduplicates_provider_records_before_batching() {
+        let normalized = normalize_places(vec![
+            serde_json::json!({"name": "First", "place_id": "same"}),
+            serde_json::json!({"name": "Duplicate", "place_id": "same"}),
+        ]);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].name, "First");
     }
 }

@@ -1214,7 +1214,9 @@ CREATE TABLE discovery_worker_action_claims (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     idempotency_key UUID NOT NULL,
     operation TEXT NOT NULL
-        CHECK (operation IN ('claim', 'heartbeat', 'checkpoint', 'store_observations', 'complete')),
+        CHECK (operation IN (
+            'claim', 'heartbeat', 'checkpoint', 'store_observations', 'fail', 'complete'
+        )),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
     receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),

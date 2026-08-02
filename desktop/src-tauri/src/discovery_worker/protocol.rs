@@ -3,13 +3,15 @@ use std::{future::Future, pin::Pin, time::Duration};
 use buzz_core_pkg::{
     discovery_worker::{
         DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
-        DiscoveryWorkerOperation, DiscoveryWorkerReceiptOutcome,
+        DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerOperation,
+        DiscoveryWorkerReceiptOutcome,
     },
     kind::KIND_DISCOVERY_WORKER_RECEIPT,
 };
 use buzz_sdk_pkg::discovery_worker::{
     build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
-    build_discovery_worker_complete_action, build_discovery_worker_heartbeat_action,
+    build_discovery_worker_complete_action, build_discovery_worker_fail_action,
+    build_discovery_worker_heartbeat_action, build_discovery_worker_store_observations_action,
     parse_discovery_worker_receipt,
 };
 use nostr::{Event, EventBuilder, EventId, Keys, PublicKey};
@@ -25,6 +27,11 @@ pub(super) trait WorkerProtocol: Send + Sync {
     fn claim(&self, request: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_>;
     fn heartbeat(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
     fn checkpoint(&self, request: DiscoveryWorkerCheckpointRequest) -> ProtocolFuture<'_>;
+    fn store_observations(
+        &self,
+        request: DiscoveryWorkerObservationBatchRequest,
+    ) -> ProtocolFuture<'_>;
+    fn fail(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
     fn complete(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
 }
 
@@ -188,6 +195,38 @@ impl WorkerProtocol for RelayWorkerProtocol<'_> {
                 DiscoveryWorkerOperation::Checkpoint,
                 request.lease.request_id,
                 request.lease.idempotency_key,
+            )
+            .await
+        })
+    }
+
+    fn store_observations(
+        &self,
+        request: DiscoveryWorkerObservationBatchRequest,
+    ) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            let builder =
+                build_discovery_worker_store_observations_action(self.relay_pubkey, &request)
+                    .map_err(|_| "invalid Discovery observation batch".to_string())?;
+            self.execute(
+                builder,
+                DiscoveryWorkerOperation::StoreObservations,
+                request.lease.request_id,
+                request.lease.idempotency_key,
+            )
+            .await
+        })
+    }
+
+    fn fail(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            let builder = build_discovery_worker_fail_action(self.relay_pubkey, &request)
+                .map_err(|_| "invalid Discovery failure".to_string())?;
+            self.execute(
+                builder,
+                DiscoveryWorkerOperation::Fail,
+                request.request_id,
+                request.idempotency_key,
             )
             .await
         })
