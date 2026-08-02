@@ -10,28 +10,27 @@
   .colony-logo {
     display: grid;
     place-items: center;
-    inline-size: fit-content;
+    /*
+     * The wrapper is the single sizing surface: consumers set a width
+     * utility on it and the mark fills it. The default is icon-sized so a
+     * mount that forgets to size it renders as a small glyph, never as the
+     * boot-splash ant. (The old default put min(466px, 100vw - 32px) on the
+     * inner svg, which no wrapper utility could constrain — every unsized or
+     * wrapper-only-sized mount became a giant ant.)
+     */
+    inline-size: 1.5rem;
   }
 
   .colony-logo__mark {
     display: block;
-    inline-size: min(466px, calc(100vw - 32px));
+    inline-size: 100%;
     block-size: auto;
+    max-inline-size: 100%;
     overflow: visible;
   }
 
   .colony-logo__mark--textured {
     filter: var(--colony-filter);
-  }
-
-  .colony-logo--compact {
-    inline-size: 1.5rem;
-  }
-
-  .colony-logo--compact .colony-logo__mark {
-    inline-size: 100%;
-    block-size: auto;
-    max-inline-size: 100%;
   }
 
   @keyframes colony-logo-pulse {
