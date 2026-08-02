@@ -1764,6 +1764,45 @@ async fn ingest_event_inner(
         };
     }
 
+    // Party mutations are community-global governance requests authorized by
+    // the owner's signature, routed here beside company actions and after the
+    // ban/timeout write-block for the same reason: a restricted owner must not
+    // be able to change who the company bills.
+    if crate::party_broker::is_party_action_candidate(&event) {
+        if auth.channel_ids().is_some() {
+            return Err(IngestError::AuthFailed(
+                "restricted: channel-scoped tokens cannot mutate party state".into(),
+            ));
+        }
+        return match crate::party_broker::handle_party_action(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::party_broker::PartyBrokerOutcome::Applied => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: true,
+                message: String::new(),
+            }),
+            crate::party_broker::PartyBrokerOutcome::Duplicate {
+                original_action_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_action_event_id);
+                Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original action {original_event_id_hex}"),
+                })
+            }
+            // The owner's request lost, but a durable receipt says so. Report
+            // it as not accepted rather than as a protocol error.
+            crate::party_broker::PartyBrokerOutcome::Refused { message } => Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: false,
+                message: format!("conflict: {message}"),
+            }),
+        };
+    }
+
     // Reserved catalog actions are community-global governance requests, not
     // chat messages and not actions against a synthetic Block instance. Route
     // every event that names a reserved action before channel derivation so a
