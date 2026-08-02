@@ -6,6 +6,7 @@ mod commands;
 mod company;
 mod deep_link;
 mod discovery_credentials;
+mod discovery_worker;
 mod event_sync;
 mod events;
 mod huddle;
@@ -422,6 +423,15 @@ pub fn run() {
                 .keyring_locked
                 .load(std::sync::atomic::Ordering::Acquire);
             let recovery_mode = identity_lost || keyring_locked;
+
+            if discovery_worker::should_start_fake_local_worker(
+                recovery_mode,
+                state
+                    .reset_failed
+                    .load(std::sync::atomic::Ordering::Acquire),
+            ) {
+                discovery_worker::start_fake_local_worker(app_handle.clone());
+            }
 
             // Backfill the pinned persona snapshot for any pre-existing agent
             // that predates the record-authoritative-spawn cutover (persona_id

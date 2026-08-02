@@ -25,7 +25,6 @@ pub enum DiscoveryCredentialStatus {
 
 trait CredentialStore: Send + Sync {
     fn probe(&self, key: &str) -> KeyringProbe;
-    fn load(&self, key: &str) -> Result<Option<String>, String>;
     fn store(&self, key: &str, value: &str) -> Result<(), String>;
     fn verify_stored_raw(&self, key: &str, expected: &str) -> Result<bool, String>;
     fn delete(&self, key: &str) -> Result<(), String>;
@@ -34,10 +33,6 @@ trait CredentialStore: Send + Sync {
 impl CredentialStore for SecretStore {
     fn probe(&self, key: &str) -> KeyringProbe {
         SecretStore::probe(self, key)
-    }
-
-    fn load(&self, key: &str) -> Result<Option<String>, String> {
-        SecretStore::load(self, key)
     }
 
     fn store(&self, key: &str, value: &str) -> Result<(), String> {
@@ -173,13 +168,6 @@ mod tests {
             }
         }
 
-        fn load(&self, key: &str) -> Result<Option<String>, String> {
-            if !self.reachable {
-                return Err("unavailable".to_string());
-            }
-            Ok(self.values.lock().expect("memory store").get(key).cloned())
-        }
-
         fn store(&self, key: &str, value: &str) -> Result<(), String> {
             if !self.reachable {
                 return Err("unavailable".to_string());
@@ -230,8 +218,13 @@ mod tests {
         );
         assert_eq!(status_with(&store), DiscoveryCredentialStatus::Configured);
         assert_eq!(
-            store.load(OUTSCRAPER_API_KEY).expect("load fixture"),
-            Some("fixture-value".to_string())
+            store
+                .values
+                .lock()
+                .expect("memory store")
+                .get(OUTSCRAPER_API_KEY)
+                .map(String::as_str),
+            Some("fixture-value")
         );
     }
 
