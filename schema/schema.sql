@@ -209,7 +209,7 @@ CREATE TABLE events (
     -- never matches `@@`.
     -- Keep in sync with migrations (final state: 0001 + 0005 + 0009).
     search_tsv  TSVECTOR GENERATED ALWAYS AS (
-        CASE WHEN kind IN (1059, 30179, 30180, 30181, 30300, 30350, 30622, 40013, 40014, 40015, 40016, 40017, 40018, 44100, 44101, 44200) THEN NULL::tsvector
+        CASE WHEN kind IN (1059, 30179, 30180, 30181, 30300, 30350, 30622, 40013, 40014, 40015, 40016, 40017, 40018, 40019, 40020, 44100, 44101, 44200) THEN NULL::tsvector
              ELSE to_tsvector('simple', content)
         END
     ) STORED,
@@ -1155,6 +1155,65 @@ CREATE TABLE discovery_action_claims (
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
     receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
     run_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key),
+    UNIQUE (community_id, action_event_id),
+    FOREIGN KEY (community_id, run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+-- Durable, private control plane for user-owned local Discovery workers.
+ALTER TABLE discovery_runs
+    ADD COLUMN worker_id UUID,
+    ADD COLUMN lease_owner_pubkey BYTEA CHECK (octet_length(lease_owner_pubkey) = 32),
+    ADD COLUMN last_checkpoint_sequence INTEGER NOT NULL DEFAULT 0
+        CHECK (last_checkpoint_sequence >= 0),
+    ADD CONSTRAINT discovery_runs_worker_lease_shape CHECK (
+        (claim_id IS NULL AND lease_until IS NULL AND worker_id IS NULL AND lease_owner_pubkey IS NULL)
+        OR
+        (claim_id IS NOT NULL AND lease_until IS NOT NULL AND worker_id IS NOT NULL AND lease_owner_pubkey IS NOT NULL)
+    );
+
+CREATE TABLE discovery_run_checkpoints (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    run_id UUID NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    checkpoint_kind TEXT NOT NULL
+        CHECK (checkpoint_kind IN ('provider_submitted', 'provider_results_ready')),
+    provider TEXT NOT NULL CHECK (provider = 'outscraper'),
+    provider_request_id TEXT
+        CHECK (
+            provider_request_id IS NULL
+            OR (length(provider_request_id) BETWEEN 1 AND 128
+                AND provider_request_id ~ '^[A-Za-z0-9_-]+$')
+        ),
+    item_count INTEGER CHECK (item_count >= 0),
+    request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, run_id, sequence),
+    FOREIGN KEY (community_id, run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE,
+    CHECK (
+        (checkpoint_kind = 'provider_submitted' AND provider_request_id IS NOT NULL AND item_count IS NULL)
+        OR
+        (checkpoint_kind = 'provider_results_ready' AND provider_request_id IS NULL AND item_count IS NOT NULL)
+    )
+);
+
+CREATE UNIQUE INDEX discovery_checkpoint_provider_request_once_idx
+    ON discovery_run_checkpoints (community_id, provider, provider_request_id)
+    WHERE provider_request_id IS NOT NULL;
+
+CREATE TABLE discovery_worker_action_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key UUID NOT NULL,
+    operation TEXT NOT NULL
+        CHECK (operation IN ('claim', 'heartbeat', 'checkpoint', 'complete')),
+    request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    run_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, idempotency_key),
     UNIQUE (community_id, action_event_id),
