@@ -100,6 +100,35 @@ nothing — every action is refused for the right reason and the failures look
 like product bugs. If the whole file fails at the first company create, check
 that first.
 
+### Colony party identity (`e2e_party_identity`)
+
+A Party is one real-world business or person; Lead and Client are views over
+that identity rather than separate records. This suite proves the parts of that
+which only exist inside the relay process: that party, alias, and relationship
+heads are authored by the relay and by nobody else, that a merge writes the
+survivor, the retired handle's pointer, and every re-pointed view in one
+transaction, and that a merge the relay cannot decide safely is refused with a
+signed receipt instead of resolved.
+
+The load-bearing assertion is that a retired handle still arrives. A handle
+written into a task, a message, or an agent's work context months ago has to
+keep resolving to whichever party absorbed it, and no unit test over a mock can
+establish that the stored alias does so.
+
+Uses the same relay setup as `e2e_company_work` above — same owner key, same
+`RELAY_OWNER_PUBKEY` requirement, same reason:
+
+```bash
+RELAY_URL=ws://localhost:3099 RELAY_HTTP_URL=http://localhost:3099 \
+cargo test -p buzz-test-client --test e2e_party_identity -- --ignored --test-threads=1
+```
+
+`--test-threads=1` is not optional: every test signs as the same owner, and the
+relay serializes party actions per owner.
+
+Each test isolates itself with a generated company and handle prefix, so a
+failed run leaves records behind but never collides with the next one.
+
 ---
 
 ## Live Local Relay
