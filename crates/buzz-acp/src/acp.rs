@@ -2877,6 +2877,10 @@ mod tests {
         spawn_named_and_read_child_env_metered(file_name, var, extra_env, None).await
     }
 
+    /// The probe writes and chmods a shell script, so it is Unix-only. The
+    /// gate belongs here rather than only on the wrapper: the wrapper delegates
+    /// its whole body to this one.
+    #[cfg(unix)]
     async fn spawn_named_and_read_child_env_metered(
         file_name: &str,
         var: &str,
