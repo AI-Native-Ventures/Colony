@@ -287,6 +287,14 @@ jobs:
         # Sigstore-signed in-toto attestation, verifiable with:
         #   gh attestation verify oci://ghcr.io/block/buzz:<tag> --owner block
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        # Provenance is a supply-chain nicety, not a publish step: by the time
+        # this runs the image is already pushed. GitHub refuses attestation on
+        # private repositories outside a paid plan ("Feature not available for
+        # the ... organization"), which failed the whole job and reported a
+        # successful publish as a failed build. A permanently red pipeline is
+        # one nobody reads, so this is allowed to fail loudly without failing
+        # the release. Where the plan supports it, nothing changes.
+        continue-on-error: true
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
@@ -333,6 +341,31 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404-arm
             arch: arm64
     steps:
+      - name: Resolve push gateway image name
+        id: gateway
+        env:
+          RELAY_IMAGE: ${{ env.IMAGE_NAME }}
+          OVERRIDE: ${{ vars.GHCR_PUSH_GATEWAY_IMAGE }}
+        run: |
+          set -euo pipefail
+          if [ -n "$OVERRIDE" ]; then
+            image="$OVERRIDE"
+          else
+            # Derive from the relay image so a fork that set GHCR_IMAGE gets a
+            # working gateway path without a second variable it has no reason
+            # to know about. The gateway was hardcoded to Block's namespace
+            # while the relay was made overridable, so a fork built it and then
+            # failed to push with "denied: permission_denied".
+            #
+            # Drop a trailing `-relay` before appending, which keeps upstream
+            # byte-identical (ghcr.io/block/buzz -> ghcr.io/block/
+            # buzz-push-gateway) while a Colony-style name stays readable
+            # (.../colony-relay -> .../colony-push-gateway).
+            image="${RELAY_IMAGE%-relay}-push-gateway"
+          fi
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "Push gateway image: ${image}"
+
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
         with:
@@ -358,7 +391,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
         with:
-          images: ghcr.io/block/buzz-push-gateway
+          images: ${{ steps.gateway.outputs.image }}
           labels: |
             org.opencontainers.image.title=Buzz Push Gateway
             org.opencontainers.image.description=Capability-gated APNs last hop for Buzz
@@ -371,7 +404,7 @@ jobs:
           file: ./Dockerfile.push-gateway
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=ghcr.io/block/buzz-push-gateway,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          outputs: type=image,name=${{ steps.gateway.outputs.image }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
       - name: Export digest
         if: github.event_name != 'pull_request'
         env:
@@ -398,6 +431,31 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Resolve push gateway image name
+        id: gateway
+        env:
+          RELAY_IMAGE: ${{ env.IMAGE_NAME }}
+          OVERRIDE: ${{ vars.GHCR_PUSH_GATEWAY_IMAGE }}
+        run: |
+          set -euo pipefail
+          if [ -n "$OVERRIDE" ]; then
+            image="$OVERRIDE"
+          else
+            # Derive from the relay image so a fork that set GHCR_IMAGE gets a
+            # working gateway path without a second variable it has no reason
+            # to know about. The gateway was hardcoded to Block's namespace
+            # while the relay was made overridable, so a fork built it and then
+            # failed to push with "denied: permission_denied".
+            #
+            # Drop a trailing `-relay` before appending, which keeps upstream
+            # byte-identical (ghcr.io/block/buzz -> ghcr.io/block/
+            # buzz-push-gateway) while a Colony-style name stays readable
+            # (.../colony-relay -> .../colony-push-gateway).
+            image="${RELAY_IMAGE%-relay}-push-gateway"
+          fi
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "Push gateway image: ${image}"
+
       - name: Download per-arch digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -416,7 +474,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
         with:
-          images: ghcr.io/block/buzz-push-gateway
+          images: ${{ steps.gateway.outputs.image }}
           tags: |
             type=ref,event=branch,enable=${{ github.event_name != 'workflow_dispatch' || inputs.version == '' }}
             type=sha,prefix=sha-,format=short,enable=${{ github.event_name != 'workflow_dispatch' || inputs.version == '' }}
@@ -426,29 +484,39 @@ jobs:
         id: manifest
         working-directory: /tmp/gateway-digests
         env:
+          GATEWAY_IMAGE: ${{ steps.gateway.outputs.image }}
           META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           tags=(); while IFS= read -r tag; do [ -n "$tag" ] && tags+=("-t" "$tag"); done <<< "$META_TAGS"
-          digests=(); for digest in *; do digests+=("ghcr.io/block/buzz-push-gateway@sha256:${digest}"); done
+          digests=(); for digest in *; do digests+=("${GATEWAY_IMAGE}@sha256:${digest}"); done
           docker buildx imagetools create "${tags[@]}" "${digests[@]}"
           first_tag=$(echo "$META_TAGS" | head -n1)
           digest=$(docker buildx imagetools inspect "$first_tag" --format '{{json .Manifest}}' | jq -r '.digest')
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
       - name: Attest gateway image provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        # Provenance is a supply-chain nicety, not a publish step: by the time
+        # this runs the image is already pushed. GitHub refuses attestation on
+        # private repositories outside a paid plan ("Feature not available for
+        # the ... organization"), which failed the whole job and reported a
+        # successful publish as a failed build. A permanently red pipeline is
+        # one nobody reads, so this is allowed to fail loudly without failing
+        # the release. Where the plan supports it, nothing changes.
+        continue-on-error: true
         with:
-          subject-name: ghcr.io/block/buzz-push-gateway
+          subject-name: ${{ steps.gateway.outputs.image }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
       - name: Gateway publication summary
         env:
           GATEWAY_DIGEST: ${{ steps.manifest.outputs.digest }}
           GATEWAY_TAGS: ${{ steps.meta.outputs.tags }}
+          GATEWAY_IMAGE: ${{ steps.gateway.outputs.image }}
         run: |
           set -euo pipefail
           {
-            echo "### Published \`ghcr.io/block/buzz-push-gateway\`"
+            echo "### Published \`${GATEWAY_IMAGE}\`"
             echo
             printf "**Digest:** \`%s\`\n" "$GATEWAY_DIGEST"
             echo
@@ -459,6 +527,6 @@ jobs:
             echo
             echo 'Verify provenance before deployment:'
             echo "\`\`\`"
-            printf 'gh attestation verify oci://ghcr.io/block/buzz-push-gateway@%s --owner block\n' "$GATEWAY_DIGEST"
+            printf 'gh attestation verify oci://%s@%s\n' "$GATEWAY_IMAGE" "$GATEWAY_DIGEST"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
