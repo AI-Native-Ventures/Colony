@@ -2929,6 +2929,8 @@ const mockPersonaEvents: RelayEvent[] = [];
  * owner's Company Action arrives, which is the ordering the send flow exists to
  * guarantee.
  */
+/** The kinds the mock relay answers as company records. */
+const COMPANY_RECORD_KINDS = [30179, 30180, 30181, 40014];
 const MOCK_RELAY_SECRET = new Uint8Array(32).fill(0x2b);
 const MOCK_RELAY_SELF_PUBKEY = getPublicKey(MOCK_RELAY_SECRET);
 const mockCompanyHeads: RelayEvent[] = [];
@@ -9688,8 +9690,13 @@ function sendToMockSocket(args: {
     }
 
     const filter = rest[1] as MockFilter;
+    // Every kind, not any: a company read asks for company kinds and nothing
+    // else, while other subscriptions ask for several at once. Matching on
+    // `some` swallowed those whole and answered them with company events they
+    // never asked for, starving them of everything they did ask for.
     if (
-      filter.kinds?.some((kind) => [30179, 30180, 30181, 40014].includes(kind))
+      filter.kinds?.length &&
+      filter.kinds.every((kind) => COMPANY_RECORD_KINDS.includes(kind))
     ) {
       for (const event of filterMockCompanyEvents(filter)) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
