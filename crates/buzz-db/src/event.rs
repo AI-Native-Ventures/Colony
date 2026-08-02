@@ -199,6 +199,46 @@ pub struct PartyActionClaim {
     pub receipt_event_id: Vec<u8>,
 }
 
+/// A durable ledger action claim, keyed by community and idempotency key.
+#[derive(Debug)]
+pub struct LedgerActionClaim {
+    /// The action event that won the claim.
+    pub action_event_id: Vec<u8>,
+    /// The book head it produced.
+    pub head_event_id: Vec<u8>,
+    /// The receipt the relay signed for it.
+    pub receipt_event_id: Vec<u8>,
+}
+
+/// Outcome of brokering one owner-signed ledger action.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Preserve direct StoredEvent handoff for relay fan-out.
+pub enum LedgerActionApply {
+    /// The action, book head, and receipt committed together.
+    Applied {
+        /// Stored owner-signed action.
+        action: StoredEvent,
+        /// Stored relay-authored book head.
+        head: StoredEvent,
+        /// Stored relay-signed receipt.
+        receipt: StoredEvent,
+    },
+    /// Another action already owns this community-local retry key.
+    Duplicate {
+        /// Raw event ID of the action that originally won the claim.
+        original_action_event_id: Vec<u8>,
+    },
+    /// This exact action event is already stored, so it cannot be applied.
+    ActionAlreadyStored,
+    /// The action author is not the community's current human owner.
+    NotOwner,
+    /// Compare-and-set failed against the head the action expected to replace.
+    StaleHead {
+        /// Raw event ID of the head that is actually stored, if any.
+        current_head_event_id: Option<Vec<u8>>,
+    },
+}
+
 /// Outcome of brokering one owner-signed party action.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)] // Preserve direct StoredEvent handoff for relay fan-out.

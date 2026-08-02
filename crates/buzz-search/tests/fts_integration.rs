@@ -35,6 +35,7 @@ const MIGRATION_0032_SQL: &str =
     include_str!("../../../migrations/0032_discovery_local_worker_protocol.sql");
 const MIGRATION_0036_SQL: &str =
     include_str!("../../../migrations/0036_discovery_workspace_records.sql");
+const MIGRATION_0037_SQL: &str = include_str!("../../../migrations/0037_usage_record_fts.sql");
 
 async fn setup() -> (PgPool, String) {
     let url = std::env::var("BUZZ_TEST_DATABASE_URL").unwrap_or_else(|_| TEST_DB_URL.to_string());
@@ -97,6 +98,9 @@ async fn setup() -> (PgPool, String) {
     pool.execute(MIGRATION_0036_SQL)
         .await
         .expect("apply 0036 migration");
+    pool.execute(MIGRATION_0037_SQL)
+        .await
+        .expect("apply 0037 migration");
     (pool, schema)
 }
 
