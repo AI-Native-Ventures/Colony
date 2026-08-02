@@ -743,3 +743,151 @@ fn only_the_company_action_kind_carries_a_company_request() {
 fn print_the_owner_pubkey_the_relay_must_be_started_with() {
     println!("RELAY_OWNER_PUBKEY={}", owner_keys().public_key().to_hex());
 }
+
+/// The attributed turn metric, through a real relay.
+///
+/// A metric that carries work context is only useful if the owner can get it
+/// back and read it. That path crosses a real encryption boundary and a real
+/// relay: the agent encrypts to the owner, the relay stores an opaque blob it
+/// cannot read, and the owner decrypts it later. Nothing about that is provable
+/// against a mock, and a classification that survived the harness but not the
+/// round trip would be a number nobody could audit.
+///
+/// What this does not prove is that a live harness *hydrates* the context
+/// correctly; that is `buzz-acp`'s own suite. This proves the metric contract
+/// holds end to end once it has.
+#[tokio::test]
+#[ignore = "requires a running relay whose community owner is this test's key"]
+async fn an_attributed_turn_metric_round_trips_through_the_relay() {
+    use buzz_core::agent_turn_metric::{
+        decrypt_agent_turn_metric, encrypt_agent_turn_metric, AgentTurnMetricPayload, TokenCounts,
+    };
+    use buzz_core::company::{AgentWorkContext, AttributionState, CostClassification};
+    use buzz_core::kind::KIND_AGENT_TURN_METRIC;
+
+    let owner = owner_keys();
+    let agent = Keys::generate();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let suffix = Uuid::new_v4().simple().to_string();
+
+    // Client delivery with a named client is the case the classifier has to get
+    // right, because it is the one that moves money between COGS and OPEX.
+    let work = AgentWorkContext {
+        company_id: format!("co{}", &suffix[..12]),
+        task_id: format!("co{}:chat:0001", &suffix[..12]),
+        initiative_id: Some(format!("co{}:launch", &suffix[..12])),
+        owning_team_id: format!("team-{}", &suffix[..12]),
+        cost_centre_id: "cc-coordination".to_string(),
+        commercial_purpose: CommercialPurpose::ClientDelivery,
+        cost_classification: buzz_core::company::classify_cost(
+            CommercialPurpose::ClientDelivery,
+            Some("acme"),
+        ),
+        attribution_state: AttributionState::Explicit,
+        client_organization_id: Some("acme".to_string()),
+    };
+    assert_eq!(
+        work.cost_classification,
+        CostClassification::Cogs,
+        "client delivery for a named client is a cost of goods sold"
+    );
+
+    let payload = AgentTurnMetricPayload {
+        harness: "e2e-company-work".to_string(),
+        model: Some("proof".to_string()),
+        channel_id: None,
+        session_id: Some(format!("session-{suffix}")),
+        turn_id: Some(format!("turn-{suffix}")),
+        turn_seq: Some(1),
+        timestamp: "2026-08-02T00:00:00.000Z".to_string(),
+        turn: Some(TokenCounts {
+            input_tokens: Some(120),
+            output_tokens: Some(45),
+            total_tokens: Some(165),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            cost_usd: None,
+        }),
+        cumulative: None,
+        delta_reliable: true,
+        stop_reason: Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+        work_context: Some(work.clone()),
+    };
+
+    let ciphertext = encrypt_agent_turn_metric(&agent, &owner.public_key(), &payload)
+        .expect("the agent encrypts its metric to the owner");
+    let metric = EventBuilder::new(Kind::Custom(KIND_AGENT_TURN_METRIC as u16), ciphertext)
+        .tags(vec![
+            Tag::parse(["p", &owner.public_key().to_hex()]).expect("p tag"),
+            Tag::parse(["agent", &agent.public_key().to_hex()]).expect("agent tag"),
+        ])
+        .sign_with_keys(&agent)
+        .expect("metric signs");
+    let metric_id = metric.id.to_hex();
+
+    // The relay refuses a metric whose `p` tag is not the agent's registered
+    // owner, so the agent connects through NIP-OA to establish that it is
+    // owned. That guard is why an agent cannot address a cost report to
+    // someone who never hired it.
+    let auth_tag_json =
+        buzz_sdk::nip_oa::compute_auth_tag(&owner, &agent.public_key(), "kind=44200")
+            .expect("owner signs the agent's auth tag");
+    let auth_tag = buzz_sdk::nip_oa::parse_auth_tag(&auth_tag_json).expect("auth tag parses");
+    let mut agent_client = BuzzTestClient::connect_unauthenticated(&relay_url())
+        .await
+        .expect("connect as agent");
+    agent_client
+        .authenticate_with_nip_oa(&agent, &auth_tag)
+        .await
+        .expect("the agent authenticates as owned by this owner");
+    let ok = agent_client
+        .send_event(metric)
+        .await
+        .expect("the relay answers the metric");
+    assert!(ok.accepted, "the relay refused the metric: {}", ok.message);
+
+    // Read it back the way the owner would: by kind, addressed to them.
+    let id = sub_id("metric");
+    let filter = Filter::new()
+        .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))
+        .pubkey(owner.public_key())
+        .limit(20);
+    client
+        .subscribe(&id, vec![filter])
+        .await
+        .expect("subscribe");
+    let events = client
+        .collect_until_eose(&id, Duration::from_secs(10))
+        .await
+        .expect("collect");
+    let _ = client.close_subscription(&id).await;
+
+    let stored = events
+        .iter()
+        .find(|event| event.id.to_hex() == metric_id)
+        .expect("the owner can read back their own turn metric");
+
+    // The relay stored a blob it cannot read. Anything legible here would mean
+    // the company's cost structure is visible to whoever runs the relay.
+    assert!(
+        !stored.content.contains("clientDelivery") && !stored.content.contains("acme"),
+        "the stored metric must not leak its work context in plaintext"
+    );
+
+    let decrypted =
+        decrypt_agent_turn_metric(&owner, stored).expect("the owner decrypts their own metric");
+    let recovered = decrypted
+        .work_context
+        .expect("an attributed turn carries its work context through the relay");
+    assert_eq!(
+        recovered, work,
+        "every work-context field survives the round trip"
+    );
+    assert_eq!(recovered.cost_classification, CostClassification::Cogs);
+    assert_eq!(recovered.attribution_state, AttributionState::Explicit);
+
+    agent_client.disconnect().await.ok();
+    client.disconnect().await.ok();
+}

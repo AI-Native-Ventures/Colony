@@ -51,6 +51,13 @@ cargo test -p buzz-test-client --test e2e_company_work -- --ignored --test-threa
 `--test-threads=1` is not optional: every test in the file signs as the same
 owner, and the relay serializes company actions per owner.
 
+The suite also proves the attributed turn metric survives a real round trip:
+the agent registers itself as owned through NIP-OA, encrypts a `kind:44200` to
+the owner, and the owner reads it back and decrypts it. The relay stores a blob
+it cannot read, which the test asserts on directly, because a metric whose work
+context were legible to whoever runs the relay would expose the company's cost
+structure.
+
 Starting the relay with any other `RELAY_OWNER_PUBKEY` makes the suite prove
 nothing — every action is refused for the right reason and the failures look
 like product bugs. If the whole file fails at the first company create, check
