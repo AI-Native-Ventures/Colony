@@ -35,6 +35,8 @@ pub mod network;
 pub mod observer;
 pub mod onboarding_facts;
 /// NIP-AB device pairing — crypto primitives, message types, and errors.
+pub mod party;
+
 pub mod pairing;
 /// Presence status types shared across crates.
 pub mod presence;
