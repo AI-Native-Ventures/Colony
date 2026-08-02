@@ -165,7 +165,7 @@ pub struct DiscoveryWorkerObservationBatchRequest {
 - Modify: `desktop/src-tauri/src/discovery_worker/mod.rs`
 - Modify: `desktop/src-tauri/Cargo.toml` only if a test-only dependency is genuinely required.
 
-- [ ] Add a local Axum test server covering synchronous success, `202 Pending` then `Success`, repeated `Pending`, `Failure`, `401`, `402`, `422`, `429`, `5xx`, malformed JSON, oversized bodies, timeout, cancellation, and a response that contains unknown fields.
+- [x] Add a local Axum test server covering synchronous success, `202 Pending` then `Success`, repeated `Pending`, `Failure`, `401`, `402`, `422`, `429`, `5xx`, malformed JSON, oversized bodies, timeout, cancellation, and a response that contains unknown fields.
 - [ ] Implement a concrete client with fixed production endpoints from the current official API contract:
 
 ```rust
@@ -179,14 +179,14 @@ pub struct OutscraperClient {
 }
 ```
 
-- [ ] Submit JSON with exactly `query: ["category, location"]`, `limit`, `language`, optional `region`, and `async: true`; place the secret only in `X-API-KEY`. Do not copy SalesTeams' server environment fallback, Redis cache, platform cost estimate, or legacy `/maps/search-v3` URL.
-- [ ] Checkpoint the returned opaque request ID before polling. Poll only `GET /requests/{requestId}` using a locally constructed URL; never follow `results_location` from the provider response.
-- [ ] Bound connect/request timeout, response bytes, poll interval, total poll duration, and retry count. Retry `429` and transient `5xx` with bounded backoff; classify `401`, `402`, and `422` as terminal actionable states without retaining raw bodies.
-- [ ] Parse only the known response envelope and normalized place fields. Allow unknown provider fields at the response edge, then discard them during conversion.
-- [ ] Normalize `website` with legacy `site` fallback, canonical source identifiers, address, coordinates, category/type, subtypes, ratings, hours/status, verified state, image, and source URL. Reject records without a non-empty name or any stable provider identifier.
-- [ ] Ensure debug/error implementations never include headers, the API key, full response bodies, or a complete user-authored query.
-- [ ] Run `cargo test --manifest-path desktop/src-tauri/Cargo.toml discovery_worker::outscraper -- --nocapture` and `cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings`.
-- [ ] Commit with `git commit -s -m "feat(discovery): integrate Outscraper business search"`.
+- [x] Submit `POST /google-maps-search` with the official query parameters: one `query=category, location`, `limit`, `language`, optional `region`, `async=true`, and a fixed field allowlist; place the secret only in `X-API-KEY`. Do not copy SalesTeams' server environment fallback, Redis cache, platform cost estimate, or legacy `/maps/search-v3` URL.
+- [x] Return the opaque request ID for checkpointing before polling. Poll only `GET /requests/{requestId}` using a locally constructed URL; never follow `results_location` from the provider response.
+- [x] Bound connect/request timeout, response bytes, poll interval, total poll duration, and retry count. Retry `429` and transient `5xx` with bounded backoff; classify `401`, `402`, and `422` as terminal actionable states without retaining raw bodies.
+- [x] Parse only the known response envelope and normalized place fields. Allow unknown provider fields at the response edge, then discard them during conversion.
+- [x] Normalize `website` with legacy `site` fallback, canonical source identifiers, address, coordinates, category/type, subtypes, ratings, status, verified state, image, and source URL. Reject records without a non-empty name or any stable provider identifier.
+- [x] Ensure debug/error implementations never include headers, the API key, full response bodies, or a complete user-authored query.
+- [x] Run `cargo test --manifest-path desktop/src-tauri/Cargo.toml discovery_worker::outscraper -- --nocapture` and `cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings`.
+- [x] Commit with `git commit -s -m "feat(discovery): integrate Outscraper business search"`.
 
 ## Task 5: Replace proof-only execution with production provider supervision
 

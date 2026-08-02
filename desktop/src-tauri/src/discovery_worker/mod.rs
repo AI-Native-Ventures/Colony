@@ -2,6 +2,12 @@
 
 mod adapter;
 mod installation;
+// These provider-edge modules are staged and fully tested before the next gate
+// wires them into the production supervisor.
+#[allow(dead_code)]
+mod normalization;
+#[allow(dead_code)]
+mod outscraper;
 mod protocol;
 mod worker_host;
 
