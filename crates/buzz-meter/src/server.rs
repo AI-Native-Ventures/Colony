@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -235,24 +235,22 @@ pub async fn start_meter(
 
 async fn anthropic_route(
     State(state): State<MeterState>,
-    Path(rest): Path<String>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    forward(state, Provider::Anthropic, rest, method, uri, headers, body).await
+    forward(state, Provider::Anthropic, method, uri, headers, body).await
 }
 
 async fn openai_route(
     State(state): State<MeterState>,
-    Path(rest): Path<String>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    forward(state, Provider::OpenAi, rest, method, uri, headers, body).await
+    forward(state, Provider::OpenAi, method, uri, headers, body).await
 }
 
 async fn unroutable(uri: Uri) -> Response {
@@ -260,10 +258,24 @@ async fn unroutable(uri: Uri) -> Response {
     local_error(StatusCode::BAD_GATEWAY, UNROUTABLE_BODY)
 }
 
+/// The upstream path, taken raw off the request line.
+///
+/// Deliberately not the `Path` extractor: that percent-decodes, which would
+/// turn an encoded `%2F` inside a path segment into a real separator and send
+/// the provider a different path than the agent asked for.
+fn upstream_path(uri: &Uri, provider: Provider) -> &str {
+    let prefix = match provider {
+        Provider::Anthropic => "/anthropic/",
+        Provider::OpenAi => "/openai/",
+    };
+    // The route only matches when the prefix is present, so the fallback is
+    // unreachable; it exists so a routing change cannot panic here.
+    uri.path().strip_prefix(prefix).unwrap_or("")
+}
+
 async fn forward(
     state: MeterState,
     provider: Provider,
-    rest: String,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -309,8 +321,9 @@ async fn forward(
     outbound_headers.insert(credential_name, credential_value);
 
     let mut url = format!(
-        "{}/{rest}",
-        state.config.upstream(provider).trim_end_matches('/')
+        "{}/{}",
+        state.config.upstream(provider).trim_end_matches('/'),
+        upstream_path(&uri, provider)
     );
     if let Some(query) = uri.query() {
         url.push('?');

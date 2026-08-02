@@ -291,6 +291,33 @@ async fn a_credential_in_an_unexpected_header_is_still_stripped() {
     handle.shutdown();
 }
 
+#[tokio::test]
+async fn percent_encoded_path_segments_reach_upstream_unchanged() {
+    let fake = FakeUpstream::start(UpstreamReply::json(ANTHROPIC_JSON)).await;
+    let (port, _rx, handle) = meter_for_anthropic(&fake).await;
+    let key = handle.issue_virtual_key("scout");
+
+    // %2F inside a segment is not a separator. Decoding it would send the
+    // provider a structurally different path than the agent asked for.
+    let response = client()
+        .get(format!(
+            "http://127.0.0.1:{port}/anthropic/v1/files/batch%2F42/content"
+        ))
+        .header("x-api-key", &key)
+        .send()
+        .await
+        .expect("proxied request");
+    let _ = response.bytes().await.expect("drain body");
+
+    let requests = fake.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].path, "/v1/files/batch%2F42/content",
+        "the path must be forwarded exactly as received, still encoded"
+    );
+    handle.shutdown();
+}
+
 // (f) No credential gets a local 401 and upstream sees nothing.
 #[tokio::test]
 async fn missing_credential_is_rejected_locally() {
