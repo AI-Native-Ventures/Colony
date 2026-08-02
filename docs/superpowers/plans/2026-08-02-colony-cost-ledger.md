@@ -19,6 +19,7 @@ These were decided explicitly by the owner in review; do not re-litigate:
 5. **Subscription usage is recorded at API-equivalent prices.** Every record is tagged `metered` (real money) or `imputed` (subscription seat, shadow cost). Unit economics uses both; cash view uses metered only.
 6. **Prices are data on the relay, never an app update.** Effective-dated append-only entries; promo stacking (e.g. 80% cut then 50% promo on top, promo later removed) is three entries. Unknown model = recorded but unpriced + Needs Review, never zero or wrong.
 7. **Reconciliation catches everything else.** Ledger daily sums are compared against the provider's own cost report; drift is an exception, flagged, then repriced from stored raw tokens.
+8. **Only Colony-launched agents are counted.** The meter sees traffic solely because the harness injected its address into an agent it spawned. The owner's personal tools (their own CLI sessions, editors, anything not launched by the harness) talk straight to providers, never touch the meter, and never appear in the ledger. The corollary is operational: Colony must use its own provider API key (an Anthropic workspace key or OpenAI project key), because a key shared with personal usage makes the provider's cost report a superset of the ledger and reconciliation would flag permanent phantom drift.
 
 ## Global Constraints
 
@@ -1045,7 +1046,7 @@ git commit -s -m "feat(core): add deterministic cost ledger engine"
 - Produces: `ProviderDailyCost { provider: String, day: String, amount_nanousd: u128 }`, `reconcile(ledger_by_day: &[DailySum], provider_rows: &[ProviderDailyCost], tolerance_nanousd: u128) -> Vec<LedgerException>` with new exception variants `ReconcileDrift { provider, day, ledger_nanousd, provider_nanousd }`, `ReconcileMissingDay { provider, day, side }`.
 - Consumes: `DailySum` from Task 5.
 
-- [ ] **Step 1: Failing tests**: exact match within tolerance yields no exceptions; ledger-above-provider drifts (the double-count smell); ledger-below-provider drifts (the stale-price smell, the owner's missed-promo-end case); a day present on one side only yields `ReconcileMissingDay`; tolerance boundary is inclusive (`|diff| <= tolerance` passes).
+- [ ] **Step 1: Failing tests**: exact match within tolerance yields no exceptions; ledger-above-provider drifts (the double-count smell); ledger-below-provider drifts (the stale-price smell, the owner's missed-promo-end case, and the shared-API-key smell: personal usage on the company key inflates the provider side); a day present on one side only yields `ReconcileMissingDay`; tolerance boundary is inclusive (`|diff| <= tolerance` passes).
 
 - [ ] **Step 2: Run, verify failure.**
 
@@ -1376,7 +1377,7 @@ Test list (each is its own `#[tokio::test]`, serialized the way the party suite 
 - [ ] **Step 2: Tests 3-8, one at a time, red-green each.**
 - [ ] **Step 3: Full-suite run against a fresh relay + fresh DB. All 8 green.**
 - [ ] **Step 4: THE BLOCKER KILL SHOT (manual, documented, not CI):** run `buzz-acp` with `buzz-agent` and a real provider key, meter on; one real turn; `buzz ledger report` as owner shows one wire record with nonzero provider-itemized counts. Record the transcript in TESTING.md. This is the phase's headline proof: real money observed at the wire with zero agent self-reporting.
-- [ ] **Step 5: TESTING.md gate section** (env vars, fresh-relay rule, the manual kill-shot procedure, codex known gap).
+- [ ] **Step 5: TESTING.md gate section** (env vars, fresh-relay rule, the manual kill-shot procedure, codex known gap, and the scope rule: only harness-spawned agents are metered, so the live proof and any reconciliation run must use a Colony-dedicated provider key, never a key shared with personal tooling).
 - [ ] **Step 6: Commit**
 
 ```bash
