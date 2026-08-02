@@ -423,6 +423,79 @@ slice above.
   stable chat-reference integration;
 - no merge to `develop`, promotion to `main`, deployment, or customer use.
 
+## Local credential and worker-host evidence (2026-08-02)
+
+The next bounded subphase is implemented and locally proven. It supplies the
+device-local credential boundary and a real Tauri-owned host for the worker
+protocol. Its deliberately network-incapable fake adapter proves orchestration
+without spending provider money or pretending that Outscraper integration is
+complete.
+
+### Implemented commits
+
+- `0ac54490c` adds the Outscraper credential boundary using Colony's existing
+  shared operating-system keychain store.
+- `ee8635a4e` adds the stable installation identity, strict signed-receipt
+  protocol client, workspace fencing, lease supervision, and deterministic fake
+  adapter.
+- `9a975edc3` adds the isolated native-host/relay proof harness.
+- `838a84a71` makes the restart test terminate an actually owned first-host
+  future, so the recovery claim is exercised rather than inferred.
+
+### Proven
+
+- Tauri exposes save, status, and delete operations only. The API key is stored
+  under a fixed key in the existing OS-keychain-backed `SecretStore`; reads for
+  worker use remain internal and zeroize the loaded string on drop.
+- Save rejects trimmed-empty values and verifies the exact raw stored value.
+  Status and delete return only `Configured`, `Missing`, or `Unavailable`, and
+  backend keychain errors are not returned to the frontend.
+- Six focused credential tests and the ignored real macOS-keychain lifecycle
+  test pass, including save, raw verification, internal load, delete, and
+  post-delete absence. The fixture secret is absent from captured output.
+- The installation UUID survives host reconstruction, rejects malformed or nil
+  persisted values, uses a `0700` directory and atomic `0600` file on Unix, and
+  is reused across restart recovery.
+- The fake worker is disabled by default and enabled only by explicit `1` or
+  `true`. Its adapter contains no HTTP client, URL, socket, or provider SDK, so
+  this proof cannot contact Outscraper or incur provider cost.
+- Twelve worker unit/adversarial tests pass. They cover missing credentials,
+  one-lease ownership, signed receipt validation, heartbeat renewal, exact
+  checkpoint ordering, resume, workspace changes, cancellation, lost leases,
+  and rejection of delayed work.
+- `scripts/discovery-worker-live-proof.sh` passes against isolated Postgres
+  `5471`, Redis `6471`, and relay `3030`. With no credential the native host
+  emits zero worker actions. With a credential it claims through relay-authored
+  signed receipts, checkpoints sequence 1, is terminated, then restarts with
+  the same worker UUID and reclaims at attempt 2. It resumes at sequence 2,
+  completes once, and does not repeat sequence 1.
+- The same live proof includes the existing protocol-level cancellation,
+  entitlement-revocation, stale-lease fencing, receipt-privacy, and secret
+  absence scenarios. The fixture secret appears zero times in persisted
+  Discovery rows and stored relay events.
+- An initial full-gate run exposed a pinned-future ownership error in the new
+  restart test. The test was corrected to own and drop the first host future,
+  the complete live proof passed again, and `just ci` then exited successfully
+  across formatting, clippy, desktop, Tauri, web, mobile, tests, and production
+  builds.
+
+### Explicitly not proven
+
+- no real Outscraper authentication, request, polling, normalization, or cost;
+- no real customer LLM call, qualification, retry, or model-key flow;
+- no UI credential wiring or replacement of the fixture-backed
+  `DiscoveryDataSource`;
+- no production Campaign, Business, observation, deduplication, Lead, or usage
+  projection through the native worker;
+- no generic-agent, CLI, or chat-reference operation through this host;
+- no merge to `develop`, promotion to `main`, deployment, or customer use.
+
+The branch was current with `origin/develop` when this subphase began. Three
+unrelated starter-team/design commits landed on `origin/develop` while the full
+gate was running; integration must rebase them before a PR and rerun the gate.
+The separate `codex/discovery-engine` worktree remains clean at `fa52ff60d` and
+was not modified.
+
 ## Implementation ownership and sequence
 
 1. Rebase `codex/discovery-next` onto current `origin/develop` before product
