@@ -2795,6 +2795,7 @@ impl Db {
         head_event: &nostr::Event,
         head_d_tag: &str,
         alias: Option<(&nostr::Event, &str)>,
+        relationship_heads: &[(&nostr::Event, &str)],
         receipt_event: &nostr::Event,
         idempotency_key: Uuid,
         actor_pubkey_hex: &str,
@@ -2839,9 +2840,26 @@ impl Db {
                 )));
             }
         }
+        // Re-pointed views ride along with a merge. Anything else arriving here
+        // would be a second party head written under a coordinate this call
+        // never compare-and-set against.
+        for (relationship_event, _) in relationship_heads {
+            let relationship_kind = relationship_event.kind.as_u16() as u32;
+            if relationship_kind != buzz_core::kind::KIND_PARTY_RELATIONSHIP {
+                return Err(DbError::InvalidData(format!(
+                    "party relationship head has kind {relationship_kind}, \
+                     expected a relationship head"
+                )));
+            }
+        }
 
         for (event, d_tag, label) in std::iter::once((head_event, head_d_tag, "party head"))
             .chain(alias.map(|(event, d_tag)| (event, d_tag, "party alias")))
+            .chain(
+                relationship_heads
+                    .iter()
+                    .map(|(event, d_tag)| (*event, *d_tag, "party relationship head")),
+            )
         {
             if d_tag.len() > event::D_TAG_MAX_LEN {
                 return Err(DbError::InvalidData(format!(
@@ -3000,6 +3018,28 @@ impl Db {
             stored_alias = Some(stored);
         }
 
+        // Same transaction as the survivor and the alias. A merge that moved
+        // the identity but not its views would leave a Lead pointing at a
+        // retired handle, and no later write is guaranteed to arrive.
+        let mut stored_relationships = Vec::with_capacity(relationship_heads.len());
+        for (relationship_event, relationship_d_tag) in relationship_heads {
+            let (stored, inserted) = replace_parameterized_event_tx(
+                &mut tx,
+                community,
+                relationship_event,
+                relationship_d_tag,
+                None,
+            )
+            .await?;
+            if !inserted {
+                tx.rollback().await?;
+                return Err(DbError::InvalidData(
+                    "party relationship head lost NIP-33 replacement ordering".to_owned(),
+                ));
+            }
+            stored_relationships.push(stored);
+        }
+
         let (receipt, receipt_inserted) = event::insert_event_with_thread_metadata_tx(
             &mut tx,
             community,
@@ -3020,6 +3060,7 @@ impl Db {
             action,
             head,
             alias: stored_alias,
+            relationships: stored_relationships,
             receipt,
         })
     }

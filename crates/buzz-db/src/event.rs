@@ -211,6 +211,9 @@ pub enum PartyActionApply {
         head: StoredEvent,
         /// Stored alias head, present only for a merge.
         alias: Option<StoredEvent>,
+        /// Stored relationship heads re-pointed at the survivor, empty for
+        /// every action that is not a merge.
+        relationships: Vec<StoredEvent>,
         /// Stored relay-signed receipt.
         receipt: StoredEvent,
     },

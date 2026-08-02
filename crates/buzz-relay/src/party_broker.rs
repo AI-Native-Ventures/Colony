@@ -6,17 +6,19 @@
 //! same external business. The tenant relay key is the only author, and an
 //! owner authorizes a change by signing a `KIND_PARTY_ACTION`.
 //!
-//! What is new here is the merge. It writes two heads at once, the surviving
-//! party and the pointer left at the retired handle, and they commit together
-//! or not at all. Half a merge is the one outcome worse than a duplicate: a
-//! survivor without its alias strands every reference handed out under the old
-//! handle.
+//! What is new here is the merge. It writes the surviving party, the pointer
+//! left at the retired handle, and every relationship moved off that handle,
+//! and they commit together or not at all. Half a merge is the one outcome
+//! worse than a duplicate: a survivor without its alias strands every reference
+//! handed out under the old handle, and an identity that moved without its
+//! views leaves a Lead hanging off a coordinate that only redirects.
 
 use std::sync::Arc;
 
 use buzz_core::kind::{KIND_PARTY, KIND_PARTY_ACTION, KIND_PARTY_RECEIPT, KIND_PARTY_RELATIONSHIP};
 use buzz_core::party::{
-    validate_party_update, validate_relationship, validate_relationship_update, Party,
+    relationship_coordinate, repoint_relationship, validate_party_update, validate_relationship,
+    validate_relationship_update, Party, PartyRelationship, ALL_RELATIONSHIP_KINDS,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::PartyActionApply;
@@ -166,6 +168,60 @@ async fn load_party(
         // let a caller keep writing to a coordinate that now only redirects.
         PartyHead::Alias(_) => Err("that handle has been merged away".to_owned()),
     }
+}
+
+/// The relationship heads a merge has to move onto the survivor.
+///
+/// Coordinates are derived from the party and the view, and the set of views is
+/// closed, so this enumerates every coordinate the retired handle could hold
+/// rather than scanning for them. A view left behind would hang off a handle
+/// that now only redirects, and the company would hold two live coordinates for
+/// one party that disagree with each other.
+///
+/// Returns each re-pointed relationship beside the head already at its
+/// destination, which is both what the collision merges against and what the
+/// replacement has to out-order.
+async fn repointed_relationships(
+    tenant: &TenantContext,
+    state: &AppState,
+    survivor_id: &str,
+    retired_id: &str,
+) -> Result<Vec<(PartyRelationship, Option<Event>)>, String> {
+    let now = nostr::Timestamp::now().as_secs() as i64;
+    let mut moved = Vec::new();
+    for kind in ALL_RELATIONSHIP_KINDS {
+        let retired_coordinate = relationship_coordinate(retired_id, kind);
+        let Some(retired_head) =
+            load_head(tenant, state, KIND_PARTY_RELATIONSHIP, &retired_coordinate).await?
+        else {
+            continue;
+        };
+        let retired_relationship = parse_party_relationship_event(&retired_head)
+            .map_err(|error| format!("stored relationship is unreadable: {error}"))?;
+
+        let survivor_coordinate = relationship_coordinate(survivor_id, kind);
+        let survivor_head =
+            load_head(tenant, state, KIND_PARTY_RELATIONSHIP, &survivor_coordinate).await?;
+        let survivor_relationship = match survivor_head.as_ref() {
+            Some(event) => Some(
+                parse_party_relationship_event(event)
+                    .map_err(|error| format!("stored relationship is unreadable: {error}"))?,
+            ),
+            None => None,
+        };
+
+        // The refusal this can raise is a real answer, not a fault: an ended
+        // relationship meeting a live one is a decision only the owner can make.
+        let repointed = repoint_relationship(
+            &retired_relationship,
+            survivor_relationship.as_ref(),
+            survivor_id,
+            now,
+        )
+        .map_err(|error| error.to_string())?;
+        moved.push((repointed, survivor_head));
+    }
+    Ok(moved)
 }
 
 /// Validate the requested payload against current canonical state.
@@ -383,6 +439,29 @@ pub(crate) async fn handle_party_action(
         _ => None,
     };
 
+    // A merge moves the retired handle's views with it. Computed before the
+    // receipt so a refusal here still produces a signed refusal receipt rather
+    // than a bare error.
+    let repointed = match &action.payload {
+        PartyActionPayload::Merge { survivor, alias } => {
+            match repointed_relationships(tenant, state, &survivor.id, &alias.id).await {
+                Ok(moved) => moved,
+                Err(message) => return refuse(state, tenant, action_event, &action, message).await,
+            }
+        }
+        _ => Vec::new(),
+    };
+    let mut relationship_heads = Vec::with_capacity(repointed.len());
+    for (relationship, previous) in &repointed {
+        let payload = PartyActionPayload::Relationship(relationship.clone());
+        let event = build_head(&state.relay_keypair, &payload, previous.as_ref())?;
+        relationship_heads.push((event, relationship.id.clone()));
+    }
+    let relationship_head_refs = relationship_heads
+        .iter()
+        .map(|(event, d_tag)| (event, d_tag.as_str()))
+        .collect::<Vec<_>>();
+
     let receipt = build_party_receipt(
         action_event,
         &action,
@@ -405,6 +484,7 @@ pub(crate) async fn handle_party_action(
             &head,
             &entity_id,
             alias_head.as_ref().zip(alias_d_tag.as_deref()),
+            &relationship_head_refs,
             &receipt,
             action.idempotency_key,
             &action_event.pubkey.to_hex(),
@@ -418,6 +498,7 @@ pub(crate) async fn handle_party_action(
             action: stored_action,
             head: stored_head,
             alias: stored_alias,
+            relationships: stored_relationships,
             receipt: stored_receipt,
         } => {
             let relay_pubkey = state.relay_keypair.public_key().to_hex();
@@ -445,6 +526,17 @@ pub(crate) async fn handle_party_action(
                     state,
                     &stored_alias,
                     KIND_PARTY,
+                    &relay_pubkey,
+                    None,
+                )
+                .await;
+            }
+            for stored_relationship in &stored_relationships {
+                dispatch_persistent_event(
+                    tenant,
+                    state,
+                    stored_relationship,
+                    KIND_PARTY_RELATIONSHIP,
                     &relay_pubkey,
                     None,
                 )
