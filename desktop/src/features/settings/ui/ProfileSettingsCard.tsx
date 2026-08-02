@@ -233,6 +233,13 @@ export function ProfileSettingsCard({
     string | null
   >(null);
   const [isAvatarEditorOpen, setIsAvatarEditorOpen] = React.useState(false);
+  // True from the open click until the animation frame that applies the open
+  // styles. The editor must accept input during this window: it is visible,
+  // and marking it inert here silently swallowed a URL typed immediately
+  // after opening (the DOM kept the value, React never saw the change, and
+  // Done closed without saving - the own-message avatar CI failure).
+  const [isAvatarEditorOpening, setIsAvatarEditorOpening] =
+    React.useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
   const [isAvatarEditorFinishing, setIsAvatarEditorFinishing] =
     React.useState(false);
@@ -433,6 +440,7 @@ export function ProfileSettingsCard({
   const closeAvatarEditor = React.useCallback(() => {
     clearAvatarEditorFinishTimeout();
     setIsAvatarEditorOpen(false);
+    setIsAvatarEditorOpening(false);
     setIsAvatarEditorFinishing(false);
     restoreScrollPosition();
   }, [clearAvatarEditorFinishTimeout, restoreScrollPosition]);
@@ -462,6 +470,7 @@ export function ProfileSettingsCard({
   const openAvatarEditor = React.useCallback(() => {
     saveScrollPosition();
     setShouldRenderAvatarEditor(true);
+    setIsAvatarEditorOpening(true);
     setIsAvatarEditorFinishing(false);
     clearAvatarEditorFinishTimeout();
 
@@ -472,6 +481,7 @@ export function ProfileSettingsCard({
     avatarEditorOpenFrameRef.current = window.requestAnimationFrame(() => {
       avatarEditorOpenFrameRef.current = null;
       setIsAvatarEditorOpen(true);
+      setIsAvatarEditorOpening(false);
     });
   }, [clearAvatarEditorFinishTimeout, saveScrollPosition]);
 
@@ -896,12 +906,21 @@ export function ProfileSettingsCard({
                           "relative origin-top transition-[opacity,scale] duration-200 ease-out will-change-[opacity,transform]",
                           isAvatarEditorOpen
                             ? "scale-100 opacity-100"
-                            : "pointer-events-none scale-[0.98] opacity-0",
+                            : "scale-[0.98] opacity-0",
+                          // Interactive while opening (one animation frame),
+                          // shielded only while closed or closing.
+                          isAvatarEditorOpen || isAvatarEditorOpening
+                            ? ""
+                            : "pointer-events-none",
                           isAvatarEditorFinishing ? "pointer-events-none" : "",
                         )}
                         aria-busy={isAvatarEditorSaving ? true : undefined}
                         data-testid="profile-avatar-editor-shell"
-                        inert={isAvatarEditorOpen ? undefined : true}
+                        inert={
+                          isAvatarEditorOpen || isAvatarEditorOpening
+                            ? undefined
+                            : true
+                        }
                       >
                         <ProfileAvatarEditor
                           animatedPreviewContainer={animatedPreviewEl}
