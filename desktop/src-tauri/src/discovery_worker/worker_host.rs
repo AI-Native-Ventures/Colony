@@ -534,13 +534,12 @@ mod tests {
         )
         .await
         .expect("first native host protocol");
-        let first_host = run_once_with_credential(
+        let mut first_host = Box::pin(run_once_with_credential(
             &first_protocol,
             worker_id,
             Duration::from_secs(2),
             Zeroizing::new(FIXTURE_SECRET.to_string()),
-        );
-        tokio::pin!(first_host);
+        ));
         loop {
             tokio::select! {
                 result = &mut first_host => panic!("first host exited before restart point: {result:?}"),
