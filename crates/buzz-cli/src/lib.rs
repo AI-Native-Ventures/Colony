@@ -2437,6 +2437,7 @@ mod tests {
             "moderation",
             "notes",
             "pack",
+            "parties",
             "patches",
             "pr",
             "reactions",
