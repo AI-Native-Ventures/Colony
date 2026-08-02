@@ -369,6 +369,60 @@ This slice is complete only when all of the following are proven:
 Code written, tests green, committed, merged, deployed, and live-proven remain
 separate delivery states.
 
+## Local worker protocol evidence (2026-08-02)
+
+The worker-protocol subphase is implemented and locally proven. This is a
+protocol acceptance gate, not acceptance of the complete Outscraper Businesses
+slice above.
+
+### Implemented commits
+
+- `105acda49` defines the core local-worker protocol.
+- `d5cdca42a` adds strict signed worker exchanges.
+- `782fd8b51` persists restart checkpoints.
+- `b674fa3ae` adds leases, fencing, reclaim, cancellation, and revocation.
+- `e53339024` brokers worker actions through the relay.
+- `2e88f2ee8` adds real-relay, restart, privacy, and fencing proof.
+- `15f371811` stabilizes the real-database lease-expiry proof.
+- `c4ad27119` isolates a pre-existing desktop test that leaked a 300-second
+  process-wide rate-limit gate into parallel tests. This changes test isolation,
+  not product behavior.
+
+### Proven
+
+- Focused unit and database gates pass: core 2, SDK 4, database 4 (including
+  the two ignored real-Postgres tests), relay 5, and search privacy 1.
+- A freshly initialized isolated harness used Postgres `5471`, Redis `6471`,
+  and relay `3030`. Both Discovery real-relay tests pass together.
+- The relay refuses external-worker operation without a durable relay signing
+  identity. With that prerequisite present, a signed worker claims a run,
+  checkpoints a non-secret provider request reference, disappears for longer
+  than the five-second lease, and reclaims at attempt 2 from that checkpoint.
+- The old lease is fenced: its next action receives `LostLease` and cannot
+  mutate the run.
+- User cancellation immediately terminalizes a run. Entitlement revocation
+  immediately terminalizes another run and rejects its next heartbeat.
+- A current lease can heartbeat and complete normally.
+- Worker receipts are result-gated. A different authenticated member cannot
+  read either historical or live receipts belonging to the run actor/worker.
+- The fixture secret `outscraper-secret-never-crosses-relay` appears zero times
+  in persisted Discovery rows and zero times in stored relay events.
+- The standard repository command `just ci` passes after the test-isolation
+  correction, including formatting, clippy, desktop/web/mobile checks and
+  tests, production builds, 1,962 desktop-native tests (15 intentionally
+  ignored), and 914 mobile tests (one intentionally skipped).
+
+### Not yet proven
+
+- no Outscraper request, normalization, polling, or provider credential flow;
+- no customer LLM call, qualification batch, or qualification retry;
+- no Discovery keychain entries or Tauri worker host;
+- no production Campaign, Business, observation, deduplication, Lead, or usage
+  projection through this worker protocol;
+- no production `DiscoveryDataSource`, native Businesses UI, generic-agent, or
+  stable chat-reference integration;
+- no merge to `develop`, promotion to `main`, deployment, or customer use.
+
 ## Implementation ownership and sequence
 
 1. Rebase `codex/discovery-next` onto current `origin/develop` before product
