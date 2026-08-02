@@ -385,18 +385,44 @@ test.describe("list virtualization", () => {
       // That reader intent retires Virtua's active prepend reconciliation, so
       // later row measurements must not pull the viewport back toward the
       // completed prepend before the next upward load.
+      // The trace runs until the test signals the wheel input is finished,
+      // then samples a short settle window. It previously ran on a fixed
+      // 400 ms deadline, which had to cover a boundingBox call, a mouse.move
+      // and three wheel dispatches — all CDP round-trips. On a loaded runner
+      // those consumed the budget and the trace closed after seeing only the
+      // first wheel, reporting 120 px of travel against a 200 px floor. The
+      // sampled behaviour is unchanged; only its window is now tied to the
+      // input rather than to how fast the machine is.
       const exitTracePromise = timeline.evaluate(async (scroller) => {
         const s = scroller as HTMLElement;
+        const traceWindow = window as Window & {
+          __VIRT_EXIT_TRACE_STOP__?: boolean;
+        };
+        traceWindow.__VIRT_EXIT_TRACE_STOP__ = false;
         const startScrollTop = s.scrollTop;
         let previousScrollTop = startScrollTop;
         let maxForwardTravel = 0;
         let maxRollback = 0;
-        const deadline = performance.now() + 400;
-        while (performance.now() < deadline) {
+        const sample = () => {
           const travel = s.scrollTop - startScrollTop;
           maxForwardTravel = Math.max(maxForwardTravel, travel);
           maxRollback = Math.max(maxRollback, previousScrollTop - s.scrollTop);
           previousScrollTop = s.scrollTop;
+        };
+        // Safety cap only; the stop signal is what normally ends this.
+        const safetyDeadline = performance.now() + 15_000;
+        while (
+          !traceWindow.__VIRT_EXIT_TRACE_STOP__ &&
+          performance.now() < safetyDeadline
+        ) {
+          sample();
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        // Keep sampling briefly after the input stops: a rollback toward the
+        // completed prepend would land here, after the last wheel.
+        const settleUntil = performance.now() + 250;
+        while (performance.now() < settleUntil) {
+          sample();
           await new Promise((resolve) => requestAnimationFrame(resolve));
         }
         return { maxForwardTravel, maxRollback };
@@ -411,6 +437,11 @@ test.describe("list virtualization", () => {
         await page.mouse.wheel(0, deltaY);
         await page.waitForTimeout(12);
       }
+      await page.evaluate(() => {
+        (
+          window as Window & { __VIRT_EXIT_TRACE_STOP__?: boolean }
+        ).__VIRT_EXIT_TRACE_STOP__ = true;
+      });
       const exitTrace = await exitTracePromise;
       expect(exitTrace.maxForwardTravel).toBeGreaterThan(200);
       expect(exitTrace.maxRollback).toBeLessThan(5);
