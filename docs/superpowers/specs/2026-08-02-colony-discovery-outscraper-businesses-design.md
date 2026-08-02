@@ -377,14 +377,14 @@ slice above.
 
 ### Implemented commits
 
-- `105acda49` defines the core local-worker protocol.
-- `d5cdca42a` adds strict signed worker exchanges.
-- `782fd8b51` persists restart checkpoints.
-- `b674fa3ae` adds leases, fencing, reclaim, cancellation, and revocation.
-- `e53339024` brokers worker actions through the relay.
-- `2e88f2ee8` adds real-relay, restart, privacy, and fencing proof.
-- `15f371811` stabilizes the real-database lease-expiry proof.
-- `c4ad27119` isolates a pre-existing desktop test that leaked a 300-second
+- `97e29bf84` defines the core local-worker protocol.
+- `d52808177` adds strict signed worker exchanges.
+- `2b75b6129` persists restart checkpoints.
+- `aeac8daba` adds leases, fencing, reclaim, cancellation, and revocation.
+- `a0f719953` brokers worker actions through the relay.
+- `2c81fe08f` adds real-relay, restart, privacy, and fencing proof.
+- `236074fb3` stabilizes the real-database lease-expiry proof.
+- `377e70630` isolates a pre-existing desktop test that leaked a 300-second
   process-wide rate-limit gate into parallel tests. This changes test isolation,
   not product behavior.
 

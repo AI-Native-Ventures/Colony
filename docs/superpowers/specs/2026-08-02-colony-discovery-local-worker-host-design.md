@@ -104,11 +104,22 @@ The host starts only after a usable workspace and signing identity exist. It
 stops on sign-out, recovery mode, or app shutdown and restarts across an active
 workspace change. It does not copy credentials between devices or communities.
 
+The fake host is also guarded by
+`BUZZ_DISCOVERY_FAKE_LOCAL_WORKER_ENABLED`. The flag defaults to false and must
+equal `1` or `true` to start the task. Normal development, release, and customer
+builds therefore cannot claim or complete paid runs with fixture results. The
+flag is a proof-only bridge and is removed when the real Outscraper adapter
+becomes the production implementation.
+
 ## Fake provider adapter
 
 The fake adapter proves the local execution machinery without network access.
 It requires the Outscraper credential to be present, borrows it inside native
 memory, and immediately drops it without recording or echoing it.
+
+It is available only when the explicit fake-worker flag is enabled. The adapter
+contains no HTTP client, provider URL, or network dependency, making external
+provider traffic impossible by construction.
 
 For a fresh lease it emits the existing deterministic non-secret checkpoints:
 
@@ -175,6 +186,7 @@ one customer-visible flow.
 - LLM provider selection or qualification credentials;
 - provider authentication validation during credential save;
 - production `DiscoveryDataSource` wiring or native Discovery UI changes;
+- enabling the fake worker in normal or release builds;
 - Campaign, Business, observation, deduplication, Lead, or usage persistence;
 - People discovery;
 - agent-specific execution paths;
@@ -194,17 +206,19 @@ This phase is complete only when all of the following are proven:
 5. No provider network request occurs during save, status, delete, or the fake
    adapter run.
 6. The stable worker ID survives a desktop-host restart but remains non-secret.
-7. With a real relay and database, the native host claims an eligible run,
+7. The fake worker defaults off, accepts only an explicit `1` or `true` opt-in,
+   and sends zero worker actions when disabled.
+8. With a real relay and database, the native host claims an eligible run,
    heartbeats, writes both checkpoints, and completes it through the fake
    adapter.
-8. A missing or unavailable credential causes zero claim actions.
-9. Killing the host after `provider_submitted` and starting a new host reclaims
+9. A missing or unavailable credential causes zero claim actions.
+10. Killing the host after `provider_submitted` and starting a new host reclaims
    at attempt 2 and resumes without repeating that checkpoint.
-10. Cancellation and entitlement revocation during a paused fake step abort
+11. Cancellation and entitlement revocation during a paused fake step abort
     execution, produce no later checkpoint, and reject stale completion.
-11. A fixture secret appears zero times in serialized command results, logs,
+12. A fixture secret appears zero times in serialized command results, logs,
     relay events, and Discovery database rows.
-12. Focused tests and the full `just ci` repository gate pass.
+13. Focused tests and the full `just ci` repository gate pass.
 
 Implemented, locally tested, committed, merged, deployed, and customer-proven
 remain separate states.
