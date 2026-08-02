@@ -29,8 +29,8 @@ wire observed is itself a signal about that agent.
 | Kind | Name | Class | Signer | Content |
 |------|------|-------|--------|---------|
 | 44210 | Usage Record | regular, immutable | agent or owner | NIP-44 v2 ciphertext to owner |
-| 40017 | Ledger Action | command (brokered) | owner only | canonical JSON |
-| 40018 | Ledger Receipt | relay-only | relay | canonical JSON |
+| 40023 | Ledger Action | command (brokered) | owner only | canonical JSON |
+| 40024 | Ledger Receipt | relay-only | relay | canonical JSON |
 | 30184 | Price Book | NIP-33 head, relay-only | relay | canonical JSON, `d=pricebook` |
 | 30185 | Attribution Rulebook | NIP-33 head, relay-only | relay | canonical JSON, `d=rulebook` |
 | 30186 | Correction Book | NIP-33 head, relay-only | relay | canonical JSON, `d=corrections` |
