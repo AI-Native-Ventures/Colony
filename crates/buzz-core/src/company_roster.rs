@@ -905,7 +905,8 @@ pub fn materialized_persona_id(
 /// The Persona ID for a role, honouring the reuse of the existing Chief of
 /// Staff.
 ///
-/// Fizz is already in the workspace and already talking to the owner: creating
+/// The built-in Chief of Staff (`builtin:fizz`, displayed as Scout) is already
+/// in the workspace and already talking to the owner: creating
 /// a second Chief of Staff would leave the owner with two, one of which has no
 /// memory of the conversation that created the company.
 pub fn persona_id_for(community_scope: &str, company_id: &str, role_id: BaselineRoleId) -> String {

@@ -5,6 +5,11 @@ import {
   openChannelBrowser,
   TEST_IDENTITIES,
 } from "../helpers/bridge";
+import {
+  GUIDE_NAME,
+  mentionPrefix,
+  STARTER_PERSONA_IDS,
+} from "../helpers/starterTeam";
 
 const MOCK_VIEWER_PUBKEY = "deadbeef".repeat(8);
 
@@ -191,7 +196,7 @@ test("@ trigger prioritizes channel members before runnable personas and other m
   page,
 }) => {
   await installMockBridge(page, {
-    activePersonaIds: ["builtin:fizz"],
+    activePersonaIds: [STARTER_PERSONA_IDS.fizz],
     managedAgents: [
       {
         pubkey: TEST_IDENTITIES.charlie.pubkey,
@@ -211,7 +216,7 @@ test("@ trigger prioritizes channel members before runnable personas and other m
   await expect(dropdown).toBeVisible();
   await expect(dropdown.getByText("alice")).toHaveCount(0);
   await expect(dropdown.getByText("bob")).toBeVisible();
-  await expect(dropdown.getByText("Fizz")).toBeVisible();
+  await expect(dropdown.getByText(GUIDE_NAME)).toBeVisible();
   await expect(dropdown.getByText("charlie")).toBeVisible();
   await expect(dropdown.getByText("outsider")).toHaveCount(0);
   const charlieRow = dropdown.locator("button", { hasText: "charlie" });
@@ -225,7 +230,9 @@ test("@ trigger prioritizes channel members before runnable personas and other m
 
   const suggestions = dropdown.locator("button");
   const suggestionText = await suggestions.allInnerTexts();
-  const fizzIndex = suggestionText.findIndex((text) => text.includes("Fizz"));
+  const fizzIndex = suggestionText.findIndex((text) =>
+    text.includes(GUIDE_NAME),
+  );
   const bobIndex = suggestionText.findIndex((text) => text.includes("bob"));
   const charlieIndex = suggestionText.findIndex((text) =>
     text.includes("charlie"),
@@ -317,7 +324,7 @@ test("blocks non-participant persona mentions in DM threads", async ({
   page,
 }) => {
   await installMockBridge(page, {
-    activePersonaIds: ["builtin:fizz"],
+    activePersonaIds: [STARTER_PERSONA_IDS.fizz],
   });
   await page.goto("/");
   await page.getByTestId("channel-bob-tyler").click();
@@ -338,11 +345,11 @@ test("blocks non-participant persona mentions in DM threads", async ({
 
   const threadPanel = page.getByTestId("message-thread-panel");
   const input = threadPanel.getByTestId("message-input");
-  await input.fill("Ask @fi");
+  await input.fill(`Ask ${mentionPrefix(GUIDE_NAME)}`);
   await expect(
     threadPanel
       .getByTestId("mention-autocomplete")
-      .locator("button", { hasText: "Fizz" }),
+      .locator("button", { hasText: GUIDE_NAME }),
   ).toBeVisible();
   await input.press("Enter");
   await page.keyboard.type(" in this thread");
@@ -362,7 +369,7 @@ test("blocks non-participant persona mentions in DM threads", async ({
   expect(commandCount(commands, "add_channel_members")).toBe(
     commandCount(baselineCommands, "add_channel_members"),
   );
-  await expect(input).toContainText("Fizz");
+  await expect(input).toContainText(GUIDE_NAME);
   await expect(page.getByTestId("chat-title")).toHaveText("bob-tyler");
 });
 
@@ -574,17 +581,17 @@ test("selecting a persona mention creates a channel agent before sending", async
   page,
 }) => {
   await installMockBridge(page, {
-    activePersonaIds: ["builtin:fizz"],
+    activePersonaIds: [STARTER_PERSONA_IDS.fizz],
   });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
   const input = page.getByTestId("message-input");
-  await input.fill("Ask @fi");
+  await input.fill(`Ask ${mentionPrefix(GUIDE_NAME)}`);
 
   const dropdown = autocomplete(page);
-  const fizzRow = dropdown.locator("button", { hasText: "Fizz" });
+  const fizzRow = dropdown.locator("button", { hasText: GUIDE_NAME });
   await expect(fizzRow).toBeVisible();
   await expect(fizzRow.getByTestId("mention-agent-icon")).toBeVisible();
   await expect(fizzRow.getByText("agent")).toBeVisible();
@@ -593,10 +600,10 @@ test("selecting a persona mention creates a channel agent before sending", async
   await page.keyboard.type(" for a hand");
 
   const composerChip = input.locator(".agent-mention-highlight", {
-    hasText: "Fizz",
+    hasText: GUIDE_NAME,
   });
   await expect(composerChip).toBeVisible();
-  await expect(composerChip).toHaveText("Fizz");
+  await expect(composerChip).toHaveText(GUIDE_NAME);
 
   const baselineCommands = await readCommandLog(page);
   const baselineCreateCount = commandCount(
@@ -646,21 +653,21 @@ test("selecting a persona mention creates a channel agent before sending", async
   const mentionChip = page
     .getByTestId("message-row")
     .last()
-    .locator("[data-mention].agent-mention-highlight", { hasText: "Fizz" });
+    .locator("[data-mention].agent-mention-highlight", { hasText: GUIDE_NAME });
   await expect(mentionChip).toBeVisible();
-  await expect(mentionChip).toHaveText("Fizz");
+  await expect(mentionChip).toHaveText(GUIDE_NAME);
 });
 
 test("selecting a persona mention reuses an existing persona agent", async ({
   page,
 }) => {
   await installMockBridge(page, {
-    activePersonaIds: ["builtin:fizz"],
+    activePersonaIds: [STARTER_PERSONA_IDS.fizz],
     managedAgents: [
       {
         pubkey: REUSABLE_PERSONA_AGENT_PUBKEY,
-        name: "Fizz",
-        personaId: "builtin:fizz",
+        name: GUIDE_NAME,
+        personaId: STARTER_PERSONA_IDS.fizz,
         status: "stopped",
       },
     ],
@@ -670,10 +677,10 @@ test("selecting a persona mention reuses an existing persona agent", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
   const input = page.getByTestId("message-input");
-  await input.fill("Ask @fi");
+  await input.fill(`Ask ${mentionPrefix(GUIDE_NAME)}`);
 
   const dropdown = autocomplete(page);
-  const fizzRow = dropdown.locator("button", { hasText: "Fizz" });
+  const fizzRow = dropdown.locator("button", { hasText: GUIDE_NAME });
   await expect(fizzRow).toBeVisible();
   await input.press("Enter");
   await page.keyboard.type(" for a hand");
@@ -712,9 +719,9 @@ test("selecting a persona mention reuses an existing persona agent", async ({
   const mentionChip = page
     .getByTestId("message-row")
     .last()
-    .locator("[data-mention].agent-mention-highlight", { hasText: "Fizz" });
+    .locator("[data-mention].agent-mention-highlight", { hasText: GUIDE_NAME });
   await expect(mentionChip).toBeVisible();
-  await expect(mentionChip).toHaveText("Fizz");
+  await expect(mentionChip).toHaveText(GUIDE_NAME);
 });
 
 test("managed relay-profile agents with member roles use the agent composer style", async ({

@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
+import {
+  STARTER_PERSONA_ORDER,
+  starterPersonaAnimation,
+} from "../helpers/starterTeam";
 
 // Community deep links that arrive before machine onboarding complete are
 // drained from Rust into a persisted transaction and acknowledged immediately.
@@ -301,12 +305,12 @@ test("Welcome failure retries once before allowing starter channel setup to be s
   );
   await page.goto("/");
 
-  for (const name of ["fizz", "honey", "bumble"]) {
-    const character = page.getByTestId(`starter-persona-${name}`);
+  for (const personaId of STARTER_PERSONA_ORDER) {
+    const character = page.getByTestId(`starter-persona-${personaId}`);
     await expect(character).toBeVisible();
     await expect(character).toHaveAttribute(
       "src",
-      `/onboarding/starter-team/${name}.png`,
+      starterPersonaAnimation(personaId) ?? "",
     );
   }
 

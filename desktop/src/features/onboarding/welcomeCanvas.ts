@@ -1,13 +1,19 @@
 import { getCanvas, setCanvas } from "@/shared/api/tauri";
+import {
+  STARTER_PERSONA_IDS,
+  starterPersonaName,
+} from "@/shared/constants/starterPersonas";
+
+const GUIDE_NAME = starterPersonaName(STARTER_PERSONA_IDS.fizz);
 
 export const WELCOME_CANVAS_CONTENT = `# Welcome to Colony
 
-This private channel is your home base. Fizz, your Chief of Staff, will learn how
+This private channel is your home base. ${GUIDE_NAME}, your Chief of Staff, will learn how
 the business works and propose the smallest useful team to run it.
 
 ## Address your team
 
-- \`@fizz\` reaches an employee by name.
+- \`@${GUIDE_NAME.toLowerCase()}\` reaches an employee by name.
 - \`@chief-of-staff\` reaches whoever currently holds that role.
 - \`@marketing\` reaches every member of a team at once.
 

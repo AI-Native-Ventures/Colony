@@ -24,6 +24,10 @@ import {
 import { getProfile, updateProfile } from "@/shared/api/tauriProfiles";
 import { getIdentity, importIdentity } from "@/shared/api/tauriIdentity";
 import { listPersonas } from "@/shared/api/tauriPersonas";
+import {
+  STARTER_PERSONA_ORDER,
+  starterPersonaAnimation,
+} from "@/shared/constants/starterPersonas";
 import { relayClient } from "@/shared/api/relayClient";
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -48,12 +52,6 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
     error.message.includes("invalid: you are not a relay member")
   );
 }
-
-const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
-  Fizz: "/onboarding/starter-team/fizz.png",
-  Honey: "/onboarding/starter-team/honey.png",
-  Bumble: "/onboarding/starter-team/bumble.png",
-};
 
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
@@ -184,9 +182,9 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          ["Fizz", "Honey", "Bumble"].flatMap((name) => {
+          STARTER_PERSONA_ORDER.flatMap((personaId) => {
             const persona = personas.find(
-              (candidate) => candidate.displayName === name,
+              (candidate) => candidate.id === personaId,
             );
             return persona ? [persona] : [];
           }),
@@ -626,8 +624,7 @@ export function CommunityOnboardingFlow({
                 {starterPersonas.length > 0 ? (
                   <div className="flex flex-wrap justify-center gap-8">
                     {starterPersonas.map((persona) => {
-                      const animationUrl =
-                        STARTER_PERSONA_ANIMATIONS[persona.displayName];
+                      const animationUrl = starterPersonaAnimation(persona.id);
                       return (
                         <div
                           className="flex w-40 flex-col items-center gap-3"
@@ -637,7 +634,7 @@ export function CommunityOnboardingFlow({
                             <img
                               alt={`${persona.displayName} animated character`}
                               className="h-40 w-40 object-contain"
-                              data-testid={`starter-persona-${persona.displayName.toLowerCase()}`}
+                              data-testid={`starter-persona-${persona.id}`}
                               src={animationUrl}
                             />
                           ) : (

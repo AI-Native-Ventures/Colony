@@ -1,7 +1,6 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-
 import type {
   AcpRuntimeCatalogEntry,
   CreatePersonaInput,
@@ -23,6 +22,7 @@ import {
   canSubmitPersonaDialog,
   formatPersonaNamePoolText,
   parsePersonaNamePoolText,
+  PERSONA_NAME_PLACEHOLDER,
 } from "./personaDialogState";
 import { hasText } from "./personaDialogEnvVars";
 import {
@@ -805,7 +805,7 @@ export function AgentDefinitionDialog({
                   disabled={isPending}
                   id="persona-display-name"
                   onChange={(event) => setDisplayName(event.target.value)}
-                  placeholder="Fizz"
+                  placeholder={PERSONA_NAME_PLACEHOLDER}
                   value={displayName}
                 />
               </div>
