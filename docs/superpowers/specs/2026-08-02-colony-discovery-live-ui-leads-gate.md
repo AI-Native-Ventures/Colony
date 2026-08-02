@@ -50,4 +50,3 @@ Branch: `codex/discovery-next`
 - LAKA billing-provider integration and a real subscription lifecycle are a
   separate product/release gate; this phase consumes the relay's existing
   entitlement authority without inventing pricing or checkout behavior.
-

@@ -55,4 +55,3 @@ Design: `docs/superpowers/specs/2026-08-02-colony-discovery-live-ui-leads-design
 - [ ] Record implemented/tested/committed separately from real-provider-tested,
   pushed, merged, deployed, and customer-proven.
 - [ ] Commit: `docs(discovery): record live UI and Leads gate`.
-

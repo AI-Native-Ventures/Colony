@@ -137,4 +137,3 @@ This phase passes only when deterministic and isolated-relay tests prove:
 A real Outscraper request remains a separate explicit spending gate. Pushing,
 merging, deployment, subscription-provider integration, and customer proof are
 also separate release states.
-
