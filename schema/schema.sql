@@ -1171,7 +1171,10 @@ ALTER TABLE discovery_runs
     ADD CONSTRAINT discovery_runs_worker_lease_shape CHECK (
         (claim_id IS NULL AND lease_until IS NULL AND worker_id IS NULL AND lease_owner_pubkey IS NULL)
         OR
-        (claim_id IS NOT NULL AND lease_until IS NOT NULL AND worker_id IS NOT NULL AND lease_owner_pubkey IS NOT NULL)
+        (claim_id IS NOT NULL AND lease_until IS NOT NULL AND (
+            (worker_id IS NULL AND lease_owner_pubkey IS NULL)
+            OR (worker_id IS NOT NULL AND lease_owner_pubkey IS NOT NULL)
+        ))
     );
 
 CREATE TABLE discovery_run_checkpoints (
