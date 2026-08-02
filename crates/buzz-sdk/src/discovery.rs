@@ -370,7 +370,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryOperation, DiscoverySdkError>
     }
 }
 
-fn validate_uuid(value: Uuid, entity: &'static str) -> Result<(), DiscoverySdkError> {
+pub(crate) fn validate_uuid(value: Uuid, entity: &'static str) -> Result<(), DiscoverySdkError> {
     if value.is_nil() {
         Err(DiscoverySdkError::InvalidEnvelope(entity))
     } else {
@@ -378,7 +378,7 @@ fn validate_uuid(value: Uuid, entity: &'static str) -> Result<(), DiscoverySdkEr
     }
 }
 
-fn parse_uuid(value: &str, entity: &'static str) -> Result<Uuid, DiscoverySdkError> {
+pub(crate) fn parse_uuid(value: &str, entity: &'static str) -> Result<Uuid, DiscoverySdkError> {
     let parsed = Uuid::parse_str(value).map_err(|_| DiscoverySdkError::InvalidEnvelope(entity))?;
     if parsed.is_nil() || parsed.to_string() != value {
         return Err(DiscoverySdkError::InvalidEnvelope(entity));
@@ -386,7 +386,10 @@ fn parse_uuid(value: &str, entity: &'static str) -> Result<Uuid, DiscoverySdkErr
     Ok(parsed)
 }
 
-fn parse_pubkey(value: &str, entity: &'static str) -> Result<PublicKey, DiscoverySdkError> {
+pub(crate) fn parse_pubkey(
+    value: &str,
+    entity: &'static str,
+) -> Result<PublicKey, DiscoverySdkError> {
     if value.len() != 64
         || value
             .chars()
@@ -397,11 +400,11 @@ fn parse_pubkey(value: &str, entity: &'static str) -> Result<PublicKey, Discover
     PublicKey::from_str(value).map_err(|_| DiscoverySdkError::InvalidEnvelope(entity))
 }
 
-fn scalar_tag(name: &'static str, value: &str) -> Result<Tag, DiscoverySdkError> {
+pub(crate) fn scalar_tag(name: &'static str, value: &str) -> Result<Tag, DiscoverySdkError> {
     tuple_tag(&[name, value])
 }
 
-fn tuple_tag(parts: &[&str]) -> Result<Tag, DiscoverySdkError> {
+pub(crate) fn tuple_tag(parts: &[&str]) -> Result<Tag, DiscoverySdkError> {
     let name = match parts.first().copied() {
         Some("p") => "p",
         Some("e") => "e",
@@ -414,7 +417,7 @@ fn tuple_tag(parts: &[&str]) -> Result<Tag, DiscoverySdkError> {
     Tag::parse(parts.iter().copied()).map_err(|_| DiscoverySdkError::InvalidTag(name))
 }
 
-fn canonical_content<T: Serialize>(
+pub(crate) fn canonical_content<T: Serialize>(
     value: &T,
     entity: &'static str,
 ) -> Result<String, DiscoverySdkError> {
@@ -423,7 +426,7 @@ fn canonical_content<T: Serialize>(
     canonical_json(&value).map_err(|_| DiscoverySdkError::InvalidContent(entity))
 }
 
-fn parse_canonical_content<T: DeserializeOwned>(
+pub(crate) fn parse_canonical_content<T: DeserializeOwned>(
     content: &str,
     entity: &'static str,
 ) -> Result<T, DiscoverySdkError> {
@@ -437,7 +440,7 @@ fn parse_canonical_content<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|_| DiscoverySdkError::InvalidContent(entity))
 }
 
-fn require_kind(event: &Event, expected: u32) -> Result<(), DiscoverySdkError> {
+pub(crate) fn require_kind(event: &Event, expected: u32) -> Result<(), DiscoverySdkError> {
     let actual = u32::from(event.kind.as_u16());
     if actual == expected {
         Ok(())
@@ -446,7 +449,7 @@ fn require_kind(event: &Event, expected: u32) -> Result<(), DiscoverySdkError> {
     }
 }
 
-fn require_exact_tag_names(
+pub(crate) fn require_exact_tag_names(
     event: &Event,
     required: &[&str],
     entity: &'static str,
@@ -476,7 +479,7 @@ fn require_exact_tag_names(
     Ok(())
 }
 
-fn required_scalar_tag<'a>(
+pub(crate) fn required_scalar_tag<'a>(
     event: &'a Event,
     name: &'static str,
 ) -> Result<&'a str, DiscoverySdkError> {
@@ -484,7 +487,7 @@ fn required_scalar_tag<'a>(
     Ok(tuple[1].as_str())
 }
 
-fn required_tuple_tag<'a>(
+pub(crate) fn required_tuple_tag<'a>(
     event: &'a Event,
     name: &'static str,
     length: usize,

@@ -17,6 +17,7 @@ pub mod builders;
 pub mod company;
 pub mod company_blueprint;
 pub mod discovery;
+pub mod discovery_worker;
 pub mod implicit_task;
 pub mod initiative_activation;
 pub mod mentions;

@@ -187,6 +187,8 @@ pub struct DiscoveryWorkerReceipt {
     pub request_id: Uuid,
     /// Stable retry key copied from the action.
     pub idempotency_key: Uuid,
+    /// Local worker installation addressed by the result.
+    pub worker_id: Uuid,
     /// Private operation outcome.
     pub outcome: DiscoveryWorkerReceiptOutcome,
 }
