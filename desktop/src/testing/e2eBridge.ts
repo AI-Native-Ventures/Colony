@@ -341,6 +341,10 @@ type E2eConfig = {
     websocketConnectErrors?: string[];
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
+    /** Device-local Discovery credential state. No secret value is modeled. */
+    discoveryCredentialStatus?: "configured" | "missing" | "unavailable";
+    /** Delay a credential save so specs can prove duplicate submission fencing. */
+    discoveryCredentialSaveDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
     // semantics. These three drive the archive-button gate matrix in
     // tests/e2e/identity-archive.spec.ts; they're plumbed into:
@@ -10439,6 +10443,41 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_discovery_outscraper_credential_status": {
+        const persistedStatus = window.sessionStorage.getItem(
+          "__buzz_e2e_discovery_credential_status",
+        );
+        return (
+          persistedStatus ??
+          activeConfig?.mock?.discoveryCredentialStatus ??
+          "missing"
+        );
+      }
+      case "save_discovery_outscraper_credential": {
+        const value = (payload as { value?: string } | null)?.value?.trim();
+        if (!value) throw new Error("Outscraper API key cannot be empty");
+        const delayMs = activeConfig?.mock?.discoveryCredentialSaveDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        if (activeConfig?.mock) {
+          activeConfig.mock.discoveryCredentialStatus = "configured";
+        }
+        window.sessionStorage.setItem(
+          "__buzz_e2e_discovery_credential_status",
+          "configured",
+        );
+        return "configured";
+      }
+      case "delete_discovery_outscraper_credential":
+        if (activeConfig?.mock) {
+          activeConfig.mock.discoveryCredentialStatus = "missing";
+        }
+        window.sessionStorage.setItem(
+          "__buzz_e2e_discovery_credential_status",
+          "missing",
+        );
+        return "missing";
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {

@@ -323,7 +323,10 @@ export function useDiscoveryRun(
       }
       generation.current += 1;
       const token = generation.current;
-      dispatch({ type: "reset", run: createInitialRun(campaign) });
+      // Every explicit start/retry is a fresh local session. Reusing a
+      // persisted terminal run would make the reducer terminal before the
+      // relay can deliver the new run's first event.
+      dispatch({ type: "reset", run: createIdleRun(campaign) });
       setBusy(true);
       setError(null);
       const stream =

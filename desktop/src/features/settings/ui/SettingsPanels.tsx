@@ -19,6 +19,7 @@ import {
   Smile,
   Sun,
   SunMoon,
+  Telescope,
   Ticket,
   UserRound,
   type LucideIcon,
@@ -83,6 +84,7 @@ import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
+import { DiscoverySettingsCard } from "./DiscoverySettingsCard";
 
 export type SettingsSection =
   | "profile"
@@ -91,6 +93,7 @@ export type SettingsSection =
   | "agents"
   | "channel-templates"
   | "compute"
+  | "discovery"
   | "appearance"
   | "shortcuts"
   | "hosted-communities"
@@ -110,6 +113,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "agents",
   "channel-templates",
   "compute",
+  "discovery",
   "appearance",
   "shortcuts",
   "hosted-communities",
@@ -188,6 +192,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "compute",
     label: "Compute",
     icon: Cpu,
+  },
+  {
+    value: "discovery",
+    label: "Discovery",
+    icon: Telescope,
   },
   {
     value: "shortcuts",
@@ -827,6 +836,8 @@ export function renderSettingsSection(
       return <ChannelTemplatesSettingsCard />;
     case "compute":
       return <MeshComputeSettingsCard />;
+    case "discovery":
+      return <DiscoverySettingsCard />;
     case "appearance":
       return <ThemeSettingsCard />;
     case "shortcuts":

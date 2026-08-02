@@ -1,5 +1,5 @@
 export const DISCOVERY_SOURCES = [
-  { key: "google_maps", label: "Google Maps" },
+  { key: "google_maps", label: "Outscraper (Google Maps)" },
   { key: "dataforseo", label: "Business Listings (DataForSEO)" },
   { key: "brave_search", label: "Brave Web Search" },
   { key: "exa_search", label: "Exa Neural Search" },

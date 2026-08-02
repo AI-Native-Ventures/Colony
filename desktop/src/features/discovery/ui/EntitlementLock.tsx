@@ -107,8 +107,8 @@ export function EntitlementLock({
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-            Plan activation is handled outside this fixture workspace. No
-            billing or checkout happens here.
+            Plan activation is handled outside this screen. No billing or
+            checkout happens here.
           </div>
           <DialogFooter>
             <DialogClose asChild>
