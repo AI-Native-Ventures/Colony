@@ -453,6 +453,7 @@ impl AcpClient {
         args: &[String],
         extra_env: &[(String, String)],
         has_generated_codex_config: bool,
+        meter: Option<&crate::meter_env::MeterEnv>,
     ) -> Result<Self, AcpError> {
         use std::process::Stdio;
 
@@ -511,6 +512,18 @@ impl AcpClient {
         }
         if let Some(merged) = codex_config_value {
             cmd.env("CODEX_CONFIG", merged);
+        }
+
+        // Metering env is applied last and unconditionally, overriding both
+        // persona `extra_env` and anything inherited from the parent process.
+        // Every other key here lets an inherited value win, which is correct
+        // for configuration and wrong for a credential: a real provider key in
+        // the operator's shell would otherwise reach the agent, and spend made
+        // with it would never appear in the ledger.
+        if let Some(meter) = meter {
+            for (key, value) in crate::meter_env::meter_env_vars(meter) {
+                cmd.env(key, value);
+            }
         }
 
         // Spawn the agent in its own process group so SIGKILL doesn't propagate
@@ -2847,7 +2860,7 @@ mod tests {
     }
 
     async fn spawn_script(script: &str) -> AcpClient {
-        AcpClient::spawn("bash", &["-c".into(), script.into()], &[], false)
+        AcpClient::spawn("bash", &["-c".into(), script.into()], &[], false, None)
             .await
             .expect("failed to spawn test script")
     }
@@ -2860,6 +2873,15 @@ mod tests {
         file_name: &str,
         var: &str,
         extra_env: &[(String, String)],
+    ) -> String {
+        spawn_named_and_read_child_env_metered(file_name, var, extra_env, None).await
+    }
+
+    async fn spawn_named_and_read_child_env_metered(
+        file_name: &str,
+        var: &str,
+        extra_env: &[(String, String)],
+        meter: Option<&crate::meter_env::MeterEnv>,
     ) -> String {
         use std::os::unix::fs::PermissionsExt;
 
@@ -2880,6 +2902,7 @@ mod tests {
             &[],
             extra_env,
             false,
+            meter,
         )
         .await
         .expect("spawn env probe script");
@@ -2892,6 +2915,72 @@ mod tests {
         client.shutdown().await;
         std::fs::remove_dir_all(&dir).expect("remove env probe dir");
         observed
+    }
+
+    /// A real provider key in the operator's environment must not reach a
+    /// metered agent.
+    ///
+    /// Everywhere else in `spawn` an inherited parent value wins. For a
+    /// credential that default is backwards: the agent would hold a key that
+    /// works directly against the provider, and every call it made with it
+    /// would be spend the ledger never sees.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn metering_masks_an_inherited_provider_key() {
+        const VAR: &str = "ANTHROPIC_API_KEY";
+        // SAFETY-adjacent note: this mutates process env for the duration of
+        // the test. It runs single-threaded within its own tokio test.
+        std::env::set_var(VAR, "sk-ant-REAL-OPERATOR-KEY");
+
+        let meter = crate::meter_env::MeterEnv {
+            port: 51234,
+            virtual_key: "colony-vk-test".to_string(),
+        };
+        let observed = spawn_named_and_read_child_env_metered(
+            "masking-probe",
+            VAR,
+            &[(VAR.into(), "sk-ant-PERSONA-KEY".into())],
+            Some(&meter),
+        )
+        .await;
+        std::env::remove_var(VAR);
+
+        assert_eq!(
+            observed, "colony-vk-test",
+            "the agent must see the virtual key, not the operator's or the persona's"
+        );
+    }
+
+    /// Metering also points the agent at the checkpoint, overriding an
+    /// inherited base URL that would otherwise route around it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn metering_overrides_an_inherited_base_url() {
+        const VAR: &str = "ANTHROPIC_BASE_URL";
+        std::env::set_var(VAR, "https://api.anthropic.com");
+
+        let meter = crate::meter_env::MeterEnv {
+            port: 51999,
+            virtual_key: "colony-vk-test".to_string(),
+        };
+        let observed =
+            spawn_named_and_read_child_env_metered("base-url-probe", VAR, &[], Some(&meter)).await;
+        std::env::remove_var(VAR);
+
+        assert_eq!(observed, "http://127.0.0.1:51999/anthropic");
+    }
+
+    /// With metering off, nothing changes: the parent value is inherited
+    /// exactly as it always was.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn without_metering_the_inherited_key_is_untouched() {
+        const VAR: &str = "OPENAI_API_KEY";
+        std::env::set_var(VAR, "sk-openai-REAL");
+        let observed =
+            spawn_named_and_read_child_env_metered("unmetered-probe", VAR, &[], None).await;
+        std::env::remove_var(VAR);
+        assert_eq!(observed, "sk-openai-REAL");
     }
 
     /// Buzz-owned Hermes processes get the configured-MCP isolation default,
@@ -3430,7 +3519,7 @@ mod tests {
     /// which is fine — these tests don't read from the agent, they just
     /// feed JSON into the parser.
     async fn spawn_inert_client() -> AcpClient {
-        AcpClient::spawn("cat", &[], &[], false)
+        AcpClient::spawn("cat", &[], &[], false, None)
             .await
             .expect("spawn cat as inert client")
     }

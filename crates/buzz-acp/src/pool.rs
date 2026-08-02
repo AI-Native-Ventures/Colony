@@ -5168,6 +5168,7 @@ mod tests {
             &["-c".to_string(), "sleep 10".to_string()],
             &[],
             false,
+            None,
         )
         .await
         .expect("failed to spawn test agent");
@@ -5226,6 +5227,7 @@ mod tests {
             &["-c".to_string(), "sleep 10".to_string()],
             &[],
             false,
+            None,
         )
         .await
         .expect("failed to spawn test agent");
