@@ -8,6 +8,7 @@ import { KIND_PARTY, KIND_PARTY_RELATIONSHIP } from "@/shared/constants/kinds";
 import type {
   Party,
   PartyAlias,
+  PartyHead,
   PartyParseResult,
   PartyRelationship,
   RelationshipKind,
@@ -150,10 +151,9 @@ export function createPartyRepository(
   /**
    * Every handle in a company, live or retired.
    *
-   * Resolution follows a chain of unknown length, so the occupants are read in
-   * one query and walked in memory rather than issuing a query per hop. Party
-   * volume is an open question; if it outgrows one read the answer is a
-   * relay-side resolution endpoint, not a per-hop round trip.
+   * This is the listing read. Resolution does not use it: following a handle
+   * reads one coordinate per hop instead, so answering "where does this point
+   * now" costs bounded work rather than the whole party set.
    */
   async function loadOccupants(companyId: string): Promise<
     PartyParseResult<{
@@ -193,6 +193,30 @@ export function createPartyRepository(
     );
   }
 
+  /**
+   * What sits at one party coordinate right now.
+   *
+   * `null` means nothing readable is there, which the walk reads as an unknown
+   * or dangling handle. A head the strict parser rejects is reported the same
+   * way rather than guessed at: no client can read it either.
+   */
+  async function occupantAt(
+    handle: string,
+  ): Promise<PartyParseResult<PartyHead | null>> {
+    return read<PartyHead | null>(
+      (relaySelfPubkey) => ({
+        kinds: [KIND_PARTY],
+        authors: [relaySelfPubkey],
+        "#d": [handle],
+        limit: 4,
+      }),
+      (events, relaySelfPubkey) => ({
+        ok: true,
+        value: collectHeads(events, relaySelfPubkey, parsePartyHead)[0] ?? null,
+      }),
+    );
+  }
+
   return {
     /**
      * The live parties a company holds, and separately the handles its merges
@@ -225,39 +249,50 @@ export function createPartyRepository(
     /**
      * Follow a handle to the party it currently names.
      *
-     * Two independent stops. A hard cap bounds a long chain, and a revisit
-     * check ends a cycle where it closes. Validation refuses cycles, but a
-     * reader that meets one anyway must survive it.
+     * One read per hop, bounded by `MAX_ALIAS_HOPS`, so this costs at most nine
+     * reads and in practice one or two however many parties a company holds.
+     *
+     * Two independent stops. The cap bounds a long chain, and a revisit check
+     * ends a cycle where it closes. Validation refuses cycles, but a reader
+     * that meets one anyway must survive it.
      */
     async resolveHandle(
       companyId: string,
       start: string,
     ): Promise<PartyParseResult<ResolvedHandle>> {
-      const occupants = await loadOccupants(companyId);
-      if (!occupants.ok) return occupants;
-      const { parties, aliases } = occupants.value;
-
       let handle = start;
       const seen = new Set<string>([start]);
       for (let hops = 0; hops <= MAX_ALIAS_HOPS; hops += 1) {
-        if (parties.has(handle)) {
-          return { ok: true, value: { handle, mergesFollowed: hops } };
-        }
-        const alias = aliases.get(handle);
-        if (!alias) {
+        const found = await occupantAt(handle);
+        if (!found.ok) return found;
+        const head = found.value;
+        if (head === null) {
           return partyFailure<ResolvedHandle>(
             "missing-head",
             `No party or retired handle named ${handle} exists on this community.`,
           );
         }
-        if (seen.has(alias.resolvesTo)) {
+        // Scoped here rather than in the query: `#d` is the coordinate, and a
+        // handle is only this company's if the record says so.
+        const owner =
+          head.type === "party" ? head.party.companyId : head.alias.companyId;
+        if (owner !== companyId) {
           return partyFailure<ResolvedHandle>(
-            "invalid-record",
-            `The handle ${start} loops back on itself at ${alias.resolvesTo}.`,
+            "missing-head",
+            `No party or retired handle named ${handle} exists on this community.`,
           );
         }
-        seen.add(alias.resolvesTo);
-        handle = alias.resolvesTo;
+        if (head.type === "party") {
+          return { ok: true, value: { handle, mergesFollowed: hops } };
+        }
+        if (seen.has(head.alias.resolvesTo)) {
+          return partyFailure<ResolvedHandle>(
+            "invalid-record",
+            `The handle ${start} loops back on itself at ${head.alias.resolvesTo}.`,
+          );
+        }
+        seen.add(head.alias.resolvesTo);
+        handle = head.alias.resolvesTo;
       }
       return partyFailure<ResolvedHandle>(
         "invalid-record",
@@ -315,9 +350,12 @@ export function createPartyRepository(
     ): Promise<PartyParseResult<PartyWithViews>> {
       const resolved = await this.resolveHandle(companyId, requested);
       if (!resolved.ok) return resolved;
-      const occupants = await loadOccupants(companyId);
-      if (!occupants.ok) return occupants;
-      const party = occupants.value.parties.get(resolved.value.handle);
+      // One read for the resolved coordinate, not the party set.
+      const found = await occupantAt(resolved.value.handle);
+      if (!found.ok) return found;
+      // Resolution already followed every alias, so landing on one here means
+      // the head changed underneath the read.
+      const party = found.value?.type === "party" ? found.value.party : null;
       if (!party) {
         return partyFailure<PartyWithViews>(
           "missing-head",

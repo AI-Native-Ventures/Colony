@@ -131,10 +131,32 @@ function relationshipHead(overrides = {}, options = {}) {
   );
 }
 
+/**
+ * Apply the parts of a filter a relay would apply.
+ *
+ * Tests hand back whole fixture sets; the repository now issues targeted reads,
+ * so a fake that ignored `kinds` and `#d` would hand a coordinate read every
+ * head in the fixture and prove nothing about which one was asked for.
+ */
+function relayLike(fetchEvents) {
+  return async (filter) => {
+    const events = await fetchEvents(filter);
+    return events.filter((event) => {
+      if (filter.kinds?.length && !filter.kinds.includes(event.kind)) {
+        return false;
+      }
+      const wanted = filter["#d"];
+      if (!wanted?.length) return true;
+      const dTag = event.tags.find((tag) => tag[0] === "d" && tag.length === 2);
+      return dTag !== undefined && wanted.includes(dTag[1]);
+    });
+  };
+}
+
 function repository(fetchEvents) {
   resetPartyRepositoryState();
   return createPartyRepository({
-    fetchEvents,
+    fetchEvents: relayLike(fetchEvents),
     relaySelf: async () => RELAY_PUBKEY,
   });
 }
@@ -274,6 +296,38 @@ test("a retired handle resolves to the party that absorbed it", async () => {
     handle: "acme-industries",
     mergesFollowed: 1,
   });
+});
+
+// The reason a company can hold any number of parties: following a handle
+// reads one coordinate per hop, so it never depends on how many exist.
+test("resolving a handle reads one coordinate per hop, not the party set", async () => {
+  const filters = [];
+  const repo = repository(async (filter) => {
+    filters.push(filter);
+    return [
+      partyHead(),
+      aliasHead("acme-oldest", "acme-old"),
+      aliasHead("acme-old", "acme-industries"),
+      // Parties this walk must never read. An unscoped implementation would
+      // pull them back on every hop.
+      partyHead({ id: "bystander-one" }),
+      partyHead({ id: "bystander-two" }),
+    ];
+  });
+
+  const result = await repo.resolveHandle(COMPANY_ID, "acme-oldest");
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, {
+    handle: "acme-industries",
+    mergesFollowed: 2,
+  });
+
+  assert.equal(filters.length, 3, "two merges cost three reads");
+  assert.deepEqual(
+    filters.map((filter) => filter["#d"]),
+    [["acme-oldest"], ["acme-old"], ["acme-industries"]],
+    "each read names the one coordinate it wants",
+  );
 });
 
 test("a live handle resolves to itself having followed nothing", async () => {

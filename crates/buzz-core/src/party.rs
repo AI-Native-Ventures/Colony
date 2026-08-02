@@ -1495,49 +1495,121 @@ pub enum HandleOccupant {
     },
 }
 
+/// The walk itself, with no opinion about where occupants come from.
+///
+/// Callers differ only in how they load a handle: a test hands over a map, the
+/// CLI and the desktop each issue one query per hop. The guards that make the
+/// walk safe -- the hop cap and the revisit check -- live here once, so a
+/// synchronous caller and an asynchronous one cannot drift apart on the two
+/// rules that matter.
+struct HandleWalk {
+    handle: String,
+    seen: HashSet<String>,
+    hops: usize,
+}
+
+impl HandleWalk {
+    fn new(start: &str) -> Self {
+        let mut seen = HashSet::new();
+        seen.insert(start.to_owned());
+        Self {
+            handle: start.to_owned(),
+            seen,
+            hops: 0,
+        }
+    }
+
+    /// The handle to load next, or `None` once the walk has run past the cap.
+    fn next_handle(&self) -> Option<&str> {
+        (self.hops <= MAX_ALIAS_HOPS).then_some(self.handle.as_str())
+    }
+
+    /// Feed in what was found. `Some` means the walk is over.
+    fn step(&mut self, found: Option<HandleOccupant>) -> Option<HandleResolution> {
+        match found {
+            None => Some(if self.hops == 0 {
+                HandleResolution::Unknown
+            } else {
+                // An alias pointing at nothing is a dangling reference, not an
+                // absent one: something was merged into a handle that no longer
+                // resolves.
+                HandleResolution::Broken {
+                    handle: self.handle.clone(),
+                }
+            }),
+            Some(HandleOccupant::Party) => Some(if self.hops == 0 {
+                HandleResolution::Live {
+                    handle: self.handle.clone(),
+                }
+            } else {
+                HandleResolution::Redirected {
+                    handle: self.handle.clone(),
+                    hops: self.hops,
+                }
+            }),
+            Some(HandleOccupant::Alias { resolves_to }) => {
+                if !self.seen.insert(resolves_to.clone()) {
+                    return Some(HandleResolution::Broken {
+                        handle: resolves_to,
+                    });
+                }
+                self.handle = resolves_to;
+                self.hops += 1;
+                None
+            }
+        }
+    }
+
+    /// The answer when the chain outran the cap.
+    fn ran_out(self) -> HandleResolution {
+        HandleResolution::Broken {
+            handle: self.handle,
+        }
+    }
+}
+
 /// Chase a handle to the live party it names.
 ///
 /// `load` answers what is stored at one coordinate. Kept as a closure so the
-/// chase is testable without a relay and reusable by anything that can read a
-/// head: the relay, the CLI, and the desktop all follow the same rule.
+/// chase is testable without a relay. Use this when every occupant is already
+/// in hand; [`resolve_party_handle_async`] is the one to reach for when each
+/// hop is a query.
 pub fn resolve_party_handle<F>(start: &str, mut load: F) -> HandleResolution
 where
     F: FnMut(&str) -> Option<HandleOccupant>,
 {
-    let mut handle = start.to_owned();
-    let mut seen: HashSet<String> = HashSet::new();
-    seen.insert(handle.clone());
-
-    for hops in 0..=MAX_ALIAS_HOPS {
-        match load(&handle) {
-            None => {
-                return if hops == 0 {
-                    HandleResolution::Unknown
-                } else {
-                    // An alias pointing at nothing is a dangling reference, not
-                    // an absent one: something was merged into a handle that no
-                    // longer resolves.
-                    HandleResolution::Broken { handle }
-                };
-            }
-            Some(HandleOccupant::Party) => {
-                return if hops == 0 {
-                    HandleResolution::Live { handle }
-                } else {
-                    HandleResolution::Redirected { handle, hops }
-                };
-            }
-            Some(HandleOccupant::Alias { resolves_to }) => {
-                if !seen.insert(resolves_to.clone()) {
-                    return HandleResolution::Broken {
-                        handle: resolves_to,
-                    };
-                }
-                handle = resolves_to;
-            }
+    let mut walk = HandleWalk::new(start);
+    loop {
+        let Some(handle) = walk.next_handle().map(str::to_owned) else {
+            return walk.ran_out();
+        };
+        if let Some(resolution) = walk.step(load(&handle)) {
+            return resolution;
         }
     }
-    HandleResolution::Broken { handle }
+}
+
+/// Resolve a handle when each hop is a query rather than a map lookup.
+///
+/// This is what a client with a relay behind it uses. The walk is bounded by
+/// [`MAX_ALIAS_HOPS`], so it costs at most nine reads and in practice one or
+/// two -- which is why no client needs to hold every party in memory to answer
+/// where a handle points.
+pub async fn resolve_party_handle_async<F, Fut>(start: &str, mut load: F) -> HandleResolution
+where
+    F: FnMut(String) -> Fut,
+    Fut: core::future::Future<Output = Option<HandleOccupant>>,
+{
+    let mut walk = HandleWalk::new(start);
+    loop {
+        let Some(handle) = walk.next_handle().map(str::to_owned) else {
+            return walk.ran_out();
+        };
+        let found = load(handle).await;
+        if let Some(resolution) = walk.step(found) {
+            return resolution;
+        }
+    }
 }
 
 /// Whether a status is the end of its lifecycle.
@@ -1662,6 +1734,10 @@ mod handle_tests {
         move |handle: &str| map.get(handle).cloned()
     }
 
+    fn alias_owned(to: String) -> HandleOccupant {
+        HandleOccupant::Alias { resolves_to: to }
+    }
+
     fn alias(to: &str) -> HandleOccupant {
         HandleOccupant::Alias {
             resolves_to: to.to_string(),
@@ -1718,6 +1794,130 @@ mod handle_tests {
                 handle: "acme-industries".to_string(),
                 hops: 2,
             }
+        );
+    }
+
+    /// Drive a future to completion without a runtime.
+    ///
+    /// The loaders below never yield, so the first poll always completes.
+    /// buzz-core carries no I/O dependencies on purpose, and a test is not a
+    /// reason to add one.
+    fn block_on<F: core::future::Future>(future: F) -> F::Output {
+        let mut future = core::pin::pin!(future);
+        let waker = core::task::Waker::noop();
+        let mut context = core::task::Context::from_waker(waker);
+        match future.as_mut().poll(&mut context) {
+            core::task::Poll::Ready(value) => value,
+            core::task::Poll::Pending => {
+                panic!("a handle walk must never need to wait on anything but its loader")
+            }
+        }
+    }
+
+    /// Every fixture the two resolvers are held to agree on.
+    fn walk_fixtures() -> [(&'static str, Vec<(&'static str, HandleOccupant)>); 6] {
+        [
+            (
+                "acme-industries",
+                vec![("acme-industries", HandleOccupant::Party)],
+            ),
+            (
+                "acme-old",
+                vec![
+                    ("acme-old", alias("acme-industries")),
+                    ("acme-industries", HandleOccupant::Party),
+                ],
+            ),
+            (
+                "acme-oldest",
+                vec![
+                    ("acme-oldest", alias("acme-old")),
+                    ("acme-old", alias("acme-industries")),
+                    ("acme-industries", HandleOccupant::Party),
+                ],
+            ),
+            ("nobody", vec![("acme-industries", HandleOccupant::Party)]),
+            ("acme-inc", vec![("acme-inc", alias("gone"))]),
+            ("a", vec![("a", alias("b")), ("b", alias("a"))]),
+        ]
+    }
+
+    /// Two implementations of the same walk are two chances to get it wrong.
+    ///
+    /// The synchronous one serves callers holding every occupant already; the
+    /// asynchronous one serves a client issuing a query per hop. They share the
+    /// guards, and this holds them to the same answers so a future edit to one
+    /// cannot silently change the other.
+    #[test]
+    fn the_async_walk_answers_exactly_what_the_sync_walk_answers() {
+        for (start, entries) in walk_fixtures() {
+            let expected = resolve_party_handle(start, resolver(&entries));
+            let map: std::collections::BTreeMap<String, HandleOccupant> = entries
+                .iter()
+                .map(|(handle, occupant)| ((*handle).to_owned(), occupant.clone()))
+                .collect();
+            let actual = block_on(resolve_party_handle_async(start, |handle: String| {
+                let found = map.get(&handle).cloned();
+                async move { found }
+            }));
+            assert_eq!(actual, expected, "the two walks disagree about {start}");
+        }
+    }
+
+    /// The reason a client does not need every party in memory.
+    ///
+    /// A walk costs one read per hop and stops at the cap, so resolving a
+    /// handle is bounded work no matter how many parties a company holds.
+    #[test]
+    fn a_walk_reads_one_handle_per_hop_and_never_more_than_the_cap() {
+        let entries = [
+            ("acme-oldest", alias("acme-old")),
+            ("acme-old", alias("acme-industries")),
+            ("acme-industries", HandleOccupant::Party),
+        ];
+        let map: std::collections::BTreeMap<String, HandleOccupant> = entries
+            .iter()
+            .map(|(handle, occupant)| ((*handle).to_owned(), occupant.clone()))
+            .collect();
+
+        let mut reads = 0usize;
+        let resolution = block_on(resolve_party_handle_async(
+            "acme-oldest",
+            |handle: String| {
+                reads += 1;
+                let found = map.get(&handle).cloned();
+                async move { found }
+            },
+        ));
+        assert_eq!(
+            resolution,
+            HandleResolution::Redirected {
+                handle: "acme-industries".to_string(),
+                hops: 2
+            }
+        );
+        assert_eq!(reads, 3, "two merges cost three reads, not the party set");
+
+        // A chain past the cap still stops, and stops at the cap.
+        let mut long: Vec<(String, HandleOccupant)> = Vec::new();
+        for index in 0..=(MAX_ALIAS_HOPS + 2) {
+            long.push((
+                format!("link-{index}"),
+                alias_owned(format!("link-{}", index + 1)),
+            ));
+        }
+        let long: std::collections::BTreeMap<String, HandleOccupant> = long.into_iter().collect();
+        let mut reads = 0usize;
+        let resolution = block_on(resolve_party_handle_async("link-0", |handle: String| {
+            reads += 1;
+            let found = long.get(&handle).cloned();
+            async move { found }
+        }));
+        assert!(matches!(resolution, HandleResolution::Broken { .. }));
+        assert_eq!(
+            reads,
+            MAX_ALIAS_HOPS + 1,
+            "the cap bounds the reads, not just the answer"
         );
     }
 

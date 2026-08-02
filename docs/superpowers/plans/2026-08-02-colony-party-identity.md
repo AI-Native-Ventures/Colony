@@ -254,12 +254,14 @@ for somebody else, and the encryption path already exists in the codebase (NIP-A
 turn metrics are encrypted to the owner the same way).
 
 **Expected party volume: not answered, and made moot instead.** The question
-only existed because handle resolution reads every party head and walks the
+only existed because handle resolution read every party head and walked the
 alias chain in memory, which is fine at hundreds and breaks past a few thousand.
-Rather than ask the owner to predict lead volume a year out, the follow-up is a
-relay-side resolution endpoint so the ceiling does not exist. Until that lands,
-`load_occupants` in the CLI and `loadOccupants` in the desktop repository are
-the two places that would need to change.
+Rather than ask the owner to predict lead volume a year out, the read path was
+fixed. No relay-side endpoint was needed after all: the walk is capped at
+`MAX_ALIAS_HOPS`, so following a handle is at most nine coordinate reads and in
+practice one or two. The CLI and the desktop now do exactly that, and neither
+holds the party set in memory to answer where a handle points. Party volume no
+longer bears on this design.
 
 ---
 
