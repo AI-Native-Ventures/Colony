@@ -377,14 +377,14 @@ slice above.
 
 ### Implemented commits
 
-- `97e29bf84` defines the core local-worker protocol.
-- `d52808177` adds strict signed worker exchanges.
-- `2b75b6129` persists restart checkpoints.
-- `aeac8daba` adds leases, fencing, reclaim, cancellation, and revocation.
-- `a0f719953` brokers worker actions through the relay.
-- `2c81fe08f` adds real-relay, restart, privacy, and fencing proof.
-- `236074fb3` stabilizes the real-database lease-expiry proof.
-- `377e70630` isolates a pre-existing desktop test that leaked a 300-second
+- `29434b0d3` defines the core local-worker protocol.
+- `fc17632c9` adds strict signed worker exchanges.
+- `fb23ab8d0` persists restart checkpoints.
+- `c2e9adf46` adds leases, fencing, reclaim, cancellation, and revocation.
+- `c5873de73` brokers worker actions through the relay.
+- `3b722c2e9` adds real-relay, restart, privacy, and fencing proof.
+- `e1e97bb7d` stabilizes the real-database lease-expiry proof.
+- `a347c4620` isolates a pre-existing desktop test that leaked a 300-second
   process-wide rate-limit gate into parallel tests. This changes test isolation,
   not product behavior.
 
@@ -433,13 +433,13 @@ complete.
 
 ### Implemented commits
 
-- `0ac54490c` adds the Outscraper credential boundary using Colony's existing
+- `7a28b5c1a` adds the Outscraper credential boundary using Colony's existing
   shared operating-system keychain store.
-- `ee8635a4e` adds the stable installation identity, strict signed-receipt
+- `1e65a9717` adds the stable installation identity, strict signed-receipt
   protocol client, workspace fencing, lease supervision, and deterministic fake
   adapter.
-- `9a975edc3` adds the isolated native-host/relay proof harness.
-- `838a84a71` makes the restart test terminate an actually owned first-host
+- `1edd28f56` adds the isolated native-host/relay proof harness.
+- `c49be992e` makes the restart test terminate an actually owned first-host
   future, so the recovery claim is exercised rather than inferred.
 
 ### Proven
