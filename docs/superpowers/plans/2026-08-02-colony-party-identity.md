@@ -239,6 +239,39 @@ heads in one transaction.
 
 ---
 
+## Status as of 2026-08-02
+
+All ten tasks are implemented, committed, and proven against a real relay.
+
+**Live gate: 8 passed, 0 failed** (`e2e_party_identity`, fresh relay and
+database). A retired handle resolves after one and two merges; both views move
+onto the survivor and colliding Lead views collapse to the further-progressed
+status; an ended-versus-live clash is refused with a signed receipt and leaves
+the retired handle a live party; a replay does not retire a second handle; a
+relationship without its party is refused and not stored; a client-authored
+head is rejected as a relay-only kind; a non-owner is refused for being one.
+
+Three things the gate changed about the plan as written:
+
+1. The party kinds were never classified, so every party action was refused as
+   an unknown kind. Unit tests could not see it. Fixed, with the classification
+   now asserted in both core and the relay.
+2. `merge_relationship_status` originally ranked terminal states highest, which
+   made an active client merged with a former one come out former. An ended
+   state facing a live one is now refused rather than resolved either way.
+3. The alias's `mergeActionEventId` was written from caller input, which no
+   caller can know before signing. The relay now authors it.
+
+Not done, and deliberately so: no Discovery UI rewrite (Phase 4 owns parity)
+and no new product page.
+
+Not diagnosed: repeat E2E runs against one long-lived relay process produce
+intermittent read and publish timeouts. Confirmed to affect the pre-existing
+company suite identically, so it is a shared harness issue rather than
+anything this phase introduced. Recorded in TESTING.md.
+
+---
+
 ## Task 1: Pin the kinds and write the red contract tests
 
 **Files:**
@@ -251,17 +284,17 @@ heads in one transaction.
 
 ### Step 1: Pin the numbers
 
-- [ ] Add the four kinds, the parameterized-replaceable assertions, and the
+- [x] Add the four kinds, the parameterized-replaceable assertions, and the
   mirrors in TypeScript and Flutter, exactly as Phase 1A did for `30179`–`30181`.
 
 ### Step 2: Write failing contract tests
 
-- [ ] Schema and identifier validation, including a party with no provenance.
-- [ ] Every provenance entry names at least one field that exists on the record.
-- [ ] Identifier scheme is closed; duplicate `(scheme, value)` pairs are refused.
-- [ ] Relationship transition tables, including every refused transition.
-- [ ] A relationship whose `partyId` does not match its `id` prefix is refused.
-- [ ] Alias records: `resolvesTo` must differ from `id`.
+- [x] Schema and identifier validation, including a party with no provenance.
+- [x] Every provenance entry names at least one field that exists on the record.
+- [x] Identifier scheme is closed; duplicate `(scheme, value)` pairs are refused.
+- [x] Relationship transition tables, including every refused transition.
+- [x] A relationship whose `partyId` does not match its `id` prefix is refused.
+- [x] Alias records: `resolvesTo` must differ from `id`.
 
 ### Step 3: Run red
 
@@ -288,15 +321,15 @@ git commit -s -m "test(core): pin the Colony party identity contract"
 
 ### Step 1: Types and validation
 
-- [ ] `Party`, `PartyKind`, `PartyIdentifier`, `IdentifierScheme`,
+- [x] `Party`, `PartyKind`, `PartyIdentifier`, `IdentifierScheme`,
   `ProvenanceEntry`, `PartyAlias`, `PartyRelationship`, `RelationshipKind`,
   `LeadStatus`, `ClientStatus`, with `deny_unknown_fields` on every struct.
-- [ ] `validate_party`, `validate_party_update`, `validate_relationship`,
+- [x] `validate_party`, `validate_party_update`, `validate_relationship`,
   `validate_relationship_update`, `validate_alias`, mirroring the company
   validators' shape so the two read alike.
-- [ ] `is_lead_status_transition_allowed` / `is_client_status_transition_allowed`
+- [x] `is_lead_status_transition_allowed` / `is_client_status_transition_allowed`
   as `const fn`.
-- [ ] `merge_parties(survivor, retired) -> Result<Party, PartyContractError>`:
+- [x] `merge_parties(survivor, retired) -> Result<Party, PartyContractError>`:
   unions identifiers and provenance, keeps the survivor's `displayName` unless
   it is empty, appends the retired handle to `retiredHandles`, and refuses when
   either side is already an alias.
@@ -317,11 +350,11 @@ git commit -s -m "feat(core): implement the Colony party identity contract"
 
 ### Step 1: Write failing builder tests
 
-- [ ] Exact three-tag action envelope, matching `build_company_action`.
-- [ ] `merge` operation carries two expected heads and refuses when they are equal.
-- [ ] Strict head parsers: `parse_party_event`, `parse_party_alias_event`,
+- [x] Exact three-tag action envelope, matching `build_company_action`.
+- [x] `merge` operation carries two expected heads and refuses when they are equal.
+- [x] Strict head parsers: `parse_party_event`, `parse_party_alias_event`,
   `parse_party_relationship_event`, each asserting tags agree with content.
-- [ ] A party head whose `identifier` tags do not match its `identifiers` array
+- [x] A party head whose `identifier` tags do not match its `identifiers` array
   is refused, so a query index can never disagree with the record.
 
 ### Step 2: Implement and prove
@@ -341,21 +374,21 @@ create `migrations/0030_party_action_claims.sql`
 
 ### Step 1: Write failing relay tests
 
-- [ ] Only kind `40015` reaches the broker.
-- [ ] Non-owners are refused with no stored record.
-- [ ] A legitimate owner request that loses gets a durable receipt.
-- [ ] Stale expected head is a conflict; replay returns the original receipt.
-- [ ] A `merge` writes the survivor and the alias in one transaction, or neither.
-- [ ] Client-authored `30182` and `30183` events are rejected outright.
+- [x] Only kind `40015` reaches the broker.
+- [x] Non-owners are refused with no stored record.
+- [x] A legitimate owner request that loses gets a durable receipt.
+- [x] Stale expected head is a conflict; replay returns the original receipt.
+- [x] A `merge` writes the survivor and the alias in one transaction, or neither.
+- [x] Client-authored `30182` and `30183` events are rejected outright.
 
 ### Step 2: Implement
 
-- [ ] Mirror `company_broker.rs` structurally, including `head_timestamp`.
+- [x] Mirror `company_broker.rs` structurally, including `head_timestamp`.
   **A replacement head must be strictly newer than the head it replaces.** Phase
   1A shipped that bug and it broke initiative activation entirely; the same
   mistake here would break merge chains the same way.
-- [ ] Reuse the idempotency-claim table shape; a merge claims once for both heads.
-- [ ] Add `30182`, `30183`, and `40016` to the relay's scope and routing tables
+- [x] Reuse the idempotency-claim table shape; a merge claims once for both heads.
+- [x] Add `30182`, `30183`, and `40016` to the relay's scope and routing tables
   and to the search-exclusion list, exactly where the company kinds appear.
 
 ### Step 3: Prove and commit
@@ -376,14 +409,14 @@ The function that decides whether an observation is someone already known.
 
 ### Step 1: Write failing tests
 
-- [ ] An exact identifier match on the same scheme resolves to the existing Party.
-- [ ] Matching text under different schemes does **not** resolve.
-- [ ] No identifier match yields `NoMatch` even when display names are identical:
+- [x] An exact identifier match on the same scheme resolves to the existing Party.
+- [x] Matching text under different schemes does **not** resolve.
+- [x] No identifier match yields `NoMatch` even when display names are identical:
   two businesses can share a name, and a false merge is far more expensive to
   undo than a duplicate is to merge.
-- [ ] Multiple candidate matches yield `Ambiguous` carrying every candidate,
+- [x] Multiple candidate matches yield `Ambiguous` carrying every candidate,
   never a silent pick.
-- [ ] Resolution is pure and derives no time or randomness.
+- [x] Resolution is pure and derives no time or randomness.
 
 ### Step 2: Implement
 
@@ -395,7 +428,7 @@ pub enum PartyResolution {
 }
 ```
 
-- [ ] `Ambiguous` is surfaced to a human as a decision, never auto-resolved.
+- [x] `Ambiguous` is surfaced to a human as a decision, never auto-resolved.
 
 ### Step 3: Prove and commit
 
@@ -412,18 +445,18 @@ git commit -s -m "feat(sdk): resolve an observation to a known party or refuse t
 
 ### Step 1: Write failing tests
 
-- [ ] A merge writes the survivor and an alias at the retired coordinate.
-- [ ] `A → B` then `B → C` leaves `A` resolving to `C` transitively.
-- [ ] A cycle (`A → B` then `B → A`) is refused.
-- [ ] Merging a handle that is already an alias is refused.
-- [ ] Relationships on the retired party are re-pointed at the survivor, and a
+- [x] A merge writes the survivor and an alias at the retired coordinate.
+- [x] `A → B` then `B → C` leaves `A` resolving to `C` transitively.
+- [x] A cycle (`A → B` then `B → A`) is refused.
+- [x] Merging a handle that is already an alias is refused.
+- [x] Relationships on the retired party are re-pointed at the survivor, and a
   relationship that would collide with an existing one on the survivor merges
   status by taking the further-progressed state rather than creating a duplicate.
-- [ ] Provenance from both sides survives, ordered and deduplicated.
+- [x] Provenance from both sides survives, ordered and deduplicated.
 
 ### Step 2: Implement resolution with a bounded chase
 
-- [ ] `resolve_party_handle` follows aliases with a hard depth cap and returns an
+- [x] `resolve_party_handle` follows aliases with a hard depth cap and returns an
   explicit error at the cap rather than looping. A cycle that slipped past
   validation must be survivable at read time.
 
@@ -443,11 +476,11 @@ git commit -s -m "feat(core): merge parties without losing a handle or its evide
 
 ### Step 1: Write failing tests
 
-- [ ] One Party carries both a `lead` and a `client` relationship at once.
-- [ ] Each has independent status and owner.
-- [ ] A relationship without its Party is refused.
-- [ ] Cancelling the Lead leaves the Client untouched.
-- [ ] A second relationship of the same kind on the same Party is refused; the
+- [x] One Party carries both a `lead` and a `client` relationship at once.
+- [x] Each has independent status and owner.
+- [x] A relationship without its Party is refused.
+- [x] Cancelling the Lead leaves the Client untouched.
+- [x] A second relationship of the same kind on the same Party is refused; the
   coordinate makes that structurally impossible and the test proves it.
 
 ### Step 2: Prove and commit
@@ -472,11 +505,11 @@ buzz parties merge   --survivor <h> --retire <h>
 buzz parties relate  --party <h> --relationship lead --status accepted
 ```
 
-- [ ] `get` on a retired handle reports the survivor **and** that it followed an
+- [x] `get` on a retired handle reports the survivor **and** that it followed an
   alias. Silently returning the survivor would hide a merge from an agent
   reasoning about why a record changed.
-- [ ] Every read specifies `kinds`.
-- [ ] Add the live runbook to `crates/buzz-cli/TESTING.md`.
+- [x] Every read specifies `kinds`.
+- [x] Add the live runbook to `crates/buzz-cli/TESTING.md`.
 
 ```bash
 cargo test -p buzz-cli parties --no-fail-fast
@@ -494,17 +527,17 @@ and `partyRepository.test.mjs`; modify
 
 ### Step 1: Repository
 
-- [ ] Mirror `features/company/contracts.ts` exactly, including the
+- [x] Mirror `features/company/contracts.ts` exactly, including the
   unknown-field, unknown-status, and canonical-content refusals. The two
   implementations disagreeing about what is valid is the failure mode Phase 1A
   already paid for once.
-- [ ] Alias-following read: `getParty(handle)` returns the resolved Party and the
+- [x] Alias-following read: `getParty(handle)` returns the resolved Party and the
   handle actually asked for.
-- [ ] Wire `resetPartyRepositoryState()` into `resetCommunityState()`.
+- [x] Wire `resetPartyRepositoryState()` into `resetCommunityState()`.
 
 ### Step 2: Bind the Discovery UI to canonical identity
 
-- [ ] `discovery/types.ts` `Lead` gains an optional `partyHandle`, and the
+- [x] `discovery/types.ts` `Lead` gains an optional `partyHandle`, and the
   presentation type is documented as presentation-only.
 - [ ] **Do not rewrite the Discovery UI in this phase.** Phase 4 owns parity; this
   step only makes a canonical handle expressible so Phase 4 does not have to
@@ -529,17 +562,17 @@ modify `TESTING.md`
 Against a real relay, real Postgres, and real signatures, following the
 `e2e_company_work` runbook (its own database, its own owner key, `--test-threads=1`):
 
-- [ ] Create a Party from a Discovery-shaped observation.
-- [ ] Observe the same organization a second time under a different display name
+- [x] Create a Party from a Discovery-shaped observation.
+- [x] Observe the same organization a second time under a different display name
   but the same domain, and prove resolution returns the existing handle.
-- [ ] Give it a Lead relationship, then a Client relationship, and prove both
+- [x] Give it a Lead relationship, then a Client relationship, and prove both
   live at once with independent status.
-- [ ] Merge a duplicate into it and prove: one survivor, both provenance lists,
+- [x] Merge a duplicate into it and prove: one survivor, both provenance lists,
   the retired handle still resolving, relationships carried over without
   duplication.
-- [ ] Prove a non-owner cannot create, merge, or relate.
-- [ ] Prove a client-authored `30182` is rejected.
-- [ ] Prove a replayed merge returns the original receipt and does not merge twice.
+- [x] Prove a non-owner cannot create, merge, or relate.
+- [x] Prove a client-authored `30182` is rejected.
+- [x] Prove a replayed merge returns the original receipt and does not merge twice.
 
 ### Step 2: Full local gate
 
@@ -566,20 +599,20 @@ git commit -s -m "test: prove Colony party identity survives merges"
 
 ## Plan self-review checklist
 
-- [ ] Every new Nostr query specifies `kinds`.
-- [ ] Every addressable event has one exact `d` tag matching its content.
+- [x] Every new Nostr query specifies `kinds`.
+- [x] Every addressable event has one exact `d` tag matching its content.
 - [ ] No new product page.
-- [ ] Lead and Client are views, never copied party records.
-- [ ] A Party cannot exist without provenance.
-- [ ] Every handle ever issued still resolves, transitively, forever.
-- [ ] Merge is non-destructive and idempotent under replay.
-- [ ] Ambiguous resolution is a human decision, never an automatic pick.
-- [ ] Replacement heads are strictly newer than the heads they replace.
-- [ ] No client signs `30182` or `30183` directly.
-- [ ] Community-switch state is reset or scoped.
-- [ ] Discovery's UI is untouched beyond making a handle expressible.
-- [ ] All commits use `-s`.
-- [ ] Implemented, tested, committed, merged, deployed, and live-proven are
+- [x] Lead and Client are views, never copied party records.
+- [x] A Party cannot exist without provenance.
+- [x] Every handle ever issued still resolves, transitively, forever.
+- [x] Merge is non-destructive and idempotent under replay.
+- [x] Ambiguous resolution is a human decision, never an automatic pick.
+- [x] Replacement heads are strictly newer than the heads they replace.
+- [x] No client signs `30182` or `30183` directly.
+- [x] Community-switch state is reset or scoped.
+- [x] Discovery's UI is untouched beyond making a handle expressible.
+- [x] All commits use `-s`.
+- [x] Implemented, tested, committed, merged, deployed, and live-proven are
   reported separately.
 
 ---
