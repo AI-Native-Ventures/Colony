@@ -208,15 +208,17 @@ function RunHero({ campaign, entitlement, runState }: DiscoveryRunTabProps) {
 
               {isRunning ? (
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {campaign.sourceConfig.order.map((source) => (
-                    <span
-                      className="inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-card/70 px-3 py-1 text-xs font-semibold text-primary shadow-sm"
-                      key={source}
-                    >
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                      Scanning {DISCOVERY_SOURCE_LABELS[source]}...
-                    </span>
-                  ))}
+                  {run.sourceMetrics
+                    .filter((metric) => metric.status === "active")
+                    .map(({ source }) => (
+                      <span
+                        className="inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-card/70 px-3 py-1 text-xs font-semibold text-primary shadow-sm"
+                        key={source}
+                      >
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                        Scanning {DISCOVERY_SOURCE_LABELS[source]}...
+                      </span>
+                    ))}
                 </div>
               ) : null}
 

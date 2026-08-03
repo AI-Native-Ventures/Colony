@@ -71,8 +71,15 @@ currently unmetered~~ (closed 2026-08-03: codex agents are metered via the
 codex-acp ACP `providers/set` custom gateway, not `CODEX_CONFIG` — the
 adapter forces the gateway provider onto every session and skips the ChatGPT
 login gate; see the live proof in TESTING.md); automated fetch of provider
-cost exports for reconciliation; a desktop corrections UI; and a cross-check
-report comparing NIP-AM self-reports against wire records.
+cost exports for reconciliation (closed 2026-08-04: `buzz ledger reconcile
+--from-provider anthropic|openai` reads the vendors' own cost endpoints);
+a desktop corrections UI (closed 2026-08-04: the Spend screen attributes any
+entry); and a cross-check report comparing NIP-AM self-reports against wire
+records (closed 2026-08-04: `buzz ledger cross-check`).
+
+**All Phase 3 follow-ups are now closed.** The one thing still needing a
+human is an Admin API key per provider, which only an org owner can create;
+without it `--from-provider` fails with instructions rather than guessing.
 
 ## Owner decisions locked (2026-08-02)
 

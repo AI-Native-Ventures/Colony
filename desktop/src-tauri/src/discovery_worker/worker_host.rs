@@ -1,26 +1,42 @@
-use std::{future::Future, pin::Pin, sync::atomic::Ordering, time::Duration};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
+#[cfg(test)]
+use std::{future::Future, pin::Pin};
+
+#[cfg(test)]
 use buzz_core_pkg::discovery_worker::{
-    DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerCheckpoint,
-    DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseProjection,
-    DiscoveryWorkerLeaseRequest, DiscoveryWorkerObservationBatchRequest,
-    DiscoveryWorkerReceiptOutcome,
+    DiscoveryCheckpointKind, DiscoveryWorkerCheckpoint, DiscoveryWorkerObservationBatchRequest,
+    DiscoveryWorkerSalvagedObservationsProjection,
+};
+use buzz_core_pkg::discovery_worker::{
+    DiscoveryProvider, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
+    DiscoveryWorkerLeaseProjection, DiscoveryWorkerLeaseRequest, DiscoveryWorkerReceiptOutcome,
+    DiscoveryWorkerSalvageBatchRequest,
 };
 use tauri::{AppHandle, Manager as _};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use super::outscraper::OutscraperPollOutcome;
+#[cfg(test)]
+use super::outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission};
 use super::{
     adapter::FakeOutscraperAdapter,
     installation::load_or_create_worker_id,
-    outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission},
+    outbox::DiscoveryOutbox,
     protocol::{RelayWorkerProtocol, WorkerProtocol},
+    provider_context::{LocalProviderCredentials, ProductionProviderClients},
+    source_executor::{execute_production_source_plan, CoordinatedRunOutcome},
 };
 use crate::{app_state::AppState, discovery_credentials, relay};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const FAKE_STEP_DELAY: Duration = Duration::from_millis(250);
+#[cfg(test)]
 const OBSERVATION_BATCH_SIZE: usize = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,8 +116,8 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                 return;
             }
         };
-        let provider = match OutscraperClient::production() {
-            Ok(provider) => provider,
+        let providers = match ProductionProviderClients::new() {
+            Ok(providers) => providers,
             Err(error) => {
                 eprintln!("buzz-desktop: Discovery source unavailable: {error}");
                 return;
@@ -113,13 +129,6 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
             if state.shutdown_started.load(Ordering::Acquire) {
                 return;
             }
-            let credential = match discovery_credentials::load_outscraper_credential() {
-                Ok(Some(credential)) => credential,
-                Ok(None) | Err(_) => {
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                    continue;
-                }
-            };
             let relay_url = state
                 .relay_url_override
                 .lock()
@@ -133,6 +142,16 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                 Ok(keys) => keys,
                 Err(_) => return,
             };
+            let outbox =
+                match DiscoveryOutbox::open(&app_data_dir, &relay_url, &keys.public_key().to_hex())
+                {
+                    Ok(outbox) => outbox,
+                    Err(error) => {
+                        eprintln!("buzz-desktop: Discovery recovery unavailable: {error}");
+                        tokio::time::sleep(POLL_INTERVAL).await;
+                        continue;
+                    }
+                };
             let generation = super::workspace_generation();
             let api_base_url = relay::relay_http_base_url(&relay_url);
             let protocol = match RelayWorkerProtocol::connect(
@@ -150,9 +169,45 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                     continue;
                 }
             };
-            if let Err(error) =
-                run_production_once_with_credential(&protocol, &provider, worker_id, &credential)
-                    .await
+            if let Err(error) = reconcile_terminal_outbox(&protocol, &outbox, worker_id).await {
+                eprintln!("buzz-desktop: Discovery recovery paused safely: {error}");
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
+            let credentials = match LocalProviderCredentials::load() {
+                Ok(credentials) => credentials,
+                Err(_) => {
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                    continue;
+                }
+            };
+            if let Err(error) = recover_terminal_outscraper_submissions(
+                &protocol,
+                &providers,
+                &credentials,
+                &outbox,
+                worker_id,
+            )
+            .await
+            {
+                eprintln!("buzz-desktop: Discovery paid-result polling paused safely: {error}");
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
+            let available_providers = credentials.available_providers();
+            if available_providers.is_empty() {
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
+            if let Err(error) = run_multi_source_production_once(
+                &protocol,
+                &providers,
+                &credentials,
+                &outbox,
+                worker_id,
+                available_providers,
+            )
+            .await
             {
                 eprintln!("buzz-desktop: Discovery run paused safely: {error}");
             }
@@ -161,8 +216,162 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
     });
 }
 
+async fn run_multi_source_production_once<P: WorkerProtocol>(
+    protocol: &P,
+    providers: &ProductionProviderClients,
+    credentials: &LocalProviderCredentials,
+    outbox: &DiscoveryOutbox,
+    worker_id: Uuid,
+    available_providers: Vec<DiscoveryProvider>,
+) -> Result<HostRunOutcome, String> {
+    let claim = DiscoveryWorkerClaimRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        worker_id,
+        available_providers,
+    };
+    let lease = match protocol.claim(claim).await? {
+        DiscoveryWorkerReceiptOutcome::Idle => return Ok(HostRunOutcome::Idle),
+        DiscoveryWorkerReceiptOutcome::Lease(lease) => lease,
+        _ => return Err("Discovery claim returned an invalid outcome".to_owned()),
+    };
+    match execute_production_source_plan(protocol, providers, credentials, outbox, lease).await? {
+        CoordinatedRunOutcome::Complete(mut lease) => {
+            complete_current_lease(protocol, &mut lease).await
+        }
+        CoordinatedRunOutcome::Fail(lease) => fail_current_lease(protocol, &lease).await,
+        CoordinatedRunOutcome::LostLease => Ok(HostRunOutcome::LostLease),
+    }
+}
+
+async fn recover_terminal_outscraper_submissions<P: WorkerProtocol>(
+    protocol: &P,
+    providers: &ProductionProviderClients,
+    credentials: &LocalProviderCredentials,
+    outbox: &DiscoveryOutbox,
+    worker_id: Uuid,
+) -> Result<(), String> {
+    let Some(credential) = credentials.credential(DiscoveryProvider::Outscraper) else {
+        return Ok(());
+    };
+    let mut recovered_results = false;
+    for run_id in outbox.run_ids()? {
+        let Some(call) = outbox.call_for(run_id, DiscoveryProvider::Outscraper) else {
+            continue;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let Some(provider_request_id) = outbox.submitted_recovery_due(call.call_id, now)? else {
+            continue;
+        };
+        let Ok(run) = protocol.status(run_id).await else {
+            // Status is also the entitlement and ownership gate. A suspended or
+            // disconnected workspace must not touch the provider.
+            continue;
+        };
+        if !run.state.is_terminal() {
+            continue;
+        }
+        let cancellation = CancellationToken::new();
+        let poll = providers
+            .outscraper
+            .poll_once_with_preflight(
+                &provider_request_id,
+                credential,
+                || async {
+                    protocol
+                        .status(run_id)
+                        .await
+                        .is_ok_and(|current| current.state.is_terminal())
+                },
+                &cancellation,
+            )
+            .await;
+        let observations = match poll {
+            Ok(OutscraperPollOutcome::Ready(observations)) => observations,
+            Ok(OutscraperPollOutcome::Pending) | Err(_) => {
+                // This is already-paid recovery, not a prerequisite for new
+                // work. Preserve it for a later retry without starving other
+                // providers or campaigns.
+                outbox.defer_submitted_recovery(call.call_id, now)?;
+                continue;
+            }
+        };
+        outbox.record_results(call.call_id, Some(provider_request_id), 1, observations)?;
+        recovered_results = true;
+    }
+    if recovered_results {
+        reconcile_terminal_outbox(protocol, outbox, worker_id).await
+    } else {
+        Ok(())
+    }
+}
+
+async fn reconcile_terminal_outbox<P: WorkerProtocol>(
+    protocol: &P,
+    outbox: &DiscoveryOutbox,
+    worker_id: Uuid,
+) -> Result<(), String> {
+    for run_id in outbox.run_ids()? {
+        if let Ok(run) = protocol.status(run_id).await {
+            if run.state.is_terminal() {
+                for provider in [
+                    DiscoveryProvider::Outscraper,
+                    DiscoveryProvider::BraveSearch,
+                    DiscoveryProvider::ExaSearch,
+                ] {
+                    let Some(call) = outbox.call_for(run_id, provider) else {
+                        continue;
+                    };
+                    let mut salvage_blocked = false;
+                    while let Some(batch) = outbox.next_batch(call.call_id)? {
+                        let request = DiscoveryWorkerSalvageBatchRequest {
+                            request_id: batch.request_id,
+                            idempotency_key: batch.idempotency_key,
+                            worker_id,
+                            run_id,
+                            provider: batch.provider,
+                            provider_request_id: batch.provider_request_id,
+                            batch_index: batch.batch_index,
+                            observations: batch.observations,
+                        };
+                        match protocol.salvage_observations(request).await {
+                            Err(_) => {
+                                salvage_blocked = true;
+                                break;
+                            }
+                            Ok(DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(salvaged))
+                                if salvaged.run.run_id == run_id =>
+                            {
+                                outbox.acknowledge_batch(call.call_id, batch.batch_index)?;
+                            }
+                            _ => {
+                                salvage_blocked = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !salvage_blocked
+                        && outbox
+                            .ready_metadata(call.call_id)?
+                            .is_some_and(|metadata| metadata.response_complete)
+                    {
+                        outbox.remove_after_relay_ack(call.call_id)?;
+                    }
+                }
+                outbox.remove_terminal_run(run_id)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, OutscraperError>> + Send + 'a>>;
 
+#[cfg(test)]
 trait BusinessDiscoveryProvider: Send + Sync {
     fn submit<'a>(
         &'a self,
@@ -179,6 +388,7 @@ trait BusinessDiscoveryProvider: Send + Sync {
     ) -> ProviderFuture<'a, Vec<buzz_core_pkg::discovery_worker::DiscoveryBusinessObservationInput>>;
 }
 
+#[cfg(test)]
 impl BusinessDiscoveryProvider for OutscraperClient {
     fn submit<'a>(
         &'a self,
@@ -210,6 +420,7 @@ impl BusinessDiscoveryProvider for OutscraperClient {
     }
 }
 
+#[cfg(test)]
 async fn run_production_once_with_credential<P, D>(
     protocol: &P,
     provider: &D,
@@ -224,6 +435,7 @@ where
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
+        available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let mut lease = match protocol.claim(claim).await? {
         DiscoveryWorkerReceiptOutcome::Idle => return Ok(HostRunOutcome::Idle),
@@ -307,6 +519,7 @@ where
     for (batch_index, observations) in observations.chunks(OBSERVATION_BATCH_SIZE).enumerate() {
         let request = DiscoveryWorkerObservationBatchRequest {
             lease: lease_request(&lease),
+            provider: DiscoveryProvider::Outscraper,
             provider_request_id: provider_request_id.clone(),
             batch_index: u32::try_from(batch_index)
                 .map_err(|_| "Discovery source returned too many batches".to_string())?,
@@ -338,12 +551,64 @@ where
     complete_current_lease(protocol, &mut lease).await
 }
 
+#[cfg(test)]
 enum ProviderStep<T> {
     Value(T),
     LostLease,
     ProviderError,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboxDrainOutcome {
+    Drained,
+    LostLease,
+}
+
+#[cfg(test)]
+async fn drain_synchronous_outbox<P: WorkerProtocol>(
+    protocol: &P,
+    outbox: &DiscoveryOutbox,
+    call_id: Uuid,
+    lease: &mut DiscoveryWorkerLeaseProjection,
+) -> Result<OutboxDrainOutcome, String> {
+    loop {
+        let Some(batch) = outbox.next_batch(call_id)? else {
+            return Ok(OutboxDrainOutcome::Drained);
+        };
+        if batch.run_id != lease.run.run_id {
+            return Err("Discovery outbox does not belong to the current run".to_owned());
+        }
+        let request = DiscoveryWorkerObservationBatchRequest {
+            lease: DiscoveryWorkerLeaseRequest {
+                request_id: batch.request_id,
+                idempotency_key: batch.idempotency_key,
+                worker_id: lease.worker_id,
+                run_id: lease.run.run_id,
+                lease_id: lease.lease_id,
+            },
+            provider: batch.provider,
+            provider_request_id: batch.provider_request_id,
+            batch_index: batch.batch_index,
+            observations: batch.observations,
+        };
+        request
+            .validate()
+            .map_err(|_| "Discovery outbox batch is invalid".to_owned())?;
+        match protocol.store_observations(request).await? {
+            DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
+                *lease = stored.lease;
+                outbox.acknowledge_batch(call_id, batch.batch_index)?;
+            }
+            DiscoveryWorkerReceiptOutcome::LostLease(_) => {
+                return Ok(OutboxDrainOutcome::LostLease);
+            }
+            _ => return Err("Discovery observation write returned an invalid outcome".to_owned()),
+        }
+    }
+}
+
+#[cfg(test)]
 async fn drive_provider_step<P, F, T>(
     protocol: &P,
     lease: &mut DiscoveryWorkerLeaseProjection,
@@ -400,6 +665,7 @@ where
     }
 }
 
+#[cfg(test)]
 async fn commit_checkpoint<P: WorkerProtocol>(
     protocol: &P,
     lease: &mut DiscoveryWorkerLeaseProjection,
@@ -447,7 +713,9 @@ async fn run_once<P: WorkerProtocol>(
     step_delay: Duration,
 ) -> Result<HostRunOutcome, String> {
     run_once_with_loader(protocol, worker_id, step_delay, || {
-        discovery_credentials::load_outscraper_credential()
+        discovery_credentials::load_discovery_credential(
+            discovery_credentials::DiscoveryCredentialProvider::Outscraper,
+        )
     })
     .await
 }
@@ -478,6 +746,7 @@ async fn run_once_with_credential<P: WorkerProtocol>(
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
+        available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let lease = match protocol.claim(claim).await? {
         DiscoveryWorkerReceiptOutcome::Idle => return Ok(HostRunOutcome::Idle),

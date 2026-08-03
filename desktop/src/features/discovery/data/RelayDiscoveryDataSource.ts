@@ -2,7 +2,7 @@ import { verifyEvent } from "nostr-tools/pure";
 
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { relayClient } from "@/shared/api/relayClient";
-import { getDiscoveryOutscraperCredentialStatus } from "@/shared/api/discoveryCredentials";
+import { getDiscoveryCredentialStatus } from "@/shared/api/discoveryCredentials";
 import { signRelayEvent } from "@/shared/api/tauri";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
@@ -15,7 +15,13 @@ import {
 } from "@/shared/constants/kinds";
 
 import type { DiscoveryEntitlement } from "../entitlement";
-import type { CampaignSourceConfig } from "../sourceConfig";
+import {
+  DISCOVERY_SOURCE_LABELS,
+  DISCOVERY_SOURCE_PROVIDERS,
+  isLiveDiscoverySource,
+  type CampaignSourceConfig,
+  type DiscoverySource,
+} from "../sourceConfig";
 import type {
   CampaignDetail,
   CampaignDraft,
@@ -34,6 +40,7 @@ import type {
 } from "../types";
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
+import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
 import {
   type CampaignProjection,
   eventBase,
@@ -43,17 +50,33 @@ import {
   mapLead,
   mapRun,
   type RunProjection,
-  sourceMetric,
 } from "./relayDiscoveryModels";
 
-const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v1";
-const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v1";
-const RUN_ACTION_SCHEMA = "colony.discovery-action/v1";
-const RUN_RECEIPT_SCHEMA = "colony.discovery-receipt/v1";
-const WORKER_RECEIPT_SCHEMA = "colony.discovery-worker-receipt/v1";
+const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v2";
+const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v2";
+const RUN_ACTION_SCHEMA = "colony.discovery-action/v2";
+const RUN_RECEIPT_SCHEMA = "colony.discovery-receipt/v2";
+const WORKER_RECEIPT_SCHEMAS = new Set([
+  "colony.discovery-worker-receipt/v1",
+  "colony.discovery-worker-receipt/v2",
+]);
 const RECEIPT_ATTEMPTS = 20;
 const RECEIPT_INTERVAL_MS = 300;
 const RUN_STATUS_INTERVAL_MS = 10_000;
+
+function liveSourcePayload(config?: CampaignSourceConfig) {
+  const selected = config ?? { mode: "waterfall", order: ["google_maps"] };
+  if (
+    (selected.mode !== "waterfall" && selected.mode !== "concurrent") ||
+    selected.order.length < 1 ||
+    selected.order.length > 3 ||
+    new Set(selected.order).size !== selected.order.length ||
+    selected.order.some((source) => !isLiveDiscoverySource(source))
+  ) {
+    throw new Error("Choose one or more available Discovery sources.");
+  }
+  return { mode: selected.mode, sources: [...selected.order] };
+}
 
 type WorkspaceResult =
   | { result: "access"; active: boolean }
@@ -80,13 +103,14 @@ type WorkspaceResult =
 type WorkspaceOperation =
   | "access"
   | "create_campaign"
+  | "update_campaign_sources"
   | "get_campaign"
   | "list_campaigns"
   | "list_leads";
 type RunOperation = "start" | "status" | "cancel";
 
 export type DiscoveryBrokerDependencies = {
-  credentialStatus?: typeof getDiscoveryOutscraperCredentialStatus;
+  credentialStatus?: typeof getDiscoveryCredentialStatus;
   delay: (ms: number) => Promise<void>;
   fetchFirstEvent: (
     filter: RelaySubscriptionFilter,
@@ -101,7 +125,7 @@ export type DiscoveryBrokerDependencies = {
 };
 
 const DEFAULT_BROKER: DiscoveryBrokerDependencies = {
-  credentialStatus: getDiscoveryOutscraperCredentialStatus,
+  credentialStatus: getDiscoveryCredentialStatus,
   delay: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
   fetchFirstEvent: (filter) => relayClient.fetchFirstEvent(filter),
   publish: (event) =>
@@ -225,7 +249,7 @@ function parseWorkspaceReceipt(
     e[2] !== "" ||
     e[3] !== "discovery-workspace-action" ||
     tuple?.length !== 5 ||
-    tuple[1] !== "1" ||
+    tuple[1] !== "2" ||
     tuple[2] !== operation ||
     tuple[3] !== requestId ||
     tuple[4] !== idempotencyKey
@@ -274,7 +298,7 @@ function parseRunReceipt(
     e[3] !== "discovery-action" ||
     run?.length !== 2 ||
     tuple?.length !== 6 ||
-    tuple[1] !== "1" ||
+    tuple[1] !== "2" ||
     tuple[2] !== operation ||
     tuple[3] !== requestId ||
     tuple[4] !== idempotencyKey ||
@@ -308,8 +332,12 @@ function workerRunId(
     return null;
   }
   const content = parseCanonicalContent(event);
+  const tuple = oneTag(event, "discovery-worker-receipt");
   if (
-    content?.schema !== WORKER_RECEIPT_SCHEMA ||
+    tuple?.length !== 6 ||
+    (tuple[1] !== "1" && tuple[1] !== "2") ||
+    content?.schema !== `colony.discovery-worker-receipt/v${tuple[1]}` ||
+    !WORKER_RECEIPT_SCHEMAS.has(content.schema) ||
     !isPlainObject(content.outcome)
   ) {
     return null;
@@ -361,7 +389,7 @@ class DiscoveryBroker {
         ["p", relayPubkey],
         [
           "discovery-workspace-action",
-          "1",
+          "2",
           operation,
           requestId,
           idempotencyKey,
@@ -427,7 +455,7 @@ class DiscoveryBroker {
       tags: [
         ["p", relayPubkey],
         [operation === "start" ? "campaign" : "run", target],
-        ["discovery-action", "1", operation, requestId, idempotencyKey],
+        ["discovery-action", "2", operation, requestId, idempotencyKey],
       ],
     });
     await beforePublish?.(action.pubkey, relayPubkey);
@@ -480,7 +508,6 @@ class DiscoveryBroker {
       },
     );
   }
-
   async requireRelayIdentity(): Promise<string> {
     const relayPubkey = await this.dependencies.relaySelf();
     if (!relayPubkey) {
@@ -491,17 +518,14 @@ class DiscoveryBroker {
     return relayPubkey;
   }
 }
-
 class RunSignal {
   private pending = 0;
   private waiters: Array<() => void> = [];
-
   push() {
     const waiter = this.waiters.shift();
     if (waiter) waiter();
     else this.pending += 1;
   }
-
   async wait(timeoutMs: number): Promise<void> {
     if (this.pending > 0) {
       this.pending -= 1;
@@ -522,7 +546,6 @@ class RunSignal {
     });
   }
 }
-
 export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   private readonly broker: DiscoveryBroker;
   private readonly demo = createFixtureDiscoveryDataSource({
@@ -530,14 +553,12 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   });
   private entitlementPromise: Promise<DiscoveryEntitlement> | null = null;
   private readonly activeRuns = new Map<string, string>();
-  private readonly credentialStatus: typeof getDiscoveryOutscraperCredentialStatus;
-
+  private readonly credentialStatus: typeof getDiscoveryCredentialStatus;
   constructor(dependencies: DiscoveryBrokerDependencies = DEFAULT_BROKER) {
     this.broker = new DiscoveryBroker(dependencies);
     this.credentialStatus =
-      dependencies.credentialStatus ?? getDiscoveryOutscraperCredentialStatus;
+      dependencies.credentialStatus ?? getDiscoveryCredentialStatus;
   }
-
   getEntitlement(): Promise<DiscoveryEntitlement> {
     if (!this.entitlementPromise) {
       this.entitlementPromise = this.broker
@@ -564,15 +585,12 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     }
     return this.entitlementPromise;
   }
-
   private async live(): Promise<boolean> {
     return (await this.getEntitlement()).experience === "live";
   }
-
   getIndustries(): Promise<Industry[]> {
     return this.demo.getIndustries();
   }
-
   getVerticals(industryId: string): Promise<Vertical[]> {
     return this.demo.getVerticals(industryId);
   }
@@ -725,6 +743,11 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
       this.demo.getVertical(input.industryId, input.verticalId),
     ]);
     if (!industry) throw new Error("This Discovery industry is unavailable.");
+    const sourceConfig = liveSourcePayload(input.sourceConfig);
+    const isDefaultSourceConfig =
+      sourceConfig.mode === "waterfall" &&
+      sourceConfig.sources.length === 1 &&
+      sourceConfig.sources[0] === "google_maps";
     const result = await this.broker.workspace("create_campaign", {
       operation: "create_campaign",
       campaign: {
@@ -740,6 +763,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
         description: input.description?.trim() || null,
         language: "en",
         region: null,
+        ...(isDefaultSourceConfig ? {} : { source_config: sourceConfig }),
       },
     });
     if (result.result !== "campaign") {
@@ -754,15 +778,15 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   ): Promise<CampaignDetail> {
     if (!(await this.live()))
       return this.demo.updateSourceConfig(campaignId, config);
-    if (
-      config.mode !== "waterfall" ||
-      config.order.join("|") !== "google_maps"
-    ) {
-      throw new Error(
-        "The first live phase uses Outscraper / Google Maps only.",
-      );
+    const result = await this.broker.workspace("update_campaign_sources", {
+      operation: "update_campaign_sources",
+      campaign_id: campaignId,
+      source_config: liveSourcePayload(config),
+    });
+    if (result.result !== "campaign") {
+      throw new Error("The relay returned the wrong campaign result.");
     }
-    return this.getCampaign(campaignId);
+    return mapCampaign(result.campaign);
   }
 
   startDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent> {
@@ -787,15 +811,49 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     if (!(await this.live())) {
       throw new Error("Activate LAKA before running live Discovery.");
     }
-    const credential = await this.credentialStatus();
-    if (credential !== "configured") {
+    const current = await this.getCampaign(campaignId);
+    const unsupported = current.sourceConfig.order.filter(
+      (source) => !isLiveDiscoverySource(source),
+    );
+    if (unsupported.length > 0) {
       throw new Error(
-        credential === "missing"
-          ? "Connect your Outscraper API key in Settings > Discovery before starting."
-          : "Colony cannot access the secure credential store on this device.",
+        `These sources are not available for live Discovery yet: ${unsupported
+          .map((source) => DISCOVERY_SOURCE_LABELS[source])
+          .join(", ")}.`,
       );
     }
-    const current = await this.getCampaign(campaignId);
+    const credentialStatuses = await Promise.all(
+      current.sourceConfig.order
+        .filter(isLiveDiscoverySource)
+        .map(async (source) => {
+          try {
+            return {
+              source,
+              status: await this.credentialStatus(
+                DISCOVERY_SOURCE_PROVIDERS[source],
+              ),
+            };
+          } catch {
+            return { source, status: "unavailable" as const };
+          }
+        }),
+    );
+    const unavailable = credentialStatuses.filter(
+      ({ status }) => status === "unavailable",
+    );
+    if (unavailable.length > 0) {
+      throw new Error(
+        "Colony cannot access the secure Discovery credential store on this device.",
+      );
+    }
+    const missing = credentialStatuses
+      .filter(({ status }) => status === "missing")
+      .map(({ source }) => DISCOVERY_SOURCE_LABELS[source]);
+    if (missing.length > 0) {
+      throw new Error(
+        `Connect API keys in Settings > Discovery for: ${missing.join(", ")}.`,
+      );
+    }
     const signal = new RunSignal();
     let runId = "";
     const workerSubscription: { stop?: () => Promise<void> } = {};
@@ -825,42 +883,25 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     this.activeRuns.set(campaignId, runId);
     try {
       let campaign = await this.getCampaignProjection(campaignId);
+      const previousSources = new Map<DiscoverySource, string>();
       let lastFingerprint = "";
       yield { type: "session_started", ...eventBase(campaign) };
-      yield {
-        type: "source_started",
-        source: "google_maps",
-        metric: sourceMetric(campaign),
-        sourceMetric: sourceMetric(campaign),
-        ...eventBase(campaign),
-      };
+      for (const event of sourceEvents(previousSources, campaign)) yield event;
       while (campaign.latest_run && !isTerminal(campaign.latest_run)) {
         await signal.wait(RUN_STATUS_INTERVAL_MS);
         campaign = await this.getCampaignProjection(campaignId);
-        const fingerprint = `${campaign.latest_run?.state}:${campaign.latest_run?.completed_steps}:${campaign.lead_count}`;
+        const fingerprint = `${campaign.latest_run?.state}:${campaign.latest_run?.completed_steps}:${campaign.lead_count}:${(
+          campaign.latest_run_sources ?? []
+        )
+          .map(sourceFingerprint)
+          .join("|")}`;
         if (fingerprint === lastFingerprint) continue;
         lastFingerprint = fingerprint;
-        const metric = sourceMetric(campaign);
-        yield {
-          type: "source_progress",
-          source: "google_maps",
-          metric,
-          sourceMetric: metric,
-          progress: mapRun(campaign).completion,
-          message: `${campaign.lead_count} unique Leads retained`,
-          ...eventBase(campaign),
-        };
+        for (const event of sourceEvents(previousSources, campaign))
+          yield event;
       }
       const base = eventBase(campaign);
       if (campaign.latest_run?.state === "succeeded") {
-        const metric = sourceMetric(campaign);
-        yield {
-          type: "source_completed",
-          source: "google_maps",
-          metric,
-          sourceMetric: metric,
-          ...base,
-        };
         if (campaign.lead_count >= campaign.target) {
           yield { type: "target_reached", targetReached: true, ...base };
         }

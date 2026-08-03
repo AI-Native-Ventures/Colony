@@ -1,4 +1,5 @@
 // site/src/sections/Hero.tsx
+import wordmarkUrl from "@/assets/colony-wordmark.svg";
 import { ScatterField } from "@/brand/ScatterField";
 
 export function Hero() {
@@ -16,7 +17,12 @@ export function Hero() {
             // density. Its Inter face is embedded as a data-URI @font-face,
             // which resolves inside an <img> where an external font URL would
             // not.
-            src="/colony-wordmark.svg"
+            // Imported, not referenced from public/: Vite gives the emitted
+            // file a content hash, so a changed wordmark ships under a new URL
+            // instead of colliding with the edge's cached copy of the old one.
+            // A stable /colony-wordmark.svg kept serving the pre-2026-08-04
+            // blur radius from Cloudflare's cache after a successful deploy.
+            src={wordmarkUrl}
             alt="Colony"
             width={777}
             height={326}

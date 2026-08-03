@@ -9,12 +9,16 @@
 //! here and refuses anything it cannot represent exactly, because a price that
 //! silently rounds is a ledger that silently lies.
 
+use buzz_core::agent_turn_metric::decrypt_agent_turn_metric;
 use buzz_core::kind::{
-    KIND_ATTRIBUTION_RULEBOOK, KIND_CORRECTION_BOOK, KIND_LEDGER_BUDGET, KIND_LEDGER_RECEIPT,
-    KIND_PRICE_BOOK, KIND_USAGE_RECORD,
+    KIND_AGENT_TURN_METRIC, KIND_ATTRIBUTION_RULEBOOK, KIND_CORRECTION_BOOK, KIND_LEDGER_BUDGET,
+    KIND_LEDGER_RECEIPT, KIND_PRICE_BOOK, KIND_USAGE_RECORD,
 };
 use buzz_core::ledger::attribution::{
     AttributionRule, Budget, Correction, CorrectionBook, RuleAssignment, Rulebook,
+};
+use buzz_core::ledger::crosscheck::{
+    cross_check, diagnose as diagnose_cross_check, SelfReportedTurn,
 };
 use buzz_core::ledger::engine::{compute_ledger, StoredUsageRecord};
 use buzz_core::ledger::prices::{PriceBook, PriceEntry, PriceRates};
@@ -26,6 +30,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::client::BuzzClient;
+use crate::commands::provider_costs::{fetch_provider_costs, CostProvider};
 use crate::error::CliError;
 use crate::LedgerCmd;
 
@@ -128,12 +133,33 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
         LedgerCmd::Report => report(client, None).await,
         LedgerCmd::Reconcile {
             provider_costs,
+            from_provider,
+            since,
+            until,
             tolerance,
         } => {
-            let rows = read_provider_costs(&provider_costs)?;
+            let rows = match (provider_costs.as_deref(), from_provider.as_deref()) {
+                (Some(path), _) => read_provider_costs(path)?,
+                (None, Some(vendor)) => {
+                    let provider = CostProvider::parse(vendor)?;
+                    let (starting_at, ending_at) = reconcile_window(since, until)?;
+                    fetch_provider_costs(provider, &starting_at, &ending_at).await?
+                }
+                (None, None) => {
+                    return Err(CliError::Usage(
+                        "reconcile needs either --provider-costs <csv> or \
+                         --from-provider <anthropic|openai>"
+                            .to_owned(),
+                    ))
+                }
+            };
             let tolerance = usd_to_nanousd(&tolerance, "--tolerance")?;
             report(client, Some((rows, u128::from(tolerance)))).await
         }
+        LedgerCmd::CrossCheck {
+            tolerance_bps,
+            floor_tokens,
+        } => cross_check_report(client, tolerance_bps, floor_tokens).await,
     }
 }
 
@@ -398,32 +424,7 @@ async fn report(
         load_book(client, KIND_CORRECTION_BOOK, "corrections").await?;
     let budgets = load_budgets(client).await?;
 
-    let keys = client.keys();
-    let raw = client
-        .query_all(json!({
-            "kinds": [KIND_USAGE_RECORD],
-            "#p": [keys.public_key().to_hex()]
-        }))
-        .await?;
-
-    let mut records = Vec::with_capacity(raw.len());
-    let mut unreadable = 0usize;
-    for value in raw {
-        let Ok(event) = Event::from_json(value.to_string()) else {
-            unreadable += 1;
-            continue;
-        };
-        match decrypt_usage_record(keys, &event) {
-            Ok(payload) => records.push(StoredUsageRecord {
-                event_id: event.id.to_hex(),
-                created_at: event.created_at.as_secs(),
-                payload,
-            }),
-            // Records addressed to a different owner, or written under a key
-            // this caller does not hold. Counted, never silently dropped.
-            Err(_) => unreadable += 1,
-        }
-    }
+    let (records, unreadable) = load_usage_records(client).await?;
 
     let mut ledger = compute_ledger(records, &prices, &rules, &corrections, &budgets);
 
@@ -523,6 +524,170 @@ fn read_provider_costs(path: &str) -> Result<Vec<ProviderDailyCost>, CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| CliError::Usage(format!("cannot read {path}: {error}")))?;
     parse_provider_costs(&text)
+}
+
+/// The window to ask a provider about.
+///
+/// Defaults to the last 30 days, which covers a monthly invoice cycle with
+/// room either side. Both bounds are validated here rather than at the
+/// provider, so a typo fails immediately instead of returning an empty
+/// report that reads as "the provider billed nothing".
+fn reconcile_window(
+    since: Option<String>,
+    until: Option<String>,
+) -> Result<(String, String), CliError> {
+    let parse = |value: &str, flag: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .map(|at| at.with_timezone(&chrono::Utc))
+            .map_err(|_| CliError::Usage(format!("{flag} {value} is not an RFC 3339 instant")))
+    };
+    let ending_at = match until.as_deref() {
+        Some(value) => parse(value, "--until")?,
+        None => chrono::Utc::now(),
+    };
+    let starting_at = match since.as_deref() {
+        Some(value) => parse(value, "--since")?,
+        None => ending_at - chrono::Duration::days(30),
+    };
+    if starting_at >= ending_at {
+        return Err(CliError::Usage("--since must be before --until".to_owned()));
+    }
+    Ok((
+        starting_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ending_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    ))
+}
+
+/// Load every usage record addressed to this identity.
+///
+/// Returns the readable records and a count of those that could not be
+/// decrypted. Unreadable records are counted rather than dropped: a total
+/// computed over fewer records than exist is understated, and a caller has
+/// to be able to say so.
+async fn load_usage_records(
+    client: &BuzzClient,
+) -> Result<(Vec<StoredUsageRecord>, usize), CliError> {
+    let keys = client.keys();
+    let raw = client
+        .query_all(json!({
+            "kinds": [KIND_USAGE_RECORD],
+            "#p": [keys.public_key().to_hex()]
+        }))
+        .await?;
+
+    let mut records = Vec::with_capacity(raw.len());
+    let mut unreadable = 0usize;
+    for value in raw {
+        let Ok(event) = Event::from_json(value.to_string()) else {
+            unreadable += 1;
+            continue;
+        };
+        match decrypt_usage_record(keys, &event) {
+            Ok(payload) => records.push(StoredUsageRecord {
+                event_id: event.id.to_hex(),
+                created_at: event.created_at.as_secs(),
+                payload,
+            }),
+            Err(_) => unreadable += 1,
+        }
+    }
+    Ok((records, unreadable))
+}
+
+/// Compare agents' own account of their spend against the metered wire.
+///
+/// The wire stays the source of record; this exists to catch the case the
+/// ledger alone cannot see, where an agent made provider calls that never
+/// crossed the checkpoint. Exits non-zero when anything is flagged, so it is
+/// usable as a scheduled check rather than only read by a human.
+async fn cross_check_report(
+    client: &BuzzClient,
+    tolerance_bps: u32,
+    floor_tokens: u64,
+) -> Result<(), CliError> {
+    let keys = client.keys();
+    let (wire_records, unreadable_wire) = load_usage_records(client).await?;
+
+    let raw_metrics = client
+        .query_all(json!({
+            "kinds": [KIND_AGENT_TURN_METRIC],
+            "#p": [keys.public_key().to_hex()]
+        }))
+        .await?;
+
+    let mut self_reports = Vec::with_capacity(raw_metrics.len());
+    let mut unreadable_metrics = 0usize;
+    let mut turns_without_counts = 0usize;
+    for value in raw_metrics {
+        let Ok(event) = Event::from_json(value.to_string()) else {
+            unreadable_metrics += 1;
+            continue;
+        };
+        let Ok(payload) = decrypt_agent_turn_metric(keys, &event) else {
+            unreadable_metrics += 1;
+            continue;
+        };
+        // `turn` is the per-turn delta. `cumulative` restates the session
+        // total every turn, so summing that instead would multiply-count
+        // every session by its own length.
+        let Some(counts) = payload.turn.as_ref() else {
+            turns_without_counts += 1;
+            continue;
+        };
+        let Some(day) = rfc3339_utc_day(&payload.timestamp) else {
+            turns_without_counts += 1;
+            continue;
+        };
+        self_reports.push(SelfReportedTurn {
+            agent_pubkey: event.pubkey.to_hex(),
+            day,
+            input_tokens: counts.input_tokens.unwrap_or(0),
+            output_tokens: counts.output_tokens.unwrap_or(0),
+            delta_reliable: payload.delta_reliable,
+        });
+    }
+
+    let report = cross_check(&wire_records, &self_reports, tolerance_bps, floor_tokens);
+    let flagged = !report.findings.is_empty();
+
+    println!(
+        "{}",
+        json!({
+            "cross_check": {
+                "rows": report.rows,
+                "findings": report.findings
+                    .iter()
+                    .map(|finding| json!({
+                        "finding": finding,
+                        "diagnosis": diagnose_cross_check(finding),
+                    }))
+                    .collect::<Vec<_>>(),
+                "skipped_unreliable_turns": report.skipped_unreliable_turns,
+            },
+            "unreadable_usage_records": unreadable_wire,
+            "unreadable_turn_metrics": unreadable_metrics,
+            "turn_metrics_without_usable_counts": turns_without_counts,
+        })
+    );
+
+    if flagged {
+        return Err(CliError::Other(
+            "agent self-reports and metered spend disagree; see findings".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The UTC day of an RFC 3339 timestamp, or `None` when it cannot be parsed.
+fn rfc3339_utc_day(timestamp: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .ok()
+        .map(|parsed| {
+            parsed
+                .with_timezone(&chrono::Utc)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
 }
 
 #[cfg(test)]

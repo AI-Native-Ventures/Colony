@@ -533,7 +533,8 @@ pub struct AgentProfileInfo {
 
 mod submit;
 pub use submit::{
-    submit_event, submit_event_at_with_keys, submit_signed_event_at_with_keys, SubmitEventResponse,
+    submit_event, submit_event_at_with_keys, submit_signed_event_at_with_keys,
+    submit_signed_event_at_with_keys_allow_rejected, SubmitEventResponse,
 };
 
 /// Sign an event with explicit keys and POST it to `/events` with NIP-98 auth.

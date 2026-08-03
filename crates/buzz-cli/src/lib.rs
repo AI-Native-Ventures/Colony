@@ -493,12 +493,32 @@ pub enum LedgerCmd {
     Report,
     /// Compare the ledger against a provider's own daily cost export
     Reconcile {
-        /// CSV with columns provider,day,amount_usd
+        /// CSV with columns provider,day,amount_usd. Mutually exclusive with
+        /// --from-provider.
+        #[arg(long, conflicts_with = "from_provider")]
+        provider_costs: Option<String>,
+        /// Fetch the cost report directly from the provider: anthropic or
+        /// openai. Needs the matching BUZZ_LEDGER_<VENDOR>_ADMIN_KEY.
         #[arg(long)]
-        provider_costs: String,
+        from_provider: Option<String>,
+        /// RFC 3339 start of the window to fetch. Defaults to 30 days ago.
+        #[arg(long, requires = "from_provider")]
+        since: Option<String>,
+        /// RFC 3339 end of the window to fetch. Defaults to now.
+        #[arg(long, requires = "from_provider")]
+        until: Option<String>,
         /// Allowed absolute difference per provider-day, in dollars
         #[arg(long, default_value = "0.01")]
         tolerance: String,
+    },
+    /// Compare what agents reported spending against what the meter observed
+    CrossCheck {
+        /// Allowed relative difference per agent-day, in basis points
+        #[arg(long, default_value_t = 100)]
+        tolerance_bps: u32,
+        /// Allowed absolute difference per agent-day, in tokens
+        #[arg(long, default_value_t = 50)]
+        floor_tokens: u64,
     },
 }
 
@@ -609,6 +629,24 @@ pub enum CompanyCmd {
 }
 
 /// Workspace-scoped business Discovery operations.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum DiscoverySourceModeArg {
+    Waterfall,
+    Concurrent,
+}
+
+/// Live Businesses source accepted by Discovery Campaign commands.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum DiscoverySourceArg {
+    #[value(name = "google_maps")]
+    GoogleMaps,
+    #[value(name = "brave_search")]
+    BraveSearch,
+    #[value(name = "exa_search")]
+    ExaSearch,
+}
+
+/// Workspace-scoped business Discovery operations.
 #[derive(Subcommand)]
 pub enum DiscoveryCmd {
     /// Read whether this workspace can use live Discovery
@@ -637,10 +675,10 @@ pub enum DiscoveryCmd {
         /// Human-readable vertical label.
         #[arg(long)]
         vertical_name: String,
-        /// Business category or Google Maps search phrase.
+        /// Business category or web-search phrase.
         #[arg(long)]
         query: String,
-        /// Geography included in the Google Maps query.
+        /// Geography included in every selected source query.
         #[arg(long)]
         location: String,
         /// Maximum unique new Leads requested.
@@ -655,6 +693,27 @@ pub enum DiscoveryCmd {
         /// Optional ISO 3166-1 alpha-2 country code.
         #[arg(long)]
         region: Option<String>,
+        /// Source execution mode for future runs.
+        #[arg(long, value_enum, default_value = "waterfall")]
+        source_mode: DiscoverySourceModeArg,
+        /// Selected source in waterfall order. Repeat to select multiple.
+        #[arg(long = "source", value_enum)]
+        sources: Vec<DiscoverySourceArg>,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Replace the source mode and selection used by future Campaign runs
+    CampaignSources {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Source execution mode.
+        #[arg(long, value_enum)]
+        source_mode: DiscoverySourceModeArg,
+        /// Selected source in waterfall order. Repeat for each source.
+        #[arg(long = "source", value_enum, required = true)]
+        sources: Vec<DiscoverySourceArg>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -712,13 +771,13 @@ pub enum DiscoveryCmd {
         /// Campaign UUID owned by the Discovery work surface.
         #[arg(long)]
         campaign: Uuid,
-        /// Business category or Google Maps search phrase.
+        /// Business category or web-search phrase.
         #[arg(long)]
         query: String,
-        /// Geography included in the Google Maps query.
+        /// Geography included in every selected source query.
         #[arg(long)]
         location: String,
-        /// Maximum organizations requested from Outscraper.
+        /// Maximum unique new organizations requested for the run.
         #[arg(long, default_value_t = 100)]
         limit: u16,
         /// ISO 639-1 language code.
@@ -2486,6 +2545,25 @@ mod tests {
                 "dentists",
                 "--location",
                 "Sandton, South Africa",
+                "--source-mode",
+                "concurrent",
+                "--source",
+                "brave_search",
+                "--source",
+                "exa_search",
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-sources",
+                "--campaign",
+                campaign,
+                "--source-mode",
+                "waterfall",
+                "--source",
+                "exa_search",
+                "--source",
+                "google_maps",
             ],
             vec!["buzz", "discovery", "campaign-get", "--campaign", campaign],
             vec!["buzz", "discovery", "campaign-list", "--limit", "100"],
@@ -2525,6 +2603,38 @@ mod tests {
             Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", campaign,]).is_err()
         );
         assert!(Cli::try_parse_from(["buzz", "discovery", "status"]).is_err());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "discovery",
+            "campaign-sources",
+            "--campaign",
+            campaign,
+            "--source-mode",
+            "concurrent"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "discovery",
+            "campaign-create",
+            "--name",
+            "Sandton dentists",
+            "--industry",
+            "healthcare",
+            "--industry-name",
+            "Healthcare",
+            "--vertical",
+            "dentists",
+            "--vertical-name",
+            "Dentists",
+            "--query",
+            "dentists",
+            "--location",
+            "Sandton, South Africa",
+            "--brave-api-key",
+            "must-stay-on-device"
+        ])
+        .is_err());
     }
 
     /// `--format compact` is a GLOBAL flag and must stay before the

@@ -44,13 +44,15 @@ export function SourceStatusTable({ metrics }: SourceStatusTableProps) {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[38rem] text-sm">
+          <table className="w-full min-w-[46rem] text-sm">
             <thead className="bg-muted/25 text-left text-2xs uppercase tracking-[0.14em] text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-medium">Source</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 text-right font-medium">Requests</th>
                 <th className="px-4 py-3 text-right font-medium">Found</th>
                 <th className="px-4 py-3 text-right font-medium">Stored</th>
+                <th className="px-4 py-3 text-right font-medium">Existing</th>
                 <th className="px-4 py-3 text-right font-medium">Quality</th>
               </tr>
             </thead>
@@ -61,6 +63,11 @@ export function SourceStatusTable({ metrics }: SourceStatusTableProps) {
                   <tr className="border-t border-border/50" key={metric.source}>
                     <th className="px-4 py-3 text-left font-medium text-foreground">
                       {DISCOVERY_SOURCE_LABELS[metric.source]}
+                      {metric.error ? (
+                        <span className="mt-1 block max-w-64 text-xs font-normal text-destructive">
+                          {metric.error}
+                        </span>
+                      ) : null}
                     </th>
                     <td className="px-4 py-3">
                       <Badge variant={variantForStatus(metric.status)}>
@@ -77,10 +84,16 @@ export function SourceStatusTable({ metrics }: SourceStatusTableProps) {
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                      {metric.requests ?? 0}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
                       {metric.discovered}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-foreground">
                       {metric.stored}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                      {metric.duplicates}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
                       {metric.quality}%

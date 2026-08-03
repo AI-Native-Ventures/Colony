@@ -21,6 +21,7 @@ export default defineConfig({
       testMatch: [
         "**/smoke.spec.ts",
         "**/blocks.spec.ts",
+        "**/ledger.spec.ts",
         "**/blocks-faults.spec.ts",
         "**/onboarding-docked-cta-screenshots.spec.ts",
         "**/identity-key-help.spec.ts",

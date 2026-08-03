@@ -29,6 +29,7 @@ mod identity;
 mod identity_archive;
 pub mod initiative;
 mod join_policy;
+pub mod ledger;
 mod legacy_storage;
 mod link_preview;
 pub(crate) mod media;

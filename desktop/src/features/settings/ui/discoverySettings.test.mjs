@@ -15,8 +15,17 @@ test("Discovery settings explain the BYOK privacy and billing boundary", () => {
 });
 
 test("Discovery settings never request a stored secret value", () => {
-  assert.match(source, /getDiscoveryOutscraperCredentialStatus/);
-  assert.doesNotMatch(source, /getDiscoveryOutscraperCredential\s*\(/);
+  assert.match(source, /getDiscoveryCredentialStatus\(provider\)/);
+  assert.doesNotMatch(source, /getDiscoveryCredential\s*\(/);
   assert.match(source, /setValue\(""\)/);
   assert.match(source, /type=\{showValue \? "text" : "password"\}/);
+});
+
+test("Discovery settings render Outscraper, Brave, and Exa consistently", () => {
+  assert.match(source, /provider: "outscraper"/);
+  assert.match(source, /provider: "brave_search"/);
+  assert.match(source, /provider: "exa_search"/);
+  assert.match(source, /PROVIDERS\.map/);
+  assert.match(source, /saveDiscoveryCredential\(provider, value\)/);
+  assert.match(source, /deleteDiscoveryCredential\(provider\)/);
 });

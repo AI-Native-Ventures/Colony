@@ -206,6 +206,17 @@ type E2eConfig = {
       normalized_host?: string;
       archived_at?: string | null;
     }>;
+    /**
+     * A `ledger_report` response. Money is decimal strings here, matching the
+     * real command: a fixture using numbers would let a rounding bug pass.
+     */
+    ledgerReport?: Record<string, unknown>;
+    /** What `ledger_correct` should answer with. */
+    ledgerCorrectOutcome?: {
+      eventId?: string;
+      accepted?: boolean;
+      message?: string;
+    };
     colonyCreatedCommunity?: {
       id?: string;
       name?: string;
@@ -329,6 +340,12 @@ type E2eConfig = {
     userSearchDelayMs?: number;
     /** Device-local Discovery credential state. No secret value is modeled. */
     discoveryCredentialStatus?: "configured" | "missing" | "unavailable";
+    discoveryCredentialStatuses?: Partial<
+      Record<
+        "outscraper" | "brave_search" | "exa_search",
+        "configured" | "missing" | "unavailable"
+      >
+    >;
     /** Delay a credential save so specs can prove duplicate submission fencing. */
     discoveryCredentialSaveDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
@@ -10429,41 +10446,72 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
-      case "get_discovery_outscraper_credential_status": {
+      case "get_discovery_credential_status": {
+        const provider = (payload as { provider?: string } | null)?.provider;
+        if (
+          !provider ||
+          !["outscraper", "brave_search", "exa_search"].includes(provider)
+        ) {
+          throw new Error("unknown Discovery credential provider");
+        }
         const persistedStatus = window.sessionStorage.getItem(
-          "__buzz_e2e_discovery_credential_status",
+          `__buzz_e2e_discovery_credential_status_${provider}`,
         );
         return (
           persistedStatus ??
+          activeConfig?.mock?.discoveryCredentialStatuses?.[
+            provider as "outscraper" | "brave_search" | "exa_search"
+          ] ??
           activeConfig?.mock?.discoveryCredentialStatus ??
           "missing"
         );
       }
-      case "save_discovery_outscraper_credential": {
+      case "save_discovery_credential": {
+        const provider = (payload as { provider?: string } | null)?.provider;
+        if (
+          !provider ||
+          !["outscraper", "brave_search", "exa_search"].includes(provider)
+        ) {
+          throw new Error("unknown Discovery credential provider");
+        }
         const value = (payload as { value?: string } | null)?.value?.trim();
-        if (!value) throw new Error("Outscraper API key cannot be empty");
+        if (!value) throw new Error("Discovery API key cannot be empty");
         const delayMs = activeConfig?.mock?.discoveryCredentialSaveDelayMs ?? 0;
         if (delayMs > 0) {
           await new Promise((resolve) => window.setTimeout(resolve, delayMs));
         }
         if (activeConfig?.mock) {
-          activeConfig.mock.discoveryCredentialStatus = "configured";
+          activeConfig.mock.discoveryCredentialStatuses ??= {};
+          activeConfig.mock.discoveryCredentialStatuses[
+            provider as "outscraper" | "brave_search" | "exa_search"
+          ] = "configured";
         }
         window.sessionStorage.setItem(
-          "__buzz_e2e_discovery_credential_status",
+          `__buzz_e2e_discovery_credential_status_${provider}`,
           "configured",
         );
         return "configured";
       }
-      case "delete_discovery_outscraper_credential":
+      case "delete_discovery_credential": {
+        const provider = (payload as { provider?: string } | null)?.provider;
+        if (
+          !provider ||
+          !["outscraper", "brave_search", "exa_search"].includes(provider)
+        ) {
+          throw new Error("unknown Discovery credential provider");
+        }
         if (activeConfig?.mock) {
-          activeConfig.mock.discoveryCredentialStatus = "missing";
+          activeConfig.mock.discoveryCredentialStatuses ??= {};
+          activeConfig.mock.discoveryCredentialStatuses[
+            provider as "outscraper" | "brave_search" | "exa_search"
+          ] = "missing";
         }
         window.sessionStorage.setItem(
-          "__buzz_e2e_discovery_credential_status",
+          `__buzz_e2e_discovery_credential_status_${provider}`,
           "missing",
         );
         return "missing";
+      }
       case "colony_check_community_name":
         return {
           name: (payload as { name?: string })?.name ?? "community",
@@ -10486,6 +10534,32 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "colony_list_my_communities":
         return { communities: activeConfig?.mock?.colonyCommunities ?? [] };
+      // Money crosses this boundary as decimal strings, exactly as the real
+      // command emits it, so the screen's bigint parsing is exercised rather
+      // than bypassed by a friendlier fixture.
+      case "ledger_correct": {
+        const outcome = activeConfig?.mock?.ledgerCorrectOutcome;
+        return {
+          accepted: outcome?.accepted ?? true,
+          eventId: outcome?.eventId ?? "c".repeat(64),
+          message: outcome?.message ?? "accepted",
+        };
+      }
+      case "ledger_report":
+        return (
+          activeConfig?.mock?.ledgerReport ?? {
+            budgetStatus: [],
+            byCostCentre: [],
+            byDay: [],
+            entries: [],
+            exceptions: [],
+            imputedNanousd: "0",
+            meteredNanousd: "0",
+            priceBookMissing: false,
+            totals: { cogs: "0", needsReview: "0", opex: "0" },
+            unreadableRecords: 0,
+          }
+        );
       case "mesh_installed_models":
         return mockMeshState.models;
       case "mesh_node_status":

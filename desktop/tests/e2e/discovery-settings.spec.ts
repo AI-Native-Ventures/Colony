@@ -4,6 +4,7 @@ import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
 
 const SHOTS = "test-results/discovery-settings";
+const PROVIDERS = ["outscraper", "brave_search", "exa_search"] as const;
 
 async function openDiscoverySettings(page: Page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -30,71 +31,80 @@ test.describe("Discovery credential settings", () => {
     });
     const card = await openDiscoverySettings(page);
 
-    await expect(card.getByTestId("discovery-credential-status")).toHaveText(
-      "Not connected",
-    );
+    for (const provider of PROVIDERS) {
+      await expect(
+        card.getByTestId(`discovery-${provider}-credential-status`),
+      ).toHaveText("Not connected");
+    }
     await expect(card).toContainText("does not upload or synchronize");
     await expect(card).toContainText("billed directly");
 
-    const input = card.getByTestId("discovery-outscraper-key-input");
-    const save = card.getByTestId("discovery-save-credential");
-    await input.fill("   ");
-    await expect(save).toBeDisabled();
-    await input.fill("test-secret-never-rendered-after-save");
-    await save.click();
-    await expect(save).toBeDisabled();
-    await save.click({ force: true });
+    const secrets = PROVIDERS.map(
+      (provider) => `test-${provider}-secret-never-rendered-after-save`,
+    );
+    for (const [index, provider] of PROVIDERS.entries()) {
+      const input = card.getByTestId(`discovery-${provider}-key-input`);
+      const save = card.getByTestId(`discovery-${provider}-save-credential`);
+      await input.fill("   ");
+      await expect(save).toBeDisabled();
+      await input.fill(secrets[index]);
+      await save.click();
+      await expect(save).toBeDisabled();
+      await save.click({ force: true });
 
-    await expect(card.getByTestId("discovery-credential-status")).toHaveText(
-      "Connected",
-    );
-    await expect(input).toHaveValue("");
-    await expect(input).toHaveAttribute("type", "password");
-    await expect(card).not.toContainText(
-      "test-secret-never-rendered-after-save",
-    );
-    await expect(
-      card.getByTestId("discovery-credential-confirmation"),
-    ).toContainText("connected on this device");
+      await expect(
+        card.getByTestId(`discovery-${provider}-credential-status`),
+      ).toHaveText("Connected");
+      await expect(input).toHaveValue("");
+      await expect(input).toHaveAttribute("type", "password");
+      await expect(
+        card.getByTestId(`discovery-${provider}-credential-confirmation`),
+      ).toContainText("connected on this device");
+    }
+    for (const secret of secrets) await expect(card).not.toContainText(secret);
     await expect
       .poll(() =>
         page.evaluate(
           () =>
             window.__BUZZ_E2E_COMMANDS__?.filter(
-              (command) => command === "save_discovery_outscraper_credential",
+              (command) => command === "save_discovery_credential",
             ).length ?? 0,
         ),
       )
-      .toBe(1);
-    expect(await card.ariaSnapshot()).not.toContain(
-      "test-secret-never-rendered-after-save",
-    );
-    expect(consoleMessages.join("\n")).not.toContain(
-      "test-secret-never-rendered-after-save",
-    );
+      .toBe(3);
+    const aria = await card.ariaSnapshot();
+    const consoleText = consoleMessages.join("\n");
+    for (const secret of secrets) {
+      expect(aria).not.toContain(secret);
+      expect(consoleText).not.toContain(secret);
+    }
 
     await waitForAnimations(page);
     await card.screenshot({ path: `${SHOTS}/01-connected.png` });
 
     await page.reload({ waitUntil: "domcontentloaded" });
     const reloadedCard = await openDiscoverySettings(page);
-    await expect(
-      reloadedCard.getByTestId("discovery-credential-status"),
-    ).toHaveText("Connected");
-    await expect(
-      reloadedCard.getByTestId("discovery-outscraper-key-input"),
-    ).toHaveValue("");
-    await expect(reloadedCard).not.toContainText(
-      "test-secret-never-rendered-after-save",
-    );
+    for (const [index, provider] of PROVIDERS.entries()) {
+      await expect(
+        reloadedCard.getByTestId(`discovery-${provider}-credential-status`),
+      ).toHaveText("Connected");
+      await expect(
+        reloadedCard.getByTestId(`discovery-${provider}-key-input`),
+      ).toHaveValue("");
+      await expect(reloadedCard).not.toContainText(secrets[index]);
 
-    await reloadedCard.getByTestId("discovery-delete-credential").click();
-    await expect(
-      reloadedCard.getByTestId("discovery-credential-status"),
-    ).toHaveText("Not connected");
-    await expect(
-      reloadedCard.getByTestId("discovery-credential-confirmation"),
-    ).toContainText("disconnected from this device");
+      await reloadedCard
+        .getByTestId(`discovery-${provider}-delete-credential`)
+        .click();
+      await expect(
+        reloadedCard.getByTestId(`discovery-${provider}-credential-status`),
+      ).toHaveText("Not connected");
+      await expect(
+        reloadedCard.getByTestId(
+          `discovery-${provider}-credential-confirmation`,
+        ),
+      ).toContainText("disconnected from this device");
+    }
   });
 
   test("fails closed when secure storage is unavailable", async ({ page }) => {
@@ -103,15 +113,17 @@ test.describe("Discovery credential settings", () => {
     });
     const card = await openDiscoverySettings(page);
 
-    await expect(card.getByTestId("discovery-credential-status")).toHaveText(
-      "Secure storage unavailable",
-    );
-    await expect(
-      card.getByTestId("discovery-credential-unavailable"),
-    ).toContainText("Unlock your system keychain");
-    await expect(
-      card.getByTestId("discovery-outscraper-key-input"),
-    ).toHaveCount(0);
+    for (const provider of PROVIDERS) {
+      await expect(
+        card.getByTestId(`discovery-${provider}-credential-status`),
+      ).toHaveText("Secure storage unavailable");
+      await expect(
+        card.getByTestId(`discovery-${provider}-credential-unavailable`),
+      ).toContainText("Unlock your system keychain");
+      await expect(
+        card.getByTestId(`discovery-${provider}-key-input`),
+      ).toHaveCount(0);
+    }
 
     await waitForAnimations(page);
     await card.screenshot({

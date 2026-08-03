@@ -1,4 +1,4 @@
-use std::{fmt, time::Duration};
+use std::{fmt, future::Future, time::Duration};
 
 use buzz_core_pkg::{
     discovery::DiscoveryBusinessSearchSpec, discovery_worker::DiscoveryBusinessObservationInput,
@@ -64,6 +64,34 @@ pub(super) struct OutscraperClient {
 pub(super) struct OutscraperSubmission {
     pub(super) request_id: String,
     pub(super) ready: Option<Vec<DiscoveryBusinessObservationInput>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum OutscraperPollOutcome {
+    Pending,
+    Ready(Vec<DiscoveryBusinessObservationInput>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct OutscraperSubmitFailure {
+    pub(super) error: OutscraperError,
+    pub(super) ambiguous: bool,
+}
+
+impl OutscraperSubmitFailure {
+    const fn rejected(error: OutscraperError) -> Self {
+        Self {
+            error,
+            ambiguous: false,
+        }
+    }
+
+    const fn ambiguous(error: OutscraperError) -> Self {
+        Self {
+            error,
+            ambiguous: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,15 +185,37 @@ impl OutscraperClient {
         )
     }
 
+    #[cfg(test)]
     pub(super) async fn submit(
         &self,
         search: &DiscoveryBusinessSearchSpec,
         credential: &Zeroizing<String>,
         cancellation: &CancellationToken,
     ) -> Result<OutscraperSubmission, OutscraperError> {
+        self.submit_with_preflight(
+            search,
+            credential,
+            || std::future::ready(true),
+            cancellation,
+        )
+        .await
+        .map_err(|failure| failure.error)
+    }
+
+    pub(super) async fn submit_with_preflight<P, PFut>(
+        &self,
+        search: &DiscoveryBusinessSearchSpec,
+        credential: &Zeroizing<String>,
+        mut before_request: P,
+        cancellation: &CancellationToken,
+    ) -> Result<OutscraperSubmission, OutscraperSubmitFailure>
+    where
+        P: FnMut() -> PFut,
+        PFut: Future<Output = bool>,
+    {
         search
             .validate()
-            .map_err(|_| OutscraperError::InvalidRequest)?;
+            .map_err(|_| OutscraperSubmitFailure::rejected(OutscraperError::InvalidRequest))?;
         let provider_query = search.provider_query();
         let limit = search.limit.to_string();
         let mut query = vec![
@@ -181,18 +231,28 @@ impl OutscraperClient {
 
         let mut retries = 0;
         loop {
+            if cancellation.is_cancelled() || !before_request().await {
+                return Err(OutscraperSubmitFailure::rejected(
+                    OutscraperError::Cancelled,
+                ));
+            }
             let response = tokio::select! {
-                () = cancellation.cancelled() => return Err(OutscraperError::Cancelled),
+                () = cancellation.cancelled() => return Err(OutscraperSubmitFailure::ambiguous(OutscraperError::Cancelled)),
                 result = self.http
                     .post(&self.endpoints.search)
                     .header("X-API-KEY", credential.as_str())
                     .query(&query)
-                    .send() => result.map_err(classify_transport_error)?,
+                    .send() => result.map_err(|error| OutscraperSubmitFailure::ambiguous(classify_transport_error(error)))?,
             };
             match classify_status(response.status()) {
                 StatusDisposition::Parse => {
-                    let envelope = self.parse_response(response, cancellation).await?;
-                    return match interpret_envelope(envelope)? {
+                    let envelope = self
+                        .parse_response(response, cancellation)
+                        .await
+                        .map_err(OutscraperSubmitFailure::ambiguous)?;
+                    return match interpret_envelope(envelope)
+                        .map_err(OutscraperSubmitFailure::ambiguous)?
+                    {
                         EnvelopeState::Pending(request_id) => Ok(OutscraperSubmission {
                             request_id,
                             ready: None,
@@ -205,23 +265,52 @@ impl OutscraperClient {
                         }
                     };
                 }
-                StatusDisposition::Retry(_error) if retries < self.poll.max_retries => {
+                StatusDisposition::Retry(OutscraperError::RateLimited)
+                    if retries < self.poll.max_retries =>
+                {
                     retries += 1;
-                    self.wait_retry(retries, cancellation).await?;
+                    self.wait_retry(retries, cancellation)
+                        .await
+                        .map_err(OutscraperSubmitFailure::rejected)?;
                 }
                 StatusDisposition::Retry(error) | StatusDisposition::Terminal(error) => {
-                    return Err(error);
+                    return Err(if error == OutscraperError::ProviderUnavailable {
+                        OutscraperSubmitFailure::ambiguous(error)
+                    } else {
+                        OutscraperSubmitFailure::rejected(error)
+                    });
                 }
             }
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn poll_until_ready(
         &self,
         request_id: &str,
         credential: &Zeroizing<String>,
         cancellation: &CancellationToken,
     ) -> Result<Vec<DiscoveryBusinessObservationInput>, OutscraperError> {
+        self.poll_until_ready_with_preflight(
+            request_id,
+            credential,
+            || std::future::ready(true),
+            cancellation,
+        )
+        .await
+    }
+
+    pub(super) async fn poll_until_ready_with_preflight<P, PFut>(
+        &self,
+        request_id: &str,
+        credential: &Zeroizing<String>,
+        mut before_request: P,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<DiscoveryBusinessObservationInput>, OutscraperError>
+    where
+        P: FnMut() -> PFut,
+        PFut: Future<Output = bool>,
+    {
         validate_request_id(request_id)?;
         let request_url = format!(
             "{}/{request_id}",
@@ -233,6 +322,9 @@ impl OutscraperClient {
         loop {
             if started.elapsed() >= self.poll.total_timeout {
                 return Err(OutscraperError::PollExhausted);
+            }
+            if cancellation.is_cancelled() || !before_request().await {
+                return Err(OutscraperError::Cancelled);
             }
             let response = tokio::select! {
                 () = cancellation.cancelled() => return Err(OutscraperError::Cancelled),
@@ -268,6 +360,52 @@ impl OutscraperClient {
                     return Err(error);
                 }
             }
+        }
+    }
+
+    pub(super) async fn poll_once_with_preflight<P, PFut>(
+        &self,
+        request_id: &str,
+        credential: &Zeroizing<String>,
+        before_request: P,
+        cancellation: &CancellationToken,
+    ) -> Result<OutscraperPollOutcome, OutscraperError>
+    where
+        P: FnOnce() -> PFut,
+        PFut: Future<Output = bool>,
+    {
+        validate_request_id(request_id)?;
+        if cancellation.is_cancelled() || !before_request().await {
+            return Err(OutscraperError::Cancelled);
+        }
+        let request_url = format!(
+            "{}/{request_id}",
+            self.endpoints.requests.trim_end_matches('/')
+        );
+        let response = tokio::select! {
+            () = cancellation.cancelled() => return Err(OutscraperError::Cancelled),
+            result = self.http
+                .get(&request_url)
+                .header("X-API-KEY", credential.as_str())
+                .send() => result.map_err(classify_transport_error)?,
+        };
+        match classify_status(response.status()) {
+            StatusDisposition::Parse => {
+                match interpret_envelope(self.parse_response(response, cancellation).await?)? {
+                    EnvelopeState::Pending(returned_id) if returned_id == request_id => {
+                        Ok(OutscraperPollOutcome::Pending)
+                    }
+                    EnvelopeState::Ready(returned_id, observations)
+                        if returned_id == request_id =>
+                    {
+                        Ok(OutscraperPollOutcome::Ready(observations))
+                    }
+                    EnvelopeState::Pending(_) | EnvelopeState::Ready(_, _) => {
+                        Err(OutscraperError::MalformedResponse)
+                    }
+                }
+            }
+            StatusDisposition::Retry(error) | StatusDisposition::Terminal(error) => Err(error),
         }
     }
 
@@ -701,24 +839,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transient_rate_limit_and_server_failures_recover_with_bounded_retry() {
-        for status in [
-            AxumStatus::TOO_MANY_REQUESTS,
-            AxumStatus::INTERNAL_SERVER_ERROR,
-        ] {
-            let (client, state, handle) = server(Scenario::TransientStatus(status)).await;
-            let result = client
-                .submit(
-                    &search(),
-                    &Zeroizing::new("test-key".to_string()),
-                    &CancellationToken::new(),
-                )
-                .await
-                .expect("transient provider status must recover");
-            assert_eq!(result.ready.expect("ready after retry").len(), 1);
-            assert_eq!(state.submit_count.load(Ordering::SeqCst), 2);
-            handle.abort();
-        }
+    async fn submit_retries_rate_limit_but_not_ambiguous_server_failure() {
+        let (client, state, handle) =
+            server(Scenario::TransientStatus(AxumStatus::TOO_MANY_REQUESTS)).await;
+        let preflights = AtomicUsize::new(0);
+        let result = client
+            .submit_with_preflight(
+                &search(),
+                &Zeroizing::new("test-key".to_string()),
+                || {
+                    preflights.fetch_add(1, Ordering::SeqCst);
+                    std::future::ready(true)
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("rate-limited submit must recover");
+        assert_eq!(result.ready.expect("ready after retry").len(), 1);
+        assert_eq!(state.submit_count.load(Ordering::SeqCst), 2);
+        assert_eq!(preflights.load(Ordering::SeqCst), 2);
+        handle.abort();
+
+        let (client, state, handle) =
+            server(Scenario::TransientStatus(AxumStatus::INTERNAL_SERVER_ERROR)).await;
+        let error = client
+            .submit(
+                &search(),
+                &Zeroizing::new("test-key".to_string()),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect_err("ambiguous server failure must not repeat a paid submit");
+        assert_eq!(error, OutscraperError::ProviderUnavailable);
+        assert_eq!(state.submit_count.load(Ordering::SeqCst), 1);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn poll_preflights_every_provider_request() {
+        let (client, state, handle) = server(Scenario::AsyncSuccess).await;
+        let preflights = AtomicUsize::new(0);
+        let observations = client
+            .poll_until_ready_with_preflight(
+                "job-1",
+                &Zeroizing::new("test-key".to_string()),
+                || {
+                    preflights.fetch_add(1, Ordering::SeqCst);
+                    std::future::ready(true)
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("poll with lease preflight");
+        assert_eq!(observations.len(), 1);
+        assert_eq!(state.poll_count.load(Ordering::SeqCst), 2);
+        assert_eq!(preflights.load(Ordering::SeqCst), 2);
+        handle.abort();
     }
 
     #[tokio::test]

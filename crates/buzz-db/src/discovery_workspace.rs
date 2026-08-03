@@ -2,8 +2,8 @@
 
 use buzz_core::{
     discovery::{
-        DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState,
-        DiscoveryTerminalReason,
+        DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState, DiscoverySource,
+        DiscoverySourceConfig, DiscoverySourceMode, DiscoveryTerminalReason,
     },
     discovery_workspace::{
         DiscoveryBusinessLeadProjection, DiscoveryCampaignInput, DiscoveryCampaignListRequest,
@@ -51,6 +51,86 @@ pub(crate) async fn require_campaign_search_tx(
         ));
     }
     Ok(())
+}
+
+/// Load the mutable Campaign plan that must be snapshotted into a new run.
+pub(crate) async fn load_campaign_source_config_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    campaign_id: Uuid,
+) -> Result<DiscoverySourceConfig> {
+    let row = sqlx::query(
+        "SELECT source_mode,source_keys FROM discovery_campaigns \
+         WHERE community_id=$1 AND id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(campaign_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| DbError::NotFound("Discovery campaign".into()))?;
+    source_config_from_row(&row)
+}
+
+/// Store one immutable run plan and its initial per-source progress rows.
+pub(crate) async fn insert_run_source_plan_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+    source_config: &DiscoverySourceConfig,
+) -> Result<()> {
+    source_config
+        .validate()
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    let source_keys = source_config
+        .sources
+        .iter()
+        .copied()
+        .map(source_text)
+        .collect::<Vec<_>>();
+    sqlx::query(
+        "INSERT INTO discovery_run_source_plans \
+         (community_id,run_id,source_mode,source_keys) VALUES ($1,$2,$3,$4)",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .bind(source_mode_text(source_config.mode))
+    .bind(&source_keys)
+    .execute(&mut **tx)
+    .await?;
+    for (position, source) in source_config.sources.iter().copied().enumerate() {
+        sqlx::query(
+            "INSERT INTO discovery_run_sources \
+             (community_id,run_id,source_key,provider,position) VALUES ($1,$2,$3,$4,$5)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(run_id)
+        .bind(source_text(source))
+        .bind(super::discovery::provider_text(source.provider()))
+        .bind(i16::try_from(position).map_err(|_| {
+            DbError::InvalidData("Discovery source position exceeds SMALLINT".into())
+        })?)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Load the immutable source snapshot owned by one run.
+pub(crate) async fn load_run_source_config_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+) -> Result<DiscoverySourceConfig> {
+    let row = sqlx::query(
+        "SELECT source_mode,source_keys FROM discovery_run_source_plans \
+         WHERE community_id=$1 AND run_id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| DbError::NotFound("Discovery run source plan".into()))?;
+    source_config_from_row(&row)
 }
 
 /// Atomic result of a signed Discovery workspace action.
@@ -216,6 +296,15 @@ async fn apply_workspace_operation_tx(
                 campaign: Box::new(load_campaign_tx(tx, community_id, campaign.campaign_id).await?),
             })
         }
+        DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+            campaign_id,
+            source_config,
+        } => {
+            update_campaign_sources_tx(tx, community_id, *campaign_id, source_config).await?;
+            Ok(DiscoveryWorkspaceResult::Campaign {
+                campaign: Box::new(load_campaign_tx(tx, community_id, *campaign_id).await?),
+            })
+        }
         DiscoveryWorkspaceActionPayload::GetCampaign { campaign_id } => {
             Ok(DiscoveryWorkspaceResult::Campaign {
                 campaign: Box::new(load_campaign_tx(tx, community_id, *campaign_id).await?),
@@ -247,8 +336,8 @@ async fn insert_campaign_tx(
         sqlx::query(
             "INSERT INTO discovery_campaigns \
          (community_id,id,created_by,name,industry_id,industry_name,vertical_id,vertical_name,\
-          query,location,target,description,language,region) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) \
+          query,location,target,description,language,region,source_mode,source_keys) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) \
          ON CONFLICT (community_id,id) DO NOTHING RETURNING id",
         )
         .bind(community_id.as_uuid())
@@ -267,12 +356,53 @@ async fn insert_campaign_tx(
         .bind(campaign.description.as_deref())
         .bind(&campaign.language)
         .bind(campaign.region.as_deref())
+        .bind(source_mode_text(campaign.source_config.mode))
+        .bind(
+            campaign
+                .source_config
+                .sources
+                .iter()
+                .copied()
+                .map(source_text)
+                .collect::<Vec<_>>(),
+        )
         .fetch_optional(&mut **tx)
         .await?;
     if inserted.is_none() {
         return Err(DbError::AccessDenied(
             "Discovery campaign identifier already exists".into(),
         ));
+    }
+    Ok(())
+}
+
+async fn update_campaign_sources_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    campaign_id: Uuid,
+    source_config: &DiscoverySourceConfig,
+) -> Result<()> {
+    source_config
+        .validate()
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    let source_keys = source_config
+        .sources
+        .iter()
+        .copied()
+        .map(source_text)
+        .collect::<Vec<_>>();
+    let updated = sqlx::query(
+        "UPDATE discovery_campaigns SET source_mode=$3,source_keys=$4,updated_at=now() \
+         WHERE community_id=$1 AND id=$2 RETURNING id",
+    )
+    .bind(community_id.as_uuid())
+    .bind(campaign_id)
+    .bind(source_mode_text(source_config.mode))
+    .bind(source_keys)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if updated.is_none() {
+        return Err(DbError::NotFound("Discovery campaign".into()));
     }
     Ok(())
 }
@@ -352,7 +482,7 @@ async fn list_leads_tx(
     .fetch_one(&mut **tx)
     .await?;
     let rows = sqlx::query(
-        "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.name,\
+        "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.provider,o.name,\
                 o.website,o.phone,o.full_address,o.city,o.state,o.country,o.category,o.subtypes,\
                 o.rating_hundredths,o.reviews_count,o.source_url,o.image_url,o.first_observed_at \
          FROM discovery_business_observations o \
@@ -383,11 +513,20 @@ async fn list_leads_tx(
 const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
     "SELECT ",
     "c.id AS campaign_record_id,c.name,c.industry_id,c.industry_name,c.vertical_id,c.vertical_name,\
-     c.query,c.location,c.target,c.description,c.language,c.region,c.created_at,\
+     c.query,c.location,c.target,c.description,c.language,c.region,c.source_mode,c.source_keys,c.created_at,\
      GREATEST(c.updated_at,COALESCE(r.updated_at,c.updated_at)) AS campaign_updated_at,\
      COALESCE(l.lead_count,0) AS lead_count,r.id AS run_id,r.campaign_id AS run_campaign_id,\
      r.state AS run_state,r.completed_steps,r.total_steps,r.cancel_requested,r.terminal_reason,\
-     r.created_at AS run_created_at,r.updated_at AS run_updated_at ",
+     r.created_at AS run_created_at,r.updated_at AS run_updated_at,\
+     COALESCE((SELECT jsonb_agg(jsonb_build_object(\
+       'source',rs.source_key,'provider',rs.provider,'position',rs.position,\
+       'status',rs.status,'request_cursor',rs.request_cursor,\
+       'request_count',rs.request_count,'returned_count',rs.returned_count,\
+       'retained_count',rs.retained_count,'duplicate_count',rs.duplicate_count,\
+       'failure_class',rs.failure_class,'started_at',rs.started_at,\
+       'finished_at',rs.finished_at,'updated_at',rs.updated_at) ORDER BY rs.position) \
+       FROM discovery_run_sources rs WHERE rs.community_id=c.community_id \
+       AND rs.run_id=r.id),'[]'::jsonb) AS run_source_states ",
     "FROM discovery_campaigns c ",
     "LEFT JOIN LATERAL (SELECT id,campaign_id,state,completed_steps,total_steps,cancel_requested,\
       terminal_reason,created_at,updated_at FROM discovery_runs \
@@ -402,11 +541,20 @@ const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
 const CAMPAIGN_PROJECTION_SELECT_FILTERED: &str = concat!(
     "SELECT ",
     "c.id AS campaign_record_id,c.name,c.industry_id,c.industry_name,c.vertical_id,c.vertical_name,\
-     c.query,c.location,c.target,c.description,c.language,c.region,c.created_at,\
+     c.query,c.location,c.target,c.description,c.language,c.region,c.source_mode,c.source_keys,c.created_at,\
      GREATEST(c.updated_at,COALESCE(r.updated_at,c.updated_at)) AS campaign_updated_at,\
      COALESCE(l.lead_count,0) AS lead_count,r.id AS run_id,r.campaign_id AS run_campaign_id,\
      r.state AS run_state,r.completed_steps,r.total_steps,r.cancel_requested,r.terminal_reason,\
-     r.created_at AS run_created_at,r.updated_at AS run_updated_at ",
+     r.created_at AS run_created_at,r.updated_at AS run_updated_at,\
+     COALESCE((SELECT jsonb_agg(jsonb_build_object(\
+       'source',rs.source_key,'provider',rs.provider,'position',rs.position,\
+       'status',rs.status,'request_cursor',rs.request_cursor,\
+       'request_count',rs.request_count,'returned_count',rs.returned_count,\
+       'retained_count',rs.retained_count,'duplicate_count',rs.duplicate_count,\
+       'failure_class',rs.failure_class,'started_at',rs.started_at,\
+       'finished_at',rs.finished_at,'updated_at',rs.updated_at) ORDER BY rs.position) \
+       FROM discovery_run_sources rs WHERE rs.community_id=c.community_id \
+       AND rs.run_id=r.id),'[]'::jsonb) AS run_source_states ",
     "FROM discovery_campaigns c ",
     "LEFT JOIN LATERAL (SELECT id,campaign_id,state,completed_steps,total_steps,cancel_requested,\
       terminal_reason,created_at,updated_at FROM discovery_runs \
@@ -441,8 +589,11 @@ fn campaign_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryCampaignPro
         description: row.try_get("description")?,
         language: row.try_get("language")?,
         region: row.try_get("region")?,
+        source_config: source_config_from_row(row)?,
         lead_count: count_to_u32(lead_count, "Lead")?,
         latest_run,
+        latest_run_sources: serde_json::from_value(row.try_get("run_source_states")?)
+            .map_err(|_| DbError::InvalidData("Discovery source states are invalid".into()))?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("campaign_updated_at")?,
     })
@@ -477,6 +628,7 @@ fn lead_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryBusinessLeadPro
         campaign_id: row.try_get("campaign_id")?,
         industry_id: row.try_get("industry_id")?,
         vertical_id: row.try_get("vertical_id")?,
+        provider: super::discovery::parse_provider(row.try_get("provider")?)?,
         name: row.try_get("name")?,
         website: row.try_get("website")?,
         phone: row.try_get("phone")?,
@@ -535,10 +687,59 @@ fn operation_text(operation: DiscoveryWorkspaceOperation) -> &'static str {
     match operation {
         DiscoveryWorkspaceOperation::Access => "access",
         DiscoveryWorkspaceOperation::CreateCampaign => "create_campaign",
+        DiscoveryWorkspaceOperation::UpdateCampaignSources => "update_campaign_sources",
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
     }
+}
+
+fn source_mode_text(mode: DiscoverySourceMode) -> &'static str {
+    match mode {
+        DiscoverySourceMode::Waterfall => "waterfall",
+        DiscoverySourceMode::Concurrent => "concurrent",
+    }
+}
+
+fn parse_source_mode(value: &str) -> Result<DiscoverySourceMode> {
+    match value {
+        "waterfall" => Ok(DiscoverySourceMode::Waterfall),
+        "concurrent" => Ok(DiscoverySourceMode::Concurrent),
+        _ => Err(DbError::InvalidData("invalid Discovery source mode".into())),
+    }
+}
+
+fn source_text(source: DiscoverySource) -> &'static str {
+    match source {
+        DiscoverySource::GoogleMaps => "google_maps",
+        DiscoverySource::BraveSearch => "brave_search",
+        DiscoverySource::ExaSearch => "exa_search",
+    }
+}
+
+pub(crate) fn parse_source(value: &str) -> Result<DiscoverySource> {
+    match value {
+        "google_maps" => Ok(DiscoverySource::GoogleMaps),
+        "brave_search" => Ok(DiscoverySource::BraveSearch),
+        "exa_search" => Ok(DiscoverySource::ExaSearch),
+        _ => Err(DbError::InvalidData("invalid Discovery source key".into())),
+    }
+}
+
+fn source_config_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoverySourceConfig> {
+    let mode: String = row.try_get("source_mode")?;
+    let source_keys: Vec<String> = row.try_get("source_keys")?;
+    let source_config = DiscoverySourceConfig {
+        mode: parse_source_mode(&mode)?,
+        sources: source_keys
+            .iter()
+            .map(|source| parse_source(source))
+            .collect::<Result<Vec<_>>>()?,
+    };
+    source_config
+        .validate()
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    Ok(source_config)
 }
 
 fn parse_run_state(value: String) -> Result<DiscoveryRunState> {
@@ -568,4 +769,41 @@ fn parse_terminal_reason(value: Option<String>) -> Result<Option<DiscoveryTermin
 fn count_to_u32(value: i64, entity: &str) -> Result<u32> {
     u32::try_from(value)
         .map_err(|_| DbError::InvalidData(format!("Discovery {entity} count is invalid")))
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+    use buzz_core::discovery_workspace::{DiscoveryCampaignInput, DiscoveryWorkspaceActionPayload};
+
+    #[test]
+    fn default_source_campaign_keeps_the_released_workspace_fingerprint_shape() {
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::from_u128(1),
+            idempotency_key: Uuid::from_u128(2),
+            payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
+                campaign: Box::new(DiscoveryCampaignInput {
+                    campaign_id: Uuid::from_u128(3),
+                    name: "Legacy dentists".into(),
+                    industry_id: "healthcare".into(),
+                    industry_name: "Healthcare".into(),
+                    vertical_id: "dentists".into(),
+                    vertical_name: "Dentists".into(),
+                    query: "dentists".into(),
+                    location: "Sandton, South Africa".into(),
+                    target: 100,
+                    description: None,
+                    language: "en".into(),
+                    region: Some("ZA".into()),
+                    source_config: DiscoverySourceConfig::default(),
+                }),
+            },
+        };
+        let encoded = serde_json::to_string(&request).expect("encode workspace request");
+        assert!(!encoded.contains("source_config"));
+        assert_eq!(
+            workspace_request_fingerprint(&request).expect("fingerprint request"),
+            <[u8; 32]>::from(Sha256::digest(encoded.as_bytes()))
+        );
+    }
 }

@@ -14,14 +14,50 @@ use nostr::{Event, EventBuilder, EventId, Kind, PublicKey, Tag};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
-const ACTION_SCHEMA: &str = "colony.discovery-workspace-action/v1";
-const RECEIPT_SCHEMA: &str = "colony.discovery-workspace-receipt/v1";
+const ACTION_SCHEMA_V1: &str = "colony.discovery-workspace-action/v1";
+const ACTION_SCHEMA_V2: &str = "colony.discovery-workspace-action/v2";
+const RECEIPT_SCHEMA_V1: &str = "colony.discovery-workspace-receipt/v1";
+const RECEIPT_SCHEMA_V2: &str = "colony.discovery-workspace-receipt/v2";
+
+/// Version of the strict Discovery workspace wire envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryWorkspaceWireVersion {
+    /// Released Outscraper-only contract.
+    V1,
+    /// Multi-source Campaign and provenance contract.
+    V2,
+}
+
+impl DiscoveryWorkspaceWireVersion {
+    const fn tag(self) -> &'static str {
+        match self {
+            Self::V1 => "1",
+            Self::V2 => "2",
+        }
+    }
+
+    const fn action_schema(self) -> &'static str {
+        match self {
+            Self::V1 => ACTION_SCHEMA_V1,
+            Self::V2 => ACTION_SCHEMA_V2,
+        }
+    }
+
+    const fn receipt_schema(self) -> &'static str {
+        match self {
+            Self::V1 => RECEIPT_SCHEMA_V1,
+            Self::V2 => RECEIPT_SCHEMA_V2,
+        }
+    }
+}
 
 /// A strict workspace action together with the relay named by its `p` tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedDiscoveryWorkspaceAction {
     /// Relay public key addressed by the actor.
     pub relay_pubkey: PublicKey,
+    /// Exact signed wire version, used to reply compatibly during upgrades.
+    pub wire_version: DiscoveryWorkspaceWireVersion,
     /// Validated request.
     pub request: DiscoveryWorkspaceRequest,
 }
@@ -29,6 +65,8 @@ pub struct ParsedDiscoveryWorkspaceAction {
 /// A strict relay receipt together with its private routing references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedDiscoveryWorkspaceReceipt {
+    /// Exact relay-authored wire version.
+    pub wire_version: DiscoveryWorkspaceWireVersion,
     /// Requester public key named by the receipt's `p` tag.
     pub actor_pubkey: PublicKey,
     /// Exact signed action processed by the relay.
@@ -84,22 +122,39 @@ pub fn build_discovery_workspace_action(
     relay_pubkey: PublicKey,
     request: &DiscoveryWorkspaceRequest,
 ) -> Result<EventBuilder, DiscoveryWorkspaceSdkError> {
+    build_discovery_workspace_action_for_version(
+        DiscoveryWorkspaceWireVersion::V2,
+        relay_pubkey,
+        request,
+    )
+}
+
+fn build_discovery_workspace_action_for_version(
+    wire_version: DiscoveryWorkspaceWireVersion,
+    relay_pubkey: PublicKey,
+    request: &DiscoveryWorkspaceRequest,
+) -> Result<EventBuilder, DiscoveryWorkspaceSdkError> {
     request
         .validate()
         .map_err(|_| DiscoveryWorkspaceSdkError::InvalidEnvelope("workspace action"))?;
+    if wire_version == DiscoveryWorkspaceWireVersion::V1 && !is_v1_request(request) {
+        return Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
+            "workspace action",
+        ));
+    }
     let operation = operation_tag(request.payload.operation());
     let request_id = request.request_id.to_string();
     let idempotency_key = request.idempotency_key.to_string();
     let relay = relay_pubkey.to_hex();
     let content = WorkspaceActionContent {
-        schema: ACTION_SCHEMA.to_owned(),
+        schema: wire_version.action_schema().to_owned(),
         request: request.clone(),
     };
     let tags = [
         scalar_tag("p", &relay)?,
         tuple_tag(&[
             "discovery-workspace-action",
-            "1",
+            wire_version.tag(),
             operation,
             &request_id,
             &idempotency_key,
@@ -124,15 +179,11 @@ pub fn parse_discovery_workspace_action(
     )?;
     let relay_pubkey = parse_pubkey(required_scalar_tag(event, "p")?)?;
     let tuple = required_tuple_tag(event, "discovery-workspace-action", 5)?;
-    if tuple[1] != "1" {
-        return Err(DiscoveryWorkspaceSdkError::InvalidTag(
-            "discovery-workspace-action",
-        ));
-    }
+    let wire_version = parse_wire_version(&tuple[1], "discovery-workspace-action")?;
     let operation = parse_operation(&tuple[2])?;
     let content: WorkspaceActionContent =
         parse_canonical_content(&event.content, "workspace action")?;
-    if content.schema != ACTION_SCHEMA
+    if content.schema != wire_version.action_schema()
         || content.request.payload.operation() != operation
         || content.request.request_id.to_string() != tuple[3]
         || content.request.idempotency_key.to_string() != tuple[4]
@@ -142,8 +193,14 @@ pub fn parse_discovery_workspace_action(
             "workspace action",
         ));
     }
+    if wire_version == DiscoveryWorkspaceWireVersion::V1 && !is_v1_request(&content.request) {
+        return Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
+            "workspace action",
+        ));
+    }
     Ok(ParsedDiscoveryWorkspaceAction {
         relay_pubkey,
+        wire_version,
         request: content.request,
     })
 }
@@ -154,21 +211,43 @@ pub fn build_discovery_workspace_receipt(
     action_event_id: EventId,
     receipt: &DiscoveryWorkspaceReceipt,
 ) -> Result<EventBuilder, DiscoveryWorkspaceSdkError> {
+    build_discovery_workspace_receipt_for_version(
+        DiscoveryWorkspaceWireVersion::V2,
+        actor_pubkey,
+        action_event_id,
+        receipt,
+    )
+}
+
+/// Build a relay receipt matching the exact action wire version.
+pub fn build_discovery_workspace_receipt_for_version(
+    wire_version: DiscoveryWorkspaceWireVersion,
+    actor_pubkey: PublicKey,
+    action_event_id: EventId,
+    receipt: &DiscoveryWorkspaceReceipt,
+) -> Result<EventBuilder, DiscoveryWorkspaceSdkError> {
     validate_receipt(receipt)?;
+    if wire_version == DiscoveryWorkspaceWireVersion::V1
+        && receipt.operation == DiscoveryWorkspaceOperation::UpdateCampaignSources
+    {
+        return Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
+            "workspace receipt",
+        ));
+    }
     let actor = actor_pubkey.to_hex();
     let action = action_event_id.to_hex();
     let request_id = receipt.request_id.to_string();
     let idempotency_key = receipt.idempotency_key.to_string();
     let content = WorkspaceReceiptContent {
-        schema: RECEIPT_SCHEMA.to_owned(),
-        receipt: receipt.clone(),
+        schema: wire_version.receipt_schema().to_owned(),
+        receipt: receipt_for_wire_version(wire_version, receipt),
     };
     let tags = [
         scalar_tag("p", &actor)?,
         tuple_tag(&["e", &action, "", "discovery-workspace-action"])?,
         tuple_tag(&[
             "discovery-workspace-receipt",
-            "1",
+            wire_version.tag(),
             operation_tag(receipt.operation),
             &request_id,
             &idempotency_key,
@@ -199,15 +278,11 @@ pub fn parse_discovery_workspace_receipt(
     let action_event_id = EventId::from_hex(&action[1])
         .map_err(|_| DiscoveryWorkspaceSdkError::InvalidEnvelope("workspace receipt"))?;
     let tuple = required_tuple_tag(event, "discovery-workspace-receipt", 5)?;
-    if tuple[1] != "1" {
-        return Err(DiscoveryWorkspaceSdkError::InvalidTag(
-            "discovery-workspace-receipt",
-        ));
-    }
+    let wire_version = parse_wire_version(&tuple[1], "discovery-workspace-receipt")?;
     let operation = parse_operation(&tuple[2])?;
     let content: WorkspaceReceiptContent =
         parse_canonical_content(&event.content, "workspace receipt")?;
-    if content.schema != RECEIPT_SCHEMA
+    if content.schema != wire_version.receipt_schema()
         || content.receipt.operation != operation
         || content.receipt.request_id.to_string() != tuple[3]
         || content.receipt.idempotency_key.to_string() != tuple[4]
@@ -218,10 +293,70 @@ pub fn parse_discovery_workspace_receipt(
     }
     validate_receipt(&content.receipt)?;
     Ok(ParsedDiscoveryWorkspaceReceipt {
+        wire_version,
         actor_pubkey,
         action_event_id,
         receipt: content.receipt,
     })
+}
+
+fn is_v1_request(request: &DiscoveryWorkspaceRequest) -> bool {
+    match &request.payload {
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::CreateCampaign {
+            campaign,
+        } => campaign.source_config.is_default(),
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+            ..
+        } => false,
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::Access
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetCampaign { .. }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListCampaigns { .. }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListLeads { .. } => true,
+    }
+}
+
+fn receipt_for_wire_version(
+    wire_version: DiscoveryWorkspaceWireVersion,
+    receipt: &DiscoveryWorkspaceReceipt,
+) -> DiscoveryWorkspaceReceipt {
+    let mut compatible = receipt.clone();
+    if wire_version == DiscoveryWorkspaceWireVersion::V1 {
+        match &mut compatible.result {
+            DiscoveryWorkspaceResult::Campaign { campaign } => {
+                make_campaign_v1_compatible(campaign)
+            }
+            DiscoveryWorkspaceResult::Campaigns { page } => {
+                for campaign in &mut page.campaigns {
+                    make_campaign_v1_compatible(campaign);
+                }
+            }
+            DiscoveryWorkspaceResult::Leads { page } => {
+                for lead in &mut page.leads {
+                    lead.provider = buzz_core::discovery::DiscoveryProvider::Outscraper;
+                }
+            }
+            DiscoveryWorkspaceResult::Access { .. } => {}
+        }
+    }
+    compatible
+}
+
+fn make_campaign_v1_compatible(
+    campaign: &mut buzz_core::discovery_workspace::DiscoveryCampaignProjection,
+) {
+    campaign.source_config = buzz_core::discovery::DiscoverySourceConfig::default();
+    campaign.latest_run_sources.clear();
+}
+
+fn parse_wire_version(
+    value: &str,
+    tag: &'static str,
+) -> Result<DiscoveryWorkspaceWireVersion, DiscoveryWorkspaceSdkError> {
+    match value {
+        "1" => Ok(DiscoveryWorkspaceWireVersion::V1),
+        "2" => Ok(DiscoveryWorkspaceWireVersion::V2),
+        _ => Err(DiscoveryWorkspaceSdkError::InvalidTag(tag)),
+    }
 }
 
 fn validate_receipt(receipt: &DiscoveryWorkspaceReceipt) -> Result<(), DiscoveryWorkspaceSdkError> {
@@ -236,7 +371,9 @@ fn validate_receipt(receipt: &DiscoveryWorkspaceReceipt) -> Result<(), Discovery
             DiscoveryWorkspaceOperation::Access,
             DiscoveryWorkspaceResult::Access { .. }
         ) | (
-            DiscoveryWorkspaceOperation::CreateCampaign | DiscoveryWorkspaceOperation::GetCampaign,
+            DiscoveryWorkspaceOperation::CreateCampaign
+                | DiscoveryWorkspaceOperation::UpdateCampaignSources
+                | DiscoveryWorkspaceOperation::GetCampaign,
             DiscoveryWorkspaceResult::Campaign { .. }
         ) | (
             DiscoveryWorkspaceOperation::ListCampaigns,
@@ -258,6 +395,7 @@ fn operation_tag(operation: DiscoveryWorkspaceOperation) -> &'static str {
     match operation {
         DiscoveryWorkspaceOperation::Access => "access",
         DiscoveryWorkspaceOperation::CreateCampaign => "create_campaign",
+        DiscoveryWorkspaceOperation::UpdateCampaignSources => "update_campaign_sources",
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
@@ -268,6 +406,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkspaceOperation, Discovery
     match value {
         "access" => Ok(DiscoveryWorkspaceOperation::Access),
         "create_campaign" => Ok(DiscoveryWorkspaceOperation::CreateCampaign),
+        "update_campaign_sources" => Ok(DiscoveryWorkspaceOperation::UpdateCampaignSources),
         "get_campaign" => Ok(DiscoveryWorkspaceOperation::GetCampaign),
         "list_campaigns" => Ok(DiscoveryWorkspaceOperation::ListCampaigns),
         "list_leads" => Ok(DiscoveryWorkspaceOperation::ListLeads),
@@ -369,8 +508,10 @@ fn required_tuple_tag<'a>(
 mod tests {
     use super::*;
     use buzz_core::discovery_workspace::{
-        DiscoveryCampaignInput, DiscoveryCampaignListRequest, DiscoveryWorkspaceActionPayload,
+        DiscoveryCampaignInput, DiscoveryCampaignListRequest, DiscoveryCampaignProjection,
+        DiscoveryWorkspaceActionPayload,
     };
+    use chrono::{TimeZone, Utc};
     use nostr::Keys;
     use uuid::Uuid;
 
@@ -379,7 +520,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: DiscoveryCampaignInput {
+                campaign: Box::new(DiscoveryCampaignInput {
                     campaign_id: Uuid::new_v4(),
                     name: "Sandton dentists".into(),
                     industry_id: "healthcare".into(),
@@ -392,7 +533,8 @@ mod tests {
                     description: None,
                     language: "en".into(),
                     region: Some("ZA".into()),
-                },
+                    source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
+                }),
             },
         }
     }
@@ -407,9 +549,79 @@ mod tests {
             .sign_with_keys(&actor)
             .expect("sign action");
         let parsed = parse_discovery_workspace_action(&event).expect("parse action");
+        assert_eq!(parsed.wire_version, DiscoveryWorkspaceWireVersion::V2);
         assert_eq!(parsed.relay_pubkey, relay.public_key());
         assert_eq!(parsed.request, request);
         assert_eq!(event.tags.len(), 2);
+    }
+
+    #[test]
+    fn released_v1_action_and_receipt_remain_canonical_and_readable() {
+        let relay = Keys::generate();
+        let actor = Keys::generate();
+        let request = create_request();
+        let action = build_discovery_workspace_action_for_version(
+            DiscoveryWorkspaceWireVersion::V1,
+            relay.public_key(),
+            &request,
+        )
+        .expect("build v1 action")
+        .sign_with_keys(&actor)
+        .expect("sign v1 action");
+        assert!(!action.content.contains("source_config"));
+        let parsed = parse_discovery_workspace_action(&action).expect("parse v1 action");
+        assert_eq!(parsed.wire_version, DiscoveryWorkspaceWireVersion::V1);
+        assert_eq!(parsed.request, request);
+
+        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign } = request.payload else {
+            panic!("campaign fixture");
+        };
+        let now = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let receipt = DiscoveryWorkspaceReceipt {
+            operation: DiscoveryWorkspaceOperation::CreateCampaign,
+            request_id: request.request_id,
+            idempotency_key: request.idempotency_key,
+            result: DiscoveryWorkspaceResult::Campaign {
+                campaign: Box::new(DiscoveryCampaignProjection {
+                    campaign_id: campaign.campaign_id,
+                    name: campaign.name,
+                    industry_id: campaign.industry_id,
+                    industry_name: campaign.industry_name,
+                    vertical_id: campaign.vertical_id,
+                    vertical_name: campaign.vertical_name,
+                    query: campaign.query,
+                    location: campaign.location,
+                    target: campaign.target,
+                    description: campaign.description,
+                    language: campaign.language,
+                    region: campaign.region,
+                    source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
+                    lead_count: 0,
+                    latest_run: None,
+                    latest_run_sources: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                }),
+            },
+        };
+        let receipt_event = build_discovery_workspace_receipt_for_version(
+            DiscoveryWorkspaceWireVersion::V1,
+            actor.public_key(),
+            action.id,
+            &receipt,
+        )
+        .expect("build v1 receipt")
+        .sign_with_keys(&relay)
+        .expect("sign v1 receipt");
+        assert!(!receipt_event.content.contains("source_config"));
+        assert!(!receipt_event.content.contains("latest_run_sources"));
+        let parsed_receipt =
+            parse_discovery_workspace_receipt(&receipt_event).expect("parse v1 receipt");
+        assert_eq!(
+            parsed_receipt.wire_version,
+            DiscoveryWorkspaceWireVersion::V1
+        );
+        assert_eq!(parsed_receipt.receipt, receipt);
     }
 
     #[test]
@@ -427,5 +639,33 @@ mod tests {
             },
         };
         assert!(build_discovery_workspace_action(Keys::generate().public_key(), &request).is_err());
+    }
+
+    #[test]
+    fn source_update_round_trips_as_a_private_canonical_action() {
+        let relay = Keys::generate();
+        let actor = Keys::generate();
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+                campaign_id: Uuid::new_v4(),
+                source_config: buzz_core::discovery::DiscoverySourceConfig {
+                    mode: buzz_core::discovery::DiscoverySourceMode::Concurrent,
+                    sources: vec![
+                        buzz_core::discovery::DiscoverySource::BraveSearch,
+                        buzz_core::discovery::DiscoverySource::ExaSearch,
+                    ],
+                },
+            },
+        };
+        let event = build_discovery_workspace_action(relay.public_key(), &request)
+            .expect("build update")
+            .sign_with_keys(&actor)
+            .expect("sign update");
+        let parsed = parse_discovery_workspace_action(&event).expect("parse update");
+        assert_eq!(parsed.request, request);
+        assert!(event.content.contains("update_campaign_sources"));
+        assert!(!event.content.contains("api_key"));
     }
 }

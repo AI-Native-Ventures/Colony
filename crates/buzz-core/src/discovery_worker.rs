@@ -4,10 +4,15 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+use url::Url;
 use uuid::Uuid;
 
-use crate::discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection};
+pub use crate::discovery::DiscoveryProvider;
+use crate::discovery::{
+    DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoverySource, DiscoverySourceConfig,
+};
 
 /// Operation requested by a trusted local Discovery worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,8 +24,12 @@ pub enum DiscoveryWorkerOperation {
     Heartbeat,
     /// Commit a monotonic non-secret execution checkpoint.
     Checkpoint,
+    /// Persist one source's truthful execution state and provider counts.
+    SourceProgress,
     /// Persist a bounded batch of normalized provider observations.
     StoreObservations,
+    /// Recover a paid result batch after its original run became terminal.
+    SalvageObservations,
     /// Mark a currently leased run failed without retaining provider details.
     Fail,
     /// Mark a currently owned run successful.
@@ -37,6 +46,7 @@ const MAX_OBSERVATION_TEXT_BYTES: usize = 512;
 const MAX_OBSERVATION_SHORT_TEXT_BYTES: usize = 128;
 const MAX_OBSERVATION_URL_BYTES: usize = 2_048;
 const MAX_OBSERVATION_SUBTYPES: usize = 20;
+const MAX_AVAILABLE_PROVIDERS: usize = 3;
 
 /// Why a normalized provider observation was refused.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -62,8 +72,14 @@ pub enum DiscoveryBusinessStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DiscoveryBusinessObservationInput {
-    /// Deterministic UUIDv5 derived from the run and provider record identifier.
+    /// Deterministic UUIDv5 derived from provider plus provider record identifier.
     pub observation_id: Uuid,
+    /// Provider that produced this observation.
+    #[serde(
+        default = "default_outscraper_provider",
+        skip_serializing_if = "is_outscraper_provider"
+    )]
+    pub provider: DiscoveryProvider,
     /// Stable provider identifier selected during normalization.
     pub provider_record_id: String,
     /// Google Places identifier, when returned.
@@ -108,6 +124,9 @@ pub struct DiscoveryBusinessObservationInput {
     pub source_url: Option<String>,
     /// Public representative image URL.
     pub image_url: Option<String>,
+    /// Bounded public provider summary, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 impl DiscoveryBusinessObservationInput {
@@ -119,7 +138,12 @@ impl DiscoveryBusinessObservationInput {
             true,
             "provider_record_id",
         )?;
-        if self.observation_id != deterministic_business_observation_id(&self.provider_record_id) {
+        let current_id =
+            deterministic_business_observation_id(self.provider, &self.provider_record_id);
+        let released_outscraper_id = (self.provider == DiscoveryProvider::Outscraper)
+            .then(|| legacy_outscraper_business_observation_id(&self.provider_record_id));
+        if self.observation_id != current_id && released_outscraper_id != Some(self.observation_id)
+        {
             return Err(DiscoveryObservationError::InvalidField("observation_id"));
         }
         validate_optional_identifier(&self.place_id, "place_id")?;
@@ -175,6 +199,7 @@ impl DiscoveryBusinessObservationInput {
         }
         validate_optional_url(&self.source_url, "source_url")?;
         validate_optional_url(&self.image_url, "image_url")?;
+        validate_optional_text(&self.description, 2_048, "description")?;
         Ok(())
     }
 
@@ -193,6 +218,7 @@ impl DiscoveryBusinessObservationInput {
             &self.category,
             &self.source_url,
             &self.image_url,
+            &self.description,
         ];
         self.provider_record_id.len()
             + self.name.len()
@@ -212,6 +238,8 @@ pub struct DiscoveryWorkerObservationBatchRequest {
     /// Current lease identity and command retry identifiers.
     #[serde(flatten)]
     pub lease: DiscoveryWorkerLeaseRequest,
+    /// Provider that produced every observation in this batch.
+    pub provider: DiscoveryProvider,
     /// Opaque provider request reference previously checkpointed for this run.
     pub provider_request_id: String,
     /// Zero-based batch position within the bounded 500-result response.
@@ -235,33 +263,95 @@ impl DiscoveryWorkerObservationBatchRequest {
         {
             return Err(DiscoveryObservationError::InvalidField("lease"));
         }
-        validate_identifier(
+        validate_observation_batch(
+            self.provider,
             &self.provider_request_id,
-            MAX_PROVIDER_REQUEST_ID_BYTES,
-            false,
-            "provider_request_id",
-        )?;
-        if self.batch_index > MAX_OBSERVATION_BATCH_INDEX {
-            return Err(DiscoveryObservationError::InvalidField("batch_index"));
+            self.batch_index,
+            &self.observations,
+        )
+    }
+}
+
+fn validate_observation_batch(
+    provider: DiscoveryProvider,
+    provider_request_id: &str,
+    batch_index: u32,
+    observations: &[DiscoveryBusinessObservationInput],
+) -> Result<(), DiscoveryObservationError> {
+    validate_identifier(
+        provider_request_id,
+        MAX_PROVIDER_REQUEST_ID_BYTES,
+        false,
+        "provider_request_id",
+    )?;
+    if batch_index > MAX_OBSERVATION_BATCH_INDEX {
+        return Err(DiscoveryObservationError::InvalidField("batch_index"));
+    }
+    if observations.is_empty() || observations.len() > MAX_OBSERVATIONS_PER_BATCH {
+        return Err(DiscoveryObservationError::InvalidField("observations"));
+    }
+    let mut provider_ids = HashSet::with_capacity(observations.len());
+    let mut retained_text_bytes = provider_request_id.len();
+    for observation in observations {
+        observation.validate()?;
+        if observation.provider != provider {
+            return Err(DiscoveryObservationError::InvalidField("provider"));
         }
-        if self.observations.is_empty() || self.observations.len() > MAX_OBSERVATIONS_PER_BATCH {
+        if !provider_ids.insert(observation.provider_record_id.as_str()) {
             return Err(DiscoveryObservationError::InvalidField("observations"));
         }
-        let mut provider_ids = HashSet::with_capacity(self.observations.len());
-        let mut retained_text_bytes = self.provider_request_id.len();
-        for observation in &self.observations {
-            observation.validate()?;
-            if !provider_ids.insert(observation.provider_record_id.as_str()) {
-                return Err(DiscoveryObservationError::InvalidField("observations"));
-            }
-            retained_text_bytes = retained_text_bytes
-                .checked_add(observation.retained_text_bytes())
-                .ok_or(DiscoveryObservationError::InvalidField("observations"))?;
+        retained_text_bytes = retained_text_bytes
+            .checked_add(observation.retained_text_bytes())
+            .ok_or(DiscoveryObservationError::InvalidField("observations"))?;
+    }
+    if retained_text_bytes > MAX_OBSERVATION_BATCH_TEXT_BYTES {
+        return Err(DiscoveryObservationError::InvalidField("observations"));
+    }
+    Ok(())
+}
+
+/// Request to recover one durable paid-result batch after lease loss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryWorkerSalvageBatchRequest {
+    /// Unique identifier for this command attempt.
+    pub request_id: Uuid,
+    /// Stable retry key for this exact result batch.
+    pub idempotency_key: Uuid,
+    /// Stable identifier for this local worker installation.
+    pub worker_id: Uuid,
+    /// Original terminal run that paid for the observations.
+    pub run_id: Uuid,
+    /// Provider that produced every observation in this batch.
+    pub provider: DiscoveryProvider,
+    /// Opaque provider request reference retained in the local outbox.
+    pub provider_request_id: String,
+    /// Zero-based batch position within the bounded response.
+    pub batch_index: u32,
+    /// Normalized allowlisted observations.
+    pub observations: Vec<DiscoveryBusinessObservationInput>,
+}
+
+impl DiscoveryWorkerSalvageBatchRequest {
+    /// Validate terminal recovery identifiers and observation bounds.
+    pub fn validate(&self) -> Result<(), DiscoveryObservationError> {
+        if [
+            self.request_id,
+            self.idempotency_key,
+            self.worker_id,
+            self.run_id,
+        ]
+        .into_iter()
+        .any(|value| value.is_nil())
+        {
+            return Err(DiscoveryObservationError::InvalidField("salvage"));
         }
-        if retained_text_bytes > MAX_OBSERVATION_BATCH_TEXT_BYTES {
-            return Err(DiscoveryObservationError::InvalidField("observations"));
-        }
-        Ok(())
+        validate_observation_batch(
+            self.provider,
+            &self.provider_request_id,
+            self.batch_index,
+            &self.observations,
+        )
     }
 }
 
@@ -277,13 +367,100 @@ pub struct DiscoveryWorkerStoredObservationsProjection {
     pub existing_count: u16,
 }
 
-/// Derive stable per-run observation identity for retry-safe inserts.
-pub fn deterministic_business_observation_id(provider_record_id: &str) -> Uuid {
+/// Private result of recovering one paid batch into a terminal run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryWorkerSalvagedObservationsProjection {
+    /// Original terminal run that now owns the recovered Leads.
+    pub run: DiscoveryRunProjection,
+    /// Records inserted by this write.
+    pub accepted_count: u16,
+    /// Identical workspace records already present.
+    pub existing_count: u16,
+}
+
+/// Derive stable provider-scoped observation identity for retry-safe inserts.
+pub fn deterministic_business_observation_id(
+    provider: DiscoveryProvider,
+    provider_record_id: &str,
+) -> Uuid {
+    if provider == DiscoveryProvider::Outscraper {
+        return legacy_outscraper_business_observation_id(provider_record_id);
+    }
+    let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"colony.discovery.business/v2");
+    let provider_record = format!("{}\0{provider_record_id}", provider_identity_text(provider));
+    Uuid::new_v5(&namespace, provider_record.as_bytes())
+}
+
+fn legacy_outscraper_business_observation_id(provider_record_id: &str) -> Uuid {
     let namespace = Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         b"colony.discovery.business/outscraper",
     );
     Uuid::new_v5(&namespace, provider_record_id.as_bytes())
+}
+
+/// Derive a lowercase canonical-domain digest for workspace deduplication.
+pub fn canonical_business_domain_digest(website: &str) -> Option<[u8; 32]> {
+    let url = Url::parse(website).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    let canonical = host.strip_prefix("www.").unwrap_or(&host);
+    (!canonical.is_empty()).then(|| Sha256::digest(canonical.as_bytes()).into())
+}
+
+/// Derive an exact normalized-phone digest for workspace deduplication.
+pub fn normalized_business_phone_digest(phone: &str) -> Option<[u8; 32]> {
+    let mut normalized = String::with_capacity(phone.len());
+    for (index, character) in phone.chars().enumerate() {
+        if character.is_ascii_digit() || (character == '+' && index == 0) {
+            normalized.push(character);
+        }
+    }
+    (normalized.chars().filter(char::is_ascii_digit).count() >= 7)
+        .then(|| Sha256::digest(normalized.as_bytes()).into())
+}
+
+/// Derive a normalized name-plus-locality digest for workspace deduplication.
+pub fn normalized_business_name_locality_digest(
+    name: &str,
+    city: Option<&str>,
+    state: Option<&str>,
+    country: Option<&str>,
+) -> Option<[u8; 32]> {
+    let locality = city.or(state).or(country)?;
+    let name = normalized_business_text(name);
+    let locality = normalized_business_text(locality);
+    if name.is_empty() || locality.is_empty() {
+        return None;
+    }
+    Some(Sha256::digest(format!("{name}\u{1f}{locality}").as_bytes()).into())
+}
+
+fn normalized_business_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn provider_identity_text(provider: DiscoveryProvider) -> &'static str {
+    match provider {
+        DiscoveryProvider::Outscraper => "outscraper",
+        DiscoveryProvider::BraveSearch => "brave_search",
+        DiscoveryProvider::ExaSearch => "exa_search",
+    }
+}
+
+fn default_outscraper_provider() -> DiscoveryProvider {
+    DiscoveryProvider::Outscraper
+}
+
+fn is_outscraper_provider(provider: &DiscoveryProvider) -> bool {
+    *provider == DiscoveryProvider::Outscraper
 }
 
 fn validate_identifier(
@@ -361,14 +538,6 @@ fn validate_optional_url(
     }
 }
 
-/// External provider represented by a worker checkpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiscoveryProvider {
-    /// Outscraper Google Maps business discovery.
-    Outscraper,
-}
-
 /// Durable boundary reached by the local worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -389,6 +558,121 @@ pub struct DiscoveryWorkerClaimRequest {
     pub idempotency_key: Uuid,
     /// Stable identifier for this local worker installation.
     pub worker_id: Uuid,
+    /// Ordered, unique providers configured on this device. No credential data is included.
+    pub available_providers: Vec<DiscoveryProvider>,
+}
+
+impl DiscoveryWorkerClaimRequest {
+    /// Validate the non-secret capability advertisement used for run matching.
+    pub fn validate(&self) -> Result<(), DiscoveryWorkerClaimError> {
+        if self.available_providers.is_empty()
+            || self.available_providers.len() > MAX_AVAILABLE_PROVIDERS
+            || self
+                .available_providers
+                .iter()
+                .enumerate()
+                .any(|(index, provider)| self.available_providers[..index].contains(provider))
+        {
+            return Err(DiscoveryWorkerClaimError::InvalidAvailableProviders);
+        }
+        Ok(())
+    }
+}
+
+/// Why a local worker capability advertisement was refused.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DiscoveryWorkerClaimError {
+    /// The provider list was empty, too large, or contained duplicates.
+    #[error("invalid Discovery worker provider capabilities")]
+    InvalidAvailableProviders,
+}
+
+/// Durable execution state for one source in an immutable run plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryRunSourceStatus {
+    /// The source has not started.
+    Pending,
+    /// The source currently has work in progress.
+    Active,
+    /// The source completed normally.
+    Completed,
+    /// The source produced no further candidates.
+    Exhausted,
+    /// The source stopped after a classified failure.
+    Failed,
+    /// The source was cancelled.
+    Cancelled,
+    /// The worker cannot prove whether a submitted request completed.
+    OutcomeUnknown,
+    /// Waterfall execution stopped because the target was already met.
+    SkippedTargetMet,
+}
+
+/// Privacy-safe class for a source execution failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryRunSourceFailureClass {
+    /// The configured provider credential was rejected.
+    CredentialRejected,
+    /// The provider account requires billing or funds.
+    BillingRequired,
+    /// The provider rejected the request shape.
+    InvalidRequest,
+    /// The provider rate-limited the worker.
+    RateLimited,
+    /// The provider was temporarily unavailable.
+    ProviderUnavailable,
+    /// The provider response exceeded Colony's safety bound.
+    ResponseTooLarge,
+    /// The provider request exceeded its time bound.
+    RequestTimedOut,
+    /// The provider response could not be normalized safely.
+    MalformedResponse,
+    /// The worker cannot determine the submitted request outcome.
+    OutcomeUnknown,
+    /// Execution was cancelled before this source completed.
+    Cancelled,
+}
+
+/// Why a local worker source-progress request was refused.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DiscoverySourceProgressError {
+    /// The lease, provider cursor, status, failure, or counts are inconsistent.
+    #[error("invalid Discovery source progress")]
+    InvalidProgress,
+}
+
+/// Durable, non-secret progress for one source in a leased run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryRunSourceProjection {
+    /// User-facing source key.
+    pub source: DiscoverySource,
+    /// Local provider required by the source.
+    pub provider: DiscoveryProvider,
+    /// Stable zero-based position in the immutable source plan.
+    pub position: u8,
+    /// Current source execution state.
+    pub status: DiscoveryRunSourceStatus,
+    /// Opaque restart cursor, when a request has been submitted.
+    pub request_cursor: Option<String>,
+    /// Provider requests attempted for this source.
+    pub request_count: u32,
+    /// Provider records returned for this source.
+    pub returned_count: u32,
+    /// New workspace records retained from this source.
+    pub retained_count: u32,
+    /// Existing workspace records skipped from this source.
+    pub duplicate_count: u32,
+    /// Privacy-safe failure class, when the source failed.
+    pub failure_class: Option<DiscoveryRunSourceFailureClass>,
+    /// First durable start time.
+    pub started_at: Option<DateTime<Utc>>,
+    /// Durable terminal time.
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Last durable progress update.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Request operating on a currently owned worker lease.
@@ -405,6 +689,95 @@ pub struct DiscoveryWorkerLeaseRequest {
     pub run_id: Uuid,
     /// Random relay-issued fencing token for the current lease.
     pub lease_id: Uuid,
+}
+
+/// Absolute, privacy-safe progress for one provider in the immutable run plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryWorkerSourceProgressRequest {
+    /// Current lease identity and command retry identifiers.
+    #[serde(flatten)]
+    pub lease: DiscoveryWorkerLeaseRequest,
+    /// Provider whose source row is being updated.
+    pub provider: DiscoveryProvider,
+    /// New durable source status.
+    pub status: DiscoveryRunSourceStatus,
+    /// Opaque resumable provider cursor, when one exists.
+    pub request_cursor: Option<String>,
+    /// Absolute provider requests attempted by this source.
+    pub request_count: u32,
+    /// Absolute provider records returned by this source.
+    pub returned_count: u32,
+    /// Privacy-safe terminal failure, when applicable.
+    pub failure_class: Option<DiscoveryRunSourceFailureClass>,
+}
+
+impl DiscoveryWorkerSourceProgressRequest {
+    /// Validate state/failure consistency without accepting provider details.
+    pub fn validate(&self) -> Result<(), DiscoverySourceProgressError> {
+        if [
+            self.lease.request_id,
+            self.lease.idempotency_key,
+            self.lease.worker_id,
+            self.lease.run_id,
+            self.lease.lease_id,
+        ]
+        .into_iter()
+        .any(|value| value.is_nil())
+            || self.returned_count > 500
+            || self.request_cursor.as_deref().is_some_and(|cursor| {
+                cursor.is_empty()
+                    || cursor.len() > MAX_PROVIDER_REQUEST_ID_BYTES
+                    || !cursor
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+        {
+            return Err(DiscoverySourceProgressError::InvalidProgress);
+        }
+        let valid = match self.status {
+            DiscoveryRunSourceStatus::Pending => false,
+            DiscoveryRunSourceStatus::Active => self.failure_class.is_none(),
+            DiscoveryRunSourceStatus::Completed => {
+                self.request_count > 0 && self.returned_count > 0 && self.failure_class.is_none()
+            }
+            DiscoveryRunSourceStatus::Exhausted => {
+                self.request_count > 0 && self.returned_count == 0 && self.failure_class.is_none()
+            }
+            DiscoveryRunSourceStatus::Failed => {
+                matches!(
+                    self.failure_class,
+                    Some(
+                        DiscoveryRunSourceFailureClass::CredentialRejected
+                            | DiscoveryRunSourceFailureClass::BillingRequired
+                            | DiscoveryRunSourceFailureClass::InvalidRequest
+                            | DiscoveryRunSourceFailureClass::RateLimited
+                            | DiscoveryRunSourceFailureClass::ProviderUnavailable
+                            | DiscoveryRunSourceFailureClass::ResponseTooLarge
+                            | DiscoveryRunSourceFailureClass::RequestTimedOut
+                            | DiscoveryRunSourceFailureClass::MalformedResponse
+                    )
+                ) && (self.request_count > 0
+                    || self.failure_class == Some(DiscoveryRunSourceFailureClass::InvalidRequest))
+            }
+            DiscoveryRunSourceStatus::Cancelled => {
+                self.failure_class == Some(DiscoveryRunSourceFailureClass::Cancelled)
+            }
+            DiscoveryRunSourceStatus::OutcomeUnknown => {
+                self.request_count > 0
+                    && self.failure_class == Some(DiscoveryRunSourceFailureClass::OutcomeUnknown)
+            }
+            DiscoveryRunSourceStatus::SkippedTargetMet => {
+                self.request_cursor.is_none()
+                    && self.request_count == 0
+                    && self.returned_count == 0
+                    && self.failure_class.is_none()
+            }
+        };
+        valid
+            .then_some(())
+            .ok_or(DiscoverySourceProgressError::InvalidProgress)
+    }
 }
 
 /// Strict, non-secret checkpoint persisted for restart recovery.
@@ -443,8 +816,12 @@ pub enum DiscoveryWorkerAction {
     Heartbeat(DiscoveryWorkerLeaseRequest),
     /// Persist restart-safe progress.
     Checkpoint(DiscoveryWorkerCheckpointRequest),
+    /// Persist one source's state and absolute counts.
+    SourceProgress(DiscoveryWorkerSourceProgressRequest),
     /// Persist normalized observations.
     StoreObservations(DiscoveryWorkerObservationBatchRequest),
+    /// Recover normalized paid results after the original lease was lost.
+    SalvageObservations(DiscoveryWorkerSalvageBatchRequest),
     /// Fail a current run without a provider error payload.
     Fail(DiscoveryWorkerLeaseRequest),
     /// Complete a current run.
@@ -458,7 +835,9 @@ impl DiscoveryWorkerAction {
             Self::Claim(_) => DiscoveryWorkerOperation::Claim,
             Self::Heartbeat(_) => DiscoveryWorkerOperation::Heartbeat,
             Self::Checkpoint(_) => DiscoveryWorkerOperation::Checkpoint,
+            Self::SourceProgress(_) => DiscoveryWorkerOperation::SourceProgress,
             Self::StoreObservations(_) => DiscoveryWorkerOperation::StoreObservations,
+            Self::SalvageObservations(_) => DiscoveryWorkerOperation::SalvageObservations,
             Self::Fail(_) => DiscoveryWorkerOperation::Fail,
             Self::Complete(_) => DiscoveryWorkerOperation::Complete,
         }
@@ -470,7 +849,9 @@ impl DiscoveryWorkerAction {
             Self::Claim(value) => value.request_id,
             Self::Heartbeat(value) | Self::Fail(value) | Self::Complete(value) => value.request_id,
             Self::Checkpoint(value) => value.lease.request_id,
+            Self::SourceProgress(value) => value.lease.request_id,
             Self::StoreObservations(value) => value.lease.request_id,
+            Self::SalvageObservations(value) => value.request_id,
         }
     }
 
@@ -482,7 +863,9 @@ impl DiscoveryWorkerAction {
                 value.idempotency_key
             }
             Self::Checkpoint(value) => value.lease.idempotency_key,
+            Self::SourceProgress(value) => value.lease.idempotency_key,
             Self::StoreObservations(value) => value.lease.idempotency_key,
+            Self::SalvageObservations(value) => value.idempotency_key,
         }
     }
 
@@ -492,7 +875,9 @@ impl DiscoveryWorkerAction {
             Self::Claim(value) => value.worker_id,
             Self::Heartbeat(value) | Self::Fail(value) | Self::Complete(value) => value.worker_id,
             Self::Checkpoint(value) => value.lease.worker_id,
+            Self::SourceProgress(value) => value.lease.worker_id,
             Self::StoreObservations(value) => value.lease.worker_id,
+            Self::SalvageObservations(value) => value.worker_id,
         }
     }
 }
@@ -513,6 +898,12 @@ pub struct DiscoveryWorkerLeaseProjection {
     pub run: DiscoveryRunProjection,
     /// Immutable non-secret Businesses query captured when the run started.
     pub business_search: DiscoveryBusinessSearchSpec,
+    /// Immutable source configuration captured when the run started.
+    #[serde(default, skip_serializing_if = "DiscoverySourceConfig::is_default")]
+    pub source_config: DiscoverySourceConfig,
+    /// Durable state for each source in exact plan order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_states: Vec<DiscoveryRunSourceProjection>,
     /// Latest durable restart checkpoint, when present.
     pub last_checkpoint: Option<DiscoveryWorkerCheckpoint>,
 }
@@ -527,6 +918,8 @@ pub enum DiscoveryWorkerReceiptOutcome {
     Lease(DiscoveryWorkerLeaseProjection),
     /// A bounded normalized batch was retained or already existed.
     ObservationsStored(DiscoveryWorkerStoredObservationsProjection),
+    /// A durable paid batch was recovered after the run became terminal.
+    ObservationsSalvaged(DiscoveryWorkerSalvagedObservationsProjection),
     /// The supplied lease is no longer current.
     LostLease(DiscoveryRunProjection),
     /// The current lease completed its run.
@@ -557,7 +950,11 @@ mod tests {
 
     fn observation(provider_record_id: &str) -> DiscoveryBusinessObservationInput {
         DiscoveryBusinessObservationInput {
-            observation_id: deterministic_business_observation_id(provider_record_id),
+            observation_id: deterministic_business_observation_id(
+                DiscoveryProvider::Outscraper,
+                provider_record_id,
+            ),
+            provider: DiscoveryProvider::Outscraper,
             provider_record_id: provider_record_id.to_owned(),
             place_id: Some("ChIJ_test".to_owned()),
             google_id: Some("0xabc:0xdef".to_owned()),
@@ -580,6 +977,7 @@ mod tests {
             verified: Some(true),
             source_url: Some("https://maps.google.com/example".to_owned()),
             image_url: Some("https://images.example.test/place.jpg".to_owned()),
+            description: None,
         }
     }
 
@@ -592,9 +990,28 @@ mod tests {
                 run_id: Uuid::new_v4(),
                 lease_id: Uuid::new_v4(),
             },
+            provider: DiscoveryProvider::Outscraper,
             provider_request_id: "request_123".to_owned(),
             batch_index: 0,
             observations: vec![observation("0xabc:0xdef")],
+        }
+    }
+
+    fn source_progress(status: DiscoveryRunSourceStatus) -> DiscoveryWorkerSourceProgressRequest {
+        DiscoveryWorkerSourceProgressRequest {
+            lease: DiscoveryWorkerLeaseRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                worker_id: Uuid::new_v4(),
+                run_id: Uuid::new_v4(),
+                lease_id: Uuid::new_v4(),
+            },
+            provider: DiscoveryProvider::BraveSearch,
+            status,
+            request_cursor: None,
+            request_count: 0,
+            returned_count: 0,
+            failure_class: None,
         }
     }
 
@@ -610,6 +1027,11 @@ mod tests {
                 .expect("serialize failure operation"),
             "\"fail\""
         );
+        assert_eq!(
+            serde_json::to_string(&DiscoveryWorkerOperation::SourceProgress)
+                .expect("serialize source progress operation"),
+            "\"source_progress\""
+        );
     }
 
     #[test]
@@ -618,9 +1040,45 @@ mod tests {
             "request_id": Uuid::new_v4(),
             "idempotency_key": Uuid::new_v4(),
             "worker_id": Uuid::new_v4(),
+            "available_providers": ["outscraper"],
             "api_key": "must-not-fit-the-schema"
         });
         assert!(serde_json::from_value::<DiscoveryWorkerClaimRequest>(value).is_err());
+    }
+
+    #[test]
+    fn claim_capabilities_are_nonempty_unique_and_secret_free() {
+        let mut request = DiscoveryWorkerClaimRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            worker_id: Uuid::new_v4(),
+            available_providers: vec![
+                DiscoveryProvider::Outscraper,
+                DiscoveryProvider::BraveSearch,
+                DiscoveryProvider::ExaSearch,
+            ],
+        };
+        assert_eq!(request.validate(), Ok(()));
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize claim")["available_providers"],
+            serde_json::json!(["outscraper", "brave_search", "exa_search"])
+        );
+
+        request.available_providers.clear();
+        assert!(request.validate().is_err());
+        request.available_providers =
+            vec![DiscoveryProvider::Outscraper, DiscoveryProvider::Outscraper];
+        assert!(request.validate().is_err());
+
+        let legacy_without_capabilities = serde_json::json!({
+            "request_id": Uuid::new_v4(),
+            "idempotency_key": Uuid::new_v4(),
+            "worker_id": Uuid::new_v4()
+        });
+        assert!(
+            serde_json::from_value::<DiscoveryWorkerClaimRequest>(legacy_without_capabilities)
+                .is_err()
+        );
     }
 
     #[test]
@@ -628,9 +1086,56 @@ mod tests {
         let valid = batch();
         assert_eq!(valid.validate(), Ok(()));
         assert_eq!(
-            deterministic_business_observation_id("0xabc:0xdef"),
+            deterministic_business_observation_id(DiscoveryProvider::Outscraper, "0xabc:0xdef"),
             observation("0xabc:0xdef").observation_id
         );
+        assert_ne!(
+            deterministic_business_observation_id(DiscoveryProvider::Outscraper, "0xabc:0xdef"),
+            deterministic_business_observation_id(DiscoveryProvider::BraveSearch, "0xabc:0xdef")
+        );
+        let mut released_outscraper = observation("legacy-provider-record");
+        released_outscraper.observation_id =
+            legacy_outscraper_business_observation_id("legacy-provider-record");
+        assert_eq!(released_outscraper.validate(), Ok(()));
+
+        assert_eq!(
+            canonical_business_domain_digest("HTTPS://WWW.Example.COM/path?q=1#fragment"),
+            canonical_business_domain_digest("https://example.com/other")
+        );
+        assert_eq!(
+            normalized_business_phone_digest("+27 (11) 555-0100"),
+            normalized_business_phone_digest("+27115550100")
+        );
+        assert_eq!(
+            normalized_business_name_locality_digest(
+                "Sandton Dental Studio",
+                Some("Sandton"),
+                None,
+                None
+            ),
+            normalized_business_name_locality_digest(
+                "SANDTON-DENTAL STUDIO",
+                Some("sandton"),
+                None,
+                None
+            )
+        );
+
+        let mut with_description = valid.clone();
+        with_description.observations[0].provider = DiscoveryProvider::BraveSearch;
+        with_description.observations[0].observation_id = deterministic_business_observation_id(
+            DiscoveryProvider::BraveSearch,
+            &with_description.observations[0].provider_record_id,
+        );
+        with_description.provider = DiscoveryProvider::BraveSearch;
+        with_description.observations[0].description = Some("Public search snippet".to_owned());
+        assert_eq!(with_description.validate(), Ok(()));
+        let mut mismatched_provider = with_description.clone();
+        mismatched_provider.provider = DiscoveryProvider::ExaSearch;
+        assert!(mismatched_provider.validate().is_err());
+        let mut oversized_description = with_description;
+        oversized_description.observations[0].description = Some("x".repeat(2_049));
+        assert!(oversized_description.validate().is_err());
 
         let mut invalid = valid.clone();
         invalid.observations[0].rating_hundredths = Some(501);
@@ -667,5 +1172,64 @@ mod tests {
             serde_json::json!({"secret": true}),
         );
         assert!(serde_json::from_value::<DiscoveryWorkerObservationBatchRequest>(raw).is_err());
+    }
+
+    #[test]
+    fn source_progress_is_absolute_strict_and_privacy_safe() {
+        let active = source_progress(DiscoveryRunSourceStatus::Active);
+        assert_eq!(active.validate(), Ok(()));
+
+        let mut submitted = active.clone();
+        submitted.provider = DiscoveryProvider::Outscraper;
+        submitted.request_cursor = Some("provider-request_1".to_owned());
+        submitted.request_count = 1;
+        assert_eq!(submitted.validate(), Ok(()));
+
+        let mut completed = active.clone();
+        completed.status = DiscoveryRunSourceStatus::Completed;
+        completed.request_count = 2;
+        completed.returned_count = 20;
+        assert_eq!(completed.validate(), Ok(()));
+
+        let mut exhausted = active.clone();
+        exhausted.status = DiscoveryRunSourceStatus::Exhausted;
+        exhausted.request_count = 1;
+        assert_eq!(exhausted.validate(), Ok(()));
+
+        let mut failed = active.clone();
+        failed.status = DiscoveryRunSourceStatus::Failed;
+        failed.request_count = 1;
+        failed.failure_class = Some(DiscoveryRunSourceFailureClass::CredentialRejected);
+        assert_eq!(failed.validate(), Ok(()));
+
+        let mut unknown = active.clone();
+        unknown.status = DiscoveryRunSourceStatus::OutcomeUnknown;
+        unknown.request_count = 1;
+        unknown.failure_class = Some(DiscoveryRunSourceFailureClass::OutcomeUnknown);
+        assert_eq!(unknown.validate(), Ok(()));
+
+        let skipped = source_progress(DiscoveryRunSourceStatus::SkippedTargetMet);
+        assert_eq!(skipped.validate(), Ok(()));
+
+        for mut invalid in [
+            source_progress(DiscoveryRunSourceStatus::Pending),
+            source_progress(DiscoveryRunSourceStatus::Completed),
+            source_progress(DiscoveryRunSourceStatus::Exhausted),
+            source_progress(DiscoveryRunSourceStatus::Failed),
+            source_progress(DiscoveryRunSourceStatus::OutcomeUnknown),
+        ] {
+            if invalid.status == DiscoveryRunSourceStatus::Exhausted {
+                invalid.returned_count = 1;
+                invalid.request_count = 1;
+            }
+            assert!(invalid.validate().is_err());
+        }
+
+        let mut raw = serde_json::to_value(&completed).expect("serialize source progress");
+        raw.as_object_mut().expect("progress object").insert(
+            "provider_error".to_owned(),
+            serde_json::json!("must not enter the schema"),
+        );
+        assert!(serde_json::from_value::<DiscoveryWorkerSourceProgressRequest>(raw).is_err());
     }
 }

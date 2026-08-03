@@ -8,8 +8,37 @@ use zeroize::Zeroizing;
 
 use crate::secret_store::{KeyringProbe, SecretStore};
 
-const OUTSCRAPER_API_KEY: &str = "discovery.outscraper.api_key";
 const UNAVAILABLE_MESSAGE: &str = "secure Discovery credential storage is unavailable";
+
+/// Live Discovery source whose credential is stored only on this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryCredentialProvider {
+    /// Outscraper Google Maps search.
+    Outscraper,
+    /// Brave Web Search.
+    BraveSearch,
+    /// Exa semantic search.
+    ExaSearch,
+}
+
+impl DiscoveryCredentialProvider {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Outscraper => "discovery.outscraper.api_key",
+            Self::BraveSearch => "discovery.brave_search.api_key",
+            Self::ExaSearch => "discovery.exa_search.api_key",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Outscraper => "Outscraper",
+            Self::BraveSearch => "Brave Search",
+            Self::ExaSearch => "Exa Search",
+        }
+    }
+}
 
 /// Safe credential state exposed to React.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,8 +81,11 @@ fn shared_store() -> &'static SecretStore {
     SecretStore::shared(crate::app_state::keyring_service())
 }
 
-fn status_with(store: &dyn CredentialStore) -> DiscoveryCredentialStatus {
-    match store.probe(OUTSCRAPER_API_KEY) {
+fn status_with(
+    store: &dyn CredentialStore,
+    provider: DiscoveryCredentialProvider,
+) -> DiscoveryCredentialStatus {
+    match store.probe(provider.key()) {
         KeyringProbe::Present => DiscoveryCredentialStatus::Configured,
         KeyringProbe::ReachableButEmpty => DiscoveryCredentialStatus::Missing,
         KeyringProbe::Unreachable => DiscoveryCredentialStatus::Unavailable,
@@ -62,36 +94,42 @@ fn status_with(store: &dyn CredentialStore) -> DiscoveryCredentialStatus {
 
 fn save_with(
     store: &dyn CredentialStore,
+    provider: DiscoveryCredentialProvider,
     value: String,
 ) -> Result<DiscoveryCredentialStatus, String> {
     let input = Zeroizing::new(value);
     let trimmed = Zeroizing::new(input.trim().to_owned());
     if trimmed.is_empty() {
-        return Err("Outscraper API key cannot be empty".to_string());
+        return Err(format!("{} API key cannot be empty", provider.label()));
     }
     store
-        .store(OUTSCRAPER_API_KEY, trimmed.as_str())
+        .store(provider.key(), trimmed.as_str())
         .map_err(|_| UNAVAILABLE_MESSAGE.to_string())?;
-    match store.verify_stored_raw(OUTSCRAPER_API_KEY, trimmed.as_str()) {
+    match store.verify_stored_raw(provider.key(), trimmed.as_str()) {
         Ok(true) => Ok(DiscoveryCredentialStatus::Configured),
         Ok(false) | Err(_) => {
-            let _ = store.delete(OUTSCRAPER_API_KEY);
+            let _ = store.delete(provider.key());
             Err(UNAVAILABLE_MESSAGE.to_string())
         }
     }
 }
 
-fn delete_with(store: &dyn CredentialStore) -> Result<DiscoveryCredentialStatus, String> {
+fn delete_with(
+    store: &dyn CredentialStore,
+    provider: DiscoveryCredentialProvider,
+) -> Result<DiscoveryCredentialStatus, String> {
     store
-        .delete(OUTSCRAPER_API_KEY)
+        .delete(provider.key())
         .map_err(|_| UNAVAILABLE_MESSAGE.to_string())?;
     Ok(DiscoveryCredentialStatus::Missing)
 }
 
-/// Load the credential for a native adapter without exposing it through IPC.
-pub(crate) fn load_outscraper_credential() -> Result<Option<Zeroizing<String>>, String> {
+/// Load one credential for its native adapter without exposing it through IPC.
+pub(crate) fn load_discovery_credential(
+    provider: DiscoveryCredentialProvider,
+) -> Result<Option<Zeroizing<String>>, String> {
     shared_store()
-        .load(OUTSCRAPER_API_KEY)
+        .load(provider.key())
         .map(|value| value.map(Zeroizing::new))
         .map_err(|_| UNAVAILABLE_MESSAGE.to_string())
 }
@@ -108,31 +146,35 @@ fn fake_local_worker_enabled_value(value: Option<&str>) -> bool {
     value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
-/// Save or replace the device-local Outscraper credential.
+/// Save or replace one device-local Discovery credential.
 #[tauri::command]
-pub async fn save_discovery_outscraper_credential(
+pub async fn save_discovery_credential(
+    provider: DiscoveryCredentialProvider,
     value: String,
 ) -> Result<DiscoveryCredentialStatus, String> {
-    let status = tokio::task::spawn_blocking(move || save_with(shared_store(), value))
+    let status = tokio::task::spawn_blocking(move || save_with(shared_store(), provider, value))
         .await
         .map_err(|_| UNAVAILABLE_MESSAGE.to_string())??;
     crate::discovery_worker::workspace_changed();
     Ok(status)
 }
 
-/// Return only whether the Outscraper credential is usable, absent, or blocked.
+/// Return only whether one credential is usable, absent, or blocked.
 #[tauri::command]
-pub async fn get_discovery_outscraper_credential_status(
+pub async fn get_discovery_credential_status(
+    provider: DiscoveryCredentialProvider,
 ) -> Result<DiscoveryCredentialStatus, String> {
-    tokio::task::spawn_blocking(|| Ok(status_with(shared_store())))
+    tokio::task::spawn_blocking(move || Ok(status_with(shared_store(), provider)))
         .await
         .map_err(|_| UNAVAILABLE_MESSAGE.to_string())?
 }
 
-/// Delete the device-local Outscraper credential idempotently.
+/// Delete one device-local Discovery credential idempotently.
 #[tauri::command]
-pub async fn delete_discovery_outscraper_credential() -> Result<DiscoveryCredentialStatus, String> {
-    let status = tokio::task::spawn_blocking(|| delete_with(shared_store()))
+pub async fn delete_discovery_credential(
+    provider: DiscoveryCredentialProvider,
+) -> Result<DiscoveryCredentialStatus, String> {
+    let status = tokio::task::spawn_blocking(move || delete_with(shared_store(), provider))
         .await
         .map_err(|_| UNAVAILABLE_MESSAGE.to_string())??;
     crate::discovery_worker::workspace_changed();
@@ -212,21 +254,56 @@ mod tests {
     }
 
     #[test]
+    fn provider_values_are_strict_and_stable() {
+        assert_eq!(
+            serde_json::to_string(&DiscoveryCredentialProvider::Outscraper)
+                .expect("serialize provider"),
+            "\"outscraper\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DiscoveryCredentialProvider::BraveSearch)
+                .expect("serialize provider"),
+            "\"brave_search\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DiscoveryCredentialProvider::ExaSearch)
+                .expect("serialize provider"),
+            "\"exa_search\""
+        );
+        assert!(serde_json::from_str::<DiscoveryCredentialProvider>("\"apollo\"").is_err());
+    }
+
+    #[test]
     fn save_trims_rejects_empty_and_returns_only_status() {
         let store = MemoryStore::reachable();
-        assert!(save_with(&store, "   ".to_string()).is_err());
-        assert_eq!(status_with(&store), DiscoveryCredentialStatus::Missing);
+        assert!(save_with(
+            &store,
+            DiscoveryCredentialProvider::Outscraper,
+            "   ".to_string()
+        )
+        .is_err());
         assert_eq!(
-            save_with(&store, "  fixture-value  ".to_string()),
+            status_with(&store, DiscoveryCredentialProvider::Outscraper),
+            DiscoveryCredentialStatus::Missing
+        );
+        assert_eq!(
+            save_with(
+                &store,
+                DiscoveryCredentialProvider::Outscraper,
+                "  fixture-value  ".to_string()
+            ),
             Ok(DiscoveryCredentialStatus::Configured)
         );
-        assert_eq!(status_with(&store), DiscoveryCredentialStatus::Configured);
+        assert_eq!(
+            status_with(&store, DiscoveryCredentialProvider::Outscraper),
+            DiscoveryCredentialStatus::Configured
+        );
         assert_eq!(
             store
                 .values
                 .lock()
                 .expect("memory store")
-                .get(OUTSCRAPER_API_KEY)
+                .get(DiscoveryCredentialProvider::Outscraper.key())
                 .map(String::as_str),
             Some("fixture-value")
         );
@@ -240,20 +317,54 @@ mod tests {
             reachable: false,
             verify: true,
         };
-        assert_eq!(status_with(&missing), DiscoveryCredentialStatus::Missing);
         assert_eq!(
-            status_with(&unavailable),
+            status_with(&missing, DiscoveryCredentialProvider::BraveSearch),
+            DiscoveryCredentialStatus::Missing
+        );
+        assert_eq!(
+            status_with(&unavailable, DiscoveryCredentialProvider::ExaSearch),
             DiscoveryCredentialStatus::Unavailable
         );
     }
 
     #[test]
+    fn providers_use_three_separate_keychain_entries() {
+        let store = MemoryStore::reachable();
+        let fixtures = [
+            (DiscoveryCredentialProvider::Outscraper, "outscraper-key"),
+            (DiscoveryCredentialProvider::BraveSearch, "brave-key"),
+            (DiscoveryCredentialProvider::ExaSearch, "exa-key"),
+        ];
+        for (provider, value) in fixtures {
+            assert_eq!(
+                save_with(&store, provider, value.to_owned()),
+                Ok(DiscoveryCredentialStatus::Configured)
+            );
+        }
+        let values = store.values.lock().expect("memory store");
+        assert_eq!(values.len(), 3);
+        for (provider, value) in fixtures {
+            assert_eq!(values.get(provider.key()).map(String::as_str), Some(value));
+        }
+    }
+
+    #[test]
     fn delete_is_idempotent() {
         let store = MemoryStore::reachable();
-        assert_eq!(delete_with(&store), Ok(DiscoveryCredentialStatus::Missing));
-        save_with(&store, "fixture-value".to_string()).expect("save fixture");
-        assert_eq!(delete_with(&store), Ok(DiscoveryCredentialStatus::Missing));
-        assert_eq!(delete_with(&store), Ok(DiscoveryCredentialStatus::Missing));
+        let provider = DiscoveryCredentialProvider::ExaSearch;
+        assert_eq!(
+            delete_with(&store, provider),
+            Ok(DiscoveryCredentialStatus::Missing)
+        );
+        save_with(&store, provider, "fixture-value".to_string()).expect("save fixture");
+        assert_eq!(
+            delete_with(&store, provider),
+            Ok(DiscoveryCredentialStatus::Missing)
+        );
+        assert_eq!(
+            delete_with(&store, provider),
+            Ok(DiscoveryCredentialStatus::Missing)
+        );
     }
 
     #[test]
@@ -264,10 +375,35 @@ mod tests {
             verify: false,
         };
         assert_eq!(
-            save_with(&store, "fixture-value".to_string()),
+            save_with(
+                &store,
+                DiscoveryCredentialProvider::BraveSearch,
+                "fixture-value".to_string()
+            ),
             Err(UNAVAILABLE_MESSAGE.to_string())
         );
-        assert_eq!(status_with(&store), DiscoveryCredentialStatus::Missing);
+        assert_eq!(
+            status_with(&store, DiscoveryCredentialProvider::BraveSearch),
+            DiscoveryCredentialStatus::Missing
+        );
+    }
+
+    #[test]
+    fn save_fails_closed_when_secure_storage_is_unreachable() {
+        let store = MemoryStore {
+            values: Mutex::new(HashMap::new()),
+            reachable: false,
+            verify: true,
+        };
+        assert_eq!(
+            save_with(
+                &store,
+                DiscoveryCredentialProvider::Outscraper,
+                "fixture-value".to_owned()
+            ),
+            Err(UNAVAILABLE_MESSAGE.to_owned())
+        );
+        assert!(store.values.lock().expect("memory store").is_empty());
     }
 
     #[test]
