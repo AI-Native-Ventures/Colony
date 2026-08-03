@@ -249,6 +249,32 @@ pub struct Config {
     /// closed. Set via `BUZZ_SELF_PROVISION_DOMAIN`.
     pub self_provision_domain: Option<String>,
 
+    /// Open public signup on the self-serve surface: drop the requirement
+    /// that the requester already be a relay member somewhere, so anyone can
+    /// create their first community.
+    ///
+    /// This deliberately weakens the strongest abuse control the surface has.
+    /// NIP-98 proves control of a key, not that the key cost anything, so with
+    /// membership off the per-owner cap bounds nothing: an abuser mints a
+    /// fresh key per request. Public mode therefore adds per-IP and
+    /// deployment-wide creation rate limits
+    /// (`BUZZ_SELF_PROVISION_PUBLIC_IP_LIMIT`,
+    /// `BUZZ_SELF_PROVISION_PUBLIC_GLOBAL_LIMIT`) which member mode does not
+    /// need. Those limits bound cost; they do not make abuse impossible.
+    ///
+    /// Requires `self_provision_domain`. Default: `false`. Set via
+    /// `BUZZ_SELF_PROVISION_PUBLIC=true`.
+    pub self_provision_public: bool,
+
+    /// Community creations allowed per client IP per hour in public mode.
+    /// Default 3. Set via `BUZZ_SELF_PROVISION_PUBLIC_IP_LIMIT`.
+    pub self_provision_public_ip_limit: u32,
+
+    /// Community creations allowed deployment-wide per hour in public mode.
+    /// Bounds what a distributed source can provision, which the per-IP limit
+    /// cannot. Default 50. Set via `BUZZ_SELF_PROVISION_PUBLIC_GLOBAL_LIMIT`.
+    pub self_provision_public_global_limit: u32,
+
     /// Media storage configuration (S3/MinIO).
     pub media: buzz_media::MediaConfig,
     /// Maximum concurrent media uploads handled by one relay process.
@@ -326,6 +352,24 @@ pub struct Config {
     /// Whether the configured web bundle serves Git browser routes in addition
     /// to the public invite landing page. Defaults to false.
     pub serve_git_web_gui: bool,
+}
+
+/// Read a positive `u32` env var, falling back to `default` when unset or
+/// empty. A present-but-unparseable or zero value is a hard config error: a
+/// typo in a rate limit must not silently install a different limit than the
+/// operator intended.
+fn parse_positive_u32(name: &str, default: u32) -> Result<u32, ConfigError> {
+    match std::env::var(name) {
+        Ok(raw) if !raw.trim().is_empty() => raw
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                ConfigError::InvalidValue(format!("{name} must be a positive integer: {raw:?}"))
+            }),
+        _ => Ok(default),
+    }
 }
 
 fn parse_bind_addr(raw: &str) -> Result<SocketAddr, ConfigError> {
@@ -674,6 +718,23 @@ impl Config {
                 }
             })
             .transpose()?;
+
+        let self_provision_public = std::env::var("BUZZ_SELF_PROVISION_PUBLIC")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        // Public signup without a domain would be a silently dead flag, and
+        // the operator asking for it clearly intends an open surface.
+        if self_provision_public && self_provision_domain.is_none() {
+            return Err(ConfigError::InvalidValue(
+                "BUZZ_SELF_PROVISION_PUBLIC requires BUZZ_SELF_PROVISION_DOMAIN".to_string(),
+            ));
+        }
+
+        let self_provision_public_ip_limit =
+            parse_positive_u32("BUZZ_SELF_PROVISION_PUBLIC_IP_LIMIT", 3)?;
+        let self_provision_public_global_limit =
+            parse_positive_u32("BUZZ_SELF_PROVISION_PUBLIC_GLOBAL_LIMIT", 50)?;
 
         // Note: intentionally not prefixed with BUZZ_ — this is a relay-identity
         // config that may be shared across multiple services (e.g., ACP agent).
@@ -1090,6 +1151,9 @@ impl Config {
             relay_operator_pubkeys,
             allow_nip_oa_auth,
             self_provision_domain,
+            self_provision_public,
+            self_provision_public_ip_limit,
+            self_provision_public_global_limit,
             media,
             media_max_concurrent_uploads,
             media_max_concurrent_uploads_per_pubkey,

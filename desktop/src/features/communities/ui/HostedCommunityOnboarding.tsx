@@ -3,42 +3,21 @@ import { AlertCircle, LoaderCircle } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import {
-  bindBuilderlabIdentity,
-  cancelBuilderlabLogin,
-  checkHostedCommunityName,
-  clearBuilderlabAuth,
-  createHostedCommunity,
-  deleteBuilderlabIdentity,
-  getBuilderlabAuth,
+  checkColonyCommunityName,
+  createColonyCommunity,
   HOSTED_COMMUNITY_LIMIT,
   HOSTED_COMMUNITY_SUFFIX,
-  hostedCommunityErrorMessage,
   hostedCommunityRelayUrl,
-  type BuilderlabAuth,
   type HostedCommunity,
-  type HostedNostrIdentity,
-  loadHostedCommunityAccount,
-  startBuilderlabLogin,
+  listColonyCommunities,
   VALID_HOSTED_COMMUNITY_NAME,
 } from "@/features/communities/hostedCommunityApi";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
-import { useIdentityQuery } from "@/shared/api/hooks";
-import { safeNpub } from "@/shared/lib/nostrUtils";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
 import { OnboardingFooter } from "@/features/onboarding/ui/OnboardingFooter";
-import {
-  ONBOARDING_INK_ICON_CLASS,
-  ONBOARDING_PRIMARY_CTA_CLASS,
-} from "@/features/onboarding/ui/OnboardingChrome";
-import { AntMark } from "@/shared/ui/colony-logo/AntMark";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/shared/ui/dialog";
+import { ONBOARDING_PRIMARY_CTA_CLASS } from "@/features/onboarding/ui/OnboardingChrome";
 
 const FUZZY_SURFACE_CLASS =
   "relative left-1/2 w-[min(calc(100%+12rem),calc(100vw-2rem))] max-w-[1040px] -translate-x-1/2 px-20 pb-14 pt-20 !text-[rgb(var(--buzz-hosted-community-surface-fg))] [--buzz-card-textured-min-height:224px]";
@@ -52,37 +31,23 @@ const COMMUNITY_ACTION_CLASS =
 const PAGE_CTA_CLASS = `${ONBOARDING_PRIMARY_CTA_CLASS} w-36 shadow-none`;
 const PAGE_BACK_CLASS =
   "h-[2.375rem] w-36 rounded-full bg-foreground/10 px-6 shadow-none hover:bg-foreground/15";
-const MODAL_PRIMARY_ACTION_CLASS = `${ONBOARDING_PRIMARY_CTA_CLASS} !text-[rgb(var(--buzz-hosted-community-modal-action-fg))]`;
-const MODAL_BACK_ACTION_CLASS =
-  "h-9 rounded-full bg-foreground/10 px-6 hover:bg-foreground/15";
 
 type HostedCommunityOnboardingProps = {
   onBack: () => void;
-  /**
-   * Fires once the account is signed in with a linked identity — the parent
-   * uses this to reveal the stage page only after the sign-in modal has
-   * finished driving the flow.
-   */
-  onReady?: () => void;
-  /**
-   * While true, render only the sign-in modal and keep the page scaffolding
-   * hidden, so whatever screen launched the flow stays visible behind it.
-   */
-  stageHidden?: boolean;
 };
 
+/**
+ * First-run community creation against the connected Colony relay.
+ *
+ * The identity that signs the request is the one already on this device, so
+ * there is no account sign-in and no identity-binding step: the page opens
+ * straight on the address form.
+ */
 export function HostedCommunityOnboarding({
   onBack,
-  onReady,
-  stageHidden = false,
 }: HostedCommunityOnboardingProps) {
   const onboarding = useCommunityOnboarding();
   const shouldReduceMotion = useReducedMotion();
-  const localPubkey = useIdentityQuery().data?.pubkey ?? null;
-  const [auth, setAuth] = React.useState<BuilderlabAuth | null>(null);
-  const [identity, setIdentity] = React.useState<HostedNostrIdentity | null>(
-    null,
-  );
   const [communities, setCommunities] = React.useState<HostedCommunity[]>([]);
   const [showCreate, setShowCreate] = React.useState(false);
   const [name, setName] = React.useState("");
@@ -91,25 +56,17 @@ export function HostedCommunityOnboarding({
   const [loading, setLoading] = React.useState(true);
   const [action, setAction] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const loginAttempt = React.useRef(0);
-
-  const loadAccount = React.useCallback(async () => {
-    const account = await loadHostedCommunityAccount();
-    setIdentity(account.identity);
-    setCommunities(account.communities);
-  }, []);
 
   React.useEffect(() => {
     let active = true;
-    void getBuilderlabAuth()
-      .then(async (nextAuth) => {
-        if (!active) return;
-        setAuth(nextAuth);
-        if (nextAuth) await loadAccount();
+    void listColonyCommunities()
+      .then((response) => {
+        if (active) setCommunities(response.communities ?? []);
       })
       .catch((cause) => {
-        if (active)
-          setError(cause instanceof Error ? cause.message : String(cause));
+        // Non-fatal: a first-run user owns nothing yet, and the relay
+        // enforces the limit on create regardless.
+        if (active && cause) setCommunities([]);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -117,7 +74,7 @@ export function HostedCommunityOnboarding({
     return () => {
       active = false;
     };
-  }, [loadAccount]);
+  }, []);
 
   const run = async (label: string, operation: () => Promise<void>) => {
     setAction(label);
@@ -131,108 +88,6 @@ export function HostedCommunityOnboarding({
     }
   };
 
-  const signIn = () => {
-    const attempt = ++loginAttempt.current;
-    setAction("Signing in…");
-    setError(null);
-    void startBuilderlabLogin()
-      .then(async (nextAuth) => {
-        if (loginAttempt.current !== attempt) return;
-        setAuth(nextAuth);
-        await loadAccount();
-      })
-      .catch((cause) => {
-        if (loginAttempt.current !== attempt) return;
-        setError(cause instanceof Error ? cause.message : String(cause));
-      })
-      .finally(() => {
-        if (loginAttempt.current === attempt) setAction(null);
-      });
-  };
-
-  const cancelSignInAndGoBack = () => {
-    loginAttempt.current += 1;
-    setAction(null);
-    setError(null);
-    onBack();
-    void cancelBuilderlabLogin().catch(() => {
-      // The modal has already closed and the login attempt is invalidated;
-      // cancellation is best-effort cleanup for the native/browser flow.
-    });
-  };
-
-  const signOut = () =>
-    run("Signing out…", async () => {
-      await clearBuilderlabAuth();
-      setAuth(null);
-      setIdentity(null);
-      setCommunities([]);
-      setShowCreate(false);
-      setName("");
-      setAvailability(null);
-    });
-
-  const goBack = () => {
-    void run("Signing out…", async () => {
-      await clearBuilderlabAuth();
-      onBack();
-    });
-  };
-
-  const connectIdentity = () =>
-    run("Connecting identity…", async () => {
-      const response = await bindBuilderlabIdentity();
-      if (response.error) {
-        throw new Error(
-          hostedCommunityErrorMessage(
-            response.error,
-            response.correlation_id,
-            "Could not connect the Colony identity.",
-          ),
-        );
-      }
-      setIdentity(response.identity ?? null);
-      await loadAccount();
-    });
-
-  const boundPubkey = identity?.pubkey_hex ?? null;
-  const identityMismatch = Boolean(
-    identity &&
-      boundPubkey &&
-      localPubkey &&
-      boundPubkey.toLowerCase() !== localPubkey.toLowerCase(),
-  );
-  const localNpub = localPubkey ? safeNpub(localPubkey) : null;
-
-  const switchToDeviceIdentity = () =>
-    run("Switching identity…", async () => {
-      const released = await deleteBuilderlabIdentity();
-      if (released.error) {
-        throw new Error(
-          hostedCommunityErrorMessage(
-            released.error,
-            released.correlation_id,
-            "Could not disconnect the account's previous Colony identity.",
-          ),
-        );
-      }
-      const bound = await bindBuilderlabIdentity();
-      if (bound.error) {
-        await loadAccount();
-        throw new Error(
-          bound.error.code === "pubkey_already_bound"
-            ? "This device's Colony identity belongs to a different Builderlab account and can't be moved from here. Sign out, then sign in with the account that already owns this identity."
-            : hostedCommunityErrorMessage(
-                bound.error,
-                bound.correlation_id,
-                "Could not connect this device's Colony identity.",
-              ),
-        );
-      }
-      setIdentity(bound.identity ?? null);
-      await loadAccount();
-    });
-
   const activeCommunities = communities.filter(
     (community) => !community.archived_at && hostedCommunityRelayUrl(community),
   );
@@ -244,19 +99,16 @@ export function HostedCommunityOnboarding({
   const hasCommunities = activeCommunities.length > 0;
 
   React.useEffect(() => {
-    if (!identity || identityMismatch || !normalizedName || !validName) {
+    if (!normalizedName || !validName) {
       setCheckingName(false);
       return;
     }
     let cancelled = false;
     setCheckingName(true);
     const handle = window.setTimeout(() => {
-      void checkHostedCommunityName(normalizedName)
+      void checkColonyCommunityName(normalizedName)
         .then((response) => {
-          if (!cancelled)
-            setAvailability(
-              response.error ? null : (response.available ?? false),
-            );
+          if (!cancelled) setAvailability(response.available ?? false);
         })
         .catch(() => {
           if (!cancelled) setAvailability(null);
@@ -269,14 +121,14 @@ export function HostedCommunityOnboarding({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [identity, identityMismatch, normalizedName, validName]);
+  }, [normalizedName, validName]);
 
   const connect = (community: HostedCommunity, created = false) => {
     const relayUrl = hostedCommunityRelayUrl(community);
     const retryPrefix = created ? "The community was created, but " : "";
     if (!relayUrl) {
       throw new Error(
-        `${retryPrefix}Builderlab did not return its relay address. Try connecting it again, or contact support if it does not appear in your communities.`,
+        `${retryPrefix}the relay did not return its address. Add it from Add community with its URL.`,
       );
     }
     if (
@@ -295,48 +147,23 @@ export function HostedCommunityOnboarding({
 
   const create = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!validName || !identity || identityMismatch || atCommunityLimit) return;
+    if (!validName || atCommunityLimit) return;
     void run("Creating community…", async () => {
-      const available = await checkHostedCommunityName(normalizedName);
-      if (available.error || !available.available) {
-        setAvailability(false);
-        throw new Error(
-          hostedCommunityErrorMessage(
-            available.error,
-            available.correlation_id,
-            "That Colony address is already taken.",
-          ),
-        );
+      try {
+        const response = await createColonyCommunity(normalizedName);
+        if (!response.community) {
+          throw new Error("Could not create the community.");
+        }
+        connect(response.community, true);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (message.startsWith("taken:")) setAvailability(false);
+        throw new Error(message);
       }
-      const response = await createHostedCommunity(normalizedName);
-      if (response.error || !response.community) {
-        throw new Error(
-          hostedCommunityErrorMessage(
-            response.error,
-            response.correlation_id,
-            "Could not create the community.",
-          ),
-        );
-      }
-      connect(response.community, true);
     });
   };
 
   const busy = action !== null;
-  // The account is set up once we're signed in with a linked, matching
-  // identity. Until then the sign-in / link-identity modal drives the flow and
-  // the page behind it shows a blurred preview of where communities will land.
-  const ready = Boolean(auth && identity && !identityMismatch);
-  const modalOpen = !loading && !ready;
-
-  // Tell the parent once sign-in completes so it can reveal the stage page.
-  // Guarded so it fires exactly once per mount.
-  const readyNotifiedRef = React.useRef(false);
-  React.useEffect(() => {
-    if (loading || !ready || readyNotifiedRef.current) return;
-    readyNotifiedRef.current = true;
-    onReady?.();
-  }, [loading, onReady, ready]);
 
   const errorBox = error ? (
     <div
@@ -454,130 +281,8 @@ export function HostedCommunityOnboarding({
       </Card>
     );
 
-  const signInDialog = (
-    <Dialog
-      open={modalOpen}
-      onOpenChange={(open) => {
-        if (open) return;
-        if (action === "Signing in…") {
-          cancelSignInAndGoBack();
-          return;
-        }
-        if (!busy) goBack();
-      }}
-    >
-      <DialogContent
-        className="buzz-onboarding-neutral-theme max-w-[560px] text-foreground [&_button]:shadow-none"
-        closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
-        data-system-color-scheme="light"
-        overlayClassName="bg-[rgb(var(--buzz-hosted-community-modal-overlay-bg)/0.25)]"
-        surface="textured"
-      >
-        <div className="mx-auto flex w-full max-w-sm flex-col items-center py-2 text-center">
-          <AntMark className="mb-5 h-auto w-9 text-foreground" />
-
-          {!auth ? (
-            <>
-              <DialogTitle className="text-xl font-medium text-foreground">
-                Set up your community
-              </DialogTitle>
-              <DialogDescription className="mt-2 text-sm leading-6 text-foreground">
-                Sign in to connect a community you already own or create a new
-                one. We’ll open Builderlab in your browser, then bring you back
-                to Colony.
-              </DialogDescription>
-              {errorBox ? <div className="mt-5 w-full">{errorBox}</div> : null}
-              {action === "Signing in…" ? (
-                <Button
-                  className={`mt-6 ${MODAL_PRIMARY_ACTION_CLASS}`}
-                  disabled
-                >
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                  Waiting for your browser…
-                </Button>
-              ) : (
-                <Button
-                  className={`mt-6 ${MODAL_PRIMARY_ACTION_CLASS}`}
-                  onClick={signIn}
-                >
-                  Sign in to continue
-                </Button>
-              )}
-              {/* Quiet breadcrumb: Buzz itself is open source; this hosted
-                    relay is the one account-backed piece of the flow. */}
-              <p className="mt-6 w-full border-t border-foreground/10 pt-4 text-xs leading-5 text-foreground/45">
-                Colony is open source. Builderlab hosts the relay for this
-                account.
-              </p>
-            </>
-          ) : !identity ? (
-            <>
-              <DialogTitle className="text-xl font-medium text-foreground">
-                Finish connecting Colony
-              </DialogTitle>
-              <DialogDescription className="mt-2 text-sm leading-6 text-foreground">
-                Your Builderlab account
-                {auth.email ? ` (${auth.email})` : ""} is ready. Connect this
-                device’s Colony identity to finish setup. Your private key stays
-                on this device.
-              </DialogDescription>
-              {errorBox ? <div className="mt-5 w-full">{errorBox}</div> : null}
-              <Button
-                className={`mt-6 ${MODAL_PRIMARY_ACTION_CLASS}`}
-                disabled={busy}
-                onClick={() => void connectIdentity()}
-              >
-                {busy ? (
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                ) : null}
-                {busy ? action : "Connect and continue"}
-              </Button>
-            </>
-          ) : (
-            <>
-              <DialogTitle className="text-xl font-medium text-foreground">
-                This account uses a different Colony identity
-              </DialogTitle>
-              <DialogDescription className="mt-2 text-sm leading-6 text-foreground">
-                This account is connected to another Colony identity. Reconnect
-                this device, or sign out to use a different email.
-              </DialogDescription>
-              <p className="mt-4 w-full break-all rounded-xl bg-[rgb(var(--buzz-hosted-community-identity-bg)/0.5)] px-4 py-3 text-left font-mono text-xs text-foreground">
-                Account: {identity.npub ?? boundPubkey}
-                <br />
-                This device: {localNpub ?? localPubkey}
-              </p>
-              {errorBox ? <div className="mt-5 w-full">{errorBox}</div> : null}
-              <div className="mt-6 flex flex-col items-stretch gap-2">
-                <Button
-                  className={MODAL_PRIMARY_ACTION_CLASS}
-                  disabled={busy}
-                  onClick={() => void switchToDeviceIdentity()}
-                >
-                  {busy ? action : "Use this device's identity"}
-                </Button>
-                <Button
-                  className={MODAL_BACK_ACTION_CLASS}
-                  disabled={busy}
-                  onClick={() => void signOut()}
-                  variant="ghost"
-                >
-                  Sign in with a different email
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-
   // While the sign-in modal drives the flow, keep the launching page
   // visible behind it instead of swapping to this stage prematurely.
-  if (stageHidden) {
-    return signInDialog;
-  }
-
   return (
     <div className="flex min-h-[calc(100dvh-15.625rem)] w-full max-w-[920px] flex-col items-center text-center">
       <h1 className="max-w-[620px] text-title font-normal leading-[1.18] tracking-[-0.025em]">
@@ -595,7 +300,7 @@ export function HostedCommunityOnboarding({
             <LoaderCircle className="h-6 w-6 animate-spin" />
             <span className="sr-only">Checking sign-in</span>
           </div>
-        ) : ready ? (
+        ) : (
           <>
             {errorBox}
             {hasCommunities ? (
@@ -733,45 +438,35 @@ export function HostedCommunityOnboarding({
               </>
             )}
           </>
-        ) : (
-          <Card
-            aria-hidden
-            className={`${FUZZY_SURFACE_CLASS} opacity-70`}
-            variant="textured"
-          />
         )}
       </div>
 
-      {!modalOpen ? (
-        <OnboardingFooter>
-          <Button
-            className={PAGE_CTA_CLASS}
-            disabled={
-              !validName ||
-              availability === false ||
-              checkingName ||
-              busy ||
-              atCommunityLimit
-            }
-            form="hosted-community-create-form"
-            type="submit"
-          >
-            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
-            {action ?? "Next"}
-          </Button>
-          <Button
-            className={PAGE_BACK_CLASS}
-            disabled={busy}
-            onClick={goBack}
-            type="button"
-            variant="ghost"
-          >
-            Back
-          </Button>
-        </OnboardingFooter>
-      ) : null}
-
-      {signInDialog}
+      <OnboardingFooter>
+        <Button
+          className={PAGE_CTA_CLASS}
+          disabled={
+            !validName ||
+            availability === false ||
+            checkingName ||
+            busy ||
+            atCommunityLimit
+          }
+          form="hosted-community-create-form"
+          type="submit"
+        >
+          {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
+          {action ?? "Next"}
+        </Button>
+        <Button
+          className={PAGE_BACK_CLASS}
+          disabled={busy}
+          onClick={onBack}
+          type="button"
+          variant="ghost"
+        >
+          Back
+        </Button>
+      </OnboardingFooter>
     </div>
   );
 }

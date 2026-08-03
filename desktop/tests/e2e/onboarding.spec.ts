@@ -866,16 +866,11 @@ test("first-community owner can connect an existing hosted community", async ({
   await installMockBridge(
     page,
     {
-      builderlabAuth: {
-        email: "owner@example.com",
-        expiresAt: "2099-01-01T00:00:00Z",
-      },
-      builderlabIdentity: { pubkey_hex: BLANK_TYLER_IDENTITY.pubkey },
-      builderlabCommunities: [
+      colonyCommunities: [
         {
           id: "owned-community",
           name: "North Star",
-          normalized_host: "north-star.communities.buzz.xyz",
+          normalized_host: "north-star.colony.ainative.ventures",
         },
       ],
     },
@@ -906,7 +901,7 @@ test("first-community owner can connect an existing hosted community", async ({
         window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
       ),
     )
-    .toContain("wss://north-star.communities.buzz.xyz");
+    .toContain("wss://north-star.colony.ainative.ventures");
   await page.getByTestId("community-profile-back").click();
   await expect(
     page.getByRole("heading", { name: "Choose a community" }),
@@ -946,11 +941,6 @@ test("first-community owner can create and connect a hosted community", async ({
   await page.goto("/");
 
   await page.getByTestId("community-choice-create").click();
-  await page.getByRole("button", { name: "Sign in to continue" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Finish connecting Colony" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Connect and continue" }).click();
   const createSurface = page.getByTestId("hosted-community-create-surface");
   const surfaceBoxBeforeFeedback = await createSurface.boundingBox();
   const communityNameInput = page.getByTestId("hosted-community-address-input");
@@ -995,7 +985,7 @@ test("first-community owner can create and connect a hosted community", async ({
         window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
       ),
     )
-    .toContain("wss://bee-lab.communities.buzz.xyz");
+    .toContain("wss://bee-lab.colony.ainative.ventures");
 });
 
 test("hosted community address line stays within the card for a long name", async ({
@@ -1022,11 +1012,6 @@ test("hosted community address line stays within the card for a long name", asyn
   await page.goto("/");
 
   await page.getByTestId("community-choice-create").click();
-  await page.getByRole("button", { name: "Sign in to continue" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Finish connecting Colony" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Connect and continue" }).click();
 
   const createSurface = page.getByTestId("hosted-community-create-surface");
   const communityNameInput = page.getByTestId("hosted-community-address-input");
@@ -1072,12 +1057,7 @@ test("first-community reports a created community without a relay address", asyn
   await installMockBridge(
     page,
     {
-      builderlabAuth: {
-        email: "owner@example.com",
-        expiresAt: "2099-01-01T00:00:00Z",
-      },
-      builderlabIdentity: { pubkey_hex: BLANK_TYLER_IDENTITY.pubkey },
-      builderlabCreatedCommunity: {
+      colonyCreatedCommunity: {
         id: "hosted-bee-lab",
         name: "bee-lab",
       },
@@ -1095,48 +1075,14 @@ test("first-community reports a created community without a relay address", asyn
   await expect(page.getByText("That address is available.")).toBeVisible();
   await page.getByRole("button", { name: "Next" }).click();
   await expect(page.getByRole("alert")).toContainText(
-    "The community was created, but Builderlab did not return its relay address.",
+    "The community was created, but the relay did not return its address.",
   );
   await expect(
     page.getByRole("heading", { name: "Build your profile" }),
   ).toHaveCount(0);
 });
 
-test("first-community X cancels a pending sign-in", async ({ page }) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    { builderlabLoginDelayMs: 5_000 },
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await page.getByTestId("community-choice-create").click();
-  await page.getByRole("button", { name: "Sign in to continue" }).click();
-  await expect(page.getByText("Waiting for your browser…")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Cancel sign-in" }),
-  ).toHaveCount(0);
-  await page.getByRole("button", { name: "Close" }).click();
-  await expect(
-    page.getByRole("button", { name: /Create a community/ }),
-  ).toBeVisible();
-  await expect
-    .poll(() => page.evaluate(() => window.__BUZZ_E2E_COMMANDS__ ?? []))
-    .toEqual(expect.arrayContaining(["cancel_builderlab_login"]));
-});
-
-test("first-community owner can replace a mismatched account identity", async ({
+test("back returns to the first-community choices and can reopen create", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -1148,13 +1094,7 @@ test("first-community owner can replace a mismatched account identity", async ({
   }, BLANK_TYLER_IDENTITY.pubkey);
   await installMockBridge(
     page,
-    {
-      builderlabAuth: {
-        email: "old-owner@example.com",
-        expiresAt: "2099-01-01T00:00:00Z",
-      },
-      builderlabIdentity: { pubkey_hex: "f".repeat(64) },
-    },
+    {},
     {
       relayWsUrl: "ws://localhost:3000",
       skipOnboardingSeed: true,
@@ -1165,99 +1105,14 @@ test("first-community owner can replace a mismatched account identity", async ({
 
   await page.getByTestId("community-choice-create").click();
   await expect(
-    page.getByRole("heading", {
-      name: "This account uses a different Colony identity",
-    }),
+    page.getByTestId("hosted-community-address-input"),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Use this device's identity" })
-    .click();
-  await expect(
-    page.getByRole("textbox", { name: "Community name" }),
-  ).toBeVisible();
-  await expect
-    .poll(() => page.evaluate(() => window.__BUZZ_E2E_COMMANDS__ ?? []))
-    .toEqual(
-      expect.arrayContaining([
-        "delete_builderlab_nostr_identity",
-        "bind_builderlab_nostr_identity",
-      ]),
-    );
-});
-
-test("first-community explains when the local identity belongs to another account", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {
-      builderlabAuth: {
-        email: "wrong-owner@example.com",
-        expiresAt: "2099-01-01T00:00:00Z",
-      },
-      builderlabIdentity: { pubkey_hex: "e".repeat(64) },
-      builderlabBindError: { code: "pubkey_already_bound" },
-    },
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await page.getByTestId("community-choice-create").click();
-  await page
-    .getByRole("button", { name: "Use this device's identity" })
-    .click();
-  await expect(
-    page.getByText(
-      "This device's Colony identity belongs to a different Builderlab account and can't be moved from here. Sign out, then sign in with the account that already owns this identity.",
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Finish connecting Colony" }),
-  ).toBeVisible();
-});
-
-test("back clears Builderlab auth before returning to first-community choices", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {
-      builderlabAuth: {
-        email: "owner@example.com",
-        expiresAt: "2099-01-01T00:00:00Z",
-      },
-      builderlabIdentity: { pubkey_hex: BLANK_TYLER_IDENTITY.pubkey },
-    },
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await page.getByTestId("community-choice-create").click();
   await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("community-choice-create")).toBeVisible();
   await page.getByTestId("community-choice-create").click();
-  await expect(page.getByRole("button", { name: "Continue" })).toBeVisible();
+  await expect(
+    page.getByTestId("hosted-community-address-input"),
+  ).toBeVisible();
 });
 
 test("first-community shows the scenario cards for localhost", async ({
