@@ -116,6 +116,16 @@ struct DiscoveryActionContent {
     business_search: Option<DiscoveryBusinessSearchSpec>,
 }
 
+struct DiscoveryActionInput {
+    wire_version: DiscoveryWireVersion,
+    operation: DiscoveryOperation,
+    request_id: Uuid,
+    idempotency_key: Uuid,
+    campaign_id: Option<Uuid>,
+    run_id: Option<Uuid>,
+    business_search: Option<DiscoveryBusinessSearchSpec>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct DiscoveryReceiptContent {
@@ -138,13 +148,15 @@ pub fn build_discovery_start_action(
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery action"))?;
     build_action(
         relay_pubkey,
-        DiscoveryWireVersion::V2,
-        DiscoveryOperation::Start,
-        request.request_id,
-        request.idempotency_key,
-        Some(request.campaign_id),
-        None,
-        Some(request.business_search.clone()),
+        DiscoveryActionInput {
+            wire_version: DiscoveryWireVersion::V2,
+            operation: DiscoveryOperation::Start,
+            request_id: request.request_id,
+            idempotency_key: request.idempotency_key,
+            campaign_id: Some(request.campaign_id),
+            run_id: None,
+            business_search: Some(request.business_search.clone()),
+        },
     )
 }
 
@@ -228,26 +240,31 @@ fn build_run_action(
     validate_uuid(request.run_id, "discovery action")?;
     build_action(
         relay_pubkey,
-        DiscoveryWireVersion::V2,
-        operation,
-        request.request_id,
-        request.idempotency_key,
-        None,
-        Some(request.run_id),
-        None,
+        DiscoveryActionInput {
+            wire_version: DiscoveryWireVersion::V2,
+            operation,
+            request_id: request.request_id,
+            idempotency_key: request.idempotency_key,
+            campaign_id: None,
+            run_id: Some(request.run_id),
+            business_search: None,
+        },
     )
 }
 
 fn build_action(
     relay_pubkey: PublicKey,
-    wire_version: DiscoveryWireVersion,
-    operation: DiscoveryOperation,
-    request_id: Uuid,
-    idempotency_key: Uuid,
-    campaign_id: Option<Uuid>,
-    run_id: Option<Uuid>,
-    business_search: Option<DiscoveryBusinessSearchSpec>,
+    input: DiscoveryActionInput,
 ) -> Result<EventBuilder, DiscoverySdkError> {
+    let DiscoveryActionInput {
+        wire_version,
+        operation,
+        request_id,
+        idempotency_key,
+        campaign_id,
+        run_id,
+        business_search,
+    } = input;
     let target = campaign_id
         .or(run_id)
         .ok_or(DiscoverySdkError::InvalidEnvelope("discovery action"))?;
@@ -832,13 +849,15 @@ mod tests {
         };
         let action = build_action(
             relay.public_key(),
-            DiscoveryWireVersion::V1,
-            DiscoveryOperation::Start,
-            request.request_id,
-            request.idempotency_key,
-            Some(request.campaign_id),
-            None,
-            Some(request.business_search.clone()),
+            DiscoveryActionInput {
+                wire_version: DiscoveryWireVersion::V1,
+                operation: DiscoveryOperation::Start,
+                request_id: request.request_id,
+                idempotency_key: request.idempotency_key,
+                campaign_id: Some(request.campaign_id),
+                run_id: None,
+                business_search: Some(request.business_search.clone()),
+            },
         )
         .expect("legacy action builds")
         .sign_with_keys(&actor)
