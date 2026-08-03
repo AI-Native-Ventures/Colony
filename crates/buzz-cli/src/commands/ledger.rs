@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::client::BuzzClient;
+use crate::commands::provider_costs::{fetch_provider_costs, CostProvider};
 use crate::error::CliError;
 use crate::LedgerCmd;
 
@@ -132,9 +133,26 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
         LedgerCmd::Report => report(client, None).await,
         LedgerCmd::Reconcile {
             provider_costs,
+            from_provider,
+            since,
+            until,
             tolerance,
         } => {
-            let rows = read_provider_costs(&provider_costs)?;
+            let rows = match (provider_costs.as_deref(), from_provider.as_deref()) {
+                (Some(path), _) => read_provider_costs(path)?,
+                (None, Some(vendor)) => {
+                    let provider = CostProvider::parse(vendor)?;
+                    let (starting_at, ending_at) = reconcile_window(since, until)?;
+                    fetch_provider_costs(provider, &starting_at, &ending_at).await?
+                }
+                (None, None) => {
+                    return Err(CliError::Usage(
+                        "reconcile needs either --provider-costs <csv> or \
+                         --from-provider <anthropic|openai>"
+                            .to_owned(),
+                    ))
+                }
+            };
             let tolerance = usd_to_nanousd(&tolerance, "--tolerance")?;
             report(client, Some((rows, u128::from(tolerance)))).await
         }
@@ -506,6 +524,38 @@ fn read_provider_costs(path: &str) -> Result<Vec<ProviderDailyCost>, CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| CliError::Usage(format!("cannot read {path}: {error}")))?;
     parse_provider_costs(&text)
+}
+
+/// The window to ask a provider about.
+///
+/// Defaults to the last 30 days, which covers a monthly invoice cycle with
+/// room either side. Both bounds are validated here rather than at the
+/// provider, so a typo fails immediately instead of returning an empty
+/// report that reads as "the provider billed nothing".
+fn reconcile_window(
+    since: Option<String>,
+    until: Option<String>,
+) -> Result<(String, String), CliError> {
+    let parse = |value: &str, flag: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .map(|at| at.with_timezone(&chrono::Utc))
+            .map_err(|_| CliError::Usage(format!("{flag} {value} is not an RFC 3339 instant")))
+    };
+    let ending_at = match until.as_deref() {
+        Some(value) => parse(value, "--until")?,
+        None => chrono::Utc::now(),
+    };
+    let starting_at = match since.as_deref() {
+        Some(value) => parse(value, "--since")?,
+        None => ending_at - chrono::Duration::days(30),
+    };
+    if starting_at >= ending_at {
+        return Err(CliError::Usage("--since must be before --until".to_owned()));
+    }
+    Ok((
+        starting_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ending_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    ))
 }
 
 /// Load every usage record addressed to this identity.

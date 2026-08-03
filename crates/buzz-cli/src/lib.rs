@@ -493,9 +493,20 @@ pub enum LedgerCmd {
     Report,
     /// Compare the ledger against a provider's own daily cost export
     Reconcile {
-        /// CSV with columns provider,day,amount_usd
+        /// CSV with columns provider,day,amount_usd. Mutually exclusive with
+        /// --from-provider.
+        #[arg(long, conflicts_with = "from_provider")]
+        provider_costs: Option<String>,
+        /// Fetch the cost report directly from the provider: anthropic or
+        /// openai. Needs the matching BUZZ_LEDGER_<VENDOR>_ADMIN_KEY.
         #[arg(long)]
-        provider_costs: String,
+        from_provider: Option<String>,
+        /// RFC 3339 start of the window to fetch. Defaults to 30 days ago.
+        #[arg(long, requires = "from_provider")]
+        since: Option<String>,
+        /// RFC 3339 end of the window to fetch. Defaults to now.
+        #[arg(long, requires = "from_provider")]
+        until: Option<String>,
         /// Allowed absolute difference per provider-day, in dollars
         #[arg(long, default_value = "0.01")]
         tolerance: String,
