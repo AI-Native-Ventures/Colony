@@ -3,7 +3,10 @@
 // centered claim plus a short paragraph, no metrics, no hype. Sits on the
 // first paler step of the vertical color journey (HUE_CANVAS_MID via
 // bg-colony-canvasMid), between the hero's full-strength canvas and the
-// palest step behind the screenshot in ProductShowcase.
+// palest step behind the screenshot in ProductShowcase. The class here read
+// canvasLight while the comment claimed canvasMid, which collapsed the first
+// two steps of the journey into one flat pale run from the hero to the
+// screenshot.
 export function Statement() {
   return (
     <section className="bg-colony-canvasMid px-6 pb-20 pt-12 sm:pb-28 sm:pt-16">

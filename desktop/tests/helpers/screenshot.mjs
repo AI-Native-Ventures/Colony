@@ -19,6 +19,10 @@
 //   --clip <x,y,w,h>           Crop to a region (e.g. 0,0,256,720 for sidebar)
 //   --wait <ms>                Milliseconds to wait before capture (default: 2000)
 //   --viewport <WxH>           Viewport dimensions (default: 1280x720)
+//   --scale <n>                Device pixel ratio (default: 1). Use 2 when the
+//                              capture is rendered large on a page — a 1x crop
+//                              blown up reads as blurry, which is how the
+//                              marketing site's feature images went wrong.
 //   --outdir <path>            Output directory (default: test-results/screenshots)
 //   --messages <path>          JSON file with messages to inject before capture
 //   --update-ready             Mock an available update so the sidebar update card renders
@@ -39,6 +43,7 @@ const { values: args } = parseArgs({
     clip: { type: "string" },
     wait: { type: "string", default: "2000" },
     viewport: { type: "string", default: "1280x720" },
+    scale: { type: "string", default: "1" },
     outdir: { type: "string", default: "test-results/screenshots" },
     messages: { type: "string" },
     "local-storage": { type: "string", multiple: true, default: [] },
@@ -102,7 +107,11 @@ const TEST_PUBKEYS = [
 // app's WKWebView, so this is a capture-only artifact. Default stays headless so
 // CI is unaffected.
 const browser = await chromium.launch({ headless: !process.env.BUZZ_HEADED });
+// `--clip` stays in CSS pixels; Playwright multiplies by the device scale
+// factor when rasterizing, so a 2x capture keeps identical framing at twice
+// the pixel density rather than shifting the crop.
 const page = await browser.newPage({
+  deviceScaleFactor: Number(args.scale) || 1,
   viewport: { width: vpWidth, height: vpHeight },
 });
 

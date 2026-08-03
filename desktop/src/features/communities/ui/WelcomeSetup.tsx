@@ -41,7 +41,6 @@ export function WelcomeSetup({
   const [page, setPage] = React.useState<WelcomeSetupPage>(initialPage);
   const [transitionMode, setTransitionMode] =
     React.useState<WelcomeTransitionMode>(initialTransitionMode);
-  // While true, the Builderlab sign-in modal floats over the current page —
   // we only navigate to the hosted stage once sign-in completes, so the page
   // behind the modal never changes out from under the user.
   const [copiedNpub, setCopiedNpub] = React.useState(false);

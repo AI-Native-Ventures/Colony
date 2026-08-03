@@ -1,10 +1,9 @@
+import { Cards } from "@/sections/Cards";
 import { Download } from "@/sections/Download";
-import { Features } from "@/sections/Features";
 import { Footer } from "@/sections/Footer";
 import { Hero } from "@/sections/Hero";
 import { ProductShowcase } from "@/sections/ProductShowcase";
 import { Statement } from "@/sections/Statement";
-import { Story } from "@/sections/Story";
 
 export function App() {
   return (
@@ -12,8 +11,7 @@ export function App() {
       <Hero />
       <Statement />
       <ProductShowcase />
-      <Story />
-      <Features />
+      <Cards />
       <Download />
       <Footer />
     </main>
