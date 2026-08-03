@@ -7,6 +7,7 @@ import {
   loadPriceBook,
   loadRulebook,
 } from "./ledgerRepository";
+import { type LedgerReport, loadLedgerReport } from "./report";
 
 /**
  * React Query access to a community's cost ledger books.
@@ -32,6 +33,10 @@ export function correctionBookQueryKey(communityId: string) {
 
 export function budgetsQueryKey(communityId: string) {
   return [LEDGER_ROOT, communityId, "budgets"] as const;
+}
+
+export function ledgerReportQueryKey(communityId: string) {
+  return [LEDGER_ROOT, communityId, "report"] as const;
 }
 
 export function usePriceBook(communityId: string) {
@@ -63,5 +68,22 @@ export function useBudgets(communityId: string) {
     queryKey: budgetsQueryKey(communityId),
     queryFn: loadBudgets,
     enabled: communityId.length > 0,
+  });
+}
+
+/**
+ * The computed ledger.
+ *
+ * Unlike the book reads above, this one decrypts every usage record and
+ * folds them through the pricing engine, so it is the expensive query here.
+ * `staleTime` is generous because spend is a running total, not a live
+ * feed: a number a minute old is still the right number to act on.
+ */
+export function useLedgerReport(communityId: string) {
+  return useQuery<LedgerReport>({
+    queryKey: ledgerReportQueryKey(communityId),
+    queryFn: loadLedgerReport,
+    enabled: communityId.length > 0,
+    staleTime: 60_000,
   });
 }

@@ -121,6 +121,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goSpend = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/spend",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goDiscovery = React.useCallback(
     (options?: DiscoveryNavigationOptions) =>
       commitNavigation(
@@ -381,6 +392,7 @@ export function useAppNavigation() {
     goProjects,
     goPulse,
     goSettings,
+    goSpend,
     goWorkflow,
     goWorkflows,
     openSearchHit,
