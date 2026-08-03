@@ -1057,6 +1057,11 @@ async fn apply_worker_action_tx(
     match action {
         DiscoveryWorkerAction::Claim(request) => {
             let lease_id = Uuid::new_v4();
+            let worker_protocol_version: i16 = if is_v1_worker_action(action_event) {
+                1
+            } else {
+                2
+            };
             let available_providers = request
                 .available_providers
                 .iter()
@@ -1086,7 +1091,7 @@ async fn apply_worker_action_tx(
                  ) \
                  UPDATE discovery_runs r \
                  SET state='running', claim_id=$2, lease_until=$3, worker_id=$4, \
-                     lease_owner_pubkey=$5, lease_worker_protocol_version=2, \
+                     lease_owner_pubkey=$5, lease_worker_protocol_version=$7, \
                      lease_worker_protocol_claim_id=$2, \
                      attempt=r.attempt+1, updated_at=now() \
                  FROM candidate c WHERE r.community_id=$1 AND r.id=c.id \
@@ -1102,6 +1107,7 @@ async fn apply_worker_action_tx(
             .bind(request.worker_id)
             .bind(actor_pubkey.as_slice())
             .bind(&available_providers)
+            .bind(worker_protocol_version)
             .fetch_optional(&mut **tx)
             .await?;
             let Some(row) = row else {
@@ -3058,7 +3064,7 @@ mod tests {
         build_discovery_worker_heartbeat_action, build_discovery_worker_receipt,
         build_discovery_worker_salvage_observations_action,
         build_discovery_worker_source_progress_action,
-        build_discovery_worker_store_observations_action,
+        build_discovery_worker_store_observations_action, parse_discovery_worker_action,
     };
     use buzz_sdk::discovery_workspace::{
         build_discovery_workspace_action, build_discovery_workspace_receipt,
@@ -3587,6 +3593,9 @@ mod tests {
         lease_duration: Duration,
     ) -> Result<DiscoveryWorkerCommandApply> {
         let builder = match &action {
+            DiscoveryWorkerAction::Claim(request) => {
+                build_discovery_worker_claim_action(relay.public_key(), request)
+            }
             DiscoveryWorkerAction::Fail(request) => {
                 build_discovery_worker_fail_action(relay.public_key(), request)
             }
@@ -3616,15 +3625,40 @@ mod tests {
                 Tag::parse(parts).map_err(|error| DbError::InvalidData(error.to_string()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let content = builder.content.replace(
+        let mut content = builder.content.replace(
             "colony.discovery-worker-action/v2",
             "colony.discovery-worker-action/v1",
         );
+        if matches!(&action, DiscoveryWorkerAction::Claim(_)) {
+            let v2_capabilities = "\"available_providers\":[\"outscraper\"],";
+            if !content.contains(v2_capabilities) {
+                return Err(DbError::InvalidData(
+                    "test V1 claim fixture did not contain V2 capabilities".into(),
+                ));
+            }
+            content = content.replacen(v2_capabilities, "", 1);
+        }
         let event = EventBuilder::new(builder.kind, content)
             .tags(tags)
             .sign_with_keys(actor)
             .map_err(|error| DbError::InvalidData(error.to_string()))?;
-        apply_worker_action_event(db, community, actor, relay, action, event, lease_duration).await
+        let parsed = parse_discovery_worker_action(&event)
+            .map_err(|error| DbError::InvalidData(error.to_string()))?;
+        if parsed.action != action {
+            return Err(DbError::InvalidData(
+                "test V1 action fixture changed the parsed action".into(),
+            ));
+        }
+        apply_worker_action_event(
+            db,
+            community,
+            actor,
+            relay,
+            parsed.action,
+            event,
+            lease_duration,
+        )
+        .await
     }
 
     async fn apply_worker_action_event(
@@ -3939,6 +3973,81 @@ mod tests {
         .await
         .expect("terminal transition clears worker protocol marker");
         assert_eq!(cleared, (None, None));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn released_v1_external_worker_cannot_claim_default_protocol_v2_run() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let actor_bytes = actor.public_key().to_bytes();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor_bytes.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker identity");
+
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &actor_bytes, campaign_id, &search).await;
+        let run_id = match db
+            .create_discovery_run_once(
+                community,
+                &actor_bytes,
+                campaign_id,
+                Uuid::new_v4(),
+                1,
+                &search,
+            )
+            .await
+            .expect("create default-source protocol V2 run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+
+        let relay = Keys::generate();
+        let legacy_claim = apply_v1_worker_action(
+            &db,
+            community,
+            &actor,
+            &relay,
+            DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                worker_id: Uuid::new_v4(),
+                available_providers: vec![DiscoveryProvider::Outscraper],
+            }),
+            Duration::seconds(30),
+        )
+        .await;
+        assert!(matches!(
+            legacy_claim,
+            Err(DbError::Sqlx(sqlx::Error::Database(error)))
+                if error.code().as_deref() == Some("23514")
+        ));
+
+        let unchanged: (String, i32, Option<Uuid>, Option<i16>, Option<Uuid>) = sqlx::query_as(
+            "SELECT state,attempt,claim_id,lease_worker_protocol_version, \
+                 lease_worker_protocol_claim_id FROM discovery_runs \
+                 WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("read rollback-fenced external-worker run");
+        assert_eq!(unchanged, ("queued".to_owned(), 0, None, None, None));
     }
 
     #[tokio::test]
