@@ -326,6 +326,12 @@ impl Db {
             business_search,
         )
         .await?;
+        let source_config = super::discovery_workspace::load_campaign_source_config_tx(
+            &mut tx,
+            community_id,
+            campaign_id,
+        )
+        .await?;
         let run_id = deterministic_run_id(community_id, idempotency_key);
         let inserted = sqlx::query(
             "INSERT INTO discovery_runs \
@@ -360,6 +366,13 @@ impl Db {
             .bind(business_search.region.as_deref())
             .execute(&mut *tx)
             .await?;
+            super::discovery_workspace::insert_run_source_plan_tx(
+                &mut tx,
+                community_id,
+                run_id,
+                &source_config,
+            )
+            .await?;
         }
         let row = sqlx::query(DISCOVERY_RUN_SELECT_BY_IDEMPOTENCY)
             .bind(community_id.as_uuid())
@@ -368,9 +381,13 @@ impl Db {
             .await?;
         let run = run_from_row(&row)?;
         let stored_search = load_business_search_tx(&mut tx, community_id, run.id).await?;
+        let stored_sources =
+            super::discovery_workspace::load_run_source_config_tx(&mut tx, community_id, run.id)
+                .await?;
         if run.campaign_id != campaign_id
             || run.total_steps != total_steps
             || stored_search != *business_search
+            || stored_sources != source_config
         {
             return Err(DbError::AccessDenied(
                 "Discovery idempotency key conflicts with an existing start".into(),
@@ -457,6 +474,12 @@ impl Db {
                     &business_search,
                 )
                 .await?;
+                let source_config = super::discovery_workspace::load_campaign_source_config_tx(
+                    &mut tx,
+                    community_id,
+                    campaign_id,
+                )
+                .await?;
                 let row = sqlx::query(
                     "INSERT INTO discovery_runs \
                      (community_id, id, campaign_id, requested_by, start_idempotency_key, \
@@ -492,6 +515,13 @@ impl Db {
                 .bind(&business_search.language)
                 .bind(business_search.region.as_deref())
                 .execute(&mut *tx)
+                .await?;
+                super::discovery_workspace::insert_run_source_plan_tx(
+                    &mut tx,
+                    community_id,
+                    run.id,
+                    &source_config,
+                )
                 .await?;
                 run
             }
@@ -1114,7 +1144,7 @@ async fn apply_worker_action_tx(
                     "INSERT INTO discovery_usage \
                      (community_id, run_id, provider, provider_request_id, returned_count) \
                      VALUES ($1,$2,'outscraper',$3,$4) \
-                     ON CONFLICT (community_id, run_id) DO UPDATE SET \
+                     ON CONFLICT (community_id, run_id, provider) DO UPDATE SET \
                        returned_count=EXCLUDED.returned_count, updated_at=now() \
                      WHERE discovery_usage.provider=EXCLUDED.provider \
                        AND discovery_usage.provider_request_id=EXCLUDED.provider_request_id \
@@ -1195,7 +1225,8 @@ async fn apply_worker_action_tx(
             let prior_batch = sqlx::query(
                 "SELECT batch_fingerprint, accepted_count, existing_count \
                  FROM discovery_observation_batches \
-                 WHERE community_id=$1 AND run_id=$2 AND provider_request_id=$3 \
+                 WHERE community_id=$1 AND run_id=$2 AND provider='outscraper' \
+                   AND provider_request_id=$3 \
                    AND batch_index=$4",
             )
             .bind(community_id.as_uuid())
@@ -1250,7 +1281,7 @@ async fn apply_worker_action_tx(
                     "INSERT INTO discovery_usage \
                      (community_id, run_id, provider, provider_request_id, stored_count, existing_count) \
                      VALUES ($1,$2,'outscraper',$3,$4,$5) \
-                     ON CONFLICT (community_id, run_id) DO UPDATE SET \
+                     ON CONFLICT (community_id, run_id, provider) DO UPDATE SET \
                        stored_count=discovery_usage.stored_count + EXCLUDED.stored_count, \
                        existing_count=discovery_usage.existing_count + EXCLUDED.existing_count, \
                        updated_at=now() \
@@ -1272,8 +1303,9 @@ async fn apply_worker_action_tx(
                 }
                 sqlx::query(
                     "INSERT INTO discovery_observation_batches \
-                     (community_id, run_id, provider_request_id, batch_index, batch_fingerprint, \
-                      accepted_count, existing_count) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                     (community_id, run_id, provider, provider_request_id, batch_index, \
+                      batch_fingerprint, accepted_count, existing_count) \
+                     VALUES ($1,$2,'outscraper',$3,$4,$5,$6,$7)",
                 )
                 .bind(community_id.as_uuid())
                 .bind(request.lease.run_id)
@@ -1704,7 +1736,7 @@ fn parse_checkpoint_kind(value: &str) -> Result<DiscoveryCheckpointKind> {
     }
 }
 
-fn provider_text(provider: DiscoveryProvider) -> &'static str {
+pub(crate) fn provider_text(provider: DiscoveryProvider) -> &'static str {
     match provider {
         DiscoveryProvider::Outscraper => "outscraper",
         DiscoveryProvider::BraveSearch => "brave_search",
@@ -2019,10 +2051,15 @@ mod tests {
     use super::*;
     use crate::DbConfig;
     use buzz_core::{
+        discovery::{DiscoverySource, DiscoverySourceConfig, DiscoverySourceMode},
         discovery_worker::{
             deterministic_business_observation_id, DiscoveryWorkerCheckpointRequest,
             DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
             DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerReceipt,
+        },
+        discovery_workspace::{
+            DiscoveryCampaignInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceReceipt,
+            DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
         },
         CommunityId,
     };
@@ -2031,6 +2068,9 @@ mod tests {
         build_discovery_worker_complete_action, build_discovery_worker_fail_action,
         build_discovery_worker_heartbeat_action, build_discovery_worker_receipt,
         build_discovery_worker_store_observations_action,
+    };
+    use buzz_sdk::discovery_workspace::{
+        build_discovery_workspace_action, build_discovery_workspace_receipt,
     };
     use nostr::Keys;
     use uuid::Uuid;
@@ -2125,6 +2165,199 @@ mod tests {
             Some(DiscoveryTerminalReason::EntitlementRevoked)
         );
         assert!(parse_terminal_reason(Some("unknown")).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn campaign_source_changes_do_not_mutate_existing_run_snapshots() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        sqlx::query(
+            "UPDATE discovery_campaigns \
+             SET source_mode='concurrent',source_keys=ARRAY['brave_search','exa_search']::TEXT[] \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .execute(&db.pool)
+        .await
+        .expect("save concurrent Campaign sources");
+
+        let run_id = match db
+            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 2, &search)
+            .await
+            .expect("create run with immutable source plan")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+
+        sqlx::query(
+            "UPDATE discovery_campaigns \
+             SET source_mode='waterfall',source_keys=ARRAY['google_maps']::TEXT[] \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .execute(&db.pool)
+        .await
+        .expect("change future Campaign sources");
+
+        let campaign_plan: (String, Vec<String>) = sqlx::query_as(
+            "SELECT source_mode,source_keys FROM discovery_campaigns \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("load current Campaign plan");
+        let run_plan: (String, Vec<String>) = sqlx::query_as(
+            "SELECT source_mode,source_keys FROM discovery_run_source_plans \
+             WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("load immutable run plan");
+        let run_sources: Vec<(String, String, i16)> = sqlx::query_as(
+            "SELECT source_key,provider,position FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 ORDER BY position",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_all(&db.pool)
+        .await
+        .expect("load per-source run rows");
+
+        assert_eq!(
+            campaign_plan,
+            ("waterfall".into(), vec!["google_maps".into()])
+        );
+        assert_eq!(
+            run_plan,
+            (
+                "concurrent".into(),
+                vec!["brave_search".into(), "exa_search".into()]
+            )
+        );
+        assert_eq!(
+            run_sources,
+            vec![
+                ("brave_search".into(), "brave_search".into(), 0),
+                ("exa_search".into(), "exa_search".into(), 1),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn workspace_source_update_is_persisted_and_idempotent() {
+        use crate::discovery_workspace::DiscoveryWorkspaceCommandApply;
+
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let relay = Keys::generate();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert workspace actor member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert workspace actor identity");
+
+        let campaign_id = Uuid::new_v4();
+        let create = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
+                campaign: DiscoveryCampaignInput {
+                    campaign_id,
+                    name: "Sandton dentists".into(),
+                    industry_id: "healthcare".into(),
+                    industry_name: "Healthcare".into(),
+                    vertical_id: "dentists".into(),
+                    vertical_name: "Dentists".into(),
+                    query: "dentists".into(),
+                    location: "Sandton, Johannesburg, South Africa".into(),
+                    target: 50,
+                    description: None,
+                    language: "en".into(),
+                    region: Some("ZA".into()),
+                    source_config: DiscoverySourceConfig {
+                        mode: DiscoverySourceMode::Concurrent,
+                        sources: vec![DiscoverySource::BraveSearch, DiscoverySource::ExaSearch],
+                    },
+                },
+            },
+        };
+        let create_event = build_discovery_workspace_action(relay.public_key(), &create)
+            .expect("build Campaign create")
+            .sign_with_keys(&actor)
+            .expect("sign Campaign create");
+        let created =
+            apply_workspace_request(&db, community, &actor, &relay, &create, &create_event)
+                .await
+                .expect("create Campaign");
+        let DiscoveryWorkspaceCommandApply::Applied { result, .. } = created else {
+            panic!("first Campaign create must apply");
+        };
+        let DiscoveryWorkspaceResult::Campaign { campaign } = *result else {
+            panic!("Campaign create must return Campaign");
+        };
+        assert_eq!(campaign.source_config.mode, DiscoverySourceMode::Concurrent);
+
+        let replacement = DiscoverySourceConfig {
+            mode: DiscoverySourceMode::Waterfall,
+            sources: vec![DiscoverySource::ExaSearch, DiscoverySource::GoogleMaps],
+        };
+        let update = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+                campaign_id,
+                source_config: replacement.clone(),
+            },
+        };
+        let update_event = build_discovery_workspace_action(relay.public_key(), &update)
+            .expect("build source update")
+            .sign_with_keys(&actor)
+            .expect("sign source update");
+        let updated =
+            apply_workspace_request(&db, community, &actor, &relay, &update, &update_event)
+                .await
+                .expect("update Campaign sources");
+        let DiscoveryWorkspaceCommandApply::Applied { result, .. } = updated else {
+            panic!("first source update must apply");
+        };
+        let DiscoveryWorkspaceResult::Campaign { campaign } = *result else {
+            panic!("source update must return Campaign");
+        };
+        assert_eq!(campaign.source_config, replacement);
+
+        let replayed =
+            apply_workspace_request(&db, community, &actor, &relay, &update, &update_event)
+                .await
+                .expect("replay source update");
+        assert!(matches!(
+            replayed,
+            DiscoveryWorkspaceCommandApply::Duplicate { .. }
+        ));
     }
 
     async fn database_fixture() -> (Db, CommunityId, [u8; 32], [u8; 32]) {
@@ -2247,6 +2480,40 @@ mod tests {
                     outcome: outcome.clone(),
                 };
                 build_discovery_worker_receipt(actor_pubkey, action_event_id, &receipt)
+                    .map_err(|error| DbError::InvalidData(error.to_string()))?
+                    .sign_with_keys(relay)
+                    .map_err(|error| DbError::InvalidData(error.to_string()))
+            },
+        )
+        .await
+    }
+
+    async fn apply_workspace_request(
+        db: &Db,
+        community: CommunityId,
+        actor: &Keys,
+        relay: &Keys,
+        request: &DiscoveryWorkspaceRequest,
+        action: &Event,
+    ) -> Result<super::super::discovery_workspace::DiscoveryWorkspaceCommandApply> {
+        let operation = request.payload.operation();
+        let request_id = request.request_id;
+        let idempotency_key = request.idempotency_key;
+        let actor_pubkey = actor.public_key();
+        let action_event_id = action.id;
+        db.apply_discovery_workspace_command_once(
+            community,
+            &actor.public_key().to_bytes(),
+            request,
+            action,
+            |result| {
+                let receipt = DiscoveryWorkspaceReceipt {
+                    operation,
+                    request_id,
+                    idempotency_key,
+                    result: result.clone(),
+                };
+                build_discovery_workspace_receipt(actor_pubkey, action_event_id, &receipt)
                     .map_err(|error| DbError::InvalidData(error.to_string()))?
                     .sign_with_keys(relay)
                     .map_err(|error| DbError::InvalidData(error.to_string()))

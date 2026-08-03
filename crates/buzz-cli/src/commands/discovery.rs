@@ -1,7 +1,10 @@
 //! Agent-first commands for the shared Discovery primitive.
 
 use buzz_core::{
-    discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunRequest, DiscoveryStartRequest},
+    discovery::{
+        DiscoveryBusinessSearchSpec, DiscoveryRunRequest, DiscoverySource, DiscoverySourceConfig,
+        DiscoverySourceMode, DiscoveryStartRequest,
+    },
     discovery_workspace::{
         DiscoveryCampaignInput, DiscoveryCampaignListRequest, DiscoveryLeadListRequest,
         DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
@@ -19,7 +22,9 @@ use nostr::{Event, JsonUtil, PublicKey};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::{client::BuzzClient, error::CliError, DiscoveryCmd};
+use crate::{
+    client::BuzzClient, error::CliError, DiscoveryCmd, DiscoverySourceArg, DiscoverySourceModeArg,
+};
 
 /// Route `buzz discovery ...`.
 pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), CliError> {
@@ -45,6 +50,8 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
             description,
             language,
             region,
+            source_mode,
+            sources,
             idempotency_key,
         } => {
             publish_workspace_payload(
@@ -63,6 +70,33 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                         description: description.map(|value| value.trim().to_owned()),
                         language: language.trim().to_ascii_lowercase(),
                         region: region.map(|value| value.trim().to_ascii_uppercase()),
+                        source_config: DiscoverySourceConfig {
+                            mode: source_mode.into(),
+                            sources: if sources.is_empty() {
+                                vec![DiscoverySource::GoogleMaps]
+                            } else {
+                                sources.into_iter().map(Into::into).collect()
+                            },
+                        },
+                    },
+                },
+                idempotency_key,
+            )
+            .await
+        }
+        DiscoveryCmd::CampaignSources {
+            campaign,
+            source_mode,
+            sources,
+            idempotency_key,
+        } => {
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+                    campaign_id: campaign,
+                    source_config: DiscoverySourceConfig {
+                        mode: source_mode.into(),
+                        sources: sources.into_iter().map(Into::into).collect(),
                     },
                 },
                 idempotency_key,
@@ -200,6 +234,25 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                 builder,
             )
             .await
+        }
+    }
+}
+
+impl From<DiscoverySourceModeArg> for DiscoverySourceMode {
+    fn from(value: DiscoverySourceModeArg) -> Self {
+        match value {
+            DiscoverySourceModeArg::Waterfall => Self::Waterfall,
+            DiscoverySourceModeArg::Concurrent => Self::Concurrent,
+        }
+    }
+}
+
+impl From<DiscoverySourceArg> for DiscoverySource {
+    fn from(value: DiscoverySourceArg) -> Self {
+        match value {
+            DiscoverySourceArg::GoogleMaps => Self::GoogleMaps,
+            DiscoverySourceArg::BraveSearch => Self::BraveSearch,
+            DiscoverySourceArg::ExaSearch => Self::ExaSearch,
         }
     }
 }

@@ -1131,6 +1131,14 @@ CREATE TABLE discovery_campaigns (
     description TEXT CHECK (description IS NULL OR (octet_length(description) BETWEEN 1 AND 2048 AND description = btrim(description) AND description !~ '[[:cntrl:]]')),
     language TEXT NOT NULL CHECK (language ~ '^[a-z]{2}$'),
     region TEXT CHECK (region IS NULL OR region ~ '^[A-Z]{2}$'),
+    source_mode TEXT NOT NULL DEFAULT 'waterfall'
+        CHECK (source_mode IN ('waterfall', 'concurrent')),
+    source_keys TEXT[] NOT NULL DEFAULT ARRAY['google_maps']::TEXT[] CHECK (
+        cardinality(source_keys) BETWEEN 1 AND 3
+        AND source_keys <@ ARRAY['google_maps', 'brave_search', 'exa_search']::TEXT[]
+        AND array_position(source_keys, source_keys[1], 2) IS NULL
+        AND (cardinality(source_keys) < 2 OR array_position(source_keys, source_keys[2], 3) IS NULL)
+    ),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, id)
@@ -1142,7 +1150,10 @@ CREATE INDEX discovery_campaigns_taxonomy_created_idx
 CREATE TABLE discovery_workspace_action_claims (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     idempotency_key UUID NOT NULL,
-    operation TEXT NOT NULL CHECK (operation IN ('access', 'create_campaign', 'get_campaign', 'list_campaigns', 'list_leads')),
+    operation TEXT NOT NULL CHECK (operation IN (
+        'access', 'create_campaign', 'update_campaign_sources',
+        'get_campaign', 'list_campaigns', 'list_leads'
+    )),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
     receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
@@ -1218,7 +1229,7 @@ CREATE TABLE discovery_run_checkpoints (
     sequence INTEGER NOT NULL CHECK (sequence > 0),
     checkpoint_kind TEXT NOT NULL
         CHECK (checkpoint_kind IN ('provider_submitted', 'provider_results_ready')),
-    provider TEXT NOT NULL CHECK (provider = 'outscraper'),
+    provider TEXT NOT NULL CHECK (provider IN ('outscraper', 'brave_search', 'exa_search')),
     provider_request_id TEXT
         CHECK (
             provider_request_id IS NULL
@@ -1285,11 +1296,58 @@ CREATE TABLE discovery_run_business_searches (
         REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
 );
 
+CREATE TABLE discovery_run_source_plans (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    run_id UUID NOT NULL,
+    source_mode TEXT NOT NULL CHECK (source_mode IN ('waterfall', 'concurrent')),
+    source_keys TEXT[] NOT NULL CHECK (
+        cardinality(source_keys) BETWEEN 1 AND 3
+        AND source_keys <@ ARRAY['google_maps', 'brave_search', 'exa_search']::TEXT[]
+        AND array_position(source_keys, source_keys[1], 2) IS NULL
+        AND (cardinality(source_keys) < 2 OR array_position(source_keys, source_keys[2], 3) IS NULL)
+    ),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, run_id),
+    FOREIGN KEY (community_id, run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE discovery_run_sources (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    run_id UUID NOT NULL,
+    source_key TEXT NOT NULL CHECK (source_key IN ('google_maps', 'brave_search', 'exa_search')),
+    provider TEXT NOT NULL CHECK (provider IN ('outscraper', 'brave_search', 'exa_search')),
+    position SMALLINT NOT NULL CHECK (position BETWEEN 0 AND 2),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending', 'active', 'completed', 'exhausted', 'failed', 'cancelled',
+        'outcome_unknown', 'skipped_target_met'
+    )),
+    request_cursor TEXT CHECK (request_cursor IS NULL OR octet_length(request_cursor) BETWEEN 1 AND 256),
+    request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+    returned_count INTEGER NOT NULL DEFAULT 0 CHECK (returned_count >= 0),
+    retained_count INTEGER NOT NULL DEFAULT 0 CHECK (retained_count >= 0),
+    duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count >= 0),
+    failure_class TEXT CHECK (failure_class IS NULL OR failure_class IN (
+        'credential_rejected', 'billing_required', 'invalid_request',
+        'rate_limited', 'provider_unavailable', 'response_too_large',
+        'request_timed_out', 'malformed_response', 'outcome_unknown', 'cancelled'
+    )),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, run_id, source_key),
+    UNIQUE (community_id, run_id, position),
+    FOREIGN KEY (community_id, run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE,
+    CHECK ((status = 'pending' AND started_at IS NULL) OR started_at IS NOT NULL),
+    CHECK ((status IN ('pending', 'active') AND finished_at IS NULL) OR finished_at IS NOT NULL)
+);
+
 CREATE TABLE discovery_business_observations (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     id UUID NOT NULL,
     first_run_id UUID NOT NULL,
-    provider TEXT NOT NULL CHECK (provider = 'outscraper'),
+    provider TEXT NOT NULL CHECK (provider IN ('outscraper', 'brave_search', 'exa_search')),
     provider_record_id TEXT NOT NULL CHECK (
         octet_length(provider_record_id) BETWEEN 1 AND 256
         AND provider_record_id ~ '^[A-Za-z0-9:_-]+$'
@@ -1363,6 +1421,13 @@ CREATE TABLE discovery_business_observations (
             AND image_url !~ '[[:cntrl:]]'
         )
     ),
+    description TEXT CHECK (
+        description IS NULL OR (
+            octet_length(description) BETWEEN 1 AND 2048
+            AND description = btrim(description)
+            AND description !~ '[[:cntrl:]]'
+        )
+    ),
     observation_fingerprint BYTEA NOT NULL CHECK (octet_length(observation_fingerprint) = 32),
     first_observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, id),
@@ -1377,7 +1442,7 @@ CREATE INDEX discovery_business_observations_first_run_idx
 CREATE TABLE discovery_usage (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     run_id UUID NOT NULL,
-    provider TEXT NOT NULL CHECK (provider = 'outscraper'),
+    provider TEXT NOT NULL CHECK (provider IN ('outscraper', 'brave_search', 'exa_search')),
     provider_request_id TEXT NOT NULL CHECK (
         octet_length(provider_request_id) BETWEEN 1 AND 128
         AND provider_request_id ~ '^[A-Za-z0-9_-]+$'
@@ -1386,7 +1451,7 @@ CREATE TABLE discovery_usage (
     existing_count INTEGER NOT NULL DEFAULT 0 CHECK (existing_count >= 0),
     returned_count INTEGER CHECK (returned_count IS NULL OR returned_count >= 0),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (community_id, run_id),
+    PRIMARY KEY (community_id, run_id, provider),
     UNIQUE (community_id, provider, provider_request_id),
     FOREIGN KEY (community_id, run_id)
         REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
@@ -1395,6 +1460,8 @@ CREATE TABLE discovery_usage (
 CREATE TABLE discovery_observation_batches (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     run_id UUID NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'outscraper'
+        CHECK (provider IN ('outscraper', 'brave_search', 'exa_search')),
     provider_request_id TEXT NOT NULL CHECK (
         octet_length(provider_request_id) BETWEEN 1 AND 128
         AND provider_request_id ~ '^[A-Za-z0-9_-]+$'
@@ -1404,7 +1471,7 @@ CREATE TABLE discovery_observation_batches (
     accepted_count SMALLINT NOT NULL CHECK (accepted_count BETWEEN 0 AND 25),
     existing_count SMALLINT NOT NULL CHECK (existing_count BETWEEN 0 AND 25),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (community_id, run_id, provider_request_id, batch_index),
+    PRIMARY KEY (community_id, run_id, provider, provider_request_id, batch_index),
     FOREIGN KEY (community_id, run_id)
         REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE,
     CHECK (accepted_count + existing_count BETWEEN 1 AND 25)

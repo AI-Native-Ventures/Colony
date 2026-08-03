@@ -609,6 +609,24 @@ pub enum CompanyCmd {
 }
 
 /// Workspace-scoped business Discovery operations.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum DiscoverySourceModeArg {
+    Waterfall,
+    Concurrent,
+}
+
+/// Live Businesses source accepted by Discovery Campaign commands.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum DiscoverySourceArg {
+    #[value(name = "google_maps")]
+    GoogleMaps,
+    #[value(name = "brave_search")]
+    BraveSearch,
+    #[value(name = "exa_search")]
+    ExaSearch,
+}
+
+/// Workspace-scoped business Discovery operations.
 #[derive(Subcommand)]
 pub enum DiscoveryCmd {
     /// Read whether this workspace can use live Discovery
@@ -655,6 +673,27 @@ pub enum DiscoveryCmd {
         /// Optional ISO 3166-1 alpha-2 country code.
         #[arg(long)]
         region: Option<String>,
+        /// Source execution mode for future runs.
+        #[arg(long, value_enum, default_value = "waterfall")]
+        source_mode: DiscoverySourceModeArg,
+        /// Selected source in waterfall order. Repeat to select multiple.
+        #[arg(long = "source", value_enum)]
+        sources: Vec<DiscoverySourceArg>,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Replace the source mode and selection used by future Campaign runs
+    CampaignSources {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Source execution mode.
+        #[arg(long, value_enum)]
+        source_mode: DiscoverySourceModeArg,
+        /// Selected source in waterfall order. Repeat for each source.
+        #[arg(long = "source", value_enum, required = true)]
+        sources: Vec<DiscoverySourceArg>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -2486,6 +2525,25 @@ mod tests {
                 "dentists",
                 "--location",
                 "Sandton, South Africa",
+                "--source-mode",
+                "concurrent",
+                "--source",
+                "brave_search",
+                "--source",
+                "exa_search",
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-sources",
+                "--campaign",
+                campaign,
+                "--source-mode",
+                "waterfall",
+                "--source",
+                "exa_search",
+                "--source",
+                "google_maps",
             ],
             vec!["buzz", "discovery", "campaign-get", "--campaign", campaign],
             vec!["buzz", "discovery", "campaign-list", "--limit", "100"],
@@ -2525,6 +2583,16 @@ mod tests {
             Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", campaign,]).is_err()
         );
         assert!(Cli::try_parse_from(["buzz", "discovery", "status"]).is_err());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "discovery",
+            "campaign-sources",
+            "--campaign",
+            campaign,
+            "--source-mode",
+            "concurrent"
+        ])
+        .is_err());
     }
 
     /// `--format compact` is a GLOBAL flag and must stay before the

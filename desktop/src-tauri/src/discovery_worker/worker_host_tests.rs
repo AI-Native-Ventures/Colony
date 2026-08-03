@@ -738,6 +738,7 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
                     description: None,
                     language: "en".to_owned(),
                     region: Some("ZA".to_owned()),
+                    source_config: buzz_core_pkg::discovery::DiscoverySourceConfig::default(),
                 },
             },
         };

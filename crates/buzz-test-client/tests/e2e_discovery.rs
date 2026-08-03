@@ -140,6 +140,7 @@ async fn create_campaign(
                 description: Some("Dental practices serving Sandton".to_owned()),
                 language: "en".to_owned(),
                 region: Some("ZA".to_owned()),
+                source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
             },
         },
     };

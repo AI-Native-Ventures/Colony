@@ -236,7 +236,9 @@ fn validate_receipt(receipt: &DiscoveryWorkspaceReceipt) -> Result<(), Discovery
             DiscoveryWorkspaceOperation::Access,
             DiscoveryWorkspaceResult::Access { .. }
         ) | (
-            DiscoveryWorkspaceOperation::CreateCampaign | DiscoveryWorkspaceOperation::GetCampaign,
+            DiscoveryWorkspaceOperation::CreateCampaign
+                | DiscoveryWorkspaceOperation::UpdateCampaignSources
+                | DiscoveryWorkspaceOperation::GetCampaign,
             DiscoveryWorkspaceResult::Campaign { .. }
         ) | (
             DiscoveryWorkspaceOperation::ListCampaigns,
@@ -258,6 +260,7 @@ fn operation_tag(operation: DiscoveryWorkspaceOperation) -> &'static str {
     match operation {
         DiscoveryWorkspaceOperation::Access => "access",
         DiscoveryWorkspaceOperation::CreateCampaign => "create_campaign",
+        DiscoveryWorkspaceOperation::UpdateCampaignSources => "update_campaign_sources",
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
@@ -268,6 +271,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkspaceOperation, Discovery
     match value {
         "access" => Ok(DiscoveryWorkspaceOperation::Access),
         "create_campaign" => Ok(DiscoveryWorkspaceOperation::CreateCampaign),
+        "update_campaign_sources" => Ok(DiscoveryWorkspaceOperation::UpdateCampaignSources),
         "get_campaign" => Ok(DiscoveryWorkspaceOperation::GetCampaign),
         "list_campaigns" => Ok(DiscoveryWorkspaceOperation::ListCampaigns),
         "list_leads" => Ok(DiscoveryWorkspaceOperation::ListLeads),
@@ -392,6 +396,7 @@ mod tests {
                     description: None,
                     language: "en".into(),
                     region: Some("ZA".into()),
+                    source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
                 },
             },
         }
@@ -427,5 +432,33 @@ mod tests {
             },
         };
         assert!(build_discovery_workspace_action(Keys::generate().public_key(), &request).is_err());
+    }
+
+    #[test]
+    fn source_update_round_trips_as_a_private_canonical_action() {
+        let relay = Keys::generate();
+        let actor = Keys::generate();
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+                campaign_id: Uuid::new_v4(),
+                source_config: buzz_core::discovery::DiscoverySourceConfig {
+                    mode: buzz_core::discovery::DiscoverySourceMode::Concurrent,
+                    sources: vec![
+                        buzz_core::discovery::DiscoverySource::BraveSearch,
+                        buzz_core::discovery::DiscoverySource::ExaSearch,
+                    ],
+                },
+            },
+        };
+        let event = build_discovery_workspace_action(relay.public_key(), &request)
+            .expect("build update")
+            .sign_with_keys(&actor)
+            .expect("sign update");
+        let parsed = parse_discovery_workspace_action(&event).expect("parse update");
+        assert_eq!(parsed.request, request);
+        assert!(event.content.contains("update_campaign_sources"));
+        assert!(!event.content.contains("api_key"));
     }
 }

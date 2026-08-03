@@ -96,23 +96,23 @@ cargo test -p buzz-sdk discovery
 - Modify: `crates/buzz-relay/src/discovery_broker.rs`
 - Modify: `crates/buzz-cli/src/commands/discovery.rs`
 
-- [ ] Add failing database tests proving create/read/update round trips, strict
+- [x] Add failing database tests proving create/read/update round trips, strict
   validation, idempotent update replay, community isolation, and that a started
   run keeps its original plan after the Campaign is edited.
-- [ ] Add `source_mode` plus ordered `source_keys` to `discovery_campaigns`, and
+- [x] Add `source_mode` plus ordered `source_keys` to `discovery_campaigns`, and
   create a run-source snapshot plus per-source execution rows. Backfill existing
   Campaigns and runs as waterfall/Google Maps without deleting or rewriting any
   observation.
-- [ ] Expand provider constraints to `outscraper`, `brave_search`, and
+- [x] Expand provider constraints to `outscraper`, `brave_search`, and
   `exa_search`; make usage and observation-batch uniqueness provider-aware.
-- [ ] Add `update_campaign_sources` as an idempotent workspace operation and
+- [x] Add `update_campaign_sources` as an idempotent workspace operation and
   return the persisted configuration in Campaign projections.
-- [ ] Require start admission to load and store the Campaign configuration in
+- [x] Require start admission to load and store the Campaign configuration in
   the same transaction that creates the run. Do not trust a caller-supplied
   source plan that differs from the Campaign.
-- [ ] Extend the CLI with source-config inspection and update arguments while
+- [x] Extend the CLI with source-config inspection and update arguments while
   keeping agent starts on the same Campaign-owned configuration.
-- [ ] Run fresh- and upgraded-database migration tests plus:
+- [x] Run fresh- and upgraded-database migration tests plus:
 
 ```bash
 cargo test -p buzz-db discovery --no-fail-fast
@@ -120,7 +120,7 @@ cargo test -p buzz-relay discovery --no-fail-fast
 cargo test -p buzz-cli discovery
 ```
 
-- [ ] Commit with `git commit -s -m "feat(discovery): persist source run plans"`.
+- [x] Commit with `git commit -s -m "feat(discovery): persist source run plans"`.
 
 ## Task 3: Make worker claims capability-aware
 

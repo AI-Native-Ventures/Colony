@@ -561,7 +561,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 38);
+        assert_eq!(migrations.len(), 39);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1018,6 +1018,28 @@ mod tests {
             );
         }
         assert!(!sql.contains("_operator_global_tables"));
+    }
+
+    #[test]
+    fn discovery_multi_source_migration_is_scoped_and_provider_aware() {
+        let migration = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == 39)
+            .expect("Discovery multi-source migration");
+        let sql = migration.sql.as_ref();
+
+        assert!(sql.contains("CREATE TABLE discovery_run_source_plans"));
+        assert!(sql.contains("CREATE TABLE discovery_run_sources"));
+        assert!(sql.contains("PRIMARY KEY (community_id, run_id, source_key)"));
+        assert!(sql.contains("UNIQUE (community_id, run_id, position)"));
+        assert!(sql.contains("'waterfall', ARRAY['google_maps']::TEXT[]"));
+        assert!(sql.contains("'outscraper', 'brave_search', 'exa_search'"));
+        assert!(sql.contains(
+            "PRIMARY KEY (community_id, run_id, provider, provider_request_id, batch_index)"
+        ));
+        assert!(!sql.contains("api_key"));
+        assert!(!sql.contains("authorization"));
+        assert!(!sql.contains("raw_response"));
     }
 
     #[test]
