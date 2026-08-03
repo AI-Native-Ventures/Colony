@@ -14,8 +14,7 @@ yaml.safe_load(auto_text)
 yaml.safe_load(publish_text)
 for needle in (
     'push-chart-release/*)',
-    'VERSION="${BRANCH#push-chart-release/}"',
-    'TAG_PREFIX="push-chart-v"',
+    'emit "push-chart-v" "${BRANCH#push-chart-release/}"',
     # The handoff is the tag itself: auto-tag pushes refs/tags/push-chart-v<v>
     # and the publisher's on.push.tags filter below picks it up.
     '-f ref="refs/tags/$TAG"',

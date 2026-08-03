@@ -1,0 +1,166 @@
+name: Colony desktop release
+
+# Builds the macOS desktop dmg at a v<version> tag and publishes it to the
+# public AI-Native-Ventures/colony-releases repo, whose
+# /releases/latest/download URL the marketing site's download button points
+# at. Exists because upstream's release.yml is gated to
+# `github.repository == 'block/buzz'` and its signing pipeline needs Block's
+# certificates; this fork ships an ad-hoc-signed Apple Silicon dmg instead.
+#
+# The build runs on a self-hosted Mac runner (labels: self-hosted, macOS,
+# colony-builder). Colony is a private repo, so GitHub-hosted macOS minutes
+# bill at a 10x multiplier and a cold-workspace build of the whole Rust
+# workspace would not fit the plan's included minutes; the self-hosted
+# runner's persistent workspace keeps the cargo cache warm between releases.
+#
+# Normal releases arrive through the push:tags trigger. The tag is created
+# by auto-tag-on-release-pr-merge.yml when a merged PR bumps the version in
+# desktop/src-tauri/tauri.conf.json. workflow_dispatch is the manual rescue
+# path for re-running publication at an existing immutable tag;
+# verify-release-ref.sh rejects any run whose ref, checked-out HEAD, and tag
+# do not resolve to one commit, so there is no caller-selected source ref.
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version e.g. 0.7.0 (no v prefix) — for tag rescue dispatch"
+        required: true
+
+permissions:
+  contents: read
+
+# Never cancel a tag build mid-publish.
+concurrency:
+  group: colony-desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-and-publish:
+    if: github.repository == 'AI-Native-Ventures/Colony'
+    runs-on: [self-hosted, macOS, colony-builder]
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release ref
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          scripts/verify-release-ref.sh v "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build sidecar binaries
+        run: |
+          . ./bin/activate-hermit
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release --target aarch64-apple-darwin \
+            -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          scripts/bundle-sidecars.sh aarch64-apple-darwin
+
+      - name: Check sidecars are real binaries
+        # The build recipe `touch`es sidecar paths, which creates 0-byte stubs
+        # when the staging step above was skipped or failed silently. A dmg
+        # with stub sidecars installs fine and then cannot launch any agent,
+        # so refuse to continue with any suspiciously small sidecar.
+        run: |
+          for bin in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+            f="desktop/src-tauri/binaries/${bin}-aarch64-apple-darwin"
+            size=$(stat -f %z "$f" 2>/dev/null || echo 0)
+            if [ "$size" -lt 500000 ]; then
+              echo "::error::Sidecar $f is ${size} bytes — a stub, not a real binary"
+              exit 1
+            fi
+          done
+
+      - name: Build desktop app
+        run: |
+          . ./bin/activate-hermit
+          export PATH="$HOME/.cargo/bin:$PATH"
+          just desktop-release-build aarch64-apple-darwin
+
+      - name: Verify the bundle
+        run: |
+          BUNDLE=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+          APP="$BUNDLE/macos/Colony.app"
+          DMG="$BUNDLE/dmg/Colony_${VERSION}_aarch64.dmg"
+          test -d "$APP" || { echo "::error::Missing $APP"; exit 1; }
+          test -f "$DMG" || { echo "::error::Missing $DMG"; exit 1; }
+          PLIST_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
+          if [ "$PLIST_VERSION" != "$VERSION" ]; then
+            echo "::error::Built app reports version $PLIST_VERSION, expected $VERSION"
+            exit 1
+          fi
+          codesign --verify --deep --strict "$APP"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      # The token is minted after the long build so its one-hour lifetime
+      # cannot expire before the upload. Same App as the release tagger,
+      # scoped down to colony-releases only.
+      - name: Create release publisher token
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          private-key: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+          owner: AI-Native-Ventures
+          repositories: colony-releases
+          permission-contents: write
+
+      - name: Publish to colony-releases
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          STAGING=$(mktemp -d)
+          # The site's download button fetches the unversioned asset name via
+          # /releases/latest/download/Colony_aarch64.dmg, so every release
+          # must carry BOTH names.
+          cp "$DMG" "$STAGING/Colony_${VERSION}_aarch64.dmg"
+          cp "$DMG" "$STAGING/Colony_aarch64.dmg"
+          PREV=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null || true)
+          {
+            echo "Colony ${VERSION} for macOS (Apple Silicon)."
+            echo
+            if [ -n "$PREV" ]; then
+              echo "Changes since ${PREV}:"
+              git log --no-merges --pretty='- %s' "${PREV}..${TAG}"
+            else
+              echo "Recent changes:"
+              git log --no-merges --pretty='- %s' -25 "${TAG}"
+            fi
+          } > "$STAGING/notes.md"
+          if ! gh release view "$TAG" --repo AI-Native-Ventures/colony-releases >/dev/null 2>&1; then
+            gh release create "$TAG" --repo AI-Native-Ventures/colony-releases \
+              --title "Colony ${VERSION}" --notes-file "$STAGING/notes.md"
+          fi
+          gh release upload "$TAG" --repo AI-Native-Ventures/colony-releases --clobber \
+            "$STAGING/Colony_${VERSION}_aarch64.dmg" "$STAGING/Colony_aarch64.dmg"
+
+      - name: Verify the public download
+        run: |
+          set -euo pipefail
+          EXPECTED=$(stat -f %z "$DMG")
+          URL="https://github.com/AI-Native-Ventures/colony-releases/releases/latest/download/Colony_aarch64.dmg"
+          for attempt in 1 2 3 4 5; do
+            GOT=$(curl -sIL "$URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${GOT:-0}" = "$EXPECTED" ]; then
+              echo "latest/download serves the new dmg ($GOT bytes)"
+              exit 0
+            fi
+            echo "Attempt $attempt: got '${GOT:-none}' bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::latest/download/Colony_aarch64.dmg does not serve the freshly published dmg"
+          exit 1

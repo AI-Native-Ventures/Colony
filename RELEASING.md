@@ -1,5 +1,47 @@
 # Releasing Buzz
 
+## Colony releases (this fork)
+
+Releases are automatic and cut from `main` only. Version numbers must never
+be minted anywhere else: a release from `develop` skips the full CI matrix,
+and two release lines make "higher version" stop meaning "newer".
+
+1. Bump the component version on `develop` as part of normal work.
+   Desktop: `just bump-desktop-version <v>`. Relay: `version` in
+   `crates/buzz-relay/Cargo.toml`.
+2. Open the promotion PR (`develop` into `main`) and merge only when every
+   non-skipped check passes.
+3. On merge, `auto-tag-on-release-pr-merge.yml` diffs the version files
+   against the previous tip of `main` and creates each matching tag
+   (`v<v>`, `relay-v<v>`) with the release-tagger App. One merge can
+   release several components.
+4. The tag push fires the publisher:
+   - `v<v>` runs `colony-desktop-release.yml`: builds the dmg on the
+     self-hosted Mac runner (`colony-mac-builder`) and publishes
+     `Colony_<v>_aarch64.dmg` plus the fixed-name `Colony_aarch64.dmg` to
+     `AI-Native-Ventures/colony-releases`. The site's download button
+     follows `/releases/latest`, so publishing is the whole deploy.
+   - `relay-v<v>` runs `docker.yml`: builds and pushes
+     `ghcr.io/ai-native-ventures/colony-relay:<v>`.
+5. Deploying the relay image to Fly stays a deliberate step: dispatch the
+   "Deploy relay to Fly" workflow with the image tag.
+
+Credentials: the org GitHub App `colony-release-tagger` (contents: write,
+installed on `Colony` and `colony-releases`) supplies both the tag
+attribution and the cross-repo publish token, via the
+`BUZZ_RELEASE_TAGGER_CLIENT_ID` repo variable and
+`BUZZ_RELEASE_TAGGER_PRIVATE_KEY` repo secret. The runner is a launchd
+service on the build Mac (`~/actions-runner-colony`, check with
+`./svc.sh status`). If a release must go out while either is broken, push
+the tag by hand at the release commit; the publisher fires exactly as the
+App would, and `workflow_dispatch` at the tag ref re-runs a publisher.
+
+Everything below this section is the upstream Buzz release process, kept
+for reference; its desktop lane (`just release-desktop`, `release.yml`) is
+gated to `block/buzz` and does not run in this fork.
+
+---
+
 Buzz has three independent release lanes. Desktop and relay use release PRs.
 Mobile uses immutable release-candidate tags cut directly from remote `main`:
 

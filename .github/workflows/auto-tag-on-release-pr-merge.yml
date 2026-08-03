@@ -10,23 +10,32 @@ name: Auto-tag on Release PR Merge
 #   push-chart-release/<v> → tag push-chart-v<v> → push-gateway-helm-chart.yml
 #   any internal PR that bumps deploy/charts/buzz/Chart.yaml `version`
 #                       → tag chart-v<v>  → helm-chart.yml (helm chart)
+#   any internal PR that bumps desktop/src-tauri/tauri.conf.json `version`
+#                       → tag v<v>        → colony-desktop-release.yml
+#   any internal PR that bumps crates/buzz-relay/Cargo.toml `version`
+#                       → tag relay-v<v>  → docker.yml (relay image)
+#
+# The version-diff detection exists for the promotion model this fork runs:
+# releases arrive as develop → main promotion PRs whose head branch is
+# `develop`, never `version-bump/<v>`, so branch-prefix lanes alone would
+# skip every real release. Bump the component version on develop, promote,
+# and the merge tags itself. One merge may bump several components and
+# therefore create several tags. The diff base is the merge commit's first
+# parent (the previous tip of main), which holds for merge commits and
+# squash merges alike.
 #
 # Mobile candidate tags do not come from merged PRs. Operators create immutable
 # mobile-v<v>-rc.N tags directly from remote main with scripts/mobile-release.sh,
 # then hand the exact tag to buzz-releases.
 #
-# The release-tagger App is optional. Where it is configured, a tag it signs is
-# attributed to the App and fires the consumers' `on.push.tags` triggers
-# normally. Where it is not (a fork without those credentials), the lane falls
-# back to GITHUB_TOKEN and then dispatches the consumer explicitly, because a
-# ref created with GITHUB_TOKEN deliberately does not trigger further
-# workflows. Without that second half the lane looks green while publishing
-# nothing: the tag exists, no artifact is ever built, and the gap surfaces only
-# when someone goes looking for an image that was never made. That is exactly
-# what happened to relay-v0.3.0, which had to be tagged by hand.
+# The release-tagger App is required: only a tag it signs fires the
+# consumers' `on.push.tags` triggers, and the publishers deliberately build
+# nowhere else. A missing App fails the lane loudly and early rather than
+# creating a tag no publisher will ever act on, which is the silent gap that
+# bit relay-v0.3.0 (tag existed, no image was ever built).
 #
 # Release tags are created with a short-lived token from the dedicated
-# buzz-release-bot GitHub App. GitHub attributes the ref creation to that
+# release-tagger GitHub App. GitHub attributes the ref creation to that
 # App, so the consumer's `on.push.tags` trigger runs normally. The workflow's
 # default GITHUB_TOKEN remains read-only and is never used to create a tag.
 #
@@ -54,7 +63,7 @@ jobs:
     if: >
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -68,43 +77,60 @@ jobs:
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           # Explicit release branches retain their established behavior. For an
-          # ordinary internal PR, publish only when Chart.yaml itself changed
-          # and its version differs from the PR's base commit.
+          # ordinary internal PR (promotion PRs included), publish each
+          # component whose version file changed relative to the merge
+          # commit's first parent, the previous tip of main.
+          emit() {
+            local prefix=$1 version=$2
+            if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+              echo "::error::Invalid release version: '$version'"
+              exit 1
+            fi
+            ENTRIES+=("${prefix} ${version}")
+            echo "Tagging ${prefix}${version}"
+          }
+          ENTRIES=()
           case "$BRANCH" in
             version-bump/*)
-              VERSION="${BRANCH#version-bump/}"
-              TAG_PREFIX="v" ;;
+              emit "v" "${BRANCH#version-bump/}" ;;
             relay-release/*)
-              VERSION="${BRANCH#relay-release/}"
-              TAG_PREFIX="relay-v" ;;
+              emit "relay-v" "${BRANCH#relay-release/}" ;;
             chart-release/*)
-              VERSION="${BRANCH#chart-release/}"
-              TAG_PREFIX="chart-v" ;;
+              emit "chart-v" "${BRANCH#chart-release/}" ;;
             push-chart-release/*)
-              VERSION="${BRANCH#push-chart-release/}"
-              TAG_PREFIX="push-chart-v" ;;
+              emit "push-chart-v" "${BRANCH#push-chart-release/}" ;;
             *)
               parent_sha="$(git rev-parse HEAD^)"
-              old_version="$(git show "${parent_sha}:deploy/charts/buzz/Chart.yaml" 2>/dev/null | awk '/^version:/ {print $2}')"
-              VERSION="$(awk '/^version:/ {print $2}' deploy/charts/buzz/Chart.yaml)"
-              if [ -z "$old_version" ] || [ -z "$VERSION" ] || [ "$old_version" = "$VERSION" ]; then
-                echo "No release branch or chart version bump — nothing to tag"
-                echo "enabled=false" >> "$GITHUB_OUTPUT"
-                exit 0
+              old_chart="$(git show "${parent_sha}:deploy/charts/buzz/Chart.yaml" 2>/dev/null | awk '/^version:/ {print $2}')"
+              new_chart="$(awk '/^version:/ {print $2}' deploy/charts/buzz/Chart.yaml)"
+              if [ -n "$old_chart" ] && [ -n "$new_chart" ] && [ "$old_chart" != "$new_chart" ]; then
+                emit "chart-v" "$new_chart"
               fi
-              TAG_PREFIX="chart-v" ;;
+              # `// empty` so a malformed file yields an empty string (skip)
+              # rather than the literal "null" reaching the semver check.
+              old_desktop="$(git show "${parent_sha}:desktop/src-tauri/tauri.conf.json" 2>/dev/null | jq -r '.version // empty')"
+              new_desktop="$(jq -r '.version // empty' desktop/src-tauri/tauri.conf.json)"
+              if [ -n "$old_desktop" ] && [ -n "$new_desktop" ] && [ "$old_desktop" != "$new_desktop" ]; then
+                emit "v" "$new_desktop"
+              fi
+              old_relay="$(git show "${parent_sha}:crates/buzz-relay/Cargo.toml" 2>/dev/null | awk -F '"' '/^version = / {print $2; exit}')"
+              new_relay="$(awk -F '"' '/^version = / {print $2; exit}' crates/buzz-relay/Cargo.toml)"
+              if [ -n "$old_relay" ] && [ -n "$new_relay" ] && [ "$old_relay" != "$new_relay" ]; then
+                emit "relay-v" "$new_relay"
+              fi
+              ;;
           esac
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-            echo "::error::Invalid release version: '$VERSION'"
-            exit 1
+          if [ "${#ENTRIES[@]}" -eq 0 ]; then
+            echo "No release branch or version bump — nothing to tag"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           {
             echo "enabled=true"
-            echo "tag=${TAG_PREFIX}${VERSION}"
-            echo "prefix=${TAG_PREFIX}"
-            echo "version=${VERSION}"
+            echo "tags<<TAGS_EOF"
+            printf '%s\n' "${ENTRIES[@]}"
+            echo "TAGS_EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "Tagging ${TAG_PREFIX}${VERSION}"
 
       # The App is what makes this lane work at all: a tag it signs is
       # attributed to the App and therefore fires the consumers'
@@ -122,7 +148,7 @@ jobs:
         # run with no jobs on every push, which is how this was found.
         if: steps.release.outputs.enabled == 'true'
         env:
-          TAG: ${{ steps.release.outputs.tag }}
+          TAGS: ${{ steps.release.outputs.tags }}
           CLIENT_ID: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
           PRIVATE_KEY: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
         run: |
@@ -131,12 +157,15 @@ jobs:
             exit 0
           fi
           {
-            echo "::error::Cannot tag ${TAG}: the release-tagger App is not configured."
+            echo "::error::Cannot tag: the release-tagger App is not configured."
             echo "::error::Set the BUZZ_RELEASE_TAGGER_CLIENT_ID repository variable and"
             echo "::error::the BUZZ_RELEASE_TAGGER_PRIVATE_KEY secret."
-            echo "::error::To release without it, push the tag by hand at the release"
+            echo "::error::To release without it, push each tag by hand at the release"
             echo "::error::commit, which fires the publisher exactly as the App would:"
-            echo "::error::  git tag -a ${TAG} <sha> -m ${TAG} && git push origin ${TAG}"
+            echo "$TAGS" | while read -r PREFIX VERSION; do
+              [ -z "$PREFIX" ] && continue
+              echo "::error::  git tag -a ${PREFIX}${VERSION} <sha> -m ${PREFIX}${VERSION} && git push origin ${PREFIX}${VERSION}"
+            done
           } >&2
           exit 1
 
@@ -149,26 +178,31 @@ jobs:
           private-key: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
           permission-contents: write
 
-      - name: Create and push tag
+      - name: Create and push tags
         if: steps.release.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ steps.release-tagger.outputs.token }}
-          TAG: ${{ steps.release.outputs.tag }}
+          TAGS: ${{ steps.release.outputs.tags }}
         run: |
           set -euo pipefail
-          # Check gh's exit status, not its output. A missing ref returns a 404
-          # JSON body on stdout, which must not be mistaken for an existing tag.
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
-            EXISTING_SHA="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
-            if [ "$EXISTING_SHA" = "$GITHUB_SHA" ]; then
-              echo "Tag $TAG already exists at $GITHUB_SHA — skipping tag creation"
-              exit 0
-            else
-              echo "::error::Tag $TAG already exists at $EXISTING_SHA (expected $GITHUB_SHA)"
-              exit 1
+          while read -r PREFIX VERSION; do
+            [ -z "$PREFIX" ] && continue
+            TAG="${PREFIX}${VERSION}"
+            # Check gh's exit status, not its output. A missing ref returns a 404
+            # JSON body on stdout, which must not be mistaken for an existing tag.
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
+              EXISTING_SHA="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
+              if [ "$EXISTING_SHA" = "$GITHUB_SHA" ]; then
+                echo "Tag $TAG already exists at $GITHUB_SHA — skipping tag creation"
+                continue
+              else
+                echo "::error::Tag $TAG already exists at $EXISTING_SHA (expected $GITHUB_SHA)"
+                exit 1
+              fi
             fi
-          fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f ref="refs/tags/$TAG" \
-            -f sha="$GITHUB_SHA" \
-            --silent
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA" \
+              --silent
+            echo "Created $TAG at $GITHUB_SHA"
+          done <<< "$TAGS"
