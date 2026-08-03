@@ -223,27 +223,27 @@ pnpm exec playwright test tests/e2e/discovery-settings.spec.ts --project=smoke
 - Modify: `desktop/src-tauri/src/discovery_worker/mod.rs`
 - Modify: `desktop/src-tauri/src/discovery_worker/normalization.rs`
 
-- [ ] Build failing loopback tests for `X-Subscription-Token`, deterministic
+- [x] Build failing loopback tests for `X-Subscription-Token`, deterministic
   query shape, `count <= 20`, offsets `0..=9`, `more_results_available`, target
   bounds, canonical URL handling, excluded hosts, cancellation, timeout,
   maximum response bytes, malformed JSON, and safe error classification.
-- [ ] Implement a client whose production endpoint is fixed in native code:
+- [x] Implement a client whose production endpoint is fixed in native code:
 
 ```rust
 const BRAVE_SEARCH_ENDPOINT: &str =
     "https://api.search.brave.com/res/v1/web/search";
 ```
 
-- [ ] Send no key, query, response body, or raw provider error through logs or
+- [x] Send no key, query, response body, or raw provider error through logs or
   Nostr. Retry only bounded `429` and temporary `5xx` responses after current
   lease, entitlement, and cancellation checks.
-- [ ] Normalize valid company-like HTTP(S) results into the shared observation
+- [x] Normalize valid company-like HTTP(S) results into the shared observation
   contract with canonical website, title-derived name, snippet, image/favicon,
   source URL, geography, provider, and URL digest.
-- [ ] Request no more pages than the remaining target permits and never add an
+- [x] Request no more pages than the remaining target permits and never add an
   LLM query multiplier.
-- [ ] Run the adapter tests and strict Tauri Clippy.
-- [ ] Commit with `git commit -s -m "feat(discovery): add Brave business search"`.
+- [x] Run the adapter tests and strict Tauri Clippy.
+- [x] Commit with `git commit -s -m "feat(discovery): add Brave business search"`.
 
 ## Task 7: Implement the Exa Search adapter
 

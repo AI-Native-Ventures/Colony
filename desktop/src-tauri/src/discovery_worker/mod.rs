@@ -1,6 +1,11 @@
 //! Device-local Discovery worker host.
 
 mod adapter;
+#[expect(
+    dead_code,
+    reason = "the tested synchronous adapters are wired into the coordinator in Task 9"
+)]
+mod brave;
 mod installation;
 mod normalization;
 mod outscraper;

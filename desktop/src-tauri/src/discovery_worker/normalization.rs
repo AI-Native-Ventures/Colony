@@ -2,9 +2,60 @@ use std::collections::HashSet;
 
 use buzz_core_pkg::discovery_worker::{
     deterministic_business_observation_id, DiscoveryBusinessObservationInput,
-    DiscoveryBusinessStatus,
+    DiscoveryBusinessStatus, DiscoveryProvider,
 };
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
+use url::Url;
+
+const EXCLUDED_BUSINESS_HOSTS: &[&str] = &[
+    "bing.com",
+    "bloomberg.com",
+    "brabys.com",
+    "crunchbase.com",
+    "facebook.com",
+    "foursquare.com",
+    "glassdoor.com",
+    "google.com",
+    "indeed.com",
+    "instagram.com",
+    "linkedin.com",
+    "opentable.com",
+    "pinterest.com",
+    "restaurantguru.com",
+    "snupit.co.za",
+    "tiktok.com",
+    "tripadvisor.com",
+    "trustpilot.com",
+    "twitter.com",
+    "wikipedia.org",
+    "x.com",
+    "yelp.com",
+    "yellowpages.co.za",
+    "youtube.com",
+    "zoominfo.com",
+];
+
+const GENERIC_TITLE_SEGMENTS: &[&str] = &[
+    "about",
+    "about us",
+    "contact",
+    "contact us",
+    "home",
+    "homepage",
+    "our services",
+    "services",
+    "welcome",
+];
+
+/// Provider-edge web result reduced to fields shared by Brave and Exa.
+pub(super) struct WebBusinessCandidate {
+    pub(super) title: Option<String>,
+    pub(super) url: Option<String>,
+    pub(super) description: Option<String>,
+    pub(super) image_url: Option<String>,
+    pub(super) profile_name: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -197,6 +248,176 @@ fn normalize_status(value: String) -> Option<DiscoveryBusinessStatus> {
     }
 }
 
+/// Normalize public web search results into the same strict business contract
+/// used by Google Maps observations. Search context is retained only as a
+/// geography hint; arbitrary provider fields never cross this boundary.
+pub(super) fn normalize_web_businesses(
+    provider: DiscoveryProvider,
+    candidates: Vec<WebBusinessCandidate>,
+    search: &buzz_core_pkg::discovery::DiscoveryBusinessSearchSpec,
+) -> Vec<DiscoveryBusinessObservationInput> {
+    let mut provider_ids = HashSet::new();
+    candidates
+        .into_iter()
+        .filter_map(|candidate| normalize_web_business(provider, candidate, search))
+        .filter(|observation| provider_ids.insert(observation.provider_record_id.clone()))
+        .collect()
+}
+
+fn normalize_web_business(
+    provider: DiscoveryProvider,
+    candidate: WebBusinessCandidate,
+    search: &buzz_core_pkg::discovery::DiscoveryBusinessSearchSpec,
+) -> Option<DiscoveryBusinessObservationInput> {
+    let website = canonical_business_url(candidate.url.as_deref()?)?;
+    let provider_record_id = format!("url:{}", hex_digest(website.as_bytes()));
+    let name = candidate
+        .profile_name
+        .and_then(|value| required_text(Some(value), 256))
+        .or_else(|| title_business_name(candidate.title.as_deref(), &search.query))
+        .or_else(|| domain_business_name(&website))?;
+    let source_url = Some(website.clone());
+    let observation = DiscoveryBusinessObservationInput {
+        observation_id: deterministic_business_observation_id(provider, &provider_record_id),
+        provider,
+        provider_record_id,
+        place_id: None,
+        google_id: None,
+        name,
+        website: Some(website),
+        phone: None,
+        full_address: None,
+        city: optional_text(Some(search.location.clone()), 128),
+        state: None,
+        postal_code: None,
+        country: None,
+        country_code: search.region.clone(),
+        latitude_micros: None,
+        longitude_micros: None,
+        category: optional_text(Some(search.query.clone()), 128),
+        subtypes: Vec::new(),
+        rating_hundredths: None,
+        reviews_count: None,
+        business_status: None,
+        verified: None,
+        source_url,
+        image_url: candidate
+            .image_url
+            .as_deref()
+            .and_then(canonical_public_url),
+        description: optional_text(candidate.description, 2_048),
+    };
+    observation.validate().ok()?;
+    Some(observation)
+}
+
+fn canonical_business_url(value: &str) -> Option<String> {
+    let canonical = canonical_public_url(value)?;
+    let host = Url::parse(&canonical)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    (!host_is_excluded(&host)).then_some(canonical)
+}
+
+fn canonical_public_url(value: &str) -> Option<String> {
+    let mut url = Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host).to_owned();
+    if host.is_empty() {
+        return None;
+    }
+    url.set_host(Some(&host)).ok()?;
+    if (url.scheme() == "https" && url.port() == Some(443))
+        || (url.scheme() == "http" && url.port() == Some(80))
+    {
+        url.set_port(None).ok()?;
+    }
+    url.set_fragment(None);
+    let mut query = url
+        .query_pairs()
+        .into_owned()
+        .filter(|(name, _)| !is_tracking_parameter(name))
+        .collect::<Vec<_>>();
+    query.sort();
+    url.set_query(None);
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query);
+    }
+    if url.path() != "/" && url.path().ends_with('/') {
+        let path = url.path().trim_end_matches('/').to_owned();
+        url.set_path(&path);
+    }
+    let mut canonical = url.to_string();
+    if url.path() == "/" && url.query().is_none() {
+        canonical.pop();
+    }
+    (canonical.len() <= 2_048).then_some(canonical)
+}
+
+fn is_tracking_parameter(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("utm_") || matches!(name.as_str(), "fbclid" | "gclid")
+}
+
+fn host_is_excluded(host: &str) -> bool {
+    EXCLUDED_BUSINESS_HOSTS
+        .iter()
+        .any(|excluded| host == *excluded || host.ends_with(&format!(".{excluded}")))
+}
+
+fn title_business_name(title: Option<&str>, query: &str) -> Option<String> {
+    let candidates = title?
+        .split(['|', '–', '—'])
+        .flat_map(|segment| segment.split(" - "))
+        .filter_map(|segment| required_text(Some(segment.to_owned()), 256))
+        .filter(|segment| {
+            !GENERIC_TITLE_SEGMENTS
+                .iter()
+                .any(|generic| segment.eq_ignore_ascii_case(generic))
+        })
+        .collect::<Vec<_>>();
+    candidates
+        .iter()
+        .find(|candidate| !candidate.eq_ignore_ascii_case(query))
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
+}
+
+fn domain_business_name(website: &str) -> Option<String> {
+    let host = Url::parse(website).ok()?.host_str()?.to_owned();
+    let label = host.split('.').next()?;
+    let name = label
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            match characters.next() {
+                Some(first) => first
+                    .to_uppercase()
+                    .chain(characters.flat_map(char::to_lowercase))
+                    .collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    required_text(Some(name), 256)
+}
+
+fn hex_digest(value: &[u8]) -> String {
+    Sha256::digest(value)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +468,101 @@ mod tests {
         ]);
         assert_eq!(normalized.len(), 1);
         assert_eq!(normalized[0].name, "First");
+    }
+
+    #[test]
+    fn web_normalization_canonicalizes_and_excludes_non_business_hosts() {
+        let search = buzz_core_pkg::discovery::DiscoveryBusinessSearchSpec {
+            query: "dentist".to_owned(),
+            location: "Sandton".to_owned(),
+            limit: 3,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
+        };
+        let normalized = normalize_web_businesses(
+            DiscoveryProvider::BraveSearch,
+            vec![
+                WebBusinessCandidate {
+                    title: Some("Home - Acme Dental | Dentist".to_owned()),
+                    url: Some(
+                        "HTTPS://WWW.Acme.Example:443/about/?utm_source=test&b=2&a=1#team"
+                            .to_owned(),
+                    ),
+                    description: Some("Public snippet".to_owned()),
+                    image_url: Some("https://cdn.example/logo.png#fragment".to_owned()),
+                    profile_name: None,
+                },
+                WebBusinessCandidate {
+                    title: Some("Acme directory profile".to_owned()),
+                    url: Some("https://za.linkedin.com/company/acme".to_owned()),
+                    description: None,
+                    image_url: None,
+                    profile_name: None,
+                },
+            ],
+            &search,
+        );
+        assert_eq!(normalized.len(), 1);
+        let business = &normalized[0];
+        assert_eq!(business.name, "Acme Dental");
+        assert_eq!(
+            business.website.as_deref(),
+            Some("https://acme.example/about?a=1&b=2")
+        );
+        assert_eq!(business.source_url, business.website);
+        assert_eq!(business.city.as_deref(), Some("Sandton"));
+        assert_eq!(business.country_code.as_deref(), Some("ZA"));
+        assert_eq!(business.category.as_deref(), Some("dentist"));
+        assert_eq!(
+            business.image_url.as_deref(),
+            Some("https://cdn.example/logo.png")
+        );
+        assert!(business.provider_record_id.starts_with("url:"));
+        assert_eq!(business.provider_record_id.len(), 68);
+        assert_eq!(business.validate(), Ok(()));
+    }
+
+    #[test]
+    fn web_normalization_deduplicates_canonical_urls_and_falls_back_to_domain_name() {
+        let search = buzz_core_pkg::discovery::DiscoveryBusinessSearchSpec {
+            query: "accountant".to_owned(),
+            location: "Cape Town".to_owned(),
+            limit: 3,
+            language: "en".to_owned(),
+            region: Some("ZA".to_owned()),
+        };
+        let normalized = normalize_web_businesses(
+            DiscoveryProvider::ExaSearch,
+            vec![
+                WebBusinessCandidate {
+                    title: Some("Home".to_owned()),
+                    url: Some("https://north-star.example/".to_owned()),
+                    description: None,
+                    image_url: None,
+                    profile_name: None,
+                },
+                WebBusinessCandidate {
+                    title: Some("Duplicate".to_owned()),
+                    url: Some("https://www.north-star.example/".to_owned()),
+                    description: None,
+                    image_url: None,
+                    profile_name: None,
+                },
+                WebBusinessCandidate {
+                    title: Some("Unsafe".to_owned()),
+                    url: Some("file:///tmp/unsafe".to_owned()),
+                    description: None,
+                    image_url: None,
+                    profile_name: None,
+                },
+            ],
+            &search,
+        );
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].name, "North Star");
+        assert_eq!(
+            normalized[0].website.as_deref(),
+            Some("https://north-star.example")
+        );
     }
 }
