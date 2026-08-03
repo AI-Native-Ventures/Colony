@@ -8,7 +8,15 @@ export function Hero() {
       <div className="relative z-10 mx-auto flex max-w-7xl flex-col gap-10 lg:grid lg:max-w-[1600px] lg:grid-cols-[1.8fr_1fr] lg:items-center lg:gap-16">
         <div className="flex flex-col items-start">
           <img
-            src="/colony-wordmark.png"
+            // The SVG, not the PNG raster of it. Both carry the same spray
+            // filter, but the hero renders the mark ~640px wide and the PNG
+            // is only 777px, so on a retina display it was being upscaled
+            // past its own resolution: the spray texture and the letterforms
+            // smeared together into one soft blob. The SVG stays sharp at any
+            // density. Its Inter face is embedded as a data-URI @font-face,
+            // which resolves inside an <img> where an external font URL would
+            // not.
+            src="/colony-wordmark.svg"
             alt="Colony"
             width={777}
             height={326}
