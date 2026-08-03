@@ -231,7 +231,10 @@ jobs:
   desktop-smoke-e2e:
     name: Desktop Smoke E2E (${{ matrix.shard }})
     runs-on: [self-hosted, Linux, colony-ci]
-    timeout-minutes: 30
+    # 45 not 30: on the self-hosted fleet a cold-cache run can have four
+    # heavy jobs sharing the VM's cores, and the 30-minute ceiling killed
+    # two shards that were making progress. Warm runs finish far below it.
+    timeout-minutes: 45
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     strategy:
@@ -800,8 +803,11 @@ jobs:
           key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
 
   mobile:
+    # Stays on GitHub-hosted x86_64: the Flutter SDK bundle is x86_64-only
+    # and dies under Rosetta on the ARM self-hosted runners. Path-filtered
+    # to mobile changes, so the hosted free quota carries it.
     name: Mobile
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.mobile == 'true'
@@ -896,8 +902,11 @@ jobs:
           echo "No dead token references found."
 
   server-cross-compile:
+    # Stays on GitHub-hosted x86_64: the musl cross toolchain setup assumes an
+    # x86_64 host and refuses to install on the ARM self-hosted runners. The
+    # job is a few path-filtered minutes, well inside the free quota.
     name: Server Cross-Compile
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
