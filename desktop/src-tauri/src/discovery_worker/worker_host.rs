@@ -1,27 +1,39 @@
-use std::{future::Future, pin::Pin, sync::atomic::Ordering, time::Duration};
+use std::{sync::atomic::Ordering, time::Duration};
 
+#[cfg(test)]
+use std::{future::Future, pin::Pin};
+
+#[cfg(test)]
 use buzz_core_pkg::discovery_worker::{
-    DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerCheckpoint,
-    DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseProjection,
-    DiscoveryWorkerLeaseRequest, DiscoveryWorkerObservationBatchRequest,
-    DiscoveryWorkerReceiptOutcome,
+    DiscoveryCheckpointKind, DiscoveryWorkerCheckpoint, DiscoveryWorkerObservationBatchRequest,
+};
+use buzz_core_pkg::discovery_worker::{
+    DiscoveryProvider, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
+    DiscoveryWorkerLeaseProjection, DiscoveryWorkerLeaseRequest, DiscoveryWorkerReceiptOutcome,
 };
 use tauri::{AppHandle, Manager as _};
+#[cfg(test)]
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+use super::outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission};
 use super::{
     adapter::FakeOutscraperAdapter,
     installation::load_or_create_worker_id,
     outbox::DiscoveryOutbox,
-    outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission},
     protocol::{RelayWorkerProtocol, WorkerProtocol},
+    source_executor::{
+        execute_production_source_plan, CoordinatedRunOutcome, LocalProviderCredentials,
+        ProductionProviderClients,
+    },
 };
 use crate::{app_state::AppState, discovery_credentials, relay};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const FAKE_STEP_DELAY: Duration = Duration::from_millis(250);
+#[cfg(test)]
 const OBSERVATION_BATCH_SIZE: usize = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,8 +113,8 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                 return;
             }
         };
-        let provider = match OutscraperClient::production() {
-            Ok(provider) => provider,
+        let providers = match ProductionProviderClients::new() {
+            Ok(providers) => providers,
             Err(error) => {
                 eprintln!("buzz-desktop: Discovery source unavailable: {error}");
                 return;
@@ -114,15 +126,18 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
             if state.shutdown_started.load(Ordering::Acquire) {
                 return;
             }
-            let credential = match discovery_credentials::load_discovery_credential(
-                discovery_credentials::DiscoveryCredentialProvider::Outscraper,
-            ) {
-                Ok(Some(credential)) => credential,
-                Ok(None) | Err(_) => {
+            let credentials = match LocalProviderCredentials::load() {
+                Ok(credentials) => credentials,
+                Err(_) => {
                     tokio::time::sleep(POLL_INTERVAL).await;
                     continue;
                 }
             };
+            let available_providers = credentials.available_providers();
+            if available_providers.is_empty() {
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
             let relay_url = state
                 .relay_url_override
                 .lock()
@@ -136,6 +151,16 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                 Ok(keys) => keys,
                 Err(_) => return,
             };
+            let outbox =
+                match DiscoveryOutbox::open(&app_data_dir, &relay_url, &keys.public_key().to_hex())
+                {
+                    Ok(outbox) => outbox,
+                    Err(error) => {
+                        eprintln!("buzz-desktop: Discovery recovery unavailable: {error}");
+                        tokio::time::sleep(POLL_INTERVAL).await;
+                        continue;
+                    }
+                };
             let generation = super::workspace_generation();
             let api_base_url = relay::relay_http_base_url(&relay_url);
             let protocol = match RelayWorkerProtocol::connect(
@@ -153,9 +178,15 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                     continue;
                 }
             };
-            if let Err(error) =
-                run_production_once_with_credential(&protocol, &provider, worker_id, &credential)
-                    .await
+            if let Err(error) = run_multi_source_production_once(
+                &protocol,
+                &providers,
+                &credentials,
+                &outbox,
+                worker_id,
+                available_providers,
+            )
+            .await
             {
                 eprintln!("buzz-desktop: Discovery run paused safely: {error}");
             }
@@ -164,8 +195,38 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
     });
 }
 
+async fn run_multi_source_production_once<P: WorkerProtocol>(
+    protocol: &P,
+    providers: &ProductionProviderClients,
+    credentials: &LocalProviderCredentials,
+    outbox: &DiscoveryOutbox,
+    worker_id: Uuid,
+    available_providers: Vec<DiscoveryProvider>,
+) -> Result<HostRunOutcome, String> {
+    let claim = DiscoveryWorkerClaimRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        worker_id,
+        available_providers,
+    };
+    let lease = match protocol.claim(claim).await? {
+        DiscoveryWorkerReceiptOutcome::Idle => return Ok(HostRunOutcome::Idle),
+        DiscoveryWorkerReceiptOutcome::Lease(lease) => lease,
+        _ => return Err("Discovery claim returned an invalid outcome".to_owned()),
+    };
+    match execute_production_source_plan(protocol, providers, credentials, outbox, lease).await? {
+        CoordinatedRunOutcome::Complete(mut lease) => {
+            complete_current_lease(protocol, &mut lease).await
+        }
+        CoordinatedRunOutcome::Fail(lease) => fail_current_lease(protocol, &lease).await,
+        CoordinatedRunOutcome::LostLease => Ok(HostRunOutcome::LostLease),
+    }
+}
+
+#[cfg(test)]
 type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, OutscraperError>> + Send + 'a>>;
 
+#[cfg(test)]
 trait BusinessDiscoveryProvider: Send + Sync {
     fn submit<'a>(
         &'a self,
@@ -182,6 +243,7 @@ trait BusinessDiscoveryProvider: Send + Sync {
     ) -> ProviderFuture<'a, Vec<buzz_core_pkg::discovery_worker::DiscoveryBusinessObservationInput>>;
 }
 
+#[cfg(test)]
 impl BusinessDiscoveryProvider for OutscraperClient {
     fn submit<'a>(
         &'a self,
@@ -213,6 +275,7 @@ impl BusinessDiscoveryProvider for OutscraperClient {
     }
 }
 
+#[cfg(test)]
 async fn run_production_once_with_credential<P, D>(
     protocol: &P,
     provider: &D,
@@ -343,25 +406,21 @@ where
     complete_current_lease(protocol, &mut lease).await
 }
 
+#[cfg(test)]
 enum ProviderStep<T> {
     Value(T),
     LostLease,
     ProviderError,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutboxDrainOutcome {
     Drained,
     LostLease,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the tested crash-safe outbox drain is wired into the coordinator in Task 9"
-    )
-)]
+#[cfg(test)]
 async fn drain_synchronous_outbox<P: WorkerProtocol>(
     protocol: &P,
     outbox: &DiscoveryOutbox,
@@ -404,6 +463,7 @@ async fn drain_synchronous_outbox<P: WorkerProtocol>(
     }
 }
 
+#[cfg(test)]
 async fn drive_provider_step<P, F, T>(
     protocol: &P,
     lease: &mut DiscoveryWorkerLeaseProjection,
@@ -460,6 +520,7 @@ where
     }
 }
 
+#[cfg(test)]
 async fn commit_checkpoint<P: WorkerProtocol>(
     protocol: &P,
     lease: &mut DiscoveryWorkerLeaseProjection,

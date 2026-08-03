@@ -251,6 +251,18 @@ impl Db {
         .await?;
         if !active {
             sqlx::query(
+                "UPDATE discovery_run_sources SET status='cancelled', failure_class='cancelled', \
+                     started_at=COALESCE(started_at,now()), finished_at=COALESCE(finished_at,now()), \
+                     updated_at=now() \
+                 WHERE community_id=$1 AND status IN ('pending','active') \
+                   AND EXISTS (SELECT 1 FROM discovery_runs r \
+                               WHERE r.community_id=$1 AND r.id=discovery_run_sources.run_id \
+                                 AND r.state IN ('queued','running'))",
+            )
+            .bind(community_id.as_uuid())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
                 "UPDATE discovery_runs \
                  SET state='cancelled', cancel_requested=TRUE, \
                      terminal_reason='entitlement_revoked', claim_id=NULL, lease_until=NULL, \
@@ -768,6 +780,19 @@ impl Db {
     ) -> Result<DiscoveryRunRecord> {
         let mut tx = self.pool.begin().await?;
         require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
+        sqlx::query(
+            "UPDATE discovery_run_sources SET status='cancelled', failure_class='cancelled', \
+                 started_at=COALESCE(started_at,now()), finished_at=COALESCE(finished_at,now()), \
+                 updated_at=now() \
+             WHERE community_id=$1 AND run_id=$2 AND status IN ('pending','active') \
+               AND EXISTS (SELECT 1 FROM discovery_runs r \
+                           WHERE r.community_id=$1 AND r.id=$2 \
+                             AND r.state IN ('queued','running'))",
+        )
+        .bind(community_id.as_uuid())
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await?;
         let row = sqlx::query(
             "UPDATE discovery_runs \
              SET state=CASE WHEN state IN ('queued','running') THEN 'cancelled' ELSE state END, \
@@ -1143,6 +1168,36 @@ async fn apply_worker_action_tx(
             .bind(action_event.id.as_bytes())
             .execute(&mut **tx)
             .await?;
+            if request.checkpoint.kind == DiscoveryCheckpointKind::ProviderSubmitted {
+                let provider_request_id = request
+                    .checkpoint
+                    .provider_request_id
+                    .as_deref()
+                    .ok_or_else(|| {
+                        DbError::InvalidData(
+                            "Discovery submitted checkpoint is missing a provider reference".into(),
+                        )
+                    })?;
+                let source_updated = sqlx::query(
+                    "UPDATE discovery_run_sources SET status='active', request_cursor=$4, \
+                         request_count=GREATEST(request_count,1), \
+                         started_at=COALESCE(started_at,now()), finished_at=NULL, \
+                         failure_class=NULL, updated_at=now() \
+                     WHERE community_id=$1 AND run_id=$2 AND provider=$3 \
+                       AND status IN ('pending','active')",
+                )
+                .bind(community_id.as_uuid())
+                .bind(request.lease.run_id)
+                .bind(provider_text(request.checkpoint.provider))
+                .bind(provider_request_id)
+                .execute(&mut **tx)
+                .await?;
+                if source_updated.rows_affected() != 1 {
+                    return Err(DbError::InvalidData(
+                        "Discovery submitted provider is not active in the run plan".into(),
+                    ));
+                }
+            }
             if request.checkpoint.kind == DiscoveryCheckpointKind::ProviderResultsReady {
                 let provider_request_id: String = sqlx::query_scalar(
                     "SELECT provider_request_id FROM discovery_run_checkpoints \
@@ -1207,6 +1262,118 @@ async fn apply_worker_action_tx(
             .bind(actor_pubkey.as_slice())
             .fetch_one(&mut **tx)
             .await?;
+            worker_lease_outcome_tx(tx, run_from_row(&row)?).await
+        }
+        DiscoveryWorkerAction::SourceProgress(request) => {
+            request
+                .validate()
+                .map_err(|error| DbError::InvalidData(error.to_string()))?;
+            let current = load_run_tx(tx, community_id, request.lease.run_id, true).await?;
+            if !worker_lease_matches(
+                &current,
+                actor_pubkey,
+                request.lease.worker_id,
+                request.lease.lease_id,
+            ) {
+                return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
+                    current.projection(),
+                ));
+            }
+            let source_row = sqlx::query(
+                "SELECT status,request_cursor,request_count,returned_count,failure_class \
+                 FROM discovery_run_sources \
+                 WHERE community_id=$1 AND run_id=$2 AND provider=$3 FOR UPDATE",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.lease.run_id)
+            .bind(provider_text(request.provider))
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or_else(|| {
+                DbError::InvalidData("Discovery progress provider is not in the run plan".into())
+            })?;
+            let current_status = parse_run_source_status(source_row.try_get("status")?)?;
+            let current_cursor: Option<String> = source_row.try_get("request_cursor")?;
+            let current_request_count: i32 = source_row.try_get("request_count")?;
+            let current_returned_count: i32 = source_row.try_get("returned_count")?;
+            let current_failure =
+                parse_run_source_failure_class(source_row.try_get("failure_class")?)?;
+            if !source_transition_allowed(current_status, request.status)
+                || request.request_count < nonnegative_source_count(current_request_count)?
+                || request.returned_count < nonnegative_source_count(current_returned_count)?
+                || current_cursor
+                    .as_ref()
+                    .zip(request.request_cursor.as_ref())
+                    .is_some_and(|(current, next)| current != next)
+            {
+                return Err(DbError::AccessDenied(
+                    "Discovery source progress conflicts with committed progress".into(),
+                ));
+            }
+            if is_terminal_source_status(current_status)
+                && (request.status != current_status
+                    || request.request_count != nonnegative_source_count(current_request_count)?
+                    || request.returned_count != nonnegative_source_count(current_returned_count)?
+                    || request.failure_class != current_failure)
+            {
+                return Err(DbError::AccessDenied(
+                    "Discovery source terminal progress conflicts with committed progress".into(),
+                ));
+            }
+            let request_count = i32::try_from(request.request_count).map_err(|_| {
+                DbError::InvalidData("Discovery source request count exceeds i32::MAX".into())
+            })?;
+            let returned_count = i32::try_from(request.returned_count).map_err(|_| {
+                DbError::InvalidData("Discovery source returned count exceeds i32::MAX".into())
+            })?;
+            let terminal = is_terminal_source_status(request.status);
+            let updated = sqlx::query(
+                "UPDATE discovery_run_sources SET status=$4, \
+                     request_cursor=COALESCE($5,request_cursor), request_count=$6, \
+                     returned_count=$7, failure_class=$8, \
+                     started_at=COALESCE(started_at,now()), \
+                     finished_at=CASE WHEN $9 THEN COALESCE(finished_at,now()) ELSE NULL END, \
+                     updated_at=now() \
+                 WHERE community_id=$1 AND run_id=$2 AND provider=$3",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.lease.run_id)
+            .bind(provider_text(request.provider))
+            .bind(run_source_status_text(request.status))
+            .bind(request.request_cursor.as_deref())
+            .bind(request_count)
+            .bind(returned_count)
+            .bind(request.failure_class.map(run_source_failure_class_text))
+            .bind(terminal)
+            .execute(&mut **tx)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(DbError::InvalidData(
+                    "Discovery progress provider is not in the run plan".into(),
+                ));
+            }
+            let row = sqlx::query(
+                "UPDATE discovery_runs SET lease_until=$5, updated_at=now() \
+                 WHERE community_id=$1 AND id=$2 AND claim_id=$3 AND worker_id=$4 \
+                   AND lease_owner_pubkey=$6 AND state='running' AND lease_until >= now() \
+                 RETURNING id, community_id, campaign_id, requested_by, start_idempotency_key, \
+                 state, completed_steps, total_steps, cancel_requested, claim_id, lease_until, \
+                 worker_id, lease_owner_pubkey, last_checkpoint_sequence, attempt, \
+                 terminal_reason, created_at, updated_at",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.lease.run_id)
+            .bind(request.lease.lease_id)
+            .bind(request.lease.worker_id)
+            .bind(lease_until)
+            .bind(actor_pubkey.as_slice())
+            .fetch_optional(&mut **tx)
+            .await?;
+            let Some(row) = row else {
+                return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
+                    current.projection(),
+                ));
+            };
             worker_lease_outcome_tx(tx, run_from_row(&row)?).await
         }
         DiscoveryWorkerAction::StoreObservations(request) => {
@@ -1596,6 +1763,42 @@ fn parse_run_source_status(value: &str) -> Result<DiscoveryRunSourceStatus> {
     }
 }
 
+fn run_source_status_text(status: DiscoveryRunSourceStatus) -> &'static str {
+    match status {
+        DiscoveryRunSourceStatus::Pending => "pending",
+        DiscoveryRunSourceStatus::Active => "active",
+        DiscoveryRunSourceStatus::Completed => "completed",
+        DiscoveryRunSourceStatus::Exhausted => "exhausted",
+        DiscoveryRunSourceStatus::Failed => "failed",
+        DiscoveryRunSourceStatus::Cancelled => "cancelled",
+        DiscoveryRunSourceStatus::OutcomeUnknown => "outcome_unknown",
+        DiscoveryRunSourceStatus::SkippedTargetMet => "skipped_target_met",
+    }
+}
+
+const fn is_terminal_source_status(status: DiscoveryRunSourceStatus) -> bool {
+    !matches!(
+        status,
+        DiscoveryRunSourceStatus::Pending | DiscoveryRunSourceStatus::Active
+    )
+}
+
+fn source_transition_allowed(
+    current: DiscoveryRunSourceStatus,
+    next: DiscoveryRunSourceStatus,
+) -> bool {
+    match current {
+        DiscoveryRunSourceStatus::Pending => matches!(
+            next,
+            DiscoveryRunSourceStatus::Active
+                | DiscoveryRunSourceStatus::Cancelled
+                | DiscoveryRunSourceStatus::SkippedTargetMet
+        ),
+        DiscoveryRunSourceStatus::Active => next != DiscoveryRunSourceStatus::Pending,
+        _ => current == next,
+    }
+}
+
 fn parse_run_source_failure_class(
     value: Option<String>,
 ) -> Result<Option<DiscoveryRunSourceFailureClass>> {
@@ -1616,6 +1819,21 @@ fn parse_run_source_failure_class(
             ))),
         })
         .transpose()
+}
+
+fn run_source_failure_class_text(failure: DiscoveryRunSourceFailureClass) -> &'static str {
+    match failure {
+        DiscoveryRunSourceFailureClass::CredentialRejected => "credential_rejected",
+        DiscoveryRunSourceFailureClass::BillingRequired => "billing_required",
+        DiscoveryRunSourceFailureClass::InvalidRequest => "invalid_request",
+        DiscoveryRunSourceFailureClass::RateLimited => "rate_limited",
+        DiscoveryRunSourceFailureClass::ProviderUnavailable => "provider_unavailable",
+        DiscoveryRunSourceFailureClass::ResponseTooLarge => "response_too_large",
+        DiscoveryRunSourceFailureClass::RequestTimedOut => "request_timed_out",
+        DiscoveryRunSourceFailureClass::MalformedResponse => "malformed_response",
+        DiscoveryRunSourceFailureClass::OutcomeUnknown => "outcome_unknown",
+        DiscoveryRunSourceFailureClass::Cancelled => "cancelled",
+    }
 }
 
 async fn load_business_search_tx(
@@ -1911,6 +2129,23 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]>
             hasher.update(request.lease.lease_id.as_bytes());
             hasher.update(checkpoint_fingerprint(&request.checkpoint));
         }
+        DiscoveryWorkerAction::SourceProgress(request) => {
+            hasher.update(request.lease.run_id.as_bytes());
+            hasher.update(request.lease.lease_id.as_bytes());
+            hasher.update(provider_text(request.provider).as_bytes());
+            hasher.update([0]);
+            hasher.update(run_source_status_text(request.status).as_bytes());
+            hasher.update([0]);
+            if let Some(cursor) = &request.request_cursor {
+                hasher.update(cursor.as_bytes());
+            }
+            hasher.update([0]);
+            hasher.update(request.request_count.to_be_bytes());
+            hasher.update(request.returned_count.to_be_bytes());
+            if let Some(failure) = request.failure_class {
+                hasher.update(run_source_failure_class_text(failure).as_bytes());
+            }
+        }
         DiscoveryWorkerAction::StoreObservations(request) => {
             hasher.update(request.lease.run_id.as_bytes());
             hasher.update(request.lease.lease_id.as_bytes());
@@ -1950,6 +2185,7 @@ fn worker_operation_text(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Claim => "claim",
         DiscoveryWorkerOperation::Heartbeat => "heartbeat",
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
+        DiscoveryWorkerOperation::SourceProgress => "source_progress",
         DiscoveryWorkerOperation::StoreObservations => "store_observations",
         DiscoveryWorkerOperation::Fail => "fail",
         DiscoveryWorkerOperation::Complete => "complete",
@@ -2194,6 +2430,16 @@ async fn stop_run_tx(
     reason: DiscoveryTerminalReason,
 ) -> Result<DiscoveryRunRecord> {
     let reason = terminal_reason_text(reason);
+    sqlx::query(
+        "UPDATE discovery_run_sources SET status='cancelled', failure_class='cancelled', \
+             started_at=COALESCE(started_at,now()), finished_at=COALESCE(finished_at,now()), \
+             updated_at=now() \
+         WHERE community_id=$1 AND run_id=$2 AND status IN ('pending','active')",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .execute(&mut **tx)
+    .await?;
     let row = sqlx::query(
         "UPDATE discovery_runs SET state='cancelled', terminal_reason=$4, \
          claim_id=NULL, lease_until=NULL, worker_id=NULL, lease_owner_pubkey=NULL, updated_at=now() \
@@ -2301,6 +2547,7 @@ mod tests {
             deterministic_business_observation_id, DiscoveryWorkerCheckpointRequest,
             DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
             DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerReceipt,
+            DiscoveryWorkerSourceProgressRequest,
         },
         discovery_workspace::{
             DiscoveryCampaignInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceReceipt,
@@ -2312,6 +2559,7 @@ mod tests {
         build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
         build_discovery_worker_complete_action, build_discovery_worker_fail_action,
         build_discovery_worker_heartbeat_action, build_discovery_worker_receipt,
+        build_discovery_worker_source_progress_action,
         build_discovery_worker_store_observations_action,
     };
     use buzz_sdk::discovery_workspace::{
@@ -2707,6 +2955,9 @@ mod tests {
             DiscoveryWorkerAction::Checkpoint(request) => {
                 build_discovery_worker_checkpoint_action(relay.public_key(), request)
             }
+            DiscoveryWorkerAction::SourceProgress(request) => {
+                build_discovery_worker_source_progress_action(relay.public_key(), request)
+            }
             DiscoveryWorkerAction::StoreObservations(request) => {
                 build_discovery_worker_store_observations_action(relay.public_key(), request)
             }
@@ -2945,6 +3196,155 @@ mod tests {
             .execute(&db.pool)
             .await
             .expect("clean community fixture");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn worker_source_progress_is_monotonic_idempotent_and_lease_fenced() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let relay = Keys::generate();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker identity");
+
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        let run_id = match db
+            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 2, &search)
+            .await
+            .expect("create run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let worker_id = Uuid::new_v4();
+        let claimed = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id,
+                    available_providers: vec![DiscoveryProvider::Outscraper],
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("claim run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(mut lease) = claimed else {
+            panic!("worker must receive lease");
+        };
+
+        let active = DiscoveryWorkerSourceProgressRequest {
+            lease: lease_request(worker_id, run_id, lease.lease_id),
+            provider: DiscoveryProvider::Outscraper,
+            status: DiscoveryRunSourceStatus::Active,
+            request_cursor: None,
+            request_count: 0,
+            returned_count: 0,
+            failure_class: None,
+        };
+        let active_outcome = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::SourceProgress(active),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("activate source"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(updated) = active_outcome else {
+            panic!("source progress must renew lease");
+        };
+        lease = updated;
+        assert_eq!(
+            lease.source_states[0].status,
+            DiscoveryRunSourceStatus::Active
+        );
+        assert!(lease.source_states[0].started_at.is_some());
+        assert!(lease.source_states[0].finished_at.is_none());
+
+        let completed = DiscoveryWorkerSourceProgressRequest {
+            lease: lease_request(worker_id, run_id, lease.lease_id),
+            provider: DiscoveryProvider::Outscraper,
+            status: DiscoveryRunSourceStatus::Completed,
+            request_cursor: Some("provider-job-1".to_owned()),
+            request_count: 2,
+            returned_count: 3,
+            failure_class: None,
+        };
+        let completed_outcome = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::SourceProgress(completed.clone()),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("complete source"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(completed_lease) = completed_outcome else {
+            panic!("terminal source progress must keep run lease");
+        };
+        let source = &completed_lease.source_states[0];
+        assert_eq!(source.status, DiscoveryRunSourceStatus::Completed);
+        assert_eq!(source.request_cursor.as_deref(), Some("provider-job-1"));
+        assert_eq!(source.request_count, 2);
+        assert_eq!(source.returned_count, 3);
+        assert!(source.finished_at.is_some());
+
+        let replay = apply_worker_action(
+            &db,
+            community,
+            &actor,
+            &relay,
+            DiscoveryWorkerAction::SourceProgress(completed.clone()),
+            Duration::seconds(30),
+        )
+        .await
+        .expect("replay terminal progress");
+        assert!(matches!(
+            replay,
+            DiscoveryWorkerCommandApply::Duplicate { .. }
+        ));
+
+        let mut conflicting = completed;
+        conflicting.lease.request_id = Uuid::new_v4();
+        conflicting.lease.idempotency_key = Uuid::new_v4();
+        conflicting.returned_count = 2;
+        assert!(apply_worker_action(
+            &db,
+            community,
+            &actor,
+            &relay,
+            DiscoveryWorkerAction::SourceProgress(conflicting),
+            Duration::seconds(30),
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
@@ -3886,6 +4286,19 @@ mod tests {
             .await
             .expect("cancel fences the old worker immediately");
         assert!(matches!(stale_after_cancel, DiscoveryAdvance::LostLease));
+        let cancelled_sources: Vec<(String, String)> = sqlx::query_as(
+            "SELECT status,failure_class FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 ORDER BY position",
+        )
+        .bind(community.as_uuid())
+        .bind(claimed.run.id)
+        .fetch_all(&db.pool)
+        .await
+        .expect("read actor-cancelled source states");
+        assert!(!cancelled_sources.is_empty());
+        assert!(cancelled_sources
+            .iter()
+            .all(|(status, failure)| status == "cancelled" && failure == "cancelled"));
 
         let revoke_campaign_id = Uuid::new_v4();
         let revoke_search = business_search();
@@ -3933,6 +4346,19 @@ mod tests {
                 .expect("revocation fences the old worker immediately"),
             DiscoveryAdvance::LostLease
         ));
+        let revoked_sources: Vec<(String, String)> = sqlx::query_as(
+            "SELECT status,failure_class FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 ORDER BY position",
+        )
+        .bind(community.as_uuid())
+        .bind(revoke_id)
+        .fetch_all(&db.pool)
+        .await
+        .expect("read entitlement-revoked source states");
+        assert!(!revoked_sources.is_empty());
+        assert!(revoked_sources
+            .iter()
+            .all(|(status, failure)| status == "cancelled" && failure == "cancelled"));
 
         db.set_discovery_entitlement(community, true)
             .await

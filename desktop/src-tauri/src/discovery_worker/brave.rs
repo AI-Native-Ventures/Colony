@@ -170,6 +170,7 @@ impl BraveSearchClient {
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn search(
         &self,
         search: &DiscoveryBusinessSearchSpec,
@@ -177,9 +178,23 @@ impl BraveSearchClient {
         remaining_target: usize,
         cancellation: &CancellationToken,
     ) -> Result<BraveSearchOutcome, BraveError> {
+        self.search_with_remaining(search, credential, || remaining_target, cancellation)
+            .await
+    }
+
+    pub(crate) async fn search_with_remaining<F>(
+        &self,
+        search: &DiscoveryBusinessSearchSpec,
+        credential: &Zeroizing<String>,
+        remaining_target: F,
+        cancellation: &CancellationToken,
+    ) -> Result<BraveSearchOutcome, BraveError>
+    where
+        F: Fn() -> usize,
+    {
         search.validate().map_err(|_| BraveError::InvalidRequest)?;
-        let target = remaining_target.min(usize::from(search.limit));
-        if target == 0 {
+        let source_limit = usize::from(search.limit);
+        if remaining_target().min(source_limit) == 0 {
             return Ok(BraveSearchOutcome {
                 observations: Vec::new(),
                 request_count: 0,
@@ -193,7 +208,9 @@ impl BraveSearchClient {
         let mut observations = Vec::new();
         let mut request_count = 0_u16;
         for offset in 0..=MAX_BRAVE_OFFSET {
-            let remaining = target.saturating_sub(observations.len());
+            let remaining = remaining_target()
+                .min(source_limit)
+                .saturating_sub(observations.len());
             if remaining == 0 {
                 break;
             }
@@ -650,6 +667,30 @@ mod tests {
                 .and_then(|count| count.parse::<u8>().ok())
                 .is_some_and(|count| (1..=20).contains(&count))
         }));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn concurrent_target_change_stops_unstarted_pages() {
+        let (client, state, handle) = server(Scenario::AlwaysMore).await;
+        let outcome = client
+            .search_with_remaining(
+                &search(50),
+                &Zeroizing::new("test-key".to_owned()),
+                || {
+                    if state.request_count.load(Ordering::SeqCst) == 0 {
+                        50
+                    } else {
+                        0
+                    }
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("bounded concurrent Brave search");
+        assert_eq!(outcome.request_count, 1);
+        assert_eq!(outcome.observations.len(), 1);
+        assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
         handle.abort();
     }
 

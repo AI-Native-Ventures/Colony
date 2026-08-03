@@ -1261,7 +1261,8 @@ CREATE TABLE discovery_worker_action_claims (
     idempotency_key UUID NOT NULL,
     operation TEXT NOT NULL
         CHECK (operation IN (
-            'claim', 'heartbeat', 'checkpoint', 'store_observations', 'fail', 'complete'
+            'claim', 'heartbeat', 'checkpoint', 'source_progress',
+            'store_observations', 'fail', 'complete'
         )),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),

@@ -7,7 +7,7 @@ use buzz_core::{
         DiscoveryWorkerCheckpoint, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
         DiscoveryWorkerLeaseRequest, DiscoveryWorkerObservationBatchRequest,
         DiscoveryWorkerOperation, DiscoveryWorkerReceipt, DiscoveryWorkerReceiptOutcome,
-        DiscoveryWorkerStoredObservationsProjection,
+        DiscoveryWorkerSourceProgressRequest, DiscoveryWorkerStoredObservationsProjection,
     },
     kind::{KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKER_RECEIPT},
 };
@@ -60,9 +60,22 @@ struct DiscoveryWorkerActionContent {
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_progress: Option<DiscoveryWorkerSourceProgressContent>,
     provider_request_id: Option<String>,
     batch_index: Option<u32>,
     observations: Option<Vec<DiscoveryBusinessObservationInput>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct DiscoveryWorkerSourceProgressContent {
+    provider: DiscoveryProvider,
+    status: buzz_core::discovery_worker::DiscoveryRunSourceStatus,
+    request_cursor: Option<String>,
+    request_count: u32,
+    returned_count: u32,
+    failure_class: Option<buzz_core::discovery_worker::DiscoveryRunSourceFailureClass>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +104,7 @@ pub fn build_discovery_worker_claim_action(
         request.idempotency_key,
         request.worker_id,
         Some(request.available_providers.clone()),
+        None,
         None,
         None,
         None,
@@ -130,6 +144,7 @@ pub fn build_discovery_worker_checkpoint_action(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -152,9 +167,43 @@ pub fn build_discovery_worker_store_observations_action(
         Some(request.lease.run_id),
         Some(request.lease.lease_id),
         None,
+        None,
         Some(request.provider_request_id.clone()),
         Some(request.batch_index),
         Some(request.observations.clone()),
+    )
+}
+
+/// Build a member-signable privacy-safe source progress action.
+pub fn build_discovery_worker_source_progress_action(
+    relay_pubkey: PublicKey,
+    request: &DiscoveryWorkerSourceProgressRequest,
+) -> Result<EventBuilder, DiscoverySdkError> {
+    request
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery source progress"))?;
+    build_action(
+        relay_pubkey,
+        DiscoveryWorkerOperation::SourceProgress,
+        request.lease.request_id,
+        request.lease.idempotency_key,
+        request.lease.worker_id,
+        None,
+        None,
+        Some(request.lease.run_id),
+        Some(request.lease.lease_id),
+        None,
+        Some(DiscoveryWorkerSourceProgressContent {
+            provider: request.provider,
+            status: request.status,
+            request_cursor: request.request_cursor.clone(),
+            request_count: request.request_count,
+            returned_count: request.returned_count,
+            failure_class: request.failure_class,
+        }),
+        None,
+        None,
+        None,
     )
 }
 
@@ -194,6 +243,7 @@ fn build_lease_action(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -209,6 +259,7 @@ fn build_action(
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
+    source_progress: Option<DiscoveryWorkerSourceProgressContent>,
     provider_request_id: Option<String>,
     batch_index: Option<u32>,
     observations: Option<Vec<DiscoveryBusinessObservationInput>>,
@@ -229,6 +280,7 @@ fn build_action(
         run_id,
         lease_id,
         checkpoint,
+        source_progress,
         provider_request_id,
         batch_index,
         observations,
@@ -346,8 +398,38 @@ pub fn parse_discovery_worker_action(
                 checkpoint,
             })
         }
+        DiscoveryWorkerOperation::SourceProgress
+            if content.available_providers.is_none()
+                && content.checkpoint.is_none()
+                && content.provider.is_none()
+                && content.provider_request_id.is_none()
+                && content.batch_index.is_none()
+                && content.observations.is_none() =>
+        {
+            let lease = parse_lease_content(event, &content)?;
+            let progress = content
+                .source_progress
+                .ok_or(DiscoverySdkError::TagContentMismatch(
+                    "discovery worker action",
+                ))?;
+            let request = DiscoveryWorkerSourceProgressRequest {
+                lease,
+                provider: progress.provider,
+                status: progress.status,
+                request_cursor: progress.request_cursor,
+                request_count: progress.request_count,
+                returned_count: progress.returned_count,
+                failure_class: progress.failure_class,
+            };
+            request
+                .validate()
+                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery source progress"))?;
+            DiscoveryWorkerAction::SourceProgress(request)
+        }
         DiscoveryWorkerOperation::StoreObservations
-            if content.available_providers.is_none() && content.checkpoint.is_none() =>
+            if content.available_providers.is_none()
+                && content.checkpoint.is_none()
+                && content.source_progress.is_none() =>
         {
             let lease = parse_lease_content(event, &content)?;
             let request =
@@ -384,7 +466,8 @@ pub fn parse_discovery_worker_action(
 }
 
 fn content_has_no_observations(content: &DiscoveryWorkerActionContent) -> bool {
-    content.provider.is_none()
+    content.source_progress.is_none()
+        && content.provider.is_none()
         && content.provider_request_id.is_none()
         && content.batch_index.is_none()
         && content.observations.is_none()
@@ -676,6 +759,7 @@ fn operation_tag(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Claim => "claim",
         DiscoveryWorkerOperation::Heartbeat => "heartbeat",
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
+        DiscoveryWorkerOperation::SourceProgress => "source_progress",
         DiscoveryWorkerOperation::StoreObservations => "store_observations",
         DiscoveryWorkerOperation::Fail => "fail",
         DiscoveryWorkerOperation::Complete => "complete",
@@ -687,6 +771,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkerOperation, DiscoverySdk
         "claim" => Ok(DiscoveryWorkerOperation::Claim),
         "heartbeat" => Ok(DiscoveryWorkerOperation::Heartbeat),
         "checkpoint" => Ok(DiscoveryWorkerOperation::Checkpoint),
+        "source_progress" => Ok(DiscoveryWorkerOperation::SourceProgress),
         "store_observations" => Ok(DiscoveryWorkerOperation::StoreObservations),
         "fail" => Ok(DiscoveryWorkerOperation::Fail),
         "complete" => Ok(DiscoveryWorkerOperation::Complete),
@@ -707,8 +792,9 @@ mod tests {
         },
         discovery_worker::{
             deterministic_business_observation_id, DiscoveryBusinessObservationInput,
-            DiscoveryRunSourceProjection, DiscoveryRunSourceStatus, DiscoveryWorkerLeaseProjection,
-            DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerReceiptOutcome,
+            DiscoveryRunSourceFailureClass, DiscoveryRunSourceProjection, DiscoveryRunSourceStatus,
+            DiscoveryWorkerLeaseProjection, DiscoveryWorkerObservationBatchRequest,
+            DiscoveryWorkerReceiptOutcome,
         },
     };
     use chrono::{TimeZone, Utc};
@@ -834,6 +920,15 @@ mod tests {
             batch_index: 0,
             observations: vec![observation()],
         };
+        let progress = DiscoveryWorkerSourceProgressRequest {
+            lease: lease(),
+            provider: DiscoveryProvider::Outscraper,
+            status: DiscoveryRunSourceStatus::Failed,
+            request_cursor: Some("request_123".to_owned()),
+            request_count: 1,
+            returned_count: 0,
+            failure_class: Some(DiscoveryRunSourceFailureClass::ProviderUnavailable),
+        };
         let events = [
             build_discovery_worker_claim_action(relay.public_key(), &claim)
                 .unwrap()
@@ -844,6 +939,10 @@ mod tests {
                 .sign_with_keys(&actor)
                 .unwrap(),
             build_discovery_worker_checkpoint_action(relay.public_key(), &checkpoint)
+                .unwrap()
+                .sign_with_keys(&actor)
+                .unwrap(),
+            build_discovery_worker_source_progress_action(relay.public_key(), &progress)
                 .unwrap()
                 .sign_with_keys(&actor)
                 .unwrap(),
@@ -874,14 +973,18 @@ mod tests {
         ));
         assert!(matches!(
             parse_discovery_worker_action(&events[3]).unwrap().action,
-            DiscoveryWorkerAction::StoreObservations(_)
+            DiscoveryWorkerAction::SourceProgress(_)
         ));
         assert!(matches!(
             parse_discovery_worker_action(&events[4]).unwrap().action,
-            DiscoveryWorkerAction::Fail(_)
+            DiscoveryWorkerAction::StoreObservations(_)
         ));
         assert!(matches!(
             parse_discovery_worker_action(&events[5]).unwrap().action,
+            DiscoveryWorkerAction::Fail(_)
+        ));
+        assert!(matches!(
+            parse_discovery_worker_action(&events[6]).unwrap().action,
             DiscoveryWorkerAction::Complete(_)
         ));
     }
@@ -955,6 +1058,7 @@ mod tests {
             Uuid::from_u128(10),
             Uuid::from_u128(11),
             Uuid::from_u128(12),
+            None,
             None,
             None,
             None,

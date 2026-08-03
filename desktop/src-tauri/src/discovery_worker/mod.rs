@@ -1,28 +1,16 @@
 //! Device-local Discovery worker host.
 
 mod adapter;
-#[expect(
-    dead_code,
-    reason = "the tested synchronous adapters are wired into the coordinator in Task 9"
-)]
 mod brave;
-#[expect(
-    dead_code,
-    reason = "the tested synchronous adapters are wired into the coordinator in Task 9"
-)]
+mod coordinator;
 mod exa;
 mod installation;
 mod normalization;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the tested crash-safe outbox is wired into the coordinator in Task 9"
-    )
-)]
 mod outbox;
 mod outscraper;
 mod protocol;
+mod source_errors;
+mod source_executor;
 mod worker_host;
 
 use std::sync::atomic::{AtomicU64, Ordering};

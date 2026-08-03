@@ -4,15 +4,15 @@ use buzz_core_pkg::{
     discovery_worker::{
         DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
         DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerOperation,
-        DiscoveryWorkerReceiptOutcome,
+        DiscoveryWorkerReceiptOutcome, DiscoveryWorkerSourceProgressRequest,
     },
     kind::KIND_DISCOVERY_WORKER_RECEIPT,
 };
 use buzz_sdk_pkg::discovery_worker::{
     build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
     build_discovery_worker_complete_action, build_discovery_worker_fail_action,
-    build_discovery_worker_heartbeat_action, build_discovery_worker_store_observations_action,
-    parse_discovery_worker_receipt,
+    build_discovery_worker_heartbeat_action, build_discovery_worker_source_progress_action,
+    build_discovery_worker_store_observations_action, parse_discovery_worker_receipt,
 };
 use nostr::{Event, EventBuilder, EventId, Keys, PublicKey};
 use serde_json::json;
@@ -27,6 +27,7 @@ pub(super) trait WorkerProtocol: Send + Sync {
     fn claim(&self, request: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_>;
     fn heartbeat(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
     fn checkpoint(&self, request: DiscoveryWorkerCheckpointRequest) -> ProtocolFuture<'_>;
+    fn source_progress(&self, request: DiscoveryWorkerSourceProgressRequest) -> ProtocolFuture<'_>;
     fn store_observations(
         &self,
         request: DiscoveryWorkerObservationBatchRequest,
@@ -193,6 +194,21 @@ impl WorkerProtocol for RelayWorkerProtocol<'_> {
             self.execute(
                 builder,
                 DiscoveryWorkerOperation::Checkpoint,
+                request.lease.request_id,
+                request.lease.idempotency_key,
+            )
+            .await
+        })
+    }
+
+    fn source_progress(&self, request: DiscoveryWorkerSourceProgressRequest) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            let builder =
+                build_discovery_worker_source_progress_action(self.relay_pubkey, &request)
+                    .map_err(|_| "invalid Discovery source progress".to_string())?;
+            self.execute(
+                builder,
+                DiscoveryWorkerOperation::SourceProgress,
                 request.lease.request_id,
                 request.lease.idempotency_key,
             )

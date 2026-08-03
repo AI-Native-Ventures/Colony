@@ -24,6 +24,8 @@ pub enum DiscoveryWorkerOperation {
     Heartbeat,
     /// Commit a monotonic non-secret execution checkpoint.
     Checkpoint,
+    /// Persist one source's truthful execution state and provider counts.
+    SourceProgress,
     /// Persist a bounded batch of normalized provider observations.
     StoreObservations,
     /// Mark a currently leased run failed without retaining provider details.
@@ -549,6 +551,14 @@ pub enum DiscoveryRunSourceFailureClass {
     Cancelled,
 }
 
+/// Why a local worker source-progress request was refused.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DiscoverySourceProgressError {
+    /// The lease, provider cursor, status, failure, or counts are inconsistent.
+    #[error("invalid Discovery source progress")]
+    InvalidProgress,
+}
+
 /// Durable, non-secret progress for one source in a leased run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -597,6 +607,95 @@ pub struct DiscoveryWorkerLeaseRequest {
     pub lease_id: Uuid,
 }
 
+/// Absolute, privacy-safe progress for one provider in the immutable run plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryWorkerSourceProgressRequest {
+    /// Current lease identity and command retry identifiers.
+    #[serde(flatten)]
+    pub lease: DiscoveryWorkerLeaseRequest,
+    /// Provider whose source row is being updated.
+    pub provider: DiscoveryProvider,
+    /// New durable source status.
+    pub status: DiscoveryRunSourceStatus,
+    /// Opaque resumable provider cursor, when one exists.
+    pub request_cursor: Option<String>,
+    /// Absolute provider requests attempted by this source.
+    pub request_count: u32,
+    /// Absolute provider records returned by this source.
+    pub returned_count: u32,
+    /// Privacy-safe terminal failure, when applicable.
+    pub failure_class: Option<DiscoveryRunSourceFailureClass>,
+}
+
+impl DiscoveryWorkerSourceProgressRequest {
+    /// Validate state/failure consistency without accepting provider details.
+    pub fn validate(&self) -> Result<(), DiscoverySourceProgressError> {
+        if [
+            self.lease.request_id,
+            self.lease.idempotency_key,
+            self.lease.worker_id,
+            self.lease.run_id,
+            self.lease.lease_id,
+        ]
+        .into_iter()
+        .any(|value| value.is_nil())
+            || self.returned_count > 500
+            || self.request_cursor.as_deref().is_some_and(|cursor| {
+                cursor.is_empty()
+                    || cursor.len() > MAX_PROVIDER_REQUEST_ID_BYTES
+                    || !cursor
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+        {
+            return Err(DiscoverySourceProgressError::InvalidProgress);
+        }
+        let valid = match self.status {
+            DiscoveryRunSourceStatus::Pending => false,
+            DiscoveryRunSourceStatus::Active => self.failure_class.is_none(),
+            DiscoveryRunSourceStatus::Completed => {
+                self.request_count > 0 && self.returned_count > 0 && self.failure_class.is_none()
+            }
+            DiscoveryRunSourceStatus::Exhausted => {
+                self.request_count > 0 && self.returned_count == 0 && self.failure_class.is_none()
+            }
+            DiscoveryRunSourceStatus::Failed => {
+                self.request_count > 0
+                    && matches!(
+                        self.failure_class,
+                        Some(
+                            DiscoveryRunSourceFailureClass::CredentialRejected
+                                | DiscoveryRunSourceFailureClass::BillingRequired
+                                | DiscoveryRunSourceFailureClass::InvalidRequest
+                                | DiscoveryRunSourceFailureClass::RateLimited
+                                | DiscoveryRunSourceFailureClass::ProviderUnavailable
+                                | DiscoveryRunSourceFailureClass::ResponseTooLarge
+                                | DiscoveryRunSourceFailureClass::RequestTimedOut
+                                | DiscoveryRunSourceFailureClass::MalformedResponse
+                        )
+                    )
+            }
+            DiscoveryRunSourceStatus::Cancelled => {
+                self.failure_class == Some(DiscoveryRunSourceFailureClass::Cancelled)
+            }
+            DiscoveryRunSourceStatus::OutcomeUnknown => {
+                self.request_count > 0
+                    && self.failure_class == Some(DiscoveryRunSourceFailureClass::OutcomeUnknown)
+            }
+            DiscoveryRunSourceStatus::SkippedTargetMet => {
+                self.request_cursor.is_none()
+                    && self.request_count == 0
+                    && self.returned_count == 0
+                    && self.failure_class.is_none()
+            }
+        };
+        valid
+            .then_some(())
+            .ok_or(DiscoverySourceProgressError::InvalidProgress)
+    }
+}
+
 /// Strict, non-secret checkpoint persisted for restart recovery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -633,6 +732,8 @@ pub enum DiscoveryWorkerAction {
     Heartbeat(DiscoveryWorkerLeaseRequest),
     /// Persist restart-safe progress.
     Checkpoint(DiscoveryWorkerCheckpointRequest),
+    /// Persist one source's state and absolute counts.
+    SourceProgress(DiscoveryWorkerSourceProgressRequest),
     /// Persist normalized observations.
     StoreObservations(DiscoveryWorkerObservationBatchRequest),
     /// Fail a current run without a provider error payload.
@@ -648,6 +749,7 @@ impl DiscoveryWorkerAction {
             Self::Claim(_) => DiscoveryWorkerOperation::Claim,
             Self::Heartbeat(_) => DiscoveryWorkerOperation::Heartbeat,
             Self::Checkpoint(_) => DiscoveryWorkerOperation::Checkpoint,
+            Self::SourceProgress(_) => DiscoveryWorkerOperation::SourceProgress,
             Self::StoreObservations(_) => DiscoveryWorkerOperation::StoreObservations,
             Self::Fail(_) => DiscoveryWorkerOperation::Fail,
             Self::Complete(_) => DiscoveryWorkerOperation::Complete,
@@ -660,6 +762,7 @@ impl DiscoveryWorkerAction {
             Self::Claim(value) => value.request_id,
             Self::Heartbeat(value) | Self::Fail(value) | Self::Complete(value) => value.request_id,
             Self::Checkpoint(value) => value.lease.request_id,
+            Self::SourceProgress(value) => value.lease.request_id,
             Self::StoreObservations(value) => value.lease.request_id,
         }
     }
@@ -672,6 +775,7 @@ impl DiscoveryWorkerAction {
                 value.idempotency_key
             }
             Self::Checkpoint(value) => value.lease.idempotency_key,
+            Self::SourceProgress(value) => value.lease.idempotency_key,
             Self::StoreObservations(value) => value.lease.idempotency_key,
         }
     }
@@ -682,6 +786,7 @@ impl DiscoveryWorkerAction {
             Self::Claim(value) => value.worker_id,
             Self::Heartbeat(value) | Self::Fail(value) | Self::Complete(value) => value.worker_id,
             Self::Checkpoint(value) => value.lease.worker_id,
+            Self::SourceProgress(value) => value.lease.worker_id,
             Self::StoreObservations(value) => value.lease.worker_id,
         }
     }
@@ -800,6 +905,24 @@ mod tests {
         }
     }
 
+    fn source_progress(status: DiscoveryRunSourceStatus) -> DiscoveryWorkerSourceProgressRequest {
+        DiscoveryWorkerSourceProgressRequest {
+            lease: DiscoveryWorkerLeaseRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                worker_id: Uuid::new_v4(),
+                run_id: Uuid::new_v4(),
+                lease_id: Uuid::new_v4(),
+            },
+            provider: DiscoveryProvider::BraveSearch,
+            status,
+            request_cursor: None,
+            request_count: 0,
+            returned_count: 0,
+            failure_class: None,
+        }
+    }
+
     #[test]
     fn worker_operation_json_is_stable() {
         assert_eq!(
@@ -811,6 +934,11 @@ mod tests {
             serde_json::to_string(&DiscoveryWorkerOperation::Fail)
                 .expect("serialize failure operation"),
             "\"fail\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DiscoveryWorkerOperation::SourceProgress)
+                .expect("serialize source progress operation"),
+            "\"source_progress\""
         );
     }
 
@@ -952,5 +1080,64 @@ mod tests {
             serde_json::json!({"secret": true}),
         );
         assert!(serde_json::from_value::<DiscoveryWorkerObservationBatchRequest>(raw).is_err());
+    }
+
+    #[test]
+    fn source_progress_is_absolute_strict_and_privacy_safe() {
+        let active = source_progress(DiscoveryRunSourceStatus::Active);
+        assert_eq!(active.validate(), Ok(()));
+
+        let mut submitted = active.clone();
+        submitted.provider = DiscoveryProvider::Outscraper;
+        submitted.request_cursor = Some("provider-request_1".to_owned());
+        submitted.request_count = 1;
+        assert_eq!(submitted.validate(), Ok(()));
+
+        let mut completed = active.clone();
+        completed.status = DiscoveryRunSourceStatus::Completed;
+        completed.request_count = 2;
+        completed.returned_count = 20;
+        assert_eq!(completed.validate(), Ok(()));
+
+        let mut exhausted = active.clone();
+        exhausted.status = DiscoveryRunSourceStatus::Exhausted;
+        exhausted.request_count = 1;
+        assert_eq!(exhausted.validate(), Ok(()));
+
+        let mut failed = active.clone();
+        failed.status = DiscoveryRunSourceStatus::Failed;
+        failed.request_count = 1;
+        failed.failure_class = Some(DiscoveryRunSourceFailureClass::CredentialRejected);
+        assert_eq!(failed.validate(), Ok(()));
+
+        let mut unknown = active.clone();
+        unknown.status = DiscoveryRunSourceStatus::OutcomeUnknown;
+        unknown.request_count = 1;
+        unknown.failure_class = Some(DiscoveryRunSourceFailureClass::OutcomeUnknown);
+        assert_eq!(unknown.validate(), Ok(()));
+
+        let skipped = source_progress(DiscoveryRunSourceStatus::SkippedTargetMet);
+        assert_eq!(skipped.validate(), Ok(()));
+
+        for mut invalid in [
+            source_progress(DiscoveryRunSourceStatus::Pending),
+            source_progress(DiscoveryRunSourceStatus::Completed),
+            source_progress(DiscoveryRunSourceStatus::Exhausted),
+            source_progress(DiscoveryRunSourceStatus::Failed),
+            source_progress(DiscoveryRunSourceStatus::OutcomeUnknown),
+        ] {
+            if invalid.status == DiscoveryRunSourceStatus::Exhausted {
+                invalid.returned_count = 1;
+                invalid.request_count = 1;
+            }
+            assert!(invalid.validate().is_err());
+        }
+
+        let mut raw = serde_json::to_value(&completed).expect("serialize source progress");
+        raw.as_object_mut().expect("progress object").insert(
+            "provider_error".to_owned(),
+            serde_json::json!("must not enter the schema"),
+        );
+        assert!(serde_json::from_value::<DiscoveryWorkerSourceProgressRequest>(raw).is_err());
     }
 }

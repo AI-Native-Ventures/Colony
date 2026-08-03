@@ -174,6 +174,13 @@ impl WorkerProtocol for FakeProtocol {
         Box::pin(async { self.next("checkpoint") })
     }
 
+    fn source_progress(
+        &self,
+        _: buzz_core_pkg::discovery_worker::DiscoveryWorkerSourceProgressRequest,
+    ) -> ProtocolFuture<'_> {
+        Box::pin(async { self.next("source_progress") })
+    }
+
     fn store_observations(
         &self,
         request: DiscoveryWorkerObservationBatchRequest,
