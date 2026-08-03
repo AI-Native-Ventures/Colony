@@ -193,8 +193,6 @@ type MockBridgeOptions = {
     tradingName?: string;
     refuseWith?: "rejected" | "failed" | "no-receipt";
   };
-  /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
-  builderlabAuth?: { email?: string; name?: string; expiresAt: string } | null;
   /** Optional policy returned by the native join-policy discovery command. */
   joinPolicy?: {
     terms_markdown?: string;
@@ -202,16 +200,6 @@ type MockBridgeOptions = {
     age_attestation_required: boolean;
     version: string;
   } | null;
-  /** Bound Builderlab Nostr identity. Null/omitted = not linked yet. */
-  builderlabIdentity?: { npub?: string; pubkey_hex?: string } | null;
-  /** Communities owned by the mocked Builderlab account. */
-  builderlabCommunities?: Array<{
-    id?: string;
-    name?: string;
-    slug?: string;
-    normalized_host?: string;
-    archived_at?: string | null;
-  }>;
   acpRuntimesCatalog?: Record<string, unknown>[];
   /** Catalog returned after a successful mocked install. */
   acpRuntimesCatalogAfterInstall?: Record<string, unknown>[];
