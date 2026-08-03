@@ -26,6 +26,10 @@ both and the first tag it is safe to deploy over 0.2.2.
   [#31](https://github.com/AI-Native-Ventures/Colony/pull/31))
 - ci: back-merge `main` into `develop` on every push to `main`, so a fix landed
   straight on `main` cannot be silently reverted by the next promotion.
+- fix(ci): the auto-tag workflow no longer references `secrets` in a step
+  condition, which had made the file unparseable and produced a failed run
+  with zero jobs on every push.
+  ([#37](https://github.com/AI-Native-Ventures/Colony/pull/37))
 - test(desktop): follow the Colony brand colour and the self-serve creation
   flow, two suites left behind by UI changes and hidden while a failing
   upstream job gated them to skipped.
