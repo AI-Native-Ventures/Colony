@@ -1,32 +1,26 @@
 // site/src/sections/Features.tsx
 import { AntMark } from "@/brand/AntMark";
 
-// Four of the five cards below carry a real crop from an actual E2E
-// screenshot, generated via `just desktop-screenshot`. Channels, Agent
-// teams, and Workflows come from the same engineering-channel capture
-// ProductShowcase renders in full (site/public/product-channel.png). Git
-// built in is a separate capture of the Projects feature's commit view
-// (mock route /projects/<bob>:design-system?commitHash=..., a seeded repo
-// with deterministic mock commit/diff data — deliberately not the "buzz"
-// mock project, whose name would put "buzz" text in a Colony screenshot).
+// One row per feature, image shown whole.
 //
-// Canvas has no honest screenshot: the E2E mock's `get_canvas` handler
-// always returns `{ content: null }` (desktop/src/testing/e2eBridge.ts,
-// case "get_canvas"), so every reachable canvas view renders "No canvas
-// set for this channel." — a real UI state, but one that would misrepresent
-// the feature as empty rather than illustrate it. Flagged to the team lead;
-// shipping a deliberately distinct non-screenshot treatment (a dot-grid
-// "blank canvas" pattern instead of the plain badge the other placeholder
-// used) rather than either faking content or leaving a lone odd card next
-// to four real screenshots.
+// This replaced a five-across card grid whose images were forced into a
+// fixed 112px-tall `object-cover` box roughly 190px wide. Every screenshot
+// was cropped to illegibility — one was sliced mid-sentence — and the source
+// files had been captured at that size (195x111), so no CSS change alone
+// could have fixed them. The captures now come from
+// desktop/tests/e2e/site-feature-screenshots.spec.ts at 2x density, and
+// nothing here constrains their aspect ratio: each renders at its natural
+// shape, which is why a tall sidebar and a single-line message row can sit
+// in the same section without either being cut.
 const FEATURES = [
   {
     title: "Channels",
     body: "Threaded, searchable channels scoped to your community: one surface for people and agents alike.",
     image: {
       src: "/feature-channels.png",
-      alt: "The Colony channel list: agents, all-replies, deep-history, engineering, general, random, and more.",
-      position: "object-top",
+      alt: "The Colony sidebar: Inbox, Agents, Blocks, and Discovery above a channel list containing agents, all-replies, deep-history, engineering, general, random, and private channels.",
+      width: 580,
+      height: 1200,
     },
   },
   {
@@ -34,8 +28,9 @@ const FEATURES = [
     body: "Spin up specialized agents that read channel history, take on tasks, and hand off work with a visible trail.",
     image: {
       src: "/feature-agents.png",
-      alt: "An agent named mira, managed by you, reviewing a pull request in a channel with a threaded reply below it.",
-      position: "object-top",
+      alt: "Colony's Agents view showing two custom agents, mira and nadia, both running.",
+      width: 1064,
+      height: 760,
     },
   },
   {
@@ -43,66 +38,83 @@ const FEATURES = [
     body: "Define recurring processes as workflow-as-code, triggered by events instead of run by hand.",
     image: {
       src: "/feature-workflow.png",
-      alt: "An agent named nadia reporting that a workflow triggered on a push, signed the build, and queued notarization.",
-      position: "object-top",
+      alt: "An agent named nadia, managed by you, reporting that the release-sign workflow triggered on push, the build was signed, and notarization is queued.",
+      width: 1980,
+      height: 436,
     },
-  },
-  {
-    title: "Canvas",
-    body: "A shared surface for diagrams and drafts that agents and people can both edit in real time.",
-    pattern: true,
   },
   {
     title: "Git built in",
     body: "Repos, pull requests, and signed commits live in the same workspace as the conversation about them.",
     image: {
       src: "/feature-git.png",
-      alt: "A design-system repository in Colony's git browser: Files, Commits, Issues, and Pull Request tabs, and a commit with +27/-4 changes.",
-      position: "object-top",
+      alt: "Colony's Projects view with Overview, Repositories, Pull Requests, and Issues tabs above counts of 3 repositories, 69 pull requests, and 74 issues.",
+      width: 1980,
+      height: 700,
     },
+  },
+  // Canvas has no honest screenshot: the E2E mock's `get_canvas` handler
+  // returns `{ content: null }`, so every reachable canvas view renders "No
+  // canvas set for this channel." — a real UI state, but one that would sell
+  // the feature as empty. A dot-grid "blank canvas" treatment instead, so it
+  // reads as a considered choice next to four real captures rather than a
+  // placeholder someone forgot.
+  {
+    title: "Canvas",
+    body: "A shared surface for diagrams and drafts that agents and people can both edit in real time.",
+    pattern: true,
   },
 ];
 
 export function Features() {
   return (
     <section className="bg-colony-canvasMid px-6 py-14 sm:py-20">
-      <div className="mx-auto max-w-5xl">
+      <div className="mx-auto max-w-6xl">
         <h2 className="text-center text-3xl font-semibold text-colony-ink sm:text-4xl">
           Everything a company needs, in one workspace
         </h2>
-        <div className="mt-16 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-5">
-          {FEATURES.map((feature) => (
+
+        <div className="mt-14 space-y-16 sm:mt-20 sm:space-y-24">
+          {FEATURES.map((feature, index) => (
             <div
               key={feature.title}
-              className="overflow-hidden rounded-2xl border border-colony-ink/10 bg-colony-ink/5"
+              className="grid grid-cols-1 items-center gap-8 sm:gap-12 lg:grid-cols-2 lg:gap-16"
             >
-              {feature.image ? (
-                <img
-                  src={feature.image.src}
-                  alt={feature.image.alt}
-                  className={`h-28 w-full border-b border-colony-ink/10 object-cover ${feature.image.position}`}
-                />
-              ) : (
-                // Canvas's deliberate non-screenshot treatment: a dot-grid
-                // "blank canvas" pattern, distinct from a plain flat badge
-                // so it reads as a considered choice sitting next to four
-                // real screenshots, not a placeholder someone forgot. Ant on
-                // an ink badge, same pairing as the packaged app icon (white
-                // ant on violet), inverted per hue: canvas-tint ant on ink.
-                // Keeps AntMark itself wingless and untouched.
-                <div className="flex h-28 w-full items-center justify-center border-b border-colony-ink/10 bg-colony-ink/5 bg-[radial-gradient(circle,_currentColor_1px,_transparent_1px)] bg-[length:14px_14px] text-colony-ink/15">
-                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-colony-ink text-colony-canvas">
-                    <AntMark className="h-5 w-5" />
-                  </span>
-                </div>
-              )}
-              <div className="p-6">
-                <h3 className="text-base font-semibold text-colony-ink">
+              <div
+                // Alternate which side the copy sits on. `lg:order-2` on odd
+                // rows moves the text after the image on wide screens only;
+                // stacked layouts keep title-then-image reading order.
+                className={index % 2 === 1 ? "lg:order-2" : undefined}
+              >
+                <h3 className="text-2xl font-semibold text-colony-ink sm:text-3xl">
                   {feature.title}
                 </h3>
-                <p className="mt-2 text-sm leading-relaxed text-colony-ink/70">
+                <p className="mt-3 max-w-md text-base leading-relaxed text-colony-ink/70">
                   {feature.body}
                 </p>
+              </div>
+
+              <div className={index % 2 === 1 ? "lg:order-1" : undefined}>
+                {feature.image ? (
+                  <img
+                    src={feature.image.src}
+                    alt={feature.image.alt}
+                    width={feature.image.width}
+                    height={feature.image.height}
+                    // No fixed height and no object-cover: the intrinsic
+                    // width/height above reserve the right box before load,
+                    // and the image fills the column at its own aspect ratio.
+                    // `max-h-[28rem] w-auto` keeps the tall sidebar capture
+                    // from towering over the shorter ones.
+                    className="mx-auto h-auto w-full max-w-full rounded-2xl border border-colony-ink/10 shadow-xl shadow-colony-ink/10 lg:max-h-[28rem] lg:w-auto"
+                  />
+                ) : (
+                  <div className="flex h-56 w-full items-center justify-center rounded-2xl border border-colony-ink/10 bg-colony-ink/5 bg-[radial-gradient(circle,_currentColor_1px,_transparent_1px)] bg-[length:14px_14px] text-colony-ink/15">
+                    <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-colony-ink text-colony-canvas">
+                      <AntMark className="h-7 w-7" />
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           ))}
