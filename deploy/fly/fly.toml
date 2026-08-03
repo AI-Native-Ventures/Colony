@@ -1,0 +1,61 @@
+# Colony relay on Fly.io. Deploy from the repo root:
+#
+#   flyctl deploy --config deploy/fly/fly.toml --image <ghcr image>
+#
+# The image is the same one deploy/compose uses (docker.yml publishes it on
+# relay-v* tags). Secrets are set once via `flyctl secrets set` on the
+# colony-relay app: DATABASE_URL, REDIS_URL, BUZZ_S3_ACCESS_KEY,
+# BUZZ_S3_SECRET_KEY, RELAY_OWNER_PUBKEY.
+app = "colony-relay"
+primary_region = "iad"
+
+[env]
+BUZZ_BIND_ADDR = "0.0.0.0:3000"
+BUZZ_HEALTH_PORT = "8080"
+BUZZ_METRICS_PORT = "9102"
+BUZZ_GIT_REPO_PATH = "/data/git"
+BUZZ_AUTO_MIGRATE = "true"
+BUZZ_DOMAIN = "relay.colony.ainative.ventures"
+BUZZ_MEDIA_BASE_URL = "https://relay.colony.ainative.ventures/media"
+BUZZ_MEDIA_SERVER_DOMAIN = "relay.colony.ainative.ventures"
+BUZZ_CORS_ORIGINS = "https://relay.colony.ainative.ventures"
+BUZZ_S3_ENDPOINT = "https://fly.storage.tigris.dev"
+BUZZ_S3_BUCKET = "colony-relay-media"
+# Production identity and posture. Without RELAY_URL the relay advertises
+# ws://localhost:3000; without REQUIRE_RELAY_MEMBERSHIP anyone who finds the
+# host can join. BUZZ_RELAY_PRIVATE_KEY (secret) keeps the relay's own
+# identity stable across restarts.
+RELAY_URL = "wss://relay.colony.ainative.ventures"
+BUZZ_REQUIRE_RELAY_MEMBERSHIP = "true"
+BUZZ_REQUIRE_AUTH_TOKEN = "true"
+BUZZ_ALLOW_NIP_OA_AUTH = "true"
+BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
+# Member self-serve community creation: any relay member may create
+# <slug>.colony.ainative.ventures via POST /api/communities (NIP-98 with
+# their own key). Wildcard DNS + the Fly wildcard cert cover every slug.
+BUZZ_SELF_PROVISION_DOMAIN = "colony.ainative.ventures"
+BUZZ_MAX_COMMUNITIES_PER_OWNER = "10"
+
+[[mounts]]
+source = "colony_relay_data"
+destination = "/data"
+
+[http_service]
+internal_port = 3000
+force_https = true
+auto_stop_machines = "off"
+auto_start_machines = true
+min_machines_running = 1
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "512mb"
+
+# The in-container health port binds localhost only; probe the public
+# relay port instead.
+[checks.readiness]
+type = "tcp"
+port = 3000
+interval = "15s"
+timeout = "5s"
+grace_period = "30s"

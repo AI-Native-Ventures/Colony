@@ -17,7 +17,7 @@ import {
 } from "@/features/agents/hooks";
 import { availableRuntimesForStart } from "@/features/agents/lib/instanceInputForDefinition";
 import type { BackendIntent } from "@/features/agents/lib/instanceInputForDefinition";
-import { resolveManagedAgentAvatarUrl } from "@/features/agents/ui/managedAgentAvatar";
+import { resolveRemoteManagedAgentAvatarUrl } from "@/features/agents/ui/managedAgentAvatar";
 import { editPersonaDialogState } from "@/features/agents/ui/personaDialogState";
 import type { AgentCreateIntent } from "@/features/agents/ui/agentCreateIntent";
 import type {
@@ -211,7 +211,9 @@ export function useAgentProposalReview() {
       if (!runtime) {
         throw new Error("Choose an available runtime for this agent.");
       }
-      const avatarUrl = await resolveManagedAgentAvatarUrl(
+      // The safe-action schema only accepts https avatar URLs, so inline
+      // emoji avatars must be uploaded (rasterized to PNG) before submit.
+      const avatarUrl = await resolveRemoteManagedAgentAvatarUrl(
         input.avatarUrl,
         undefined,
         runtime.avatarUrl,
@@ -247,7 +249,7 @@ export function useAgentProposalReview() {
         );
       }
       assertProposalOrigin(proposal);
-      const avatarUrl = await resolveManagedAgentAvatarUrl(
+      const avatarUrl = await resolveRemoteManagedAgentAvatarUrl(
         input.avatarUrl,
         undefined,
       );

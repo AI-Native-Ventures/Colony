@@ -193,7 +193,7 @@
 
   .buzz-onboarding-neutral-theme.buzz-startup-shell.buzz-onboarding-welcome {
     background-color: var(--buzz-welcome-chartreuse);
-    /* Landing is a flat chartreuse field, so the docked-footer scrim must match
+    /* Landing is a flat brand field, so the docked-footer scrim must match
        it (not the gradient's light-blue bottom) to stay invisible. */
     --buzz-onboarding-shell-bottom: var(--buzz-welcome-chartreuse);
     /* Subtle dot grid: 2px dots spaced on a 24px lattice. */
@@ -206,8 +206,11 @@
   }
 
   .buzz-onboarding-neutral-theme {
-    /* Landing "chartreuse" — the welcome background; reused for the CTA label. */
-    --buzz-welcome-chartreuse: #d7d72e;
+    /* Landing brand field — the welcome background; reused for the CTA label.
+       Colony violet, matching --buzz-gradient-light-top in theme.css. The
+       token keeps its historical name so every consumer stays wired; only the
+       value moved off Buzz's chartreuse. */
+    --buzz-welcome-chartreuse: #d9cdf3;
     /* Bottom stop of the onboarding shell gradient; also the docked-footer
        scrim color so content scrolling under the CTA fades into the page. */
     --buzz-onboarding-shell-bottom: #d7e7f6;

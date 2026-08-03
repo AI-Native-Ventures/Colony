@@ -15,6 +15,16 @@ name: Auto-tag on Release PR Merge
 # mobile-v<v>-rc.N tags directly from remote main with scripts/mobile-release.sh,
 # then hand the exact tag to buzz-releases.
 #
+# The release-tagger App is optional. Where it is configured, a tag it signs is
+# attributed to the App and fires the consumers' `on.push.tags` triggers
+# normally. Where it is not (a fork without those credentials), the lane falls
+# back to GITHUB_TOKEN and then dispatches the consumer explicitly, because a
+# ref created with GITHUB_TOKEN deliberately does not trigger further
+# workflows. Without that second half the lane looks green while publishing
+# nothing: the tag exists, no artifact is ever built, and the gap surfaces only
+# when someone goes looking for an image that was never made. That is exactly
+# what happened to relay-v0.3.0, which had to be tagged by hand.
+#
 # Release tags are created with a short-lived token from the dedicated
 # buzz-release-bot GitHub App. GitHub attributes the ref creation to that
 # App, so the consumer's `on.push.tags` trigger runs normally. The workflow's
@@ -35,6 +45,12 @@ permissions:
 
 jobs:
   auto-tag:
+    permissions:
+      # The fallback path creates the tag ref itself and then dispatches the
+      # consumer, because a ref created with GITHUB_TOKEN does not fire
+      # `on.push.tags`. Both need more than the read-only default.
+      contents: write
+      actions: write
     if: >
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -85,8 +101,37 @@ jobs:
           {
             echo "enabled=true"
             echo "tag=${TAG_PREFIX}${VERSION}"
+            echo "prefix=${TAG_PREFIX}"
+            echo "version=${VERSION}"
           } >> "$GITHUB_OUTPUT"
           echo "Tagging ${TAG_PREFIX}${VERSION}"
+
+      # The App is what makes this lane work at all: a tag it signs is
+      # attributed to the App and therefore fires the consumers'
+      # `on.push.tags` triggers, which is the only path that builds a release
+      # at the tag ref. `verify-release-ref.sh` rejects a branch-backed
+      # release, so there is no substitute here, and creating a tag we cannot
+      # publish from would be worse than not tagging: the lane would look done
+      # while no artifact was ever built.
+      #
+      # So its absence fails here, loudly and early, with the two ways out.
+      - name: Require the release tagger App
+        if: >
+          steps.release.outputs.enabled == 'true' &&
+          (vars.BUZZ_RELEASE_TAGGER_CLIENT_ID == '' ||
+           secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY == '')
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          {
+            echo "::error::Cannot tag ${TAG}: the release-tagger App is not configured."
+            echo "::error::Set the BUZZ_RELEASE_TAGGER_CLIENT_ID repository variable and"
+            echo "::error::the BUZZ_RELEASE_TAGGER_PRIVATE_KEY secret."
+            echo "::error::To release without it, push the tag by hand at the release"
+            echo "::error::commit, which fires the publisher exactly as the App would:"
+            echo "::error::  git tag -a ${TAG} <sha> -m ${TAG} && git push origin ${TAG}"
+          } >&2
+          exit 1
 
       - name: Create release tagger token
         if: steps.release.outputs.enabled == 'true'

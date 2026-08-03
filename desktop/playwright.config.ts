@@ -44,6 +44,7 @@ export default defineConfig({
         "**/channel-controls.spec.ts",
         "**/active-turn-resilience.spec.ts",
         "**/profile-active-turn.spec.ts",
+        "**/ant-mark-sizing.spec.ts",
         "**/config-bridge-screenshots.spec.ts",
         "**/observer-feed-screenshots.spec.ts",
         "**/core-memory-screenshots.spec.ts",

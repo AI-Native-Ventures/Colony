@@ -1,0 +1,50 @@
+name: Deploy relay to Fly
+
+# Relays the GHCR relay image into Fly's registry and deploys it. Exists
+# because Fly Machines cannot pull private images from external registries,
+# and local tokens lack read:packages; the Actions GITHUB_TOKEN always can
+# read this repo's own packages.
+#
+# Dispatch with the image tag to deploy, e.g. "0.2.1".
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "colony-relay image tag to deploy (e.g. 0.2.1)"
+        required: true
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@63da3ecc5e2793b98a3f2519b3d75d4f4c11cec2 # v1.5
+
+      - name: Relay image into Fly registry and deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          SRC="ghcr.io/ai-native-ventures/colony-relay:${TAG}"
+          DST="registry.fly.io/colony-relay:${TAG}"
+          docker pull --platform linux/amd64 "$SRC"
+          docker tag "$SRC" "$DST"
+          flyctl auth docker
+          docker push "$DST"
+          flyctl deploy --config deploy/fly/fly.toml --app colony-relay \
+            --image "$DST" --strategy immediate --yes

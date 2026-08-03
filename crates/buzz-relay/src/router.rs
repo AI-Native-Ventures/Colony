@@ -93,6 +93,18 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::operator::transfer_community),
         )
         // Relay invites: mint (owner/admin) + claim (membership-gate exempt)
+        .route(
+            "/api/communities",
+            post(api::self_provisioning::create_community),
+        )
+        .route(
+            "/api/communities/mine",
+            get(api::self_provisioning::list_my_communities),
+        )
+        .route(
+            "/api/communities/availability",
+            get(api::self_provisioning::community_availability),
+        )
         .route("/api/invites", post(api::invites::mint_invite))
         .route("/api/join-policy", get(api::invites::join_policy))
         // Policy documents as standalone pages — desktop opens these in the

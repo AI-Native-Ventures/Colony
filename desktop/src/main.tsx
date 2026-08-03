@@ -4,6 +4,12 @@ import { App } from "@/app/App";
 import { NostrBindConsentDialog } from "@/features/profile/ui/NostrBindConsentDialog";
 import "@fontsource-variable/inter/wght.css";
 import "@/shared/styles/globals.css";
+// Imported at the entry so the mark's sizing rules land in the always-loaded
+// CSS bundle. Left only to ColonyLogoAnimation's own import, Vite emits this
+// file into whichever lazy chunk claims it first (it shipped inside the
+// UserProfilePanel chunk), and any other chunk rendering the mark got an
+// unstyled svg at the browser's 300x150 replaced-element default.
+import "@/shared/ui/colony-logo/colony-logo-animation.css";
 import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
 import { migrateLegacyCommunityStorageBeforeRender } from "@/features/communities/legacyCommunityStorage";
 import { CommunitiesProvider } from "@/features/communities/useCommunities";
