@@ -8,12 +8,16 @@
 //! and reconciled against what the provider says it billed.
 
 pub mod attribution;
+pub mod crosscheck;
 pub mod engine;
 pub mod prices;
 pub mod reconcile;
 
 pub use attribution::{
     AttributionRule, Budget, Correction, CorrectionBook, RuleAssignment, Rulebook,
+};
+pub use crosscheck::{
+    cross_check, CrossCheckFinding, CrossCheckReport, CrossCheckRow, SelfReportedTurn,
 };
 pub use engine::{
     compute_ledger, AttributionMethod, BudgetStatus, ClassTotals, DailySum, LedgerEntry,

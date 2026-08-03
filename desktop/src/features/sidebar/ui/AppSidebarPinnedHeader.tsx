@@ -5,6 +5,7 @@ import {
   Compass,
   FolderGit2,
   Inbox,
+  Receipt,
   Zap,
 } from "lucide-react";
 
@@ -19,17 +20,7 @@ import {
   SidebarMenuItem,
 } from "@/shared/ui/sidebar";
 import { SidebarMenuLabel } from "@/shared/ui/sidebar-menu-label";
-
-type SidebarSelectedView =
-  | "home"
-  | "channel"
-  | "messages"
-  | "agents"
-  | "blocks"
-  | "discovery"
-  | "workflows"
-  | "pulse"
-  | "projects";
+import type { SidebarSelectedView } from "../types";
 
 type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
@@ -53,6 +44,7 @@ type AppSidebarPrimaryMenuProps = {
   onSelectHome: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
+  onSelectSpend: () => void;
   onSelectWorkflows: () => void;
   selectedView: SidebarSelectedView;
 };
@@ -100,6 +92,7 @@ export function AppSidebarPrimaryMenu({
   onSelectHome,
   onSelectProjects,
   onSelectPulse,
+  onSelectSpend,
   onSelectWorkflows,
   selectedView,
 }: AppSidebarPrimaryMenuProps) {
@@ -179,6 +172,18 @@ export function AppSidebarPrimaryMenu({
           >
             <Blocks className="h-4 w-4" />
             <SidebarMenuLabel>Blocks</SidebarMenuLabel>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            data-testid="open-spend-view"
+            isActive={selectedView === "spend"}
+            onClick={onSelectSpend}
+            tooltip="Spend"
+            type="button"
+          >
+            <Receipt className="h-4 w-4" />
+            <SidebarMenuLabel>Spend</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <FeatureGate feature="workflows">
