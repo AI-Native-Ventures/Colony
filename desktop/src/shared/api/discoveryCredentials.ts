@@ -5,23 +5,33 @@ export type DiscoveryCredentialStatus =
   | "missing"
   | "unavailable";
 
-export function saveDiscoveryOutscraperCredential(
+export type DiscoveryCredentialProvider =
+  | "outscraper"
+  | "brave_search"
+  | "exa_search";
+
+export function saveDiscoveryCredential(
+  provider: DiscoveryCredentialProvider,
   value: string,
 ): Promise<DiscoveryCredentialStatus> {
-  return invoke<DiscoveryCredentialStatus>(
-    "save_discovery_outscraper_credential",
-    { value },
-  );
+  return invoke<DiscoveryCredentialStatus>("save_discovery_credential", {
+    provider,
+    value,
+  });
 }
 
-export function getDiscoveryOutscraperCredentialStatus(): Promise<DiscoveryCredentialStatus> {
-  return invoke<DiscoveryCredentialStatus>(
-    "get_discovery_outscraper_credential_status",
-  );
+export function getDiscoveryCredentialStatus(
+  provider: DiscoveryCredentialProvider,
+): Promise<DiscoveryCredentialStatus> {
+  return invoke<DiscoveryCredentialStatus>("get_discovery_credential_status", {
+    provider,
+  });
 }
 
-export function deleteDiscoveryOutscraperCredential(): Promise<DiscoveryCredentialStatus> {
-  return invoke<DiscoveryCredentialStatus>(
-    "delete_discovery_outscraper_credential",
-  );
+export function deleteDiscoveryCredential(
+  provider: DiscoveryCredentialProvider,
+): Promise<DiscoveryCredentialStatus> {
+  return invoke<DiscoveryCredentialStatus>("delete_discovery_credential", {
+    provider,
+  });
 }

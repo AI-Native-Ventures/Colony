@@ -113,7 +113,9 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
             if state.shutdown_started.load(Ordering::Acquire) {
                 return;
             }
-            let credential = match discovery_credentials::load_outscraper_credential() {
+            let credential = match discovery_credentials::load_discovery_credential(
+                discovery_credentials::DiscoveryCredentialProvider::Outscraper,
+            ) {
                 Ok(Some(credential)) => credential,
                 Ok(None) | Err(_) => {
                     tokio::time::sleep(POLL_INTERVAL).await;
@@ -449,7 +451,9 @@ async fn run_once<P: WorkerProtocol>(
     step_delay: Duration,
 ) -> Result<HostRunOutcome, String> {
     run_once_with_loader(protocol, worker_id, step_delay, || {
-        discovery_credentials::load_outscraper_credential()
+        discovery_credentials::load_discovery_credential(
+            discovery_credentials::DiscoveryCredentialProvider::Outscraper,
+        )
     })
     .await
 }

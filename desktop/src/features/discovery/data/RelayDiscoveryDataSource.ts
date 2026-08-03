@@ -2,7 +2,7 @@ import { verifyEvent } from "nostr-tools/pure";
 
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { relayClient } from "@/shared/api/relayClient";
-import { getDiscoveryOutscraperCredentialStatus } from "@/shared/api/discoveryCredentials";
+import { getDiscoveryCredentialStatus } from "@/shared/api/discoveryCredentials";
 import { signRelayEvent } from "@/shared/api/tauri";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
@@ -86,7 +86,7 @@ type WorkspaceOperation =
 type RunOperation = "start" | "status" | "cancel";
 
 export type DiscoveryBrokerDependencies = {
-  credentialStatus?: typeof getDiscoveryOutscraperCredentialStatus;
+  credentialStatus?: typeof getDiscoveryCredentialStatus;
   delay: (ms: number) => Promise<void>;
   fetchFirstEvent: (
     filter: RelaySubscriptionFilter,
@@ -101,7 +101,7 @@ export type DiscoveryBrokerDependencies = {
 };
 
 const DEFAULT_BROKER: DiscoveryBrokerDependencies = {
-  credentialStatus: getDiscoveryOutscraperCredentialStatus,
+  credentialStatus: getDiscoveryCredentialStatus,
   delay: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
   fetchFirstEvent: (filter) => relayClient.fetchFirstEvent(filter),
   publish: (event) =>
@@ -530,12 +530,12 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   });
   private entitlementPromise: Promise<DiscoveryEntitlement> | null = null;
   private readonly activeRuns = new Map<string, string>();
-  private readonly credentialStatus: typeof getDiscoveryOutscraperCredentialStatus;
+  private readonly credentialStatus: typeof getDiscoveryCredentialStatus;
 
   constructor(dependencies: DiscoveryBrokerDependencies = DEFAULT_BROKER) {
     this.broker = new DiscoveryBroker(dependencies);
     this.credentialStatus =
-      dependencies.credentialStatus ?? getDiscoveryOutscraperCredentialStatus;
+      dependencies.credentialStatus ?? getDiscoveryCredentialStatus;
   }
 
   getEntitlement(): Promise<DiscoveryEntitlement> {
@@ -787,7 +787,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     if (!(await this.live())) {
       throw new Error("Activate LAKA before running live Discovery.");
     }
-    const credential = await this.credentialStatus();
+    const credential = await this.credentialStatus("outscraper");
     if (credential !== "configured") {
       throw new Error(
         credential === "missing"

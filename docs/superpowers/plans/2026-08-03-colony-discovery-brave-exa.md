@@ -186,10 +186,10 @@ cargo test -p buzz-cli discovery
 - Modify: `desktop/tests/e2e/discovery-settings.spec.ts`
 - Modify: `desktop/src/features/settings/ui/discoverySettings.test.mjs`
 
-- [ ] Add failing Rust and TypeScript tests for three strict provider values,
+- [x] Add failing Rust and TypeScript tests for three strict provider values,
   three separate keychain entries, status-only reads, zeroized inputs,
   idempotent removal, unknown-provider rejection, and secure-storage failure.
-- [ ] Store keys only under:
+- [x] Store keys only under:
 
 ```text
 discovery.outscraper.api_key
@@ -197,14 +197,14 @@ discovery.brave_search.api_key
 discovery.exa_search.api_key
 ```
 
-- [ ] Replace Outscraper-specific IPC with provider-parameterized status,
+- [x] Replace Outscraper-specific IPC with provider-parameterized status,
   save, and delete commands. No native or React API may return a key.
-- [ ] Render three consistent Settings rows and refresh worker capabilities
+- [x] Render three consistent Settings rows and refresh worker capabilities
   after save, replace, or removal without making a provider request.
-- [ ] Extend the mock bridge and E2E proof to verify all three lifecycles and
+- [x] Extend the mock bridge and E2E proof to verify all three lifecycles and
   absence of a secret fixture from DOM, accessibility text, console, and IPC
   receipts.
-- [ ] Run:
+- [x] Run:
 
 ```bash
 cargo test --manifest-path desktop/src-tauri/Cargo.toml discovery_credentials
@@ -214,7 +214,7 @@ pnpm typecheck
 pnpm exec playwright test tests/e2e/discovery-settings.spec.ts --project=smoke
 ```
 
-- [ ] Commit with `git commit -s -m "feat(discovery): configure three local sources"`.
+- [x] Commit with `git commit -s -m "feat(discovery): configure three local sources"`.
 
 ## Task 6: Implement the Brave Search adapter
 
