@@ -116,13 +116,20 @@ jobs:
       #
       # So its absence fails here, loudly and early, with the two ways out.
       - name: Require the release tagger App
-        if: >
-          steps.release.outputs.enabled == 'true' &&
-          (vars.BUZZ_RELEASE_TAGGER_CLIENT_ID == '' ||
-           secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY == '')
+        # The credentials are checked in the body, not in `if`: the `secrets`
+        # context is not available to a step condition, and using it there
+        # makes the whole workflow unparseable. GitHub then reports a failed
+        # run with no jobs on every push, which is how this was found.
+        if: steps.release.outputs.enabled == 'true'
         env:
           TAG: ${{ steps.release.outputs.tag }}
+          CLIENT_ID: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
         run: |
+          if [ -n "$CLIENT_ID" ] && [ -n "$PRIVATE_KEY" ]; then
+            echo "Release tagger App is configured."
+            exit 0
+          fi
           {
             echo "::error::Cannot tag ${TAG}: the release-tagger App is not configured."
             echo "::error::Set the BUZZ_RELEASE_TAGGER_CLIENT_ID repository variable and"
