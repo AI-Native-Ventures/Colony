@@ -103,8 +103,9 @@ test("add community starts with create and join choices", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Create a new community" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Continue to Builderlab" }).click();
-  await page.getByRole("button", { name: "Connect and continue" }).click();
+  // Self-serve creation on the Colony relay replaced the Builderlab hand-off,
+  // so the address field is on the create screen itself rather than two
+  // sign-in steps later.
   await expect(page.getByLabel("Community address")).toBeVisible();
 });
 
