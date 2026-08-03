@@ -14,32 +14,33 @@
 // there ships in the deploy. They are reproducible whenever a features page
 // wants them: run desktop/tests/e2e/site-feature-screenshots.spec.ts and copy
 // test-results/site-features/feature-*.png back in.
-import { AntMark } from "@/brand/AntMark";
 import { PheromoneTrail } from "@/brand/PheromoneTrail";
 import { getActiveHue, HUE_ACCENT, HUE_SCATTER_TONES } from "@/brand/hue";
 
-// The illustration slot. Each card gets a tinted tile carrying the ant mark
-// rather than a scaled-up bare SVG: a lone flat mark floating on white read
-// as a missing asset, where a tile reads as a deliberate icon. Tones step
-// down the same violet family (dark, accent, pale) so three cards vary in
-// weight without the page growing three competing hues, and the pale tile
-// flips its mark to ink to hold contrast.
-const TILES = [
-  { tile: 0, mark: "#ffffff" },
-  { tile: 1, mark: "#ffffff" },
-  { tile: 2, mark: "#171717" },
-] as const;
-
+// The illustration slot carries the starter team: the same three rendered
+// entities the desktop app introduces at onboarding (Tender, Scout, Forager,
+// from desktop/public/onboarding/starter-team). They are the first frame of
+// each animated avatar, so the character on this page is the character a new
+// owner meets on day one — and the page finally has art with depth and
+// lighting instead of the flat mark on a tinted tile that stood in for it.
+//
+// Regenerating: ffmpeg -i desktop/public/onboarding/starter-team/<name>.png \
+//   -frames:v 1 site/public/starter-team/<name>.png
+// (the source is a ~1MB animated PNG; one frame is ~30KB, and a landing page
+// does not need three megabytes of looping avatars).
 const CARDS = [
   {
+    art: "/starter-team/tender.png",
     title: "Communicate with your team",
     body: "Keep people, context, decisions, and next steps in one shared room. No more chasing threads, docs, and status updates.",
   },
   {
+    art: "/starter-team/scout.png",
     title: "Bring in your agents",
     body: "Invite specialized agents into the conversation so they compare notes, divide work, and build on your team's context.",
   },
   {
+    art: "/starter-team/forager.png",
     title: "Manage your git projects",
     body: "Turn the discussion into plans, code, reviews, and PRs without hopping between your tracker, chat app, and dev tools.",
   },
@@ -47,8 +48,8 @@ const CARDS = [
 
 export function Cards() {
   const hue = getActiveHue();
-  // Scatter tones are ordered [dark, accent, pale, white]; the first three
-  // are the tile fills, indexed by TILES[n].tile.
+  // Scatter tones are ordered [dark, accent, pale, white]; the darkest is the
+  // second trail colour, so the two arcs read as different pheromone paths.
   const tones = HUE_SCATTER_TONES[hue];
   const trailA = HUE_ACCENT[hue];
   const trailB = tones[0];
@@ -93,7 +94,7 @@ export function Cards() {
           />
         </div>
 
-        {CARDS.map((card, index) => (
+        {CARDS.map((card) => (
           <div
             key={card.title}
             // The copy sits at a fixed offset below the tile, not pushed down
@@ -111,14 +112,18 @@ export function Cards() {
             // it is just scrolling.
             className="relative flex flex-col rounded-2xl bg-white p-6 shadow-sm shadow-colony-ink/5 sm:min-h-[24rem]"
           >
-            <div
-              className="flex h-24 w-24 items-center justify-center rounded-2xl"
-              style={{
-                backgroundColor: tones[TILES[index].tile],
-                color: TILES[index].mark,
-              }}
-            >
-              <AntMark className="w-16" />
+            {/* Fixed-height slot, image contained inside it: the three renders
+                differ by a few pixels in height (185/187/188), and letting the
+                image drive the box would push each card's heading to a
+                different line. */}
+            <div className="flex h-28 items-end">
+              <img
+                src={card.art}
+                alt=""
+                width={160}
+                height={185}
+                className="h-full w-auto"
+              />
             </div>
 
             <div className="mt-10 sm:mt-32">
