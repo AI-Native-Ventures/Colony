@@ -35,6 +35,12 @@ BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
 # their own key). Wildcard DNS + the Fly wildcard cert cover every slug.
 BUZZ_SELF_PROVISION_DOMAIN = "colony.ainative.ventures"
 BUZZ_MAX_COMMUNITIES_PER_OWNER = "10"
+# Public signup: anyone can create their first community, not just existing
+# relay members. Keys are free to mint, so the per-owner cap no longer bounds
+# an abuser here; the two rate limits below are what bound cost.
+BUZZ_SELF_PROVISION_PUBLIC = "true"
+BUZZ_SELF_PROVISION_PUBLIC_IP_LIMIT = "3"
+BUZZ_SELF_PROVISION_PUBLIC_GLOBAL_LIMIT = "50"
 
 [[mounts]]
 source = "colony_relay_data"

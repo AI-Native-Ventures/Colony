@@ -44,7 +44,6 @@ export function WelcomeSetup({
   // While true, the Builderlab sign-in modal floats over the current page —
   // we only navigate to the hosted stage once sign-in completes, so the page
   // behind the modal never changes out from under the user.
-  const [isHostedSignInOpen, setIsHostedSignInOpen] = React.useState(false);
   const [copiedNpub, setCopiedNpub] = React.useState(false);
   const communityOnboarding = useCommunityOnboarding();
   const identityQuery = useIdentityQuery();
@@ -144,7 +143,7 @@ export function WelcomeSetup({
                 >
                   <button
                     data-testid="community-choice-create"
-                    onClick={() => setIsHostedSignInOpen(true)}
+                    onClick={() => showPage("owned")}
                     type="button"
                   >
                     Create a community
@@ -199,7 +198,7 @@ export function WelcomeSetup({
                 >
                   <button
                     data-testid="existing-choice-owner"
-                    onClick={() => setIsHostedSignInOpen(true)}
+                    onClick={() => showPage("owned")}
                     type="button"
                   >
                     I own the community
@@ -318,16 +317,6 @@ export function WelcomeSetup({
               </div>
             </OnboardingSlideTransition>
           )}
-          {isHostedSignInOpen && page !== "owned" ? (
-            <HostedCommunityOnboarding
-              onBack={() => setIsHostedSignInOpen(false)}
-              onReady={() => {
-                setIsHostedSignInOpen(false);
-                showPage("owned");
-              }}
-              stageHidden
-            />
-          ) : null}
         </div>
       </OnboardingFooterProvider>
     </div>

@@ -198,7 +198,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
 
   return (
     <div
-      className="min-h-full bg-background text-foreground"
+      className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background text-foreground"
       style={DISCOVERY_LIGHT_SURFACE_STYLE}
     >
       <DiscoveryWorkspace

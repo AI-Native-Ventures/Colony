@@ -1,5 +1,25 @@
 # Changelog
 
+## relay-v0.4.1
+
+Public signup for community creation
+([#39](https://github.com/AI-Native-Ventures/Colony/pull/39)).
+`BUZZ_SELF_PROVISION_PUBLIC` drops the requirement that a community creator
+already be a relay member, so a first-run user can create a community with no
+invite and no account.
+
+That gate was what made the per-owner cap meaningful: NIP-98 proves control of
+a key, not that the key cost anything, so once anyone may create, an abuser
+mints a fresh key per request. Public mode therefore adds limits keyed on
+scarcer resources — creations per client IP per hour
+(`BUZZ_SELF_PROVISION_PUBLIC_IP_LIMIT`, default 3) and deployment-wide per hour
+(`BUZZ_SELF_PROVISION_PUBLIC_GLOBAL_LIMIT`, default 50). The global limit is
+the backstop a distributed source cannot evade; the trade is that a noisy
+attacker can exhaust the hour's allowance for everyone.
+
+Cut from `develop` merged with `main`, so it contains both the 0.4.0 release
+line and public signup. Safe to deploy over 0.4.0.
+
 ## relay-v0.4.0
 
 The first image that contains every line currently on `main`. Neither

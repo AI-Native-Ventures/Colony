@@ -220,6 +220,20 @@ type E2eConfig = {
       archived_at?: string | null;
     }>;
     /** Override the community returned after hosted creation. */
+    colonyCommunities?: Array<{
+      id?: string;
+      name?: string;
+      slug?: string;
+      normalized_host?: string;
+      archived_at?: string | null;
+    }>;
+    colonyCreatedCommunity?: {
+      id?: string;
+      name?: string;
+      slug?: string;
+      normalized_host?: string;
+    };
+    colonyCreateError?: string;
     builderlabCreatedCommunity?: {
       id?: string;
       name?: string;
@@ -10542,8 +10556,11 @@ export function maybeInstallE2eTauriMocks() {
         };
       case "colony_create_community": {
         const colonyName = (payload as { name?: string })?.name ?? "community";
+        if (activeConfig?.mock?.colonyCreateError) {
+          throw new Error(activeConfig.mock.colonyCreateError);
+        }
         return {
-          community: {
+          community: activeConfig?.mock?.colonyCreatedCommunity ?? {
             id: `colony-${colonyName}`,
             name: colonyName,
             slug: colonyName,
@@ -10552,7 +10569,7 @@ export function maybeInstallE2eTauriMocks() {
         };
       }
       case "colony_list_my_communities":
-        return { communities: [] };
+        return { communities: activeConfig?.mock?.colonyCommunities ?? [] };
       case "mesh_installed_models":
         return mockMeshState.models;
       case "mesh_node_status":
