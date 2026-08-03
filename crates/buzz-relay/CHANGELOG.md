@@ -1,5 +1,40 @@
 # Changelog
 
+## relay-v0.4.0
+
+The first image that contains every line currently on `main`. Neither
+published image did.
+
+`relay-v0.3.0` was tagged at the release merge, before self-serve community
+creation landed, so its image has the cost ledger but not
+`self_provisioning.rs`. `relay-v0.2.2` was tagged from develop afterwards and
+has both self-provisioning and the ledger, and it is what is deployed. Despite
+the version ordering, 0.2.2 is newer in content than 0.3.0, so deploying 0.3.0
+would have removed self-serve community creation from a running relay.
+
+0.4.0 is cut from `main` after the promotion, so it is a strict superset of
+both and the first tag it is safe to deploy over 0.2.2.
+
+- feat(relay): self-serve community creation on the Colony relay
+  ([#35](https://github.com/AI-Native-Ventures/Colony/pull/35))
+- fix(ci): the release pipeline works in this fork. The push gateway derives
+  its image from the relay's namespace instead of Block's, provenance
+  attestation no longer fails a build whose image already published, and the
+  auto-tag lane fails loudly and actionably when the release-tagger App is
+  absent rather than tagging without a publisher.
+  ([#27](https://github.com/AI-Native-Ventures/Colony/pull/27),
+  [#31](https://github.com/AI-Native-Ventures/Colony/pull/31))
+- ci: back-merge `main` into `develop` on every push to `main`, so a fix landed
+  straight on `main` cannot be silently reverted by the next promotion.
+- test(desktop): follow the Colony brand colour and the self-serve creation
+  flow, two suites left behind by UI changes and hidden while a failing
+  upstream job gated them to skipped.
+  ([#32](https://github.com/AI-Native-Ventures/Colony/pull/32),
+  [#36](https://github.com/AI-Native-Ventures/Colony/pull/36))
+- feat(desktop): cost ledger read layer.
+  ([#23](https://github.com/AI-Native-Ventures/Colony/pull/23))
+
+
 ## relay-v0.3.0
 
 Colony cost ledger, party identity, and Discovery.
