@@ -187,6 +187,50 @@ money invisibly, which is the gap this closes. `--no-meter` remains the
 explicit opt-out. The desktop's adapter floor (`MIN_CODEX_ACP_VERSION`,
 1.1.7) already includes `providers/set`.
 
+### Reconciling against a provider's own invoice
+
+`buzz ledger reconcile` compares the ledger's metered total against what the
+provider says it billed, per provider-day. The provider side can come from a
+CSV export or be fetched directly:
+
+```bash
+BUZZ_LEDGER_ANTHROPIC_ADMIN_KEY=sk-ant-admin-... \
+buzz ledger reconcile --from-provider anthropic --since 2026-08-01T00:00:00Z
+```
+
+**It must be an Admin key**, not an ordinary API key. `sk-ant-api…` and
+project keys cannot read organisation cost and the endpoint answers 401; the
+command says so and names where to create the right one. Create it at
+console.anthropic.com → Settings → Admin keys, or platform.openai.com →
+Settings → Organization → Admin keys.
+
+The cost endpoints are used rather than the usage endpoints, deliberately.
+Usage endpoints return token counts, and pricing those with our own price
+book would put our numbers on both sides of the comparison: the check would
+pass by construction while a stale or wrong price sailed through.
+
+These are organisation-wide figures covering every key on the account. If the
+same provider account is used outside Colony, the provider side legitimately
+sits above the ledger — and that is the finding, not noise. The drift
+direction is the diagnosis, and "provider above ledger" is exactly what a key
+used outside Colony looks like.
+
+Exit code is non-zero when any provider-day disagrees beyond `--tolerance`
+(default one cent), so it works as a scheduled check.
+
+### Cross-checking agents against the meter
+
+```bash
+buzz ledger cross-check
+```
+
+Compares each agent's self-reported turn metrics (NIP-AM) against what the
+metering checkpoint observed, per agent-day. An agent reporting **more** than
+the wire saw made calls that never crossed the checkpoint, which means it is
+holding a real provider credential rather than its virtual key. Reporting
+**less** is a harness that publishes metrics partially or not at all, and the
+money is still counted correctly. Exits non-zero on any finding.
+
 ### Colony cost ledger (`e2e_cost_ledger`)
 
 Proves what only exists inside a relay process: that book heads are authored

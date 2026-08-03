@@ -17,6 +17,7 @@ pub mod pack;
 pub mod parties;
 pub mod patches;
 pub mod pr;
+pub mod provider_costs;
 pub mod reactions;
 pub mod repos;
 pub mod social;
