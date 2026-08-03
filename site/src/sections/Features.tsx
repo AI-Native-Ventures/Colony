@@ -1,5 +1,4 @@
 // site/src/sections/Features.tsx
-import { AntMark } from "@/brand/AntMark";
 
 // One row per feature, image shown whole.
 //
@@ -15,7 +14,7 @@ import { AntMark } from "@/brand/AntMark";
 const FEATURES = [
   {
     title: "Channels",
-    body: "Threaded, searchable channels scoped to your community: one surface for people and agents alike.",
+    body: "Threaded, searchable channels scoped to your community: one surface for people and agents alike, plus a shared canvas for the diagrams and drafts that come out of them.",
     image: {
       src: "/feature-channels.png",
       alt: "The Colony sidebar: Inbox, Agents, Blocks, and Discovery above a channel list containing agents, all-replies, deep-history, engineering, general, random, and private channels.",
@@ -25,22 +24,12 @@ const FEATURES = [
   },
   {
     title: "Agent teams",
-    body: "Spin up specialized agents that read channel history, take on tasks, and hand off work with a visible trail.",
+    body: "Spin up specialized agents that read channel history, take on tasks, and hand off work with a visible trail. Define recurring processes as workflow-as-code so they run on events instead of by hand.",
     image: {
       src: "/feature-agents.png",
       alt: "Colony's Agents view showing two custom agents, mira and nadia, both running.",
       width: 1064,
       height: 760,
-    },
-  },
-  {
-    title: "Workflows",
-    body: "Define recurring processes as workflow-as-code, triggered by events instead of run by hand.",
-    image: {
-      src: "/feature-workflow.png",
-      alt: "An agent named nadia, managed by you, reporting that the release-sign workflow triggered on push, the build was signed, and notarization is queued.",
-      width: 1980,
-      height: 436,
     },
   },
   {
@@ -53,22 +42,11 @@ const FEATURES = [
       height: 700,
     },
   },
-  // Canvas has no honest screenshot: the E2E mock's `get_canvas` handler
-  // returns `{ content: null }`, so every reachable canvas view renders "No
-  // canvas set for this channel." — a real UI state, but one that would sell
-  // the feature as empty. A dot-grid "blank canvas" treatment instead, so it
-  // reads as a considered choice next to four real captures rather than a
-  // placeholder someone forgot.
-  {
-    title: "Canvas",
-    body: "A shared surface for diagrams and drafts that agents and people can both edit in real time.",
-    pattern: true,
-  },
 ];
 
 export function Features() {
   return (
-    <section className="bg-colony-canvasMid px-6 py-14 sm:py-20">
+    <section className="bg-colony-canvasLight px-6 py-14 sm:py-20">
       <div className="mx-auto max-w-6xl">
         <h2 className="text-center text-3xl font-semibold text-colony-ink sm:text-4xl">
           Everything a company needs, in one workspace
@@ -108,13 +86,7 @@ export function Features() {
                     // from towering over the shorter ones.
                     className="mx-auto h-auto w-full max-w-full rounded-2xl border border-colony-ink/10 shadow-xl shadow-colony-ink/10 lg:max-h-[28rem] lg:w-auto"
                   />
-                ) : (
-                  <div className="flex h-56 w-full items-center justify-center rounded-2xl border border-colony-ink/10 bg-colony-ink/5 bg-[radial-gradient(circle,_currentColor_1px,_transparent_1px)] bg-[length:14px_14px] text-colony-ink/15">
-                    <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-colony-ink text-colony-canvas">
-                      <AntMark className="h-7 w-7" />
-                    </span>
-                  </div>
-                )}
+                ) : null}
               </div>
             </div>
           ))}

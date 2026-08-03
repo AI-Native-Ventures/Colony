@@ -2,52 +2,21 @@
 <html lang="en">
   <head>
     <script>
-      // Colony's random-hue mechanic: pick one of the five brand hues before
-      // first paint so there is never a flash of a default color. Runs
-      // synchronously as the very first thing in <head>, ahead of any
-      // stylesheet or bundled script, and sets the CSS custom properties
-      // every downstream color in the site reads. Duplicates
-      // src/brand/hue.ts's HUE_CANVAS/HUE_CANVAS_MID/HUE_CANVAS_LIGHT/
-      // HUE_ACCENT tables by hand (same hand-sync convention as
-      // AntMark.tsx/palette.ts) because this script must run before that
-      // module's bundle ever loads. Keep both in sync.
+      // Colony's brand hue, stamped before first paint so there is never a
+      // flash of a default color. This used to pick at random from five
+      // hues on every load, which made the same page pink, then amber, then
+      // green between refreshes — the site had no identity because it had
+      // five. One brand, one color: violet, matching the app icon and the
+      // product chrome. Duplicates src/brand/hue.ts's tables by hand (same
+      // convention as AntMark.tsx/palette.ts) because this runs ahead of
+      // that module's bundle. Keep both in sync.
       (function () {
-        var names = ["violet", "blue", "pink", "amber", "green"];
-        var canvas = {
-          violet: "#B394F9",
-          blue: "#72A5F8",
-          pink: "#F17EB8",
-          amber: "#F59F0A",
-          green: "#33CC99",
-        };
-        var canvasMid = {
-          violet: "#DED4F7",
-          blue: "#D4E1F7",
-          pink: "#F8DDEB",
-          amber: "#FAEBD1",
-          green: "#D9F2EA",
-        };
-        var canvasLight = {
-          violet: "#F3EFFA",
-          blue: "#EFF3FA",
-          pink: "#FBF4F7",
-          amber: "#FBF7EE",
-          green: "#F1F9F6",
-        };
-        var accent = {
-          violet: "hsl(258 90% 66%)",
-          blue: "hsl(217 91% 60%)",
-          pink: "hsl(330 81% 60%)",
-          amber: "hsl(38 92% 50%)",
-          green: "hsl(160 60% 45%)",
-        };
-        var name = names[Math.floor(Math.random() * names.length)];
         var root = document.documentElement;
-        root.dataset.hue = name;
-        root.style.setProperty("--colony-canvas", canvas[name]);
-        root.style.setProperty("--colony-canvas-mid", canvasMid[name]);
-        root.style.setProperty("--colony-canvas-light", canvasLight[name]);
-        root.style.setProperty("--colony-accent", accent[name]);
+        root.dataset.hue = "violet";
+        root.style.setProperty("--colony-canvas", "#B394F9");
+        root.style.setProperty("--colony-canvas-mid", "#DED4F7");
+        root.style.setProperty("--colony-canvas-light", "#F3EFFA");
+        root.style.setProperty("--colony-accent", "hsl(258 90% 66%)");
       })();
     </script>
     <meta charset="UTF-8" />

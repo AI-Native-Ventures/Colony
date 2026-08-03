@@ -99,8 +99,12 @@ export const HUE_SCATTER_TONES: Record<HueName, string[]> = {
  * onto <html data-hue> before this module ever evaluates. Falls back to
  * violet if the attribute is somehow missing (script blocked, non-browser
  * render, e.g. during `tsc`/build-time type checks). */
+/** Colony's single brand hue. The site previously rolled a random hue per
+ * page load, so the same page rendered pink, then amber, then green between
+ * refreshes; a brand that changes color on every visit reads as broken, not
+ * playful. Kept as a function (rather than inlining the constant at every
+ * call site) so a future themed surface can reintroduce variation
+ * deliberately, in one place. */
 export function getActiveHue(): HueName {
-  if (typeof document === "undefined") return "violet";
-  const attr = document.documentElement.dataset.hue as HueName | undefined;
-  return attr && HUE_NAMES.includes(attr) ? attr : "violet";
+  return "violet";
 }
