@@ -45,7 +45,9 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["buzz"]
+        "schemes": [
+          "buzz"
+        ]
       }
     }
   },
@@ -69,6 +71,7 @@
     "macOS": {
       "infoPlist": "Info.plist",
       "entitlements": "Entitlements.plist",
+      "signingIdentity": "-",
       "dmg": {
         "background": "icons/dmg-background.png",
         "windowSize": {
