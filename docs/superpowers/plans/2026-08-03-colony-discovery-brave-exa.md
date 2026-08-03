@@ -401,7 +401,7 @@ just ci
   commands, result counts, screenshots, and any baseline failures separately.
 - [x] Do not call real Brave or Exa yet. Obtain explicit approval and strict
   result caps before separate paid smoke calls; report that proof independently.
-- [ ] Commit final evidence with
+- [x] Commit final evidence with
   `git commit -s -m "docs(discovery): record multi-source proof"`.
 
 ## Delivery boundary

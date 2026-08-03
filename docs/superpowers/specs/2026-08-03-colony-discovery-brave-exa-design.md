@@ -451,19 +451,20 @@ provider calls disabled:
   deduplication, and credential privacy. The proof also caught and corrected a
   transactional bug where an agent cancellation stopped the run but did not
   initially stop its per-source rows.
-- Focused tests passed: 16 `buzz-core` Discovery tests, 17 `buzz-sdk` tests,
-  3 non-ignored plus 8 real-Postgres `buzz-db` Discovery tests, 6
-  `buzz-relay` tests, 1 `buzz-cli` test, and 86 native desktop Discovery tests
-  with 2 infrastructure tests intentionally ignored.
-- The 8 real-Postgres tests ran sequentially in an isolated disposable
-  database. They include migration from schema 0038 with representative legacy
-  Outscraper Campaign, run, checkpoint, observation, usage, and batch records.
-  A separate isolated empty-database migration test also passed. Both temporary
-  databases were dropped after the tests.
+- Focused suites passed across `buzz-core`, `buzz-sdk`, `buzz-db`,
+  `buzz-relay`, `buzz-cli`, and the native desktop worker. The final worker-host
+  suite passed 16 tests with its real-relay case then run separately and passed.
+- The real-Postgres tests ran sequentially in isolated disposable databases.
+  They include V2 replay of a persisted released V1 claim, the complete V1
+  checkpoint/lease/terminal lifecycle, migration from schema 0038 with
+  representative legacy Outscraper records, cross-Campaign deduplication, and
+  a separate empty-database migration. The temporary databases were dropped
+  after the tests.
 - Desktop lint and typecheck passed. The Discovery Playwright journey passed,
   and 17 captured UI states had 17 distinct SHA-256 hashes.
-- `just ci` passed in full: formatting, strict Rust lint, desktop and web
-  checks/builds, 4,089 desktop unit tests, 2,034 native desktop tests, and 915
+- `just ci` passed in full after rebasing onto `origin/develop` at
+  `e5acaff76`: formatting, strict Rust lint, desktop and web checks/builds,
+  4,089 desktop unit tests, 2,044 native desktop tests, and 915
   mobile tests passed.
 - `just test` passed every branch-relevant unit and database step, then stopped
   in the unrelated `buzz-agent` `fake_llm` suite at
