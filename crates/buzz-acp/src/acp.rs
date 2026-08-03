@@ -3606,8 +3606,12 @@ mod tests {
 
     #[tokio::test]
     async fn keepalive_resets_idle_past_deadline() {
-        // Keepalive session/update lines every 50ms against a 100ms idle deadline.
-        // The turn should survive well past the 100ms deadline (proves the fix).
+        // Keepalive session/update lines every 50ms against a 300ms idle
+        // deadline. The turn should survive well past the deadline (proves
+        // the reset). The deadline is 6× the cadence rather than 2× because
+        // a loaded machine stretches the bash sleeps: with 100ms this test
+        // failed a real pre-push run when one keepalive gap exceeded the
+        // deadline, which is scheduler jitter, not the regression it guards.
         let mut client = spawn_script(
             r#"for i in $(seq 1 20); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"keepalive"}}}'; sleep 0.05; done; sleep 10"#,
         )
@@ -3619,16 +3623,17 @@ mod tests {
             .read_until_response_with_idle_timeout(
                 "test",
                 999,
-                std::time::Duration::from_millis(100),
+                std::time::Duration::from_millis(300),
                 hard_deadline,
                 max_dur,
             )
             .await;
         let elapsed = start.elapsed();
-        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after 100ms more.
-        // Must survive well past the 100ms deadline.
+        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after
+        // 300ms more. Without the reset, idle would fire at ~300ms, so
+        // clearing 700ms is only possible when keepalives reset the clock.
         assert!(
-            elapsed >= std::time::Duration::from_millis(500),
+            elapsed >= std::time::Duration::from_millis(700),
             "keepalive should reset idle past the deadline; elapsed only {elapsed:?}"
         );
         assert!(elapsed < std::time::Duration::from_secs(5));
