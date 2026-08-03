@@ -30,13 +30,7 @@ test.beforeEach(async ({ page }) => {
   }, COMMUNITIES);
   await installMockBridge(
     page,
-    {
-      builderlabAuth: {
-        email: "owner@example.com",
-        expiresAt: "2099-01-01T00:00:00Z",
-      },
-      builderlabIdentity: { pubkey_hex: DEFAULT_MOCK_PUBKEY },
-    },
+    {},
     {
       skipCommunitySeed: true,
     },

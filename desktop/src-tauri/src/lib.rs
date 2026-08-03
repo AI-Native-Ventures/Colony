@@ -1,7 +1,6 @@
 #![recursion_limit = "256"] // Deep Tauri command futures exceed the default layout query depth.
 mod app_state;
 mod archive;
-mod builderlab;
 mod colony_provisioning;
 mod commands;
 mod company;
@@ -36,7 +35,6 @@ mod util;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
-use builderlab::*;
 use colony_provisioning::*;
 use commands::*;
 use deep_link::{
@@ -361,8 +359,6 @@ pub fn run() {
         .manage(build_app_state())
         .manage(ClipboardState::new())
         .manage(PendingCommunityDeepLinks::default())
-        .manage(BuilderlabSession::default())
-        .manage(BuilderlabLogin::default())
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -666,19 +662,6 @@ pub fn run() {
             colony_check_community_name,
             colony_create_community,
             colony_list_my_communities,
-            start_builderlab_login,
-            cancel_builderlab_login,
-            get_builderlab_auth,
-            clear_builderlab_auth,
-            get_builderlab_nostr_identity,
-            bind_builderlab_nostr_identity,
-            delete_builderlab_nostr_identity,
-            list_builderlab_communities,
-            check_builderlab_community_name,
-            create_builderlab_community,
-            archive_builderlab_community,
-            unarchive_builderlab_community,
-            transfer_builderlab_community,
             title_bar_double_click,
             get_identity,
             save_discovery_outscraper_credential,

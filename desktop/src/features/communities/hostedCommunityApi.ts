@@ -6,7 +6,7 @@ export const VALID_HOSTED_COMMUNITY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 // ── Colony self-serve provisioning ──────────────────────────────────────────
 // These talk to the active relay's own /api/communities surface (NIP-98
-// signed with the local identity) instead of Builderlab. The relay enforces
+// signed with the local identity). The relay enforces
 // membership, the per-owner limit, and name rules; commands reject with a
 // readable message on failure.
 
@@ -38,12 +38,6 @@ export function createColonyCommunity(name: string) {
 export function listColonyCommunities() {
   return invoke<ColonyCommunitiesResponse>("colony_list_my_communities");
 }
-
-export type BuilderlabAuth = {
-  email?: string;
-  name?: string;
-  expiresAt: string;
-};
 
 export type HostedCommunityApiError = {
   code?: string;
@@ -107,10 +101,6 @@ export function hostedCommunityErrorMessage(
     taken: "That Colony address is already taken.",
     limit_reached: `You've reached the limit of ${HOSTED_COMMUNITY_LIMIT} hosted communities.`,
     relay_unavailable: "Community provisioning is temporarily unavailable.",
-    identity_already_bound:
-      "This Builderlab account is connected to another Colony identity.",
-    pubkey_already_bound:
-      "This Colony identity is connected to another Builderlab account.",
     not_owner: "Only the community owner can do that.",
     transferee_not_registered:
       "That person needs a connected Colony identity before you can transfer ownership to them.",
@@ -124,77 +114,4 @@ export function hostedCommunityErrorMessage(
 export function hostedCommunityRelayUrl(community: HostedCommunity) {
   const host = community.normalized_host?.trim();
   return host ? `wss://${host.replace(/^wss?:\/\//, "")}` : null;
-}
-
-export function getBuilderlabAuth() {
-  return invoke<BuilderlabAuth | null>("get_builderlab_auth");
-}
-
-export function cancelBuilderlabLogin() {
-  return invoke<void>("cancel_builderlab_login");
-}
-
-export function clearBuilderlabAuth() {
-  return invoke<void>("clear_builderlab_auth");
-}
-
-export function startBuilderlabLogin() {
-  return invoke<BuilderlabAuth>("start_builderlab_login");
-}
-
-export async function loadHostedCommunityAccount(): Promise<HostedCommunityAccount> {
-  const [identityResponse, communitiesResponse] = await Promise.all([
-    invoke<HostedIdentityResponse>("get_builderlab_nostr_identity"),
-    invoke<HostedCommunitiesResponse>("list_builderlab_communities"),
-  ]);
-  if (
-    identityResponse.error &&
-    identityResponse.error.code !== "unauthorized" &&
-    !identityResponse.error.setup_needed
-  ) {
-    throw new Error(
-      hostedCommunityErrorMessage(
-        identityResponse.error,
-        identityResponse.correlation_id,
-        "Could not load the connected Colony identity.",
-      ),
-    );
-  }
-  if (communitiesResponse.error && !communitiesResponse.error.setup_needed) {
-    throw new Error(
-      hostedCommunityErrorMessage(
-        communitiesResponse.error,
-        communitiesResponse.correlation_id,
-        "Could not load communities.",
-      ),
-    );
-  }
-  return {
-    identity: identityResponse.identity ?? null,
-    communities: communitiesResponse.communities ?? [],
-  };
-}
-
-export function bindBuilderlabIdentity() {
-  return invoke<HostedIdentityResponse>("bind_builderlab_nostr_identity");
-}
-
-export function deleteBuilderlabIdentity() {
-  return invoke<HostedIdentityResponse>("delete_builderlab_nostr_identity");
-}
-
-export function checkHostedCommunityName(name: string) {
-  return invoke<HostedCommunityAvailabilityResponse>(
-    "check_builderlab_community_name",
-    { name },
-  );
-}
-
-export function createHostedCommunity(name: string) {
-  return invoke<HostedCommunityMutationResponse>(
-    "create_builderlab_community",
-    {
-      name,
-    },
-  );
 }
