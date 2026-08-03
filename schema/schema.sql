@@ -1439,6 +1439,8 @@ CREATE TABLE discovery_business_observations (
         normalized_name_locality_digest IS NULL
         OR octet_length(normalized_name_locality_digest) = 32
     ),
+    dedupe_digest_version SMALLINT NOT NULL DEFAULT 1
+        CHECK (dedupe_digest_version IN (0, 1)),
     observation_fingerprint BYTEA NOT NULL CHECK (octet_length(observation_fingerprint) = 32),
     first_observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, id),

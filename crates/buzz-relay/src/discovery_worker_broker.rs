@@ -8,7 +8,9 @@ use buzz_core::{
     tenant::TenantContext,
 };
 use buzz_db::discovery::DiscoveryWorkerCommandApply;
-use buzz_sdk::discovery_worker::{build_discovery_worker_receipt, parse_discovery_worker_action};
+use buzz_sdk::discovery_worker::{
+    build_discovery_worker_receipt_for_version, parse_discovery_worker_action,
+};
 use chrono::Duration;
 use nostr::Event;
 
@@ -75,6 +77,7 @@ pub(crate) async fn handle_discovery_worker_action(
     let worker_id = parsed.action.worker_id();
     let actor_pubkey = action_event.pubkey;
     let action_event_id = action_event.id;
+    let wire_version = parsed.wire_version;
     let relay_keys = state.relay_keypair.clone();
     let lease_duration = Duration::seconds(state.config.discovery.lease_seconds as i64);
     let applied = state
@@ -93,10 +96,15 @@ pub(crate) async fn handle_discovery_worker_action(
                     worker_id,
                     outcome: outcome.clone(),
                 };
-                build_discovery_worker_receipt(actor_pubkey, action_event_id, &receipt)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
-                    .sign_with_keys(&relay_keys)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
+                build_discovery_worker_receipt_for_version(
+                    wire_version,
+                    actor_pubkey,
+                    action_event_id,
+                    &receipt,
+                )
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
+                .sign_with_keys(&relay_keys)
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
             },
         )
         .await

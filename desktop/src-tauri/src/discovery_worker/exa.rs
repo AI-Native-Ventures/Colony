@@ -1,11 +1,11 @@
-use std::{fmt, time::Duration};
+use std::{fmt, future::Future, time::Duration};
 
 use buzz_core_pkg::{
     discovery::DiscoveryBusinessSearchSpec,
     discovery_worker::{DiscoveryBusinessObservationInput, DiscoveryProvider},
 };
 use futures_util::StreamExt as _;
-use reqwest::{Response, StatusCode};
+use reqwest::{header::HeaderMap, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
@@ -45,6 +45,21 @@ pub(crate) struct ExaSearchOutcome {
     pub(crate) observations: Vec<DiscoveryBusinessObservationInput>,
     pub(crate) request_id: Option<String>,
     pub(crate) request_count: u16,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExaSearchFailure {
+    pub(crate) error: ExaError,
+    pub(crate) request_count: u16,
+}
+
+impl ExaSearchFailure {
+    fn new(error: ExaError, request_count: u16) -> Self {
+        Self {
+            error,
+            request_count,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +140,19 @@ impl ExaSearchClient {
         Self::with_config(EXA_SEARCH_ENDPOINT.to_owned(), ExaPolicy::default())
     }
 
+    #[cfg(test)]
+    pub(super) fn for_local_test(endpoint: String) -> Result<Self, ExaError> {
+        Self::with_config(
+            endpoint,
+            ExaPolicy {
+                request_timeout: Duration::from_secs(2),
+                retry_backoff: Duration::from_millis(1),
+                max_retries: 2,
+                max_response_bytes: 512 * 1024,
+            },
+        )
+    }
+
     fn with_config(endpoint: String, policy: ExaPolicy) -> Result<Self, ExaError> {
         let http = reqwest::Client::builder()
             .connect_timeout(policy.request_timeout)
@@ -139,6 +167,7 @@ impl ExaSearchClient {
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn search(
         &self,
         search: &DiscoveryBusinessSearchSpec,
@@ -146,7 +175,32 @@ impl ExaSearchClient {
         remaining_target: usize,
         cancellation: &CancellationToken,
     ) -> Result<ExaSearchOutcome, ExaError> {
-        search.validate().map_err(|_| ExaError::InvalidRequest)?;
+        self.search_with_preflight(
+            search,
+            credential,
+            remaining_target,
+            || std::future::ready(true),
+            cancellation,
+        )
+        .await
+        .map_err(|failure| failure.error)
+    }
+
+    pub(crate) async fn search_with_preflight<P, PFut>(
+        &self,
+        search: &DiscoveryBusinessSearchSpec,
+        credential: &Zeroizing<String>,
+        remaining_target: usize,
+        mut before_request: P,
+        cancellation: &CancellationToken,
+    ) -> Result<ExaSearchOutcome, ExaSearchFailure>
+    where
+        P: FnMut() -> PFut,
+        PFut: Future<Output = bool>,
+    {
+        search
+            .validate()
+            .map_err(|_| ExaSearchFailure::new(ExaError::InvalidRequest, 0))?;
         let num_results = remaining_target
             .min(usize::from(search.limit))
             .min(MAX_EXA_RESULTS);
@@ -166,8 +220,11 @@ impl ExaSearchClient {
             category: "company",
             user_location: search.region.as_deref(),
         };
-        let (envelope, request_count) = self.request(&request, credential, cancellation).await?;
-        validate_request_id(&envelope.request_id)?;
+        let (envelope, request_count) = self
+            .request(&request, credential, &mut before_request, cancellation)
+            .await?;
+        validate_request_id(&envelope.request_id)
+            .map_err(|error| ExaSearchFailure::new(error, request_count))?;
         let observations = normalize_web_businesses(
             DiscoveryProvider::ExaSearch,
             envelope
@@ -187,39 +244,53 @@ impl ExaSearchClient {
         })
     }
 
-    async fn request(
+    async fn request<P, PFut>(
         &self,
         request: &ExaRequest<'_>,
         credential: &Zeroizing<String>,
+        before_request: &mut P,
         cancellation: &CancellationToken,
-    ) -> Result<(ExaEnvelope, u16), ExaError> {
+    ) -> Result<(ExaEnvelope, u16), ExaSearchFailure>
+    where
+        P: FnMut() -> PFut,
+        PFut: Future<Output = bool>,
+    {
         let mut retries = 0_usize;
         let mut request_count = 0_u16;
         loop {
             if cancellation.is_cancelled() {
-                return Err(ExaError::Cancelled);
+                return Err(ExaSearchFailure::new(ExaError::Cancelled, request_count));
+            }
+            if !before_request().await {
+                return Err(ExaSearchFailure::new(ExaError::Cancelled, request_count));
             }
             request_count = request_count.saturating_add(1);
             let response = tokio::select! {
-                () = cancellation.cancelled() => return Err(ExaError::Cancelled),
+                () = cancellation.cancelled() => return Err(ExaSearchFailure::new(ExaError::Cancelled, request_count)),
                 result = self.http
                     .post(&self.endpoint)
                     .header("Accept", "application/json")
                     .header("x-api-key", credential.as_str())
                     .json(request)
-                    .send() => result.map_err(classify_transport_error)?,
+                    .send() => result.map_err(|error| ExaSearchFailure::new(classify_transport_error(error), request_count))?,
             };
+            let retry_after = retry_after_delay(response.headers(), self.policy.request_timeout);
             match classify_status(response.status()) {
                 StatusDisposition::Parse => {
-                    let envelope = self.parse_response(response, cancellation).await?;
+                    let envelope = self
+                        .parse_response(response, cancellation)
+                        .await
+                        .map_err(|error| ExaSearchFailure::new(error, request_count))?;
                     return Ok((envelope, request_count));
                 }
                 StatusDisposition::Retry(_) if retries < self.policy.max_retries => {
                     retries += 1;
-                    self.wait_retry(retries, cancellation).await?;
+                    self.wait_retry(retries, retry_after, cancellation)
+                        .await
+                        .map_err(|error| ExaSearchFailure::new(error, request_count))?;
                 }
                 StatusDisposition::Retry(error) | StatusDisposition::Terminal(error) => {
-                    return Err(error);
+                    return Err(ExaSearchFailure::new(error, request_count));
                 }
             }
         }
@@ -248,19 +319,33 @@ impl ExaSearchClient {
     async fn wait_retry(
         &self,
         attempt: usize,
+        retry_after: Option<Duration>,
         cancellation: &CancellationToken,
     ) -> Result<(), ExaError> {
-        let multiplier = u32::try_from(attempt).unwrap_or(u32::MAX);
-        let duration = self
+        let exponent = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+        let multiplier = 2_u32.saturating_pow(exponent);
+        let backoff = self
             .policy
             .retry_backoff
             .checked_mul(multiplier)
-            .unwrap_or(self.policy.request_timeout);
+            .unwrap_or(self.policy.request_timeout)
+            .min(self.policy.request_timeout);
+        let duration = retry_after.unwrap_or_default().max(backoff);
         tokio::select! {
             () = cancellation.cancelled() => Err(ExaError::Cancelled),
             () = tokio::time::sleep(duration) => Ok(()),
         }
     }
+}
+
+fn retry_after_delay(headers: &HeaderMap, cap: Duration) -> Option<Duration> {
+    let seconds = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    (seconds > 0).then(|| Duration::from_secs(seconds).min(cap))
 }
 
 fn validate_request_id(value: &str) -> Result<(), ExaError> {
@@ -326,6 +411,7 @@ mod tests {
         Json, Router,
     };
     use serde_json::{json, Value};
+    use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
     use zeroize::Zeroizing;
 
@@ -347,6 +433,7 @@ mod tests {
         bodies: Mutex<Vec<Value>>,
         header_seen: AtomicBool,
         request_count: AtomicUsize,
+        request_started: Notify,
     }
 
     async fn handler(
@@ -363,6 +450,7 @@ mod tests {
         );
         state.bodies.lock().expect("bodies").push(body);
         let request_index = state.request_count.fetch_add(1, Ordering::SeqCst);
+        state.request_started.notify_one();
         match state.scenario {
             Scenario::Success => (
                 StatusCode::OK,
@@ -432,6 +520,7 @@ mod tests {
             bodies: Mutex::new(Vec::new()),
             header_seen: AtomicBool::new(false),
             request_count: AtomicUsize::new(0),
+            request_started: Notify::new(),
         });
         let router = Router::new()
             .route("/search", post(handler))
@@ -581,6 +670,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preflight_stops_before_a_paid_retry_and_failures_keep_exact_count() {
+        let (client, state, handle) =
+            server(Scenario::Transient(StatusCode::TOO_MANY_REQUESTS)).await;
+        let preflights = AtomicUsize::new(0);
+        let failure = client
+            .search_with_preflight(
+                &search(1),
+                &Zeroizing::new("test-key".to_owned()),
+                1,
+                || std::future::ready(preflights.fetch_add(1, Ordering::SeqCst) == 0),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect_err("paid retry must be stopped by preflight");
+        assert_eq!(failure.error, ExaError::Cancelled);
+        assert_eq!(failure.request_count, 1);
+        assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
+        handle.abort();
+
+        let (client, state, handle) = server(Scenario::Status(StatusCode::TOO_MANY_REQUESTS)).await;
+        let failure = client
+            .search_with_preflight(
+                &search(1),
+                &Zeroizing::new("test-key".to_owned()),
+                1,
+                || std::future::ready(true),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect_err("bounded retries must fail");
+        assert_eq!(failure.error, ExaError::RateLimited);
+        assert_eq!(failure.request_count, 3);
+        assert_eq!(state.request_count.load(Ordering::SeqCst), 3);
+        handle.abort();
+    }
+
+    #[tokio::test]
     async fn status_errors_are_actionable_bounded_and_sanitized() {
         for (status, expected, expected_calls) in [
             (StatusCode::UNAUTHORIZED, ExaError::CredentialRejected, 1),
@@ -647,23 +773,33 @@ mod tests {
     async fn cancellation_interrupts_an_inflight_request() {
         let (client, state, handle) = server(Scenario::Delayed).await;
         let cancellation = CancellationToken::new();
-        let cancellation_signal = cancellation.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            cancellation_signal.cancel();
-        });
-        let error = client
-            .search(
-                &search(1),
-                &Zeroizing::new("test-key".to_owned()),
-                1,
-                &cancellation,
-            )
-            .await
-            .expect_err("cancelled Exa request");
+        let search = search(1);
+        let credential = Zeroizing::new("test-key".to_owned());
+        let request = client.search(&search, &credential, 1, &cancellation);
+        let cancel_after_start = async {
+            state.request_started.notified().await;
+            cancellation.cancel();
+        };
+        let (result, ()) = tokio::join!(request, cancel_after_start);
+        let error = result.expect_err("cancelled Exa request");
         assert_eq!(error, ExaError::Cancelled);
         assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
         handle.abort();
+    }
+
+    #[test]
+    fn retry_after_is_bounded_and_rejects_invalid_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "999".parse().expect("header"));
+        assert_eq!(
+            retry_after_delay(&headers, Duration::from_millis(100)),
+            Some(Duration::from_millis(100))
+        );
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "invalid".parse().expect("header"),
+        );
+        assert_eq!(retry_after_delay(&headers, Duration::from_secs(1)), None);
     }
 
     #[test]

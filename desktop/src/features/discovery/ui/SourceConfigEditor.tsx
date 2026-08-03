@@ -279,15 +279,20 @@ export function SourceConfigEditor({
   const rowProps = (
     source: DiscoverySource,
     enabled: boolean,
-  ): SourceRowProps => ({
-    enabled,
-    entitlement,
-    hint: sourceHint(source),
-    locked: isLocked(source),
-    disabled: isLocked(source) || saving,
-    onToggle: () => handleToggle(source),
-    source,
-  });
+  ): SourceRowProps => {
+    // Missing credentials must prevent enabling a paid source, but must never
+    // trap an already-enabled source in the campaign configuration.
+    const locked = live && enabled ? false : isLocked(source);
+    return {
+      enabled,
+      entitlement,
+      hint: sourceHint(source),
+      locked,
+      disabled: locked || saving,
+      onToggle: () => handleToggle(source),
+      source,
+    };
+  };
 
   return (
     <Card className="space-y-4 border-border/60 bg-card/80 p-4 shadow-none">

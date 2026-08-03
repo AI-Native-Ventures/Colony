@@ -69,7 +69,7 @@ pub struct DiscoveryCampaignInput {
     /// Optional ISO 3166-1 alpha-2 provider country code.
     pub region: Option<String>,
     /// Sources and execution mode used by future Campaign runs.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DiscoverySourceConfig::is_default")]
     pub source_config: DiscoverySourceConfig,
 }
 
@@ -285,14 +285,14 @@ pub struct DiscoveryCampaignProjection {
     /// Optional provider country code.
     pub region: Option<String>,
     /// Sources and execution mode used by future Campaign runs.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DiscoverySourceConfig::is_default")]
     pub source_config: DiscoverySourceConfig,
     /// Count of unique Leads first retained by this campaign.
     pub lead_count: u32,
     /// Latest run, when the campaign has been executed.
     pub latest_run: Option<DiscoveryRunProjection>,
     /// Durable source rows for the latest run, in the snapshotted execution order.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub latest_run_sources: Vec<DiscoveryRunSourceProjection>,
     /// Creation time.
     pub created_at: DateTime<Utc>,
@@ -313,6 +313,10 @@ pub struct DiscoveryBusinessLeadProjection {
     /// Taxonomy vertical inherited from the first campaign.
     pub vertical_id: String,
     /// Provider that first retained this unique business.
+    #[serde(
+        default = "default_outscraper_provider",
+        skip_serializing_if = "is_outscraper_provider"
+    )]
     pub provider: DiscoveryProvider,
     /// Business name.
     pub name: String,
@@ -410,6 +414,14 @@ pub struct DiscoveryWorkspaceReceipt {
     pub idempotency_key: Uuid,
     /// Strict operation result.
     pub result: DiscoveryWorkspaceResult,
+}
+
+fn default_outscraper_provider() -> DiscoveryProvider {
+    DiscoveryProvider::Outscraper
+}
+
+fn is_outscraper_provider(provider: &DiscoveryProvider) -> bool {
+    *provider == DiscoveryProvider::Outscraper
 }
 
 fn validate_page(offset: u32, limit: u16) -> Result<(), DiscoveryWorkspaceValidationError> {

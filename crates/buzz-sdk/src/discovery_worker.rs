@@ -21,15 +21,51 @@ use crate::discovery::{
     DiscoverySdkError,
 };
 
-const ACTION_SCHEMA: &str = "colony.discovery-worker-action/v1";
-const RECEIPT_SCHEMA: &str = "colony.discovery-worker-receipt/v1";
+const ACTION_SCHEMA_V1: &str = "colony.discovery-worker-action/v1";
+const ACTION_SCHEMA_V2: &str = "colony.discovery-worker-action/v2";
+const RECEIPT_SCHEMA_V1: &str = "colony.discovery-worker-receipt/v1";
+const RECEIPT_SCHEMA_V2: &str = "colony.discovery-worker-receipt/v2";
 const MAX_PROVIDER_REQUEST_ID_LEN: usize = 128;
+
+/// Version of the strict Discovery worker wire envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryWorkerWireVersion {
+    /// Released Outscraper-only contract.
+    V1,
+    /// Capability-aware multi-source contract.
+    V2,
+}
+
+impl DiscoveryWorkerWireVersion {
+    const fn tag(self) -> &'static str {
+        match self {
+            Self::V1 => "1",
+            Self::V2 => "2",
+        }
+    }
+
+    const fn action_schema(self) -> &'static str {
+        match self {
+            Self::V1 => ACTION_SCHEMA_V1,
+            Self::V2 => ACTION_SCHEMA_V2,
+        }
+    }
+
+    const fn receipt_schema(self) -> &'static str {
+        match self {
+            Self::V1 => RECEIPT_SCHEMA_V1,
+            Self::V2 => RECEIPT_SCHEMA_V2,
+        }
+    }
+}
 
 /// Strict worker action together with the relay named by its `p` tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedDiscoveryWorkerAction {
     /// Relay public key addressed by the worker.
     pub relay_pubkey: PublicKey,
+    /// Exact signed wire version, used to reply compatibly during upgrades.
+    pub wire_version: DiscoveryWorkerWireVersion,
     /// Validated operation-specific payload.
     pub action: DiscoveryWorkerAction,
 }
@@ -39,6 +75,8 @@ pub struct ParsedDiscoveryWorkerAction {
 pub struct ParsedDiscoveryWorkerReceipt {
     /// Exact receipt event ID.
     pub event_id: EventId,
+    /// Exact relay-authored wire version.
+    pub wire_version: DiscoveryWorkerWireVersion,
     /// Worker actor named by the receipt's `p` tag.
     pub actor_pubkey: PublicKey,
     /// Exact worker action processed by the relay.
@@ -55,7 +93,9 @@ struct DiscoveryWorkerActionContent {
     request_id: Uuid,
     idempotency_key: Uuid,
     worker_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
     available_providers: Option<Vec<DiscoveryProvider>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<DiscoveryProvider>,
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
@@ -99,6 +139,7 @@ pub fn build_discovery_worker_claim_action(
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker claim"))?;
     build_action(
         relay_pubkey,
+        DiscoveryWorkerWireVersion::V2,
         DiscoveryWorkerOperation::Claim,
         request.request_id,
         request.idempotency_key,
@@ -132,6 +173,7 @@ pub fn build_discovery_worker_checkpoint_action(
     validate_checkpoint(&request.checkpoint)?;
     build_action(
         relay_pubkey,
+        DiscoveryWorkerWireVersion::V2,
         DiscoveryWorkerOperation::Checkpoint,
         request.lease.request_id,
         request.lease.idempotency_key,
@@ -158,6 +200,7 @@ pub fn build_discovery_worker_store_observations_action(
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery observation batch"))?;
     build_action(
         relay_pubkey,
+        DiscoveryWorkerWireVersion::V2,
         DiscoveryWorkerOperation::StoreObservations,
         request.lease.request_id,
         request.lease.idempotency_key,
@@ -184,6 +227,7 @@ pub fn build_discovery_worker_source_progress_action(
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery source progress"))?;
     build_action(
         relay_pubkey,
+        DiscoveryWorkerWireVersion::V2,
         DiscoveryWorkerOperation::SourceProgress,
         request.lease.request_id,
         request.lease.idempotency_key,
@@ -231,6 +275,7 @@ fn build_lease_action(
     validate_lease_request(request)?;
     build_action(
         relay_pubkey,
+        DiscoveryWorkerWireVersion::V2,
         operation,
         request.request_id,
         request.idempotency_key,
@@ -250,6 +295,7 @@ fn build_lease_action(
 #[allow(clippy::too_many_arguments)]
 fn build_action(
     relay_pubkey: PublicKey,
+    wire_version: DiscoveryWorkerWireVersion,
     operation: DiscoveryWorkerOperation,
     request_id: Uuid,
     idempotency_key: Uuid,
@@ -270,7 +316,7 @@ fn build_action(
     let idempotency_text = idempotency_key.to_string();
     let operation_text = operation_tag(operation);
     let content = DiscoveryWorkerActionContent {
-        schema: ACTION_SCHEMA.to_owned(),
+        schema: wire_version.action_schema().to_owned(),
         operation,
         request_id,
         idempotency_key,
@@ -295,7 +341,7 @@ fn build_action(
     }
     tags.push(tuple_tag(&[
         "discovery-worker-action",
-        "1",
+        wire_version.tag(),
         operation_text,
         &request_text,
         &idempotency_text,
@@ -313,9 +359,7 @@ pub fn parse_discovery_worker_action(
 ) -> Result<ParsedDiscoveryWorkerAction, DiscoverySdkError> {
     require_kind(event, KIND_DISCOVERY_WORKER_ACTION)?;
     let tuple = required_tuple_tag(event, "discovery-worker-action", 5)?;
-    if tuple[1] != "1" {
-        return Err(DiscoverySdkError::InvalidTag("discovery-worker-action"));
-    }
+    let wire_version = parse_wire_version(&tuple[1], "discovery-worker-action")?;
     let operation = parse_operation(&tuple[2])?;
     let required = if operation == DiscoveryWorkerOperation::Claim {
         ["p", "worker", "discovery-worker-action"].as_slice()
@@ -332,13 +376,19 @@ pub fn parse_discovery_worker_action(
     )?;
     let content: DiscoveryWorkerActionContent =
         parse_canonical_content(&event.content, "discovery worker action")?;
-    if content.schema != ACTION_SCHEMA
+    if content.schema != wire_version.action_schema()
         || content.operation != operation
         || content.request_id != request_id
         || content.idempotency_key != idempotency_key
         || content.worker_id != worker_id
     {
         return Err(DiscoverySdkError::TagContentMismatch(
+            "discovery worker action",
+        ));
+    }
+    if wire_version == DiscoveryWorkerWireVersion::V1 && !is_v1_action_content(&content, operation)
+    {
+        return Err(DiscoverySdkError::InvalidEnvelope(
             "discovery worker action",
         ));
     }
@@ -461,6 +511,7 @@ pub fn parse_discovery_worker_action(
     };
     Ok(ParsedDiscoveryWorkerAction {
         relay_pubkey,
+        wire_version,
         action,
     })
 }
@@ -471,6 +522,26 @@ fn content_has_no_observations(content: &DiscoveryWorkerActionContent) -> bool {
         && content.provider_request_id.is_none()
         && content.batch_index.is_none()
         && content.observations.is_none()
+}
+
+fn is_v1_action_content(
+    content: &DiscoveryWorkerActionContent,
+    operation: DiscoveryWorkerOperation,
+) -> bool {
+    operation != DiscoveryWorkerOperation::SourceProgress
+        && content.available_providers.is_none()
+        && content.provider.is_none()
+        && content.source_progress.is_none()
+        && content
+            .checkpoint
+            .as_ref()
+            .is_none_or(|checkpoint| checkpoint.provider == DiscoveryProvider::Outscraper)
+        && content.observations.as_ref().is_none_or(|observations| {
+            observations.iter().all(|observation| {
+                observation.provider == DiscoveryProvider::Outscraper
+                    && observation.description.is_none()
+            })
+        })
 }
 
 fn parse_lease_content(
@@ -505,15 +576,37 @@ pub fn build_discovery_worker_receipt(
     action_event_id: EventId,
     receipt: &DiscoveryWorkerReceipt,
 ) -> Result<EventBuilder, DiscoverySdkError> {
+    build_discovery_worker_receipt_for_version(
+        DiscoveryWorkerWireVersion::V2,
+        actor_pubkey,
+        action_event_id,
+        receipt,
+    )
+}
+
+/// Build a relay receipt matching the exact action wire version.
+pub fn build_discovery_worker_receipt_for_version(
+    wire_version: DiscoveryWorkerWireVersion,
+    actor_pubkey: PublicKey,
+    action_event_id: EventId,
+    receipt: &DiscoveryWorkerReceipt,
+) -> Result<EventBuilder, DiscoverySdkError> {
     validate_receipt(receipt)?;
+    if wire_version == DiscoveryWorkerWireVersion::V1
+        && receipt.operation == DiscoveryWorkerOperation::SourceProgress
+    {
+        return Err(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ));
+    }
     let actor_text = actor_pubkey.to_hex();
     let action_text = action_event_id.to_hex();
     let worker_text = receipt.worker_id.to_string();
     let request_text = receipt.request_id.to_string();
     let idempotency_text = receipt.idempotency_key.to_string();
     let content = DiscoveryWorkerReceiptContent {
-        schema: RECEIPT_SCHEMA.to_owned(),
-        receipt: receipt.clone(),
+        schema: wire_version.receipt_schema().to_owned(),
+        receipt: receipt_for_wire_version(wire_version, receipt),
     };
     let tags = [
         scalar_tag("p", &actor_text)?,
@@ -521,7 +614,7 @@ pub fn build_discovery_worker_receipt(
         scalar_tag("worker", &worker_text)?,
         tuple_tag(&[
             "discovery-worker-receipt",
-            "1",
+            wire_version.tag(),
             operation_tag(receipt.operation),
             &request_text,
             &idempotency_text,
@@ -557,9 +650,7 @@ pub fn parse_discovery_worker_receipt(
         "discovery worker receipt",
     )?;
     let tuple = required_tuple_tag(event, "discovery-worker-receipt", 6)?;
-    if tuple[1] != "1" {
-        return Err(DiscoverySdkError::InvalidTag("discovery-worker-receipt"));
-    }
+    let wire_version = parse_wire_version(&tuple[1], "discovery-worker-receipt")?;
     let operation = parse_operation(&tuple[2])?;
     let request_id = parse_uuid(&tuple[3], "discovery worker receipt")?;
     let idempotency_key = parse_uuid(&tuple[4], "discovery worker receipt")?;
@@ -570,7 +661,7 @@ pub fn parse_discovery_worker_receipt(
     }
     let content: DiscoveryWorkerReceiptContent =
         parse_canonical_content(&event.content, "discovery worker receipt")?;
-    if content.schema != RECEIPT_SCHEMA
+    if content.schema != wire_version.receipt_schema()
         || content.receipt.operation != operation
         || content.receipt.request_id != request_id
         || content.receipt.idempotency_key != idempotency_key
@@ -583,10 +674,49 @@ pub fn parse_discovery_worker_receipt(
     validate_receipt(&content.receipt)?;
     Ok(ParsedDiscoveryWorkerReceipt {
         event_id: event.id,
+        wire_version,
         actor_pubkey,
         action_event_id,
         receipt: content.receipt,
     })
+}
+
+fn receipt_for_wire_version(
+    wire_version: DiscoveryWorkerWireVersion,
+    receipt: &DiscoveryWorkerReceipt,
+) -> DiscoveryWorkerReceipt {
+    let mut compatible = receipt.clone();
+    if wire_version == DiscoveryWorkerWireVersion::V1 {
+        match &mut compatible.outcome {
+            DiscoveryWorkerReceiptOutcome::Lease(lease) => make_lease_v1_compatible(lease),
+            DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
+                make_lease_v1_compatible(&mut stored.lease);
+            }
+            DiscoveryWorkerReceiptOutcome::Idle
+            | DiscoveryWorkerReceiptOutcome::LostLease(_)
+            | DiscoveryWorkerReceiptOutcome::Completed(_)
+            | DiscoveryWorkerReceiptOutcome::Failed(_) => {}
+        }
+    }
+    compatible
+}
+
+fn make_lease_v1_compatible(
+    lease: &mut buzz_core::discovery_worker::DiscoveryWorkerLeaseProjection,
+) {
+    lease.source_config = buzz_core::discovery::DiscoverySourceConfig::default();
+    lease.source_states.clear();
+}
+
+fn parse_wire_version(
+    value: &str,
+    tag: &'static str,
+) -> Result<DiscoveryWorkerWireVersion, DiscoverySdkError> {
+    match value {
+        "1" => Ok(DiscoveryWorkerWireVersion::V1),
+        "2" => Ok(DiscoveryWorkerWireVersion::V2),
+        _ => Err(DiscoverySdkError::InvalidTag(tag)),
+    }
 }
 
 fn validate_lease_request(request: &DiscoveryWorkerLeaseRequest) -> Result<(), DiscoverySdkError> {
@@ -1054,6 +1184,7 @@ mod tests {
         let actor = Keys::generate();
         let event = build_action(
             relay.public_key(),
+            DiscoveryWorkerWireVersion::V1,
             DiscoveryWorkerOperation::Claim,
             Uuid::from_u128(10),
             Uuid::from_u128(11),
@@ -1072,6 +1203,7 @@ mod tests {
         .sign_with_keys(&actor)
         .expect("signed legacy claim");
         let parsed = parse_discovery_worker_action(&event).expect("parse legacy claim");
+        assert_eq!(parsed.wire_version, DiscoveryWorkerWireVersion::V1);
         let DiscoveryWorkerAction::Claim(claim) = parsed.action else {
             panic!("legacy claim action");
         };
@@ -1118,6 +1250,26 @@ mod tests {
         assert!(!event
             .as_json()
             .contains("outscraper-secret-never-serialized"));
+
+        let legacy = build_discovery_worker_receipt_for_version(
+            DiscoveryWorkerWireVersion::V1,
+            actor.public_key(),
+            action.id,
+            &receipt,
+        )
+        .unwrap()
+        .sign_with_keys(&relay)
+        .unwrap();
+        assert!(!legacy.content.contains("source_config"));
+        assert!(!legacy.content.contains("source_states"));
+        let parsed_legacy = parse_discovery_worker_receipt(&legacy).unwrap();
+        assert_eq!(parsed_legacy.wire_version, DiscoveryWorkerWireVersion::V1);
+        let DiscoveryWorkerReceiptOutcome::Lease(legacy_lease) = parsed_legacy.receipt.outcome
+        else {
+            panic!("legacy lease receipt");
+        };
+        assert_eq!(legacy_lease.source_config, DiscoverySourceConfig::default());
+        assert!(legacy_lease.source_states.is_empty());
     }
 
     #[test]

@@ -95,6 +95,11 @@ impl DiscoverySourceConfig {
             .map(DiscoverySource::provider)
             .collect()
     }
+
+    /// Whether this is the released Outscraper-only configuration.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 impl Default for DiscoverySourceConfig {
@@ -120,9 +125,9 @@ pub enum DiscoverySearchSpecError {
 pub struct DiscoveryBusinessSearchSpec {
     /// Business category or search phrase.
     pub query: String,
-    /// Human-readable geography included in the Google Maps query.
+    /// Human-readable geography included in each configured provider query.
     pub location: String,
-    /// Maximum organizations requested from Outscraper.
+    /// Maximum net-new organizations requested for the run.
     pub limit: u16,
     /// Lowercase ISO 639-1 language code.
     pub language: String,
@@ -131,7 +136,7 @@ pub struct DiscoveryBusinessSearchSpec {
 }
 
 impl DiscoveryBusinessSearchSpec {
-    /// Validate the strict, bounded shape accepted by Colony's live source.
+    /// Validate the strict, bounded shape accepted by Colony's live sources.
     pub fn validate(&self) -> Result<(), DiscoverySearchSpecError> {
         validate_search_text(&self.query, "query")?;
         validate_search_text(&self.location, "location")?;
@@ -151,7 +156,7 @@ impl DiscoveryBusinessSearchSpec {
         Ok(())
     }
 
-    /// Render the only provider query form allowed by the production worker.
+    /// Render the shared category-and-location query sent to configured providers.
     pub fn provider_query(&self) -> String {
         format!("{}, {}", self.query, self.location)
     }

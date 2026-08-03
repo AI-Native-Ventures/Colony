@@ -373,14 +373,16 @@ const BRAVE_SEARCH_ENDPOINT: &str =
 ## Task 12: Run the production acceptance gate
 
 **Files:**
+- Modify: `crates/buzz-db/src/migration.rs` to add the populated 0038 upgrade
+  regression.
 - Modify: `docs/superpowers/specs/2026-08-03-colony-discovery-brave-exa-design.md`
   only to append measured evidence without changing approved behavior.
 
-- [ ] Scan tracked changes and test artifacts for secret fixtures; require zero
+- [x] Scan tracked changes and test artifacts for secret fixtures; require zero
   occurrences outside the test declarations that construct them.
-- [ ] Run migration tests from an empty database and from a schema at migration
+- [x] Run migration tests from an empty database and from a schema at migration
   0038 with representative legacy Outscraper Campaign/run/Lead rows.
-- [ ] Run:
+- [x] Run:
 
 ```bash
 . ./bin/activate-hermit
@@ -395,9 +397,9 @@ cd .. && just test
 just ci
 ```
 
-- [ ] Run `git diff --check`, confirm no other worktree changed, and record exact
+- [x] Run `git diff --check`, confirm no other worktree changed, and record exact
   commands, result counts, screenshots, and any baseline failures separately.
-- [ ] Do not call real Brave or Exa yet. Obtain explicit approval and strict
+- [x] Do not call real Brave or Exa yet. Obtain explicit approval and strict
   result caps before separate paid smoke calls; report that proof independently.
 - [ ] Commit final evidence with
   `git commit -s -m "docs(discovery): record multi-source proof"`.

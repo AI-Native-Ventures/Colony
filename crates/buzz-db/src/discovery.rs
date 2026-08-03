@@ -1047,6 +1047,11 @@ async fn apply_worker_action_tx(
                      SELECT id FROM discovery_runs \
                      WHERE community_id=$1 AND state IN ('queued','running') \
                        AND (claim_id IS NULL OR lease_until < now()) \
+                       AND (requested_by=$5 OR EXISTS ( \
+                           SELECT 1 FROM users requester \
+                           WHERE requester.community_id=$1 \
+                             AND requester.pubkey=discovery_runs.requested_by \
+                             AND requester.agent_owner_pubkey=$5)) \
                        AND EXISTS (SELECT 1 FROM discovery_run_business_searches s \
                                    WHERE s.community_id=$1 AND s.run_id=discovery_runs.id) \
                        AND EXISTS (SELECT 1 FROM discovery_run_sources rs \
@@ -1607,6 +1612,9 @@ async fn apply_worker_action_tx(
             .await?;
             Ok(match row {
                 Some(row) => {
+                    if is_v1_worker_action(action_event) {
+                        finalize_v1_source_tx(tx, community_id, request.run_id, false).await?;
+                    }
                     DiscoveryWorkerReceiptOutcome::Failed(run_from_row(&row)?.projection())
                 }
                 None => DiscoveryWorkerReceiptOutcome::LostLease(current.projection()),
@@ -1639,12 +1647,61 @@ async fn apply_worker_action_tx(
             .await?;
             Ok(match row {
                 Some(row) => {
+                    if is_v1_worker_action(action_event) {
+                        finalize_v1_source_tx(tx, community_id, request.run_id, true).await?;
+                    }
                     DiscoveryWorkerReceiptOutcome::Completed(run_from_row(&row)?.projection())
                 }
                 None => DiscoveryWorkerReceiptOutcome::LostLease(current.projection()),
             })
         }
     }
+}
+
+fn is_v1_worker_action(event: &Event) -> bool {
+    event.tags.iter().any(|tag| {
+        let parts = tag.as_slice();
+        parts
+            .first()
+            .is_some_and(|value| value == "discovery-worker-action")
+            && parts.get(1).is_some_and(|value| value == "1")
+    })
+}
+
+async fn finalize_v1_source_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+    succeeded: bool,
+) -> Result<()> {
+    let status = if succeeded { "completed" } else { "failed" };
+    let updated = sqlx::query(
+        "UPDATE discovery_run_sources SET \
+             returned_count=COALESCE(( \
+                 SELECT returned_count FROM discovery_usage \
+                 WHERE community_id=$1 AND run_id=$2 AND provider='outscraper' \
+             ),returned_count), \
+             status=CASE WHEN $4 AND COALESCE(( \
+                 SELECT returned_count FROM discovery_usage \
+                 WHERE community_id=$1 AND run_id=$2 AND provider='outscraper' \
+             ),returned_count)=0 THEN 'exhausted' ELSE $3 END, \
+             failure_class=NULL, started_at=COALESCE(started_at,now()), \
+             finished_at=now(), updated_at=now() \
+         WHERE community_id=$1 AND run_id=$2 AND provider='outscraper' \
+           AND status IN ('pending','active')",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .bind(status)
+    .bind(succeeded)
+    .execute(&mut **tx)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(DbError::InvalidData(
+            "legacy Discovery run did not have one active Outscraper source".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn worker_lease_matches(
@@ -2102,7 +2159,11 @@ fn observation_fingerprint(observation: &DiscoveryBusinessObservationInput) -> R
         ))
     })?;
     let mut hasher = Sha256::new();
-    hasher.update(b"colony.discovery-business-observation/v1\0");
+    if is_legacy_observation(observation) {
+        hasher.update(b"colony.discovery-business-observation/v1\0");
+    } else {
+        hasher.update(b"colony.discovery-business-observation/v2\0");
+    }
     hasher.update(encoded);
     Ok(hasher.finalize().into())
 }
@@ -2111,7 +2172,11 @@ fn observation_batch_fingerprint(
     observations: &[DiscoveryBusinessObservationInput],
 ) -> Result<[u8; 32]> {
     let mut hasher = Sha256::new();
-    hasher.update(b"colony.discovery-observation-batch/v1\0");
+    if observations.iter().all(is_legacy_observation) {
+        hasher.update(b"colony.discovery-observation-batch/v1\0");
+    } else {
+        hasher.update(b"colony.discovery-observation-batch/v2\0");
+    }
     for observation in observations {
         hasher.update(observation_fingerprint(observation)?);
     }
@@ -2120,15 +2185,37 @@ fn observation_batch_fingerprint(
 
 fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]> {
     let mut hasher = Sha256::new();
-    hasher.update(b"colony.discovery-worker-command/v1\0");
+    let legacy_compatible = match action {
+        DiscoveryWorkerAction::Claim(request) => {
+            request.available_providers == [DiscoveryProvider::Outscraper]
+        }
+        DiscoveryWorkerAction::Heartbeat(_)
+        | DiscoveryWorkerAction::Fail(_)
+        | DiscoveryWorkerAction::Complete(_) => true,
+        DiscoveryWorkerAction::Checkpoint(request) => {
+            request.checkpoint.provider == DiscoveryProvider::Outscraper
+        }
+        DiscoveryWorkerAction::SourceProgress(_) => false,
+        DiscoveryWorkerAction::StoreObservations(request) => {
+            request.provider == DiscoveryProvider::Outscraper
+                && request.observations.iter().all(is_legacy_observation)
+        }
+    };
+    if legacy_compatible {
+        hasher.update(b"colony.discovery-worker-command/v1\0");
+    } else {
+        hasher.update(b"colony.discovery-worker-command/v2\0");
+    }
     hasher.update(worker_operation_text(action.operation()).as_bytes());
     hasher.update([0]);
     hasher.update(action.worker_id().as_bytes());
     match action {
         DiscoveryWorkerAction::Claim(request) => {
-            for provider in &request.available_providers {
-                hasher.update(provider_text(*provider).as_bytes());
-                hasher.update([0]);
+            if !legacy_compatible {
+                for provider in &request.available_providers {
+                    hasher.update(provider_text(*provider).as_bytes());
+                    hasher.update([0]);
+                }
             }
         }
         DiscoveryWorkerAction::Heartbeat(request)
@@ -2162,8 +2249,10 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]>
         DiscoveryWorkerAction::StoreObservations(request) => {
             hasher.update(request.lease.run_id.as_bytes());
             hasher.update(request.lease.lease_id.as_bytes());
-            hasher.update(provider_text(request.provider).as_bytes());
-            hasher.update([0]);
+            if !legacy_compatible {
+                hasher.update(provider_text(request.provider).as_bytes());
+                hasher.update([0]);
+            }
             hasher.update(request.provider_request_id.as_bytes());
             hasher.update([0]);
             hasher.update(request.batch_index.to_be_bytes());
@@ -2173,6 +2262,10 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]>
         }
     }
     Ok(hasher.finalize().into())
+}
+
+fn is_legacy_observation(observation: &DiscoveryBusinessObservationInput) -> bool {
+    observation.provider == DiscoveryProvider::Outscraper && observation.description.is_none()
 }
 
 fn checkpoint_fingerprint(checkpoint: &DiscoveryWorkerCheckpoint) -> [u8; 32] {
@@ -2578,7 +2671,7 @@ mod tests {
     use buzz_sdk::discovery_workspace::{
         build_discovery_workspace_action, build_discovery_workspace_receipt,
     };
-    use nostr::Keys;
+    use nostr::{EventBuilder, Keys, Tag};
     use uuid::Uuid;
 
     static DISCOVERY_DB_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -2628,6 +2721,35 @@ mod tests {
             name,
             "https://example.test",
         )
+    }
+
+    #[test]
+    fn released_outscraper_worker_fingerprints_survive_the_multi_source_upgrade() {
+        let claim = DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            worker_id: Uuid::new_v4(),
+            available_providers: vec![DiscoveryProvider::Outscraper],
+        });
+        let actual = worker_action_fingerprint(&claim).expect("fingerprint claim");
+        let mut expected = Sha256::new();
+        expected.update(b"colony.discovery-worker-command/v1\0");
+        expected.update(b"claim");
+        expected.update([0]);
+        expected.update(claim.worker_id().as_bytes());
+        assert_eq!(actual, <[u8; 32]>::from(expected.finalize()));
+
+        let observation = business_observation("Legacy Dental");
+        let encoded = serde_json::to_vec(&observation).expect("encode released observation");
+        assert!(!String::from_utf8_lossy(&encoded).contains("\"provider\""));
+        assert!(!String::from_utf8_lossy(&encoded).contains("\"description\""));
+        let mut expected = Sha256::new();
+        expected.update(b"colony.discovery-business-observation/v1\0");
+        expected.update(encoded);
+        assert_eq!(
+            observation_fingerprint(&observation).expect("fingerprint observation"),
+            <[u8; 32]>::from(expected.finalize())
+        );
     }
 
     fn business_observation_for(
@@ -2985,6 +3107,67 @@ mod tests {
         let event = builder
             .sign_with_keys(actor)
             .map_err(|error| DbError::InvalidData(error.to_string()))?;
+        apply_worker_action_event(db, community, actor, relay, action, event, lease_duration).await
+    }
+
+    async fn apply_v1_worker_action(
+        db: &Db,
+        community: CommunityId,
+        actor: &Keys,
+        relay: &Keys,
+        action: DiscoveryWorkerAction,
+        lease_duration: Duration,
+    ) -> Result<DiscoveryWorkerCommandApply> {
+        let builder = match &action {
+            DiscoveryWorkerAction::Fail(request) => {
+                build_discovery_worker_fail_action(relay.public_key(), request)
+            }
+            DiscoveryWorkerAction::Complete(request) => {
+                build_discovery_worker_complete_action(relay.public_key(), request)
+            }
+            _ => {
+                return Err(DbError::InvalidData(
+                    "test v1 helper only supports terminal worker actions".into(),
+                ))
+            }
+        }
+        .map_err(|error| DbError::InvalidData(error.to_string()))?
+        .sign_with_keys(actor)
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+        let tags = builder
+            .tags
+            .iter()
+            .map(|tag| {
+                let mut parts = tag.as_slice().to_vec();
+                if parts
+                    .first()
+                    .is_some_and(|value| value == "discovery-worker-action")
+                {
+                    parts[1] = "1".to_owned();
+                }
+                Tag::parse(parts).map_err(|error| DbError::InvalidData(error.to_string()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let content = builder.content.replace(
+            "colony.discovery-worker-action/v2",
+            "colony.discovery-worker-action/v1",
+        );
+        let event = EventBuilder::new(builder.kind, content)
+            .tags(tags)
+            .sign_with_keys(actor)
+            .map_err(|error| DbError::InvalidData(error.to_string()))?;
+        apply_worker_action_event(db, community, actor, relay, action, event, lease_duration).await
+    }
+
+    async fn apply_worker_action_event(
+        db: &Db,
+        community: CommunityId,
+        actor: &Keys,
+        relay: &Keys,
+        action: DiscoveryWorkerAction,
+        event: Event,
+        lease_duration: Duration,
+    ) -> Result<DiscoveryWorkerCommandApply> {
         let operation = action.operation();
         let request_id = action.request_id();
         let idempotency_key = action.idempotency_key();
@@ -3071,14 +3254,89 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
+    async fn v2_worker_replay_matches_a_persisted_released_v1_claim() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker identity");
+
+        let request = DiscoveryWorkerClaimRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            worker_id: Uuid::new_v4(),
+            available_providers: vec![DiscoveryProvider::Outscraper],
+        };
+        let mut legacy_fingerprint = Sha256::new();
+        legacy_fingerprint.update(b"colony.discovery-worker-command/v1\0");
+        legacy_fingerprint.update(b"claim");
+        legacy_fingerprint.update([0]);
+        legacy_fingerprint.update(request.worker_id.as_bytes());
+        let original_action_event_id = vec![41_u8; 32];
+        let original_receipt_event_id = vec![42_u8; 32];
+        sqlx::query(
+            "INSERT INTO discovery_worker_action_claims \
+             (community_id,idempotency_key,operation,request_fingerprint,action_event_id,receipt_event_id) \
+             VALUES ($1,$2,'claim',$3,$4,$5)",
+        )
+        .bind(community.as_uuid())
+        .bind(request.idempotency_key)
+        .bind(<[u8; 32]>::from(legacy_fingerprint.finalize()).as_slice())
+        .bind(&original_action_event_id)
+        .bind(&original_receipt_event_id)
+        .execute(&db.pool)
+        .await
+        .expect("seed released v1 claim");
+
+        let relay = Keys::generate();
+        let event = build_discovery_worker_claim_action(relay.public_key(), &request)
+            .expect("build v2 claim")
+            .sign_with_keys(&actor)
+            .expect("sign v2 claim");
+        let replay = db
+            .apply_discovery_worker_command_once(
+                community,
+                &actor.public_key().to_bytes(),
+                &DiscoveryWorkerAction::Claim(request),
+                &event,
+                Duration::seconds(30),
+                |_| panic!("duplicate claim must not build another receipt"),
+            )
+            .await
+            .expect("match released claim fingerprint");
+        assert!(matches!(
+            replay,
+            DiscoveryWorkerCommandApply::Duplicate {
+                original_action_event_id: action,
+                receipt_event_id: receipt,
+            } if action == original_action_event_id && receipt == original_receipt_event_id
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn worker_claim_requires_every_provider_in_the_run_snapshot() {
         let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
-        let (db, community, human, _) = database_fixture().await;
+        let (db, community, _, _) = database_fixture().await;
         db.set_discovery_entitlement(community, true)
             .await
             .expect("entitle workspace");
         let actor = Keys::generate();
         let relay = Keys::generate();
+        let actor_bytes = actor.public_key().to_bytes();
         sqlx::query(
             "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'member')",
         )
@@ -3096,7 +3354,7 @@ mod tests {
 
         let search = business_search();
         let campaign_id = Uuid::new_v4();
-        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        insert_test_campaign(&db, community, &actor_bytes, campaign_id, &search).await;
         sqlx::query(
             "UPDATE discovery_campaigns \
              SET source_mode='concurrent',source_keys=ARRAY['brave_search','exa_search']::TEXT[] \
@@ -3108,7 +3366,14 @@ mod tests {
         .await
         .expect("configure multi-source Campaign");
         let run_id = match db
-            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 1, &search)
+            .create_discovery_run_once(
+                community,
+                &actor_bytes,
+                campaign_id,
+                Uuid::new_v4(),
+                1,
+                &search,
+            )
             .await
             .expect("create capability-matched run")
         {
@@ -3236,32 +3501,206 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
+    async fn local_worker_claims_only_its_human_or_owned_agent_runs() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let requester = Keys::generate();
+        let other_member = Keys::generate();
+        let owned_agent = Keys::generate();
+        let relay = Keys::generate();
+        let requester_pubkey = requester.public_key().to_bytes();
+        let other_pubkey = other_member.public_key().to_bytes();
+        let agent_pubkey = owned_agent.public_key().to_bytes();
+
+        for keys in [&requester, &other_member, &owned_agent] {
+            sqlx::query(
+                "INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')",
+            )
+            .bind(community.as_uuid())
+            .bind(keys.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker-bound member");
+        }
+        for pubkey in [requester_pubkey, other_pubkey] {
+            sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+                .bind(community.as_uuid())
+                .bind(pubkey.as_slice())
+                .execute(&db.pool)
+                .await
+                .expect("insert human worker identity");
+        }
+        sqlx::query("INSERT INTO users (community_id,pubkey,agent_owner_pubkey) VALUES ($1,$2,$3)")
+            .bind(community.as_uuid())
+            .bind(agent_pubkey.as_slice())
+            .bind(requester_pubkey.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert owned agent identity");
+        db.set_discovery_actor_grant(community, &agent_pubkey, &requester_pubkey, true)
+            .await
+            .expect("grant owned agent Discovery");
+
+        let search = business_search();
+        let human_campaign = Uuid::new_v4();
+        insert_test_campaign(&db, community, &requester_pubkey, human_campaign, &search).await;
+        let human_run = match db
+            .create_discovery_run_once(
+                community,
+                &requester_pubkey,
+                human_campaign,
+                Uuid::new_v4(),
+                1,
+                &search,
+            )
+            .await
+            .expect("create requester's run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let provider_set = vec![DiscoveryProvider::Outscraper];
+        let unrelated_claim = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &other_member,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id: Uuid::new_v4(),
+                    available_providers: provider_set.clone(),
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("unrelated worker is safely idle"),
+        );
+        assert_eq!(unrelated_claim, DiscoveryWorkerReceiptOutcome::Idle);
+
+        let owner_worker_id = Uuid::new_v4();
+        let owner_claim = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &requester,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id: owner_worker_id,
+                    available_providers: provider_set.clone(),
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("requester worker claims its run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(owner_lease) = owner_claim else {
+            panic!("requester worker must receive its own run");
+        };
+        assert_eq!(owner_lease.run.run_id, human_run);
+        let failed = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &requester,
+                &relay,
+                DiscoveryWorkerAction::Fail(lease_request(
+                    owner_worker_id,
+                    human_run,
+                    owner_lease.lease_id,
+                )),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("finish requester run"),
+        );
+        assert!(matches!(failed, DiscoveryWorkerReceiptOutcome::Failed(_)));
+
+        let agent_campaign = Uuid::new_v4();
+        insert_test_campaign(&db, community, &agent_pubkey, agent_campaign, &search).await;
+        let agent_run = match db
+            .create_discovery_run_once(
+                community,
+                &agent_pubkey,
+                agent_campaign,
+                Uuid::new_v4(),
+                1,
+                &search,
+            )
+            .await
+            .expect("create owned agent run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let agent_owner_claim = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &requester,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id: Uuid::new_v4(),
+                    available_providers: provider_set,
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("owner worker claims its agent's run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(agent_lease) = agent_owner_claim else {
+            panic!("owner worker must receive its agent's run");
+        };
+        assert_eq!(agent_lease.run.run_id, agent_run);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn worker_source_progress_is_monotonic_idempotent_and_lease_fenced() {
         let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
-        let (db, community, human, _) = database_fixture().await;
+        let (db, community, _, _) = database_fixture().await;
         db.set_discovery_entitlement(community, true)
             .await
             .expect("entitle workspace");
         let actor = Keys::generate();
+        let other_member = Keys::generate();
         let relay = Keys::generate();
-        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+        let actor_bytes = actor.public_key().to_bytes();
+        for keys in [&actor, &other_member] {
+            sqlx::query(
+                "INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')",
+            )
             .bind(community.as_uuid())
-            .bind(actor.public_key().to_hex())
+            .bind(keys.public_key().to_hex())
             .execute(&db.pool)
             .await
             .expect("insert worker member");
-        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
-            .bind(community.as_uuid())
-            .bind(actor.public_key().to_bytes().as_slice())
-            .execute(&db.pool)
-            .await
-            .expect("insert worker identity");
+            sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+                .bind(community.as_uuid())
+                .bind(keys.public_key().to_bytes().as_slice())
+                .execute(&db.pool)
+                .await
+                .expect("insert worker identity");
+        }
 
         let search = business_search();
         let campaign_id = Uuid::new_v4();
-        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        insert_test_campaign(&db, community, &actor_bytes, campaign_id, &search).await;
         let run_id = match db
-            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 2, &search)
+            .create_discovery_run_once(
+                community,
+                &actor_bytes,
+                campaign_id,
+                Uuid::new_v4(),
+                2,
+                &search,
+            )
             .await
             .expect("create run")
         {
@@ -3320,6 +3759,41 @@ mod tests {
         );
         assert!(lease.source_states[0].started_at.is_some());
         assert!(lease.source_states[0].finished_at.is_none());
+
+        let cross_actor = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &other_member,
+                &relay,
+                DiscoveryWorkerAction::SourceProgress(DiscoveryWorkerSourceProgressRequest {
+                    lease: lease_request(worker_id, run_id, lease.lease_id),
+                    provider: DiscoveryProvider::Outscraper,
+                    status: DiscoveryRunSourceStatus::Active,
+                    request_cursor: None,
+                    request_count: 0,
+                    returned_count: 0,
+                    failure_class: None,
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("cross-actor progress is safely fenced"),
+        );
+        assert!(matches!(
+            cross_actor,
+            DiscoveryWorkerReceiptOutcome::LostLease(_)
+        ));
+        let unchanged: (String, i32, i32) = sqlx::query_as(
+            "SELECT status,request_count,returned_count FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 AND provider='outscraper'",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("load source after cross-actor progress");
+        assert_eq!(unchanged, ("active".to_owned(), 0, 0));
 
         let completed = DiscoveryWorkerSourceProgressRequest {
             lease: lease_request(worker_id, run_id, lease.lease_id),
@@ -3387,7 +3861,7 @@ mod tests {
     #[ignore = "requires Postgres"]
     async fn local_worker_recovers_checkpoints_and_rejects_stale_fences() {
         let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
-        let (db, community, human, _) = database_fixture().await;
+        let (db, community, _, _) = database_fixture().await;
         db.set_discovery_entitlement(community, true)
             .await
             .expect("entitle workspace");
@@ -3411,11 +3885,11 @@ mod tests {
 
         let expected_search = business_search();
         let campaign_id = Uuid::new_v4();
-        insert_test_campaign(&db, community, &human, campaign_id, &expected_search).await;
+        insert_test_campaign(&db, community, &actor_bytes, campaign_id, &expected_search).await;
         let created = db
             .create_discovery_run_once(
                 community,
-                &human,
+                &actor_bytes,
                 campaign_id,
                 Uuid::new_v4(),
                 1,
@@ -3553,7 +4027,7 @@ mod tests {
         assert_eq!(current_checkpoint.last_checkpoint, Some(ready));
 
         let completed = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,
@@ -3573,14 +4047,31 @@ mod tests {
         };
         assert_eq!(completed.state, DiscoveryRunState::Succeeded);
         assert_eq!(completed.completed_steps, completed.total_steps);
+        let completed_source: (String, i32) = sqlx::query_as(
+            "SELECT status,returned_count FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 AND provider='outscraper'",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("load source finalized by v1 completion");
+        assert_eq!(completed_source, ("completed".to_owned(), 37));
 
         let failed_campaign_id = Uuid::new_v4();
         let failed_search = business_search();
-        insert_test_campaign(&db, community, &human, failed_campaign_id, &failed_search).await;
+        insert_test_campaign(
+            &db,
+            community,
+            &actor_bytes,
+            failed_campaign_id,
+            &failed_search,
+        )
+        .await;
         let failed_run_id = match db
             .create_discovery_run_once(
                 community,
-                &human,
+                &actor_bytes,
                 failed_campaign_id,
                 Uuid::new_v4(),
                 1,
@@ -3614,7 +4105,7 @@ mod tests {
         };
         assert_eq!(failure_lease.run.run_id, failed_run_id);
         let failed = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,
@@ -3637,6 +4128,16 @@ mod tests {
             failed.terminal_reason,
             Some(DiscoveryTerminalReason::ExecutorFailed)
         );
+        let failed_source: String = sqlx::query_scalar(
+            "SELECT status FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 AND provider='outscraper'",
+        )
+        .bind(community.as_uuid())
+        .bind(failed_run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("load source finalized by v1 failure");
+        assert_eq!(failed_source, "failed");
 
         sqlx::query("DELETE FROM event_mentions WHERE community_id=$1")
             .bind(community.as_uuid())
@@ -3669,12 +4170,13 @@ mod tests {
     #[ignore = "requires Postgres"]
     async fn observation_batches_replay_and_deduplicate_across_campaigns() {
         let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
-        let (db, community, human, _) = database_fixture().await;
+        let (db, community, _, _) = database_fixture().await;
         db.set_discovery_entitlement(community, true)
             .await
             .expect("entitle workspace");
         let actor = Keys::generate();
         let relay = Keys::generate();
+        let actor_bytes = actor.public_key().to_bytes();
         sqlx::query(
             "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'member')",
         )
@@ -3717,11 +4219,18 @@ mod tests {
 
         let first_campaign_id = Uuid::new_v4();
         let first_search = business_search();
-        insert_test_campaign(&db, community, &human, first_campaign_id, &first_search).await;
+        insert_test_campaign(
+            &db,
+            community,
+            &actor_bytes,
+            first_campaign_id,
+            &first_search,
+        )
+        .await;
         let first_run = match db
             .create_discovery_run_once(
                 community,
-                &human,
+                &actor_bytes,
                 first_campaign_id,
                 Uuid::new_v4(),
                 1,
@@ -3818,7 +4327,6 @@ mod tests {
 
         let other_search = business_search();
         let other_campaign = Uuid::new_v4();
-        let actor_bytes = actor.public_key().to_bytes();
         insert_test_campaign(
             &db,
             other_community,
@@ -3971,7 +4479,14 @@ mod tests {
 
         let second_campaign_id = Uuid::new_v4();
         let second_search = business_search();
-        insert_test_campaign(&db, community, &human, second_campaign_id, &second_search).await;
+        insert_test_campaign(
+            &db,
+            community,
+            &actor_bytes,
+            second_campaign_id,
+            &second_search,
+        )
+        .await;
         sqlx::query(
             "UPDATE discovery_campaigns SET source_keys=ARRAY['brave_search']::TEXT[] \
              WHERE community_id=$1 AND id=$2",
@@ -3984,7 +4499,7 @@ mod tests {
         let second_run = match db
             .create_discovery_run_once(
                 community,
-                &human,
+                &actor_bytes,
                 second_campaign_id,
                 Uuid::new_v4(),
                 1,
@@ -4077,7 +4592,14 @@ mod tests {
 
         let third_campaign_id = Uuid::new_v4();
         let third_search = business_search();
-        insert_test_campaign(&db, community, &human, third_campaign_id, &third_search).await;
+        insert_test_campaign(
+            &db,
+            community,
+            &actor_bytes,
+            third_campaign_id,
+            &third_search,
+        )
+        .await;
         sqlx::query(
             "UPDATE discovery_campaigns SET source_keys=ARRAY['exa_search']::TEXT[] \
              WHERE community_id=$1 AND id=$2",
@@ -4090,7 +4612,7 @@ mod tests {
         let third_run = match db
             .create_discovery_run_once(
                 community,
-                &human,
+                &actor_bytes,
                 third_campaign_id,
                 Uuid::new_v4(),
                 1,

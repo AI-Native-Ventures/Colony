@@ -9,8 +9,10 @@ mod normalization;
 mod outbox;
 mod outscraper;
 mod protocol;
+mod provider_context;
 mod source_errors;
 mod source_executor;
+mod source_executor_helpers;
 mod worker_host;
 
 use std::sync::atomic::{AtomicU64, Ordering};

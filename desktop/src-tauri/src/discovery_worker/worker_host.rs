@@ -24,10 +24,8 @@ use super::{
     installation::load_or_create_worker_id,
     outbox::DiscoveryOutbox,
     protocol::{RelayWorkerProtocol, WorkerProtocol},
-    source_executor::{
-        execute_production_source_plan, CoordinatedRunOutcome, LocalProviderCredentials,
-        ProductionProviderClients,
-    },
+    provider_context::{LocalProviderCredentials, ProductionProviderClients},
+    source_executor::{execute_production_source_plan, CoordinatedRunOutcome},
 };
 use crate::{app_state::AppState, discovery_credentials, relay};
 
@@ -203,6 +201,7 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
     worker_id: Uuid,
     available_providers: Vec<DiscoveryProvider>,
 ) -> Result<HostRunOutcome, String> {
+    reconcile_terminal_outbox(protocol, outbox).await?;
     let claim = DiscoveryWorkerClaimRequest {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
@@ -221,6 +220,20 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
         CoordinatedRunOutcome::Fail(lease) => fail_current_lease(protocol, &lease).await,
         CoordinatedRunOutcome::LostLease => Ok(HostRunOutcome::LostLease),
     }
+}
+
+async fn reconcile_terminal_outbox<P: WorkerProtocol>(
+    protocol: &P,
+    outbox: &DiscoveryOutbox,
+) -> Result<(), String> {
+    for run_id in outbox.run_ids()? {
+        if let Ok(run) = protocol.status(run_id).await {
+            if run.state.is_terminal() {
+                outbox.remove_terminal_run(run_id)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -438,3 +438,46 @@ Implementation is complete only when all of the following are proven:
 Code written, locally tested, committed, merged into `develop`, promoted to
 `main`, released, and proven against real provider accounts remain separate
 delivery states.
+
+## Measured implementation evidence — 2026-08-03
+
+The implementation branch passed its local production gate with customer-owned
+provider calls disabled:
+
+- `scripts/discovery-multi-source-proof.sh` passed against a real local relay.
+  It exercised an agent-started run, persisted waterfall and concurrent plans,
+  capable/incompatible worker matching, cancellation, entitlement revocation,
+  lease loss, restart recovery, provider failure, overshoot, cross-Campaign
+  deduplication, and credential privacy. The proof also caught and corrected a
+  transactional bug where an agent cancellation stopped the run but did not
+  initially stop its per-source rows.
+- Focused tests passed: 16 `buzz-core` Discovery tests, 17 `buzz-sdk` tests,
+  3 non-ignored plus 8 real-Postgres `buzz-db` Discovery tests, 6
+  `buzz-relay` tests, 1 `buzz-cli` test, and 86 native desktop Discovery tests
+  with 2 infrastructure tests intentionally ignored.
+- The 8 real-Postgres tests ran sequentially in an isolated disposable
+  database. They include migration from schema 0038 with representative legacy
+  Outscraper Campaign, run, checkpoint, observation, usage, and batch records.
+  A separate isolated empty-database migration test also passed. Both temporary
+  databases were dropped after the tests.
+- Desktop lint and typecheck passed. The Discovery Playwright journey passed,
+  and 17 captured UI states had 17 distinct SHA-256 hashes.
+- `just ci` passed in full: formatting, strict Rust lint, desktop and web
+  checks/builds, 4,089 desktop unit tests, 2,034 native desktop tests, and 915
+  mobile tests passed.
+- `just test` passed every branch-relevant unit and database step, then stopped
+  in the unrelated `buzz-agent` `fake_llm` suite at
+  `cancelled_turn_with_usage_emits_notification_before_response`. The same
+  parallel-only failure reproduces on clean `develop`, while the test passes in
+  isolation; this is recorded as a baseline shared-state race and was not
+  changed on this branch.
+- `git diff --check` passed. Test artifacts contained no credential sentinel,
+  no screenshot was tracked, and all credential sentinel occurrences in the
+  branch diff are deliberate test declarations or invalid-schema fixtures.
+  Other worktrees were inspected and left untouched.
+
+No real Brave or Exa API request was made. Current provider compatibility with
+customer accounts remains a separate paid smoke gate requiring explicit
+approval and strict result caps. This evidence proves the branch locally; it
+does not claim merge to `develop`, promotion to `main`, release, or live paid
+provider proof.

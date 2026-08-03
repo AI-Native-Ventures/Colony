@@ -55,6 +55,7 @@ pub(super) struct SynchronousReadyMetadata {
     pub(super) provider_request_id: String,
     pub(super) request_count: u16,
     pub(super) item_count: u32,
+    pub(super) response_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +83,8 @@ enum PersistedCallState {
         provider_request_id: String,
         request_count: u16,
         item_count: u32,
+        #[serde(default = "default_true")]
+        response_complete: bool,
         acknowledged_batches: usize,
         batches: Vec<PersistedBatch>,
     },
@@ -214,9 +217,141 @@ impl DiscoveryOutbox {
                 provider_request_id,
                 request_count,
                 item_count,
+                response_complete: true,
                 acknowledged_batches: 0,
                 batches,
             };
+            Ok(())
+        })
+    }
+
+    /// Durably append a paid page before requesting the next one.
+    pub(super) fn append_results(
+        &self,
+        call_id: Uuid,
+        provider_request_id: Option<String>,
+        request_count: u16,
+        observations: Vec<DiscoveryBusinessObservationInput>,
+    ) -> Result<(), String> {
+        self.update(|state| {
+            let call = state
+                .calls
+                .iter_mut()
+                .find(|call| call.call_id == call_id)
+                .ok_or_else(|| "Discovery call intent was not found".to_owned())?;
+            let requested_id = provider_request_id.unwrap_or_else(|| call.call_id.to_string());
+            validate_provider_request_id(&requested_id)?;
+
+            let (stored_id, stored_request_count, item_count, response_complete, batches) =
+                match &mut call.state {
+                    PersistedCallState::Intent => {
+                        call.state = PersistedCallState::Ready {
+                            provider_request_id: requested_id.clone(),
+                            request_count: 0,
+                            item_count: 0,
+                            response_complete: false,
+                            acknowledged_batches: 0,
+                            batches: Vec::new(),
+                        };
+                        let PersistedCallState::Ready {
+                            provider_request_id,
+                            request_count,
+                            item_count,
+                            response_complete,
+                            batches,
+                            ..
+                        } = &mut call.state
+                        else {
+                            return Err("Discovery call state transition failed".to_owned());
+                        };
+                        (
+                            provider_request_id,
+                            request_count,
+                            item_count,
+                            response_complete,
+                            batches,
+                        )
+                    }
+                    PersistedCallState::Ready {
+                        provider_request_id,
+                        request_count,
+                        item_count,
+                        response_complete,
+                        batches,
+                        ..
+                    } => (
+                        provider_request_id,
+                        request_count,
+                        item_count,
+                        response_complete,
+                        batches,
+                    ),
+                    PersistedCallState::OutcomeUnknown => {
+                        return Err("Discovery call outcome is already unknown".to_owned())
+                    }
+                };
+            if *response_complete
+                || *stored_id != requested_id
+                || request_count < *stored_request_count
+            {
+                return Err("invalid incremental Discovery results".to_owned());
+            }
+
+            let mut provider_records = batches
+                .iter()
+                .flat_map(|batch| &batch.observations)
+                .map(|observation| observation.provider_record_id.as_str())
+                .collect::<HashSet<_>>();
+            for observation in &observations {
+                observation
+                    .validate()
+                    .map_err(|_| "invalid normalized Discovery observation".to_owned())?;
+                if observation.provider != call.provider
+                    || !provider_records.insert(observation.provider_record_id.as_str())
+                {
+                    return Err("invalid normalized Discovery observation set".to_owned());
+                }
+            }
+            let next_count = usize::try_from(*item_count)
+                .unwrap_or(usize::MAX)
+                .saturating_add(observations.len());
+            if next_count > MAX_RESULTS_PER_CALL {
+                return Err("too many normalized Discovery observations".to_owned());
+            }
+            batches.extend(observations.chunks(OBSERVATIONS_PER_BATCH).map(|chunk| {
+                PersistedBatch {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    observations: chunk.to_vec(),
+                }
+            }));
+            *stored_request_count = request_count;
+            *item_count = u32::try_from(next_count)
+                .map_err(|_| "too many normalized Discovery observations".to_owned())?;
+            Ok(())
+        })
+    }
+
+    pub(super) fn mark_response_complete(
+        &self,
+        call_id: Uuid,
+        provider_request_id: Option<String>,
+        request_count: u16,
+    ) -> Result<(), String> {
+        self.append_results(call_id, provider_request_id, request_count, Vec::new())?;
+        self.update(|state| {
+            let call = state
+                .calls
+                .iter_mut()
+                .find(|call| call.call_id == call_id)
+                .ok_or_else(|| "Discovery call was not found".to_owned())?;
+            let PersistedCallState::Ready {
+                response_complete, ..
+            } = &mut call.state
+            else {
+                return Err("Discovery call has no recoverable response".to_owned());
+            };
+            *response_complete = true;
             Ok(())
         })
     }
@@ -288,11 +423,13 @@ impl DiscoveryOutbox {
                 provider_request_id,
                 request_count,
                 item_count,
+                response_complete,
                 ..
             } => Some(SynchronousReadyMetadata {
                 provider_request_id: provider_request_id.clone(),
                 request_count: *request_count,
                 item_count: *item_count,
+                response_complete: *response_complete,
             }),
             PersistedCallState::Intent | PersistedCallState::OutcomeUnknown => None,
         })
@@ -385,6 +522,31 @@ impl DiscoveryOutbox {
             state.calls.remove(index);
             Ok(())
         })
+    }
+
+    pub(super) fn remove_terminal_run(&self, run_id: Uuid) -> Result<(), String> {
+        if run_id.is_nil() {
+            return Err("invalid terminal Discovery run".to_owned());
+        }
+        self.update(|state| {
+            state.calls.retain(|call| call.run_id != run_id);
+            Ok(())
+        })
+    }
+
+    pub(super) fn run_ids(&self) -> Result<Vec<Uuid>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "Discovery outbox lock failed".to_owned())?;
+        let mut run_ids = state
+            .calls
+            .iter()
+            .map(|call| call.run_id)
+            .collect::<Vec<_>>();
+        run_ids.sort_unstable();
+        run_ids.dedup();
+        Ok(run_ids)
     }
 
     #[cfg(test)]
@@ -549,8 +711,12 @@ const fn is_synchronous_provider(provider: DiscoveryProvider) -> bool {
     )
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use buzz_core_pkg::discovery_worker::{
         deterministic_business_observation_id, DiscoveryBusinessObservationInput, DiscoveryProvider,
     };
@@ -558,8 +724,10 @@ mod tests {
 
     use super::*;
 
-    const ACTOR_ONE: &str = "31029e74e8d93b2238fdf0be93f56a084b923e4e5b6ff55b03109bd86a87061b";
-    const ACTOR_TWO: &str = "17c4e256a47fd3b862e98af9877dd954b24135e875d077a94ca5c2f1cb6e49dc";
+    pub(super) const ACTOR_ONE: &str =
+        "31029e74e8d93b2238fdf0be93f56a084b923e4e5b6ff55b03109bd86a87061b";
+    pub(super) const ACTOR_TWO: &str =
+        "17c4e256a47fd3b862e98af9877dd954b24135e875d077a94ca5c2f1cb6e49dc";
 
     fn observation(provider: DiscoveryProvider, index: usize) -> DiscoveryBusinessObservationInput {
         let provider_record_id = format!("provider-record-{index}");
@@ -592,7 +760,7 @@ mod tests {
         }
     }
 
-    fn observations(
+    pub(super) fn observations(
         provider: DiscoveryProvider,
         count: usize,
     ) -> Vec<DiscoveryBusinessObservationInput> {
@@ -695,6 +863,52 @@ mod tests {
                 provider_request_id: call.call_id.to_string(),
                 request_count: 2,
                 item_count: 30,
+                response_complete: true,
+            })
+        );
+    }
+
+    #[test]
+    fn paid_page_is_durable_before_the_response_is_complete() {
+        let dir = tempfile::tempdir().expect("temporary app data");
+        let run_id = Uuid::new_v4();
+        let first = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
+            .expect("open outbox");
+        let call = first
+            .begin_call(run_id, DiscoveryProvider::BraveSearch)
+            .expect("write call intent");
+        first
+            .append_results(
+                call.call_id,
+                None,
+                1,
+                observations(DiscoveryProvider::BraveSearch, 2),
+            )
+            .expect("persist paid first page");
+        let batch = first
+            .next_batch(call.call_id)
+            .expect("read paid page")
+            .expect("paid page batch");
+        first
+            .acknowledge_batch(call.call_id, batch.batch_index)
+            .expect("acknowledge paid page");
+        drop(first);
+
+        let recovered = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
+            .expect("recover incomplete paid search");
+        assert!(recovered
+            .next_batch(call.call_id)
+            .expect("read drained paid page")
+            .is_none());
+        assert_eq!(
+            recovered
+                .ready_metadata(call.call_id)
+                .expect("read incomplete response"),
+            Some(SynchronousReadyMetadata {
+                provider_request_id: call.call_id.to_string(),
+                request_count: 1,
+                item_count: 2,
+                response_complete: false,
             })
         );
     }
@@ -778,126 +992,8 @@ mod tests {
             None
         );
     }
-
-    #[test]
-    fn community_and_actor_scopes_are_physically_isolated() {
-        let dir = tempfile::tempdir().expect("temporary app data");
-        let run_id = Uuid::new_v4();
-        let first = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
-            .expect("open first outbox");
-        first
-            .begin_call(run_id, DiscoveryProvider::BraveSearch)
-            .expect("write first intent");
-
-        let other_relay = DiscoveryOutbox::open(dir.path(), "wss://relay-two.example", ACTOR_ONE)
-            .expect("open other relay outbox");
-        let other_actor = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_TWO)
-            .expect("open other actor outbox");
-        assert_eq!(
-            other_relay.state_for(run_id, DiscoveryProvider::BraveSearch),
-            None
-        );
-        assert_eq!(
-            other_actor.state_for(run_id, DiscoveryProvider::BraveSearch),
-            None
-        );
-        assert_ne!(first.path(), other_relay.path());
-        assert_ne!(first.path(), other_actor.path());
-    }
-
-    #[test]
-    fn accepted_call_without_recoverable_response_stays_outcome_unknown() {
-        let dir = tempfile::tempdir().expect("temporary app data");
-        let run_id = Uuid::new_v4();
-        let first = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
-            .expect("open outbox");
-        let call = first
-            .begin_call(run_id, DiscoveryProvider::ExaSearch)
-            .expect("write call intent");
-        first
-            .mark_outcome_unknown(call.call_id)
-            .expect("record unknown outcome");
-        drop(first);
-
-        let recovered = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
-            .expect("reopen outbox");
-        assert_eq!(
-            recovered.state_for(run_id, DiscoveryProvider::ExaSearch),
-            Some(SynchronousCallState::OutcomeUnknown)
-        );
-        assert!(recovered
-            .begin_call(run_id, DiscoveryProvider::ExaSearch)
-            .is_err());
-    }
-
-    #[test]
-    fn outbox_contains_no_provider_secret_query_or_raw_response() {
-        let dir = tempfile::tempdir().expect("temporary app data");
-        let run_id = Uuid::new_v4();
-        let outbox = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
-            .expect("open outbox");
-        let call = outbox
-            .begin_call(run_id, DiscoveryProvider::ExaSearch)
-            .expect("write call intent");
-        outbox
-            .record_results(
-                call.call_id,
-                Some("exa-request-safe".to_owned()),
-                1,
-                observations(DiscoveryProvider::ExaSearch, 1),
-            )
-            .expect("record normalized results");
-        let serialized = std::fs::read_to_string(outbox.path()).expect("read persisted outbox");
-        for forbidden in [
-            "api_key",
-            "authorization",
-            "x-api-key",
-            "x-subscription-token",
-            "raw_response",
-            "search_query",
-        ] {
-            assert!(!serialized.to_ascii_lowercase().contains(forbidden));
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn outbox_directory_and_file_are_owner_only() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let dir = tempfile::tempdir().expect("temporary app data");
-        let outbox = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
-            .expect("open outbox");
-        outbox
-            .begin_call(Uuid::new_v4(), DiscoveryProvider::BraveSearch)
-            .expect("write call intent");
-        assert_eq!(
-            std::fs::metadata(outbox.path().parent().expect("outbox directory"))
-                .expect("outbox directory metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
-        assert_eq!(
-            std::fs::metadata(outbox.path())
-                .expect("outbox metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-    }
-
-    #[test]
-    fn malformed_outbox_fails_closed_without_starting_another_call() {
-        let dir = tempfile::tempdir().expect("temporary app data");
-        let outbox = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
-            .expect("open outbox");
-        let path = outbox.path().to_path_buf();
-        drop(outbox);
-        std::fs::write(path, br#"{"version":1,"calls":"unsafe"}"#).expect("corrupt outbox fixture");
-
-        assert!(DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE).is_err());
-    }
 }
+
+#[cfg(test)]
+#[path = "outbox_security_tests.rs"]
+mod security_tests;

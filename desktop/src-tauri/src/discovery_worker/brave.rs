@@ -1,11 +1,11 @@
-use std::{fmt, time::Duration};
+use std::{fmt, future::Future, time::Duration};
 
 use buzz_core_pkg::{
     discovery::DiscoveryBusinessSearchSpec,
     discovery_worker::{DiscoveryBusinessObservationInput, DiscoveryProvider},
 };
 use futures_util::StreamExt as _;
-use reqwest::{Response, StatusCode};
+use reqwest::{header::HeaderMap, Response, StatusCode};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
@@ -45,6 +45,31 @@ pub(crate) struct BraveSearchClient {
 pub(crate) struct BraveSearchOutcome {
     pub(crate) observations: Vec<DiscoveryBusinessObservationInput>,
     pub(crate) request_count: u16,
+}
+
+#[derive(Debug)]
+pub(crate) struct BraveSearchFailure {
+    pub(crate) error: BraveError,
+    pub(crate) request_count: u16,
+    pub(crate) local_error: Option<String>,
+}
+
+impl BraveSearchFailure {
+    fn provider(error: BraveError, request_count: u16) -> Self {
+        Self {
+            error,
+            request_count,
+            local_error: None,
+        }
+    }
+
+    fn local(error: String, request_count: u16) -> Self {
+        Self {
+            error: BraveError::ProviderFailed,
+            request_count,
+            local_error: Some(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +151,14 @@ struct BraveThumbnail {
     original: Option<String>,
 }
 
+struct BravePageRequest<'a> {
+    search: &'a DiscoveryBusinessSearchSpec,
+    query: &'a str,
+    count: usize,
+    offset: u8,
+    credential: &'a Zeroizing<String>,
+}
+
 impl From<BraveWebResult> for WebBusinessCandidate {
     fn from(result: BraveWebResult) -> Self {
         let profile_name = result
@@ -156,6 +189,19 @@ impl BraveSearchClient {
         Self::with_config(BRAVE_SEARCH_ENDPOINT.to_owned(), BravePolicy::default())
     }
 
+    #[cfg(test)]
+    pub(super) fn for_local_test(endpoint: String) -> Result<Self, BraveError> {
+        Self::with_config(
+            endpoint,
+            BravePolicy {
+                request_timeout: Duration::from_secs(2),
+                retry_backoff: Duration::from_millis(1),
+                max_retries: 2,
+                max_response_bytes: 512 * 1024,
+            },
+        )
+    }
+
     fn with_config(endpoint: String, policy: BravePolicy) -> Result<Self, BraveError> {
         let http = reqwest::Client::builder()
             .connect_timeout(policy.request_timeout)
@@ -182,6 +228,7 @@ impl BraveSearchClient {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn search_with_remaining<F>(
         &self,
         search: &DiscoveryBusinessSearchSpec,
@@ -192,7 +239,37 @@ impl BraveSearchClient {
     where
         F: Fn() -> usize,
     {
-        search.validate().map_err(|_| BraveError::InvalidRequest)?;
+        self.search_with_hooks(
+            search,
+            credential,
+            remaining_target,
+            || std::future::ready(true),
+            |_, _| std::future::ready(Ok(())),
+            cancellation,
+        )
+        .await
+        .map_err(|failure| failure.error)
+    }
+
+    pub(crate) async fn search_with_hooks<F, P, PFut, R, RFut>(
+        &self,
+        search: &DiscoveryBusinessSearchSpec,
+        credential: &Zeroizing<String>,
+        remaining_target: F,
+        mut before_request: P,
+        mut page_ready: R,
+        cancellation: &CancellationToken,
+    ) -> Result<BraveSearchOutcome, BraveSearchFailure>
+    where
+        F: Fn() -> usize,
+        P: FnMut() -> PFut,
+        PFut: Future<Output = bool>,
+        R: FnMut(Vec<DiscoveryBusinessObservationInput>, u16) -> RFut,
+        RFut: Future<Output = Result<(), String>>,
+    {
+        search
+            .validate()
+            .map_err(|_| BraveSearchFailure::provider(BraveError::InvalidRequest, 0))?;
         let source_limit = usize::from(search.limit);
         if remaining_target().min(source_limit) == 0 {
             return Ok(BraveSearchOutcome {
@@ -203,7 +280,7 @@ impl BraveSearchClient {
 
         let query = search.provider_query();
         if query.chars().count() > 400 || query.split_whitespace().count() > 50 {
-            return Err(BraveError::InvalidRequest);
+            return Err(BraveSearchFailure::provider(BraveError::InvalidRequest, 0));
         }
         let mut observations = Vec::new();
         let mut request_count = 0_u16;
@@ -215,9 +292,26 @@ impl BraveSearchClient {
                 break;
             }
             let count = remaining.min(MAX_BRAVE_COUNT);
-            let (envelope, page_requests) = self
-                .request_page(search, &query, count, offset, credential, cancellation)
-                .await?;
+            let (envelope, page_requests) = match self
+                .request_page(
+                    BravePageRequest {
+                        search,
+                        query: &query,
+                        count,
+                        offset,
+                        credential,
+                    },
+                    &mut before_request,
+                    cancellation,
+                )
+                .await
+            {
+                Ok(result) => result,
+                Err(mut failure) => {
+                    failure.request_count = failure.request_count.saturating_add(request_count);
+                    return Err(failure);
+                }
+            };
             request_count = request_count.saturating_add(page_requests);
             let more_results_available = envelope
                 .query
@@ -238,11 +332,15 @@ impl BraveSearchClient {
                     observation.provider_record_id.clone()
                 })
                 .collect::<std::collections::HashSet<_>>();
-            observations.extend(
-                page.into_iter()
-                    .filter(|observation| known.insert(observation.provider_record_id.clone()))
-                    .take(remaining),
-            );
+            let page = page
+                .into_iter()
+                .filter(|observation| known.insert(observation.provider_record_id.clone()))
+                .take(remaining)
+                .collect::<Vec<_>>();
+            page_ready(page.clone(), request_count)
+                .await
+                .map_err(|error| BraveSearchFailure::local(error, request_count))?;
+            observations.extend(page);
             if !more_results_available {
                 break;
             }
@@ -253,28 +351,29 @@ impl BraveSearchClient {
         })
     }
 
-    async fn request_page(
+    async fn request_page<P, PFut>(
         &self,
-        search: &DiscoveryBusinessSearchSpec,
-        query: &str,
-        count: usize,
-        offset: u8,
-        credential: &Zeroizing<String>,
+        page: BravePageRequest<'_>,
+        before_request: &mut P,
         cancellation: &CancellationToken,
-    ) -> Result<(BraveEnvelope, u16), BraveError> {
-        let count = count.clamp(1, MAX_BRAVE_COUNT).to_string();
-        let offset = offset.min(MAX_BRAVE_OFFSET).to_string();
+    ) -> Result<(BraveEnvelope, u16), BraveSearchFailure>
+    where
+        P: FnMut() -> PFut,
+        PFut: Future<Output = bool>,
+    {
+        let count = page.count.clamp(1, MAX_BRAVE_COUNT).to_string();
+        let offset = page.offset.min(MAX_BRAVE_OFFSET).to_string();
         let mut parameters = vec![
-            ("q", query),
+            ("q", page.query),
             ("count", count.as_str()),
             ("offset", offset.as_str()),
-            ("search_lang", search.language.as_str()),
+            ("search_lang", page.search.language.as_str()),
             ("safesearch", "moderate"),
             ("spellcheck", "true"),
             ("text_decorations", "false"),
             ("result_filter", "web"),
         ];
-        if let Some(country) = &search.region {
+        if let Some(country) = &page.search.region {
             parameters.push(("country", country.as_str()));
         }
 
@@ -282,29 +381,44 @@ impl BraveSearchClient {
         let mut request_count = 0_u16;
         loop {
             if cancellation.is_cancelled() {
-                return Err(BraveError::Cancelled);
+                return Err(BraveSearchFailure::provider(
+                    BraveError::Cancelled,
+                    request_count,
+                ));
+            }
+            if !before_request().await {
+                return Err(BraveSearchFailure::provider(
+                    BraveError::Cancelled,
+                    request_count,
+                ));
             }
             request_count = request_count.saturating_add(1);
             let response = tokio::select! {
-                () = cancellation.cancelled() => return Err(BraveError::Cancelled),
+                () = cancellation.cancelled() => return Err(BraveSearchFailure::provider(BraveError::Cancelled, request_count)),
                 result = self.http
                     .get(&self.endpoint)
                     .header("Accept", "application/json")
-                    .header("X-Subscription-Token", credential.as_str())
+                    .header("X-Subscription-Token", page.credential.as_str())
                     .query(&parameters)
-                    .send() => result.map_err(classify_transport_error)?,
+                    .send() => result.map_err(|error| BraveSearchFailure::provider(classify_transport_error(error), request_count))?,
             };
+            let retry_after = retry_after_delay(response.headers(), self.policy.request_timeout);
             match classify_status(response.status()) {
                 StatusDisposition::Parse => {
-                    let envelope = self.parse_response(response, cancellation).await?;
+                    let envelope = self
+                        .parse_response(response, cancellation)
+                        .await
+                        .map_err(|error| BraveSearchFailure::provider(error, request_count))?;
                     return Ok((envelope, request_count));
                 }
                 StatusDisposition::Retry(_) if retries < self.policy.max_retries => {
                     retries += 1;
-                    self.wait_retry(retries, cancellation).await?;
+                    self.wait_retry(retries, retry_after, cancellation)
+                        .await
+                        .map_err(|error| BraveSearchFailure::provider(error, request_count))?;
                 }
                 StatusDisposition::Retry(error) | StatusDisposition::Terminal(error) => {
-                    return Err(error);
+                    return Err(BraveSearchFailure::provider(error, request_count));
                 }
             }
         }
@@ -333,19 +447,33 @@ impl BraveSearchClient {
     async fn wait_retry(
         &self,
         attempt: usize,
+        retry_after: Option<Duration>,
         cancellation: &CancellationToken,
     ) -> Result<(), BraveError> {
-        let multiplier = u32::try_from(attempt).unwrap_or(u32::MAX);
-        let duration = self
+        let exponent = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+        let multiplier = 2_u32.saturating_pow(exponent);
+        let backoff = self
             .policy
             .retry_backoff
             .checked_mul(multiplier)
-            .unwrap_or(self.policy.request_timeout);
+            .unwrap_or(self.policy.request_timeout)
+            .min(self.policy.request_timeout);
+        let duration = retry_after.unwrap_or_default().max(backoff);
         tokio::select! {
             () = cancellation.cancelled() => Err(BraveError::Cancelled),
             () = tokio::time::sleep(duration) => Ok(()),
         }
     }
+}
+
+fn retry_after_delay(headers: &HeaderMap, cap: Duration) -> Option<Duration> {
+    let seconds = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    (seconds > 0).then(|| Duration::from_secs(seconds).min(cap))
 }
 
 enum StatusDisposition {
@@ -400,6 +528,7 @@ mod tests {
         Router,
     };
     use serde_json::json;
+    use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
     use zeroize::Zeroizing;
 
@@ -422,6 +551,7 @@ mod tests {
         calls: Mutex<Vec<HashMap<String, String>>>,
         header_seen: AtomicBool,
         request_count: AtomicUsize,
+        request_started: Notify,
     }
 
     async fn handler(
@@ -445,6 +575,7 @@ mod tests {
             .unwrap_or_default();
         state.calls.lock().expect("calls").push(parameters);
         let request_index = state.request_count.fetch_add(1, Ordering::SeqCst);
+        state.request_started.notify_one();
 
         match state.scenario {
             Scenario::Paginated => {
@@ -556,6 +687,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
             header_seen: AtomicBool::new(false),
             request_count: AtomicUsize::new(0),
+            request_started: Notify::new(),
         });
         let router = Router::new()
             .route("/web/search", get(handler))
@@ -817,22 +949,32 @@ mod tests {
     async fn cancellation_interrupts_an_inflight_request() {
         let (client, state, handle) = server(Scenario::Delayed).await;
         let cancellation = CancellationToken::new();
-        let cancellation_signal = cancellation.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            cancellation_signal.cancel();
-        });
-        let error = client
-            .search(
-                &search(1),
-                &Zeroizing::new("test-key".to_owned()),
-                1,
-                &cancellation,
-            )
-            .await
-            .expect_err("cancelled request");
+        let search = search(1);
+        let credential = Zeroizing::new("test-key".to_owned());
+        let request = client.search(&search, &credential, 1, &cancellation);
+        let cancel_after_start = async {
+            state.request_started.notified().await;
+            cancellation.cancel();
+        };
+        let (result, ()) = tokio::join!(request, cancel_after_start);
+        let error = result.expect_err("cancelled request");
         assert_eq!(error, BraveError::Cancelled);
         assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
         handle.abort();
+    }
+
+    #[test]
+    fn retry_after_is_bounded_and_rejects_invalid_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "999".parse().expect("header"));
+        assert_eq!(
+            retry_after_delay(&headers, Duration::from_millis(100)),
+            Some(Duration::from_millis(100))
+        );
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "invalid".parse().expect("header"),
+        );
+        assert_eq!(retry_after_delay(&headers, Duration::from_secs(1)), None);
     }
 }

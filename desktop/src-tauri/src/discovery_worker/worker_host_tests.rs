@@ -11,7 +11,7 @@ use axum::{
     http::HeaderMap,
     response::IntoResponse,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use buzz_core_pkg::{
     discovery::{
@@ -21,7 +21,8 @@ use buzz_core_pkg::{
     discovery_worker::{
         deterministic_business_observation_id, DiscoveryBusinessObservationInput,
         DiscoveryBusinessStatus, DiscoveryCheckpointKind, DiscoveryProvider,
-        DiscoveryRunSourceProjection, DiscoveryRunSourceStatus, DiscoveryWorkerCheckpoint,
+        DiscoveryRunSourceFailureClass, DiscoveryRunSourceProjection, DiscoveryRunSourceStatus,
+        DiscoveryWorkerCheckpoint, DiscoveryWorkerSourceProgressRequest,
         DiscoveryWorkerStoredObservationsProjection,
     },
 };
@@ -29,7 +30,9 @@ use chrono::Utc;
 use serde_json::json;
 
 use super::*;
-use crate::discovery_worker::protocol::ProtocolFuture;
+use crate::discovery_worker::{
+    brave::BraveSearchClient, exa::ExaSearchClient, protocol::ProtocolFuture,
+};
 
 struct LocalOutscraperState {
     allow_success: AtomicBool,
@@ -136,6 +139,105 @@ async fn start_local_outscraper() -> (
     (client, state, handle)
 }
 
+async fn local_brave_search(headers: HeaderMap) -> impl IntoResponse {
+    assert_eq!(
+        headers
+            .get("x-subscription-token")
+            .and_then(|value| value.to_str().ok()),
+        Some("brave-test-key")
+    );
+    Json(json!({
+        "query": {"more_results_available": false},
+        "web": {"results": [{
+            "title": "Brave Dental",
+            "url": "https://brave-dental.example"
+        }]}
+    }))
+}
+
+async fn local_delayed_brave_search(headers: HeaderMap) -> impl IntoResponse {
+    assert_eq!(
+        headers
+            .get("x-subscription-token")
+            .and_then(|value| value.to_str().ok()),
+        Some("brave-test-key")
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    Json(json!({
+        "query": {"more_results_available": false},
+        "web": {"results": []}
+    }))
+}
+
+async fn local_paginated_brave_search(
+    State(request_count): State<Arc<AtomicUsize>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    assert_eq!(
+        headers
+            .get("x-subscription-token")
+            .and_then(|value| value.to_str().ok()),
+        Some("brave-test-key")
+    );
+    let page = request_count.fetch_add(1, AtomicOrdering::SeqCst);
+    Json(json!({
+        "query": {"more_results_available": page == 0},
+        "web": {"results": [{
+            "title": format!("Paid Brave Page {page}"),
+            "url": format!("https://paid-page-{page}.example")
+        }]}
+    }))
+}
+
+async fn local_exa_search(
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    assert_eq!(
+        headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok()),
+        Some("exa-test-key")
+    );
+    assert_eq!(body.get("category"), Some(&json!("company")));
+    Json(json!({
+        "requestId": "exa-integrated-request",
+        "results": [{
+            "title": "Exa Dental",
+            "url": "https://exa-dental.example"
+        }]
+    }))
+}
+
+async fn local_rate_limited() -> impl IntoResponse {
+    (axum::http::StatusCode::TOO_MANY_REQUESTS, "retry later")
+}
+
+async fn start_local_synchronous_sources() -> (
+    BraveSearchClient,
+    ExaSearchClient,
+    tokio::task::JoinHandle<()>,
+) {
+    let router = Router::new()
+        .route("/brave", get(local_brave_search))
+        .route("/brave-delayed", get(local_delayed_brave_search))
+        .route("/exa", post(local_exa_search));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind local multi-source server");
+    let address = listener.local_addr().expect("local multi-source address");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("serve local multi-source endpoints");
+    });
+    let brave = BraveSearchClient::for_local_test(format!("http://{address}/brave"))
+        .expect("local Brave client");
+    let exa =
+        ExaSearchClient::for_local_test(format!("http://{address}/exa")).expect("local Exa client");
+    (brave, exa, handle)
+}
+
 struct FakeProtocol {
     outcomes: Mutex<VecDeque<DiscoveryWorkerReceiptOutcome>>,
     calls: Mutex<Vec<&'static str>>,
@@ -162,6 +264,10 @@ impl FakeProtocol {
 }
 
 impl WorkerProtocol for FakeProtocol {
+    fn status(&self, _: Uuid) -> crate::discovery_worker::protocol::RunStatusFuture<'_> {
+        Box::pin(async { Err("status fixture is not configured".to_owned()) })
+    }
+
     fn claim(&self, _: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
         Box::pin(async { self.next("claim") })
     }
@@ -200,6 +306,175 @@ impl WorkerProtocol for FakeProtocol {
 
     fn complete(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
         Box::pin(async { self.next("complete") })
+    }
+}
+
+struct MultiSourceProtocol {
+    lease: Mutex<DiscoveryWorkerLeaseProjection>,
+    calls: Mutex<Vec<&'static str>>,
+    completed: AtomicBool,
+    heartbeat_count: AtomicUsize,
+    cancel_on_heartbeat: Option<usize>,
+}
+
+impl MultiSourceProtocol {
+    fn new(lease: DiscoveryWorkerLeaseProjection) -> Self {
+        Self {
+            lease: Mutex::new(lease),
+            calls: Mutex::new(Vec::new()),
+            completed: AtomicBool::new(false),
+            heartbeat_count: AtomicUsize::new(0),
+            cancel_on_heartbeat: None,
+        }
+    }
+
+    fn cancelling(lease: DiscoveryWorkerLeaseProjection, heartbeat: usize) -> Self {
+        Self {
+            lease: Mutex::new(lease),
+            calls: Mutex::new(Vec::new()),
+            completed: AtomicBool::new(false),
+            heartbeat_count: AtomicUsize::new(0),
+            cancel_on_heartbeat: Some(heartbeat),
+        }
+    }
+
+    fn lease(&self) -> DiscoveryWorkerLeaseProjection {
+        self.lease.lock().expect("multi-source lease").clone()
+    }
+
+    fn record(&self, call: &'static str) {
+        self.calls.lock().expect("multi-source calls").push(call);
+    }
+}
+
+impl WorkerProtocol for MultiSourceProtocol {
+    fn status(&self, _: Uuid) -> crate::discovery_worker::protocol::RunStatusFuture<'_> {
+        Box::pin(async { Ok(self.lease().run) })
+    }
+
+    fn claim(&self, _: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
+        Box::pin(async {
+            self.record("claim");
+            Ok(DiscoveryWorkerReceiptOutcome::Lease(self.lease()))
+        })
+    }
+
+    fn heartbeat(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
+        Box::pin(async {
+            self.record("heartbeat");
+            let count = self.heartbeat_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+            if self
+                .cancel_on_heartbeat
+                .is_some_and(|threshold| count >= threshold)
+            {
+                let mut run = self.lease().run;
+                run.state = DiscoveryRunState::Cancelled;
+                run.cancel_requested = true;
+                return Ok(DiscoveryWorkerReceiptOutcome::LostLease(run));
+            }
+            Ok(DiscoveryWorkerReceiptOutcome::Lease(self.lease()))
+        })
+    }
+
+    fn checkpoint(&self, request: DiscoveryWorkerCheckpointRequest) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            self.record("checkpoint");
+            let mut lease = self.lease.lock().expect("multi-source lease");
+            if request.checkpoint.kind == DiscoveryCheckpointKind::ProviderSubmitted {
+                let source = lease
+                    .source_states
+                    .iter_mut()
+                    .find(|source| source.provider == request.checkpoint.provider)
+                    .expect("checkpoint provider source");
+                source.status = DiscoveryRunSourceStatus::Active;
+                source.request_cursor = request.checkpoint.provider_request_id.clone();
+                source.request_count = 1;
+                source.started_at = Some(Utc::now());
+                source.updated_at = Utc::now();
+            }
+            lease.last_checkpoint = Some(request.checkpoint);
+            Ok(DiscoveryWorkerReceiptOutcome::Lease(lease.clone()))
+        })
+    }
+
+    fn source_progress(&self, request: DiscoveryWorkerSourceProgressRequest) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            self.record("source_progress");
+            let mut lease = self.lease.lock().expect("multi-source lease");
+            let source = lease
+                .source_states
+                .iter_mut()
+                .find(|source| source.provider == request.provider)
+                .expect("progress provider source");
+            source.status = request.status;
+            if request.request_cursor.is_some() {
+                source.request_cursor = request.request_cursor;
+            }
+            source.request_count = request.request_count;
+            source.returned_count = request.returned_count;
+            source.failure_class = request.failure_class;
+            source.started_at.get_or_insert_with(Utc::now);
+            if matches!(
+                request.status,
+                DiscoveryRunSourceStatus::Completed
+                    | DiscoveryRunSourceStatus::Exhausted
+                    | DiscoveryRunSourceStatus::Failed
+                    | DiscoveryRunSourceStatus::OutcomeUnknown
+                    | DiscoveryRunSourceStatus::Cancelled
+                    | DiscoveryRunSourceStatus::SkippedTargetMet
+            ) {
+                source.finished_at = Some(Utc::now());
+            }
+            source.updated_at = Utc::now();
+            Ok(DiscoveryWorkerReceiptOutcome::Lease(lease.clone()))
+        })
+    }
+
+    fn store_observations(
+        &self,
+        request: DiscoveryWorkerObservationBatchRequest,
+    ) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            self.record("store_observations");
+            let mut lease = self.lease.lock().expect("multi-source lease");
+            let source = lease
+                .source_states
+                .iter_mut()
+                .find(|source| source.provider == request.provider)
+                .expect("observation provider source");
+            let accepted_count = u16::try_from(request.observations.len())
+                .map_err(|_| "too many fixture observations".to_owned())?;
+            source.retained_count = source
+                .retained_count
+                .saturating_add(u32::from(accepted_count));
+            source.updated_at = Utc::now();
+            Ok(DiscoveryWorkerReceiptOutcome::ObservationsStored(
+                DiscoveryWorkerStoredObservationsProjection {
+                    lease: lease.clone(),
+                    accepted_count,
+                    existing_count: 0,
+                },
+            ))
+        })
+    }
+
+    fn fail(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
+        Box::pin(async {
+            self.record("fail");
+            let mut lease = self.lease.lock().expect("multi-source lease");
+            lease.run.state = DiscoveryRunState::Failed;
+            Ok(DiscoveryWorkerReceiptOutcome::Failed(lease.run.clone()))
+        })
+    }
+
+    fn complete(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
+        Box::pin(async {
+            self.record("complete");
+            self.completed.store(true, AtomicOrdering::SeqCst);
+            let mut lease = self.lease.lock().expect("multi-source lease");
+            lease.run.state = DiscoveryRunState::Succeeded;
+            Ok(DiscoveryWorkerReceiptOutcome::Completed(lease.run.clone()))
+        })
     }
 }
 
@@ -349,6 +624,40 @@ fn lease(last_checkpoint: Option<DiscoveryWorkerCheckpoint>) -> DiscoveryWorkerL
     }
 }
 
+fn concurrent_synchronous_lease() -> DiscoveryWorkerLeaseProjection {
+    let mut value = lease(None);
+    value.business_search.limit = 2;
+    value.source_config = DiscoverySourceConfig {
+        mode: DiscoverySourceMode::Concurrent,
+        sources: vec![DiscoverySource::BraveSearch, DiscoverySource::ExaSearch],
+    };
+    value.source_states = [
+        (DiscoverySource::BraveSearch, DiscoveryProvider::BraveSearch),
+        (DiscoverySource::ExaSearch, DiscoveryProvider::ExaSearch),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(
+        |(position, (source, provider))| DiscoveryRunSourceProjection {
+            source,
+            provider,
+            position: u8::try_from(position).expect("source position"),
+            status: DiscoveryRunSourceStatus::Pending,
+            request_cursor: None,
+            request_count: 0,
+            returned_count: 0,
+            retained_count: 0,
+            duplicate_count: 0,
+            failure_class: None,
+            started_at: None,
+            finished_at: None,
+            updated_at: Utc::now(),
+        },
+    )
+    .collect();
+    value
+}
+
 fn lease_outcome(value: &DiscoveryWorkerLeaseProjection) -> DiscoveryWorkerReceiptOutcome {
     DiscoveryWorkerReceiptOutcome::Lease(value.clone())
 }
@@ -403,6 +712,9 @@ async fn missing_credential_sends_zero_claim_actions() {
     assert_eq!(outcome, HostRunOutcome::NoCredential);
     assert!(protocol.calls.lock().expect("calls").is_empty());
 }
+
+#[path = "worker_host_multi_source_tests.rs"]
+mod multi_source_tests;
 
 #[tokio::test]
 async fn production_run_checkpoints_before_storing_and_completing() {
@@ -654,114 +966,7 @@ async fn lost_lease_during_paused_step_sends_no_checkpoint_or_completion() {
         .any(|call| *call == "checkpoint" || *call == "complete"));
 }
 
-fn synchronous_observation(
-    provider: DiscoveryProvider,
-    provider_record_id: &str,
-) -> DiscoveryBusinessObservationInput {
-    let mut value = observation(provider_record_id);
-    value.provider = provider;
-    value.observation_id = deterministic_business_observation_id(provider, provider_record_id);
-    value
-}
-
-#[tokio::test]
-async fn synchronous_outbox_drains_with_stable_batch_retry_identities() {
-    let dir = tempfile::tempdir().expect("temporary app data");
-    let mut lease = lease(None);
-    let outbox = DiscoveryOutbox::open(
-        dir.path(),
-        "wss://relay-one.example",
-        "31029e74e8d93b2238fdf0be93f56a084b923e4e5b6ff55b03109bd86a87061b",
-    )
-    .expect("open outbox");
-    let call = outbox
-        .begin_call(lease.run.run_id, DiscoveryProvider::BraveSearch)
-        .expect("write call intent");
-    let observations = (0..30)
-        .map(|index| {
-            synchronous_observation(
-                DiscoveryProvider::BraveSearch,
-                &format!("brave-record-{index}"),
-            )
-        })
-        .collect();
-    outbox
-        .record_results(call.call_id, None, 2, observations)
-        .expect("record normalized results");
-    let expected_first = outbox
-        .next_batch(call.call_id)
-        .expect("read outbox")
-        .expect("first batch");
-    let protocol = FakeProtocol::new(vec![stored_outcome(&lease), stored_outcome(&lease)]);
-
-    let result = drain_synchronous_outbox(&protocol, &outbox, call.call_id, &mut lease)
-        .await
-        .expect("drain outbox");
-
-    assert_eq!(result, OutboxDrainOutcome::Drained);
-    assert!(outbox
-        .next_batch(call.call_id)
-        .expect("read drained outbox")
-        .is_none());
-    let requests = protocol
-        .observation_requests
-        .lock()
-        .expect("observation requests");
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].lease.request_id, expected_first.request_id);
-    assert_eq!(
-        requests[0].lease.idempotency_key,
-        expected_first.idempotency_key
-    );
-    assert_eq!(requests[0].observations.len(), 25);
-    assert_eq!(requests[1].observations.len(), 5);
-}
-
-#[tokio::test]
-async fn lost_lease_leaves_synchronous_outbox_batch_unacknowledged() {
-    let dir = tempfile::tempdir().expect("temporary app data");
-    let mut lease = lease(None);
-    let outbox = DiscoveryOutbox::open(
-        dir.path(),
-        "wss://relay-one.example",
-        "31029e74e8d93b2238fdf0be93f56a084b923e4e5b6ff55b03109bd86a87061b",
-    )
-    .expect("open outbox");
-    let call = outbox
-        .begin_call(lease.run.run_id, DiscoveryProvider::ExaSearch)
-        .expect("write call intent");
-    outbox
-        .record_results(
-            call.call_id,
-            Some("exa-request-1".to_owned()),
-            1,
-            vec![synchronous_observation(
-                DiscoveryProvider::ExaSearch,
-                "exa-record-1",
-            )],
-        )
-        .expect("record normalized results");
-    let expected = outbox
-        .next_batch(call.call_id)
-        .expect("read outbox")
-        .expect("first batch");
-    let protocol = FakeProtocol::new(vec![DiscoveryWorkerReceiptOutcome::LostLease(
-        lease.run.clone(),
-    )]);
-
-    let result = drain_synchronous_outbox(&protocol, &outbox, call.call_id, &mut lease)
-        .await
-        .expect("drain outbox");
-
-    assert_eq!(result, OutboxDrainOutcome::LostLease);
-    assert_eq!(
-        outbox
-            .next_batch(call.call_id)
-            .expect("read retained batch")
-            .expect("retained batch"),
-        expected
-    );
-}
-
 #[path = "worker_host_integration_tests.rs"]
 mod integration_tests;
+#[path = "worker_host_outbox_tests.rs"]
+mod outbox_tests;

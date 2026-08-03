@@ -1,10 +1,20 @@
-use std::{
-    sync::atomic::{AtomicU32, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 
+use super::{
+    coordinator::{
+        execute_source_plan, PlanExecution, SourceExecution, SourceExecutor, SourceFuture,
+    },
+    outbox::{DiscoveryOutbox, SynchronousCallState},
+    outscraper::OutscraperError,
+    protocol::WorkerProtocol,
+    provider_context::{LocalProviderCredentials, ProductionProviderClients},
+    source_errors::{
+        brave_failure, brave_is_uncertain, exa_failure, exa_is_uncertain, outscraper_failure,
+    },
+    source_executor_helpers::{heartbeat_interval, lease_request, terminal_source_execution},
+};
 use buzz_core_pkg::{
-    discovery::{DiscoveryProvider, DiscoverySource},
+    discovery::{DiscoveryProvider, DiscoveryRunProjection, DiscoverySource},
     discovery_worker::{
         DiscoveryCheckpointKind, DiscoveryRunSourceFailureClass, DiscoveryRunSourceProjection,
         DiscoveryRunSourceStatus, DiscoveryWorkerCheckpoint, DiscoveryWorkerCheckpointRequest,
@@ -16,81 +26,8 @@ use buzz_core_pkg::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use zeroize::Zeroizing;
-
-use super::{
-    brave::BraveSearchClient,
-    coordinator::{
-        execute_source_plan, PlanExecution, SourceExecution, SourceExecutor, SourceFuture,
-    },
-    exa::ExaSearchClient,
-    outbox::{DiscoveryOutbox, SynchronousCallState},
-    outscraper::{OutscraperClient, OutscraperError},
-    protocol::WorkerProtocol,
-    source_errors::{
-        brave_failure, brave_is_uncertain, exa_failure, exa_is_uncertain, outscraper_failure,
-    },
-};
-use crate::discovery_credentials::{self, DiscoveryCredentialProvider};
 
 const OBSERVATION_BATCH_SIZE: usize = 25;
-
-pub(super) struct ProductionProviderClients {
-    outscraper: OutscraperClient,
-    brave: BraveSearchClient,
-    exa: ExaSearchClient,
-}
-
-impl ProductionProviderClients {
-    pub(super) fn new() -> Result<Self, String> {
-        Ok(Self {
-            outscraper: OutscraperClient::production().map_err(|error| error.to_string())?,
-            brave: BraveSearchClient::production().map_err(|error| error.to_string())?,
-            exa: ExaSearchClient::production().map_err(|error| error.to_string())?,
-        })
-    }
-}
-
-pub(super) struct LocalProviderCredentials {
-    outscraper: Option<Zeroizing<String>>,
-    brave: Option<Zeroizing<String>>,
-    exa: Option<Zeroizing<String>>,
-}
-
-impl LocalProviderCredentials {
-    pub(super) fn load() -> Result<Self, String> {
-        Ok(Self {
-            outscraper: discovery_credentials::load_discovery_credential(
-                DiscoveryCredentialProvider::Outscraper,
-            )?,
-            brave: discovery_credentials::load_discovery_credential(
-                DiscoveryCredentialProvider::BraveSearch,
-            )?,
-            exa: discovery_credentials::load_discovery_credential(
-                DiscoveryCredentialProvider::ExaSearch,
-            )?,
-        })
-    }
-
-    pub(super) fn available_providers(&self) -> Vec<DiscoveryProvider> {
-        [
-            (DiscoveryProvider::Outscraper, self.outscraper.is_some()),
-            (DiscoveryProvider::BraveSearch, self.brave.is_some()),
-            (DiscoveryProvider::ExaSearch, self.exa.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(provider, available)| available.then_some(provider))
-        .collect()
-    }
-
-    fn credential(&self, provider: DiscoveryProvider) -> Option<&Zeroizing<String>> {
-        match provider {
-            DiscoveryProvider::Outscraper => self.outscraper.as_ref(),
-            DiscoveryProvider::BraveSearch => self.brave.as_ref(),
-            DiscoveryProvider::ExaSearch => self.exa.as_ref(),
-        }
-    }
-}
 
 pub(super) enum CoordinatedRunOutcome {
     Complete(DiscoveryWorkerLeaseProjection),
@@ -238,32 +175,71 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             .credential(provider)
             .ok_or_else(|| "configured Brave Search credential disappeared".to_owned())?;
         let search = self.lease.lock().await.business_search.clone();
+        let provider_request_id = intent.call_id.to_string();
+        if !self
+            .ensure_submitted(provider, &provider_request_id)
+            .await?
+        {
+            return Ok(SourceExecution::LostLease);
+        }
         let outcome = self
             .clients
             .brave
-            .search_with_remaining(
+            .search_with_hooks(
                 &search,
                 credential,
                 || usize::try_from(self.dynamic_remaining(remaining_target)).unwrap_or(usize::MAX),
+                || async { self.heartbeat_once().await.unwrap_or(false) },
+                |page, request_count| {
+                    let provider_request_id = provider_request_id.clone();
+                    async move {
+                        self.outbox.append_results(
+                            intent.call_id,
+                            Some(provider_request_id),
+                            request_count,
+                            page,
+                        )?;
+                        if !self.drain_outbox(intent.call_id).await? {
+                            return Err(
+                                "Discovery lease was lost while storing a Brave page".to_owned()
+                            );
+                        }
+                        Ok(())
+                    }
+                },
                 &self.cancellation,
             )
             .await;
         match outcome {
             Ok(outcome) => {
-                self.outbox.record_results(
+                self.outbox.mark_response_complete(
                     intent.call_id,
-                    None,
+                    Some(provider_request_id),
                     outcome.request_count,
-                    outcome.observations,
                 )?;
                 self.finish_synchronous(intent.call_id, provider).await
             }
             Err(error) => {
+                if self.cancellation.is_cancelled() {
+                    return Ok(SourceExecution::LostLease);
+                }
+                if let Some(local_error) = error.local_error {
+                    return Err(local_error);
+                }
+                if error.request_count > 0 {
+                    self.outbox.append_results(
+                        intent.call_id,
+                        Some(provider_request_id),
+                        error.request_count,
+                        Vec::new(),
+                    )?;
+                }
                 self.finish_synchronous_error(
                     intent.call_id,
                     provider,
-                    brave_failure(error),
-                    brave_is_uncertain(error),
+                    brave_failure(error.error),
+                    brave_is_uncertain(error.error),
+                    error.request_count,
                 )
                 .await
             }
@@ -292,10 +268,11 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         let outcome = self
             .clients
             .exa
-            .search(
+            .search_with_preflight(
                 &search,
                 credential,
                 usize::try_from(remaining).unwrap_or(usize::MAX),
+                || async { self.heartbeat_once().await.unwrap_or(false) },
                 &self.cancellation,
             )
             .await;
@@ -313,8 +290,9 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 self.finish_synchronous_error(
                     intent.call_id,
                     provider,
-                    exa_failure(error),
-                    exa_is_uncertain(error),
+                    exa_failure(error.error),
+                    exa_is_uncertain(error.error),
+                    error.request_count,
                 )
                 .await
             }
@@ -337,10 +315,27 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             return Ok(None);
         };
         match self.outbox.state_for(run_id, provider) {
-            Some(SynchronousCallState::Ready) => self
-                .finish_synchronous(call.call_id, provider)
-                .await
-                .map(Some),
+            Some(SynchronousCallState::Ready) => {
+                let metadata = self
+                    .outbox
+                    .ready_metadata(call.call_id)?
+                    .ok_or_else(|| "Discovery synchronous results disappeared".to_owned())?;
+                if metadata.response_complete {
+                    self.finish_synchronous(call.call_id, provider)
+                        .await
+                        .map(Some)
+                } else {
+                    self.finish_synchronous_error(
+                        call.call_id,
+                        provider,
+                        DiscoveryRunSourceFailureClass::OutcomeUnknown,
+                        true,
+                        metadata.request_count,
+                    )
+                    .await
+                    .map(Some)
+                }
+            }
             Some(SynchronousCallState::Intent) => {
                 self.outbox.mark_outcome_unknown(call.call_id)?;
                 self.mark_synchronous_outcome_unknown(Some(call.call_id), provider, 1)
@@ -365,6 +360,9 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             .outbox
             .ready_metadata(call_id)?
             .ok_or_else(|| "Discovery synchronous results are not recoverable".to_owned())?;
+        if !metadata.response_complete {
+            return Err("Discovery synchronous response is incomplete".to_owned());
+        }
         if metadata.request_count == 0 {
             if !self
                 .source_progress(
@@ -433,14 +431,67 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         provider: DiscoveryProvider,
         failure: DiscoveryRunSourceFailureClass,
         uncertain: bool,
+        request_count: u16,
     ) -> Result<SourceExecution, String> {
         if self.cancellation.is_cancelled() {
             return Ok(SourceExecution::LostLease);
         }
+        if let Some(metadata) = self.outbox.ready_metadata(call_id)? {
+            let before = self.source_state(provider).await?.retained_count;
+            if !self
+                .ensure_submitted(provider, &metadata.provider_request_id)
+                .await?
+            {
+                return Ok(SourceExecution::LostLease);
+            }
+            if !self.drain_outbox(call_id).await? {
+                return Ok(SourceExecution::LostLease);
+            }
+            if metadata.item_count > 0
+                && !self
+                    .checkpoint(
+                        DiscoveryCheckpointKind::ProviderResultsReady,
+                        provider,
+                        None,
+                        Some(metadata.item_count),
+                    )
+                    .await?
+            {
+                return Ok(SourceExecution::LostLease);
+            }
+            let status = if uncertain {
+                DiscoveryRunSourceStatus::OutcomeUnknown
+            } else {
+                DiscoveryRunSourceStatus::Failed
+            };
+            let failure = if uncertain {
+                DiscoveryRunSourceFailureClass::OutcomeUnknown
+            } else {
+                failure
+            };
+            if !self
+                .source_progress(
+                    provider,
+                    status,
+                    Some(metadata.provider_request_id),
+                    u32::from(metadata.request_count.max(request_count)),
+                    metadata.item_count,
+                    Some(failure),
+                )
+                .await?
+            {
+                return Ok(SourceExecution::LostLease);
+            }
+            self.outbox.remove_after_relay_ack(call_id)?;
+            let after = self.source_state(provider).await?.retained_count;
+            let retained = after.saturating_sub(before);
+            self.retained.fetch_add(retained, Ordering::AcqRel);
+            return Ok(SourceExecution::Failed { retained });
+        }
         if uncertain {
             self.outbox.mark_outcome_unknown(call_id)?;
             return self
-                .mark_synchronous_outcome_unknown(Some(call_id), provider, 1)
+                .mark_synchronous_outcome_unknown(Some(call_id), provider, u32::from(request_count))
                 .await;
         }
         if !self
@@ -448,7 +499,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 provider,
                 DiscoveryRunSourceStatus::Failed,
                 None,
-                1,
+                u32::from(request_count),
                 0,
                 Some(failure),
             )
@@ -718,8 +769,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 self.merge_lease(updated).await?;
                 Ok(true)
             }
-            DiscoveryWorkerReceiptOutcome::LostLease(_) => {
-                self.cancellation.cancel();
+            DiscoveryWorkerReceiptOutcome::LostLease(run) => {
+                self.handle_lost_lease(&run)?;
                 Ok(false)
             }
             _ => Err("Discovery checkpoint returned an invalid outcome".to_owned()),
@@ -750,8 +801,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 self.merge_lease(updated).await?;
                 Ok(true)
             }
-            DiscoveryWorkerReceiptOutcome::LostLease(_) => {
-                self.cancellation.cancel();
+            DiscoveryWorkerReceiptOutcome::LostLease(run) => {
+                self.handle_lost_lease(&run)?;
                 Ok(false)
             }
             _ => Err("Discovery source progress returned an invalid outcome".to_owned()),
@@ -778,8 +829,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
                     self.merge_lease(stored.lease).await?;
                 }
-                DiscoveryWorkerReceiptOutcome::LostLease(_) => {
-                    self.cancellation.cancel();
+                DiscoveryWorkerReceiptOutcome::LostLease(run) => {
+                    self.handle_lost_lease(&run)?;
                     return Ok(false);
                 }
                 _ => {
@@ -814,8 +865,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                     self.merge_lease(stored.lease).await?;
                     self.outbox.acknowledge_batch(call_id, batch.batch_index)?;
                 }
-                DiscoveryWorkerReceiptOutcome::LostLease(_) => {
-                    self.cancellation.cancel();
+                DiscoveryWorkerReceiptOutcome::LostLease(run) => {
+                    self.handle_lost_lease(&run)?;
                     return Ok(false);
                 }
                 _ => {
@@ -849,8 +900,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 self.merge_lease(updated).await?;
                 Ok(true)
             }
-            Ok(DiscoveryWorkerReceiptOutcome::LostLease(_)) => {
-                self.cancellation.cancel();
+            Ok(DiscoveryWorkerReceiptOutcome::LostLease(run)) => {
+                self.handle_lost_lease(&run)?;
                 Ok(false)
             }
             Ok(_) => {
@@ -930,42 +981,18 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         Ok(())
     }
 
+    fn handle_lost_lease(&self, run: &DiscoveryRunProjection) -> Result<(), String> {
+        self.cancellation.cancel();
+        if run.state.is_terminal() {
+            self.outbox.remove_terminal_run(run.run_id)?;
+        }
+        Ok(())
+    }
+
     fn dynamic_remaining(&self, source_remaining: u32) -> u32 {
         let global = self
             .target
             .saturating_sub(self.retained.load(Ordering::Acquire));
         source_remaining.min(global)
     }
-}
-
-fn terminal_source_execution(state: &DiscoveryRunSourceProjection) -> Option<SourceExecution> {
-    match state.status {
-        DiscoveryRunSourceStatus::Completed
-        | DiscoveryRunSourceStatus::Exhausted
-        | DiscoveryRunSourceStatus::SkippedTargetMet => {
-            Some(SourceExecution::Succeeded { retained: 0 })
-        }
-        DiscoveryRunSourceStatus::Failed | DiscoveryRunSourceStatus::OutcomeUnknown => {
-            Some(SourceExecution::Failed { retained: 0 })
-        }
-        DiscoveryRunSourceStatus::Cancelled => Some(SourceExecution::Cancelled),
-        DiscoveryRunSourceStatus::Pending | DiscoveryRunSourceStatus::Active => None,
-    }
-}
-
-fn lease_request(lease: &DiscoveryWorkerLeaseProjection) -> DiscoveryWorkerLeaseRequest {
-    DiscoveryWorkerLeaseRequest {
-        request_id: Uuid::new_v4(),
-        idempotency_key: Uuid::new_v4(),
-        worker_id: lease.worker_id,
-        run_id: lease.run.run_id,
-        lease_id: lease.lease_id,
-    }
-}
-
-fn heartbeat_interval(lease: &DiscoveryWorkerLeaseProjection) -> Duration {
-    let remaining = (lease.lease_until - chrono::Utc::now())
-        .to_std()
-        .unwrap_or(Duration::from_millis(150));
-    (remaining / 3).clamp(Duration::from_millis(50), Duration::from_secs(2))
 }

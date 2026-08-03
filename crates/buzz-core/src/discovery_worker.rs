@@ -73,7 +73,10 @@ pub struct DiscoveryBusinessObservationInput {
     /// Deterministic UUIDv5 derived from provider plus provider record identifier.
     pub observation_id: Uuid,
     /// Provider that produced this observation.
-    #[serde(default = "default_outscraper_provider")]
+    #[serde(
+        default = "default_outscraper_provider",
+        skip_serializing_if = "is_outscraper_provider"
+    )]
     pub provider: DiscoveryProvider,
     /// Stable provider identifier selected during normalization.
     pub provider_record_id: String,
@@ -120,6 +123,7 @@ pub struct DiscoveryBusinessObservationInput {
     /// Public representative image URL.
     pub image_url: Option<String>,
     /// Bounded public provider summary, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
@@ -307,6 +311,9 @@ pub fn deterministic_business_observation_id(
     provider: DiscoveryProvider,
     provider_record_id: &str,
 ) -> Uuid {
+    if provider == DiscoveryProvider::Outscraper {
+        return legacy_outscraper_business_observation_id(provider_record_id);
+    }
     let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"colony.discovery.business/v2");
     let provider_record = format!("{}\0{provider_record_id}", provider_identity_text(provider));
     Uuid::new_v5(&namespace, provider_record.as_bytes())
@@ -377,6 +384,10 @@ fn provider_identity_text(provider: DiscoveryProvider) -> &'static str {
 
 fn default_outscraper_provider() -> DiscoveryProvider {
     DiscoveryProvider::Outscraper
+}
+
+fn is_outscraper_provider(provider: &DiscoveryProvider) -> bool {
+    *provider == DiscoveryProvider::Outscraper
 }
 
 fn validate_identifier(
@@ -809,10 +820,10 @@ pub struct DiscoveryWorkerLeaseProjection {
     /// Immutable non-secret Businesses query captured when the run started.
     pub business_search: DiscoveryBusinessSearchSpec,
     /// Immutable source configuration captured when the run started.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DiscoverySourceConfig::is_default")]
     pub source_config: DiscoverySourceConfig,
     /// Durable state for each source in exact plan order.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_states: Vec<DiscoveryRunSourceProjection>,
     /// Latest durable restart checkpoint, when present.
     pub last_checkpoint: Option<DiscoveryWorkerCheckpoint>,

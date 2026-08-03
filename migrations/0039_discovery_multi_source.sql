@@ -140,36 +140,15 @@ ALTER TABLE discovery_business_observations
     ADD COLUMN normalized_name_locality_digest BYTEA CHECK (
         normalized_name_locality_digest IS NULL
         OR octet_length(normalized_name_locality_digest) = 32
-    );
+    ),
+    ADD COLUMN dedupe_digest_version SMALLINT NOT NULL DEFAULT 0
+        CHECK (dedupe_digest_version IN (0, 1));
 
--- Preserve older paid Outscraper records while making them participate in the
--- same workspace-wide cross-provider deduplication keys as new observations.
-UPDATE discovery_business_observations
-SET canonical_domain_digest = sha256(convert_to(
-        regexp_replace(
-            lower(split_part(split_part(regexp_replace(website, '^https?://', '', 'i'), '/', 1), ':', 1)),
-            '^www[.]',
-            ''
-        ),
-        'UTF8'
-    ))
-WHERE website IS NOT NULL;
-
-UPDATE discovery_business_observations
-SET normalized_phone_digest = sha256(convert_to(
-        regexp_replace(phone, '[^0-9+]', '', 'g'),
-        'UTF8'
-    ))
-WHERE phone IS NOT NULL
-  AND length(regexp_replace(phone, '[^0-9]', '', 'g')) >= 7;
-
-UPDATE discovery_business_observations
-SET normalized_name_locality_digest = sha256(convert_to(
-        lower(regexp_replace(name, '[^[:alnum:]]', '', 'g')) || chr(31) ||
-        lower(regexp_replace(COALESCE(city, state, country), '[^[:alnum:]]', '', 'g')),
-        'UTF8'
-    ))
-WHERE COALESCE(city, state, country) IS NOT NULL;
+-- Existing paid records are backfilled after SQL migration by the exact Rust
+-- normalization functions used for new observations. SQL URL/Unicode/phone
+-- approximations would create different identities and allow rediscovery.
+ALTER TABLE discovery_business_observations
+    ALTER COLUMN dedupe_digest_version SET DEFAULT 1;
 
 CREATE INDEX discovery_business_observations_domain_dedupe_idx
     ON discovery_business_observations (community_id, canonical_domain_digest)

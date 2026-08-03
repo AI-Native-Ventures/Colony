@@ -275,6 +275,27 @@ async fn generic_agent_and_desktop_worker_share_the_discovery_primitive() {
     provision_member(&pool, community_id, &agent).await;
     provision_member(&pool, community_id, &desktop_worker).await;
     sqlx::query(
+        "UPDATE users SET agent_owner_pubkey=$3 \
+         WHERE community_id=$1 AND pubkey=$2",
+    )
+    .bind(community_id)
+    .bind(agent.public_key().to_bytes().as_slice())
+    .bind(desktop_worker.public_key().to_bytes().as_slice())
+    .execute(&pool)
+    .await
+    .expect("link generic agent to its desktop owner");
+    sqlx::query(
+        "INSERT INTO discovery_actor_grants \
+         (community_id,actor_pubkey,capability,granted_by,active) \
+         VALUES ($1,$2,'discovery.run',$3,TRUE)",
+    )
+    .bind(community_id)
+    .bind(agent.public_key().to_bytes().as_slice())
+    .bind(desktop_worker.public_key().to_bytes().as_slice())
+    .execute(&pool)
+    .await
+    .expect("grant generic agent Discovery capability");
+    sqlx::query(
         "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
          VALUES ($1,TRUE,now()) ON CONFLICT (community_id) \
          DO UPDATE SET active=TRUE,updated_at=now()",

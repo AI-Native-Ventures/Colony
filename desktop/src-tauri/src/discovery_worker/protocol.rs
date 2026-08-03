@@ -1,13 +1,15 @@
 use std::{future::Future, pin::Pin, time::Duration};
 
 use buzz_core_pkg::{
+    discovery::{DiscoveryOperation, DiscoveryRunProjection, DiscoveryRunRequest},
     discovery_worker::{
         DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
         DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerOperation,
         DiscoveryWorkerReceiptOutcome, DiscoveryWorkerSourceProgressRequest,
     },
-    kind::KIND_DISCOVERY_WORKER_RECEIPT,
+    kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKER_RECEIPT},
 };
+use buzz_sdk_pkg::discovery::{build_discovery_status_action, parse_discovery_receipt};
 use buzz_sdk_pkg::discovery_worker::{
     build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
     build_discovery_worker_complete_action, build_discovery_worker_fail_action,
@@ -22,8 +24,11 @@ use crate::{app_state::AppState, relay};
 
 pub(super) type ProtocolFuture<'a> =
     Pin<Box<dyn Future<Output = Result<DiscoveryWorkerReceiptOutcome, String>> + Send + 'a>>;
+pub(super) type RunStatusFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<DiscoveryRunProjection, String>> + Send + 'a>>;
 
 pub(super) trait WorkerProtocol: Send + Sync {
+    fn status(&self, run_id: Uuid) -> RunStatusFuture<'_>;
     fn claim(&self, request: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_>;
     fn heartbeat(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
     fn checkpoint(&self, request: DiscoveryWorkerCheckpointRequest) -> ProtocolFuture<'_>;
@@ -159,6 +164,78 @@ impl<'a> RelayWorkerProtocol<'a> {
 }
 
 impl WorkerProtocol for RelayWorkerProtocol<'_> {
+    fn status(&self, run_id: Uuid) -> RunStatusFuture<'_> {
+        Box::pin(async move {
+            self.ensure_current()?;
+            let request = DiscoveryRunRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                run_id,
+            };
+            let event = build_discovery_status_action(self.relay_pubkey, &request)
+                .map_err(|_| "invalid Discovery status request".to_string())?
+                .sign_with_keys(&self.keys)
+                .map_err(|_| "failed to sign Discovery status request".to_string())?;
+            let response = relay::submit_signed_event_at_with_keys(
+                &event,
+                self.state,
+                &self.api_base_url,
+                &self.keys,
+            )
+            .await?;
+            let message: serde_json::Value = serde_json::from_str(&response.message)
+                .map_err(|_| "Discovery status response is malformed".to_string())?;
+            let receipt_id = message
+                .get("receipt_event_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "Discovery status response has no receipt".to_string())?;
+            let filter = json!({
+                "ids": [receipt_id],
+                "authors": [self.relay_pubkey.to_hex()],
+                "kinds": [KIND_DISCOVERY_RECEIPT],
+                "#p": [self.keys.public_key().to_hex()],
+                "limit": 1
+            });
+            for _ in 0..10 {
+                let events = relay::query_relay_at_with_keys(
+                    self.state,
+                    &self.api_base_url,
+                    std::slice::from_ref(&filter),
+                    &self.keys,
+                    None,
+                )
+                .await?;
+                if let Some(receipt_event) = events.first() {
+                    receipt_event
+                        .verify()
+                        .map_err(|_| "Discovery status receipt signature is invalid".to_string())?;
+                    if receipt_event.pubkey != self.relay_pubkey {
+                        return Err(
+                            "Discovery status receipt has the wrong relay signer".to_string()
+                        );
+                    }
+                    let parsed = parse_discovery_receipt(receipt_event)
+                        .map_err(|_| "Discovery status receipt is invalid".to_string())?;
+                    if parsed.actor_pubkey != self.keys.public_key()
+                        || parsed.action_event_id != event.id
+                        || parsed.receipt.operation != DiscoveryOperation::Status
+                        || parsed.receipt.request_id != request.request_id
+                        || parsed.receipt.idempotency_key != request.idempotency_key
+                        || parsed.receipt.run.run_id != run_id
+                    {
+                        return Err(
+                            "Discovery status receipt does not match the request".to_string()
+                        );
+                    }
+                    self.ensure_current()?;
+                    return Ok(parsed.receipt.run);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err("Discovery status receipt was not found".to_string())
+        })
+    }
+
     fn claim(&self, request: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
         Box::pin(async move {
             let builder = build_discovery_worker_claim_action(self.relay_pubkey, &request)

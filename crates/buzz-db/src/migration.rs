@@ -4,7 +4,11 @@
 //! multi-tenant rewrite owns a clean consolidated `0001`; legacy single-tenant
 //! cutover/backfill is a separate operator script, not startup migration state.
 
-use sqlx::PgPool;
+use buzz_core::discovery_worker::{
+    canonical_business_domain_digest, normalized_business_name_locality_digest,
+    normalized_business_phone_digest,
+};
+use sqlx::{PgPool, Row};
 
 use crate::Result;
 
@@ -14,6 +18,7 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     reject_legacy_nip_rs_cardinality_ambiguity(pool).await?;
     MIGRATOR.run(pool).await?;
+    backfill_discovery_dedupe_digests(pool).await?;
     // The replica-fence proof (see `replica_fence`) requires the commit-time
     // `created_at` floor trigger from migration 0021 — correctly shaped — on
     // the `events` parent and every partition. `CREATE TABLE .. PARTITION OF`
@@ -22,6 +27,80 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     // guard, so migration fails closed if any is missing. (The fence probe
     // re-runs this same check at startup on non-migrating relays.)
     crate::replica_fence::verify_floor_guard_catalog(pool).await?;
+    Ok(())
+}
+
+/// Backfill pre-multi-source paid observations with the exact runtime
+/// normalizers. The version cursor makes this bounded, restart-safe, and
+/// idempotent even when multiple relay instances start together.
+async fn backfill_discovery_dedupe_digests(pool: &PgPool) -> Result<()> {
+    const BATCH_SIZE: i64 = 500;
+    loop {
+        let mut tx = pool.begin().await?;
+        let rows = sqlx::query(
+            "SELECT community_id,id,name,website,phone,city,state,country \
+             FROM discovery_business_observations \
+             WHERE dedupe_digest_version=0 \
+             ORDER BY community_id,id FOR UPDATE SKIP LOCKED LIMIT $1",
+        )
+        .bind(BATCH_SIZE)
+        .fetch_all(&mut *tx)
+        .await?;
+        if rows.is_empty() {
+            tx.commit().await?;
+            break;
+        }
+
+        let mut community_ids = Vec::with_capacity(rows.len());
+        let mut observation_ids = Vec::with_capacity(rows.len());
+        let mut domain_digests = Vec::with_capacity(rows.len());
+        let mut phone_digests = Vec::with_capacity(rows.len());
+        let mut name_locality_digests = Vec::with_capacity(rows.len());
+        for row in rows {
+            let community_id: uuid::Uuid = row.try_get("community_id")?;
+            let observation_id: uuid::Uuid = row.try_get("id")?;
+            let name: String = row.try_get("name")?;
+            let website: Option<String> = row.try_get("website")?;
+            let phone: Option<String> = row.try_get("phone")?;
+            let city: Option<String> = row.try_get("city")?;
+            let state: Option<String> = row.try_get("state")?;
+            let country: Option<String> = row.try_get("country")?;
+            let domain_digest = website
+                .as_deref()
+                .and_then(canonical_business_domain_digest);
+            let phone_digest = phone.as_deref().and_then(normalized_business_phone_digest);
+            let name_locality_digest = normalized_business_name_locality_digest(
+                &name,
+                city.as_deref(),
+                state.as_deref(),
+                country.as_deref(),
+            );
+            community_ids.push(community_id);
+            observation_ids.push(observation_id);
+            domain_digests.push(domain_digest.map(Vec::from));
+            phone_digests.push(phone_digest.map(Vec::from));
+            name_locality_digests.push(name_locality_digest.map(Vec::from));
+        }
+        sqlx::query(
+            "UPDATE discovery_business_observations observation \
+             SET canonical_domain_digest=batch.domain_digest, \
+                 normalized_phone_digest=batch.phone_digest, \
+                 normalized_name_locality_digest=batch.name_locality_digest, \
+                 dedupe_digest_version=1 \
+             FROM UNNEST($1::uuid[],$2::uuid[],$3::bytea[],$4::bytea[],$5::bytea[]) \
+                  AS batch(community_id,id,domain_digest,phone_digest,name_locality_digest) \
+             WHERE observation.community_id=batch.community_id \
+               AND observation.id=batch.id AND observation.dedupe_digest_version=0",
+        )
+        .bind(&community_ids)
+        .bind(&observation_ids)
+        .bind(&domain_digests)
+        .bind(&phone_digests)
+        .bind(&name_locality_digests)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+    }
     Ok(())
 }
 
@@ -561,7 +640,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 39);
+        assert_eq!(migrations.len(), 40);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -607,6 +686,13 @@ mod tests {
             .sql
             .as_str()
             .contains("CREATE TABLE discovery_campaigns"));
+        assert_eq!(migrations[38].version, 39);
+        assert!(migrations[38]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE discovery_run_source_plans"));
+        assert_eq!(migrations[39].version, 40);
+        assert!(migrations[39].sql.as_str().contains("'source_progress'"));
         assert!(migrations[0]
             .sql
             .as_str()
@@ -1037,6 +1123,8 @@ mod tests {
         assert!(sql.contains(
             "PRIMARY KEY (community_id, run_id, provider, provider_request_id, batch_index)"
         ));
+        assert!(sql.contains("dedupe_digest_version"));
+        assert!(!sql.contains("UPDATE discovery_business_observations"));
         assert!(!sql.contains("api_key"));
         assert!(!sql.contains("authorization"));
         assert!(!sql.contains("raw_response"));
@@ -1343,6 +1431,223 @@ mod tests {
         .await
         .expect("read post-push search behavior");
         assert_eq!(after, vec![(1, Some(true)), (30_350, None)]);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn discovery_multi_source_upgrade_preserves_legacy_outscraper_records() {
+        let pool = connect_test_pool().await;
+        reset_public_schema(&pool).await;
+        MIGRATOR
+            .run_to(38, &pool)
+            .await
+            .expect("apply migrations through the legacy Discovery schema");
+
+        let community_id = uuid::Uuid::new_v4();
+        let campaign_id = uuid::Uuid::new_v4();
+        let run_id = uuid::Uuid::new_v4();
+        let actor = vec![7_u8; 32];
+        sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
+            .bind(community_id)
+            .bind(format!("pre-0039-{}.example", community_id.simple()))
+            .execute(&pool)
+            .await
+            .expect("insert legacy community");
+        sqlx::query(
+            "INSERT INTO discovery_campaigns \
+             (community_id,id,created_by,name,industry_id,industry_name,vertical_id,vertical_name,\
+              query,location,target,language,region) \
+             VALUES ($1,$2,$3,'Legacy dentists','healthcare','Healthcare','dentists','Dentists',\
+                     'dentists','Sandton, South Africa',100,'en','ZA')",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .bind(&actor)
+        .execute(&pool)
+        .await
+        .expect("insert legacy Campaign");
+        sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,state,\
+              completed_steps,total_steps,created_at,updated_at) \
+             VALUES ($1,$2,$3,$4,$5,'succeeded',1,1,now() - interval '1 minute',now())",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .bind(campaign_id)
+        .bind(&actor)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("insert legacy run");
+        sqlx::query(
+            "INSERT INTO discovery_run_business_searches \
+             (community_id,run_id,query,location,result_limit,language,region) \
+             VALUES ($1,$2,'dentists','Sandton, South Africa',100,'en','ZA')",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("insert legacy search");
+        sqlx::query(
+            "INSERT INTO discovery_run_checkpoints \
+             (community_id,run_id,sequence,checkpoint_kind,provider,provider_request_id,\
+              request_fingerprint,action_event_id) \
+             VALUES ($1,$2,1,'provider_submitted','outscraper','legacy-job-1',$3,$4)",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .bind(vec![8_u8; 32])
+        .bind(vec![9_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("insert legacy checkpoint");
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,website,phone,city,\
+              country,country_code,observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper','place:legacy-1','Legacy Dental',\
+                     'https://user:pass@www.bücher.example:8443/practice','27+11 555 0100','München',\
+                     'South Africa','ZA',$4)",
+        )
+        .bind(community_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(run_id)
+        .bind(vec![10_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("insert legacy Lead observation");
+        sqlx::query(
+            "INSERT INTO discovery_usage \
+             (community_id,run_id,provider,provider_request_id,stored_count,existing_count,\
+              returned_count) VALUES ($1,$2,'outscraper','legacy-job-1',1,0,1)",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("insert legacy usage");
+        sqlx::query(
+            "INSERT INTO discovery_observation_batches \
+             (community_id,run_id,provider_request_id,batch_index,batch_fingerprint,\
+              accepted_count,existing_count) VALUES ($1,$2,'legacy-job-1',0,$3,1,0)",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .bind(vec![11_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("insert legacy observation batch");
+
+        run_migrations(&pool)
+            .await
+            .expect("upgrade populated Discovery database");
+
+        let campaign: (String, Vec<String>) = sqlx::query_as(
+            "SELECT source_mode,source_keys FROM discovery_campaigns \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read upgraded Campaign");
+        assert_eq!(
+            campaign,
+            ("waterfall".to_owned(), vec!["google_maps".to_owned()])
+        );
+        let plan: (String, Vec<String>) = sqlx::query_as(
+            "SELECT source_mode,source_keys FROM discovery_run_source_plans \
+             WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read upgraded immutable run plan");
+        assert_eq!(plan, campaign);
+        let source: (String, String, String, i32, i32, i32, i32) = sqlx::query_as(
+            "SELECT source_key,provider,status,request_count,returned_count,retained_count,\
+                    duplicate_count FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read upgraded source progress");
+        assert_eq!(
+            source,
+            (
+                "google_maps".to_owned(),
+                "outscraper".to_owned(),
+                "completed".to_owned(),
+                1,
+                1,
+                1,
+                0,
+            )
+        );
+        #[derive(sqlx::FromRow)]
+        struct UpgradedObservation {
+            provider: String,
+            canonical_domain_digest: Option<Vec<u8>>,
+            normalized_phone_digest: Option<Vec<u8>>,
+            normalized_name_locality_digest: Option<Vec<u8>>,
+            dedupe_digest_version: i16,
+        }
+        let observation: UpgradedObservation = sqlx::query_as(
+            "SELECT provider,canonical_domain_digest,normalized_phone_digest,\
+                        normalized_name_locality_digest,dedupe_digest_version \
+                 FROM discovery_business_observations \
+                 WHERE community_id=$1 AND first_run_id=$2",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read upgraded Lead observation");
+        assert_eq!(observation.provider, "outscraper");
+        assert_eq!(
+            observation.canonical_domain_digest,
+            canonical_business_domain_digest("https://user:pass@www.bücher.example:8443/practice")
+                .map(Vec::from)
+        );
+        assert_eq!(
+            observation.normalized_phone_digest,
+            normalized_business_phone_digest("27+11 555 0100").map(Vec::from)
+        );
+        assert_eq!(
+            observation.normalized_name_locality_digest,
+            normalized_business_name_locality_digest(
+                "Legacy Dental",
+                Some("München"),
+                None,
+                Some("South Africa")
+            )
+            .map(Vec::from)
+        );
+        assert_eq!(observation.dedupe_digest_version, 1);
+        let usage_provider: String = sqlx::query_scalar(
+            "SELECT provider FROM discovery_usage WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read preserved usage");
+        assert_eq!(usage_provider, "outscraper");
+        let batch_provider: String = sqlx::query_scalar(
+            "SELECT provider FROM discovery_observation_batches \
+             WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read preserved batch");
+        assert_eq!(batch_provider, "outscraper");
     }
 
     #[tokio::test]

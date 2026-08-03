@@ -770,3 +770,40 @@ fn count_to_u32(value: i64, entity: &str) -> Result<u32> {
     u32::try_from(value)
         .map_err(|_| DbError::InvalidData(format!("Discovery {entity} count is invalid")))
 }
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+    use buzz_core::discovery_workspace::{DiscoveryCampaignInput, DiscoveryWorkspaceActionPayload};
+
+    #[test]
+    fn default_source_campaign_keeps_the_released_workspace_fingerprint_shape() {
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::from_u128(1),
+            idempotency_key: Uuid::from_u128(2),
+            payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
+                campaign: Box::new(DiscoveryCampaignInput {
+                    campaign_id: Uuid::from_u128(3),
+                    name: "Legacy dentists".into(),
+                    industry_id: "healthcare".into(),
+                    industry_name: "Healthcare".into(),
+                    vertical_id: "dentists".into(),
+                    vertical_name: "Dentists".into(),
+                    query: "dentists".into(),
+                    location: "Sandton, South Africa".into(),
+                    target: 100,
+                    description: None,
+                    language: "en".into(),
+                    region: Some("ZA".into()),
+                    source_config: DiscoverySourceConfig::default(),
+                }),
+            },
+        };
+        let encoded = serde_json::to_string(&request).expect("encode workspace request");
+        assert!(!encoded.contains("source_config"));
+        assert_eq!(
+            workspace_request_fingerprint(&request).expect("fingerprint request"),
+            <[u8; 32]>::from(Sha256::digest(encoded.as_bytes()))
+        );
+    }
+}
