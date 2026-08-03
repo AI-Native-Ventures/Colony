@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use crate::discovery::DiscoveryProvider;
 use crate::discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection};
 
 /// Operation requested by a trusted local Discovery worker.
@@ -359,14 +360,6 @@ fn validate_optional_url(
         Some(_) => Err(DiscoveryObservationError::InvalidField(field)),
         None => Ok(()),
     }
-}
-
-/// External provider represented by a worker checkpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiscoveryProvider {
-    /// Outscraper Google Maps business discovery.
-    Outscraper,
 }
 
 /// Durable boundary reached by the local worker.

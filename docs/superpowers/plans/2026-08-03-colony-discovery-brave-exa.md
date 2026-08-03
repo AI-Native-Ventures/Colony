@@ -33,10 +33,10 @@ signed events, Colony Postgres migrations, Node contract tests, Playwright E2E.
 - Modify: `crates/buzz-sdk/src/discovery_workspace.rs`
 - Modify: `crates/buzz-sdk/src/discovery_worker.rs`
 
-- [ ] Add failing core tests for `waterfall` and `concurrent`, the three live
+- [x] Add failing core tests for `waterfall` and `concurrent`, the three live
   sources, a non-empty unique source list, stable order, a three-source maximum,
   unknown-field rejection, and source-to-provider mapping.
-- [ ] Add the shared contracts:
+- [x] Add the shared contracts:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,18 +70,18 @@ pub enum DiscoveryProvider {
 }
 ```
 
-- [ ] Centralize validation and mapping so the UI, CLI, relay, database, and
+- [x] Centralize validation and mapping so the UI, CLI, relay, database, and
   worker cannot develop separate source vocabularies.
-- [ ] Preserve the legacy default as waterfall with `google_maps` so upgraded
+- [x] Preserve the legacy default as waterfall with `google_maps` so upgraded
   Outscraper Campaigns remain executable.
-- [ ] Run:
+- [x] Run:
 
 ```bash
 cargo test -p buzz-core discovery
 cargo test -p buzz-sdk discovery
 ```
 
-- [ ] Commit with `git commit -s -m "feat(discovery): define multi-source run plans"`.
+- [x] Commit with `git commit -s -m "feat(discovery): define multi-source run plans"`.
 
 ## Task 2: Persist Campaign configuration and immutable run snapshots
 

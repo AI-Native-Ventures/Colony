@@ -1707,12 +1707,16 @@ fn parse_checkpoint_kind(value: &str) -> Result<DiscoveryCheckpointKind> {
 fn provider_text(provider: DiscoveryProvider) -> &'static str {
     match provider {
         DiscoveryProvider::Outscraper => "outscraper",
+        DiscoveryProvider::BraveSearch => "brave_search",
+        DiscoveryProvider::ExaSearch => "exa_search",
     }
 }
 
 fn parse_provider(value: &str) -> Result<DiscoveryProvider> {
     match value {
         "outscraper" => Ok(DiscoveryProvider::Outscraper),
+        "brave_search" => Ok(DiscoveryProvider::BraveSearch),
+        "exa_search" => Ok(DiscoveryProvider::ExaSearch),
         other => Err(DbError::InvalidData(format!(
             "unknown Discovery provider `{other}`"
         ))),
