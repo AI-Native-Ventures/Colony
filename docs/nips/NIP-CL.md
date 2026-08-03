@@ -24,6 +24,22 @@ NIP-AM remains valid and unchanged. Under NIP-CL it is demoted from source of
 record to cross-check: a disagreement between what an agent claims and what the
 wire observed is itself a signal about that agent.
 
+`buzz ledger cross-check` performs that comparison per agent-day and exits
+non-zero when either side disagrees past tolerance. The direction is the
+diagnosis. An agent reporting **more** than the wire observed made calls that
+never crossed the checkpoint, so it is holding a real provider credential
+rather than its virtual key; an agent reporting **less** is a harness that
+publishes turn metrics partially or not at all, and its money is still counted
+correctly because the wire is the source of record.
+
+Two rules keep that comparison meaningful. NIP-AM reports input tokens
+*inclusive* of cache reads and writes while a usage record itemizes them, so
+the wire side is summed cache-inclusive before comparing; otherwise every
+cached call reads as drift. And a turn flagged `deltaReliable: false` (the
+harness lost its cumulative baseline, e.g. across a restart) is excluded and
+counted rather than summed, since including it manufactures drift that is an
+artifact of the restart.
+
 ## Event kinds
 
 | Kind | Name | Class | Signer | Content |
