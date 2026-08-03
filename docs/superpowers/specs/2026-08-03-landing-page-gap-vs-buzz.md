@@ -1,7 +1,9 @@
 # Landing page: the real gap vs buzz.xyz
 
-**Status:** Diagnosed 2026-08-03 from side-by-side captures. Items 1 and 3
-implemented the same day (commit `6424dc44f`). Items 2 and 4 remain open.
+**Status:** Closed 2026-08-03. Diagnosed from side-by-side captures; items 1
+and 3 implemented the same day (commit `6424dc44f`), items 2 and 4 that
+evening (`c147cf9d8`), and the wordmark's blur radius decided and applied
+(`d7bd7816b`).
 
 First, a correction to the assumption behind this document: buzz.xyz's
 marketing site is **not** in the open-source repo, so there was never a
@@ -68,31 +70,47 @@ the page is not one flat surface either.
    at max-w-6xl with p-16 inner padding. Doing this exposed a defect the pale
    background had been hiding: the capture carried ~8px of Buzz-era
    chartreuse, rgb(212,219,201), down its right and bottom edges. Cropped.
-2. **Richer seeded screenshot content**: human names, avatar images, a code
-   block, reactions, a threaded reply with substance. The E2E mock supports
-   all of this (`--messages` passes `extraTags`, `parentEventId`, `pubkey`);
-   it needs a fixture written with care, not more capture tuning.
+2. ~~**Richer seeded screenshot content**~~ — done, and the story changed with
+   it. The shot is a `#growth` channel, not an engineering release thread:
+   Colony's own claim (people and agents running a company) instead of
+   Buzz's. Named humans with initials, both agents carrying starter-team
+   renders, a markdown table of ranked target companies, reactions with
+   counts, and a thread summary. It lives in
+   `desktop/tests/e2e/site-feature-screenshots.spec.ts` as "capture: the
+   company channel hero shot", so it regenerates instead of being tuned by
+   hand. Three things that had to be learned by looking at the output:
+   messages seeded **before** the channel opens arrive as history (live
+   delivery paints a NEW rule and floats "4 new messages" over the header);
+   the channel needs opening, leaving, and reopening for that history to
+   count as read; and two extra opening messages are what push the
+   empty-channel cards and the sticky day-divider pill above the fold.
 3. ~~**Three cards instead of alternating rows**~~ — done, as
    `site/src/sections/Cards.tsx`, replacing both Story and Features. 1024px
    row, 20px gutters, ~24rem cards, headings on a fixed offset below the
    tile so they align across all three regardless of body length.
-4. **Character illustrations.** The real gap and the real cost. Three ant
-   characters with depth and lighting, or a deliberate flat-illustration
-   style owned as a choice. Not something to fake with the existing SVG mark
-   scaled up — that is what the current dot-grid Canvas tile looked like, and
-   it read as a placeholder.
+4. ~~**Character illustrations.**~~ — done, and it cost nothing, because the
+   art already existed. This was written up as a design commission on the
+   assumption that Colony had no rendered characters. It has three: Scout,
+   Forager, and Tender, the starter team the desktop app introduces at
+   onboarding (`desktop/public/onboarding/starter-team/*.png`), rendered
+   with real depth and lighting. Their first frames are now the card
+   illustrations (`site/public/starter-team/`), replacing the ant-mark
+   tiles. The characters on the marketing page are the characters a new
+   owner meets on day one, and the same two appear inside the product shot
+   above as agent avatars.
 
-Item 4 is a design commission, not a code change. The card illustration slot
-now ships with the ant mark on a tinted tile, stepping down the violet family
-per card. That is deliberately a holding pattern, not the answer: it reads as
-an icon system rather than a missing asset, which a bare scaled-up mark on
-white did not, but it has none of the weight three rendered characters carry.
+   The source files are ~1MB animated PNGs; one extracted frame is ~30KB:
+   `ffmpeg -i <src> -frames:v 1 <dest>`. Animating them on the page is a
+   real option later, at 3MB.
 
-One more open item, not in the original diagnosis: the wordmark's spray
-filter runs `stdDeviation="9"` on a 250px face
-(`desktop/public/landing/colony-wordmark.svg`). Buzz uses its sprayed
-wordmark as a low-contrast background watermark, where that reads as
-texture. Ours is a full-contrast foreground element in the hero, where it
-reads as out of focus. Switching the site from the PNG raster to the SVG
-recovered the grain, but the blur radius itself is a brand decision and was
-left alone.
+**Wordmark blur, decided.** Not in the original diagnosis: the spray filter
+ran `stdDeviation="9"` on a 777-unit face, which reads as texture on Buzz's
+low-contrast background watermark and as out of focus on our full-contrast
+hero element. Rendered at 9 / 6 / 4 / 2 for the call; **2** shipped, keeping
+the spray grain on the edges and the displacement roughening while the
+letterforms stay solid. Applied to both copies (site hero and the desktop
+app's landing asset).
+
+**Nothing from this document is open.** The next landing-page question is a
+different one: whether the page should say anything about the paid
+primitives (Discovery, Outreach, Brand) at all before they ship.
