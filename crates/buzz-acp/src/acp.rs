@@ -3411,9 +3411,14 @@ mod tests {
     }
 
     /// What the sink saw: request path and Authorization header.
+    ///
+    /// The sink helpers back the Unix-only live test below, so they carry the
+    /// same gate — on Windows they would be dead code and fail clippy.
+    #[cfg(unix)]
     type SinkLog = std::sync::Arc<tokio::sync::Mutex<Vec<(String, Option<String>)>>>;
 
     /// A fixed Responses-API stream: 42 input tokens of which 7 cached, 3 out.
+    #[cfg(unix)]
     const SINK_SSE: &str = concat!(
         "event: response.created\n",
         r#"data: {"type":"response.created","response":{"id":"resp_live1","model":"gpt-5.2-codex","status":"in_progress","output":[]}}"#,
@@ -3432,6 +3437,7 @@ mod tests {
         "\n\n",
     );
 
+    #[cfg(unix)]
     async fn sink_handler(
         axum::extract::State(seen): axum::extract::State<SinkLog>,
         request: axum::extract::Request,
