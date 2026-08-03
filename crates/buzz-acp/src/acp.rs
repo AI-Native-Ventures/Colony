@@ -3410,6 +3410,200 @@ mod tests {
         );
     }
 
+    /// What the sink saw: request path and Authorization header.
+    type SinkLog = std::sync::Arc<tokio::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+    /// A fixed Responses-API stream: 42 input tokens of which 7 cached, 3 out.
+    const SINK_SSE: &str = concat!(
+        "event: response.created\n",
+        r#"data: {"type":"response.created","response":{"id":"resp_live1","model":"gpt-5.2-codex","status":"in_progress","output":[]}}"#,
+        "\n\n",
+        "event: response.output_item.added\n",
+        r#"data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}"#,
+        "\n\n",
+        "event: response.output_text.delta\n",
+        r#"data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"OK"}"#,
+        "\n\n",
+        "event: response.output_item.done\n",
+        r#"data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK"}]}}"#,
+        "\n\n",
+        "event: response.completed\n",
+        r#"data: {"type":"response.completed","response":{"id":"resp_live1","model":"gpt-5.2-codex","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":42,"input_tokens_details":{"cached_tokens":7},"output_tokens":3}}}"#,
+        "\n\n",
+    );
+
+    async fn sink_handler(
+        axum::extract::State(seen): axum::extract::State<SinkLog>,
+        request: axum::extract::Request,
+    ) -> axum::response::Response {
+        let path = request.uri().path().to_string();
+        let auth = request
+            .headers()
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(String::from);
+        seen.lock().await.push((path.clone(), auth));
+        let (content_type, body) = if path.ends_with("/responses") {
+            ("text/event-stream", SINK_SSE)
+        } else {
+            ("application/json", r#"{"object":"list","data":[]}"#)
+        };
+        axum::response::Response::builder()
+            .status(200)
+            .header("content-type", content_type)
+            .body(axum::body::Body::from(body))
+            .expect("static sink response must build")
+    }
+
+    /// Live proof: a real codex + codex-acp pair, metered end to end.
+    ///
+    /// The unit tests above script the adapter; this one runs the real thing.
+    /// The checkpoint's OpenAI upstream is a local sink answering a fixed
+    /// Responses-API stream, so it proves the whole chain — spawn env,
+    /// `providers/set`, codex's actual wire traffic, credential swap, usage
+    /// parsing, per-agent attribution — while spending nothing.
+    ///
+    /// Ignored by default: it needs the codex binary and the codex-acp
+    /// adapter (>= 1.1) on the machine. Run it deliberately:
+    ///
+    /// ```text
+    /// BUZZ_CODEX_ACP_JS=/path/to/@agentclientprotocol/codex-acp/dist/index.js \
+    /// CODEX_PATH="$(which codex)" \
+    ///   cargo test -p buzz-acp --lib live_codex_turn_is_metered -- --ignored --nocapture
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires a local codex binary and the codex-acp adapter"]
+    async fn live_codex_turn_is_metered() {
+        let adapter_js = std::env::var("BUZZ_CODEX_ACP_JS")
+            .expect("set BUZZ_CODEX_ACP_JS to the codex-acp adapter's dist/index.js");
+        let codex_path = std::env::var("CODEX_PATH").unwrap_or_else(|_| "codex".to_string());
+
+        // Sink upstream standing in for the provider.
+        let seen: SinkLog = std::sync::Arc::default();
+        let app = axum::Router::new()
+            .fallback(axum::routing::any(sink_handler))
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind sink");
+        let sink_port = listener.local_addr().expect("sink addr").port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        // Checkpoint whose OpenAI route forwards to the sink.
+        let (meter_port, mut calls, handle) = buzz_meter::start_meter(buzz_meter::MeterConfig {
+            openai_upstream: format!("http://127.0.0.1:{sink_port}"),
+            openai_api_key: Some("sk-real-upstream-secret".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("start meter");
+        let meter = crate::meter_env::MeterEnv {
+            port: meter_port,
+            virtual_key: handle.issue_virtual_key("agent-live"),
+        };
+
+        // A wrapper named codex-acp, with an isolated CODEX_HOME so the run
+        // neither reads nor touches the operator's real codex state.
+        let dir = std::env::temp_dir().join(format!("codex-meter-live-{}", std::process::id()));
+        let codex_home = dir.join("codex-home");
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&codex_home).expect("mkdir codex home");
+        std::fs::create_dir_all(&cwd).expect("mkdir cwd");
+        let wrapper = dir.join("codex-acp");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexport CODEX_HOME='{}'\nexport CODEX_PATH='{}'\nexec node '{}' \"$@\"\n",
+                codex_home.display(),
+                codex_path,
+                adapter_js,
+            ),
+        )
+        .expect("write wrapper");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod wrapper");
+        }
+
+        // Exactly the harness spawn path: meter env applied, then the
+        // post-initialize gateway call.
+        let mut client = AcpClient::spawn(
+            wrapper.to_str().expect("wrapper path utf8"),
+            &[],
+            &[],
+            false,
+            Some(&meter),
+        )
+        .await
+        .expect("spawn codex-acp");
+        client.initialize().await.expect("initialize");
+        assert!(
+            client.providers_supported(),
+            "adapter must advertise the providers API"
+        );
+        client
+            .configure_metered_gateway(&meter)
+            .await
+            .expect("providers/set");
+
+        let session = client
+            .session_new_full(cwd.to_str().expect("cwd utf8"), Vec::new(), None, None)
+            .await
+            .expect("session/new");
+        client
+            .send_request(
+                "session/prompt",
+                serde_json::json!({
+                    "sessionId": session.session_id,
+                    "prompt": [{"type": "text", "text": "Reply with the single word OK and do nothing else."}],
+                }),
+            )
+            .await
+            .expect("session/prompt");
+
+        // The checkpoint observed the call and attributed it to this agent's
+        // virtual key, with the provider-itemized counts from the sink.
+        let call = tokio::time::timeout(std::time::Duration::from_secs(30), calls.recv())
+            .await
+            .expect("a metered call within 30s")
+            .expect("meter channel open");
+        assert_eq!(call.agent_label, "agent-live");
+        assert_eq!(call.provider, "openai");
+        assert_eq!(call.http_status, 200);
+        assert_eq!(call.model.as_deref(), Some("gpt-5.2-codex"));
+        let tokens = call.tokens.expect("tokens itemized");
+        assert_eq!(tokens.input_uncached_tokens, 35);
+        assert_eq!(tokens.cache_read_tokens, 7);
+        assert_eq!(tokens.output_tokens, 3);
+
+        // Credential custody: upstream saw the checkpoint's real key; the
+        // agent's virtual key never left the checkpoint.
+        let log = seen.lock().await;
+        let responses: Vec<_> = log
+            .iter()
+            .filter(|(path, _)| path.ends_with("/responses"))
+            .collect();
+        assert!(
+            !responses.is_empty(),
+            "codex never reached the sink: {log:?}"
+        );
+        for (_, auth) in &responses {
+            assert_eq!(
+                auth.as_deref(),
+                Some("Bearer sk-real-upstream-secret"),
+                "upstream must see the real credential, nothing else"
+            );
+        }
+        drop(log);
+
+        client.shutdown().await;
+        handle.shutdown();
+    }
+
     #[tokio::test]
     async fn keepalive_resets_idle_past_deadline() {
         // Keepalive session/update lines every 50ms against a 100ms idle deadline.
