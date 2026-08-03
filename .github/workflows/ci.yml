@@ -24,7 +24,7 @@ env:
 jobs:
   changes:
     name: Detect Changed Paths
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
       contents: read
@@ -95,7 +95,7 @@ jobs:
 
   rust-lint:
     name: Rust Lint
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
@@ -116,7 +116,7 @@ jobs:
 
   unit-tests:
     name: Unit Tests
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
@@ -138,7 +138,7 @@ jobs:
 
   desktop-core:
     name: Desktop Core
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
@@ -230,7 +230,7 @@ jobs:
 
   desktop-smoke-e2e:
     name: Desktop Smoke E2E (${{ matrix.shard }})
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     # 45 not 30: on the self-hosted fleet a cold-cache run can have four
     # heavy jobs sharing the VM's cores, and the 30-minute ceiling killed
     # two shards that were making progress. Warm runs finish far below it.
@@ -299,7 +299,7 @@ jobs:
 
   desktop:
     name: Desktop
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, desktop-core, desktop-smoke-e2e]
     if: always() && (github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
@@ -320,7 +320,7 @@ jobs:
 
   desktop-e2e-relay:
     name: Desktop E2E Relay
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     # A cold build of the relay artifacts measured 29.3 min, which sat inside
     # the previous 30 min ceiling by seconds. Timing out here is uniquely
     # expensive: the cancelled job never reaches its "Save relay artifacts
@@ -394,7 +394,7 @@ jobs:
 
   desktop-e2e-integration-shard:
     name: Desktop E2E Integration (${{ matrix.shard }}/2)
-    runs-on: [self-hosted, Linux, colony-ci-services]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
@@ -570,7 +570,7 @@ jobs:
 
   desktop-e2e-integration:
     name: Desktop E2E Integration
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, desktop-e2e-integration-shard]
     if: always() && (github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
@@ -587,7 +587,7 @@ jobs:
 
   backend-integration:
     name: Backend Integration (relay e2e)
-    runs-on: [self-hosted, Linux, colony-ci-services]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
@@ -728,7 +728,7 @@ jobs:
 
   relay-e2e:
     name: Relay E2E
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
@@ -769,7 +769,7 @@ jobs:
 
   web:
     name: Web
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
@@ -868,7 +868,7 @@ jobs:
 
   security:
     name: Security
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
@@ -882,7 +882,7 @@ jobs:
 
   dead-token-guard:
     name: Dead Token Reference Guard
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
