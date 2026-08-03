@@ -1213,7 +1213,7 @@ BEFORE INSERT OR UPDATE OF state,community_id,campaign_id ON discovery_runs
 FOR EACH ROW EXECUTE FUNCTION discovery_guard_active_campaign_run();
 
 CREATE TABLE discovery_workspace_protocols (
-    community_id UUID PRIMARY KEY REFERENCES communities(id) ON DELETE CASCADE,
+    community_id UUID NOT NULL PRIMARY KEY REFERENCES communities(id) ON DELETE CASCADE,
     multi_source_adopted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
