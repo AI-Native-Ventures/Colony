@@ -896,8 +896,11 @@ jobs:
           echo "No dead token references found."
 
   server-cross-compile:
+    # Stays on GitHub-hosted x86_64: the musl cross toolchain setup assumes an
+    # x86_64 host and refuses to install on the ARM self-hosted runners. The
+    # job is a few path-filtered minutes, well inside the free quota.
     name: Server Cross-Compile
-    runs-on: [self-hosted, Linux, colony-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
