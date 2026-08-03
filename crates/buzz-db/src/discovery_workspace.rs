@@ -696,7 +696,7 @@ fn source_text(source: DiscoverySource) -> &'static str {
     }
 }
 
-fn parse_source(value: &str) -> Result<DiscoverySource> {
+pub(crate) fn parse_source(value: &str) -> Result<DiscoverySource> {
     match value {
         "google_maps" => Ok(DiscoverySource::GoogleMaps),
         "brave_search" => Ok(DiscoverySource::BraveSearch),

@@ -188,7 +188,7 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::discovery_worker::DiscoveryWorkerClaimRequest;
+    use buzz_core::discovery_worker::{DiscoveryProvider, DiscoveryWorkerClaimRequest};
     use buzz_sdk::discovery_worker::build_discovery_worker_claim_action;
     use nostr::Keys;
     use uuid::Uuid;
@@ -201,6 +201,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             worker_id: Uuid::new_v4(),
+            available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let event = build_discovery_worker_claim_action(relay.public_key(), &request)
             .expect("valid builder")

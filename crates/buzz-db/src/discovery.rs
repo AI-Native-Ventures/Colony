@@ -7,7 +7,8 @@ use buzz_core::{
     },
     discovery_worker::{
         DiscoveryBusinessObservationInput, DiscoveryBusinessStatus, DiscoveryCheckpointKind,
-        DiscoveryProvider, DiscoveryWorkerAction, DiscoveryWorkerCheckpoint,
+        DiscoveryProvider, DiscoveryRunSourceFailureClass, DiscoveryRunSourceProjection,
+        DiscoveryRunSourceStatus, DiscoveryWorkerAction, DiscoveryWorkerCheckpoint,
         DiscoveryWorkerLeaseProjection, DiscoveryWorkerOperation, DiscoveryWorkerReceiptOutcome,
         DiscoveryWorkerStoredObservationsProjection,
     },
@@ -638,6 +639,11 @@ impl Db {
                 "Discovery worker action signer does not match authenticated actor".into(),
             ));
         }
+        if let DiscoveryWorkerAction::Claim(request) = action {
+            request
+                .validate()
+                .map_err(|error| DbError::InvalidData(error.to_string()))?;
+        }
 
         let mut tx = self.pool.begin().await?;
         require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
@@ -989,6 +995,13 @@ async fn apply_worker_action_tx(
     match action {
         DiscoveryWorkerAction::Claim(request) => {
             let lease_id = Uuid::new_v4();
+            let available_providers = request
+                .available_providers
+                .iter()
+                .copied()
+                .map(provider_text)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             let row = sqlx::query(
                 "WITH candidate AS ( \
                      SELECT id FROM discovery_runs \
@@ -996,6 +1009,12 @@ async fn apply_worker_action_tx(
                        AND (claim_id IS NULL OR lease_until < now()) \
                        AND EXISTS (SELECT 1 FROM discovery_run_business_searches s \
                                    WHERE s.community_id=$1 AND s.run_id=discovery_runs.id) \
+                       AND EXISTS (SELECT 1 FROM discovery_run_sources rs \
+                                   WHERE rs.community_id=$1 AND rs.run_id=discovery_runs.id) \
+                       AND NOT EXISTS (SELECT 1 FROM discovery_run_sources rs \
+                                       WHERE rs.community_id=$1 \
+                                         AND rs.run_id=discovery_runs.id \
+                                         AND NOT (rs.provider = ANY($6::text[]))) \
                      ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1 \
                  ) \
                  UPDATE discovery_runs r \
@@ -1013,6 +1032,7 @@ async fn apply_worker_action_tx(
             .bind(lease_until)
             .bind(request.worker_id)
             .bind(actor_pubkey.as_slice())
+            .bind(&available_providers)
             .fetch_optional(&mut **tx)
             .await?;
             let Some(row) = row else {
@@ -1457,6 +1477,9 @@ async fn worker_lease_projection_tx(
         .lease_until
         .ok_or_else(|| DbError::InvalidData("external Discovery lease is missing expiry".into()))?;
     let business_search = load_business_search_tx(tx, run.community_id, run.id).await?;
+    let source_config =
+        super::discovery_workspace::load_run_source_config_tx(tx, run.community_id, run.id).await?;
+    let source_states = load_run_source_states_tx(tx, run.community_id, run.id).await?;
     let last_checkpoint = load_last_checkpoint_tx(tx, run.community_id, run.id).await?;
     Ok(DiscoveryWorkerLeaseProjection {
         worker_id,
@@ -1465,8 +1488,108 @@ async fn worker_lease_projection_tx(
         lease_until,
         run: run.projection(),
         business_search,
+        source_config,
+        source_states,
         last_checkpoint,
     })
+}
+
+async fn load_run_source_states_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+) -> Result<Vec<DiscoveryRunSourceProjection>> {
+    let rows = sqlx::query(
+        "SELECT source_key,provider,position,status,request_cursor,request_count, \
+                returned_count,retained_count,duplicate_count,failure_class, \
+                started_at,finished_at,updated_at \
+         FROM discovery_run_sources WHERE community_id=$1 AND run_id=$2 \
+         ORDER BY position",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    if rows.is_empty() {
+        return Err(DbError::InvalidData(
+            "Discovery run is missing source progress".into(),
+        ));
+    }
+    rows.iter().map(run_source_from_row).collect()
+}
+
+fn run_source_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryRunSourceProjection> {
+    let source = super::discovery_workspace::parse_source(row.try_get("source_key")?)?;
+    let provider = parse_provider(row.try_get("provider")?)?;
+    if provider != source.provider() {
+        return Err(DbError::InvalidData(
+            "Discovery run source provider does not match its source".into(),
+        ));
+    }
+    let position: i16 = row.try_get("position")?;
+    let request_count: i32 = row.try_get("request_count")?;
+    let returned_count: i32 = row.try_get("returned_count")?;
+    let retained_count: i32 = row.try_get("retained_count")?;
+    let duplicate_count: i32 = row.try_get("duplicate_count")?;
+    Ok(DiscoveryRunSourceProjection {
+        source,
+        provider,
+        position: u8::try_from(position)
+            .map_err(|_| DbError::InvalidData("Discovery source position is invalid".into()))?,
+        status: parse_run_source_status(row.try_get("status")?)?,
+        request_cursor: row.try_get("request_cursor")?,
+        request_count: nonnegative_source_count(request_count)?,
+        returned_count: nonnegative_source_count(returned_count)?,
+        retained_count: nonnegative_source_count(retained_count)?,
+        duplicate_count: nonnegative_source_count(duplicate_count)?,
+        failure_class: parse_run_source_failure_class(row.try_get("failure_class")?)?,
+        started_at: row.try_get("started_at")?,
+        finished_at: row.try_get("finished_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn nonnegative_source_count(value: i32) -> Result<u32> {
+    u32::try_from(value)
+        .map_err(|_| DbError::InvalidData("Discovery source count cannot be negative".into()))
+}
+
+fn parse_run_source_status(value: &str) -> Result<DiscoveryRunSourceStatus> {
+    match value {
+        "pending" => Ok(DiscoveryRunSourceStatus::Pending),
+        "active" => Ok(DiscoveryRunSourceStatus::Active),
+        "completed" => Ok(DiscoveryRunSourceStatus::Completed),
+        "exhausted" => Ok(DiscoveryRunSourceStatus::Exhausted),
+        "failed" => Ok(DiscoveryRunSourceStatus::Failed),
+        "cancelled" => Ok(DiscoveryRunSourceStatus::Cancelled),
+        "outcome_unknown" => Ok(DiscoveryRunSourceStatus::OutcomeUnknown),
+        "skipped_target_met" => Ok(DiscoveryRunSourceStatus::SkippedTargetMet),
+        other => Err(DbError::InvalidData(format!(
+            "unknown Discovery source status `{other}`"
+        ))),
+    }
+}
+
+fn parse_run_source_failure_class(
+    value: Option<String>,
+) -> Result<Option<DiscoveryRunSourceFailureClass>> {
+    value
+        .map(|value| match value.as_str() {
+            "credential_rejected" => Ok(DiscoveryRunSourceFailureClass::CredentialRejected),
+            "billing_required" => Ok(DiscoveryRunSourceFailureClass::BillingRequired),
+            "invalid_request" => Ok(DiscoveryRunSourceFailureClass::InvalidRequest),
+            "rate_limited" => Ok(DiscoveryRunSourceFailureClass::RateLimited),
+            "provider_unavailable" => Ok(DiscoveryRunSourceFailureClass::ProviderUnavailable),
+            "response_too_large" => Ok(DiscoveryRunSourceFailureClass::ResponseTooLarge),
+            "request_timed_out" => Ok(DiscoveryRunSourceFailureClass::RequestTimedOut),
+            "malformed_response" => Ok(DiscoveryRunSourceFailureClass::MalformedResponse),
+            "outcome_unknown" => Ok(DiscoveryRunSourceFailureClass::OutcomeUnknown),
+            "cancelled" => Ok(DiscoveryRunSourceFailureClass::Cancelled),
+            other => Err(DbError::InvalidData(format!(
+                "unknown Discovery source failure class `{other}`"
+            ))),
+        })
+        .transpose()
 }
 
 async fn load_business_search_tx(
@@ -1656,7 +1779,12 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]>
     hasher.update([0]);
     hasher.update(action.worker_id().as_bytes());
     match action {
-        DiscoveryWorkerAction::Claim(_) => {}
+        DiscoveryWorkerAction::Claim(request) => {
+            for provider in &request.available_providers {
+                hasher.update(provider_text(*provider).as_bytes());
+                hasher.update([0]);
+            }
+        }
         DiscoveryWorkerAction::Heartbeat(request)
         | DiscoveryWorkerAction::Fail(request)
         | DiscoveryWorkerAction::Complete(request) => {
@@ -2545,6 +2673,148 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
+    async fn worker_claim_requires_every_provider_in_the_run_snapshot() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let relay = Keys::generate();
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(community.as_uuid())
+        .bind(actor.public_key().to_hex())
+        .execute(&db.pool)
+        .await
+        .expect("insert worker member");
+        sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker identity");
+
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        sqlx::query(
+            "UPDATE discovery_campaigns \
+             SET source_mode='concurrent',source_keys=ARRAY['brave_search','exa_search']::TEXT[] \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .execute(&db.pool)
+        .await
+        .expect("configure multi-source Campaign");
+        let run_id = match db
+            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 1, &search)
+            .await
+            .expect("create capability-matched run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+
+        let incompatible = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id: Uuid::new_v4(),
+                    available_providers: vec![DiscoveryProvider::Outscraper],
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("incompatible claim is safely idle"),
+        );
+        assert_eq!(incompatible, DiscoveryWorkerReceiptOutcome::Idle);
+        let untouched: (String, i32, Option<Uuid>) = sqlx::query_as(
+            "SELECT state,attempt,claim_id FROM discovery_runs WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("load untouched run");
+        assert_eq!(untouched, ("queued".to_owned(), 0, None));
+
+        let compatible_worker = Uuid::new_v4();
+        let compatible = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id: compatible_worker,
+                    available_providers: vec![
+                        DiscoveryProvider::BraveSearch,
+                        DiscoveryProvider::ExaSearch,
+                    ],
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("compatible claim leases run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(lease) = compatible else {
+            panic!("compatible worker must receive the queued run");
+        };
+        assert_eq!(lease.run.run_id, run_id);
+        assert_eq!(lease.attempt, 1);
+        assert_eq!(
+            lease.source_config,
+            DiscoverySourceConfig {
+                mode: DiscoverySourceMode::Concurrent,
+                sources: vec![DiscoverySource::BraveSearch, DiscoverySource::ExaSearch],
+            }
+        );
+        assert_eq!(lease.source_states.len(), 2);
+        assert_eq!(lease.source_states[0].source, DiscoverySource::BraveSearch);
+        assert_eq!(lease.source_states[1].source, DiscoverySource::ExaSearch);
+        assert!(lease
+            .source_states
+            .iter()
+            .all(|source| source.status == DiscoveryRunSourceStatus::Pending));
+
+        sqlx::query("DELETE FROM event_mentions WHERE community_id=$1")
+            .bind(community.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("clean worker receipt mentions");
+        sqlx::query("DELETE FROM events WHERE community_id=$1")
+            .bind(community.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("clean worker events");
+        sqlx::query("DELETE FROM users WHERE community_id=$1")
+            .bind(community.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("clean user fixture");
+        sqlx::query("DELETE FROM relay_members WHERE community_id=$1")
+            .bind(community.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("clean member fixture");
+        sqlx::query("DELETE FROM communities WHERE id=$1")
+            .bind(community.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("clean community fixture");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn local_worker_recovers_checkpoints_and_rejects_stale_fences() {
         let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
         let (db, community, human, _) = database_fixture().await;
@@ -2591,6 +2861,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             worker_id: first_worker,
+            available_providers: vec![DiscoveryProvider::Outscraper],
         });
         let first = applied_worker_outcome(
             apply_worker_action(
@@ -2652,6 +2923,7 @@ mod tests {
                     request_id: Uuid::new_v4(),
                     idempotency_key: Uuid::new_v4(),
                     worker_id: second_worker,
+                    available_providers: vec![DiscoveryProvider::Outscraper],
                 }),
                 Duration::seconds(5),
             )
@@ -2760,6 +3032,7 @@ mod tests {
                     request_id: Uuid::new_v4(),
                     idempotency_key: Uuid::new_v4(),
                     worker_id: failure_worker,
+                    available_providers: vec![DiscoveryProvider::Outscraper],
                 }),
                 Duration::seconds(5),
             )
@@ -2900,6 +3173,7 @@ mod tests {
                     request_id: Uuid::new_v4(),
                     idempotency_key: Uuid::new_v4(),
                     worker_id,
+                    available_providers: vec![DiscoveryProvider::Outscraper],
                 }),
                 Duration::seconds(30),
             )
@@ -3057,6 +3331,7 @@ mod tests {
                     request_id: Uuid::new_v4(),
                     idempotency_key: Uuid::new_v4(),
                     worker_id,
+                    available_providers: vec![DiscoveryProvider::Outscraper],
                 }),
                 Duration::seconds(30),
             )

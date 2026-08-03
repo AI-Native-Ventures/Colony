@@ -132,19 +132,19 @@ cargo test -p buzz-cli discovery
 - Modify: `desktop/src-tauri/src/discovery_worker/protocol.rs`
 - Modify: `desktop/src-tauri/src/discovery_worker/worker_host.rs`
 
-- [ ] Add failing contract and database tests proving a worker claims a run only
+- [x] Add failing contract and database tests proving a worker claims a run only
   when its advertised provider set contains every required provider.
-- [ ] Add ordered, unique `available_providers` to the private claim request.
+- [x] Add ordered, unique `available_providers` to the private claim request.
   Validate it at signing and relay admission; reveal presence only, never key
   values, identifiers, prefixes, or metadata.
-- [ ] Return the immutable source snapshot and per-source durable states in the
+- [x] Return the immutable source snapshot and per-source durable states in the
   leased projection.
-- [ ] Leave incompatible runs queued and claimable by another device. Do not
+- [x] Leave incompatible runs queued and claimable by another device. Do not
   claim and then fail them for a missing credential.
-- [ ] Prove legacy workers and legacy Outscraper runs fail closed or follow the
+- [x] Prove legacy workers and legacy Outscraper runs fail closed or follow the
   explicit compatibility default without panics.
-- [ ] Run the focused core, SDK, database, relay, and Tauri worker tests.
-- [ ] Commit with `git commit -s -m "feat(discovery): match runs to provider workers"`.
+- [x] Run the focused core, SDK, database, relay, and Tauri worker tests.
+- [x] Commit with `git commit -s -m "feat(discovery): match runs to provider workers"`.
 
 ## Task 4: Generalize observations, provenance, and deduplication
 

@@ -224,6 +224,7 @@ where
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
+        available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let mut lease = match protocol.claim(claim).await? {
         DiscoveryWorkerReceiptOutcome::Idle => return Ok(HostRunOutcome::Idle),
@@ -478,6 +479,7 @@ async fn run_once_with_credential<P: WorkerProtocol>(
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
+        available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let lease = match protocol.claim(claim).await? {
         DiscoveryWorkerReceiptOutcome::Idle => return Ok(HostRunOutcome::Idle),

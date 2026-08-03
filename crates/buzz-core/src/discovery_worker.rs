@@ -8,7 +8,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use crate::discovery::DiscoveryProvider;
-use crate::discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection};
+use crate::discovery::{
+    DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoverySource, DiscoverySourceConfig,
+};
 
 /// Operation requested by a trusted local Discovery worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +40,7 @@ const MAX_OBSERVATION_TEXT_BYTES: usize = 512;
 const MAX_OBSERVATION_SHORT_TEXT_BYTES: usize = 128;
 const MAX_OBSERVATION_URL_BYTES: usize = 2_048;
 const MAX_OBSERVATION_SUBTYPES: usize = 20;
+const MAX_AVAILABLE_PROVIDERS: usize = 3;
 
 /// Why a normalized provider observation was refused.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -382,6 +385,113 @@ pub struct DiscoveryWorkerClaimRequest {
     pub idempotency_key: Uuid,
     /// Stable identifier for this local worker installation.
     pub worker_id: Uuid,
+    /// Ordered, unique providers configured on this device. No credential data is included.
+    pub available_providers: Vec<DiscoveryProvider>,
+}
+
+impl DiscoveryWorkerClaimRequest {
+    /// Validate the non-secret capability advertisement used for run matching.
+    pub fn validate(&self) -> Result<(), DiscoveryWorkerClaimError> {
+        if self.available_providers.is_empty()
+            || self.available_providers.len() > MAX_AVAILABLE_PROVIDERS
+            || self
+                .available_providers
+                .iter()
+                .enumerate()
+                .any(|(index, provider)| self.available_providers[..index].contains(provider))
+        {
+            return Err(DiscoveryWorkerClaimError::InvalidAvailableProviders);
+        }
+        Ok(())
+    }
+}
+
+/// Why a local worker capability advertisement was refused.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DiscoveryWorkerClaimError {
+    /// The provider list was empty, too large, or contained duplicates.
+    #[error("invalid Discovery worker provider capabilities")]
+    InvalidAvailableProviders,
+}
+
+/// Durable execution state for one source in an immutable run plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryRunSourceStatus {
+    /// The source has not started.
+    Pending,
+    /// The source currently has work in progress.
+    Active,
+    /// The source completed normally.
+    Completed,
+    /// The source produced no further candidates.
+    Exhausted,
+    /// The source stopped after a classified failure.
+    Failed,
+    /// The source was cancelled.
+    Cancelled,
+    /// The worker cannot prove whether a submitted request completed.
+    OutcomeUnknown,
+    /// Waterfall execution stopped because the target was already met.
+    SkippedTargetMet,
+}
+
+/// Privacy-safe class for a source execution failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryRunSourceFailureClass {
+    /// The configured provider credential was rejected.
+    CredentialRejected,
+    /// The provider account requires billing or funds.
+    BillingRequired,
+    /// The provider rejected the request shape.
+    InvalidRequest,
+    /// The provider rate-limited the worker.
+    RateLimited,
+    /// The provider was temporarily unavailable.
+    ProviderUnavailable,
+    /// The provider response exceeded Colony's safety bound.
+    ResponseTooLarge,
+    /// The provider request exceeded its time bound.
+    RequestTimedOut,
+    /// The provider response could not be normalized safely.
+    MalformedResponse,
+    /// The worker cannot determine the submitted request outcome.
+    OutcomeUnknown,
+    /// Execution was cancelled before this source completed.
+    Cancelled,
+}
+
+/// Durable, non-secret progress for one source in a leased run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryRunSourceProjection {
+    /// User-facing source key.
+    pub source: DiscoverySource,
+    /// Local provider required by the source.
+    pub provider: DiscoveryProvider,
+    /// Stable zero-based position in the immutable source plan.
+    pub position: u8,
+    /// Current source execution state.
+    pub status: DiscoveryRunSourceStatus,
+    /// Opaque restart cursor, when a request has been submitted.
+    pub request_cursor: Option<String>,
+    /// Provider requests attempted for this source.
+    pub request_count: u32,
+    /// Provider records returned for this source.
+    pub returned_count: u32,
+    /// New workspace records retained from this source.
+    pub retained_count: u32,
+    /// Existing workspace records skipped from this source.
+    pub duplicate_count: u32,
+    /// Privacy-safe failure class, when the source failed.
+    pub failure_class: Option<DiscoveryRunSourceFailureClass>,
+    /// First durable start time.
+    pub started_at: Option<DateTime<Utc>>,
+    /// Durable terminal time.
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Last durable progress update.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Request operating on a currently owned worker lease.
@@ -506,6 +616,12 @@ pub struct DiscoveryWorkerLeaseProjection {
     pub run: DiscoveryRunProjection,
     /// Immutable non-secret Businesses query captured when the run started.
     pub business_search: DiscoveryBusinessSearchSpec,
+    /// Immutable source configuration captured when the run started.
+    #[serde(default)]
+    pub source_config: DiscoverySourceConfig,
+    /// Durable state for each source in exact plan order.
+    #[serde(default)]
+    pub source_states: Vec<DiscoveryRunSourceProjection>,
     /// Latest durable restart checkpoint, when present.
     pub last_checkpoint: Option<DiscoveryWorkerCheckpoint>,
 }
@@ -611,9 +727,45 @@ mod tests {
             "request_id": Uuid::new_v4(),
             "idempotency_key": Uuid::new_v4(),
             "worker_id": Uuid::new_v4(),
+            "available_providers": ["outscraper"],
             "api_key": "must-not-fit-the-schema"
         });
         assert!(serde_json::from_value::<DiscoveryWorkerClaimRequest>(value).is_err());
+    }
+
+    #[test]
+    fn claim_capabilities_are_nonempty_unique_and_secret_free() {
+        let mut request = DiscoveryWorkerClaimRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            worker_id: Uuid::new_v4(),
+            available_providers: vec![
+                DiscoveryProvider::Outscraper,
+                DiscoveryProvider::BraveSearch,
+                DiscoveryProvider::ExaSearch,
+            ],
+        };
+        assert_eq!(request.validate(), Ok(()));
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize claim")["available_providers"],
+            serde_json::json!(["outscraper", "brave_search", "exa_search"])
+        );
+
+        request.available_providers.clear();
+        assert!(request.validate().is_err());
+        request.available_providers =
+            vec![DiscoveryProvider::Outscraper, DiscoveryProvider::Outscraper];
+        assert!(request.validate().is_err());
+
+        let legacy_without_capabilities = serde_json::json!({
+            "request_id": Uuid::new_v4(),
+            "idempotency_key": Uuid::new_v4(),
+            "worker_id": Uuid::new_v4()
+        });
+        assert!(
+            serde_json::from_value::<DiscoveryWorkerClaimRequest>(legacy_without_capabilities)
+                .is_err()
+        );
     }
 
     #[test]

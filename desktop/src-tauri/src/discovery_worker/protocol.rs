@@ -298,7 +298,9 @@ fn validate_receipt_event(
 
 #[cfg(test)]
 mod tests {
-    use buzz_core_pkg::discovery_worker::{DiscoveryWorkerClaimRequest, DiscoveryWorkerReceipt};
+    use buzz_core_pkg::discovery_worker::{
+        DiscoveryProvider, DiscoveryWorkerClaimRequest, DiscoveryWorkerReceipt,
+    };
     use buzz_sdk_pkg::discovery_worker::{
         build_discovery_worker_claim_action, build_discovery_worker_receipt,
     };
@@ -316,6 +318,7 @@ mod tests {
             request_id,
             idempotency_key,
             worker_id,
+            available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let action = build_discovery_worker_claim_action(relay.public_key(), &request)
             .expect("claim builder")

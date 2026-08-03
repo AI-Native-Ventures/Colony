@@ -14,11 +14,15 @@ use axum::{
     Router,
 };
 use buzz_core_pkg::{
-    discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState},
+    discovery::{
+        DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState, DiscoverySource,
+        DiscoverySourceConfig, DiscoverySourceMode,
+    },
     discovery_worker::{
         deterministic_business_observation_id, DiscoveryBusinessObservationInput,
         DiscoveryBusinessStatus, DiscoveryCheckpointKind, DiscoveryProvider,
-        DiscoveryWorkerCheckpoint, DiscoveryWorkerStoredObservationsProjection,
+        DiscoveryRunSourceProjection, DiscoveryRunSourceStatus, DiscoveryWorkerCheckpoint,
+        DiscoveryWorkerStoredObservationsProjection,
     },
 };
 use chrono::Utc;
@@ -304,6 +308,25 @@ fn lease(last_checkpoint: Option<DiscoveryWorkerCheckpoint>) -> DiscoveryWorkerL
             language: "en".to_owned(),
             region: Some("ZA".to_owned()),
         },
+        source_config: DiscoverySourceConfig {
+            mode: DiscoverySourceMode::Waterfall,
+            sources: vec![DiscoverySource::GoogleMaps],
+        },
+        source_states: vec![DiscoveryRunSourceProjection {
+            source: DiscoverySource::GoogleMaps,
+            provider: DiscoveryProvider::Outscraper,
+            position: 0,
+            status: DiscoveryRunSourceStatus::Pending,
+            request_cursor: None,
+            request_count: 0,
+            returned_count: 0,
+            retained_count: 0,
+            duplicate_count: 0,
+            failure_class: None,
+            started_at: None,
+            finished_at: None,
+            updated_at: Utc::now(),
+        }],
         last_checkpoint,
     }
 }

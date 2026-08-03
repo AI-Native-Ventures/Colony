@@ -1,7 +1,7 @@
 //! Strict signed Nostr envelopes for trusted local Discovery workers.
 
 use buzz_core::{
-    discovery::{DiscoveryRunProjection, DiscoveryRunState},
+    discovery::{DiscoveryProvider, DiscoveryRunProjection, DiscoveryRunState},
     discovery_worker::{
         DiscoveryBusinessObservationInput, DiscoveryCheckpointKind, DiscoveryWorkerAction,
         DiscoveryWorkerCheckpoint, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
@@ -55,6 +55,7 @@ struct DiscoveryWorkerActionContent {
     request_id: Uuid,
     idempotency_key: Uuid,
     worker_id: Uuid,
+    available_providers: Option<Vec<DiscoveryProvider>>,
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
@@ -79,12 +80,16 @@ pub fn build_discovery_worker_claim_action(
     validate_uuid(request.request_id, "discovery worker action")?;
     validate_uuid(request.idempotency_key, "discovery worker action")?;
     validate_uuid(request.worker_id, "discovery worker action")?;
+    request
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker claim"))?;
     build_action(
         relay_pubkey,
         DiscoveryWorkerOperation::Claim,
         request.request_id,
         request.idempotency_key,
         request.worker_id,
+        Some(request.available_providers.clone()),
         None,
         None,
         None,
@@ -115,6 +120,7 @@ pub fn build_discovery_worker_checkpoint_action(
         request.lease.request_id,
         request.lease.idempotency_key,
         request.lease.worker_id,
+        None,
         Some(request.lease.run_id),
         Some(request.lease.lease_id),
         Some(request.checkpoint.clone()),
@@ -138,6 +144,7 @@ pub fn build_discovery_worker_store_observations_action(
         request.lease.request_id,
         request.lease.idempotency_key,
         request.lease.worker_id,
+        None,
         Some(request.lease.run_id),
         Some(request.lease.lease_id),
         None,
@@ -175,6 +182,7 @@ fn build_lease_action(
         request.request_id,
         request.idempotency_key,
         request.worker_id,
+        None,
         Some(request.run_id),
         Some(request.lease_id),
         None,
@@ -191,6 +199,7 @@ fn build_action(
     request_id: Uuid,
     idempotency_key: Uuid,
     worker_id: Uuid,
+    available_providers: Option<Vec<DiscoveryProvider>>,
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
@@ -209,6 +218,7 @@ fn build_action(
         request_id,
         idempotency_key,
         worker_id,
+        available_providers,
         run_id,
         lease_id,
         checkpoint,
@@ -280,16 +290,28 @@ pub fn parse_discovery_worker_action(
                 && content.checkpoint.is_none()
                 && content_has_no_observations(&content) =>
         {
-            DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+            let request = DiscoveryWorkerClaimRequest {
                 request_id,
                 idempotency_key,
                 worker_id,
-            })
+                // Claims signed by the released Outscraper-only worker predate
+                // capability advertisements. Treat only that legacy shape as
+                // Outscraper-capable so it can never claim Brave or Exa work.
+                available_providers: content
+                    .available_providers
+                    .unwrap_or_else(|| vec![DiscoveryProvider::Outscraper]),
+            };
+            request
+                .validate()
+                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker claim"))?;
+            DiscoveryWorkerAction::Claim(request)
         }
         DiscoveryWorkerOperation::Heartbeat
         | DiscoveryWorkerOperation::Fail
         | DiscoveryWorkerOperation::Complete
-            if content.checkpoint.is_none() && content_has_no_observations(&content) =>
+            if content.available_providers.is_none()
+                && content.checkpoint.is_none()
+                && content_has_no_observations(&content) =>
         {
             let request = parse_lease_content(event, &content)?;
             match operation {
@@ -300,7 +322,7 @@ pub fn parse_discovery_worker_action(
             }
         }
         DiscoveryWorkerOperation::Checkpoint => {
-            if !content_has_no_observations(&content) {
+            if content.available_providers.is_some() || !content_has_no_observations(&content) {
                 return Err(DiscoverySdkError::TagContentMismatch(
                     "discovery worker action",
                 ));
@@ -317,7 +339,9 @@ pub fn parse_discovery_worker_action(
                 checkpoint,
             })
         }
-        DiscoveryWorkerOperation::StoreObservations if content.checkpoint.is_none() => {
+        DiscoveryWorkerOperation::StoreObservations
+            if content.available_providers.is_none() && content.checkpoint.is_none() =>
+        {
             let lease = parse_lease_content(event, &content)?;
             let request =
                 DiscoveryWorkerObservationBatchRequest {
@@ -564,6 +588,37 @@ fn validate_lease_projection(
         .business_search
         .validate()
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker receipt"))?;
+    lease
+        .source_config
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker receipt"))?;
+    if lease.source_states.is_empty() {
+        if lease.source_config != buzz_core::discovery::DiscoverySourceConfig::default() {
+            return Err(DiscoverySdkError::InvalidEnvelope(
+                "discovery worker receipt",
+            ));
+        }
+    } else if lease.source_states.len() != lease.source_config.sources.len()
+        || lease
+            .source_states
+            .iter()
+            .zip(&lease.source_config.sources)
+            .enumerate()
+            .any(|(position, (state, source))| {
+                usize::from(state.position) != position
+                    || state.source != *source
+                    || state.provider != source.provider()
+                    || state.request_cursor.as_deref().is_some_and(|cursor| {
+                        cursor.is_empty()
+                            || cursor.len() > 256
+                            || cursor.chars().any(char::is_control)
+                    })
+            })
+    {
+        return Err(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ));
+    }
     if let Some(checkpoint) = &lease.last_checkpoint {
         validate_checkpoint(checkpoint)?;
     }
@@ -635,11 +690,14 @@ mod tests {
     use super::*;
     use buzz_core::discovery_worker::DiscoveryProvider;
     use buzz_core::{
-        discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState},
+        discovery::{
+            DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState,
+            DiscoverySource, DiscoverySourceConfig, DiscoverySourceMode,
+        },
         discovery_worker::{
             deterministic_business_observation_id, DiscoveryBusinessObservationInput,
-            DiscoveryWorkerLeaseProjection, DiscoveryWorkerObservationBatchRequest,
-            DiscoveryWorkerReceiptOutcome,
+            DiscoveryRunSourceProjection, DiscoveryRunSourceStatus, DiscoveryWorkerLeaseProjection,
+            DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerReceiptOutcome,
         },
     };
     use chrono::{TimeZone, Utc};
@@ -679,6 +737,31 @@ mod tests {
         }
     }
 
+    fn source_config() -> DiscoverySourceConfig {
+        DiscoverySourceConfig {
+            mode: DiscoverySourceMode::Waterfall,
+            sources: vec![DiscoverySource::GoogleMaps],
+        }
+    }
+
+    fn source_states() -> Vec<DiscoveryRunSourceProjection> {
+        vec![DiscoveryRunSourceProjection {
+            source: DiscoverySource::GoogleMaps,
+            provider: DiscoveryProvider::Outscraper,
+            position: 0,
+            status: DiscoveryRunSourceStatus::Pending,
+            request_cursor: None,
+            request_count: 0,
+            returned_count: 0,
+            retained_count: 0,
+            duplicate_count: 0,
+            failure_class: None,
+            started_at: None,
+            finished_at: None,
+            updated_at: Utc.timestamp_opt(1_800_000_000, 0).single().unwrap(),
+        }]
+    }
+
     fn observation() -> DiscoveryBusinessObservationInput {
         let provider_record_id = "0xabc:0xdef".to_owned();
         DiscoveryBusinessObservationInput {
@@ -716,6 +799,7 @@ mod tests {
             request_id: Uuid::from_u128(10),
             idempotency_key: Uuid::from_u128(11),
             worker_id: Uuid::from_u128(12),
+            available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let checkpoint = DiscoveryWorkerCheckpointRequest {
             lease: lease(),
@@ -811,6 +895,7 @@ mod tests {
             request_id: Uuid::from_u128(10),
             idempotency_key: Uuid::from_u128(11),
             worker_id: Uuid::from_u128(12),
+            available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let original = build_discovery_worker_claim_action(relay.public_key(), &request)
             .unwrap()
@@ -826,6 +911,52 @@ mod tests {
             parse_discovery_worker_action(&tampered),
             Err(DiscoverySdkError::UnexpectedTag("discovery worker action"))
         ));
+    }
+
+    #[test]
+    fn claim_builder_rejects_missing_or_duplicate_capabilities() {
+        let relay = Keys::generate();
+        let mut request = DiscoveryWorkerClaimRequest {
+            request_id: Uuid::from_u128(10),
+            idempotency_key: Uuid::from_u128(11),
+            worker_id: Uuid::from_u128(12),
+            available_providers: Vec::new(),
+        };
+        assert!(build_discovery_worker_claim_action(relay.public_key(), &request).is_err());
+        request.available_providers =
+            vec![DiscoveryProvider::Outscraper, DiscoveryProvider::Outscraper];
+        assert!(build_discovery_worker_claim_action(relay.public_key(), &request).is_err());
+    }
+
+    #[test]
+    fn legacy_claim_without_capabilities_defaults_only_to_outscraper() {
+        let relay = Keys::generate();
+        let actor = Keys::generate();
+        let event = build_action(
+            relay.public_key(),
+            DiscoveryWorkerOperation::Claim,
+            Uuid::from_u128(10),
+            Uuid::from_u128(11),
+            Uuid::from_u128(12),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("legacy claim envelope")
+        .sign_with_keys(&actor)
+        .expect("signed legacy claim");
+        let parsed = parse_discovery_worker_action(&event).expect("parse legacy claim");
+        let DiscoveryWorkerAction::Claim(claim) = parsed.action else {
+            panic!("legacy claim action");
+        };
+        assert_eq!(
+            claim.available_providers,
+            vec![DiscoveryProvider::Outscraper]
+        );
     }
 
     #[test]
@@ -848,6 +979,8 @@ mod tests {
                 lease_until: Utc.timestamp_opt(1_800_000_030, 0).single().unwrap(),
                 run: run(),
                 business_search: business_search(),
+                source_config: source_config(),
+                source_states: source_states(),
                 last_checkpoint: None,
             }),
         };
@@ -874,6 +1007,8 @@ mod tests {
             lease_until: Utc.timestamp_opt(1_800_000_030, 0).single().unwrap(),
             run: run(),
             business_search: business_search(),
+            source_config: source_config(),
+            source_states: source_states(),
             last_checkpoint: None,
         };
         let mut receipt = DiscoveryWorkerReceipt {

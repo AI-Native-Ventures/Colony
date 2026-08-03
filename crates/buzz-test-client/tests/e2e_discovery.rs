@@ -483,6 +483,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id: worker_a,
+        available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let claimed_a = submit_worker_action(
         &mut actor_client,
@@ -531,6 +532,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id: worker_b,
+        available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let claimed_b = submit_worker_action(
         &mut actor_client,
@@ -625,6 +627,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
                 request_id: Uuid::new_v4(),
                 idempotency_key: Uuid::new_v4(),
                 worker_id: worker_b,
+                available_providers: vec![DiscoveryProvider::Outscraper],
             },
         )
         .expect("second claim builder"),
@@ -690,6 +693,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
                 request_id: Uuid::new_v4(),
                 idempotency_key: Uuid::new_v4(),
                 worker_id: worker_b,
+                available_providers: vec![DiscoveryProvider::Outscraper],
             },
         )
         .expect("third claim builder"),
