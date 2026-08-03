@@ -13,6 +13,14 @@ mod brave;
 mod exa;
 mod installation;
 mod normalization;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the tested crash-safe outbox is wired into the coordinator in Task 9"
+    )
+)]
+mod outbox;
 mod outscraper;
 mod protocol;
 mod worker_host;

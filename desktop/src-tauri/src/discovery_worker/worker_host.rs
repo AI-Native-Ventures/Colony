@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use super::{
     adapter::FakeOutscraperAdapter,
     installation::load_or_create_worker_id,
+    outbox::DiscoveryOutbox,
     outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission},
     protocol::{RelayWorkerProtocol, WorkerProtocol},
 };
@@ -346,6 +347,61 @@ enum ProviderStep<T> {
     Value(T),
     LostLease,
     ProviderError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboxDrainOutcome {
+    Drained,
+    LostLease,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the tested crash-safe outbox drain is wired into the coordinator in Task 9"
+    )
+)]
+async fn drain_synchronous_outbox<P: WorkerProtocol>(
+    protocol: &P,
+    outbox: &DiscoveryOutbox,
+    call_id: Uuid,
+    lease: &mut DiscoveryWorkerLeaseProjection,
+) -> Result<OutboxDrainOutcome, String> {
+    loop {
+        let Some(batch) = outbox.next_batch(call_id)? else {
+            return Ok(OutboxDrainOutcome::Drained);
+        };
+        if batch.run_id != lease.run.run_id {
+            return Err("Discovery outbox does not belong to the current run".to_owned());
+        }
+        let request = DiscoveryWorkerObservationBatchRequest {
+            lease: DiscoveryWorkerLeaseRequest {
+                request_id: batch.request_id,
+                idempotency_key: batch.idempotency_key,
+                worker_id: lease.worker_id,
+                run_id: lease.run.run_id,
+                lease_id: lease.lease_id,
+            },
+            provider: batch.provider,
+            provider_request_id: batch.provider_request_id,
+            batch_index: batch.batch_index,
+            observations: batch.observations,
+        };
+        request
+            .validate()
+            .map_err(|_| "Discovery outbox batch is invalid".to_owned())?;
+        match protocol.store_observations(request).await? {
+            DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
+                *lease = stored.lease;
+                outbox.acknowledge_batch(call_id, batch.batch_index)?;
+            }
+            DiscoveryWorkerReceiptOutcome::LostLease(_) => {
+                return Ok(OutboxDrainOutcome::LostLease);
+            }
+            _ => return Err("Discovery observation write returned an invalid outcome".to_owned()),
+        }
+    }
 }
 
 async fn drive_provider_step<P, F, T>(
