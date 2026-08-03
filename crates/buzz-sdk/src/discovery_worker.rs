@@ -56,6 +56,7 @@ struct DiscoveryWorkerActionContent {
     idempotency_key: Uuid,
     worker_id: Uuid,
     available_providers: Option<Vec<DiscoveryProvider>>,
+    provider: Option<DiscoveryProvider>,
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
@@ -96,6 +97,7 @@ pub fn build_discovery_worker_claim_action(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -121,6 +123,7 @@ pub fn build_discovery_worker_checkpoint_action(
         request.lease.idempotency_key,
         request.lease.worker_id,
         None,
+        None,
         Some(request.lease.run_id),
         Some(request.lease.lease_id),
         Some(request.checkpoint.clone()),
@@ -145,6 +148,7 @@ pub fn build_discovery_worker_store_observations_action(
         request.lease.idempotency_key,
         request.lease.worker_id,
         None,
+        Some(request.provider),
         Some(request.lease.run_id),
         Some(request.lease.lease_id),
         None,
@@ -183,6 +187,7 @@ fn build_lease_action(
         request.idempotency_key,
         request.worker_id,
         None,
+        None,
         Some(request.run_id),
         Some(request.lease_id),
         None,
@@ -200,6 +205,7 @@ fn build_action(
     idempotency_key: Uuid,
     worker_id: Uuid,
     available_providers: Option<Vec<DiscoveryProvider>>,
+    provider: Option<DiscoveryProvider>,
     run_id: Option<Uuid>,
     lease_id: Option<Uuid>,
     checkpoint: Option<DiscoveryWorkerCheckpoint>,
@@ -219,6 +225,7 @@ fn build_action(
         idempotency_key,
         worker_id,
         available_providers,
+        provider,
         run_id,
         lease_id,
         checkpoint,
@@ -346,6 +353,9 @@ pub fn parse_discovery_worker_action(
             let request =
                 DiscoveryWorkerObservationBatchRequest {
                     lease,
+                    // Released observation actions predate the explicit batch
+                    // provider and could only originate from Outscraper.
+                    provider: content.provider.unwrap_or(DiscoveryProvider::Outscraper),
                     provider_request_id: content.provider_request_id.ok_or(
                         DiscoverySdkError::TagContentMismatch("discovery worker action"),
                     )?,
@@ -374,7 +384,8 @@ pub fn parse_discovery_worker_action(
 }
 
 fn content_has_no_observations(content: &DiscoveryWorkerActionContent) -> bool {
-    content.provider_request_id.is_none()
+    content.provider.is_none()
+        && content.provider_request_id.is_none()
         && content.batch_index.is_none()
         && content.observations.is_none()
 }
@@ -765,7 +776,11 @@ mod tests {
     fn observation() -> DiscoveryBusinessObservationInput {
         let provider_record_id = "0xabc:0xdef".to_owned();
         DiscoveryBusinessObservationInput {
-            observation_id: deterministic_business_observation_id(&provider_record_id),
+            observation_id: deterministic_business_observation_id(
+                DiscoveryProvider::Outscraper,
+                &provider_record_id,
+            ),
+            provider: DiscoveryProvider::Outscraper,
             provider_record_id,
             place_id: None,
             google_id: Some("0xabc:0xdef".to_owned()),
@@ -788,6 +803,7 @@ mod tests {
             verified: Some(true),
             source_url: Some("https://maps.google.com/example".to_owned()),
             image_url: None,
+            description: None,
         }
     }
 
@@ -813,6 +829,7 @@ mod tests {
         };
         let observations = DiscoveryWorkerObservationBatchRequest {
             lease: lease(),
+            provider: DiscoveryProvider::Outscraper,
             provider_request_id: "request_123".to_owned(),
             batch_index: 0,
             observations: vec![observation()],
@@ -938,6 +955,7 @@ mod tests {
             Uuid::from_u128(10),
             Uuid::from_u128(11),
             Uuid::from_u128(12),
+            None,
             None,
             None,
             None,

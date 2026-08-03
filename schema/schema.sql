@@ -1428,6 +1428,16 @@ CREATE TABLE discovery_business_observations (
             AND description !~ '[[:cntrl:]]'
         )
     ),
+    canonical_domain_digest BYTEA CHECK (
+        canonical_domain_digest IS NULL OR octet_length(canonical_domain_digest) = 32
+    ),
+    normalized_phone_digest BYTEA CHECK (
+        normalized_phone_digest IS NULL OR octet_length(normalized_phone_digest) = 32
+    ),
+    normalized_name_locality_digest BYTEA CHECK (
+        normalized_name_locality_digest IS NULL
+        OR octet_length(normalized_name_locality_digest) = 32
+    ),
     observation_fingerprint BYTEA NOT NULL CHECK (octet_length(observation_fingerprint) = 32),
     first_observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, id),
@@ -1438,6 +1448,18 @@ CREATE TABLE discovery_business_observations (
 
 CREATE INDEX discovery_business_observations_first_run_idx
     ON discovery_business_observations (community_id, first_run_id, first_observed_at);
+
+CREATE INDEX discovery_business_observations_domain_dedupe_idx
+    ON discovery_business_observations (community_id, canonical_domain_digest)
+    WHERE canonical_domain_digest IS NOT NULL;
+
+CREATE INDEX discovery_business_observations_phone_dedupe_idx
+    ON discovery_business_observations (community_id, normalized_phone_digest)
+    WHERE normalized_phone_digest IS NOT NULL;
+
+CREATE INDEX discovery_business_observations_name_locality_dedupe_idx
+    ON discovery_business_observations (community_id, normalized_name_locality_digest)
+    WHERE normalized_name_locality_digest IS NOT NULL;
 
 CREATE TABLE discovery_usage (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,

@@ -64,7 +64,11 @@ fn normalize_place(raw: RawOutscraperPlace) -> Option<DiscoveryBusinessObservati
         provider_identity(raw.place_id, raw.google_id, raw.cid)?;
     let category = optional_text(raw.category.or(raw.place_type), 128);
     let observation = DiscoveryBusinessObservationInput {
-        observation_id: deterministic_business_observation_id(&provider_record_id),
+        observation_id: deterministic_business_observation_id(
+            buzz_core_pkg::discovery_worker::DiscoveryProvider::Outscraper,
+            &provider_record_id,
+        ),
+        provider: buzz_core_pkg::discovery_worker::DiscoveryProvider::Outscraper,
         provider_record_id,
         place_id,
         google_id,
@@ -87,6 +91,7 @@ fn normalize_place(raw: RawOutscraperPlace) -> Option<DiscoveryBusinessObservati
         verified: raw.verified,
         source_url: optional_url(raw.location_link),
         image_url: optional_url(raw.photo.or(raw.logo)),
+        description: None,
     };
     observation.validate().ok()?;
     Some(observation)

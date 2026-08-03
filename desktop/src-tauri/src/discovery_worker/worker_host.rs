@@ -308,6 +308,7 @@ where
     for (batch_index, observations) in observations.chunks(OBSERVATION_BATCH_SIZE).enumerate() {
         let request = DiscoveryWorkerObservationBatchRequest {
             lease: lease_request(&lease),
+            provider: DiscoveryProvider::Outscraper,
             provider_request_id: provider_request_id.clone(),
             batch_index: u32::try_from(batch_index)
                 .map_err(|_| "Discovery source returned too many batches".to_string())?,

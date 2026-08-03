@@ -4,7 +4,9 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+use url::Url;
 use uuid::Uuid;
 
 pub use crate::discovery::DiscoveryProvider;
@@ -66,8 +68,11 @@ pub enum DiscoveryBusinessStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DiscoveryBusinessObservationInput {
-    /// Deterministic UUIDv5 derived from the run and provider record identifier.
+    /// Deterministic UUIDv5 derived from provider plus provider record identifier.
     pub observation_id: Uuid,
+    /// Provider that produced this observation.
+    #[serde(default = "default_outscraper_provider")]
+    pub provider: DiscoveryProvider,
     /// Stable provider identifier selected during normalization.
     pub provider_record_id: String,
     /// Google Places identifier, when returned.
@@ -112,6 +117,8 @@ pub struct DiscoveryBusinessObservationInput {
     pub source_url: Option<String>,
     /// Public representative image URL.
     pub image_url: Option<String>,
+    /// Bounded public provider summary, when available.
+    pub description: Option<String>,
 }
 
 impl DiscoveryBusinessObservationInput {
@@ -123,7 +130,12 @@ impl DiscoveryBusinessObservationInput {
             true,
             "provider_record_id",
         )?;
-        if self.observation_id != deterministic_business_observation_id(&self.provider_record_id) {
+        let current_id =
+            deterministic_business_observation_id(self.provider, &self.provider_record_id);
+        let released_outscraper_id = (self.provider == DiscoveryProvider::Outscraper)
+            .then(|| legacy_outscraper_business_observation_id(&self.provider_record_id));
+        if self.observation_id != current_id && released_outscraper_id != Some(self.observation_id)
+        {
             return Err(DiscoveryObservationError::InvalidField("observation_id"));
         }
         validate_optional_identifier(&self.place_id, "place_id")?;
@@ -179,6 +191,7 @@ impl DiscoveryBusinessObservationInput {
         }
         validate_optional_url(&self.source_url, "source_url")?;
         validate_optional_url(&self.image_url, "image_url")?;
+        validate_optional_text(&self.description, 2_048, "description")?;
         Ok(())
     }
 
@@ -197,6 +210,7 @@ impl DiscoveryBusinessObservationInput {
             &self.category,
             &self.source_url,
             &self.image_url,
+            &self.description,
         ];
         self.provider_record_id.len()
             + self.name.len()
@@ -216,6 +230,8 @@ pub struct DiscoveryWorkerObservationBatchRequest {
     /// Current lease identity and command retry identifiers.
     #[serde(flatten)]
     pub lease: DiscoveryWorkerLeaseRequest,
+    /// Provider that produced every observation in this batch.
+    pub provider: DiscoveryProvider,
     /// Opaque provider request reference previously checkpointed for this run.
     pub provider_request_id: String,
     /// Zero-based batch position within the bounded 500-result response.
@@ -255,6 +271,9 @@ impl DiscoveryWorkerObservationBatchRequest {
         let mut retained_text_bytes = self.provider_request_id.len();
         for observation in &self.observations {
             observation.validate()?;
+            if observation.provider != self.provider {
+                return Err(DiscoveryObservationError::InvalidField("provider"));
+            }
             if !provider_ids.insert(observation.provider_record_id.as_str()) {
                 return Err(DiscoveryObservationError::InvalidField("observations"));
             }
@@ -281,13 +300,81 @@ pub struct DiscoveryWorkerStoredObservationsProjection {
     pub existing_count: u16,
 }
 
-/// Derive stable per-run observation identity for retry-safe inserts.
-pub fn deterministic_business_observation_id(provider_record_id: &str) -> Uuid {
+/// Derive stable provider-scoped observation identity for retry-safe inserts.
+pub fn deterministic_business_observation_id(
+    provider: DiscoveryProvider,
+    provider_record_id: &str,
+) -> Uuid {
+    let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"colony.discovery.business/v2");
+    let provider_record = format!("{}\0{provider_record_id}", provider_identity_text(provider));
+    Uuid::new_v5(&namespace, provider_record.as_bytes())
+}
+
+fn legacy_outscraper_business_observation_id(provider_record_id: &str) -> Uuid {
     let namespace = Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         b"colony.discovery.business/outscraper",
     );
     Uuid::new_v5(&namespace, provider_record_id.as_bytes())
+}
+
+/// Derive a lowercase canonical-domain digest for workspace deduplication.
+pub fn canonical_business_domain_digest(website: &str) -> Option<[u8; 32]> {
+    let url = Url::parse(website).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    let canonical = host.strip_prefix("www.").unwrap_or(&host);
+    (!canonical.is_empty()).then(|| Sha256::digest(canonical.as_bytes()).into())
+}
+
+/// Derive an exact normalized-phone digest for workspace deduplication.
+pub fn normalized_business_phone_digest(phone: &str) -> Option<[u8; 32]> {
+    let mut normalized = String::with_capacity(phone.len());
+    for (index, character) in phone.chars().enumerate() {
+        if character.is_ascii_digit() || (character == '+' && index == 0) {
+            normalized.push(character);
+        }
+    }
+    (normalized.chars().filter(char::is_ascii_digit).count() >= 7)
+        .then(|| Sha256::digest(normalized.as_bytes()).into())
+}
+
+/// Derive a normalized name-plus-locality digest for workspace deduplication.
+pub fn normalized_business_name_locality_digest(
+    name: &str,
+    city: Option<&str>,
+    state: Option<&str>,
+    country: Option<&str>,
+) -> Option<[u8; 32]> {
+    let locality = city.or(state).or(country)?;
+    let name = normalized_business_text(name);
+    let locality = normalized_business_text(locality);
+    if name.is_empty() || locality.is_empty() {
+        return None;
+    }
+    Some(Sha256::digest(format!("{name}\u{1f}{locality}").as_bytes()).into())
+}
+
+fn normalized_business_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn provider_identity_text(provider: DiscoveryProvider) -> &'static str {
+    match provider {
+        DiscoveryProvider::Outscraper => "outscraper",
+        DiscoveryProvider::BraveSearch => "brave_search",
+        DiscoveryProvider::ExaSearch => "exa_search",
+    }
+}
+
+fn default_outscraper_provider() -> DiscoveryProvider {
+    DiscoveryProvider::Outscraper
 }
 
 fn validate_identifier(
@@ -666,7 +753,11 @@ mod tests {
 
     fn observation(provider_record_id: &str) -> DiscoveryBusinessObservationInput {
         DiscoveryBusinessObservationInput {
-            observation_id: deterministic_business_observation_id(provider_record_id),
+            observation_id: deterministic_business_observation_id(
+                DiscoveryProvider::Outscraper,
+                provider_record_id,
+            ),
+            provider: DiscoveryProvider::Outscraper,
             provider_record_id: provider_record_id.to_owned(),
             place_id: Some("ChIJ_test".to_owned()),
             google_id: Some("0xabc:0xdef".to_owned()),
@@ -689,6 +780,7 @@ mod tests {
             verified: Some(true),
             source_url: Some("https://maps.google.com/example".to_owned()),
             image_url: Some("https://images.example.test/place.jpg".to_owned()),
+            description: None,
         }
     }
 
@@ -701,6 +793,7 @@ mod tests {
                 run_id: Uuid::new_v4(),
                 lease_id: Uuid::new_v4(),
             },
+            provider: DiscoveryProvider::Outscraper,
             provider_request_id: "request_123".to_owned(),
             batch_index: 0,
             observations: vec![observation("0xabc:0xdef")],
@@ -773,9 +866,56 @@ mod tests {
         let valid = batch();
         assert_eq!(valid.validate(), Ok(()));
         assert_eq!(
-            deterministic_business_observation_id("0xabc:0xdef"),
+            deterministic_business_observation_id(DiscoveryProvider::Outscraper, "0xabc:0xdef"),
             observation("0xabc:0xdef").observation_id
         );
+        assert_ne!(
+            deterministic_business_observation_id(DiscoveryProvider::Outscraper, "0xabc:0xdef"),
+            deterministic_business_observation_id(DiscoveryProvider::BraveSearch, "0xabc:0xdef")
+        );
+        let mut released_outscraper = observation("legacy-provider-record");
+        released_outscraper.observation_id =
+            legacy_outscraper_business_observation_id("legacy-provider-record");
+        assert_eq!(released_outscraper.validate(), Ok(()));
+
+        assert_eq!(
+            canonical_business_domain_digest("HTTPS://WWW.Example.COM/path?q=1#fragment"),
+            canonical_business_domain_digest("https://example.com/other")
+        );
+        assert_eq!(
+            normalized_business_phone_digest("+27 (11) 555-0100"),
+            normalized_business_phone_digest("+27115550100")
+        );
+        assert_eq!(
+            normalized_business_name_locality_digest(
+                "Sandton Dental Studio",
+                Some("Sandton"),
+                None,
+                None
+            ),
+            normalized_business_name_locality_digest(
+                "SANDTON-DENTAL STUDIO",
+                Some("sandton"),
+                None,
+                None
+            )
+        );
+
+        let mut with_description = valid.clone();
+        with_description.observations[0].provider = DiscoveryProvider::BraveSearch;
+        with_description.observations[0].observation_id = deterministic_business_observation_id(
+            DiscoveryProvider::BraveSearch,
+            &with_description.observations[0].provider_record_id,
+        );
+        with_description.provider = DiscoveryProvider::BraveSearch;
+        with_description.observations[0].description = Some("Public search snippet".to_owned());
+        assert_eq!(with_description.validate(), Ok(()));
+        let mut mismatched_provider = with_description.clone();
+        mismatched_provider.provider = DiscoveryProvider::ExaSearch;
+        assert!(mismatched_provider.validate().is_err());
+        let mut oversized_description = with_description;
+        oversized_description.observations[0].description = Some("x".repeat(2_049));
+        assert!(oversized_description.validate().is_err());
 
         let mut invalid = valid.clone();
         invalid.observations[0].rating_hundredths = Some(501);

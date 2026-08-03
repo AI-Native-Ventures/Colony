@@ -178,6 +178,11 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
         {
             DiscoveryWorkerBrokerError::Invalid(message)
         }
+        buzz_db::DbError::InvalidData(message)
+            if message.contains("observation provider is not in the run plan") =>
+        {
+            DiscoveryWorkerBrokerError::Invalid(message)
+        }
         buzz_db::DbError::NotFound(_) => {
             DiscoveryWorkerBrokerError::Invalid("Discovery run not found".into())
         }

@@ -337,7 +337,11 @@ fn lease_outcome(value: &DiscoveryWorkerLeaseProjection) -> DiscoveryWorkerRecei
 
 fn observation(provider_record_id: &str) -> DiscoveryBusinessObservationInput {
     DiscoveryBusinessObservationInput {
-        observation_id: deterministic_business_observation_id(provider_record_id),
+        observation_id: deterministic_business_observation_id(
+            DiscoveryProvider::Outscraper,
+            provider_record_id,
+        ),
+        provider: DiscoveryProvider::Outscraper,
         provider_record_id: provider_record_id.to_string(),
         place_id: Some(provider_record_id.to_string()),
         google_id: None,
@@ -360,6 +364,7 @@ fn observation(provider_record_id: &str) -> DiscoveryBusinessObservationInput {
         verified: None,
         source_url: None,
         image_url: None,
+        description: None,
     }
 }
 

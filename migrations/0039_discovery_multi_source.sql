@@ -130,7 +130,58 @@ ALTER TABLE discovery_business_observations
             AND description = btrim(description)
             AND description !~ '[[:cntrl:]]'
         )
+    ),
+    ADD COLUMN canonical_domain_digest BYTEA CHECK (
+        canonical_domain_digest IS NULL OR octet_length(canonical_domain_digest) = 32
+    ),
+    ADD COLUMN normalized_phone_digest BYTEA CHECK (
+        normalized_phone_digest IS NULL OR octet_length(normalized_phone_digest) = 32
+    ),
+    ADD COLUMN normalized_name_locality_digest BYTEA CHECK (
+        normalized_name_locality_digest IS NULL
+        OR octet_length(normalized_name_locality_digest) = 32
     );
+
+-- Preserve older paid Outscraper records while making them participate in the
+-- same workspace-wide cross-provider deduplication keys as new observations.
+UPDATE discovery_business_observations
+SET canonical_domain_digest = sha256(convert_to(
+        regexp_replace(
+            lower(split_part(split_part(regexp_replace(website, '^https?://', '', 'i'), '/', 1), ':', 1)),
+            '^www[.]',
+            ''
+        ),
+        'UTF8'
+    ))
+WHERE website IS NOT NULL;
+
+UPDATE discovery_business_observations
+SET normalized_phone_digest = sha256(convert_to(
+        regexp_replace(phone, '[^0-9+]', '', 'g'),
+        'UTF8'
+    ))
+WHERE phone IS NOT NULL
+  AND length(regexp_replace(phone, '[^0-9]', '', 'g')) >= 7;
+
+UPDATE discovery_business_observations
+SET normalized_name_locality_digest = sha256(convert_to(
+        lower(regexp_replace(name, '[^[:alnum:]]', '', 'g')) || chr(31) ||
+        lower(regexp_replace(COALESCE(city, state, country), '[^[:alnum:]]', '', 'g')),
+        'UTF8'
+    ))
+WHERE COALESCE(city, state, country) IS NOT NULL;
+
+CREATE INDEX discovery_business_observations_domain_dedupe_idx
+    ON discovery_business_observations (community_id, canonical_domain_digest)
+    WHERE canonical_domain_digest IS NOT NULL;
+
+CREATE INDEX discovery_business_observations_phone_dedupe_idx
+    ON discovery_business_observations (community_id, normalized_phone_digest)
+    WHERE normalized_phone_digest IS NOT NULL;
+
+CREATE INDEX discovery_business_observations_name_locality_dedupe_idx
+    ON discovery_business_observations (community_id, normalized_name_locality_digest)
+    WHERE normalized_name_locality_digest IS NOT NULL;
 
 ALTER TABLE discovery_usage
     DROP CONSTRAINT discovery_usage_provider_check,

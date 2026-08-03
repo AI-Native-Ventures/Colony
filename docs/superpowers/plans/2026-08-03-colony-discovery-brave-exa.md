@@ -155,24 +155,24 @@ cargo test -p buzz-cli discovery
 - Modify: `crates/buzz-relay/src/discovery_worker_broker.rs`
 - Modify: `desktop/src-tauri/src/discovery_worker/normalization.rs`
 
-- [ ] Add failing tests proving observation identity contains provider plus
+- [x] Add failing tests proving observation identity contains provider plus
   provider-record ID, URLs become canonical lowercase digests, and an optional
   bounded description accepts Brave/Exa snippets without weakening strict
   validation.
-- [ ] Require every observation batch to name its provider and request/page
+- [x] Require every observation batch to name its provider and request/page
   identity. Include provider in deterministic observation IDs and batch
   conflict keys.
-- [ ] Keep exact same-provider identity as the strongest key, then suppress
+- [x] Keep exact same-provider identity as the strongest key, then suppress
   cross-provider duplicates by canonical domain, exact normalized phone, or
   normalized name plus locality.
-- [ ] When a duplicate is encountered, increment that run/source's duplicate
+- [x] When a duplicate is encountered, increment that run/source's duplicate
   count but do not insert or Campaign-link a second business or Lead.
-- [ ] Preserve first-source provenance on the canonical Lead. Persist source
+- [x] Preserve first-source provenance on the canonical Lead. Persist source
   encounter metrics without overwriting that provenance.
-- [ ] Add database tests for same-domain Brave/Exa/Outscraper duplicates,
+- [x] Add database tests for same-domain Brave/Exa/Outscraper duplicates,
   different communities, idempotent replay, conflicting replay, and retained
   source counts.
-- [ ] Run focused tests and commit with
+- [x] Run focused tests and commit with
   `git commit -s -m "feat(discovery): deduplicate provider observations"`.
 
 ## Task 5: Generalize provider credentials without exposing secrets
