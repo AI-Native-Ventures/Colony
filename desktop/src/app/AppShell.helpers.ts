@@ -11,7 +11,8 @@ export type AppView =
   | "discovery"
   | "workflows"
   | "pulse"
-  | "projects";
+  | "projects"
+  | "spend";
 
 const WINDOW_DRAG_HANDLE_HEIGHT = 44;
 const TAURI_DRAG_REGION_ATTR = "data-tauri-drag-region";
@@ -168,6 +169,13 @@ export function deriveShellRoute(pathname: string): {
     return {
       selectedChannelId: null,
       selectedView: "pulse",
+    };
+  }
+
+  if (path === "/spend") {
+    return {
+      selectedChannelId: null,
+      selectedView: "spend",
     };
   }
 

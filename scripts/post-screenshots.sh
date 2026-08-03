@@ -17,9 +17,25 @@ fi
 
 GH_USER=$(gh api user --jq .login)
 BRANCH="agent-screenshots/${GH_USER}"
-REPO="block/buzz"
+# Derived from the `origin` remote, not hardcoded and not from `gh repo view`.
+# Two ways to get this wrong, both of which post to somebody else's repo:
+# hardcoding upstream, and asking `gh`, which resolves a fork to its *parent*
+# and so returned `block/buzz` from a Colony checkout. The remote URL is the
+# only source that names the repository this branch was actually pushed to.
+ORIGIN_URL=$(git remote get-url origin)
+REPO=$(printf '%s' "$ORIGIN_URL" \
+  | sed -E 's#^git@[^:]+:##; s#^https?://[^/]+/##; s#\.git$##')
+if ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  echo "error: could not read owner/name from origin remote: $ORIGIN_URL" >&2
+  exit 1
+fi
 
-mapfile -t PNGS < <(find "$PNG_DIR" -maxdepth 1 -name "*.png" -type f | sort)
+# Read with a while-loop rather than `mapfile`, which is bash 4+ and so
+# missing on macOS's stock bash 3.2 — where this script is mostly run.
+PNGS=()
+while IFS= read -r PNG_PATH; do
+  PNGS+=("$PNG_PATH")
+done < <(find "$PNG_DIR" -maxdepth 1 -name "*.png" -type f | sort)
 if [[ ${#PNGS[@]} -eq 0 ]]; then
   echo "error: no PNGs found in $PNG_DIR" >&2
   exit 1
@@ -56,13 +72,13 @@ git push --force-with-lease origin "${COMMIT}:refs/heads/${BRANCH}"
 
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${COMMIT}"
 
-declare -A IMAGE_URL_MAP
+# Parallel arrays rather than an associative one: `declare -A` is bash 4+ and
+# macOS ships bash 3.2, where it aborts the script outright.
+IMAGE_NAMES=()
 IMAGE_URLS=()
 for i in "${!PNGS[@]}"; do
-  ORIG_NAME="$(basename "${PNGS[$i]}" .png)"
-  URL="${RAW_BASE}/${TREE_PATHS[$i]}"
-  IMAGE_URLS+=("$URL")
-  IMAGE_URL_MAP["$ORIG_NAME"]="$URL"
+  IMAGE_NAMES+=("$(basename "${PNGS[$i]}" .png)")
+  IMAGE_URLS+=("${RAW_BASE}/${TREE_PATHS[$i]}")
 done
 
 if [[ -n "$BODY_FILE" ]]; then
@@ -70,19 +86,22 @@ if [[ -n "$BODY_FILE" ]]; then
   "$SCRIPT_DIR/check-pr-image-urls.sh" "$BODY_FILE"
   COMMENT_BODY="$(cat "$BODY_FILE")"
   UNREFERENCED=()
-  for NAME in "${!IMAGE_URL_MAP[@]}"; do
-    URL="${IMAGE_URL_MAP[$NAME]}"
+  for i in "${!IMAGE_NAMES[@]}"; do
+    NAME="${IMAGE_NAMES[$i]}"
+    URL="${IMAGE_URLS[$i]}"
     PLACEHOLDER="{{${NAME}}}"
     if [[ "$COMMENT_BODY" == *"$PLACEHOLDER"* ]]; then
       COMMENT_BODY="${COMMENT_BODY//"$PLACEHOLDER"/![$NAME]($URL)}"
     else
-      UNREFERENCED+=("$NAME")
+      UNREFERENCED+=("${NAME}"$'\t'"${URL}")
     fi
   done
   if [[ ${#UNREFERENCED[@]} -gt 0 ]]; then
     IFS=$'\n' SORTED=($(printf '%s\n' "${UNREFERENCED[@]}" | sort)); unset IFS
-    for NAME in "${SORTED[@]}"; do
-      COMMENT_BODY+=$'\n\n'"![${NAME}](${IMAGE_URL_MAP[$NAME]})"
+    for ENTRY in "${SORTED[@]}"; do
+      NAME="${ENTRY%%$'\t'*}"
+      URL="${ENTRY#*$'\t'}"
+      COMMENT_BODY+=$'\n\n'"![${NAME}](${URL})"
     done
   fi
 else

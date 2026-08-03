@@ -214,6 +214,16 @@ fn utc_day(unix_seconds: u64) -> String {
     format!("{year:04}-{m:02}-{d:02}")
 }
 
+/// The UTC day a record is counted under.
+///
+/// Shared with the cross-check so both derive the day the same way: an
+/// unparseable payload timestamp falls back to the event's `created_at`,
+/// exactly as pricing does. Two different fallbacks would put the same
+/// record on different days in two reports about the same spend.
+pub fn utc_day_for(record: &StoredUsageRecord) -> String {
+    utc_day(parse_rfc3339(&record.payload.timestamp).unwrap_or(record.created_at))
+}
+
 /// Parse an RFC 3339 timestamp to unix seconds.
 ///
 /// Returns `None` for anything unparseable, which the caller turns into a

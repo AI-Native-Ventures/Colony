@@ -7,6 +7,7 @@ import * as BuzzTheme from "@/app/BuzzThemeSurfaces";
 import { AppShellOverlays } from "@/app/AppShellOverlays";
 import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { useSettingsPanelHandlers } from "@/app/useSettingsPanelHandlers";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useCommunityNavigationTransitions } from "@/app/useCommunityNavigationTransitions";
 import { useLiveHomeFeedActions } from "@/app/useLiveHomeFeedActions";
@@ -133,6 +134,7 @@ export function AppShell() {
     goProjects,
     goPulse,
     goSettings,
+    goSpend,
     goWorkflows,
     closeSettings,
     openSearchHit,
@@ -586,27 +588,20 @@ export function AppShell() {
     [goHome, hideDmMutation, selectedChannelId],
   );
 
-  const handleOpenSettings = React.useCallback(
-    (section: SettingsSection = DEFAULT_SETTINGS_SECTION) => {
-      setIsChannelManagementOpen(false);
-      void goSettings(section);
-    },
-    [goSettings],
+  const dismissChannelManagement = React.useCallback(
+    () => setIsChannelManagementOpen(false),
+    [],
   );
-
-  const handleCloseSettings = React.useCallback(
-    () => closeSettings(),
-    [closeSettings],
-  );
-
-  // Section switches rewrite the settings entry rather than stacking one
-  // history entry per section, so back always exits settings in one step.
-  const handleSettingsSectionChange = React.useCallback(
-    (section: SettingsSection) => {
-      void goSettings(section, { replace: true });
-    },
-    [goSettings],
-  );
+  const {
+    handleCloseSettings,
+    handleOpenSettings,
+    handleSettingsSectionChange,
+  } = useSettingsPanelHandlers({
+    closeSettings,
+    defaultSection: DEFAULT_SETTINGS_SECTION,
+    goSettings,
+    onOpen: dismissChannelManagement,
+  });
 
   const handleOpenSearchResult = React.useCallback(
     (hit: SearchHit) => {
@@ -886,6 +881,7 @@ export function AppShell() {
                           onSelectProjects={() => void goProjects()}
                           onSelectPulse={() => void goPulse()}
                           onSelectSettings={handleOpenSettings}
+                          onSelectSpend={() => void goSpend()}
                           onSelectWorkflows={() => void goWorkflows()}
                           onSetPresenceStatus={(status) =>
                             presenceSession.setStatus(status)

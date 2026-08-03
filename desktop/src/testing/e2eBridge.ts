@@ -206,6 +206,17 @@ type E2eConfig = {
       normalized_host?: string;
       archived_at?: string | null;
     }>;
+    /**
+     * A `ledger_report` response. Money is decimal strings here, matching the
+     * real command: a fixture using numbers would let a rounding bug pass.
+     */
+    ledgerReport?: Record<string, unknown>;
+    /** What `ledger_correct` should answer with. */
+    ledgerCorrectOutcome?: {
+      eventId?: string;
+      accepted?: boolean;
+      message?: string;
+    };
     colonyCreatedCommunity?: {
       id?: string;
       name?: string;
@@ -10523,6 +10534,32 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "colony_list_my_communities":
         return { communities: activeConfig?.mock?.colonyCommunities ?? [] };
+      // Money crosses this boundary as decimal strings, exactly as the real
+      // command emits it, so the screen's bigint parsing is exercised rather
+      // than bypassed by a friendlier fixture.
+      case "ledger_correct": {
+        const outcome = activeConfig?.mock?.ledgerCorrectOutcome;
+        return {
+          accepted: outcome?.accepted ?? true,
+          eventId: outcome?.eventId ?? "c".repeat(64),
+          message: outcome?.message ?? "accepted",
+        };
+      }
+      case "ledger_report":
+        return (
+          activeConfig?.mock?.ledgerReport ?? {
+            budgetStatus: [],
+            byCostCentre: [],
+            byDay: [],
+            entries: [],
+            exceptions: [],
+            imputedNanousd: "0",
+            meteredNanousd: "0",
+            priceBookMissing: false,
+            totals: { cogs: "0", needsReview: "0", opex: "0" },
+            unreadableRecords: 0,
+          }
+        );
       case "mesh_installed_models":
         return mockMeshState.models;
       case "mesh_node_status":

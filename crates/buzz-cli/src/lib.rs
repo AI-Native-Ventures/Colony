@@ -500,6 +500,15 @@ pub enum LedgerCmd {
         #[arg(long, default_value = "0.01")]
         tolerance: String,
     },
+    /// Compare what agents reported spending against what the meter observed
+    CrossCheck {
+        /// Allowed relative difference per agent-day, in basis points
+        #[arg(long, default_value_t = 100)]
+        tolerance_bps: u32,
+        /// Allowed absolute difference per agent-day, in tokens
+        #[arg(long, default_value_t = 50)]
+        floor_tokens: u64,
+    },
 }
 
 #[derive(Subcommand)]

@@ -55,6 +55,7 @@ import { SidebarUpdateCard } from "@/features/settings/SidebarUpdateCard";
 import { useUpdaterContext } from "@/features/settings/hooks/UpdaterProvider";
 import { shouldShowSidebarUpdateCard } from "@/features/settings/sidebarUpdateCardVisibility";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
+import type { SidebarSelectedView } from "../types";
 import type {
   Channel,
   ChannelVisibility,
@@ -97,16 +98,7 @@ type AppSidebarProps = {
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
   selectedChannelId: string | null;
-  selectedView:
-    | "home"
-    | "channel"
-    | "messages"
-    | "agents"
-    | "blocks"
-    | "discovery"
-    | "workflows"
-    | "pulse"
-    | "projects";
+  selectedView: SidebarSelectedView;
   unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
   communities: Community[];
@@ -148,6 +140,7 @@ type AppSidebarProps = {
   onSelectDiscovery: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
+  onSelectSpend: () => void;
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -218,6 +211,7 @@ export function AppSidebar({
   onSelectDiscovery,
   onSelectProjects,
   onSelectPulse,
+  onSelectSpend,
   onSelectWorkflows,
   onSelectHome,
   onSelectChannel,
@@ -617,6 +611,7 @@ export function AppSidebar({
                 onSelectHome={onSelectHome}
                 onSelectProjects={onSelectProjects}
                 onSelectPulse={onSelectPulse}
+                onSelectSpend={onSelectSpend}
                 onSelectWorkflows={onSelectWorkflows}
                 selectedView={selectedView}
               />
