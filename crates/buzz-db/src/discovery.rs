@@ -544,6 +544,19 @@ impl Db {
                 load_run_tx(&mut tx, community_id, run_id, false).await?
             }
             DiscoveryCommandMutation::Cancel { run_id } => {
+                sqlx::query(
+                    "UPDATE discovery_run_sources SET status='cancelled', failure_class='cancelled', \
+                         started_at=COALESCE(started_at,now()), \
+                         finished_at=COALESCE(finished_at,now()), updated_at=now() \
+                     WHERE community_id=$1 AND run_id=$2 AND status IN ('pending','active') \
+                       AND EXISTS (SELECT 1 FROM discovery_runs r \
+                                   WHERE r.community_id=$1 AND r.id=$2 \
+                                     AND r.state IN ('queued','running'))",
+                )
+                .bind(community_id.as_uuid())
+                .bind(run_id)
+                .execute(&mut *tx)
+                .await?;
                 let row = sqlx::query(
                     "UPDATE discovery_runs \
                      SET state=CASE WHEN state IN ('queued','running') THEN 'cancelled' ELSE state END, \

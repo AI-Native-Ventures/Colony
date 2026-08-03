@@ -655,10 +655,10 @@ pub enum DiscoveryCmd {
         /// Human-readable vertical label.
         #[arg(long)]
         vertical_name: String,
-        /// Business category or Google Maps search phrase.
+        /// Business category or web-search phrase.
         #[arg(long)]
         query: String,
-        /// Geography included in the Google Maps query.
+        /// Geography included in every selected source query.
         #[arg(long)]
         location: String,
         /// Maximum unique new Leads requested.
@@ -751,13 +751,13 @@ pub enum DiscoveryCmd {
         /// Campaign UUID owned by the Discovery work surface.
         #[arg(long)]
         campaign: Uuid,
-        /// Business category or Google Maps search phrase.
+        /// Business category or web-search phrase.
         #[arg(long)]
         query: String,
-        /// Geography included in the Google Maps query.
+        /// Geography included in every selected source query.
         #[arg(long)]
         location: String,
-        /// Maximum organizations requested from Outscraper.
+        /// Maximum unique new organizations requested for the run.
         #[arg(long, default_value_t = 100)]
         limit: u16,
         /// ISO 639-1 language code.
@@ -2591,6 +2591,28 @@ mod tests {
             campaign,
             "--source-mode",
             "concurrent"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "discovery",
+            "campaign-create",
+            "--name",
+            "Sandton dentists",
+            "--industry",
+            "healthcare",
+            "--industry-name",
+            "Healthcare",
+            "--vertical",
+            "dentists",
+            "--vertical-name",
+            "Dentists",
+            "--query",
+            "dentists",
+            "--location",
+            "Sandton, South Africa",
+            "--brave-api-key",
+            "must-stay-on-device"
         ])
         .is_err());
     }

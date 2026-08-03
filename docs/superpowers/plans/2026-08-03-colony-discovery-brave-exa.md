@@ -359,16 +359,16 @@ const BRAVE_SEARCH_ENDPOINT: &str =
 - Modify: `scripts/discovery-worker-live-proof.sh`
 - Create: `scripts/discovery-multi-source-proof.sh`
 
-- [ ] Add an E2E relay scenario in which a generic authorized actor creates or
+- [x] Add an E2E relay scenario in which a generic authorized actor creates or
   references a Campaign, updates its source plan, starts a run, inspects the
   same projections as the UI, and cancels it.
-- [ ] Prove neither the CLI nor signed events expose provider credentials.
-- [ ] Prove a capable desktop worker claims the agent-started run and an
+- [x] Prove neither the CLI nor signed events expose provider credentials.
+- [x] Prove a capable desktop worker claims the agent-started run and an
   incompatible worker cannot.
-- [ ] Exercise waterfall, concurrent overshoot, dedupe, one-source failure,
+- [x] Exercise waterfall, concurrent overshoot, dedupe, one-source failure,
   cancellation, entitlement revocation, lost lease, restart, and all-provider
   failure against loopback providers and a real local relay.
-- [ ] Commit with `git commit -s -m "test(discovery): prove multi-source agent runs"`.
+- [x] Commit with `git commit -s -m "test(discovery): prove multi-source agent runs"`.
 
 ## Task 12: Run the production acceptance gate
 

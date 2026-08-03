@@ -6,7 +6,10 @@
 use std::time::Duration;
 
 use buzz_core::{
-    discovery::{DiscoveryRunRequest, DiscoveryRunState, DiscoveryStartRequest},
+    discovery::{
+        DiscoveryRunRequest, DiscoveryRunState, DiscoverySource, DiscoverySourceConfig,
+        DiscoverySourceMode, DiscoveryStartRequest,
+    },
     discovery_worker::{
         DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerCheckpoint,
         DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
@@ -17,7 +20,8 @@ use buzz_core::{
         DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
     },
     kind::{
-        KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKER_RECEIPT, KIND_DISCOVERY_WORKSPACE_RECEIPT,
+        KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKER_RECEIPT, KIND_DISCOVERY_WORKSPACE_ACTION,
+        KIND_DISCOVERY_WORKSPACE_RECEIPT,
     },
 };
 use buzz_sdk::{
@@ -117,16 +121,72 @@ async fn submit_worker_action(
     parsed
 }
 
+async fn submit_workspace_action(
+    client: &mut BuzzTestClient,
+    actor: &Keys,
+    relay: nostr::PublicKey,
+    payload: DiscoveryWorkspaceActionPayload,
+) -> DiscoveryWorkspaceResult {
+    let request = DiscoveryWorkspaceRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        payload,
+    };
+    let event = build_discovery_workspace_action(relay, &request)
+        .expect("valid workspace action")
+        .sign_with_keys(actor)
+        .expect("sign workspace action");
+    let action_id = event.id;
+    let ok = client
+        .send_event(event)
+        .await
+        .expect("publish workspace action");
+    assert!(ok.accepted, "workspace action rejected: {}", ok.message);
+    let answer: Value = serde_json::from_str(&ok.message).expect("structured workspace response");
+    let receipt_id = EventId::from_hex(
+        answer
+            .get("receipt_event_id")
+            .and_then(Value::as_str)
+            .expect("workspace receipt event id"),
+    )
+    .expect("valid workspace receipt id");
+    let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+    let filter = Filter::new()
+        .kind(Kind::Custom(KIND_DISCOVERY_WORKSPACE_RECEIPT as u16))
+        .id(receipt_id)
+        .event(action_id)
+        .custom_tags(p_tag, [actor.public_key().to_hex()]);
+    let subscription_id = format!("workspace-receipt-{}", request.request_id);
+    client
+        .subscribe(&subscription_id, vec![filter])
+        .await
+        .expect("subscribe to workspace receipt");
+    let receipts = client
+        .collect_until_eose(&subscription_id, Duration::from_secs(5))
+        .await
+        .expect("collect workspace receipt");
+    let receipt = receipts
+        .first()
+        .expect("workspace receipt must be delivered");
+    receipt.verify().expect("workspace receipt signature");
+    assert_eq!(receipt.pubkey, relay);
+    let parsed = parse_discovery_workspace_receipt(receipt).expect("strict workspace receipt");
+    assert_eq!(parsed.actor_pubkey, actor.public_key());
+    assert_eq!(parsed.action_event_id, action_id);
+    parsed.receipt.result
+}
+
 async fn create_campaign(
     client: &mut BuzzTestClient,
     actor: &Keys,
     relay: nostr::PublicKey,
 ) -> Uuid {
     let campaign_id = Uuid::new_v4();
-    let request = DiscoveryWorkspaceRequest {
-        request_id: Uuid::new_v4(),
-        idempotency_key: Uuid::new_v4(),
-        payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
+    let result = submit_workspace_action(
+        client,
+        actor,
+        relay,
+        DiscoveryWorkspaceActionPayload::CreateCampaign {
             campaign: Box::new(DiscoveryCampaignInput {
                 campaign_id,
                 name: "Sandton Dentists".to_owned(),
@@ -143,21 +203,21 @@ async fn create_campaign(
                 source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
             }),
         },
+    )
+    .await;
+    let DiscoveryWorkspaceResult::Campaign { campaign } = result else {
+        panic!("campaign create must return the campaign projection");
     };
-    let event = build_discovery_workspace_action(relay, &request)
-        .expect("valid campaign action")
-        .sign_with_keys(actor)
-        .expect("sign campaign action");
-    let ok = client
-        .send_event(event)
-        .await
-        .expect("publish campaign action");
-    assert!(ok.accepted, "campaign creation rejected: {}", ok.message);
+    assert_eq!(campaign.campaign_id, campaign_id);
     campaign_id
 }
 
-async fn start_run(client: &mut BuzzTestClient, actor: &Keys, relay: nostr::PublicKey) -> Uuid {
-    let campaign_id = create_campaign(client, actor, relay).await;
+async fn start_campaign_run(
+    client: &mut BuzzTestClient,
+    actor: &Keys,
+    relay: nostr::PublicKey,
+    campaign_id: Uuid,
+) -> Uuid {
     let request = DiscoveryStartRequest {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
@@ -185,6 +245,206 @@ async fn start_run(client: &mut BuzzTestClient, actor: &Keys, relay: nostr::Publ
             .expect("start run id"),
     )
     .expect("valid start run id")
+}
+
+async fn start_run(client: &mut BuzzTestClient, actor: &Keys, relay: nostr::PublicKey) -> Uuid {
+    let campaign_id = create_campaign(client, actor, relay).await;
+    start_campaign_run(client, actor, relay, campaign_id).await
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Postgres, Redis, and relay with external Discovery workers enabled"]
+async fn generic_agent_and_desktop_worker_share_the_discovery_primitive() {
+    let _test_guard = DISCOVERY_E2E_LOCK.lock().await;
+    const LOCAL_CREDENTIAL_SENTINEL: &str = "agent-local-provider-key-never-signed";
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5471/buzz".to_owned());
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("connect isolated Postgres");
+    let host = buzz_core::tenant::relay_url_authority(&relay_url());
+    let community_id: Uuid = sqlx::query("SELECT id FROM communities WHERE lower(host)=lower($1)")
+        .bind(&host)
+        .fetch_one(&pool)
+        .await
+        .expect("isolated community exists")
+        .try_get("id")
+        .expect("community UUID");
+    let agent = Keys::generate();
+    let desktop_worker = Keys::generate();
+    provision_member(&pool, community_id, &agent).await;
+    provision_member(&pool, community_id, &desktop_worker).await;
+    sqlx::query(
+        "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
+         VALUES ($1,TRUE,now()) ON CONFLICT (community_id) \
+         DO UPDATE SET active=TRUE,updated_at=now()",
+    )
+    .bind(community_id)
+    .execute(&pool)
+    .await
+    .expect("enable entitlement");
+    let relay = relay_pubkey().await;
+    let mut agent_client = BuzzTestClient::connect(&relay_url(), &agent)
+        .await
+        .expect("authenticate generic agent");
+    let mut worker_client = BuzzTestClient::connect(&relay_url(), &desktop_worker)
+        .await
+        .expect("authenticate desktop worker");
+
+    let campaign_id = create_campaign(&mut agent_client, &agent, relay).await;
+    let source_config = DiscoverySourceConfig {
+        mode: DiscoverySourceMode::Concurrent,
+        sources: vec![
+            DiscoverySource::BraveSearch,
+            DiscoverySource::ExaSearch,
+            DiscoverySource::GoogleMaps,
+        ],
+    };
+    let updated = submit_workspace_action(
+        &mut agent_client,
+        &agent,
+        relay,
+        DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+            campaign_id,
+            source_config: source_config.clone(),
+        },
+    )
+    .await;
+    let DiscoveryWorkspaceResult::Campaign { campaign } = updated else {
+        panic!("source update must return the campaign projection");
+    };
+    assert_eq!(campaign.source_config, source_config);
+
+    let run_id = start_campaign_run(&mut agent_client, &agent, relay, campaign_id).await;
+    let incompatible = submit_worker_action(
+        &mut worker_client,
+        &desktop_worker,
+        relay,
+        build_discovery_worker_claim_action(
+            relay,
+            &DiscoveryWorkerClaimRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                worker_id: Uuid::new_v4(),
+                available_providers: vec![
+                    DiscoveryProvider::BraveSearch,
+                    DiscoveryProvider::ExaSearch,
+                ],
+            },
+        )
+        .expect("incompatible worker claim builder"),
+    )
+    .await;
+    assert!(matches!(
+        incompatible.receipt.outcome,
+        DiscoveryWorkerReceiptOutcome::Idle
+    ));
+
+    let capable_worker_id = Uuid::new_v4();
+    let capable = submit_worker_action(
+        &mut worker_client,
+        &desktop_worker,
+        relay,
+        build_discovery_worker_claim_action(
+            relay,
+            &DiscoveryWorkerClaimRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                worker_id: capable_worker_id,
+                available_providers: vec![
+                    DiscoveryProvider::Outscraper,
+                    DiscoveryProvider::BraveSearch,
+                    DiscoveryProvider::ExaSearch,
+                ],
+            },
+        )
+        .expect("capable worker claim builder"),
+    )
+    .await;
+    let DiscoveryWorkerReceiptOutcome::Lease(lease) = capable.receipt.outcome else {
+        panic!("worker with every selected provider must receive the agent-started run");
+    };
+    assert_eq!(lease.worker_id, capable_worker_id);
+    assert_eq!(lease.run.run_id, run_id);
+    assert_eq!(lease.source_config, source_config);
+    assert_eq!(
+        lease
+            .source_states
+            .iter()
+            .map(|source| source.source)
+            .collect::<Vec<_>>(),
+        source_config.sources
+    );
+
+    let projected = submit_workspace_action(
+        &mut agent_client,
+        &agent,
+        relay,
+        DiscoveryWorkspaceActionPayload::GetCampaign { campaign_id },
+    )
+    .await;
+    let DiscoveryWorkspaceResult::Campaign { campaign } = projected else {
+        panic!("campaign read must return the UI projection");
+    };
+    assert_eq!(
+        campaign.latest_run.as_ref().map(|run| run.run_id),
+        Some(run_id)
+    );
+    assert_eq!(
+        campaign
+            .latest_run_sources
+            .iter()
+            .map(|source| source.source)
+            .collect::<Vec<_>>(),
+        source_config.sources
+    );
+
+    let cancel = DiscoveryRunRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        run_id,
+    };
+    let cancelled = agent_client
+        .send_event(
+            build_discovery_cancel_action(relay, &cancel)
+                .expect("cancel builder")
+                .sign_with_keys(&agent)
+                .expect("sign cancel"),
+        )
+        .await
+        .expect("cancel agent-started run");
+    assert!(cancelled.accepted, "cancel rejected: {}", cancelled.message);
+    let after_cancel = submit_workspace_action(
+        &mut agent_client,
+        &agent,
+        relay,
+        DiscoveryWorkspaceActionPayload::GetCampaign { campaign_id },
+    )
+    .await;
+    let DiscoveryWorkspaceResult::Campaign { campaign } = after_cancel else {
+        panic!("campaign read after cancel must return the UI projection");
+    };
+    assert_eq!(
+        campaign.latest_run.as_ref().map(|run| run.state),
+        Some(DiscoveryRunState::Cancelled)
+    );
+    assert!(campaign.latest_run_sources.iter().all(|source| {
+        source.status == buzz_core::discovery_worker::DiscoveryRunSourceStatus::Cancelled
+    }));
+
+    let leaked_credentials: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM events WHERE community_id=$1 AND pubkey=$2 AND kind=$3 \
+         AND (content LIKE '%' || $4 || '%' OR content ILIKE '%api_key%' \
+              OR content ILIKE '%authorization%')",
+    )
+    .bind(community_id)
+    .bind(agent.public_key().to_bytes().as_slice())
+    .bind(i64::from(KIND_DISCOVERY_WORKSPACE_ACTION))
+    .bind(LOCAL_CREDENTIAL_SENTINEL)
+    .fetch_one(&pool)
+    .await
+    .expect("scan signed agent actions for provider credentials");
+    assert_eq!(leaked_credentials, 0);
 }
 
 #[tokio::test]
