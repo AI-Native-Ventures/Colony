@@ -153,6 +153,40 @@ nothing — every action is refused for the right reason and the failures look
 like product bugs. If the whole file fails at the first company create, check
 that first.
 
+### Codex metering live proof (`buzz-acp`)
+
+Codex is the one managed runtime that ignores the `OPENAI_BASE_URL`-style
+variables the meter overwrites — it routes model traffic through its own
+provider config. The harness meters it differently: after `initialize`, it
+sends the ACP `providers/set` call configuring the codex-acp adapter's
+custom-gateway provider with the checkpoint URL and the agent's virtual key.
+The adapter forces that provider onto every session and skips the ChatGPT
+login gate, so a metered codex needs no OpenAI account on the machine.
+
+This test runs a real codex binary and the real adapter through the real
+checkpoint. Spends nothing: the checkpoint's upstream is a local sink that
+answers a fixed Responses-API stream.
+
+```bash
+npm pack @agentclientprotocol/codex-acp && tar xzf agentclientprotocol-codex-acp-*.tgz
+BUZZ_CODEX_ACP_JS=$PWD/package/dist/index.js \
+CODEX_PATH="$(which codex)" \
+cargo test -p buzz-acp --lib live_codex_turn_is_metered -- --ignored --nocapture
+```
+
+**Result, 2026-08-03, codex 0.146.0 + codex-acp 1.1.9:** every codex request
+crossed the checkpoint's loopback gateway, the upstream saw only the
+checkpoint's real credential, and the recorded call carried the stream's own
+itemization (35 uncached input, 7 cached, 3 output) attributed to the
+agent's virtual-key label.
+
+A metered codex whose adapter does not advertise the providers API
+(codex-acp < 1.1) **fails to start**, with an error naming the upgrade. That
+is deliberate: skipping the gateway call would let the agent spend real
+money invisibly, which is the gap this closes. `--no-meter` remains the
+explicit opt-out. The desktop's adapter floor (`MIN_CODEX_ACP_VERSION`,
+1.1.7) already includes `providers/set`.
+
 ### Colony cost ledger (`e2e_cost_ledger`)
 
 Proves what only exists inside a relay process: that book heads are authored

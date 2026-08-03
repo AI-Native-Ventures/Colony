@@ -198,6 +198,12 @@ pub struct AcpClient {
     /// a JSON-RPC *success*, not `-32601` — which the main loop would read as
     /// a delivered steer and drop the user's message from the queue.
     steering_supported: bool,
+    /// Whether the adapter advertised the ACP providers API
+    /// (`agentCapabilities.providers`) at `initialize` time. Gates
+    /// [`configure_metered_gateway`](Self::configure_metered_gateway): a
+    /// metered Codex agent whose adapter lacks `providers/set` must fail to
+    /// start rather than spawn with provider routing the meter never sees.
+    providers_supported: bool,
     /// Per-turn channel for receiving goose-native non-cancelling steer
     /// requests from the main loop. Installed by
     /// [`install_steer_rx`](Self::install_steer_rx) at dispatch and
@@ -561,6 +567,7 @@ impl AcpClient {
             observer_context: ObserverContext::default(),
             active_run_id: None,
             steering_supported: false,
+            providers_supported: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
         })
@@ -617,8 +624,47 @@ impl AcpClient {
             .pointer("/_meta/steering/supported")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // Presence of the key is the signal; its value is an empty object.
+        self.providers_supported = result.pointer("/agentCapabilities/providers").is_some();
         tracing::debug!(target: "acp::init", "initialize response: {result}");
         Ok(result)
+    }
+
+    /// Whether the adapter advertised the ACP providers API at `initialize`.
+    pub fn providers_supported(&self) -> bool {
+        self.providers_supported
+    }
+
+    /// Point a Codex adapter's provider routing at the metering checkpoint.
+    ///
+    /// Sends `providers/set` configuring the adapter's custom-gateway
+    /// provider with the checkpoint URL and this agent's virtual key. The
+    /// adapter forces that provider on every session it starts, so all of
+    /// the agent's model traffic crosses the checkpoint — codex ignores the
+    /// `OPENAI_BASE_URL`-style variables that redirect every other runtime.
+    ///
+    /// Must be called after [`initialize`](Self::initialize). Fails without
+    /// sending anything when the adapter never advertised the providers API:
+    /// spawning anyway would let the agent spend outside the ledger's view,
+    /// which is exactly what metering exists to prevent.
+    pub async fn configure_metered_gateway(
+        &mut self,
+        meter: &crate::meter_env::MeterEnv,
+    ) -> Result<(), AcpError> {
+        if !self.providers_supported {
+            return Err(AcpError::Protocol(
+                "adapter does not support providers/set, so this codex agent cannot be \
+                 metered — upgrade @agentclientprotocol/codex-acp (>= 1.1) or pass \
+                 --no-meter to run without cost tracking"
+                    .into(),
+            ));
+        }
+        self.send_request(
+            "providers/set",
+            crate::meter_env::metered_gateway_params(meter),
+        )
+        .await?;
+        Ok(())
     }
 
     /// Send the ACP `authenticate` request for an adapter-advertised method.
@@ -3276,10 +3322,296 @@ mod tests {
         assert_eq!(result.unwrap()["worked"], serde_json::json!(true));
     }
 
+    // --- metered codex gateway tests ---
+
+    fn test_meter() -> crate::meter_env::MeterEnv {
+        crate::meter_env::MeterEnv {
+            port: 51234,
+            virtual_key: "colony-vk-abc123".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_records_providers_capability() {
+        let mut client = spawn_script(
+            r#"read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"providers":{}}}}'
+            sleep 1"#,
+        )
+        .await;
+        client.initialize().await.expect("initialize");
+        assert!(client.providers_supported());
+    }
+
+    #[tokio::test]
+    async fn initialize_without_providers_capability_leaves_flag_off() {
+        let mut client = spawn_script(
+            r#"read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            sleep 1"#,
+        )
+        .await;
+        client.initialize().await.expect("initialize");
+        assert!(!client.providers_supported());
+    }
+
+    #[tokio::test]
+    async fn metered_gateway_is_configured_via_providers_set() {
+        // The script accepts providers/set only when the request names the
+        // custom gateway and carries the virtual key; anything else errors,
+        // so a malformed request fails the test rather than passing vacuously.
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"providers":{}}}}'
+            read -t 2 req
+            ok=1
+            for needle in '"providers/set"' '"custom-gateway"' 'colony-vk-abc123'; do
+              case "$req" in
+                *"$needle"*) ;;
+                *) ok=0 ;;
+              esac
+            done
+            if [ "$ok" = 1 ]; then
+              echo '{"jsonrpc":"2.0","id":1,"result":{}}'
+            else
+              echo '{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"unexpected providers/set request"}}'
+            fi
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client.initialize().await.expect("initialize");
+        client
+            .configure_metered_gateway(&test_meter())
+            .await
+            .expect("providers/set should succeed");
+    }
+
+    #[tokio::test]
+    async fn metered_codex_without_providers_support_is_refused_not_skipped() {
+        // An adapter without providers/set cannot be pointed at the
+        // checkpoint, and a codex agent that spawned anyway would spend
+        // invisibly. The refusal is local: nothing is sent to the agent, so
+        // the script never reads a second request.
+        let mut client = spawn_script(
+            r#"read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            sleep 1"#,
+        )
+        .await;
+        client.initialize().await.expect("initialize");
+        let err = client
+            .configure_metered_gateway(&test_meter())
+            .await
+            .expect_err("gateway configuration must be refused");
+        let message = err.to_string();
+        assert!(
+            message.contains("providers/set"),
+            "error must name the missing capability: {message}"
+        );
+    }
+
+    /// What the sink saw: request path and Authorization header.
+    type SinkLog = std::sync::Arc<tokio::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+    /// A fixed Responses-API stream: 42 input tokens of which 7 cached, 3 out.
+    const SINK_SSE: &str = concat!(
+        "event: response.created\n",
+        r#"data: {"type":"response.created","response":{"id":"resp_live1","model":"gpt-5.2-codex","status":"in_progress","output":[]}}"#,
+        "\n\n",
+        "event: response.output_item.added\n",
+        r#"data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}"#,
+        "\n\n",
+        "event: response.output_text.delta\n",
+        r#"data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"OK"}"#,
+        "\n\n",
+        "event: response.output_item.done\n",
+        r#"data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK"}]}}"#,
+        "\n\n",
+        "event: response.completed\n",
+        r#"data: {"type":"response.completed","response":{"id":"resp_live1","model":"gpt-5.2-codex","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":42,"input_tokens_details":{"cached_tokens":7},"output_tokens":3}}}"#,
+        "\n\n",
+    );
+
+    async fn sink_handler(
+        axum::extract::State(seen): axum::extract::State<SinkLog>,
+        request: axum::extract::Request,
+    ) -> axum::response::Response {
+        let path = request.uri().path().to_string();
+        let auth = request
+            .headers()
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(String::from);
+        seen.lock().await.push((path.clone(), auth));
+        let (content_type, body) = if path.ends_with("/responses") {
+            ("text/event-stream", SINK_SSE)
+        } else {
+            ("application/json", r#"{"object":"list","data":[]}"#)
+        };
+        axum::response::Response::builder()
+            .status(200)
+            .header("content-type", content_type)
+            .body(axum::body::Body::from(body))
+            .expect("static sink response must build")
+    }
+
+    /// Live proof: a real codex + codex-acp pair, metered end to end.
+    ///
+    /// The unit tests above script the adapter; this one runs the real thing.
+    /// The checkpoint's OpenAI upstream is a local sink answering a fixed
+    /// Responses-API stream, so it proves the whole chain — spawn env,
+    /// `providers/set`, codex's actual wire traffic, credential swap, usage
+    /// parsing, per-agent attribution — while spending nothing.
+    ///
+    /// Ignored by default: it needs the codex binary and the codex-acp
+    /// adapter (>= 1.1) on the machine. Run it deliberately:
+    ///
+    /// ```text
+    /// BUZZ_CODEX_ACP_JS=/path/to/@agentclientprotocol/codex-acp/dist/index.js \
+    /// CODEX_PATH="$(which codex)" \
+    ///   cargo test -p buzz-acp --lib live_codex_turn_is_metered -- --ignored --nocapture
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires a local codex binary and the codex-acp adapter"]
+    async fn live_codex_turn_is_metered() {
+        let adapter_js = std::env::var("BUZZ_CODEX_ACP_JS")
+            .expect("set BUZZ_CODEX_ACP_JS to the codex-acp adapter's dist/index.js");
+        let codex_path = std::env::var("CODEX_PATH").unwrap_or_else(|_| "codex".to_string());
+
+        // Sink upstream standing in for the provider.
+        let seen: SinkLog = std::sync::Arc::default();
+        let app = axum::Router::new()
+            .fallback(axum::routing::any(sink_handler))
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind sink");
+        let sink_port = listener.local_addr().expect("sink addr").port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        // Checkpoint whose OpenAI route forwards to the sink.
+        let (meter_port, mut calls, handle) = buzz_meter::start_meter(buzz_meter::MeterConfig {
+            openai_upstream: format!("http://127.0.0.1:{sink_port}"),
+            openai_api_key: Some("sk-real-upstream-secret".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("start meter");
+        let meter = crate::meter_env::MeterEnv {
+            port: meter_port,
+            virtual_key: handle.issue_virtual_key("agent-live"),
+        };
+
+        // A wrapper named codex-acp, with an isolated CODEX_HOME so the run
+        // neither reads nor touches the operator's real codex state.
+        let dir = std::env::temp_dir().join(format!("codex-meter-live-{}", std::process::id()));
+        let codex_home = dir.join("codex-home");
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&codex_home).expect("mkdir codex home");
+        std::fs::create_dir_all(&cwd).expect("mkdir cwd");
+        let wrapper = dir.join("codex-acp");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexport CODEX_HOME='{}'\nexport CODEX_PATH='{}'\nexec node '{}' \"$@\"\n",
+                codex_home.display(),
+                codex_path,
+                adapter_js,
+            ),
+        )
+        .expect("write wrapper");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod wrapper");
+        }
+
+        // Exactly the harness spawn path: meter env applied, then the
+        // post-initialize gateway call.
+        let mut client = AcpClient::spawn(
+            wrapper.to_str().expect("wrapper path utf8"),
+            &[],
+            &[],
+            false,
+            Some(&meter),
+        )
+        .await
+        .expect("spawn codex-acp");
+        client.initialize().await.expect("initialize");
+        assert!(
+            client.providers_supported(),
+            "adapter must advertise the providers API"
+        );
+        client
+            .configure_metered_gateway(&meter)
+            .await
+            .expect("providers/set");
+
+        let session = client
+            .session_new_full(cwd.to_str().expect("cwd utf8"), Vec::new(), None, None)
+            .await
+            .expect("session/new");
+        client
+            .send_request(
+                "session/prompt",
+                serde_json::json!({
+                    "sessionId": session.session_id,
+                    "prompt": [{"type": "text", "text": "Reply with the single word OK and do nothing else."}],
+                }),
+            )
+            .await
+            .expect("session/prompt");
+
+        // The checkpoint observed the call and attributed it to this agent's
+        // virtual key, with the provider-itemized counts from the sink.
+        let call = tokio::time::timeout(std::time::Duration::from_secs(30), calls.recv())
+            .await
+            .expect("a metered call within 30s")
+            .expect("meter channel open");
+        assert_eq!(call.agent_label, "agent-live");
+        assert_eq!(call.provider, "openai");
+        assert_eq!(call.http_status, 200);
+        assert_eq!(call.model.as_deref(), Some("gpt-5.2-codex"));
+        let tokens = call.tokens.expect("tokens itemized");
+        assert_eq!(tokens.input_uncached_tokens, 35);
+        assert_eq!(tokens.cache_read_tokens, 7);
+        assert_eq!(tokens.output_tokens, 3);
+
+        // Credential custody: upstream saw the checkpoint's real key; the
+        // agent's virtual key never left the checkpoint.
+        let log = seen.lock().await;
+        let responses: Vec<_> = log
+            .iter()
+            .filter(|(path, _)| path.ends_with("/responses"))
+            .collect();
+        assert!(
+            !responses.is_empty(),
+            "codex never reached the sink: {log:?}"
+        );
+        for (_, auth) in &responses {
+            assert_eq!(
+                auth.as_deref(),
+                Some("Bearer sk-real-upstream-secret"),
+                "upstream must see the real credential, nothing else"
+            );
+        }
+        drop(log);
+
+        client.shutdown().await;
+        handle.shutdown();
+    }
+
     #[tokio::test]
     async fn keepalive_resets_idle_past_deadline() {
-        // Keepalive session/update lines every 50ms against a 100ms idle deadline.
-        // The turn should survive well past the 100ms deadline (proves the fix).
+        // Keepalive session/update lines every 50ms against a 300ms idle
+        // deadline. The turn should survive well past the deadline (proves
+        // the reset). The deadline is 6× the cadence rather than 2× because
+        // a loaded machine stretches the bash sleeps: with 100ms this test
+        // failed a real pre-push run when one keepalive gap exceeded the
+        // deadline, which is scheduler jitter, not the regression it guards.
         let mut client = spawn_script(
             r#"for i in $(seq 1 20); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"keepalive"}}}'; sleep 0.05; done; sleep 10"#,
         )
@@ -3291,16 +3623,17 @@ mod tests {
             .read_until_response_with_idle_timeout(
                 "test",
                 999,
-                std::time::Duration::from_millis(100),
+                std::time::Duration::from_millis(300),
                 hard_deadline,
                 max_dur,
             )
             .await;
         let elapsed = start.elapsed();
-        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after 100ms more.
-        // Must survive well past the 100ms deadline.
+        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after
+        // 300ms more. Without the reset, idle would fire at ~300ms, so
+        // clearing 700ms is only possible when keepalives reset the clock.
         assert!(
-            elapsed >= std::time::Duration::from_millis(500),
+            elapsed >= std::time::Duration::from_millis(700),
             "keepalive should reset idle past the deadline; elapsed only {elapsed:?}"
         );
         assert!(elapsed < std::time::Duration::from_secs(5));

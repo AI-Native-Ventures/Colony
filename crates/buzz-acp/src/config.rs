@@ -760,6 +760,20 @@ pub(crate) fn default_agent_env(command: &str) -> &'static [(&'static str, &'sta
     }
 }
 
+/// Whether an agent command resolves to the Codex adapter.
+///
+/// Codex differs from every other supported runtime in two load-bearing
+/// ways: its sandbox needs `CODEX_CONFIG` widening to reach the relay, and
+/// it reads provider routing from its own config rather than the
+/// `OPENAI_BASE_URL`-style variables the meter overwrites — so metering it
+/// requires the ACP `providers/set` gateway call instead.
+pub(crate) fn is_codex_command(agent_command: &str) -> bool {
+    matches!(
+        normalize_agent_command_identity(agent_command).as_str(),
+        "codex" | "codex-acp"
+    )
+}
+
 /// Build the `CODEX_CONFIG` environment variable that enables full outbound
 /// network access in Codex's macOS Seatbelt sandbox.
 ///
@@ -781,9 +795,8 @@ pub(crate) fn default_agent_env(command: &str) -> &'static [(&'static str, &'sta
 ///
 /// Handles `ws://`, `wss://`, `http://`, and `https://` schemes.
 pub fn codex_network_env(agent_command: &str, relay_url: &str) -> Option<(String, String)> {
-    match normalize_agent_command_identity(agent_command).as_str() {
-        "codex" | "codex-acp" => {}
-        _ => return None,
+    if !is_codex_command(agent_command) {
+        return None;
     }
 
     // Validate the relay URL before injecting broader network access. On parse failure,
@@ -1744,6 +1757,16 @@ mod tests {
             normalize_agent_args("codex-acp", vec!["ACP".into()]),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn is_codex_command_matches_codex_identities_only() {
+        for command in ["codex", "codex-acp", "/usr/local/bin/codex-acp"] {
+            assert!(is_codex_command(command), "{command} must match");
+        }
+        for command in ["goose", "claude-agent-acp", "buzz-agent", ""] {
+            assert!(!is_codex_command(command), "{command} must not match");
+        }
     }
 
     // --- codex_network_env tests ---

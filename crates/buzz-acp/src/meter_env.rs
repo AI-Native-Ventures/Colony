@@ -38,7 +38,7 @@ pub const METERED_CREDENTIAL_VARS: &[&str] =
 fn base_url_vars(port: u16) -> Vec<(String, String)> {
     let anthropic = format!("http://127.0.0.1:{port}/anthropic");
     let openai_root = format!("http://127.0.0.1:{port}/openai");
-    let openai_v1 = format!("{openai_root}/v1");
+    let openai_v1 = openai_v1_url(port);
     vec![
         ("ANTHROPIC_BASE_URL".to_string(), anthropic.clone()),
         ("ANTHROPIC_HOST".to_string(), anthropic),
@@ -46,6 +46,31 @@ fn base_url_vars(port: u16) -> Vec<(String, String)> {
         ("OPENAI_API_BASE".to_string(), openai_v1),
         ("OPENAI_HOST".to_string(), openai_root),
     ]
+}
+
+/// The one OpenAI-dialect checkpoint endpoint, shared by the env vars and the
+/// codex gateway so the two routes cannot drift onto different URLs.
+fn openai_v1_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/openai/v1")
+}
+
+/// ACP `providers/set` params pointing a Codex adapter at the checkpoint.
+///
+/// Codex ignores the `OPENAI_BASE_URL`-style variables above — it routes by
+/// its own provider config. The codex-acp adapter's custom-gateway provider
+/// is the supported override: it forces every session onto this base URL,
+/// sends the headers on every request, and skips the ChatGPT login gate. The
+/// virtual key rides in `Authorization`, so the checkpoint attributes each
+/// call to the agent the key was minted for.
+pub fn metered_gateway_params(meter: &MeterEnv) -> serde_json::Value {
+    serde_json::json!({
+        "providerId": "custom-gateway",
+        "apiType": "openai",
+        "baseUrl": openai_v1_url(meter.port),
+        "headers": {
+            "Authorization": format!("Bearer {}", meter.virtual_key),
+        },
+    })
 }
 
 /// Every variable a metered agent receives, in a fixed order.
@@ -155,6 +180,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn gateway_params_route_codex_through_the_checkpoint() {
+        let params = metered_gateway_params(&sample());
+        assert_eq!(params["providerId"], "custom-gateway");
+        assert_eq!(params["apiType"], "openai");
+        assert_eq!(params["baseUrl"], "http://127.0.0.1:51234/openai/v1");
+        assert_eq!(
+            params["headers"]["Authorization"],
+            "Bearer colony-vk-abc123"
+        );
+    }
+
+    #[test]
+    fn gateway_base_url_is_the_same_endpoint_the_env_vars_advertise() {
+        // codex reaches the checkpoint through providers/set while SDK agents
+        // read OPENAI_BASE_URL. Two formats drifting apart would silently
+        // split the metered surface in half.
+        let meter = sample();
+        let params = metered_gateway_params(&meter);
+        let env_url = meter_env_vars(&meter)
+            .into_iter()
+            .find(|(key, _)| key == "OPENAI_BASE_URL")
+            .map(|(_, value)| value)
+            .expect("OPENAI_BASE_URL must be set");
+        assert_eq!(params["baseUrl"].as_str(), Some(env_url.as_str()));
     }
 
     #[test]

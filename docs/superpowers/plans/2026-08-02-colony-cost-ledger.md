@@ -65,11 +65,14 @@ None were visible to unit tests that already passed:
   coordinates and append-only. It must run against a disposable relay and
   database, never a shared or deployed one.
 
-**Follow-ups not done here.** Codex base-URL injection, since codex reads
+**Follow-ups not done here.** ~~Codex base-URL injection, since codex reads
 providers from `CODEX_CONFIG` rather than env and its agents are therefore
-currently unmetered; automated fetch of provider cost exports for
-reconciliation; a desktop corrections UI; and a cross-check report comparing
-NIP-AM self-reports against wire records.
+currently unmetered~~ (closed 2026-08-03: codex agents are metered via the
+codex-acp ACP `providers/set` custom gateway, not `CODEX_CONFIG` — the
+adapter forces the gateway provider onto every session and skips the ChatGPT
+login gate; see the live proof in TESTING.md); automated fetch of provider
+cost exports for reconciliation; a desktop corrections UI; and a cross-check
+report comparing NIP-AM self-reports against wire records.
 
 ## Owner decisions locked (2026-08-02)
 
