@@ -127,7 +127,7 @@ async fn create_campaign(
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-            campaign: DiscoveryCampaignInput {
+            campaign: Box::new(DiscoveryCampaignInput {
                 campaign_id,
                 name: "Sandton Dentists".to_owned(),
                 industry_id: "healthcare".to_owned(),
@@ -141,7 +141,7 @@ async fn create_campaign(
                 language: "en".to_owned(),
                 region: Some("ZA".to_owned()),
                 source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
-            },
+            }),
         },
     };
     let event = build_discovery_workspace_action(relay, &request)

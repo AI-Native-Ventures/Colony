@@ -383,7 +383,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: DiscoveryCampaignInput {
+                campaign: Box::new(DiscoveryCampaignInput {
                     campaign_id: Uuid::new_v4(),
                     name: "Sandton dentists".into(),
                     industry_id: "healthcare".into(),
@@ -397,7 +397,7 @@ mod tests {
                     language: "en".into(),
                     region: Some("ZA".into()),
                     source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
-                },
+                }),
             },
         }
     }

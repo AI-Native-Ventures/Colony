@@ -15,7 +15,13 @@ import {
 } from "@/shared/constants/kinds";
 
 import type { DiscoveryEntitlement } from "../entitlement";
-import type { CampaignSourceConfig } from "../sourceConfig";
+import {
+  DISCOVERY_SOURCE_LABELS,
+  DISCOVERY_SOURCE_PROVIDERS,
+  isLiveDiscoverySource,
+  type CampaignSourceConfig,
+  type DiscoverySource,
+} from "../sourceConfig";
 import type {
   CampaignDetail,
   CampaignDraft,
@@ -34,6 +40,7 @@ import type {
 } from "../types";
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
+import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
 import {
   type CampaignProjection,
   eventBase,
@@ -43,7 +50,6 @@ import {
   mapLead,
   mapRun,
   type RunProjection,
-  sourceMetric,
 } from "./relayDiscoveryModels";
 
 const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v1";
@@ -54,6 +60,20 @@ const WORKER_RECEIPT_SCHEMA = "colony.discovery-worker-receipt/v1";
 const RECEIPT_ATTEMPTS = 20;
 const RECEIPT_INTERVAL_MS = 300;
 const RUN_STATUS_INTERVAL_MS = 10_000;
+
+function liveSourcePayload(config?: CampaignSourceConfig) {
+  const selected = config ?? { mode: "waterfall", order: ["google_maps"] };
+  if (
+    (selected.mode !== "waterfall" && selected.mode !== "concurrent") ||
+    selected.order.length < 1 ||
+    selected.order.length > 3 ||
+    new Set(selected.order).size !== selected.order.length ||
+    selected.order.some((source) => !isLiveDiscoverySource(source))
+  ) {
+    throw new Error("Choose one or more available Discovery sources.");
+  }
+  return { mode: selected.mode, sources: [...selected.order] };
+}
 
 type WorkspaceResult =
   | { result: "access"; active: boolean }
@@ -80,6 +100,7 @@ type WorkspaceResult =
 type WorkspaceOperation =
   | "access"
   | "create_campaign"
+  | "update_campaign_sources"
   | "get_campaign"
   | "list_campaigns"
   | "list_leads";
@@ -740,6 +761,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
         description: input.description?.trim() || null,
         language: "en",
         region: null,
+        source_config: liveSourcePayload(input.sourceConfig),
       },
     });
     if (result.result !== "campaign") {
@@ -754,15 +776,15 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   ): Promise<CampaignDetail> {
     if (!(await this.live()))
       return this.demo.updateSourceConfig(campaignId, config);
-    if (
-      config.mode !== "waterfall" ||
-      config.order.join("|") !== "google_maps"
-    ) {
-      throw new Error(
-        "The first live phase uses Outscraper / Google Maps only.",
-      );
+    const result = await this.broker.workspace("update_campaign_sources", {
+      operation: "update_campaign_sources",
+      campaign_id: campaignId,
+      source_config: liveSourcePayload(config),
+    });
+    if (result.result !== "campaign") {
+      throw new Error("The relay returned the wrong campaign result.");
     }
-    return this.getCampaign(campaignId);
+    return mapCampaign(result.campaign);
   }
 
   startDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent> {
@@ -787,15 +809,49 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     if (!(await this.live())) {
       throw new Error("Activate LAKA before running live Discovery.");
     }
-    const credential = await this.credentialStatus("outscraper");
-    if (credential !== "configured") {
+    const current = await this.getCampaign(campaignId);
+    const unsupported = current.sourceConfig.order.filter(
+      (source) => !isLiveDiscoverySource(source),
+    );
+    if (unsupported.length > 0) {
       throw new Error(
-        credential === "missing"
-          ? "Connect your Outscraper API key in Settings > Discovery before starting."
-          : "Colony cannot access the secure credential store on this device.",
+        `These sources are not available for live Discovery yet: ${unsupported
+          .map((source) => DISCOVERY_SOURCE_LABELS[source])
+          .join(", ")}.`,
       );
     }
-    const current = await this.getCampaign(campaignId);
+    const credentialStatuses = await Promise.all(
+      current.sourceConfig.order
+        .filter(isLiveDiscoverySource)
+        .map(async (source) => {
+          try {
+            return {
+              source,
+              status: await this.credentialStatus(
+                DISCOVERY_SOURCE_PROVIDERS[source],
+              ),
+            };
+          } catch {
+            return { source, status: "unavailable" as const };
+          }
+        }),
+    );
+    const unavailable = credentialStatuses.filter(
+      ({ status }) => status === "unavailable",
+    );
+    if (unavailable.length > 0) {
+      throw new Error(
+        "Colony cannot access the secure Discovery credential store on this device.",
+      );
+    }
+    const missing = credentialStatuses
+      .filter(({ status }) => status === "missing")
+      .map(({ source }) => DISCOVERY_SOURCE_LABELS[source]);
+    if (missing.length > 0) {
+      throw new Error(
+        `Connect API keys in Settings > Discovery for: ${missing.join(", ")}.`,
+      );
+    }
     const signal = new RunSignal();
     let runId = "";
     const workerSubscription: { stop?: () => Promise<void> } = {};
@@ -825,42 +881,25 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     this.activeRuns.set(campaignId, runId);
     try {
       let campaign = await this.getCampaignProjection(campaignId);
+      const previousSources = new Map<DiscoverySource, string>();
       let lastFingerprint = "";
       yield { type: "session_started", ...eventBase(campaign) };
-      yield {
-        type: "source_started",
-        source: "google_maps",
-        metric: sourceMetric(campaign),
-        sourceMetric: sourceMetric(campaign),
-        ...eventBase(campaign),
-      };
+      for (const event of sourceEvents(previousSources, campaign)) yield event;
       while (campaign.latest_run && !isTerminal(campaign.latest_run)) {
         await signal.wait(RUN_STATUS_INTERVAL_MS);
         campaign = await this.getCampaignProjection(campaignId);
-        const fingerprint = `${campaign.latest_run?.state}:${campaign.latest_run?.completed_steps}:${campaign.lead_count}`;
+        const fingerprint = `${campaign.latest_run?.state}:${campaign.latest_run?.completed_steps}:${campaign.lead_count}:${(
+          campaign.latest_run_sources ?? []
+        )
+          .map(sourceFingerprint)
+          .join("|")}`;
         if (fingerprint === lastFingerprint) continue;
         lastFingerprint = fingerprint;
-        const metric = sourceMetric(campaign);
-        yield {
-          type: "source_progress",
-          source: "google_maps",
-          metric,
-          sourceMetric: metric,
-          progress: mapRun(campaign).completion,
-          message: `${campaign.lead_count} unique Leads retained`,
-          ...eventBase(campaign),
-        };
+        for (const event of sourceEvents(previousSources, campaign))
+          yield event;
       }
       const base = eventBase(campaign);
       if (campaign.latest_run?.state === "succeeded") {
-        const metric = sourceMetric(campaign);
-        yield {
-          type: "source_completed",
-          source: "google_maps",
-          metric,
-          sourceMetric: metric,
-          ...base,
-        };
         if (campaign.lead_count >= campaign.target) {
           yield { type: "target_reached", targetReached: true, ...base };
         }

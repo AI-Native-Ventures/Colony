@@ -6,8 +6,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::discovery::{
-    DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoverySourceConfig,
+    DiscoveryBusinessSearchSpec, DiscoveryProvider, DiscoveryRunProjection, DiscoverySourceConfig,
 };
+use crate::discovery_worker::DiscoveryRunSourceProjection;
 
 const MAX_NAME_BYTES: usize = 256;
 const MAX_TAXONOMY_ID_BYTES: usize = 128;
@@ -172,7 +173,7 @@ pub enum DiscoveryWorkspaceActionPayload {
     /// Create one live Businesses campaign.
     CreateCampaign {
         /// Complete immutable campaign input.
-        campaign: DiscoveryCampaignInput,
+        campaign: Box<DiscoveryCampaignInput>,
     },
     /// Replace the source plan used by future runs of one Campaign.
     UpdateCampaignSources {
@@ -290,6 +291,9 @@ pub struct DiscoveryCampaignProjection {
     pub lead_count: u32,
     /// Latest run, when the campaign has been executed.
     pub latest_run: Option<DiscoveryRunProjection>,
+    /// Durable source rows for the latest run, in the snapshotted execution order.
+    #[serde(default)]
+    pub latest_run_sources: Vec<DiscoveryRunSourceProjection>,
     /// Creation time.
     pub created_at: DateTime<Utc>,
     /// Last campaign or run update time.
@@ -308,6 +312,8 @@ pub struct DiscoveryBusinessLeadProjection {
     pub industry_id: String,
     /// Taxonomy vertical inherited from the first campaign.
     pub vertical_id: String,
+    /// Provider that first retained this unique business.
+    pub provider: DiscoveryProvider,
     /// Business name.
     pub name: String,
     /// Public website, when returned.
@@ -519,7 +525,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: campaign(),
+                campaign: Box::new(campaign()),
             },
         };
         let value = serde_json::to_value(&request).expect("serialize request");

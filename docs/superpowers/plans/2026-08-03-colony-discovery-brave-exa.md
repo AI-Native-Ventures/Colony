@@ -273,20 +273,20 @@ const BRAVE_SEARCH_ENDPOINT: &str =
 - Modify: `desktop/src-tauri/src/discovery_worker/protocol.rs`
 - Modify: `desktop/src-tauri/src/app_state.rs` if lifecycle ownership belongs there.
 
-- [ ] Add failing restart tests at call-intent written, response received,
+- [x] Add failing restart tests at call-intent written, response received,
   normalized outbox written, first batch acknowledged, all batches acknowledged,
   and call accepted with no recoverable response.
-- [ ] Store only workspace-scoped normalized public observations plus run,
+- [x] Store only workspace-scoped normalized public observations plus run,
   provider, request, and batch identities. Never store keys, headers, raw bodies,
   or arbitrary provider JSON.
-- [ ] Write intent before Brave/Exa calls; atomically write normalized results
+- [x] Write intent before Brave/Exa calls; atomically write normalized results
   immediately after receipt; drain idempotently before starting any later paid
   request; delete an entry only after relay acknowledgement.
-- [ ] Mark an accepted-call/no-response restart as `outcome_unknown` and do not
+- [x] Mark an accepted-call/no-response restart as `outcome_unknown` and do not
   repeat it automatically.
-- [ ] Prove two communities cannot read or drain one another's outbox entries.
-- [ ] Run restart and secret-scan tests.
-- [ ] Commit with `git commit -s -m "feat(discovery): recover synchronous source calls"`.
+- [x] Prove two communities cannot read or drain one another's outbox entries.
+- [x] Run restart and secret-scan tests.
+- [x] Commit with `git commit -s -m "feat(discovery): recover synchronous source calls"`.
 
 ## Task 9: Execute waterfall and concurrent source plans
 
@@ -299,25 +299,25 @@ const BRAVE_SEARCH_ENDPOINT: &str =
 - Modify: `crates/buzz-db/src/discovery.rs`
 - Modify: `crates/buzz-relay/src/discovery_worker_broker.rs`
 
-- [ ] Add deterministic fake-provider tests before production wiring. Record
+- [x] Add deterministic fake-provider tests before production wiring. Record
   call start/end order and expose barriers so concurrency is proven rather than
   inferred from elapsed time.
-- [ ] Prove waterfall calls only selected sources in exact saved order, checks
+- [x] Prove waterfall calls only selected sources in exact saved order, checks
   retained net-new count between paid calls, and marks later sources
   `skipped_target_met` without contacting them.
-- [ ] Prove concurrent starts all selected sources before releasing their
+- [x] Prove concurrent starts all selected sources before releasing their
   response barriers, serializes checkpoint sequence writes, stops unstarted
   pages after the target, and retains valid in-flight overshoot.
-- [ ] Maintain one fenced lease heartbeat. Check cancellation, entitlement,
+- [x] Maintain one fenced lease heartbeat. Check cancellation, entitlement,
   worker generation, and lease ownership before every provider call and retry.
-- [ ] Persist truthful per-source pending, active, completed, exhausted, failed,
+- [x] Persist truthful per-source pending, active, completed, exhausted, failed,
   cancelled, `outcome_unknown`, and skipped states plus returned/retained/
   duplicate/request counts.
-- [ ] One-source failure must preserve other-source success. Fail the entire run
+- [x] One-source failure must preserve other-source success. Fail the entire run
   only when every selected source fails and no usable result was retained.
-- [ ] Prove Outscraper provider-request resumption still submits exactly once.
-- [ ] Run all worker, relay, and database Discovery tests.
-- [ ] Commit with `git commit -s -m "feat(discovery): orchestrate multi-source runs"`.
+- [x] Prove Outscraper provider-request resumption still submits exactly once.
+- [x] Run all worker, relay, and database Discovery tests.
+- [x] Commit with `git commit -s -m "feat(discovery): orchestrate multi-source runs"`.
 
 ## Task 10: Connect the live Discovery UI to persisted source plans
 
@@ -331,25 +331,25 @@ const BRAVE_SEARCH_ENDPOINT: &str =
 - Modify: `desktop/src/testing/e2eBridge.ts`
 - Modify: `desktop/tests/e2e/discovery.spec.ts`
 
-- [ ] Add failing contract tests showing live Campaigns no longer synthesize a
+- [x] Add failing contract tests showing live Campaigns no longer synthesize a
   Google-Maps-only config and start uses the persisted Campaign plan.
-- [ ] Remove the live-mode resets and Outscraper-only rejection. Enable the
+- [x] Remove the live-mode resets and Outscraper-only rejection. Enable the
   three production sources only when their local credentials are configured;
   leave catalogue-only sources visibly unavailable.
-- [ ] Save mode, selection, and waterfall order through
+- [x] Save mode, selection, and waterfall order through
   `update_campaign_sources`. In concurrent mode preserve the stored order for
   display/fingerprinting but disable drag semantics.
-- [ ] Block start with one clear message listing missing selected credentials.
+- [x] Block start with one clear message listing missing selected credentials.
   Do not silently remove a configured source.
-- [ ] Map real source rows, run timeline, counts, failures, and Lead provenance
+- [x] Map real source rows, run timeline, counts, failures, and Lead provenance
   from relay projections. Do not hardcode `google_maps` or Outscraper.
-- [ ] Preserve free/demo fixtures and ensure they make no live-store,
+- [x] Preserve free/demo fixtures and ensure they make no live-store,
   credential, worker, or provider calls.
-- [ ] Add E2E cases for create/save/reload, reorder waterfall, concurrent
+- [x] Add E2E cases for create/save/reload, reorder waterfall, concurrent
   selection, missing-key block, progress, one-source failure, and provenance.
-- [ ] Run desktop unit/contract tests, lint, typecheck, E2E build, and focused
+- [x] Run desktop unit/contract tests, lint, typecheck, E2E build, and focused
   Playwright tests.
-- [ ] Commit with `git commit -s -m "feat(discovery): operate persisted source plans"`.
+- [x] Commit with `git commit -s -m "feat(discovery): operate persisted source plans"`.
 
 ## Task 11: Prove agents use the same primitive
 

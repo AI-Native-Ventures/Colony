@@ -2225,7 +2225,7 @@ pub(crate) fn provider_text(provider: DiscoveryProvider) -> &'static str {
     }
 }
 
-fn parse_provider(value: &str) -> Result<DiscoveryProvider> {
+pub(crate) fn parse_provider(value: &str) -> Result<DiscoveryProvider> {
     match value {
         "outscraper" => Ok(DiscoveryProvider::Outscraper),
         "brave_search" => Ok(DiscoveryProvider::BraveSearch),
@@ -2550,8 +2550,8 @@ mod tests {
             DiscoveryWorkerSourceProgressRequest,
         },
         discovery_workspace::{
-            DiscoveryCampaignInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceReceipt,
-            DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
+            DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryWorkspaceActionPayload,
+            DiscoveryWorkspaceReceipt, DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
         },
         CommunityId,
     };
@@ -2796,7 +2796,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: DiscoveryCampaignInput {
+                campaign: Box::new(DiscoveryCampaignInput {
                     campaign_id,
                     name: "Sandton dentists".into(),
                     industry_id: "healthcare".into(),
@@ -2813,7 +2813,7 @@ mod tests {
                         mode: DiscoverySourceMode::Concurrent,
                         sources: vec![DiscoverySource::BraveSearch, DiscoverySource::ExaSearch],
                     },
-                },
+                }),
             },
         };
         let create_event = build_discovery_workspace_action(relay.public_key(), &create)
@@ -3170,6 +3170,29 @@ mod tests {
             .source_states
             .iter()
             .all(|source| source.status == DiscoveryRunSourceStatus::Pending));
+
+        let read_request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::GetCampaign { campaign_id },
+        };
+        let read_event = build_discovery_workspace_action(relay.public_key(), &read_request)
+            .expect("build Campaign read")
+            .sign_with_keys(&actor)
+            .expect("sign Campaign read");
+        let read =
+            apply_workspace_request(&db, community, &actor, &relay, &read_request, &read_event)
+                .await
+                .expect("read Campaign source projection");
+        let crate::discovery_workspace::DiscoveryWorkspaceCommandApply::Applied { result, .. } =
+            read
+        else {
+            panic!("Campaign read must apply");
+        };
+        let DiscoveryWorkspaceResult::Campaign { campaign } = *result else {
+            panic!("Campaign read must return Campaign");
+        };
+        assert_eq!(campaign.latest_run_sources, lease.source_states);
 
         sqlx::query("DELETE FROM event_mentions WHERE community_id=$1")
             .bind(community.as_uuid())
@@ -4171,6 +4194,37 @@ mod tests {
         .await
         .expect("load first-source provenance");
         assert_eq!(retained_provider, "outscraper");
+        let list_request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::ListLeads {
+                request: DiscoveryLeadListRequest {
+                    campaign_id: None,
+                    industry_id: None,
+                    vertical_id: None,
+                    offset: 0,
+                    limit: 100,
+                },
+            },
+        };
+        let list_event = build_discovery_workspace_action(relay.public_key(), &list_request)
+            .expect("build Lead list")
+            .sign_with_keys(&actor)
+            .expect("sign Lead list");
+        let listed =
+            apply_workspace_request(&db, community, &actor, &relay, &list_request, &list_event)
+                .await
+                .expect("list retained Leads");
+        let crate::discovery_workspace::DiscoveryWorkspaceCommandApply::Applied { result, .. } =
+            listed
+        else {
+            panic!("Lead list must apply");
+        };
+        let DiscoveryWorkspaceResult::Leads { page } = *result else {
+            panic!("Lead list must return Leads");
+        };
+        assert_eq!(page.leads.len(), 1);
+        assert_eq!(page.leads[0].provider, DiscoveryProvider::Outscraper);
         let usage: Vec<(Uuid, i32, i32)> = sqlx::query_as(
             "SELECT run_id, stored_count, existing_count FROM discovery_usage \
              WHERE community_id=$1 ORDER BY run_id",

@@ -10,6 +10,27 @@ export const DISCOVERY_SOURCES = [
 
 export type DiscoverySource = (typeof DISCOVERY_SOURCES)[number]["key"];
 
+/** Sources backed by production provider adapters in the local worker. */
+export const LIVE_DISCOVERY_SOURCES = [
+  "google_maps",
+  "brave_search",
+  "exa_search",
+] as const satisfies readonly DiscoverySource[];
+
+export type LiveDiscoverySource = (typeof LIVE_DISCOVERY_SOURCES)[number];
+
+export const DISCOVERY_SOURCE_PROVIDERS = {
+  google_maps: "outscraper",
+  brave_search: "brave_search",
+  exa_search: "exa_search",
+} as const;
+
+export function isLiveDiscoverySource(
+  source: DiscoverySource,
+): source is LiveDiscoverySource {
+  return LIVE_DISCOVERY_SOURCES.some((candidate) => candidate === source);
+}
+
 export const DISCOVERY_SOURCE_LABELS: Record<DiscoverySource, string> =
   Object.fromEntries(
     DISCOVERY_SOURCES.map(({ key, label }) => [key, label]),

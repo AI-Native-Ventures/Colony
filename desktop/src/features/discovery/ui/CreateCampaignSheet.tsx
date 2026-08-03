@@ -4,6 +4,11 @@ import { Building2, Check, Loader2, MapPin } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import {
+  getDiscoveryCredentialStatus,
+  type DiscoveryCredentialProvider,
+  type DiscoveryCredentialStatus,
+} from "@/shared/api/discoveryCredentials";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -19,6 +24,8 @@ import {
   DEFAULT_SOURCE_CONFIG,
   DISCOVERY_SOURCES,
   DISCOVERY_SOURCE_LABELS,
+  DISCOVERY_SOURCE_PROVIDERS,
+  isLiveDiscoverySource,
   toggleSource,
   type DiscoveryMode,
   type DiscoverySource,
@@ -80,6 +87,9 @@ export function CreateCampaignSheet({
   );
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [credentialStatuses, setCredentialStatuses] = React.useState<
+    Partial<Record<DiscoveryCredentialProvider, DiscoveryCredentialStatus>>
+  >({});
   const liveBusinessPhase = entitlement?.experience === "live";
 
   React.useEffect(() => {
@@ -91,11 +101,42 @@ export function CreateCampaignSheet({
     setHasWebsite(true);
     setHasPhone(true);
     setHasEmail(true);
-    setSourceMode(liveBusinessPhase ? "waterfall" : DEFAULT_SOURCE_CONFIG.mode);
+    setSourceMode(DEFAULT_SOURCE_CONFIG.mode);
     setEnabledSources(
-      liveBusinessPhase ? ["google_maps"] : [...DEFAULT_SOURCE_CONFIG.order],
+      liveBusinessPhase ? [] : [...DEFAULT_SOURCE_CONFIG.order],
     );
+    setCredentialStatuses({});
     setError(null);
+    if (liveBusinessPhase) {
+      let cancelled = false;
+      void Promise.all(
+        Object.values(DISCOVERY_SOURCE_PROVIDERS).map(async (provider) => {
+          try {
+            return [
+              provider,
+              await getDiscoveryCredentialStatus(provider),
+            ] as const;
+          } catch {
+            return [provider, "unavailable"] as const;
+          }
+        }),
+      ).then((statuses) => {
+        if (cancelled) return;
+        const next = Object.fromEntries(statuses) as Partial<
+          Record<DiscoveryCredentialProvider, DiscoveryCredentialStatus>
+        >;
+        setCredentialStatuses(next);
+        const firstConfigured = (
+          ["google_maps", "brave_search", "exa_search"] as const
+        ).find(
+          (source) => next[DISCOVERY_SOURCE_PROVIDERS[source]] === "configured",
+        );
+        setEnabledSources(firstConfigured ? [firstConfigured] : []);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
   }, [liveBusinessPhase, open, vertical]);
 
   const targetNumber = Math.max(0, Number.parseInt(target, 10) || 0);
@@ -109,6 +150,14 @@ export function CreateCampaignSheet({
     }
     if (!Number.isFinite(targetNumber) || targetNumber < 1) {
       setError("Choose a lead target of at least one.");
+      return;
+    }
+    if (enabledSources.length === 0) {
+      setError(
+        liveBusinessPhase
+          ? "Connect an API key in Settings > Discovery, then select a source."
+          : "Select at least one Discovery source.",
+      );
       return;
     }
     setSubmitting(true);
@@ -258,81 +307,89 @@ export function CreateCampaignSheet({
               <summary className="cursor-pointer text-sm font-semibold text-foreground">
                 Advanced: Data Sources
               </summary>
-              {liveBusinessPhase ? (
-                <div className="mt-4 space-y-3">
-                  <p className="text-sm text-muted-foreground">
-                    The first live phase uses your Outscraper key for Google
-                    Maps business discovery. Additional sources and execution
-                    modes remain in the preview until their production gates
-                    pass.
-                  </p>
-                  <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/50 p-2.5">
-                    <span className="min-w-0 flex-1 text-sm text-foreground">
-                      {DISCOVERY_SOURCE_LABELS.google_maps}
-                    </span>
-                    <Switch
-                      aria-label="Outscraper is enabled"
-                      checked
-                      disabled
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 space-y-4">
-                  <Tabs
-                    onValueChange={(value) => {
-                      if (value === "waterfall" || value === "concurrent")
-                        setSourceMode(value);
-                    }}
-                    value={sourceMode}
-                  >
-                    <TabsList aria-label="Campaign source mode">
-                      <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
-                      <TabsTrigger value="concurrent">Concurrent</TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                  <div className="space-y-2">
-                    {DISCOVERY_SOURCES.map(({ key }) => {
-                      const enabled = enabledSources.includes(key);
-                      const paidLocked =
-                        key === "linkedin_company_search" &&
+              <div className="mt-4 space-y-4">
+                <Tabs
+                  onValueChange={(value) => {
+                    if (value === "waterfall" || value === "concurrent")
+                      setSourceMode(value);
+                  }}
+                  value={sourceMode}
+                >
+                  <TabsList aria-label="Campaign source mode">
+                    <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
+                    <TabsTrigger value="concurrent">Concurrent</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <div className="space-y-2">
+                  {DISCOVERY_SOURCES.map(({ key }) => {
+                    const enabled = enabledSources.includes(key);
+                    const liveAvailable =
+                      isLiveDiscoverySource(key) &&
+                      credentialStatuses[DISCOVERY_SOURCE_PROVIDERS[key]] ===
+                        "configured";
+                    const locked = liveBusinessPhase
+                      ? !liveAvailable
+                      : key === "linkedin_company_search" &&
                         entitlement?.state !== "entitled";
-                      return (
-                        <div
-                          className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/50 p-2.5"
-                          key={key}
-                        >
-                          <span className="min-w-0 flex-1 text-sm text-foreground">
-                            {DISCOVERY_SOURCE_LABELS[key]}
+                    const liveHint = !liveBusinessPhase
+                      ? null
+                      : !isLiveDiscoverySource(key)
+                        ? "Not available yet"
+                        : credentialStatuses[
+                              DISCOVERY_SOURCE_PROVIDERS[key]
+                            ] === "configured"
+                          ? "Connected"
+                          : "Connect in Settings";
+                    return (
+                      <div
+                        className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/50 p-2.5"
+                        key={key}
+                      >
+                        <span className="min-w-0 flex-1 text-sm text-foreground">
+                          {DISCOVERY_SOURCE_LABELS[key]}
+                        </span>
+                        {liveHint ? (
+                          <span className="text-xs text-muted-foreground">
+                            {liveHint}
                           </span>
-                          <Switch
-                            aria-label={`${enabled ? "Disable" : "Enable"} ${DISCOVERY_SOURCE_LABELS[key]}`}
-                            checked={enabled}
-                            disabled={paidLocked}
-                            onCheckedChange={() =>
-                              setEnabledSources(
-                                (current) =>
-                                  toggleSource(
-                                    { mode: sourceMode, order: current },
-                                    key,
-                                  ).order,
-                              )
+                        ) : null}
+                        <Switch
+                          aria-label={`${enabled ? "Disable" : "Enable"} ${DISCOVERY_SOURCE_LABELS[key]}`}
+                          checked={enabled}
+                          disabled={locked}
+                          onCheckedChange={() => {
+                            if (liveBusinessPhase) {
+                              setEnabledSources((current) =>
+                                current.includes(key)
+                                  ? current.length > 1
+                                    ? current.filter((source) => source !== key)
+                                    : current
+                                  : [...current, key],
+                              );
+                              return;
                             }
+                            setEnabledSources(
+                              (current) =>
+                                toggleSource(
+                                  { mode: sourceMode, order: current },
+                                  key,
+                                ).order,
+                            );
+                          }}
+                        />
+                        {locked && !liveBusinessPhase ? (
+                          <EntitlementLock
+                            actionLabel="Unlock source"
+                            entitlement={entitlement}
+                            onRetry={onRetryEntitlement}
+                            onRun={() => undefined}
                           />
-                          {paidLocked ? (
-                            <EntitlementLock
-                              actionLabel="Unlock source"
-                              entitlement={entitlement}
-                              onRetry={onRetryEntitlement}
-                              onRun={() => undefined}
-                            />
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
+              </div>
             </details>
 
             <section className="space-y-4">

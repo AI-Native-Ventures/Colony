@@ -57,7 +57,7 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
             publish_workspace_payload(
                 client,
                 DiscoveryWorkspaceActionPayload::CreateCampaign {
-                    campaign: DiscoveryCampaignInput {
+                    campaign: Box::new(DiscoveryCampaignInput {
                         campaign_id: campaign.unwrap_or_else(Uuid::new_v4),
                         name: name.trim().to_owned(),
                         industry_id: industry.trim().to_owned(),
@@ -78,7 +78,7 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                                 sources.into_iter().map(Into::into).collect()
                             },
                         },
-                    },
+                    }),
                 },
                 idempotency_key,
             )

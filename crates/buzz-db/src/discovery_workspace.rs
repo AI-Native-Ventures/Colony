@@ -482,7 +482,7 @@ async fn list_leads_tx(
     .fetch_one(&mut **tx)
     .await?;
     let rows = sqlx::query(
-        "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.name,\
+        "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.provider,o.name,\
                 o.website,o.phone,o.full_address,o.city,o.state,o.country,o.category,o.subtypes,\
                 o.rating_hundredths,o.reviews_count,o.source_url,o.image_url,o.first_observed_at \
          FROM discovery_business_observations o \
@@ -517,7 +517,16 @@ const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
      GREATEST(c.updated_at,COALESCE(r.updated_at,c.updated_at)) AS campaign_updated_at,\
      COALESCE(l.lead_count,0) AS lead_count,r.id AS run_id,r.campaign_id AS run_campaign_id,\
      r.state AS run_state,r.completed_steps,r.total_steps,r.cancel_requested,r.terminal_reason,\
-     r.created_at AS run_created_at,r.updated_at AS run_updated_at ",
+     r.created_at AS run_created_at,r.updated_at AS run_updated_at,\
+     COALESCE((SELECT jsonb_agg(jsonb_build_object(\
+       'source',rs.source_key,'provider',rs.provider,'position',rs.position,\
+       'status',rs.status,'request_cursor',rs.request_cursor,\
+       'request_count',rs.request_count,'returned_count',rs.returned_count,\
+       'retained_count',rs.retained_count,'duplicate_count',rs.duplicate_count,\
+       'failure_class',rs.failure_class,'started_at',rs.started_at,\
+       'finished_at',rs.finished_at,'updated_at',rs.updated_at) ORDER BY rs.position) \
+       FROM discovery_run_sources rs WHERE rs.community_id=c.community_id \
+       AND rs.run_id=r.id),'[]'::jsonb) AS run_source_states ",
     "FROM discovery_campaigns c ",
     "LEFT JOIN LATERAL (SELECT id,campaign_id,state,completed_steps,total_steps,cancel_requested,\
       terminal_reason,created_at,updated_at FROM discovery_runs \
@@ -536,7 +545,16 @@ const CAMPAIGN_PROJECTION_SELECT_FILTERED: &str = concat!(
      GREATEST(c.updated_at,COALESCE(r.updated_at,c.updated_at)) AS campaign_updated_at,\
      COALESCE(l.lead_count,0) AS lead_count,r.id AS run_id,r.campaign_id AS run_campaign_id,\
      r.state AS run_state,r.completed_steps,r.total_steps,r.cancel_requested,r.terminal_reason,\
-     r.created_at AS run_created_at,r.updated_at AS run_updated_at ",
+     r.created_at AS run_created_at,r.updated_at AS run_updated_at,\
+     COALESCE((SELECT jsonb_agg(jsonb_build_object(\
+       'source',rs.source_key,'provider',rs.provider,'position',rs.position,\
+       'status',rs.status,'request_cursor',rs.request_cursor,\
+       'request_count',rs.request_count,'returned_count',rs.returned_count,\
+       'retained_count',rs.retained_count,'duplicate_count',rs.duplicate_count,\
+       'failure_class',rs.failure_class,'started_at',rs.started_at,\
+       'finished_at',rs.finished_at,'updated_at',rs.updated_at) ORDER BY rs.position) \
+       FROM discovery_run_sources rs WHERE rs.community_id=c.community_id \
+       AND rs.run_id=r.id),'[]'::jsonb) AS run_source_states ",
     "FROM discovery_campaigns c ",
     "LEFT JOIN LATERAL (SELECT id,campaign_id,state,completed_steps,total_steps,cancel_requested,\
       terminal_reason,created_at,updated_at FROM discovery_runs \
@@ -574,6 +592,8 @@ fn campaign_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryCampaignPro
         source_config: source_config_from_row(row)?,
         lead_count: count_to_u32(lead_count, "Lead")?,
         latest_run,
+        latest_run_sources: serde_json::from_value(row.try_get("run_source_states")?)
+            .map_err(|_| DbError::InvalidData("Discovery source states are invalid".into()))?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("campaign_updated_at")?,
     })
@@ -608,6 +628,7 @@ fn lead_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryBusinessLeadPro
         campaign_id: row.try_get("campaign_id")?,
         industry_id: row.try_get("industry_id")?,
         vertical_id: row.try_get("vertical_id")?,
+        provider: super::discovery::parse_provider(row.try_get("provider")?)?,
         name: row.try_get("name")?,
         website: row.try_get("website")?,
         phone: row.try_get("phone")?,

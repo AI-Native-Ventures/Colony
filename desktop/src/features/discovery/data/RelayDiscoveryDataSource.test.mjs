@@ -11,17 +11,23 @@ import {
   canonicalDiscoveryJson,
   RelayDiscoveryDataSource,
 } from "./RelayDiscoveryDataSource.ts";
+import { mapCampaign } from "./relayDiscoveryModels.ts";
 
 const ACTOR_SECRET = generateSecretKey();
 const RELAY_SECRET = generateSecretKey();
 const RELAY_PUBKEY = getPublicKey(RELAY_SECRET);
 const NOW = "2026-08-02T10:00:00Z";
 
-function harness(active, receiptSecret = RELAY_SECRET) {
+function harness(
+  active,
+  receiptSecret = RELAY_SECRET,
+  credentialStatuses = {},
+) {
   let published = null;
   let campaign = null;
   let workerListener = null;
   let runAction = null;
+  let runActions = 0;
   let run = null;
   const workerId = "1f507956-6f08-4e6a-bf38-3a7011565047";
   const lead = {
@@ -29,6 +35,7 @@ function harness(active, receiptSecret = RELAY_SECRET) {
     campaign_id: "",
     industry_id: "automotive",
     vertical_id: "auto-repair",
+    provider: "outscraper",
     name: "Sandton Auto Works",
     website: "https://sandton-auto.example",
     phone: "+27 11 555 0100",
@@ -47,6 +54,9 @@ function harness(active, receiptSecret = RELAY_SECRET) {
   const operations = [];
   return {
     operations,
+    get runActions() {
+      return runActions;
+    },
     dependencies: {
       delay: async () => {},
       relaySelf: async () => RELAY_PUBKEY,
@@ -63,6 +73,7 @@ function harness(active, receiptSecret = RELAY_SECRET) {
       publish: async (event) => {
         published = event;
         if (event.kind === 40017) {
+          runActions += 1;
           runAction = event;
           const content = JSON.parse(event.content);
           run = {
@@ -77,10 +88,28 @@ function harness(active, receiptSecret = RELAY_SECRET) {
             updated_at: NOW,
           };
           campaign.latest_run = run;
+          campaign.latest_run_sources = campaign.source_config.sources.map(
+            (source, position) => ({
+              source,
+              provider: source === "google_maps" ? "outscraper" : source,
+              position,
+              status: "pending",
+              request_cursor: null,
+              request_count: 0,
+              returned_count: 0,
+              retained_count: 0,
+              duplicate_count: 0,
+              failure_class: null,
+              started_at: null,
+              finished_at: null,
+              updated_at: NOW,
+            }),
+          );
         }
         return event;
       },
-      credentialStatus: async () => "configured",
+      credentialStatus: async (provider) =>
+        credentialStatuses[provider] ?? "configured",
       subscribe: async (_filter, onEvent) => {
         workerListener = onEvent;
         return async () => {
@@ -130,6 +159,19 @@ function harness(active, receiptSecret = RELAY_SECRET) {
             };
             campaign.latest_run = run;
             campaign.lead_count = 1;
+            campaign.latest_run_sources = campaign.latest_run_sources.map(
+              (source, index) => ({
+                ...source,
+                status: index === 0 ? "completed" : "exhausted",
+                request_count: 1,
+                returned_count: index === 0 ? 1 : 0,
+                retained_count: index === 0 ? 1 : 0,
+                started_at: NOW,
+                finished_at: "2026-08-02T10:00:05Z",
+                updated_at: "2026-08-02T10:00:05Z",
+              }),
+            );
+            lead.provider = campaign.latest_run_sources[0].provider;
             lead.campaign_id = campaign.campaign_id;
             workerListener(
               finalizeEvent(
@@ -189,11 +231,17 @@ function harness(active, receiptSecret = RELAY_SECRET) {
             description: input.description,
             language: input.language,
             region: input.region,
+            source_config: input.source_config,
             lead_count: 0,
             latest_run: null,
+            latest_run_sources: [],
             created_at: NOW,
             updated_at: NOW,
           };
+          result = { result: "campaign", campaign };
+        } else if (operation === "update_campaign_sources") {
+          campaign.source_config = request.payload.source_config;
+          campaign.updated_at = "2026-08-02T10:00:02Z";
           result = { result: "campaign", campaign };
         } else if (operation === "list_campaigns") {
           result = {
@@ -257,6 +305,78 @@ test("canonical Discovery JSON matches the relay's sorted encoding", () => {
   );
 });
 
+test("a failed source remains visible without discarding another source's success", () => {
+  const campaign = mapCampaign({
+    campaign_id: "7112c2bb-9a11-48b4-a516-7b2a7bb7f5fb",
+    name: "Mixed source result",
+    industry_id: "automotive",
+    industry_name: "Automotive",
+    vertical_id: "auto-repair",
+    vertical_name: "Auto Repair",
+    query: "mechanics",
+    location: "Sandton",
+    target: 10,
+    description: null,
+    language: "en",
+    region: null,
+    source_config: {
+      mode: "concurrent",
+      sources: ["brave_search", "exa_search"],
+    },
+    lead_count: 3,
+    latest_run: {
+      run_id: "6bc3c05c-d5bc-490f-91d0-3b7ebf987cc2",
+      campaign_id: "7112c2bb-9a11-48b4-a516-7b2a7bb7f5fb",
+      state: "succeeded",
+      completed_steps: 4,
+      total_steps: 4,
+      cancel_requested: false,
+      terminal_reason: null,
+      created_at: NOW,
+      updated_at: NOW,
+    },
+    latest_run_sources: [
+      {
+        source: "brave_search",
+        provider: "brave_search",
+        position: 0,
+        status: "failed",
+        request_cursor: null,
+        request_count: 1,
+        returned_count: 0,
+        retained_count: 0,
+        duplicate_count: 0,
+        failure_class: "rate_limited",
+        started_at: NOW,
+        finished_at: NOW,
+        updated_at: NOW,
+      },
+      {
+        source: "exa_search",
+        provider: "exa_search",
+        position: 1,
+        status: "completed",
+        request_cursor: null,
+        request_count: 1,
+        returned_count: 3,
+        retained_count: 3,
+        duplicate_count: 0,
+        failure_class: null,
+        started_at: NOW,
+        finished_at: NOW,
+        updated_at: NOW,
+      },
+    ],
+    created_at: NOW,
+    updated_at: NOW,
+  });
+
+  assert.equal(campaign.status, "partial");
+  assert.equal(campaign.run.status, "partial");
+  assert.match(campaign.run.sourceMetrics[0].error, /rate limit/);
+  assert.equal(campaign.run.sourceMetrics[1].stored, 3);
+});
+
 test("active LAKA access switches taxonomy campaigns onto persisted relay data", async () => {
   const live = harness(true);
   const source = new RelayDiscoveryDataSource(live.dependencies);
@@ -291,6 +411,66 @@ test("active LAKA access switches taxonomy campaigns onto persisted relay data",
     1,
     "the entitlement decision is cached for this community-scoped source",
   );
+});
+
+test("live campaigns persist and reload the selected source plan", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const created = await source.createCampaign({
+    name: "Multi-source mechanics",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+    sourceConfig: {
+      mode: "concurrent",
+      order: ["brave_search", "exa_search"],
+    },
+  });
+  assert.deepEqual(created.sourceConfig, {
+    mode: "concurrent",
+    order: ["brave_search", "exa_search"],
+  });
+
+  const updated = await source.updateSourceConfig(created.id, {
+    mode: "waterfall",
+    order: ["exa_search", "google_maps", "brave_search"],
+  });
+  assert.deepEqual(updated.sourceConfig, {
+    mode: "waterfall",
+    order: ["exa_search", "google_maps", "brave_search"],
+  });
+  assert.ok(live.operations.includes("update_campaign_sources"));
+  assert.deepEqual((await source.getCampaign(created.id)).sourceConfig, {
+    mode: "waterfall",
+    order: ["exa_search", "google_maps", "brave_search"],
+  });
+});
+
+test("start lists every selected source whose local key is missing", async () => {
+  const live = harness(true, RELAY_SECRET, {
+    brave_search: "missing",
+    exa_search: "missing",
+  });
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const campaign = await source.createCampaign({
+    name: "Missing credentials",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+    sourceConfig: {
+      mode: "concurrent",
+      order: ["brave_search", "exa_search"],
+    },
+  });
+
+  await assert.rejects(async () => {
+    for await (const _event of source.startDiscovery(campaign.id)) {
+      // The stream must fail before the run action is published.
+    }
+  }, /Brave Web Search, Exa Neural Search/);
+  assert.equal(live.runActions, 0);
 });
 
 test("inactive workspaces stay on the cost-free demo and cannot create live records", async () => {
@@ -329,6 +509,10 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
     verticalId: "auto-repair",
     location: "Sandton, South Africa",
     target: 25,
+    sourceConfig: {
+      mode: "concurrent",
+      order: ["brave_search", "exa_search"],
+    },
   });
 
   const events = [];
@@ -336,6 +520,20 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
     events.push(event);
   }
   assert.equal(events[0].type, "session_started");
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "source_completed" &&
+        event.source === "brave_search" &&
+        event.sourceMetric.stored === 1,
+    ),
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "source_exhausted" && event.source === "exa_search",
+    ),
+  );
   assert.equal(events.at(-1).type, "session_completed");
   assert.equal(events.at(-1).partial, true);
 
@@ -349,4 +547,6 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
   assert.equal(page.leads[0].companyName, "Sandton Auto Works");
   assert.equal(page.leads[0].status, "new");
   assert.equal(page.leads[0].score, 0);
+  assert.equal(page.leads[0].source, "brave_search");
+  assert.equal(page.leads[0].sourceLabel, "Brave Web Search");
 });

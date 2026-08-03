@@ -117,7 +117,7 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: DiscoveryCampaignInput {
+                campaign: Box::new(DiscoveryCampaignInput {
                     campaign_id,
                     name: "Sandton dentists".to_owned(),
                     industry_id: "healthcare".to_owned(),
@@ -131,7 +131,7 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
                     language: "en".to_owned(),
                     region: Some("ZA".to_owned()),
                     source_config: buzz_core_pkg::discovery::DiscoverySourceConfig::default(),
-                },
+                }),
             },
         };
         let campaign_response = relay::submit_event_at_with_keys(

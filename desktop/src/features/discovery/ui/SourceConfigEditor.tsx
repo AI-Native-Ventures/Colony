@@ -20,12 +20,19 @@ import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { Switch } from "@/shared/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import {
+  getDiscoveryCredentialStatus,
+  type DiscoveryCredentialProvider,
+  type DiscoveryCredentialStatus,
+} from "@/shared/api/discoveryCredentials";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { DiscoveryEntitlement } from "../entitlement";
 import {
   canReorderSources,
   DISCOVERY_SOURCES,
   DISCOVERY_SOURCE_LABELS,
+  DISCOVERY_SOURCE_PROVIDERS,
+  isLiveDiscoverySource,
   moveSource,
   resolveSourceConfig,
   toggleSource,
@@ -47,8 +54,10 @@ type SourceRowProps = {
   source: DiscoverySource;
   enabled: boolean;
   locked: boolean;
+  disabled: boolean;
   entitlement: DiscoveryEntitlement | null;
   onToggle: () => void;
+  hint?: string;
 };
 
 function SourceRowContents({
@@ -56,7 +65,9 @@ function SourceRowContents({
   enabled,
   entitlement,
   locked,
+  disabled,
   onToggle,
+  hint,
   dragHandle,
 }: SourceRowProps & { dragHandle: React.ReactNode }) {
   return (
@@ -65,13 +76,16 @@ function SourceRowContents({
       <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
         {DISCOVERY_SOURCE_LABELS[source]}
       </span>
+      {hint ? (
+        <span className="text-xs text-muted-foreground">{hint}</span>
+      ) : null}
       <Switch
         aria-label={`${enabled ? "Disable" : "Enable"} ${DISCOVERY_SOURCE_LABELS[source]}`}
         checked={enabled}
-        disabled={locked}
+        disabled={disabled}
         onCheckedChange={onToggle}
       />
-      {locked ? (
+      {locked && entitlement?.experience !== "live" ? (
         <EntitlementLock
           actionLabel="Unlock source"
           entitlement={entitlement}
@@ -99,6 +113,8 @@ function SortableSourceRow({
   return (
     <div
       className="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 p-3"
+      data-enabled={props.enabled}
+      data-source={props.source}
       ref={setNodeRef}
       style={style}
     >
@@ -124,7 +140,11 @@ function SortableSourceRow({
 
 function StaticSourceRow(props: SourceRowProps) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 p-3">
+    <div
+      className="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 p-3"
+      data-enabled={props.enabled}
+      data-source={props.source}
+    >
       <SourceRowContents {...props} dragHandle={null} />
     </div>
   );
@@ -149,6 +169,10 @@ export function SourceConfigEditor({
   );
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [credentialStatuses, setCredentialStatuses] = React.useState<
+    Partial<Record<DiscoveryCredentialProvider, DiscoveryCredentialStatus>>
+  >({});
+  const live = entitlement?.experience === "live";
   const campaignId = campaign.id;
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -162,6 +186,28 @@ export function SourceConfigEditor({
     setConfig(resolveSourceConfig(campaign.sourceConfig));
     setError(null);
   }, [campaign.sourceConfig, campaignId]);
+
+  React.useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    void Promise.all(
+      Object.values(DISCOVERY_SOURCE_PROVIDERS).map(async (provider) => {
+        try {
+          return [
+            provider,
+            await getDiscoveryCredentialStatus(provider),
+          ] as const;
+        } catch {
+          return [provider, "unavailable"] as const;
+        }
+      }),
+    ).then((statuses) => {
+      if (!cancelled) setCredentialStatuses(Object.fromEntries(statuses));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [live]);
 
   const persist = React.useCallback(
     async (next: CampaignSourceConfig) => {
@@ -210,40 +256,38 @@ export function SourceConfigEditor({
 
   const reorderable = canReorderSources(config);
   const { enabled: enabledRows, disabled: disabledRows } = sourceRows(config);
-  const isLocked = (source: DiscoverySource) =>
-    source === "linkedin_company_search" && entitlement?.state !== "entitled";
+  const isLocked = (source: DiscoverySource) => {
+    if (!live) {
+      return (
+        source === "linkedin_company_search" &&
+        entitlement?.state !== "entitled"
+      );
+    }
+    return (
+      !isLiveDiscoverySource(source) ||
+      credentialStatuses[DISCOVERY_SOURCE_PROVIDERS[source]] !== "configured"
+    );
+  };
+  const sourceHint = (source: DiscoverySource) => {
+    if (!live) return undefined;
+    if (!isLiveDiscoverySource(source)) return "Not available yet";
+    const status = credentialStatuses[DISCOVERY_SOURCE_PROVIDERS[source]];
+    if (status === "configured") return "Connected";
+    if (status === "unavailable") return "Secure storage unavailable";
+    return "Connect in Settings";
+  };
   const rowProps = (
     source: DiscoverySource,
     enabled: boolean,
   ): SourceRowProps => ({
     enabled,
     entitlement,
+    hint: sourceHint(source),
     locked: isLocked(source),
+    disabled: isLocked(source) || saving,
     onToggle: () => handleToggle(source),
     source,
   });
-
-  if (entitlement?.experience === "live") {
-    return (
-      <Card className="space-y-4 border-border/60 bg-card/80 p-4 shadow-none">
-        <div>
-          <h3 className="text-base font-semibold text-foreground">
-            Discovery source
-          </h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            The first production phase uses your connected Outscraper account.
-            Colony does not add usage credits or provider markup.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 p-3">
-          <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-            {DISCOVERY_SOURCE_LABELS.google_maps}
-          </span>
-          <Switch aria-label="Outscraper is enabled" checked disabled />
-        </div>
-      </Card>
-    );
-  }
 
   return (
     <Card className="space-y-4 border-border/60 bg-card/80 p-4 shadow-none">
@@ -253,7 +297,9 @@ export function SourceConfigEditor({
             Discovery sources
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Choose where discovery searches. The enabled sources run first.
+            {live
+              ? "Choose connected sources. Provider usage is billed directly to your own accounts."
+              : "Choose where discovery searches. The enabled sources run first."}
           </p>
         </div>
         {saving ? (
@@ -266,8 +312,12 @@ export function SourceConfigEditor({
 
       <Tabs onValueChange={handleModeChange} value={config.mode}>
         <TabsList aria-label="Discovery source execution mode">
-          <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
-          <TabsTrigger value="concurrent">Concurrent</TabsTrigger>
+          <TabsTrigger disabled={saving} value="waterfall">
+            Waterfall
+          </TabsTrigger>
+          <TabsTrigger disabled={saving} value="concurrent">
+            Concurrent
+          </TabsTrigger>
         </TabsList>
       </Tabs>
       <p className="text-sm text-muted-foreground">
@@ -291,7 +341,7 @@ export function SourceConfigEditor({
                 {enabledRows.map((source) => (
                   <SortableSourceRow
                     {...rowProps(source, true)}
-                    canDrag={reorderable && !isLocked(source)}
+                    canDrag={reorderable && !isLocked(source) && !saving}
                     key={source}
                   />
                 ))}
