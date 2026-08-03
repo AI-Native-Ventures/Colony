@@ -8,7 +8,7 @@ use buzz_core::{
     tenant::TenantContext,
 };
 use buzz_db::discovery::{DiscoveryCommandApply, DiscoveryCommandMutation};
-use buzz_sdk::discovery::{build_discovery_receipt, parse_discovery_action};
+use buzz_sdk::discovery::{build_discovery_receipt_for_version, parse_discovery_action};
 use nostr::Event;
 
 use crate::{handlers::event::dispatch_persistent_event, state::AppState};
@@ -76,6 +76,7 @@ pub(crate) async fn handle_discovery_action(
     let operation = parsed.action.operation();
     let request_id = parsed.action.request_id();
     let idempotency_key = parsed.action.idempotency_key();
+    let wire_version = parsed.wire_version;
     let mutation = match parsed.action {
         DiscoveryAction::Start(request) => {
             if !state.config.discovery.fake_executor_enabled
@@ -93,6 +94,10 @@ pub(crate) async fn handle_discovery_action(
                 } else {
                     1
                 },
+                supports_multi_source: matches!(
+                    wire_version,
+                    buzz_sdk::discovery::DiscoveryWireVersion::V2
+                ),
                 accepted_at: chrono::Utc::now(),
             }
         }
@@ -122,10 +127,15 @@ pub(crate) async fn handle_discovery_action(
                     idempotency_key,
                     run: run.projection(),
                 };
-                build_discovery_receipt(actor_pubkey, action_event_id, &receipt)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
-                    .sign_with_keys(&relay_keys)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
+                build_discovery_receipt_for_version(
+                    wire_version,
+                    actor_pubkey,
+                    action_event_id,
+                    &receipt,
+                )
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
+                .sign_with_keys(&relay_keys)
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
             },
         )
         .await
@@ -200,11 +210,21 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryBrokerError {
                 "that idempotency key belongs to a different Discovery command".into(),
             )
         }
+        buzz_db::DbError::AccessDenied(message)
+            if message.contains("already has an active run") =>
+        {
+            DiscoveryBrokerError::Conflict(message)
+        }
         buzz_db::DbError::NotFound(message) if message.contains("campaign") => {
             DiscoveryBrokerError::Invalid("Discovery campaign not found".into())
         }
         buzz_db::DbError::NotFound(_) => {
             DiscoveryBrokerError::Invalid("Discovery run not found".into())
+        }
+        buzz_db::DbError::InvalidData(message)
+            if message.contains("does not support this campaign's source plan") =>
+        {
+            DiscoveryBrokerError::Invalid(message)
         }
         other => DiscoveryBrokerError::Internal(other.to_string()),
     }

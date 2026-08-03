@@ -9,7 +9,7 @@ use buzz_core::{
 };
 use buzz_db::discovery_workspace::DiscoveryWorkspaceCommandApply;
 use buzz_sdk::discovery_workspace::{
-    build_discovery_workspace_receipt, parse_discovery_workspace_action,
+    build_discovery_workspace_receipt_for_version, parse_discovery_workspace_action,
 };
 use nostr::Event;
 
@@ -71,6 +71,7 @@ pub(crate) async fn handle_discovery_workspace_action(
     let idempotency_key = parsed.request.idempotency_key;
     let actor_pubkey = action_event.pubkey;
     let action_event_id = action_event.id;
+    let wire_version = parsed.wire_version;
     let relay_keys = state.relay_keypair.clone();
     let applied = state
         .db
@@ -86,10 +87,15 @@ pub(crate) async fn handle_discovery_workspace_action(
                     idempotency_key,
                     result: result.clone(),
                 };
-                build_discovery_workspace_receipt(actor_pubkey, action_event_id, &receipt)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
-                    .sign_with_keys(&relay_keys)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
+                build_discovery_workspace_receipt_for_version(
+                    wire_version,
+                    actor_pubkey,
+                    action_event_id,
+                    &receipt,
+                )
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
+                .sign_with_keys(&relay_keys)
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
             },
         )
         .await

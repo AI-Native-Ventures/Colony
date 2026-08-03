@@ -168,6 +168,34 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(page.getByRole("tab", { name: "Waterfall" })).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-source-config.png");
 
+  const sourceList = page.getByTestId("discovery-source-list");
+  const braveHandle = page.getByRole("button", {
+    name: "Reorder Brave Web Search",
+  });
+  await braveHandle.dragTo(
+    page.getByRole("button", { name: "Reorder Outscraper (Google Maps)" }),
+  );
+  await expect(sourceList.locator("[data-source]").first()).toHaveAttribute(
+    "data-source",
+    "brave_search",
+  );
+
+  await page.getByRole("tab", { name: "Concurrent" }).click();
+  await expect(page.getByRole("button", { name: /Reorder / })).toHaveCount(0);
+  const exaRow = sourceList.locator('[data-source="exa_search"]');
+  const exaSwitch = exaRow.getByRole("switch");
+  await expect(exaSwitch).toBeEnabled();
+  await exaSwitch.click();
+  await expect(exaRow).toHaveAttribute("data-enabled", "false");
+  await expect(exaSwitch).toHaveAttribute("data-state", "unchecked");
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await expect(page.getByRole("tab", { name: "Concurrent" })).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(exaRow).toHaveAttribute("data-enabled", "false");
+
   await page.goto("/#/discovery?surface=leads");
   const globalLeadsHeading = page.getByRole("heading", { name: "Leads." });
   await expect(globalLeadsHeading).toBeVisible();

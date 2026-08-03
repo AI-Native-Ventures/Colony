@@ -8,7 +8,9 @@ use buzz_core::{
     tenant::TenantContext,
 };
 use buzz_db::discovery::DiscoveryWorkerCommandApply;
-use buzz_sdk::discovery_worker::{build_discovery_worker_receipt, parse_discovery_worker_action};
+use buzz_sdk::discovery_worker::{
+    build_discovery_worker_receipt_for_version, parse_discovery_worker_action,
+};
 use chrono::Duration;
 use nostr::Event;
 
@@ -75,6 +77,7 @@ pub(crate) async fn handle_discovery_worker_action(
     let worker_id = parsed.action.worker_id();
     let actor_pubkey = action_event.pubkey;
     let action_event_id = action_event.id;
+    let wire_version = parsed.wire_version;
     let relay_keys = state.relay_keypair.clone();
     let lease_duration = Duration::seconds(state.config.discovery.lease_seconds as i64);
     let applied = state
@@ -93,10 +96,15 @@ pub(crate) async fn handle_discovery_worker_action(
                     worker_id,
                     outcome: outcome.clone(),
                 };
-                build_discovery_worker_receipt(actor_pubkey, action_event_id, &receipt)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
-                    .sign_with_keys(&relay_keys)
-                    .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
+                build_discovery_worker_receipt_for_version(
+                    wire_version,
+                    actor_pubkey,
+                    action_event_id,
+                    &receipt,
+                )
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))?
+                .sign_with_keys(&relay_keys)
+                .map_err(|error| buzz_db::DbError::InvalidData(error.to_string()))
             },
         )
         .await
@@ -164,6 +172,11 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
                 "this agent has not been granted the Discovery capability".into(),
             )
         }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Discovery local worker requires a human member identity" =>
+        {
+            DiscoveryWorkerBrokerError::Restricted(message)
+        }
         buzz_db::DbError::AccessDenied(message) if message.contains("conflict") => {
             DiscoveryWorkerBrokerError::Conflict(message)
         }
@@ -178,6 +191,21 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
         {
             DiscoveryWorkerBrokerError::Invalid(message)
         }
+        buzz_db::DbError::InvalidData(message)
+            if message.contains("observation provider is not in the run plan") =>
+        {
+            DiscoveryWorkerBrokerError::Invalid(message)
+        }
+        buzz_db::DbError::InvalidData(message)
+            if message.contains("sources must be terminal before") =>
+        {
+            DiscoveryWorkerBrokerError::Invalid(message)
+        }
+        buzz_db::DbError::InvalidData(message)
+            if message.contains("must finish before multi-source adoption") =>
+        {
+            DiscoveryWorkerBrokerError::Invalid(message)
+        }
         buzz_db::DbError::NotFound(_) => {
             DiscoveryWorkerBrokerError::Invalid("Discovery run not found".into())
         }
@@ -188,7 +216,7 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::discovery_worker::DiscoveryWorkerClaimRequest;
+    use buzz_core::discovery_worker::{DiscoveryProvider, DiscoveryWorkerClaimRequest};
     use buzz_sdk::discovery_worker::build_discovery_worker_claim_action;
     use nostr::Keys;
     use uuid::Uuid;
@@ -201,6 +229,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             worker_id: Uuid::new_v4(),
+            available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let event = build_discovery_worker_claim_action(relay.public_key(), &request)
             .expect("valid builder")

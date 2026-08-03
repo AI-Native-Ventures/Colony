@@ -38,7 +38,7 @@ pub(crate) fn load_or_create_worker_id(app_data_dir: &Path) -> Result<Uuid, Stri
     Ok(id)
 }
 
-fn set_directory_owner_only(path: &Path) -> Result<(), String> {
+pub(super) fn set_directory_owner_only(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -50,7 +50,7 @@ fn set_directory_owner_only(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn set_file_owner_only(path: &Path) -> Result<(), String> {
+pub(super) fn set_file_owner_only(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

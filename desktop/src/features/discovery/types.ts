@@ -251,6 +251,7 @@ export type SourceStatus =
 export type SourceMetric = {
   source: DiscoverySource;
   status: SourceStatus;
+  requests?: number;
   discovered: number;
   stored: number;
   rejected: number;

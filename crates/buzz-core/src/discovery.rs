@@ -6,6 +6,110 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const MAX_DISCOVERY_SEARCH_TEXT_BYTES: usize = 256;
+const MAX_DISCOVERY_SOURCES: usize = 3;
+
+/// How the selected Discovery sources execute within one run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoverySourceMode {
+    /// Execute sources sequentially in the exact saved order.
+    Waterfall,
+    /// Start every selected source together.
+    Concurrent,
+}
+
+/// User-facing live Businesses source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoverySource {
+    /// Google Maps businesses acquired through Outscraper.
+    GoogleMaps,
+    /// Brave Web Search results.
+    BraveSearch,
+    /// Exa semantic company results.
+    ExaSearch,
+}
+
+impl DiscoverySource {
+    /// Return the trusted worker provider required by this source.
+    pub const fn provider(self) -> DiscoveryProvider {
+        match self {
+            Self::GoogleMaps => DiscoveryProvider::Outscraper,
+            Self::BraveSearch => DiscoveryProvider::BraveSearch,
+            Self::ExaSearch => DiscoveryProvider::ExaSearch,
+        }
+    }
+}
+
+/// External provider used by a trusted local Discovery worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryProvider {
+    /// Outscraper Google Maps business discovery.
+    Outscraper,
+    /// Brave Web Search.
+    BraveSearch,
+    /// Exa semantic company search.
+    ExaSearch,
+}
+
+/// Why a Campaign source configuration was refused.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DiscoverySourceConfigError {
+    /// The ordered source list was empty, too large, or contained duplicates.
+    #[error("invalid Discovery source configuration")]
+    InvalidSources,
+}
+
+/// Strict source plan saved on a Campaign and snapshotted into each run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoverySourceConfig {
+    /// Sequential or parallel source execution.
+    pub mode: DiscoverySourceMode,
+    /// Ordered, unique, selected live sources.
+    pub sources: Vec<DiscoverySource>,
+}
+
+impl DiscoverySourceConfig {
+    /// Validate the strict selected-source bounds and uniqueness invariant.
+    pub fn validate(&self) -> Result<(), DiscoverySourceConfigError> {
+        if self.sources.is_empty()
+            || self.sources.len() > MAX_DISCOVERY_SOURCES
+            || self
+                .sources
+                .iter()
+                .enumerate()
+                .any(|(index, source)| self.sources[..index].contains(source))
+        {
+            return Err(DiscoverySourceConfigError::InvalidSources);
+        }
+        Ok(())
+    }
+
+    /// Return the required provider list in stable source order.
+    pub fn providers(&self) -> Vec<DiscoveryProvider> {
+        self.sources
+            .iter()
+            .copied()
+            .map(DiscoverySource::provider)
+            .collect()
+    }
+
+    /// Whether this is the released Outscraper-only configuration.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+impl Default for DiscoverySourceConfig {
+    fn default() -> Self {
+        Self {
+            mode: DiscoverySourceMode::Waterfall,
+            sources: vec![DiscoverySource::GoogleMaps],
+        }
+    }
+}
 
 /// Why a non-secret Businesses search snapshot was refused.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -21,9 +125,9 @@ pub enum DiscoverySearchSpecError {
 pub struct DiscoveryBusinessSearchSpec {
     /// Business category or search phrase.
     pub query: String,
-    /// Human-readable geography included in the Google Maps query.
+    /// Human-readable geography included in each configured provider query.
     pub location: String,
-    /// Maximum organizations requested from Outscraper.
+    /// Maximum net-new organizations requested for the run.
     pub limit: u16,
     /// Lowercase ISO 639-1 language code.
     pub language: String,
@@ -32,7 +136,7 @@ pub struct DiscoveryBusinessSearchSpec {
 }
 
 impl DiscoveryBusinessSearchSpec {
-    /// Validate the strict, bounded shape accepted by Colony's live source.
+    /// Validate the strict, bounded shape accepted by Colony's live sources.
     pub fn validate(&self) -> Result<(), DiscoverySearchSpecError> {
         validate_search_text(&self.query, "query")?;
         validate_search_text(&self.location, "location")?;
@@ -52,7 +156,7 @@ impl DiscoveryBusinessSearchSpec {
         Ok(())
     }
 
-    /// Render the only provider query form allowed by the production worker.
+    /// Render the shared category-and-location query sent to configured providers.
     pub fn provider_query(&self) -> String {
         format!("{}, {}", self.query, self.location)
     }
@@ -232,6 +336,82 @@ pub struct DiscoveryReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_config_is_strict_ordered_and_provider_mapped() {
+        let valid = DiscoverySourceConfig {
+            mode: DiscoverySourceMode::Waterfall,
+            sources: vec![
+                DiscoverySource::GoogleMaps,
+                DiscoverySource::BraveSearch,
+                DiscoverySource::ExaSearch,
+            ],
+        };
+        assert_eq!(valid.validate(), Ok(()));
+        assert_eq!(
+            valid.providers(),
+            vec![
+                DiscoveryProvider::Outscraper,
+                DiscoveryProvider::BraveSearch,
+                DiscoveryProvider::ExaSearch,
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&valid).expect("serialize source config"),
+            serde_json::json!({
+                "mode": "waterfall",
+                "sources": ["google_maps", "brave_search", "exa_search"]
+            })
+        );
+
+        for invalid in [
+            DiscoverySourceConfig {
+                mode: DiscoverySourceMode::Waterfall,
+                sources: vec![],
+            },
+            DiscoverySourceConfig {
+                mode: DiscoverySourceMode::Concurrent,
+                sources: vec![DiscoverySource::BraveSearch, DiscoverySource::BraveSearch],
+            },
+            DiscoverySourceConfig {
+                mode: DiscoverySourceMode::Concurrent,
+                sources: vec![
+                    DiscoverySource::GoogleMaps,
+                    DiscoverySource::BraveSearch,
+                    DiscoverySource::ExaSearch,
+                    DiscoverySource::GoogleMaps,
+                ],
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn source_config_has_a_legacy_safe_default_and_denies_unknown_fields() {
+        assert_eq!(
+            DiscoverySourceConfig::default(),
+            DiscoverySourceConfig {
+                mode: DiscoverySourceMode::Waterfall,
+                sources: vec![DiscoverySource::GoogleMaps],
+            }
+        );
+        assert!(
+            serde_json::from_value::<DiscoverySourceConfig>(serde_json::json!({
+                "mode": "concurrent",
+                "sources": ["brave_search", "exa_search"],
+                "api_key": "must-not-fit-the-schema"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DiscoverySourceConfig>(serde_json::json!({
+                "mode": "concurrent",
+                "sources": ["unknown_source"]
+            }))
+            .is_err()
+        );
+    }
 
     fn business_search() -> DiscoveryBusinessSearchSpec {
         DiscoveryBusinessSearchSpec {

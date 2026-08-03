@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::discovery::{DiscoveryBusinessSearchSpec, DiscoveryRunProjection};
+use crate::discovery::{
+    DiscoveryBusinessSearchSpec, DiscoveryProvider, DiscoveryRunProjection, DiscoverySourceConfig,
+};
+use crate::discovery_worker::DiscoveryRunSourceProjection;
 
 const MAX_NAME_BYTES: usize = 256;
 const MAX_TAXONOMY_ID_BYTES: usize = 128;
@@ -27,6 +30,8 @@ pub enum DiscoveryWorkspaceOperation {
     Access,
     /// Create one immutable Businesses campaign.
     CreateCampaign,
+    /// Replace the mutable source plan for future Campaign runs.
+    UpdateCampaignSources,
     /// Read one campaign and its latest run/count projection.
     GetCampaign,
     /// List campaigns in the workspace.
@@ -63,6 +68,9 @@ pub struct DiscoveryCampaignInput {
     pub language: String,
     /// Optional ISO 3166-1 alpha-2 provider country code.
     pub region: Option<String>,
+    /// Sources and execution mode used by future Campaign runs.
+    #[serde(default, skip_serializing_if = "DiscoverySourceConfig::is_default")]
+    pub source_config: DiscoverySourceConfig,
 }
 
 impl DiscoveryCampaignInput {
@@ -79,7 +87,10 @@ impl DiscoveryCampaignInput {
         }
         self.business_search()
             .validate()
-            .map_err(|_| DiscoveryWorkspaceValidationError::InvalidField("business_search"))
+            .map_err(|_| DiscoveryWorkspaceValidationError::InvalidField("business_search"))?;
+        self.source_config
+            .validate()
+            .map_err(|_| DiscoveryWorkspaceValidationError::InvalidField("source_config"))
     }
 
     /// Produce the exact immutable run search accepted for this campaign.
@@ -162,7 +173,14 @@ pub enum DiscoveryWorkspaceActionPayload {
     /// Create one live Businesses campaign.
     CreateCampaign {
         /// Complete immutable campaign input.
-        campaign: DiscoveryCampaignInput,
+        campaign: Box<DiscoveryCampaignInput>,
+    },
+    /// Replace the source plan used by future runs of one Campaign.
+    UpdateCampaignSources {
+        /// Stable Campaign identifier.
+        campaign_id: Uuid,
+        /// Complete replacement source configuration.
+        source_config: DiscoverySourceConfig,
     },
     /// Read one campaign.
     GetCampaign {
@@ -187,6 +205,9 @@ impl DiscoveryWorkspaceActionPayload {
         match self {
             Self::Access => DiscoveryWorkspaceOperation::Access,
             Self::CreateCampaign { .. } => DiscoveryWorkspaceOperation::CreateCampaign,
+            Self::UpdateCampaignSources { .. } => {
+                DiscoveryWorkspaceOperation::UpdateCampaignSources
+            }
             Self::GetCampaign { .. } => DiscoveryWorkspaceOperation::GetCampaign,
             Self::ListCampaigns { .. } => DiscoveryWorkspaceOperation::ListCampaigns,
             Self::ListLeads { .. } => DiscoveryWorkspaceOperation::ListLeads,
@@ -198,6 +219,15 @@ impl DiscoveryWorkspaceActionPayload {
         match self {
             Self::Access => Ok(()),
             Self::CreateCampaign { campaign } => campaign.validate(),
+            Self::UpdateCampaignSources {
+                campaign_id,
+                source_config,
+            } => {
+                validate_uuid(*campaign_id, "campaign_id")?;
+                source_config
+                    .validate()
+                    .map_err(|_| DiscoveryWorkspaceValidationError::InvalidField("source_config"))
+            }
             Self::GetCampaign { campaign_id } => validate_uuid(*campaign_id, "campaign_id"),
             Self::ListCampaigns { request } => request.validate(),
             Self::ListLeads { request } => request.validate(),
@@ -254,10 +284,16 @@ pub struct DiscoveryCampaignProjection {
     pub language: String,
     /// Optional provider country code.
     pub region: Option<String>,
+    /// Sources and execution mode used by future Campaign runs.
+    #[serde(default, skip_serializing_if = "DiscoverySourceConfig::is_default")]
+    pub source_config: DiscoverySourceConfig,
     /// Count of unique Leads first retained by this campaign.
     pub lead_count: u32,
     /// Latest run, when the campaign has been executed.
     pub latest_run: Option<DiscoveryRunProjection>,
+    /// Durable source rows for the latest run, in the snapshotted execution order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub latest_run_sources: Vec<DiscoveryRunSourceProjection>,
     /// Creation time.
     pub created_at: DateTime<Utc>,
     /// Last campaign or run update time.
@@ -276,6 +312,12 @@ pub struct DiscoveryBusinessLeadProjection {
     pub industry_id: String,
     /// Taxonomy vertical inherited from the first campaign.
     pub vertical_id: String,
+    /// Provider that first retained this unique business.
+    #[serde(
+        default = "default_outscraper_provider",
+        skip_serializing_if = "is_outscraper_provider"
+    )]
+    pub provider: DiscoveryProvider,
     /// Business name.
     pub name: String,
     /// Public website, when returned.
@@ -374,6 +416,14 @@ pub struct DiscoveryWorkspaceReceipt {
     pub result: DiscoveryWorkspaceResult,
 }
 
+fn default_outscraper_provider() -> DiscoveryProvider {
+    DiscoveryProvider::Outscraper
+}
+
+fn is_outscraper_provider(provider: &DiscoveryProvider) -> bool {
+    *provider == DiscoveryProvider::Outscraper
+}
+
 fn validate_page(offset: u32, limit: u16) -> Result<(), DiscoveryWorkspaceValidationError> {
     if limit == 0 || limit > 100 || offset > 1_000_000 {
         return Err(DiscoveryWorkspaceValidationError::InvalidField("page"));
@@ -425,6 +475,7 @@ fn validate_taxonomy_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::{DiscoverySource, DiscoverySourceConfig, DiscoverySourceMode};
 
     fn campaign() -> DiscoveryCampaignInput {
         DiscoveryCampaignInput {
@@ -440,6 +491,7 @@ mod tests {
             description: Some("Independent dental practices".into()),
             language: "en".into(),
             region: Some("ZA".into()),
+            source_config: DiscoverySourceConfig::default(),
         }
     }
 
@@ -485,13 +537,55 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: campaign(),
+                campaign: Box::new(campaign()),
             },
         };
         let value = serde_json::to_value(&request).expect("serialize request");
         let decoded: DiscoveryWorkspaceRequest =
             serde_json::from_value(value).expect("decode request");
         assert_eq!(decoded, request);
+        assert_eq!(decoded.validate(), Ok(()));
+    }
+
+    #[test]
+    fn campaign_sources_are_validated_and_update_is_explicit() {
+        let mut valid = campaign();
+        valid.source_config = DiscoverySourceConfig {
+            mode: DiscoverySourceMode::Concurrent,
+            sources: vec![DiscoverySource::BraveSearch, DiscoverySource::ExaSearch],
+        };
+        assert_eq!(valid.validate(), Ok(()));
+
+        let update = DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+            campaign_id: valid.campaign_id,
+            source_config: valid.source_config.clone(),
+        };
+        assert_eq!(
+            update.operation(),
+            DiscoveryWorkspaceOperation::UpdateCampaignSources
+        );
+        assert_eq!(update.validate(), Ok(()));
+
+        let invalid = DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+            campaign_id: valid.campaign_id,
+            source_config: DiscoverySourceConfig {
+                mode: DiscoverySourceMode::Waterfall,
+                sources: vec![],
+            },
+        };
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_campaign_input_defaults_to_outscraper_waterfall() {
+        let mut value = serde_json::to_value(campaign()).expect("serialize Campaign");
+        value
+            .as_object_mut()
+            .expect("Campaign object")
+            .remove("source_config");
+        let decoded: DiscoveryCampaignInput =
+            serde_json::from_value(value).expect("decode legacy Campaign");
+        assert_eq!(decoded.source_config, DiscoverySourceConfig::default());
         assert_eq!(decoded.validate(), Ok(()));
     }
 }
