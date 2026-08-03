@@ -494,3 +494,136 @@ mod tests {
         assert!(newest_head(Vec::new()).is_none());
     }
 }
+
+// ── Corrections ─────────────────────────────────────────────────────────────
+
+/// A re-attribution the owner is asking for.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionRequest {
+    /// Hex event id of the usage record being re-attributed.
+    pub usage_record_event_id: String,
+    /// Company charged.
+    pub company_id: String,
+    /// Cost centre charged.
+    pub cost_centre_id: String,
+    /// Team accountable.
+    pub owning_team_id: String,
+    /// Commercial reason for the work.
+    pub commercial_purpose: String,
+    /// Client receiving the work, when this is client delivery.
+    pub client_organization_id: Option<String>,
+    /// Task the work belonged to, when known.
+    pub task_id: Option<String>,
+    /// Why the original attribution was wrong.
+    pub reason: String,
+}
+
+/// What the relay made of a correction.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionOutcome {
+    /// Hex id of the submitted action event.
+    pub event_id: String,
+    /// Whether the relay accepted it.
+    pub accepted: bool,
+    /// The relay's own message, shown verbatim on refusal.
+    pub message: String,
+}
+
+fn blank(value: &str) -> bool {
+    value.trim().is_empty()
+}
+
+/// Re-attribute one usage record.
+///
+/// A correction never rewrites the record it names. It is appended to the
+/// correction book, and the engine applies the last correction for a record
+/// when it computes the ledger, leaving the original classification intact.
+/// That is what makes the ledger auditable rather than merely current.
+///
+/// The relay brokers the append and enforces that only the community's human
+/// owner may write one; this builds the action, signs it with the local
+/// identity, and reports what the relay said.
+#[tauri::command]
+pub async fn ledger_correct(
+    state: State<'_, AppState>,
+    request: CorrectionRequest,
+) -> Result<CorrectionOutcome, String> {
+    // An unexplained restatement is not an audit trail: months later the
+    // reason is the only thing that says why the number changed.
+    if blank(&request.reason) {
+        return Err("a correction needs a reason: it is the audit trail".to_string());
+    }
+    if blank(&request.company_id)
+        || blank(&request.cost_centre_id)
+        || blank(&request.owning_team_id)
+    {
+        return Err("a correction needs a company, a cost centre, and an owning team".to_string());
+    }
+    if request.usage_record_event_id.len() != 64
+        || !request
+            .usage_record_event_id
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    {
+        return Err("the usage record must be named by its 64-hex event id".to_string());
+    }
+
+    let commercial_purpose: buzz_core_pkg::company::CommercialPurpose = serde_json::from_value(
+        serde_json::Value::String(request.commercial_purpose.clone()),
+    )
+    .map_err(|_| format!("unknown commercial purpose: {}", request.commercial_purpose))?;
+
+    let keys = state.signing_keys()?;
+    let relay_pubkey = fetch_relay_self(&state)
+        .await?
+        .ok_or_else(|| "the relay does not publish its own key".to_string())?;
+
+    let correction = buzz_core_pkg::ledger::attribution::Correction {
+        id: uuid::Uuid::new_v4().to_string(),
+        usage_record_event_id: request.usage_record_event_id,
+        assign: buzz_core_pkg::ledger::attribution::RuleAssignment {
+            company_id: request.company_id,
+            cost_centre_id: request.cost_centre_id,
+            owning_team_id: request.owning_team_id,
+            commercial_purpose,
+            client_organization_id: request.client_organization_id.filter(|value| !blank(value)),
+            task_id: request.task_id.filter(|value| !blank(value)),
+        },
+        reason: request.reason.trim().to_string(),
+        corrected_at: chrono::Utc::now().timestamp().max(0) as u64,
+    };
+    let payload = buzz_sdk_pkg::ledger::LedgerActionPayload::Correction(correction);
+
+    // Compare-and-set against the head this correction was composed on top
+    // of. Getting it wrong is not destructive: the broker refuses a mismatch
+    // rather than clobbering a concurrent append.
+    let expected_head = fetch_book_head(
+        &state,
+        &relay_pubkey,
+        KIND_CORRECTION_BOOK,
+        CORRECTION_BOOK_D_TAG,
+    )
+    .await?
+    .map(|event| event.id.to_hex());
+
+    let action = buzz_sdk_pkg::ledger::LedgerAction {
+        relay_pubkey: relay_pubkey.clone(),
+        operation: payload.operation(),
+        request_id: uuid::Uuid::new_v4(),
+        idempotency_key: uuid::Uuid::new_v4(),
+        target: buzz_sdk_pkg::ledger::ledger_coordinate(&relay_pubkey, &payload),
+        expected_head,
+        payload,
+    };
+    let builder = buzz_sdk_pkg::ledger::build_ledger_action(&action)
+        .map_err(|error| format!("invalid correction: {error}"))?;
+
+    let response = crate::relay::submit_event_with_keys(builder, &state, &keys, None).await?;
+    Ok(CorrectionOutcome {
+        event_id: response.event_id,
+        accepted: response.accepted,
+        message: response.message,
+    })
+}

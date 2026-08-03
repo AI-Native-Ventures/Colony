@@ -211,6 +211,12 @@ type E2eConfig = {
      * real command: a fixture using numbers would let a rounding bug pass.
      */
     ledgerReport?: Record<string, unknown>;
+    /** What `ledger_correct` should answer with. */
+    ledgerCorrectOutcome?: {
+      eventId?: string;
+      accepted?: boolean;
+      message?: string;
+    };
     colonyCreatedCommunity?: {
       id?: string;
       name?: string;
@@ -10494,6 +10500,14 @@ export function maybeInstallE2eTauriMocks() {
       // Money crosses this boundary as decimal strings, exactly as the real
       // command emits it, so the screen's bigint parsing is exercised rather
       // than bypassed by a friendlier fixture.
+      case "ledger_correct": {
+        const outcome = activeConfig?.mock?.ledgerCorrectOutcome;
+        return {
+          accepted: outcome?.accepted ?? true,
+          eventId: outcome?.eventId ?? "c".repeat(64),
+          message: outcome?.message ?? "accepted",
+        };
+      }
       case "ledger_report":
         return (
           activeConfig?.mock?.ledgerReport ?? {

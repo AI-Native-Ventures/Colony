@@ -4,7 +4,7 @@ import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 import { attentionItems } from "../lib/summarize";
-import type { LedgerReport } from "../report";
+import type { LedgerEntry, LedgerReport } from "../report";
 import { LedgerActivity } from "./LedgerActivity";
 import { LedgerAttention } from "./LedgerAttention";
 import { LedgerBreakdown } from "./LedgerBreakdown";
@@ -62,10 +62,13 @@ function EmptyState() {
 export function LedgerScreen({
   error,
   isLoading,
+  onAttribute,
   report,
 }: {
   error: Error | null;
   isLoading: boolean;
+  /** Absent when the viewer cannot correct, e.g. is not the owner. */
+  onAttribute?: (entry: LedgerEntry) => void;
   report: LedgerReport | null;
 }) {
   const hasSpend =
@@ -109,7 +112,7 @@ export function LedgerScreen({
                 <>
                   <LedgerTotals report={report} />
                   <LedgerBreakdown report={report} />
-                  <LedgerActivity report={report} />
+                  <LedgerActivity onAttribute={onAttribute} report={report} />
                 </>
               ) : (
                 <EmptyState />

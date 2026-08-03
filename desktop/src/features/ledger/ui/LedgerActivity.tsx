@@ -1,3 +1,4 @@
+import { Button } from "@/shared/ui/button";
 import { SectionHeader } from "@/shared/ui/PageHeader";
 
 import { formatNanousd } from "../contracts";
@@ -15,7 +16,13 @@ import type { LedgerEntry, LedgerReport } from "../report";
 
 const ACTIVITY_LIMIT = 25;
 
-function Row({ entry }: { entry: LedgerEntry }) {
+function Row({
+  entry,
+  onAttribute,
+}: {
+  entry: LedgerEntry;
+  onAttribute?: (entry: LedgerEntry) => void;
+}) {
   const unattributed = entry.attributedBy.kind === "needsReview";
   return (
     <li className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2">
@@ -36,24 +43,43 @@ function Row({ entry }: { entry: LedgerEntry }) {
             : describeAttribution(entry.attributedBy)}
         </p>
       </div>
-      <p
-        className={
-          unattributed
-            ? "text-sm tabular-nums text-muted-foreground"
-            : "text-sm tabular-nums text-foreground"
-        }
-      >
-        {entry.costNanousd === null ? (
-          <span title="No price is on file for this model.">not priced</span>
-        ) : (
-          formatNanousd(entry.costNanousd)
-        )}
-      </p>
+      <div className="flex items-baseline gap-3">
+        {onAttribute ? (
+          <Button
+            className="h-auto px-2 py-1 text-xs"
+            data-testid={`ledger-attribute-${entry.eventId.slice(0, 8)}`}
+            onClick={() => onAttribute(entry)}
+            type="button"
+            variant="ghost"
+          >
+            {unattributed ? "Attribute" : "Reattribute"}
+          </Button>
+        ) : null}
+        <p
+          className={
+            unattributed
+              ? "text-sm tabular-nums text-muted-foreground"
+              : "text-sm tabular-nums text-foreground"
+          }
+        >
+          {entry.costNanousd === null ? (
+            <span title="No price is on file for this model.">not priced</span>
+          ) : (
+            formatNanousd(entry.costNanousd)
+          )}
+        </p>
+      </div>
     </li>
   );
 }
 
-export function LedgerActivity({ report }: { report: LedgerReport }) {
+export function LedgerActivity({
+  onAttribute,
+  report,
+}: {
+  onAttribute?: (entry: LedgerEntry) => void;
+  report: LedgerReport;
+}) {
   const entries = recentEntries(report.entries, ACTIVITY_LIMIT);
 
   return (
@@ -77,7 +103,7 @@ export function LedgerActivity({ report }: { report: LedgerReport }) {
       ) : (
         <ul className="mt-2 divide-y divide-border/50">
           {entries.map((entry) => (
-            <Row entry={entry} key={entry.eventId} />
+            <Row entry={entry} key={entry.eventId} onAttribute={onAttribute} />
           ))}
         </ul>
       )}

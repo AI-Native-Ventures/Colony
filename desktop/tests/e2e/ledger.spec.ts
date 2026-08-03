@@ -181,4 +181,55 @@ test.describe("Spend", () => {
       path: `${OUTPUT_DIR}/03-spend-empty.png`,
     });
   });
+
+  test("records a correction for spend the ledger could not place", async ({
+    page,
+  }) => {
+    await seedActiveIdentity(page);
+    await installMockBridge(page, { ledgerReport: REPORT });
+    await page.goto("/");
+
+    await page.getByTestId("open-spend-view").click();
+    await expect(page.getByTestId("ledger-page")).toBeVisible();
+
+    // The unattributed call is the one offering to be attributed.
+    await page.getByTestId(`ledger-attribute-${"b".repeat(8)}`).click();
+    const dialog = page.getByTestId("ledger-correction-dialog");
+    await expect(dialog).toBeVisible();
+
+    const submit = page.getByTestId("ledger-correction-submit");
+    // Nothing filled in yet, and in particular no reason: an unexplained
+    // restatement is not an audit trail, so it cannot be submitted.
+    await expect(submit).toBeDisabled();
+
+    await dialog.getByPlaceholder("horizon-labs").fill("horizon-labs");
+    await dialog.getByPlaceholder("web-delivery").fill("web-delivery");
+    await dialog.getByPlaceholder("web-team").fill("web-team");
+    await expect(submit).toBeDisabled();
+
+    await dialog
+      .getByPlaceholder("Was billable client work, misfiled as internal.")
+      .fill("Was billable client work, misfiled as internal.");
+    await expect(submit).toBeEnabled();
+
+    await waitForAnimations(page);
+    await page.screenshot({ path: `${OUTPUT_DIR}/04-correction-dialog.png` });
+
+    await submit.click();
+    await expect(dialog).toBeHidden();
+
+    // The correction reached the backend naming the right record, with the
+    // reason attached.
+    const sent = await page.evaluate(() =>
+      (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+        (entry) => entry.command === "ledger_correct",
+      ),
+    );
+    expect(sent).toHaveLength(1);
+    const request = (sent[0].payload as { request: Record<string, unknown> })
+      .request;
+    expect(request.usageRecordEventId).toBe("b".repeat(64));
+    expect(request.costCentreId).toBe("web-delivery");
+    expect(request.reason).toContain("misfiled as internal");
+  });
 });

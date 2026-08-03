@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { Budget, CorrectionBook, PriceBook, Rulebook } from "./contracts";
 import {
@@ -7,6 +7,7 @@ import {
   loadPriceBook,
   loadRulebook,
 } from "./ledgerRepository";
+import { type CorrectionRequest, submitCorrection } from "./corrections";
 import { type LedgerReport, loadLedgerReport } from "./report";
 
 /**
@@ -85,5 +86,27 @@ export function useLedgerReport(communityId: string) {
     queryFn: loadLedgerReport,
     enabled: communityId.length > 0,
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Record a correction, then refetch the ledger.
+ *
+ * The refetch is the point: a correction changes what the totals say, and a
+ * screen still showing the pre-correction figures would leave the owner
+ * unsure whether it took effect.
+ */
+export function useRecordCorrection(communityId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: CorrectionRequest) => submitCorrection(request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ledgerReportQueryKey(communityId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: correctionBookQueryKey(communityId),
+      });
+    },
   });
 }
