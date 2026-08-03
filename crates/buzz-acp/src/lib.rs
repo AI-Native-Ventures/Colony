@@ -4140,6 +4140,7 @@ async fn initialize_agent_pool(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown"),
                             steering_supported = acp.steering_supported(),
+                            providers_supported = acp.providers_supported(),
                             "agent initialized"
                         );
                         acp.observe(
@@ -4149,6 +4150,23 @@ async fn initialize_agent_pool(
                                 "initializeResult": init_result,
                             }),
                         );
+                        // Codex routes provider traffic by its own config, not
+                        // the base-URL env vars, so a metered codex must be
+                        // pointed at the checkpoint over ACP — and one that
+                        // cannot be must not run, or its spend is invisible.
+                        if let Some(meter) = meter.as_ref() {
+                            if config::is_codex_command(&startup.command) {
+                                if let Err(e) = acp.configure_metered_gateway(meter).await {
+                                    tracing::error!(
+                                        agent = i,
+                                        "metered codex gateway configuration failed: {e}"
+                                    );
+                                    acp.shutdown().await;
+                                    agent_slots.push(None);
+                                    continue;
+                                }
+                            }
+                        }
                         let agent_name = normalized_agent_name(&init_result);
                         agent_slots.push(Some(OwnedAgent {
                             index: i,
@@ -4237,6 +4255,18 @@ async fn spawn_and_init(
                     "initializeResult": init_result,
                 }),
             );
+            // Same invariant as pool startup: a metered codex that cannot be
+            // routed through the checkpoint must not respawn unmetered.
+            if let Some(meter) = meter.as_ref() {
+                if config::is_codex_command(command) {
+                    if let Err(e) = acp.configure_metered_gateway(meter).await {
+                        acp.shutdown().await;
+                        return Err(anyhow::anyhow!(
+                            "metered codex gateway configuration failed: {e}"
+                        ));
+                    }
+                }
+            }
             let agent_name = normalized_agent_name(&init_result);
             Ok((acp, protocol_version, agent_name))
         }

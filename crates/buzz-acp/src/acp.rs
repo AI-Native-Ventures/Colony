@@ -198,6 +198,12 @@ pub struct AcpClient {
     /// a JSON-RPC *success*, not `-32601` — which the main loop would read as
     /// a delivered steer and drop the user's message from the queue.
     steering_supported: bool,
+    /// Whether the adapter advertised the ACP providers API
+    /// (`agentCapabilities.providers`) at `initialize` time. Gates
+    /// [`configure_metered_gateway`](Self::configure_metered_gateway): a
+    /// metered Codex agent whose adapter lacks `providers/set` must fail to
+    /// start rather than spawn with provider routing the meter never sees.
+    providers_supported: bool,
     /// Per-turn channel for receiving goose-native non-cancelling steer
     /// requests from the main loop. Installed by
     /// [`install_steer_rx`](Self::install_steer_rx) at dispatch and
@@ -561,6 +567,7 @@ impl AcpClient {
             observer_context: ObserverContext::default(),
             active_run_id: None,
             steering_supported: false,
+            providers_supported: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
         })
@@ -617,8 +624,47 @@ impl AcpClient {
             .pointer("/_meta/steering/supported")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // Presence of the key is the signal; its value is an empty object.
+        self.providers_supported = result.pointer("/agentCapabilities/providers").is_some();
         tracing::debug!(target: "acp::init", "initialize response: {result}");
         Ok(result)
+    }
+
+    /// Whether the adapter advertised the ACP providers API at `initialize`.
+    pub fn providers_supported(&self) -> bool {
+        self.providers_supported
+    }
+
+    /// Point a Codex adapter's provider routing at the metering checkpoint.
+    ///
+    /// Sends `providers/set` configuring the adapter's custom-gateway
+    /// provider with the checkpoint URL and this agent's virtual key. The
+    /// adapter forces that provider on every session it starts, so all of
+    /// the agent's model traffic crosses the checkpoint — codex ignores the
+    /// `OPENAI_BASE_URL`-style variables that redirect every other runtime.
+    ///
+    /// Must be called after [`initialize`](Self::initialize). Fails without
+    /// sending anything when the adapter never advertised the providers API:
+    /// spawning anyway would let the agent spend outside the ledger's view,
+    /// which is exactly what metering exists to prevent.
+    pub async fn configure_metered_gateway(
+        &mut self,
+        meter: &crate::meter_env::MeterEnv,
+    ) -> Result<(), AcpError> {
+        if !self.providers_supported {
+            return Err(AcpError::Protocol(
+                "adapter does not support providers/set, so this codex agent cannot be \
+                 metered — upgrade @agentclientprotocol/codex-acp (>= 1.1) or pass \
+                 --no-meter to run without cost tracking"
+                    .into(),
+            ));
+        }
+        self.send_request(
+            "providers/set",
+            crate::meter_env::metered_gateway_params(meter),
+        )
+        .await?;
+        Ok(())
     }
 
     /// Send the ACP `authenticate` request for an adapter-advertised method.
@@ -3274,6 +3320,94 @@ mod tests {
             .await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         assert_eq!(result.unwrap()["worked"], serde_json::json!(true));
+    }
+
+    // --- metered codex gateway tests ---
+
+    fn test_meter() -> crate::meter_env::MeterEnv {
+        crate::meter_env::MeterEnv {
+            port: 51234,
+            virtual_key: "colony-vk-abc123".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_records_providers_capability() {
+        let mut client = spawn_script(
+            r#"read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"providers":{}}}}'
+            sleep 1"#,
+        )
+        .await;
+        client.initialize().await.expect("initialize");
+        assert!(client.providers_supported());
+    }
+
+    #[tokio::test]
+    async fn initialize_without_providers_capability_leaves_flag_off() {
+        let mut client = spawn_script(
+            r#"read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            sleep 1"#,
+        )
+        .await;
+        client.initialize().await.expect("initialize");
+        assert!(!client.providers_supported());
+    }
+
+    #[tokio::test]
+    async fn metered_gateway_is_configured_via_providers_set() {
+        // The script accepts providers/set only when the request names the
+        // custom gateway and carries the virtual key; anything else errors,
+        // so a malformed request fails the test rather than passing vacuously.
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"providers":{}}}}'
+            read -t 2 req
+            ok=1
+            for needle in '"providers/set"' '"custom-gateway"' 'colony-vk-abc123'; do
+              case "$req" in
+                *"$needle"*) ;;
+                *) ok=0 ;;
+              esac
+            done
+            if [ "$ok" = 1 ]; then
+              echo '{"jsonrpc":"2.0","id":1,"result":{}}'
+            else
+              echo '{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"unexpected providers/set request"}}'
+            fi
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client.initialize().await.expect("initialize");
+        client
+            .configure_metered_gateway(&test_meter())
+            .await
+            .expect("providers/set should succeed");
+    }
+
+    #[tokio::test]
+    async fn metered_codex_without_providers_support_is_refused_not_skipped() {
+        // An adapter without providers/set cannot be pointed at the
+        // checkpoint, and a codex agent that spawned anyway would spend
+        // invisibly. The refusal is local: nothing is sent to the agent, so
+        // the script never reads a second request.
+        let mut client = spawn_script(
+            r#"read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            sleep 1"#,
+        )
+        .await;
+        client.initialize().await.expect("initialize");
+        let err = client
+            .configure_metered_gateway(&test_meter())
+            .await
+            .expect_err("gateway configuration must be refused");
+        let message = err.to_string();
+        assert!(
+            message.contains("providers/set"),
+            "error must name the missing capability: {message}"
+        );
     }
 
     #[tokio::test]
