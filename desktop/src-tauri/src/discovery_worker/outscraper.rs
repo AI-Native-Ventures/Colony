@@ -249,7 +249,7 @@ impl OutscraperClient {
                     let envelope = self
                         .parse_response(response, cancellation)
                         .await
-                        .map_err(|error| OutscraperSubmitFailure::ambiguous(error))?;
+                        .map_err(OutscraperSubmitFailure::ambiguous)?;
                     return match interpret_envelope(envelope)
                         .map_err(OutscraperSubmitFailure::ambiguous)?
                     {
