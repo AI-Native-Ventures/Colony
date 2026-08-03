@@ -6,6 +6,11 @@ mod adapter;
     reason = "the tested synchronous adapters are wired into the coordinator in Task 9"
 )]
 mod brave;
+#[expect(
+    dead_code,
+    reason = "the tested synchronous adapters are wired into the coordinator in Task 9"
+)]
+mod exa;
 mod installation;
 mod normalization;
 mod outscraper;

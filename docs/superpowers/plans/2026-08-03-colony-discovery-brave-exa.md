@@ -252,18 +252,18 @@ const BRAVE_SEARCH_ENDPOINT: &str =
 - Modify: `desktop/src-tauri/src/discovery_worker/mod.rs`
 - Modify: `desktop/src-tauri/src/discovery_worker/normalization.rs`
 
-- [ ] Build failing loopback tests for `x-api-key`, POST body, `category:
+- [x] Build failing loopback tests for `x-api-key`, POST body, `category:
   company`, `type: auto`, no `excludeDomains`, no contents/summaries, result
   maximum 100, excluded hosts, cancellation, timeout, response bytes, malformed
   JSON, request ID retention, and safe error classification.
-- [ ] Implement a client with fixed `https://api.exa.ai/search`, one bounded
+- [x] Implement a client with fixed `https://api.exa.ai/search`, one bounded
   request per attempt, and `numResults = min(remaining_target, 100)`.
-- [ ] Classify 401, 402, 403, 429, and temporary 5xx responses into the shared
+- [x] Classify 401, 402, 403, 429, and temporary 5xx responses into the shared
   privacy-safe source error vocabulary. Apply bounded retries only where safe.
-- [ ] Normalize valid company results into the same contract and retain request
+- [x] Normalize valid company results into the same contract and retain request
   counts without converting provider estimates into Colony credits or billing.
-- [ ] Run the adapter tests and strict Tauri Clippy.
-- [ ] Commit with `git commit -s -m "feat(discovery): add Exa company search"`.
+- [x] Run the adapter tests and strict Tauri Clippy.
+- [x] Commit with `git commit -s -m "feat(discovery): add Exa company search"`.
 
 ## Task 8: Add crash-safe synchronous-provider recovery
 
