@@ -596,6 +596,21 @@ pub struct AppState {
     /// generate fresh Nostr keys.
     pub invite_claim_rate_limiter:
         Arc<moka::sync::Cache<ScopedPubkeyKey, Arc<std::sync::atomic::AtomicU32>>>,
+    /// Per-client-IP community creation counter for the public self-serve
+    /// surface (`POST /api/communities` with `BUZZ_SELF_PROVISION_PUBLIC`).
+    ///
+    /// Keyed on IP rather than pubkey on purpose: with the membership gate
+    /// off, the signer can mint a fresh Nostr key per request for free, so a
+    /// per-pubkey cap bounds nothing. Entries expire after one window and the
+    /// cache is capacity-bounded so the limiter itself cannot be grown into a
+    /// memory exhaustion vector.
+    pub community_create_ip_rate_limiter:
+        Arc<moka::sync::Cache<std::net::IpAddr, Arc<std::sync::atomic::AtomicU32>>>,
+    /// Deployment-wide community creation counter for the same surface. The
+    /// per-IP limiter does not bound a distributed source; this caps what the
+    /// whole deployment will provision per window regardless of origin.
+    pub community_create_global_rate_limiter:
+        Arc<moka::sync::Cache<(), Arc<std::sync::atomic::AtomicU32>>>,
     /// Current in-flight media uploads per (community, uploader pubkey).
     pub media_uploads_in_flight: Arc<DashMap<ScopedPubkeyKey, u32>>,
     /// Cache for observer agent-owner authorization (kind 24200).
@@ -777,6 +792,18 @@ impl AppState {
                 moka::sync::Cache::builder()
                     .max_capacity(crate::api::invites::CLAIM_RATE_CACHE_CAPACITY)
                     .time_to_live(crate::api::invites::CLAIM_RATE_WINDOW)
+                    .build(),
+            ),
+            community_create_ip_rate_limiter: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(crate::api::self_provisioning::CREATE_RATE_CACHE_CAPACITY)
+                    .time_to_live(crate::api::self_provisioning::CREATE_RATE_WINDOW)
+                    .build(),
+            ),
+            community_create_global_rate_limiter: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(crate::api::self_provisioning::CREATE_RATE_WINDOW)
                     .build(),
             ),
             media_uploads_in_flight: Arc::new(DashMap::new()),

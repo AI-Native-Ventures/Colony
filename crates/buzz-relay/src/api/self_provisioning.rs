@@ -17,7 +17,7 @@
 //!
 //! Scope is deliberately narrower than the operator surface:
 //!
-//! - Hosts are always `<slug>.<BUZZ_SELF_PROVISION_DOMAIN>` — a member can
+//! - Hosts are always `<slug>.<BUZZ_SELF_PROVISION_DOMAIN>` — a caller can
 //!   never create an arbitrary host.
 //! - Creation is create-only ([`create_community_for_owner`]): an existing
 //!   community's owner can never be rotated from here.
@@ -25,11 +25,30 @@
 //!   atomically in the database.
 //! - `BUZZ_SELF_PROVISION_DOMAIN` unset (the default) disables every route
 //!   here — fail closed, matching the operator allowlist default.
+//!
+//! ## Member mode vs public mode
+//!
+//! By default the requester must already be a relay member of the community
+//! the request arrives on. That gate is what makes the per-owner cap
+//! meaningful: an abuser cannot simply mint keys, because each key must first
+//! have been admitted to some community.
+//!
+//! `BUZZ_SELF_PROVISION_PUBLIC=true` removes that gate so anyone can create
+//! their first community. NIP-98 still proves key control, but keys are free
+//! to generate, so the per-owner cap no longer bounds an attacker. Public mode
+//! therefore substitutes limits keyed on scarcer resources: creations per
+//! client IP per hour, and creations deployment-wide per hour. The global
+//! limit is the one an attacker cannot evade by changing source address; it
+//! bounds cost, at the price of a noisy attacker being able to exhaust the
+//! hour's allowance for everyone. Raise it if that trade lands wrong.
 
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
@@ -40,6 +59,13 @@ use crate::handlers::community_provisioning::create_community_for_owner;
 use crate::state::AppState;
 
 use super::{api_error, bridge, internal_error};
+
+/// Fixed-window size for both public-mode creation limiters.
+pub(crate) const CREATE_RATE_WINDOW: Duration = Duration::from_secs(60 * 60);
+
+/// Maximum distinct client IPs retained by the per-IP limiter. Bounds the
+/// limiter's own memory under a spray of source addresses.
+pub(crate) const CREATE_RATE_CACHE_CAPACITY: u64 = 50_000;
 
 /// Maximum slug length. DNS caps labels at 63 octets; the full host must
 /// also fit `communities.host VARCHAR(255)`, which every slug under this cap
@@ -156,6 +182,9 @@ async fn authenticate(
 /// The requester must already be a relay member of the tenant community the
 /// request arrived on. Any role qualifies: membership is the customer gate,
 /// ownership of the new community is what the request grants.
+///
+/// Skipped entirely in public mode, where the IP and deployment-wide rate
+/// limits are the abuse controls instead.
 async fn require_tenant_membership(
     state: &AppState,
     tenant: &buzz_core::TenantContext,
@@ -173,6 +202,67 @@ async fn require_tenant_membership(
         ));
     }
     Ok(())
+}
+
+/// Resolve the client address for rate limiting.
+///
+/// Behind Fly's proxy the socket peer is the proxy, so `Fly-Client-IP` (which
+/// the proxy sets itself, overwriting any client-supplied value) carries the
+/// real source. A relay exposed directly would see a spoofable header here;
+/// that is why the deployment-wide limit exists as an unspoofable backstop
+/// and why this address is used only for rate limiting, never for authz.
+fn client_ip(headers: &HeaderMap, extensions: &axum::http::Extensions) -> Option<IpAddr> {
+    headers
+        .get("fly-client-ip")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<IpAddr>().ok())
+        .or_else(|| {
+            extensions
+                .get::<ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0.ip())
+        })
+}
+
+/// Count one creation attempt against a fixed-window counter, returning true
+/// when the caller has already spent its allowance for this window.
+fn window_limited<K>(cache: &moka::sync::Cache<K, Arc<AtomicU32>>, key: K, limit: u32) -> bool
+where
+    K: std::hash::Hash + Eq + Send + Sync + Clone + 'static,
+{
+    let counter = cache.get_with(key, || Arc::new(AtomicU32::new(0)));
+    counter.fetch_add(1, Ordering::Relaxed) >= limit
+}
+
+/// Public-mode abuse controls. Both counters advance on every attempt, so a
+/// caller cannot probe for free by sending requests that fail later checks.
+///
+/// The per-IP limit is the primary control and the global limit is the
+/// backstop for a distributed source. Neither is keyed on pubkey: with the
+/// membership gate off, keys are free to mint, so a per-key limit would bound
+/// nothing.
+fn public_create_rate_limited(state: &AppState, client_ip: Option<IpAddr>) -> Option<&'static str> {
+    if window_limited(
+        &state.community_create_global_rate_limiter,
+        (),
+        state.config.self_provision_public_global_limit,
+    ) {
+        return Some(
+            "this relay has reached its hourly limit for new communities; try again later",
+        );
+    }
+
+    // A request whose source address is unknown must not bypass the per-IP
+    // limit; it falls into one shared bucket rather than an exemption.
+    let ip = client_ip.unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    if window_limited(
+        &state.community_create_ip_rate_limiter,
+        ip,
+        state.config.self_provision_public_ip_limit,
+    ) {
+        return Some("too many communities created from this network; try again later");
+    }
+
+    None
 }
 
 /// `GET /api/communities/availability?name=<slug>` — public name check.
@@ -214,6 +304,7 @@ pub async fn community_availability(
 /// `POST /api/communities` — create `<name>.<domain>` owned by the signer.
 pub async fn create_community(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -222,7 +313,15 @@ pub async fn create_community(
     let (tenant, pubkey) =
         authenticate(&state, &headers, "POST", "/api/communities", Some(&body)).await?;
     let pubkey_hex = pubkey.to_hex();
-    require_tenant_membership(&state, &tenant, &pubkey_hex).await?;
+
+    if state.config.self_provision_public {
+        if let Some(message) = public_create_rate_limited(&state, client_ip(&headers, &extensions))
+        {
+            return Err(api_error(StatusCode::TOO_MANY_REQUESTS, message));
+        }
+    } else {
+        require_tenant_membership(&state, &tenant, &pubkey_hex).await?;
+    }
 
     let request: CreateCommunityRequest = serde_json::from_slice(&body).map_err(|e| {
         api_error(
@@ -346,5 +445,86 @@ mod tests {
             slug_host("acme", "colony.example.com"),
             "acme.colony.example.com"
         );
+    }
+
+    fn counter_cache<K>() -> moka::sync::Cache<K, Arc<AtomicU32>>
+    where
+        K: std::hash::Hash + Eq + Send + Sync + 'static,
+    {
+        moka::sync::Cache::builder()
+            .max_capacity(CREATE_RATE_CACHE_CAPACITY)
+            .time_to_live(CREATE_RATE_WINDOW)
+            .build()
+    }
+
+    #[test]
+    fn window_limiter_admits_exactly_the_limit_then_blocks() {
+        let cache = counter_cache::<IpAddr>();
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+
+        for attempt in 0..3 {
+            assert!(
+                !window_limited(&cache, ip, 3),
+                "attempt {attempt} should be admitted"
+            );
+        }
+        assert!(window_limited(&cache, ip, 3), "4th attempt must be blocked");
+    }
+
+    #[test]
+    fn window_limiter_counts_each_address_separately() {
+        let cache = counter_cache::<IpAddr>();
+        let noisy: IpAddr = "203.0.113.7".parse().unwrap();
+        let quiet: IpAddr = "203.0.113.8".parse().unwrap();
+
+        for _ in 0..3 {
+            let _ = window_limited(&cache, noisy, 3);
+        }
+        assert!(window_limited(&cache, noisy, 3));
+        assert!(
+            !window_limited(&cache, quiet, 3),
+            "a different source must not inherit another's exhausted window"
+        );
+    }
+
+    #[test]
+    fn client_ip_prefers_the_fly_proxy_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "198.51.100.4".parse().unwrap());
+        let mut extensions = axum::http::Extensions::new();
+        extensions.insert(ConnectInfo(std::net::SocketAddr::from((
+            [10, 0, 0, 1],
+            4000,
+        ))));
+
+        assert_eq!(
+            client_ip(&headers, &extensions),
+            Some("198.51.100.4".parse::<IpAddr>().unwrap()),
+            "the proxy's client header must win over the socket peer"
+        );
+    }
+
+    #[test]
+    fn client_ip_falls_back_to_socket_peer() {
+        let headers = HeaderMap::new();
+        let mut extensions = axum::http::Extensions::new();
+        extensions.insert(ConnectInfo(std::net::SocketAddr::from((
+            [10, 0, 0, 1],
+            4000,
+        ))));
+
+        assert_eq!(
+            client_ip(&headers, &extensions),
+            Some("10.0.0.1".parse::<IpAddr>().unwrap())
+        );
+    }
+
+    #[test]
+    fn client_ip_ignores_a_malformed_proxy_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "not-an-ip".parse().unwrap());
+        let extensions = axum::http::Extensions::new();
+
+        assert_eq!(client_ip(&headers, &extensions), None);
     }
 }
