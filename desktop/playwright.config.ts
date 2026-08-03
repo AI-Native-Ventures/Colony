@@ -133,6 +133,7 @@ export default defineConfig({
         "**/harness-catalog-screenshots.spec.ts",
         "**/inline-custom-harness.spec.ts",
         "**/discovery.spec.ts",
+        "**/discovery-scroll.spec.ts",
         "**/discovery-settings.spec.ts",
       ],
       use: {
