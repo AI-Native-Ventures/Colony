@@ -12,7 +12,7 @@ use buzz_core::{
         DiscoveryRunSourceFailureClass, DiscoveryRunSourceProjection, DiscoveryRunSourceStatus,
         DiscoveryWorkerAction, DiscoveryWorkerCheckpoint, DiscoveryWorkerLeaseProjection,
         DiscoveryWorkerOperation, DiscoveryWorkerReceiptOutcome,
-        DiscoveryWorkerStoredObservationsProjection,
+        DiscoveryWorkerSalvagedObservationsProjection, DiscoveryWorkerStoredObservationsProjection,
     },
     CommunityId, StoredEvent,
 };
@@ -148,6 +148,8 @@ pub enum DiscoveryCommandMutation {
         business_search: DiscoveryBusinessSearchSpec,
         /// Server-configured fake executor step count.
         total_steps: u32,
+        /// Whether this signed client understands persisted multi-source plans.
+        supports_multi_source: bool,
         /// Timestamp already embedded in the relay-signed queued receipt.
         accepted_at: DateTime<Utc>,
     },
@@ -348,10 +350,12 @@ impl Db {
         )
         .await?;
         let run_id = deterministic_run_id(community_id, idempotency_key);
+        require_no_other_active_campaign_run_tx(&mut tx, community_id, campaign_id, run_id).await?;
         let inserted = sqlx::query(
             "INSERT INTO discovery_runs \
-             (id, community_id, campaign_id, requested_by, start_idempotency_key, total_steps) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
+             (id, community_id, campaign_id, requested_by, start_idempotency_key, total_steps, \
+              discovery_protocol_version) \
+             VALUES ($1, $2, $3, $4, $5, $6, 2) \
              ON CONFLICT (community_id, start_idempotency_key) DO NOTHING \
              RETURNING id",
         )
@@ -472,6 +476,7 @@ impl Db {
                 campaign_id,
                 business_search,
                 total_steps,
+                supports_multi_source,
                 accepted_at,
             } => {
                 if total_steps == 0 || total_steps > i32::MAX as u32 {
@@ -495,11 +500,24 @@ impl Db {
                     campaign_id,
                 )
                 .await?;
+                if !supports_multi_source && !source_config.is_default() {
+                    return Err(DbError::InvalidData(
+                        "This Discovery client does not support this campaign's source plan; update Colony before starting the run"
+                        .into(),
+                    ));
+                }
+                require_no_other_active_campaign_run_tx(
+                    &mut tx,
+                    community_id,
+                    campaign_id,
+                    target_id,
+                )
+                .await?;
                 let row = sqlx::query(
                     "INSERT INTO discovery_runs \
                      (community_id, id, campaign_id, requested_by, start_idempotency_key, \
-                      total_steps, created_at, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+                      total_steps, discovery_protocol_version, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) \
                      RETURNING id, community_id, campaign_id, requested_by, start_idempotency_key, \
                      state, completed_steps, total_steps, cancel_requested, claim_id, lease_until, \
                      worker_id, lease_owner_pubkey, last_checkpoint_sequence, attempt, \
@@ -511,6 +529,7 @@ impl Db {
                 .bind(actor_pubkey.as_slice())
                 .bind(idempotency_key)
                 .bind(total_steps as i32)
+                .bind(if supports_multi_source { 2_i16 } else { 1_i16 })
                 .bind(accepted_at)
                 .fetch_one(&mut *tx)
                 .await?;
@@ -531,13 +550,15 @@ impl Db {
                 .bind(business_search.region.as_deref())
                 .execute(&mut *tx)
                 .await?;
-                super::discovery_workspace::insert_run_source_plan_tx(
-                    &mut tx,
-                    community_id,
-                    run.id,
-                    &source_config,
-                )
-                .await?;
+                if supports_multi_source {
+                    super::discovery_workspace::insert_run_source_plan_tx(
+                        &mut tx,
+                        community_id,
+                        run.id,
+                        &source_config,
+                    )
+                    .await?;
+                }
                 run
             }
             DiscoveryCommandMutation::Status { run_id } => {
@@ -673,7 +694,7 @@ impl Db {
         }
 
         let mut tx = self.pool.begin().await?;
-        require_discovery_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
+        require_discovery_worker_authorized_tx(&mut tx, community_id, actor_pubkey).await?;
         let operation = action.operation();
         let fingerprint = worker_action_fingerprint(action)?;
         if let Some(row) = sqlx::query(
@@ -1237,15 +1258,15 @@ async fn apply_worker_action_tx(
                     DbError::InvalidData("Discovery results checkpoint is missing a count".into())
                 })?;
                 let usage_row = sqlx::query(
-                    "INSERT INTO discovery_usage \
+                    "INSERT INTO discovery_source_usage \
                      (community_id, run_id, provider, provider_request_id, returned_count) \
                      VALUES ($1,$2,$3,$4,$5) \
                      ON CONFLICT (community_id, run_id, provider) DO UPDATE SET \
                        returned_count=EXCLUDED.returned_count, updated_at=now() \
-                     WHERE discovery_usage.provider=EXCLUDED.provider \
-                       AND discovery_usage.provider_request_id=EXCLUDED.provider_request_id \
-                       AND (discovery_usage.returned_count IS NULL \
-                            OR discovery_usage.returned_count=EXCLUDED.returned_count) \
+                     WHERE discovery_source_usage.provider=EXCLUDED.provider \
+                       AND discovery_source_usage.provider_request_id=EXCLUDED.provider_request_id \
+                       AND (discovery_source_usage.returned_count IS NULL \
+                            OR discovery_source_usage.returned_count=EXCLUDED.returned_count) \
                      RETURNING run_id",
                 )
                 .bind(community_id.as_uuid())
@@ -1296,6 +1317,11 @@ async fn apply_worker_action_tx(
                 return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
                     current.projection(),
                 ));
+            }
+            if request.provider != DiscoveryProvider::Outscraper
+                && request.status == DiscoveryRunSourceStatus::Active
+            {
+                adopt_multi_source_tx(tx, community_id).await?;
             }
             let source_row = sqlx::query(
                 "SELECT status,request_cursor,request_count,returned_count,failure_class \
@@ -1434,7 +1460,7 @@ async fn apply_worker_action_tx(
             let batch_fingerprint = observation_batch_fingerprint(&request.observations)?;
             let prior_batch = sqlx::query(
                 "SELECT batch_fingerprint, accepted_count, existing_count \
-                 FROM discovery_observation_batches \
+                 FROM discovery_source_observation_batches \
                  WHERE community_id=$1 AND run_id=$2 AND provider=$3 \
                    AND provider_request_id=$4 \
                    AND batch_index=$5",
@@ -1489,15 +1515,15 @@ async fn apply_worker_action_tx(
                 }
 
                 let usage_row = sqlx::query(
-                    "INSERT INTO discovery_usage \
+                    "INSERT INTO discovery_source_usage \
                      (community_id, run_id, provider, provider_request_id, stored_count, existing_count) \
                      VALUES ($1,$2,$3,$4,$5,$6) \
                      ON CONFLICT (community_id, run_id, provider) DO UPDATE SET \
-                       stored_count=discovery_usage.stored_count + EXCLUDED.stored_count, \
-                       existing_count=discovery_usage.existing_count + EXCLUDED.existing_count, \
+                       stored_count=discovery_source_usage.stored_count + EXCLUDED.stored_count, \
+                       existing_count=discovery_source_usage.existing_count + EXCLUDED.existing_count, \
                        updated_at=now() \
-                     WHERE discovery_usage.provider=EXCLUDED.provider \
-                       AND discovery_usage.provider_request_id=EXCLUDED.provider_request_id \
+                     WHERE discovery_source_usage.provider=EXCLUDED.provider \
+                       AND discovery_source_usage.provider_request_id=EXCLUDED.provider_request_id \
                      RETURNING run_id",
                 )
                 .bind(community_id.as_uuid())
@@ -1514,7 +1540,7 @@ async fn apply_worker_action_tx(
                     ));
                 }
                 sqlx::query(
-                    "INSERT INTO discovery_observation_batches \
+                    "INSERT INTO discovery_source_observation_batches \
                      (community_id, run_id, provider, provider_request_id, batch_index, \
                       batch_fingerprint, accepted_count, existing_count) \
                      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
@@ -1585,12 +1611,87 @@ async fn apply_worker_action_tx(
                 },
             ))
         }
+        DiscoveryWorkerAction::SalvageObservations(request) => {
+            request
+                .validate()
+                .map_err(|error| DbError::InvalidData(error.to_string()))?;
+            let run = load_run_tx(tx, community_id, request.run_id, true).await?;
+            if !run.state.is_terminal() {
+                return Err(DbError::InvalidData(
+                    "Discovery paid-result recovery requires a terminal run".into(),
+                ));
+            }
+            if run.requested_by != *actor_pubkey {
+                let owns_requesting_agent: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM users \
+                     WHERE community_id=$1 AND pubkey=$2 AND agent_owner_pubkey=$3)",
+                )
+                .bind(community_id.as_uuid())
+                .bind(run.requested_by.as_slice())
+                .bind(actor_pubkey.as_slice())
+                .fetch_one(&mut **tx)
+                .await?;
+                if !owns_requesting_agent {
+                    return Err(DbError::AccessDenied(
+                        "Discovery paid-result recovery requires the original run owner".into(),
+                    ));
+                }
+            }
+            let source_terminal: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM discovery_run_sources \
+                 WHERE community_id=$1 AND run_id=$2 AND provider=$3 \
+                   AND status NOT IN ('pending','active'))",
+            )
+            .bind(community_id.as_uuid())
+            .bind(request.run_id)
+            .bind(provider_text(request.provider))
+            .fetch_one(&mut **tx)
+            .await?;
+            if !source_terminal {
+                return Err(DbError::InvalidData(
+                    "Discovery paid-result recovery provider is not terminal in the run plan"
+                        .into(),
+                ));
+            }
+            let (accepted_count, existing_count) = salvage_observation_batch_tx(
+                tx,
+                community_id,
+                request.run_id,
+                request.provider,
+                &request.provider_request_id,
+                request.batch_index,
+                &request.observations,
+            )
+            .await?;
+            Ok(DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(
+                DiscoveryWorkerSalvagedObservationsProjection {
+                    run: run.projection(),
+                    accepted_count,
+                    existing_count,
+                },
+            ))
+        }
         DiscoveryWorkerAction::Fail(request) => {
             let current = load_run_tx(tx, community_id, request.run_id, true).await?;
             if !worker_lease_matches(&current, actor_pubkey, request.worker_id, request.lease_id) {
                 return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
                     current.projection(),
                 ));
+            }
+            if !is_v1_worker_action(action_event) {
+                let all_sources_terminal: bool = sqlx::query_scalar(
+                    "SELECT NOT EXISTS (SELECT 1 FROM discovery_run_sources \
+                     WHERE community_id=$1 AND run_id=$2 AND status IN ('pending','active'))",
+                )
+                .bind(community_id.as_uuid())
+                .bind(request.run_id)
+                .fetch_one(&mut **tx)
+                .await?;
+                if !all_sources_terminal {
+                    return Err(DbError::InvalidData(
+                        "all Discovery sources must be terminal before failure".into(),
+                    ));
+                }
             }
             let row = sqlx::query(
                 "UPDATE discovery_runs SET state='failed', terminal_reason='executor_failed', \
@@ -1612,9 +1713,6 @@ async fn apply_worker_action_tx(
             .await?;
             Ok(match row {
                 Some(row) => {
-                    if is_v1_worker_action(action_event) {
-                        finalize_v1_source_tx(tx, community_id, request.run_id, false).await?;
-                    }
                     DiscoveryWorkerReceiptOutcome::Failed(run_from_row(&row)?.projection())
                 }
                 None => DiscoveryWorkerReceiptOutcome::LostLease(current.projection()),
@@ -1626,6 +1724,21 @@ async fn apply_worker_action_tx(
                 return Ok(DiscoveryWorkerReceiptOutcome::LostLease(
                     current.projection(),
                 ));
+            }
+            if !is_v1_worker_action(action_event) {
+                let all_sources_terminal: bool = sqlx::query_scalar(
+                    "SELECT NOT EXISTS (SELECT 1 FROM discovery_run_sources \
+                     WHERE community_id=$1 AND run_id=$2 AND status IN ('pending','active'))",
+                )
+                .bind(community_id.as_uuid())
+                .bind(request.run_id)
+                .fetch_one(&mut **tx)
+                .await?;
+                if !all_sources_terminal {
+                    return Err(DbError::InvalidData(
+                        "all Discovery sources must be terminal before completion".into(),
+                    ));
+                }
             }
             let row = sqlx::query(
                 "UPDATE discovery_runs SET state='succeeded', completed_steps=total_steps, \
@@ -1647,15 +1760,43 @@ async fn apply_worker_action_tx(
             .await?;
             Ok(match row {
                 Some(row) => {
-                    if is_v1_worker_action(action_event) {
-                        finalize_v1_source_tx(tx, community_id, request.run_id, true).await?;
-                    }
                     DiscoveryWorkerReceiptOutcome::Completed(run_from_row(&row)?.projection())
                 }
                 None => DiscoveryWorkerReceiptOutcome::LostLease(current.projection()),
             })
         }
     }
+}
+
+async fn adopt_multi_source_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(community_id.as_uuid())
+        .execute(&mut **tx)
+        .await?;
+    let legacy_run_active: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM discovery_runs \
+         WHERE community_id=$1 AND discovery_protocol_version=1 \
+           AND state IN ('queued','running'))",
+    )
+    .bind(community_id.as_uuid())
+    .fetch_one(&mut **tx)
+    .await?;
+    if legacy_run_active {
+        return Err(DbError::InvalidData(
+            "Discovery protocol V1 runs must finish before multi-source adoption".into(),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO discovery_workspace_protocols (community_id) VALUES ($1) \
+         ON CONFLICT (community_id) DO NOTHING",
+    )
+    .bind(community_id.as_uuid())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 fn is_v1_worker_action(event: &Event) -> bool {
@@ -1666,42 +1807,6 @@ fn is_v1_worker_action(event: &Event) -> bool {
             .is_some_and(|value| value == "discovery-worker-action")
             && parts.get(1).is_some_and(|value| value == "1")
     })
-}
-
-async fn finalize_v1_source_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    community_id: CommunityId,
-    run_id: Uuid,
-    succeeded: bool,
-) -> Result<()> {
-    let status = if succeeded { "completed" } else { "failed" };
-    let updated = sqlx::query(
-        "UPDATE discovery_run_sources SET \
-             returned_count=COALESCE(( \
-                 SELECT returned_count FROM discovery_usage \
-                 WHERE community_id=$1 AND run_id=$2 AND provider='outscraper' \
-             ),returned_count), \
-             status=CASE WHEN $4 AND COALESCE(( \
-                 SELECT returned_count FROM discovery_usage \
-                 WHERE community_id=$1 AND run_id=$2 AND provider='outscraper' \
-             ),returned_count)=0 THEN 'exhausted' ELSE $3 END, \
-             failure_class=NULL, started_at=COALESCE(started_at,now()), \
-             finished_at=now(), updated_at=now() \
-         WHERE community_id=$1 AND run_id=$2 AND provider='outscraper' \
-           AND status IN ('pending','active')",
-    )
-    .bind(community_id.as_uuid())
-    .bind(run_id)
-    .bind(status)
-    .bind(succeeded)
-    .execute(&mut **tx)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(DbError::InvalidData(
-            "legacy Discovery run did not have one active Outscraper source".into(),
-        ));
-    }
-    Ok(())
 }
 
 fn worker_lease_matches(
@@ -1980,10 +2085,145 @@ fn worker_outcome_run_id(outcome: &DiscoveryWorkerReceiptOutcome) -> Option<Uuid
         DiscoveryWorkerReceiptOutcome::Idle => None,
         DiscoveryWorkerReceiptOutcome::Lease(lease) => Some(lease.run.run_id),
         DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => Some(stored.lease.run.run_id),
+        DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(salvaged) => Some(salvaged.run.run_id),
         DiscoveryWorkerReceiptOutcome::LostLease(run)
         | DiscoveryWorkerReceiptOutcome::Completed(run)
         | DiscoveryWorkerReceiptOutcome::Failed(run) => Some(run.run_id),
     }
+}
+
+async fn salvage_observation_batch_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+    provider: DiscoveryProvider,
+    provider_request_id: &str,
+    batch_index: u32,
+    observations: &[DiscoveryBusinessObservationInput],
+) -> Result<(u16, u16)> {
+    let batch_index = i16::try_from(batch_index).map_err(|_| {
+        DbError::InvalidData("Discovery observation batch index exceeds SMALLINT".into())
+    })?;
+    let batch_fingerprint = observation_batch_fingerprint(observations)?;
+    if let Some(row) = sqlx::query(
+        "SELECT batch_fingerprint,accepted_count,existing_count \
+         FROM discovery_source_observation_batches \
+         WHERE community_id=$1 AND run_id=$2 AND provider=$3 \
+           AND provider_request_id=$4 AND batch_index=$5",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .bind(provider_text(provider))
+    .bind(provider_request_id)
+    .bind(batch_index)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        let prior_fingerprint: Vec<u8> = row.try_get("batch_fingerprint")?;
+        if prior_fingerprint != batch_fingerprint.as_slice() {
+            return Err(DbError::AccessDenied(
+                "Discovery salvage batch conflicts with committed results".into(),
+            ));
+        }
+        let accepted: i16 = row.try_get("accepted_count")?;
+        let existing: i16 = row.try_get("existing_count")?;
+        return Ok((
+            u16::try_from(accepted).map_err(|_| {
+                DbError::InvalidData("Discovery accepted count cannot be negative".into())
+            })?,
+            u16::try_from(existing).map_err(|_| {
+                DbError::InvalidData("Discovery existing count cannot be negative".into())
+            })?,
+        ));
+    }
+
+    let mut accepted_count = 0_u16;
+    let mut existing_count = 0_u16;
+    for observation in observations {
+        let fingerprint = observation_fingerprint(observation)?;
+        if insert_business_observation_tx(tx, community_id, run_id, observation, &fingerprint)
+            .await?
+        {
+            accepted_count = accepted_count
+                .checked_add(1)
+                .ok_or_else(|| DbError::InvalidData("Discovery accepted count overflow".into()))?;
+        } else {
+            existing_count = existing_count
+                .checked_add(1)
+                .ok_or_else(|| DbError::InvalidData("Discovery existing count overflow".into()))?;
+        }
+    }
+
+    let usage_row = sqlx::query(
+        "INSERT INTO discovery_source_usage \
+         (community_id,run_id,provider,provider_request_id,stored_count,existing_count,returned_count) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7) \
+         ON CONFLICT (community_id,run_id,provider) DO UPDATE SET \
+           stored_count=discovery_source_usage.stored_count+EXCLUDED.stored_count, \
+           existing_count=discovery_source_usage.existing_count+EXCLUDED.existing_count, \
+           returned_count=COALESCE(discovery_source_usage.returned_count,0)+EXCLUDED.returned_count, \
+           updated_at=now() \
+         WHERE discovery_source_usage.provider_request_id=EXCLUDED.provider_request_id \
+         RETURNING run_id",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .bind(provider_text(provider))
+    .bind(provider_request_id)
+    .bind(i32::from(accepted_count))
+    .bind(i32::from(existing_count))
+    .bind(i32::from(accepted_count) + i32::from(existing_count))
+    .fetch_optional(&mut **tx)
+    .await?;
+    if usage_row.is_none() {
+        return Err(DbError::AccessDenied(
+            "Discovery salvage usage conflicts with a different provider request".into(),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO discovery_source_observation_batches \
+         (community_id,run_id,provider,provider_request_id,batch_index,batch_fingerprint, \
+          accepted_count,existing_count) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .bind(provider_text(provider))
+    .bind(provider_request_id)
+    .bind(batch_index)
+    .bind(batch_fingerprint.as_slice())
+    .bind(
+        i16::try_from(accepted_count).map_err(|_| {
+            DbError::InvalidData("Discovery accepted count exceeds SMALLINT".into())
+        })?,
+    )
+    .bind(
+        i16::try_from(existing_count).map_err(|_| {
+            DbError::InvalidData("Discovery existing count exceeds SMALLINT".into())
+        })?,
+    )
+    .execute(&mut **tx)
+    .await?;
+    let source_updated = sqlx::query(
+        "UPDATE discovery_run_sources SET \
+           retained_count=retained_count+$4, duplicate_count=duplicate_count+$5, \
+           returned_count=GREATEST(returned_count,retained_count+duplicate_count+$4+$5), \
+           updated_at=now() \
+         WHERE community_id=$1 AND run_id=$2 AND provider=$3 \
+           AND status NOT IN ('pending','active')",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .bind(provider_text(provider))
+    .bind(i32::from(accepted_count))
+    .bind(i32::from(existing_count))
+    .execute(&mut **tx)
+    .await?;
+    if source_updated.rows_affected() != 1 {
+        return Err(DbError::InvalidData(
+            "Discovery salvage provider is not terminal in the run plan".into(),
+        ));
+    }
+    Ok((accepted_count, existing_count))
 }
 
 async fn insert_business_observation_tx(
@@ -2019,6 +2259,7 @@ async fn insert_business_observation_tx(
         .bind(community_id.as_uuid())
         .execute(&mut **tx)
         .await?;
+    backfill_legacy_observation_digests_tx(tx, community_id).await?;
     let exact_identity: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM discovery_business_observations \
          WHERE community_id=$1 AND provider=$2 AND provider_record_id=$3",
@@ -2065,9 +2306,10 @@ async fn insert_business_observation_tx(
          name, website, phone, full_address, city, state, postal_code, country, country_code, \
          latitude_micros, longitude_micros, category, subtypes, rating_hundredths, reviews_count, \
          business_status, verified, source_url, image_url, description, canonical_domain_digest, \
-         normalized_phone_digest, normalized_name_locality_digest, observation_fingerprint) \
+         normalized_phone_digest, normalized_name_locality_digest, dedupe_digest_version, \
+         observation_fingerprint) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,\
-                 $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31) \
+                 $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,1,$31) \
          ON CONFLICT DO NOTHING",
     )
     .bind(community_id.as_uuid())
@@ -2152,6 +2394,82 @@ async fn insert_business_observation_tx(
     Ok(false)
 }
 
+async fn backfill_legacy_observation_digests_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+) -> Result<()> {
+    const BATCH_SIZE: i64 = 500;
+    loop {
+        let rows = sqlx::query(
+            "SELECT id,name,website,phone,city,state,country \
+             FROM discovery_business_observations \
+             WHERE community_id=$1 AND dedupe_digest_version=0 \
+             ORDER BY id FOR UPDATE LIMIT $2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(BATCH_SIZE)
+        .fetch_all(&mut **tx)
+        .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let mut observation_ids = Vec::with_capacity(rows.len());
+        let mut domain_digests = Vec::with_capacity(rows.len());
+        let mut phone_digests = Vec::with_capacity(rows.len());
+        let mut name_locality_digests = Vec::with_capacity(rows.len());
+        for row in rows {
+            let observation_id: Uuid = row.try_get("id")?;
+            let name: String = row.try_get("name")?;
+            let website: Option<String> = row.try_get("website")?;
+            let phone: Option<String> = row.try_get("phone")?;
+            let city: Option<String> = row.try_get("city")?;
+            let state: Option<String> = row.try_get("state")?;
+            let country: Option<String> = row.try_get("country")?;
+            observation_ids.push(observation_id);
+            domain_digests.push(
+                website
+                    .as_deref()
+                    .and_then(canonical_business_domain_digest)
+                    .map(Vec::from),
+            );
+            phone_digests.push(
+                phone
+                    .as_deref()
+                    .and_then(normalized_business_phone_digest)
+                    .map(Vec::from),
+            );
+            name_locality_digests.push(
+                normalized_business_name_locality_digest(
+                    &name,
+                    city.as_deref(),
+                    state.as_deref(),
+                    country.as_deref(),
+                )
+                .map(Vec::from),
+            );
+        }
+        sqlx::query(
+            "UPDATE discovery_business_observations observation \
+             SET canonical_domain_digest=batch.domain_digest, \
+                 normalized_phone_digest=batch.phone_digest, \
+                 normalized_name_locality_digest=batch.name_locality_digest, \
+                 dedupe_digest_version=1 \
+             FROM UNNEST($2::uuid[],$3::bytea[],$4::bytea[],$5::bytea[]) \
+                  AS batch(id,domain_digest,phone_digest,name_locality_digest) \
+             WHERE observation.community_id=$1 AND observation.id=batch.id \
+               AND observation.dedupe_digest_version=0",
+        )
+        .bind(community_id.as_uuid())
+        .bind(&observation_ids)
+        .bind(&domain_digests)
+        .bind(&phone_digests)
+        .bind(&name_locality_digests)
+        .execute(&mut **tx)
+        .await?;
+    }
+}
+
 fn observation_fingerprint(observation: &DiscoveryBusinessObservationInput) -> Result<[u8; 32]> {
     let encoded = serde_json::to_vec(observation).map_err(|error| {
         DbError::InvalidData(format!(
@@ -2200,6 +2518,7 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]>
             request.provider == DiscoveryProvider::Outscraper
                 && request.observations.iter().all(is_legacy_observation)
         }
+        DiscoveryWorkerAction::SalvageObservations(_) => false,
     };
     if legacy_compatible {
         hasher.update(b"colony.discovery-worker-command/v1\0");
@@ -2260,6 +2579,17 @@ fn worker_action_fingerprint(action: &DiscoveryWorkerAction) -> Result<[u8; 32]>
                 hasher.update(observation_fingerprint(observation)?);
             }
         }
+        DiscoveryWorkerAction::SalvageObservations(request) => {
+            hasher.update(request.run_id.as_bytes());
+            hasher.update(provider_text(request.provider).as_bytes());
+            hasher.update([0]);
+            hasher.update(request.provider_request_id.as_bytes());
+            hasher.update([0]);
+            hasher.update(request.batch_index.to_be_bytes());
+            for observation in &request.observations {
+                hasher.update(observation_fingerprint(observation)?);
+            }
+        }
     }
     Ok(hasher.finalize().into())
 }
@@ -2293,6 +2623,7 @@ fn worker_operation_text(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
         DiscoveryWorkerOperation::SourceProgress => "source_progress",
         DiscoveryWorkerOperation::StoreObservations => "store_observations",
+        DiscoveryWorkerOperation::SalvageObservations => "salvage_observations",
         DiscoveryWorkerOperation::Fail => "fail",
         DiscoveryWorkerOperation::Complete => "complete",
     }
@@ -2478,6 +2809,63 @@ pub(crate) async fn require_discovery_authorized_tx(
     require_authorization(authorization_from_row(row.as_ref())?)
 }
 
+async fn require_discovery_worker_authorized_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    actor_pubkey: &[u8; 32],
+) -> Result<()> {
+    require_discovery_authorized_tx(tx, community_id, actor_pubkey).await?;
+    let is_agent: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM users \
+         WHERE community_id=$1 AND pubkey=$2 AND agent_owner_pubkey IS NOT NULL)",
+    )
+    .bind(community_id.as_uuid())
+    .bind(actor_pubkey.as_slice())
+    .fetch_one(&mut **tx)
+    .await?;
+    if is_agent {
+        return Err(DbError::AccessDenied(
+            "Discovery local worker requires a human member identity".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn require_no_other_active_campaign_run_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    campaign_id: Uuid,
+    requested_run_id: Uuid,
+) -> Result<()> {
+    let campaign_exists = sqlx::query(
+        "SELECT id FROM discovery_campaigns \
+         WHERE community_id=$1 AND id=$2 FOR UPDATE",
+    )
+    .bind(community_id.as_uuid())
+    .bind(campaign_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .is_some();
+    if !campaign_exists {
+        return Err(DbError::NotFound("Discovery campaign".into()));
+    }
+    let active_run: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM discovery_runs \
+         WHERE community_id=$1 AND campaign_id=$2 \
+           AND state IN ('queued','running') LIMIT 1",
+    )
+    .bind(community_id.as_uuid())
+    .bind(campaign_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if active_run.is_some_and(|run_id| run_id != requested_run_id) {
+        return Err(DbError::AccessDenied(
+            "Discovery campaign already has an active run".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn lock_discovery_authority_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
@@ -2653,7 +3041,7 @@ mod tests {
             deterministic_business_observation_id, DiscoveryWorkerCheckpointRequest,
             DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
             DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerReceipt,
-            DiscoveryWorkerSourceProgressRequest,
+            DiscoveryWorkerSalvageBatchRequest, DiscoveryWorkerSourceProgressRequest,
         },
         discovery_workspace::{
             DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryWorkspaceActionPayload,
@@ -2665,13 +3053,14 @@ mod tests {
         build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
         build_discovery_worker_complete_action, build_discovery_worker_fail_action,
         build_discovery_worker_heartbeat_action, build_discovery_worker_receipt,
+        build_discovery_worker_salvage_observations_action,
         build_discovery_worker_source_progress_action,
         build_discovery_worker_store_observations_action,
     };
     use buzz_sdk::discovery_workspace::{
         build_discovery_workspace_action, build_discovery_workspace_receipt,
     };
-    use nostr::{EventBuilder, Keys, Tag};
+    use nostr::{EventBuilder, Keys, Kind, Tag};
     use uuid::Uuid;
 
     static DISCOVERY_DB_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -2750,6 +3139,79 @@ mod tests {
             observation_fingerprint(&observation).expect("fingerprint observation"),
             <[u8; 32]>::from(expected.finalize())
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn released_v1_run_start_refuses_a_multi_source_campaign() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert member");
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(
+            &db,
+            community,
+            &actor.public_key().to_bytes(),
+            campaign_id,
+            &search,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE discovery_campaigns SET source_mode='concurrent', \
+             source_keys=ARRAY['brave_search','exa_search']::TEXT[] \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .execute(&db.pool)
+        .await
+        .expect("configure multi-source campaign");
+        let action = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_DISCOVERY_ACTION as u16),
+            "{}",
+        )
+        .sign_with_keys(&actor)
+        .expect("sign released action fixture");
+        let result = db
+            .apply_discovery_command_once(
+                community,
+                &actor.public_key().to_bytes(),
+                Uuid::new_v4(),
+                DiscoveryCommandMutation::Start {
+                    campaign_id,
+                    business_search: search,
+                    total_steps: 1,
+                    supports_multi_source: false,
+                    accepted_at: Utc::now(),
+                },
+                &action,
+                |_| panic!("a refused V1 start must not build a receipt"),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(DbError::InvalidData(message))
+                if message.contains("does not support this campaign's source plan")
+        ));
+        let run_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM discovery_runs WHERE community_id=$1 AND campaign_id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("count refused runs");
+        assert_eq!(run_count, 0);
     }
 
     fn business_observation_for(
@@ -3095,6 +3557,9 @@ mod tests {
             }
             DiscoveryWorkerAction::StoreObservations(request) => {
                 build_discovery_worker_store_observations_action(relay.public_key(), request)
+            }
+            DiscoveryWorkerAction::SalvageObservations(request) => {
+                build_discovery_worker_salvage_observations_action(relay.public_key(), request)
             }
             DiscoveryWorkerAction::Fail(request) => {
                 build_discovery_worker_fail_action(relay.public_key(), request)
@@ -3603,6 +4068,52 @@ mod tests {
             panic!("requester worker must receive its own run");
         };
         assert_eq!(owner_lease.run.run_id, human_run);
+        let active_source = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &requester,
+                &relay,
+                DiscoveryWorkerAction::SourceProgress(DiscoveryWorkerSourceProgressRequest {
+                    lease: lease_request(owner_worker_id, human_run, owner_lease.lease_id),
+                    provider: DiscoveryProvider::Outscraper,
+                    status: DiscoveryRunSourceStatus::Active,
+                    request_cursor: None,
+                    request_count: 0,
+                    returned_count: 0,
+                    failure_class: None,
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("activate requester source"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(active_lease) = active_source else {
+            panic!("source activation must preserve the lease");
+        };
+        let terminal_source = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &requester,
+                &relay,
+                DiscoveryWorkerAction::SourceProgress(DiscoveryWorkerSourceProgressRequest {
+                    lease: lease_request(owner_worker_id, human_run, active_lease.lease_id),
+                    provider: DiscoveryProvider::Outscraper,
+                    status: DiscoveryRunSourceStatus::Failed,
+                    request_cursor: None,
+                    request_count: 0,
+                    returned_count: 0,
+                    failure_class: Some(DiscoveryRunSourceFailureClass::InvalidRequest),
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("terminalize requester source"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(terminal_lease) = terminal_source else {
+            panic!("source failure must preserve the lease");
+        };
         let failed = applied_worker_outcome(
             apply_worker_action(
                 &db,
@@ -3612,7 +4123,7 @@ mod tests {
                 DiscoveryWorkerAction::Fail(lease_request(
                     owner_worker_id,
                     human_run,
-                    owner_lease.lease_id,
+                    terminal_lease.lease_id,
                 )),
                 Duration::seconds(30),
             )
@@ -3637,6 +4148,24 @@ mod tests {
         {
             DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
         };
+        let agent_worker_attempt = apply_worker_action(
+            &db,
+            community,
+            &owned_agent,
+            &relay,
+            DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                worker_id: Uuid::new_v4(),
+                available_providers: vec![DiscoveryProvider::Outscraper],
+            }),
+            Duration::seconds(30),
+        )
+        .await;
+        assert!(matches!(
+            agent_worker_attempt,
+            Err(DbError::AccessDenied(message)) if message.contains("human member identity")
+        ));
         let agent_owner_claim = applied_worker_outcome(
             apply_worker_action(
                 &db,
@@ -3658,6 +4187,269 @@ mod tests {
             panic!("owner worker must receive its agent's run");
         };
         assert_eq!(agent_lease.run.run_id, agent_run);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn campaign_allows_only_one_active_run_and_reopens_after_terminal_state() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+
+        let first_key = Uuid::new_v4();
+        let second_key = Uuid::new_v4();
+        let (first, second) = tokio::join!(
+            db.create_discovery_run_once(community, &human, campaign_id, first_key, 1, &search,),
+            db.create_discovery_run_once(community, &human, campaign_id, second_key, 1, &search,),
+        );
+        let results = [first, second];
+        let created = results
+            .iter()
+            .filter_map(|result| match result {
+                Ok(DiscoveryRunCreate::Created(run)) => Some(run.id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(created.len(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(
+                    result,
+                    Err(DbError::AccessDenied(message)) if message.contains("already has an active run")
+                ))
+                .count(),
+            1
+        );
+
+        db.request_discovery_cancel(community, &human, created[0])
+            .await
+            .expect("terminalize first run");
+        let next = db
+            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 1, &search)
+            .await
+            .expect("campaign accepts a new run after terminal state");
+        assert!(matches!(next, DiscoveryRunCreate::Created(_)));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn terminal_paid_results_salvage_is_owner_scoped_and_batch_idempotent() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let owner = Keys::generate();
+        let foreign_member = Keys::generate();
+        let relay = Keys::generate();
+        for actor in [&owner, &foreign_member] {
+            sqlx::query(
+                "INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')",
+            )
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert salvage member");
+            sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+                .bind(community.as_uuid())
+                .bind(actor.public_key().to_bytes().as_slice())
+                .execute(&db.pool)
+                .await
+                .expect("insert salvage human identity");
+        }
+        let owner_pubkey = owner.public_key().to_bytes();
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &owner_pubkey, campaign_id, &search).await;
+        sqlx::query(
+            "UPDATE discovery_campaigns SET source_keys=ARRAY['brave_search']::TEXT[] \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .execute(&db.pool)
+        .await
+        .expect("configure salvage source");
+        let run_id = match db
+            .create_discovery_run_once(
+                community,
+                &owner_pubkey,
+                campaign_id,
+                Uuid::new_v4(),
+                1,
+                &search,
+            )
+            .await
+            .expect("create salvage run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let worker_id = Uuid::new_v4();
+        let claimed = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &owner,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id,
+                    available_providers: vec![DiscoveryProvider::BraveSearch],
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("claim salvage run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(lease) = claimed else {
+            panic!("salvage run must be leased");
+        };
+        let active = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &owner,
+                &relay,
+                DiscoveryWorkerAction::SourceProgress(DiscoveryWorkerSourceProgressRequest {
+                    lease: lease_request(worker_id, run_id, lease.lease_id),
+                    provider: DiscoveryProvider::BraveSearch,
+                    status: DiscoveryRunSourceStatus::Active,
+                    request_cursor: Some("brave-paid-request".to_owned()),
+                    request_count: 1,
+                    returned_count: 0,
+                    failure_class: None,
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("activate paid source"),
+        );
+        assert!(matches!(active, DiscoveryWorkerReceiptOutcome::Lease(_)));
+        db.request_discovery_cancel(community, &owner_pubkey, run_id)
+            .await
+            .expect("cancel after paid provider response");
+
+        let observation = business_observation_for(
+            DiscoveryProvider::BraveSearch,
+            "brave-result-1",
+            "Recovered Brave Dental",
+            "https://recovered-brave.example",
+        );
+        let salvage = DiscoveryWorkerSalvageBatchRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            worker_id,
+            run_id,
+            provider: DiscoveryProvider::BraveSearch,
+            provider_request_id: "brave-paid-request".to_owned(),
+            batch_index: 0,
+            observations: vec![observation.clone()],
+        };
+        assert!(matches!(
+            apply_worker_action(
+                &db,
+                community,
+                &foreign_member,
+                &relay,
+                DiscoveryWorkerAction::SalvageObservations(salvage.clone()),
+                Duration::seconds(30),
+            )
+            .await,
+            Err(DbError::AccessDenied(message)) if message.contains("original run owner")
+        ));
+
+        let applied = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &owner,
+                &relay,
+                DiscoveryWorkerAction::SalvageObservations(salvage.clone()),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("salvage paid result"),
+        );
+        let DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(applied) = applied else {
+            panic!("salvage must return stored counts");
+        };
+        assert_eq!((applied.accepted_count, applied.existing_count), (1, 0));
+
+        let duplicate = apply_worker_action(
+            &db,
+            community,
+            &owner,
+            &relay,
+            DiscoveryWorkerAction::SalvageObservations(salvage.clone()),
+            Duration::seconds(30),
+        )
+        .await
+        .expect("command retry is idempotent");
+        assert!(matches!(
+            duplicate,
+            DiscoveryWorkerCommandApply::Duplicate { .. }
+        ));
+
+        let replay = DiscoveryWorkerSalvageBatchRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            ..salvage.clone()
+        };
+        let replayed = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &owner,
+                &relay,
+                DiscoveryWorkerAction::SalvageObservations(replay),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("batch retry is idempotent"),
+        );
+        let DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(replayed) = replayed else {
+            panic!("batch replay must return original counts");
+        };
+        assert_eq!((replayed.accepted_count, replayed.existing_count), (1, 0));
+
+        let mut conflicting_observation = observation;
+        conflicting_observation.name = "Conflicting recovered business".to_owned();
+        let conflicting = DiscoveryWorkerSalvageBatchRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            observations: vec![conflicting_observation],
+            ..salvage
+        };
+        assert!(matches!(
+            apply_worker_action(
+                &db,
+                community,
+                &owner,
+                &relay,
+                DiscoveryWorkerAction::SalvageObservations(conflicting),
+                Duration::seconds(30),
+            )
+            .await,
+            Err(DbError::AccessDenied(message)) if message.contains("conflicts with committed results")
+        ));
+        let source_counts: (i32, i32) = sqlx::query_as(
+            "SELECT retained_count,duplicate_count FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 AND provider='brave_search'",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("load salvaged source counts");
+        assert_eq!(source_counts, (1, 0));
     }
 
     #[tokio::test]
@@ -3795,6 +4587,25 @@ mod tests {
         .expect("load source after cross-actor progress");
         assert_eq!(unchanged, ("active".to_owned(), 0, 0));
 
+        for action in [
+            DiscoveryWorkerAction::Complete(lease_request(worker_id, run_id, lease.lease_id)),
+            DiscoveryWorkerAction::Fail(lease_request(worker_id, run_id, lease.lease_id)),
+        ] {
+            assert!(matches!(
+                apply_worker_action(
+                    &db,
+                    community,
+                    &actor,
+                    &relay,
+                    action,
+                    Duration::seconds(30),
+                )
+                .await,
+                Err(DbError::InvalidData(message))
+                    if message.contains("all Discovery sources must be terminal")
+            ));
+        }
+
         let completed = DiscoveryWorkerSourceProgressRequest {
             lease: lease_request(worker_id, run_id, lease.lease_id),
             provider: DiscoveryProvider::Outscraper,
@@ -3855,6 +4666,27 @@ mod tests {
         )
         .await
         .is_err());
+
+        let completed_run = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Complete(lease_request(
+                    worker_id,
+                    run_id,
+                    completed_lease.lease_id,
+                )),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("complete after every source is terminal"),
+        );
+        assert!(matches!(
+            completed_run,
+            DiscoveryWorkerReceiptOutcome::Completed(_)
+        ));
     }
 
     #[tokio::test]
@@ -3900,6 +4732,15 @@ mod tests {
         let run_id = match created {
             DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
         };
+        sqlx::query(
+            "UPDATE discovery_runs SET discovery_protocol_version=1 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .execute(&db.pool)
+        .await
+        .expect("mark released-worker run as protocol V1");
         let first_worker = Uuid::new_v4();
         let first_claim = DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
             request_id: Uuid::new_v4(),
@@ -4082,6 +4923,15 @@ mod tests {
         {
             DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
         };
+        sqlx::query(
+            "UPDATE discovery_runs SET discovery_protocol_version=1 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(failed_run_id)
+        .execute(&db.pool)
+        .await
+        .expect("mark released-worker failure run as protocol V1");
         let failure_worker = Uuid::new_v4();
         let failure_claim = applied_worker_outcome(
             apply_worker_action(
@@ -4466,6 +5316,27 @@ mod tests {
                 community,
                 &actor,
                 &relay,
+                DiscoveryWorkerAction::SourceProgress(DiscoveryWorkerSourceProgressRequest {
+                    lease: lease_request(worker_id, first_run, first_lease.lease_id),
+                    provider: DiscoveryProvider::Outscraper,
+                    status: DiscoveryRunSourceStatus::Completed,
+                    request_cursor: Some(provider_request_id),
+                    request_count: 1,
+                    returned_count: 1,
+                    failure_class: None,
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("terminalize first observation source"),
+        );
+
+        applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
                 DiscoveryWorkerAction::Complete(lease_request(
                     worker_id,
                     first_run,
@@ -4761,7 +5632,7 @@ mod tests {
         assert_eq!(page.leads.len(), 1);
         assert_eq!(page.leads[0].provider, DiscoveryProvider::Outscraper);
         let usage: Vec<(Uuid, i32, i32)> = sqlx::query_as(
-            "SELECT run_id, stored_count, existing_count FROM discovery_usage \
+            "SELECT run_id, stored_count, existing_count FROM discovery_source_usage \
              WHERE community_id=$1 ORDER BY run_id",
         )
         .bind(community.as_uuid())
@@ -4772,6 +5643,15 @@ mod tests {
         assert!(usage.contains(&(first_run, 1, 0)));
         assert!(usage.contains(&(second_run, 0, 1)));
         assert!(usage.contains(&(third_run, 0, 1)));
+        let legacy_usage: Vec<(Uuid, i32, i32)> = sqlx::query_as(
+            "SELECT run_id, stored_count, existing_count FROM discovery_usage \
+             WHERE community_id=$1 ORDER BY run_id",
+        )
+        .bind(community.as_uuid())
+        .fetch_all(&db.pool)
+        .await
+        .expect("load rollback-compatible Outscraper accounting");
+        assert_eq!(legacy_usage, vec![(first_run, 1, 0)]);
         let source_counts: Vec<(Uuid, String, i32, i32)> = sqlx::query_as(
             "SELECT run_id,provider,retained_count,duplicate_count \
              FROM discovery_run_sources WHERE community_id=$1 ORDER BY run_id",

@@ -15,14 +15,50 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-const ACTION_SCHEMA: &str = "colony.discovery-action/v1";
-const RECEIPT_SCHEMA: &str = "colony.discovery-receipt/v1";
+const ACTION_SCHEMA_V1: &str = "colony.discovery-action/v1";
+const ACTION_SCHEMA_V2: &str = "colony.discovery-action/v2";
+const RECEIPT_SCHEMA_V1: &str = "colony.discovery-receipt/v1";
+const RECEIPT_SCHEMA_V2: &str = "colony.discovery-receipt/v2";
+
+/// Version of the strict Discovery run wire envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryWireVersion {
+    /// Released Outscraper-only run contract.
+    V1,
+    /// Multi-source-aware run contract.
+    V2,
+}
+
+impl DiscoveryWireVersion {
+    const fn tag(self) -> &'static str {
+        match self {
+            Self::V1 => "1",
+            Self::V2 => "2",
+        }
+    }
+
+    const fn action_schema(self) -> &'static str {
+        match self {
+            Self::V1 => ACTION_SCHEMA_V1,
+            Self::V2 => ACTION_SCHEMA_V2,
+        }
+    }
+
+    const fn receipt_schema(self) -> &'static str {
+        match self {
+            Self::V1 => RECEIPT_SCHEMA_V1,
+            Self::V2 => RECEIPT_SCHEMA_V2,
+        }
+    }
+}
 
 /// A strict Discovery action together with the relay named by its `p` tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedDiscoveryAction {
     /// Relay public key addressed by the actor.
     pub relay_pubkey: PublicKey,
+    /// Exact signed wire version, used to enforce rollout-safe behavior.
+    pub wire_version: DiscoveryWireVersion,
     /// Validated operation-specific payload.
     pub action: DiscoveryAction,
 }
@@ -30,6 +66,8 @@ pub struct ParsedDiscoveryAction {
 /// A strict Discovery receipt together with its private routing references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedDiscoveryReceipt {
+    /// Exact relay-authored wire version.
+    pub wire_version: DiscoveryWireVersion,
     /// Requester public key named by the receipt's `p` tag.
     pub actor_pubkey: PublicKey,
     /// Exact signed action processed by the relay.
@@ -100,6 +138,7 @@ pub fn build_discovery_start_action(
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery action"))?;
     build_action(
         relay_pubkey,
+        DiscoveryWireVersion::V2,
         DiscoveryOperation::Start,
         request.request_id,
         request.idempotency_key,
@@ -134,6 +173,21 @@ pub fn build_discovery_receipt(
     action_event_id: EventId,
     receipt: &DiscoveryReceipt,
 ) -> Result<EventBuilder, DiscoverySdkError> {
+    build_discovery_receipt_for_version(
+        DiscoveryWireVersion::V2,
+        actor_pubkey,
+        action_event_id,
+        receipt,
+    )
+}
+
+/// Build a relay receipt matching the exact run action wire version.
+pub fn build_discovery_receipt_for_version(
+    wire_version: DiscoveryWireVersion,
+    actor_pubkey: PublicKey,
+    action_event_id: EventId,
+    receipt: &DiscoveryReceipt,
+) -> Result<EventBuilder, DiscoverySdkError> {
     validate_projection(receipt)?;
     let actor_text = actor_pubkey.to_hex();
     let action_text = action_event_id.to_hex();
@@ -141,7 +195,7 @@ pub fn build_discovery_receipt(
     let request_text = receipt.request_id.to_string();
     let idempotency_text = receipt.idempotency_key.to_string();
     let content = DiscoveryReceiptContent {
-        schema: RECEIPT_SCHEMA.to_owned(),
+        schema: wire_version.receipt_schema().to_owned(),
         receipt: receipt.clone(),
     };
     let tags = [
@@ -150,7 +204,7 @@ pub fn build_discovery_receipt(
         scalar_tag("run", &run_text)?,
         tuple_tag(&[
             "discovery-receipt",
-            "1",
+            wire_version.tag(),
             operation_tag(receipt.operation),
             &request_text,
             &idempotency_text,
@@ -174,6 +228,7 @@ fn build_run_action(
     validate_uuid(request.run_id, "discovery action")?;
     build_action(
         relay_pubkey,
+        DiscoveryWireVersion::V2,
         operation,
         request.request_id,
         request.idempotency_key,
@@ -185,6 +240,7 @@ fn build_run_action(
 
 fn build_action(
     relay_pubkey: PublicKey,
+    wire_version: DiscoveryWireVersion,
     operation: DiscoveryOperation,
     request_id: Uuid,
     idempotency_key: Uuid,
@@ -206,7 +262,7 @@ fn build_action(
     let target_text = target.to_string();
     let relay_text = relay_pubkey.to_hex();
     let content = DiscoveryActionContent {
-        schema: ACTION_SCHEMA.to_owned(),
+        schema: wire_version.action_schema().to_owned(),
         operation,
         request_id,
         idempotency_key,
@@ -219,7 +275,7 @@ fn build_action(
         scalar_tag(target_tag, &target_text)?,
         tuple_tag(&[
             "discovery-action",
-            "1",
+            wire_version.tag(),
             operation_tag,
             &request_text,
             &idempotency_text,
@@ -243,9 +299,7 @@ pub fn parse_discovery_action(event: &Event) -> Result<ParsedDiscoveryAction, Di
     }
     let relay_pubkey = parse_pubkey(required_scalar_tag(event, "p")?, "discovery action")?;
     let tuple = required_tuple_tag(event, "discovery-action", 5)?;
-    if tuple[1] != "1" {
-        return Err(DiscoverySdkError::InvalidTag("discovery-action"));
-    }
+    let wire_version = parse_wire_version(&tuple[1], "discovery-action")?;
     let operation = parse_operation(&tuple[2])?;
     let request_id = parse_uuid(&tuple[3], "discovery action")?;
     let idempotency_key = parse_uuid(&tuple[4], "discovery action")?;
@@ -261,7 +315,7 @@ pub fn parse_discovery_action(event: &Event) -> Result<ParsedDiscoveryAction, Di
     let target_id = parse_uuid(required_scalar_tag(event, target_tag)?, "discovery action")?;
     let content: DiscoveryActionContent =
         parse_canonical_content(&event.content, "discovery action")?;
-    if content.schema != ACTION_SCHEMA
+    if content.schema != wire_version.action_schema()
         || content.operation != operation
         || content.request_id != request_id
         || content.idempotency_key != idempotency_key
@@ -313,6 +367,7 @@ pub fn parse_discovery_action(event: &Event) -> Result<ParsedDiscoveryAction, Di
     };
     Ok(ParsedDiscoveryAction {
         relay_pubkey,
+        wire_version,
         action,
     })
 }
@@ -337,9 +392,7 @@ pub fn parse_discovery_receipt(event: &Event) -> Result<ParsedDiscoveryReceipt, 
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery receipt"))?;
     let run_id = parse_uuid(required_scalar_tag(event, "run")?, "discovery receipt")?;
     let tuple = required_tuple_tag(event, "discovery-receipt", 6)?;
-    if tuple[1] != "1" {
-        return Err(DiscoverySdkError::InvalidTag("discovery-receipt"));
-    }
+    let wire_version = parse_wire_version(&tuple[1], "discovery-receipt")?;
     let operation = parse_operation(&tuple[2])?;
     let request_id = parse_uuid(&tuple[3], "discovery receipt")?;
     let idempotency_key = parse_uuid(&tuple[4], "discovery receipt")?;
@@ -348,7 +401,7 @@ pub fn parse_discovery_receipt(event: &Event) -> Result<ParsedDiscoveryReceipt, 
     }
     let content: DiscoveryReceiptContent =
         parse_canonical_content(&event.content, "discovery receipt")?;
-    if content.schema != RECEIPT_SCHEMA
+    if content.schema != wire_version.receipt_schema()
         || content.receipt.operation != operation
         || content.receipt.request_id != request_id
         || content.receipt.idempotency_key != idempotency_key
@@ -358,10 +411,22 @@ pub fn parse_discovery_receipt(event: &Event) -> Result<ParsedDiscoveryReceipt, 
     }
     validate_projection(&content.receipt)?;
     Ok(ParsedDiscoveryReceipt {
+        wire_version,
         actor_pubkey,
         action_event_id,
         receipt: content.receipt,
     })
+}
+
+fn parse_wire_version(
+    value: &str,
+    tag: &'static str,
+) -> Result<DiscoveryWireVersion, DiscoverySdkError> {
+    match value {
+        "1" => Ok(DiscoveryWireVersion::V1),
+        "2" => Ok(DiscoveryWireVersion::V2),
+        _ => Err(DiscoverySdkError::InvalidTag(tag)),
+    }
 }
 
 fn validate_projection(receipt: &DiscoveryReceipt) -> Result<(), DiscoverySdkError> {
@@ -563,6 +628,7 @@ mod tests {
 
         let parsed = parse_discovery_action(&event).expect("strict parser must accept its builder");
         assert_eq!(parsed.relay_pubkey, relay_keys.public_key());
+        assert_eq!(parsed.wire_version, DiscoveryWireVersion::V2);
         assert_eq!(parsed.action, DiscoveryAction::Start(request));
         assert_eq!(event.tags.len(), 3);
     }
@@ -690,7 +756,7 @@ mod tests {
             .sign_with_keys(&Keys::generate())
             .expect("action signs");
         let content = DiscoveryActionContent {
-            schema: ACTION_SCHEMA.to_owned(),
+            schema: ACTION_SCHEMA_V2.to_owned(),
             operation: DiscoveryOperation::Start,
             request_id: request.request_id,
             idempotency_key: request.idempotency_key,
@@ -747,9 +813,76 @@ mod tests {
             .expect("receipt signs");
         let parsed = parse_discovery_receipt(&event).expect("receipt parses");
 
+        assert_eq!(parsed.wire_version, DiscoveryWireVersion::V2);
         assert_eq!(parsed.actor_pubkey, actor.public_key());
         assert_eq!(parsed.action_event_id, action.id);
         assert_eq!(parsed.receipt, receipt);
         assert_eq!(event.tags.len(), 4);
+    }
+
+    #[test]
+    fn released_v1_run_envelopes_remain_parseable_and_receive_v1_receipts() {
+        let actor = Keys::generate();
+        let relay = Keys::generate();
+        let request = DiscoveryStartRequest {
+            request_id: Uuid::from_u128(31),
+            idempotency_key: Uuid::from_u128(32),
+            campaign_id: Uuid::from_u128(33),
+            business_search: business_search(),
+        };
+        let action = build_action(
+            relay.public_key(),
+            DiscoveryWireVersion::V1,
+            DiscoveryOperation::Start,
+            request.request_id,
+            request.idempotency_key,
+            Some(request.campaign_id),
+            None,
+            Some(request.business_search.clone()),
+        )
+        .expect("legacy action builds")
+        .sign_with_keys(&actor)
+        .expect("legacy action signs");
+        let parsed = parse_discovery_action(&action).expect("legacy action parses");
+        assert_eq!(parsed.wire_version, DiscoveryWireVersion::V1);
+        assert_eq!(parsed.action, DiscoveryAction::Start(request));
+
+        let receipt = DiscoveryReceipt {
+            operation: DiscoveryOperation::Start,
+            request_id: Uuid::from_u128(31),
+            idempotency_key: Uuid::from_u128(32),
+            run: DiscoveryRunProjection {
+                run_id: Uuid::from_u128(34),
+                campaign_id: Uuid::from_u128(33),
+                state: DiscoveryRunState::Queued,
+                completed_steps: 0,
+                total_steps: 1,
+                cancel_requested: false,
+                terminal_reason: None,
+                created_at: chrono::Utc
+                    .timestamp_opt(1_800_000_000, 0)
+                    .single()
+                    .expect("time"),
+                updated_at: chrono::Utc
+                    .timestamp_opt(1_800_000_000, 0)
+                    .single()
+                    .expect("time"),
+            },
+        };
+        let receipt_event = build_discovery_receipt_for_version(
+            parsed.wire_version,
+            actor.public_key(),
+            action.id,
+            &receipt,
+        )
+        .expect("legacy receipt builds")
+        .sign_with_keys(&relay)
+        .expect("legacy receipt signs");
+        assert_eq!(
+            parse_discovery_receipt(&receipt_event)
+                .expect("legacy receipt parses")
+                .wire_version,
+            DiscoveryWireVersion::V1
+        );
     }
 }

@@ -52,11 +52,14 @@ import {
   type RunProjection,
 } from "./relayDiscoveryModels";
 
-const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v1";
-const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v1";
-const RUN_ACTION_SCHEMA = "colony.discovery-action/v1";
-const RUN_RECEIPT_SCHEMA = "colony.discovery-receipt/v1";
-const WORKER_RECEIPT_SCHEMA = "colony.discovery-worker-receipt/v1";
+const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v2";
+const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v2";
+const RUN_ACTION_SCHEMA = "colony.discovery-action/v2";
+const RUN_RECEIPT_SCHEMA = "colony.discovery-receipt/v2";
+const WORKER_RECEIPT_SCHEMAS = new Set([
+  "colony.discovery-worker-receipt/v1",
+  "colony.discovery-worker-receipt/v2",
+]);
 const RECEIPT_ATTEMPTS = 20;
 const RECEIPT_INTERVAL_MS = 300;
 const RUN_STATUS_INTERVAL_MS = 10_000;
@@ -246,7 +249,7 @@ function parseWorkspaceReceipt(
     e[2] !== "" ||
     e[3] !== "discovery-workspace-action" ||
     tuple?.length !== 5 ||
-    tuple[1] !== "1" ||
+    tuple[1] !== "2" ||
     tuple[2] !== operation ||
     tuple[3] !== requestId ||
     tuple[4] !== idempotencyKey
@@ -295,7 +298,7 @@ function parseRunReceipt(
     e[3] !== "discovery-action" ||
     run?.length !== 2 ||
     tuple?.length !== 6 ||
-    tuple[1] !== "1" ||
+    tuple[1] !== "2" ||
     tuple[2] !== operation ||
     tuple[3] !== requestId ||
     tuple[4] !== idempotencyKey ||
@@ -329,8 +332,12 @@ function workerRunId(
     return null;
   }
   const content = parseCanonicalContent(event);
+  const tuple = oneTag(event, "discovery-worker-receipt");
   if (
-    content?.schema !== WORKER_RECEIPT_SCHEMA ||
+    tuple?.length !== 6 ||
+    (tuple[1] !== "1" && tuple[1] !== "2") ||
+    content?.schema !== `colony.discovery-worker-receipt/v${tuple[1]}` ||
+    !WORKER_RECEIPT_SCHEMAS.has(content.schema) ||
     !isPlainObject(content.outcome)
   ) {
     return null;
@@ -382,7 +389,7 @@ class DiscoveryBroker {
         ["p", relayPubkey],
         [
           "discovery-workspace-action",
-          "1",
+          "2",
           operation,
           requestId,
           idempotencyKey,
@@ -448,7 +455,7 @@ class DiscoveryBroker {
       tags: [
         ["p", relayPubkey],
         [operation === "start" ? "campaign" : "run", target],
-        ["discovery-action", "1", operation, requestId, idempotencyKey],
+        ["discovery-action", "2", operation, requestId, idempotencyKey],
       ],
     });
     await beforePublish?.(action.pubkey, relayPubkey);
@@ -501,7 +508,6 @@ class DiscoveryBroker {
       },
     );
   }
-
   async requireRelayIdentity(): Promise<string> {
     const relayPubkey = await this.dependencies.relaySelf();
     if (!relayPubkey) {
@@ -512,17 +518,14 @@ class DiscoveryBroker {
     return relayPubkey;
   }
 }
-
 class RunSignal {
   private pending = 0;
   private waiters: Array<() => void> = [];
-
   push() {
     const waiter = this.waiters.shift();
     if (waiter) waiter();
     else this.pending += 1;
   }
-
   async wait(timeoutMs: number): Promise<void> {
     if (this.pending > 0) {
       this.pending -= 1;
@@ -543,7 +546,6 @@ class RunSignal {
     });
   }
 }
-
 export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   private readonly broker: DiscoveryBroker;
   private readonly demo = createFixtureDiscoveryDataSource({
@@ -552,13 +554,11 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   private entitlementPromise: Promise<DiscoveryEntitlement> | null = null;
   private readonly activeRuns = new Map<string, string>();
   private readonly credentialStatus: typeof getDiscoveryCredentialStatus;
-
   constructor(dependencies: DiscoveryBrokerDependencies = DEFAULT_BROKER) {
     this.broker = new DiscoveryBroker(dependencies);
     this.credentialStatus =
       dependencies.credentialStatus ?? getDiscoveryCredentialStatus;
   }
-
   getEntitlement(): Promise<DiscoveryEntitlement> {
     if (!this.entitlementPromise) {
       this.entitlementPromise = this.broker
@@ -585,15 +585,12 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     }
     return this.entitlementPromise;
   }
-
   private async live(): Promise<boolean> {
     return (await this.getEntitlement()).experience === "live";
   }
-
   getIndustries(): Promise<Industry[]> {
     return this.demo.getIndustries();
   }
-
   getVerticals(industryId: string): Promise<Vertical[]> {
     return this.demo.getVerticals(industryId);
   }
@@ -746,6 +743,11 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
       this.demo.getVertical(input.industryId, input.verticalId),
     ]);
     if (!industry) throw new Error("This Discovery industry is unavailable.");
+    const sourceConfig = liveSourcePayload(input.sourceConfig);
+    const isDefaultSourceConfig =
+      sourceConfig.mode === "waterfall" &&
+      sourceConfig.sources.length === 1 &&
+      sourceConfig.sources[0] === "google_maps";
     const result = await this.broker.workspace("create_campaign", {
       operation: "create_campaign",
       campaign: {
@@ -761,7 +763,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
         description: input.description?.trim() || null,
         language: "en",
         region: null,
-        source_config: liveSourcePayload(input.sourceConfig),
+        ...(isDefaultSourceConfig ? {} : { source_config: sourceConfig }),
       },
     });
     if (result.result !== "campaign") {

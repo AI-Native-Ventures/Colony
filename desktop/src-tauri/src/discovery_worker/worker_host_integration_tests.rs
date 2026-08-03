@@ -72,8 +72,16 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
         .await
         .expect("relay signing identity");
     let worker_id = Uuid::new_v4();
-    let credential = Zeroizing::new(FIXTURE_SECRET.to_string());
     let (provider, provider_state, provider_handle) = start_local_outscraper().await;
+    let providers = ProductionProviderClients::for_test(
+        provider,
+        BraveSearchClient::production().expect("Brave client"),
+        ExaSearchClient::production().expect("Exa client"),
+    );
+    let credentials = LocalProviderCredentials::for_test(Some(FIXTURE_SECRET), None, None);
+    let outbox_dir = tempfile::tempdir().expect("Discovery outbox directory");
+    let outbox = DiscoveryOutbox::open(outbox_dir.path(), &relay_url, &actor_hex)
+        .expect("open Discovery outbox");
 
     let actions_before: i64 =
         sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND kind=40019")
@@ -187,11 +195,13 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     )
     .await
     .expect("first native host protocol");
-    let mut first_host = Box::pin(run_production_once_with_credential(
+    let mut first_host = Box::pin(run_multi_source_production_once(
         &first_protocol,
-        &provider,
+        &providers,
+        &credentials,
+        &outbox,
         worker_id,
-        &credential,
+        vec![DiscoveryProvider::Outscraper],
     ));
     loop {
         tokio::select! {
@@ -213,10 +223,13 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
         }
     }
     drop(first_host);
+    drop(outbox);
     provider_state
         .allow_success
         .store(true, AtomicOrdering::SeqCst);
     tokio::time::sleep(Duration::from_secs(6)).await;
+    let outbox = DiscoveryOutbox::open(outbox_dir.path(), &relay_url, &actor_hex)
+        .expect("reopen Discovery outbox after restart");
 
     let restarted_protocol = RelayWorkerProtocol::connect(
         &state,
@@ -228,11 +241,13 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
     .await
     .expect("restarted native host protocol");
     assert_eq!(
-        run_production_once_with_credential(
+        run_multi_source_production_once(
             &restarted_protocol,
-            &provider,
+            &providers,
+            &credentials,
+            &outbox,
             worker_id,
-            &credential,
+            vec![DiscoveryProvider::Outscraper],
         )
         .await
         .expect("restarted native host outcome"),

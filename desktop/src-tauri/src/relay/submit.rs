@@ -19,6 +19,26 @@ pub async fn submit_signed_event_at_with_keys(
     api_base_url: &str,
     keys: &nostr::Keys,
 ) -> Result<SubmitEventResponse, String> {
+    let result =
+        submit_signed_event_at_with_keys_allow_rejected(event, state, api_base_url, keys).await?;
+    if !result.accepted {
+        return Err(format!("relay rejected event: {}", result.message));
+    }
+    Ok(result)
+}
+
+/// Submit a signed event while preserving a relay-level rejection response.
+///
+/// Most callers want [`submit_signed_event_at_with_keys`], which turns every
+/// rejected event into an error. Idempotent action protocols also need the
+/// receipt attached to a duplicate rejection, so they use this narrower form
+/// and validate the duplicate response themselves.
+pub async fn submit_signed_event_at_with_keys_allow_rejected(
+    event: &nostr::Event,
+    state: &AppState,
+    api_base_url: &str,
+    keys: &nostr::Keys,
+) -> Result<SubmitEventResponse, String> {
     if event.pubkey != keys.public_key() {
         return Err("signed event does not match the publishing identity".to_string());
     }
@@ -42,10 +62,6 @@ pub async fn submit_signed_event_at_with_keys(
     }
 
     let result: SubmitEventResponse = parse_json_response(response).await?;
-    if !result.accepted {
-        return Err(format!("relay rejected event: {}", result.message));
-    }
-
     Ok(result)
 }
 

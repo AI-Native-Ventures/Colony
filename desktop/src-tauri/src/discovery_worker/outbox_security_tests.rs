@@ -58,7 +58,7 @@ fn accepted_call_without_recoverable_response_stays_outcome_unknown() {
 }
 
 #[test]
-fn terminal_run_cleanup_removes_ambiguous_and_ready_calls() {
+fn terminal_run_cleanup_removes_only_fully_acknowledged_calls() {
     let dir = tempfile::tempdir().expect("temporary app data");
     let run_id = Uuid::new_v4();
     let other_run = Uuid::new_v4();
@@ -78,6 +78,13 @@ fn terminal_run_cleanup_removes_ambiguous_and_ready_calls() {
             observations(DiscoveryProvider::ExaSearch, 1),
         )
         .expect("record terminal results");
+    let ready_batch = outbox
+        .next_batch(ready.call_id)
+        .expect("read ready batch")
+        .expect("ready batch");
+    outbox
+        .acknowledge_batch(ready.call_id, ready_batch.batch_index)
+        .expect("acknowledge ready batch");
     outbox
         .begin_call(other_run, DiscoveryProvider::BraveSearch)
         .expect("write unrelated call");
@@ -88,13 +95,45 @@ fn terminal_run_cleanup_removes_ambiguous_and_ready_calls() {
 
     assert_eq!(
         outbox.state_for(run_id, DiscoveryProvider::BraveSearch),
-        None
+        Some(SynchronousCallState::Intent)
     );
     assert_eq!(outbox.state_for(run_id, DiscoveryProvider::ExaSearch), None);
     assert_eq!(
         outbox.state_for(other_run, DiscoveryProvider::BraveSearch),
         Some(SynchronousCallState::Intent)
     );
+}
+
+#[test]
+fn terminal_run_cleanup_retains_unacknowledged_paid_results() {
+    let dir = tempfile::tempdir().expect("temporary app data");
+    let run_id = Uuid::new_v4();
+    let outbox = DiscoveryOutbox::open(dir.path(), "wss://relay-one.example", ACTOR_ONE)
+        .expect("open outbox");
+    let call = outbox
+        .begin_call(run_id, DiscoveryProvider::BraveSearch)
+        .expect("write call intent");
+    outbox
+        .record_results(
+            call.call_id,
+            None,
+            1,
+            observations(DiscoveryProvider::BraveSearch, 1),
+        )
+        .expect("record paid results");
+
+    outbox
+        .remove_terminal_run(run_id)
+        .expect("reconcile terminal run");
+
+    assert_eq!(
+        outbox.state_for(run_id, DiscoveryProvider::BraveSearch),
+        Some(SynchronousCallState::Ready)
+    );
+    assert!(outbox
+        .next_batch(call.call_id)
+        .expect("read retained paid batch")
+        .is_some());
 }
 
 #[test]

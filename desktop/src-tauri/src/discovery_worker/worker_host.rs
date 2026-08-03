@@ -1,4 +1,7 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(test)]
 use std::{future::Future, pin::Pin};
@@ -6,17 +9,19 @@ use std::{future::Future, pin::Pin};
 #[cfg(test)]
 use buzz_core_pkg::discovery_worker::{
     DiscoveryCheckpointKind, DiscoveryWorkerCheckpoint, DiscoveryWorkerObservationBatchRequest,
+    DiscoveryWorkerSalvagedObservationsProjection,
 };
 use buzz_core_pkg::discovery_worker::{
     DiscoveryProvider, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
     DiscoveryWorkerLeaseProjection, DiscoveryWorkerLeaseRequest, DiscoveryWorkerReceiptOutcome,
+    DiscoveryWorkerSalvageBatchRequest,
 };
 use tauri::{AppHandle, Manager as _};
-#[cfg(test)]
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use super::outscraper::OutscraperPollOutcome;
 #[cfg(test)]
 use super::outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission};
 use super::{
@@ -124,18 +129,6 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
             if state.shutdown_started.load(Ordering::Acquire) {
                 return;
             }
-            let credentials = match LocalProviderCredentials::load() {
-                Ok(credentials) => credentials,
-                Err(_) => {
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                    continue;
-                }
-            };
-            let available_providers = credentials.available_providers();
-            if available_providers.is_empty() {
-                tokio::time::sleep(POLL_INTERVAL).await;
-                continue;
-            }
             let relay_url = state
                 .relay_url_override
                 .lock()
@@ -176,6 +169,36 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                     continue;
                 }
             };
+            if let Err(error) = reconcile_terminal_outbox(&protocol, &outbox, worker_id).await {
+                eprintln!("buzz-desktop: Discovery recovery paused safely: {error}");
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
+            let credentials = match LocalProviderCredentials::load() {
+                Ok(credentials) => credentials,
+                Err(_) => {
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                    continue;
+                }
+            };
+            if let Err(error) = recover_terminal_outscraper_submissions(
+                &protocol,
+                &providers,
+                &credentials,
+                &outbox,
+                worker_id,
+            )
+            .await
+            {
+                eprintln!("buzz-desktop: Discovery paid-result polling paused safely: {error}");
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
+            let available_providers = credentials.available_providers();
+            if available_providers.is_empty() {
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
             if let Err(error) = run_multi_source_production_once(
                 &protocol,
                 &providers,
@@ -201,7 +224,6 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
     worker_id: Uuid,
     available_providers: Vec<DiscoveryProvider>,
 ) -> Result<HostRunOutcome, String> {
-    reconcile_terminal_outbox(protocol, outbox).await?;
     let claim = DiscoveryWorkerClaimRequest {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
@@ -222,13 +244,123 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
     }
 }
 
+async fn recover_terminal_outscraper_submissions<P: WorkerProtocol>(
+    protocol: &P,
+    providers: &ProductionProviderClients,
+    credentials: &LocalProviderCredentials,
+    outbox: &DiscoveryOutbox,
+    worker_id: Uuid,
+) -> Result<(), String> {
+    let Some(credential) = credentials.credential(DiscoveryProvider::Outscraper) else {
+        return Ok(());
+    };
+    let mut recovered_results = false;
+    for run_id in outbox.run_ids()? {
+        let Some(call) = outbox.call_for(run_id, DiscoveryProvider::Outscraper) else {
+            continue;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let Some(provider_request_id) = outbox.submitted_recovery_due(call.call_id, now)? else {
+            continue;
+        };
+        let Ok(run) = protocol.status(run_id).await else {
+            // Status is also the entitlement and ownership gate. A suspended or
+            // disconnected workspace must not touch the provider.
+            continue;
+        };
+        if !run.state.is_terminal() {
+            continue;
+        }
+        let cancellation = CancellationToken::new();
+        let poll = providers
+            .outscraper
+            .poll_once_with_preflight(
+                &provider_request_id,
+                credential,
+                || async {
+                    protocol
+                        .status(run_id)
+                        .await
+                        .is_ok_and(|current| current.state.is_terminal())
+                },
+                &cancellation,
+            )
+            .await;
+        let observations = match poll {
+            Ok(OutscraperPollOutcome::Ready(observations)) => observations,
+            Ok(OutscraperPollOutcome::Pending) | Err(_) => {
+                // This is already-paid recovery, not a prerequisite for new
+                // work. Preserve it for a later retry without starving other
+                // providers or campaigns.
+                outbox.defer_submitted_recovery(call.call_id, now)?;
+                continue;
+            }
+        };
+        outbox.record_results(call.call_id, Some(provider_request_id), 1, observations)?;
+        recovered_results = true;
+    }
+    if recovered_results {
+        reconcile_terminal_outbox(protocol, outbox, worker_id).await
+    } else {
+        Ok(())
+    }
+}
+
 async fn reconcile_terminal_outbox<P: WorkerProtocol>(
     protocol: &P,
     outbox: &DiscoveryOutbox,
+    worker_id: Uuid,
 ) -> Result<(), String> {
     for run_id in outbox.run_ids()? {
         if let Ok(run) = protocol.status(run_id).await {
             if run.state.is_terminal() {
+                for provider in [
+                    DiscoveryProvider::Outscraper,
+                    DiscoveryProvider::BraveSearch,
+                    DiscoveryProvider::ExaSearch,
+                ] {
+                    let Some(call) = outbox.call_for(run_id, provider) else {
+                        continue;
+                    };
+                    let mut salvage_blocked = false;
+                    while let Some(batch) = outbox.next_batch(call.call_id)? {
+                        let request = DiscoveryWorkerSalvageBatchRequest {
+                            request_id: batch.request_id,
+                            idempotency_key: batch.idempotency_key,
+                            worker_id,
+                            run_id,
+                            provider: batch.provider,
+                            provider_request_id: batch.provider_request_id,
+                            batch_index: batch.batch_index,
+                            observations: batch.observations,
+                        };
+                        match protocol.salvage_observations(request).await {
+                            Err(_) => {
+                                salvage_blocked = true;
+                                break;
+                            }
+                            Ok(DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(salvaged))
+                                if salvaged.run.run_id == run_id =>
+                            {
+                                outbox.acknowledge_batch(call.call_id, batch.batch_index)?;
+                            }
+                            _ => {
+                                salvage_blocked = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !salvage_blocked
+                        && outbox
+                            .ready_metadata(call.call_id)?
+                            .is_some_and(|metadata| metadata.response_complete)
+                    {
+                        outbox.remove_after_relay_ack(call.call_id)?;
+                    }
+                }
                 outbox.remove_terminal_run(run_id)?;
             }
         }

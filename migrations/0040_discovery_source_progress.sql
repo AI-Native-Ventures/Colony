@@ -6,5 +6,5 @@ ALTER TABLE discovery_worker_action_claims
     ADD CONSTRAINT discovery_worker_action_claims_operation_check
         CHECK (operation IN (
             'claim', 'heartbeat', 'checkpoint', 'source_progress',
-            'store_observations', 'fail', 'complete'
+            'store_observations', 'salvage_observations', 'fail', 'complete'
         ));

@@ -172,6 +172,11 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
                 "this agent has not been granted the Discovery capability".into(),
             )
         }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Discovery local worker requires a human member identity" =>
+        {
+            DiscoveryWorkerBrokerError::Restricted(message)
+        }
         buzz_db::DbError::AccessDenied(message) if message.contains("conflict") => {
             DiscoveryWorkerBrokerError::Conflict(message)
         }
@@ -188,6 +193,16 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryWorkerBrokerError {
         }
         buzz_db::DbError::InvalidData(message)
             if message.contains("observation provider is not in the run plan") =>
+        {
+            DiscoveryWorkerBrokerError::Invalid(message)
+        }
+        buzz_db::DbError::InvalidData(message)
+            if message.contains("sources must be terminal before") =>
+        {
+            DiscoveryWorkerBrokerError::Invalid(message)
+        }
+        buzz_db::DbError::InvalidData(message)
+            if message.contains("must finish before multi-source adoption") =>
         {
             DiscoveryWorkerBrokerError::Invalid(message)
         }

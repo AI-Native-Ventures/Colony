@@ -126,12 +126,12 @@ export function CreateCampaignSheet({
           Record<DiscoveryCredentialProvider, DiscoveryCredentialStatus>
         >;
         setCredentialStatuses(next);
-        const firstConfigured = (
+        const configuredSources = (
           ["google_maps", "brave_search", "exa_search"] as const
-        ).find(
+        ).filter(
           (source) => next[DISCOVERY_SOURCE_PROVIDERS[source]] === "configured",
         );
-        setEnabledSources(firstConfigured ? [firstConfigured] : []);
+        setEnabledSources(configuredSources);
       });
       return () => {
         cancelled = true;
@@ -393,47 +393,62 @@ export function CreateCampaignSheet({
             </details>
 
             <section className="space-y-4">
-              <div>
-                <h2 className="text-base font-semibold text-foreground">
-                  Advanced Criteria
-                </h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Optional signals Jen can use to qualify results.
-                </p>
-              </div>
-              <div className="space-y-3">
-                <p className="text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Must have
-                </p>
-                <CriteriaSwitch
-                  checked={hasWebsite}
-                  label="Must be in the specified location"
-                  onCheckedChange={setHasWebsite}
-                />
-                <CriteriaSwitch
-                  checked={hasPhone}
-                  label="Must match the vertical/profession"
-                  onCheckedChange={setHasPhone}
-                />
-                <p className="pt-2 text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Nice to have
-                </p>
-                <CriteriaSwitch
-                  checked={hasWebsite}
-                  label="Has website"
-                  onCheckedChange={setHasWebsite}
-                />
-                <CriteriaSwitch
-                  checked={hasPhone}
-                  label="Has phone number"
-                  onCheckedChange={setHasPhone}
-                />
-                <CriteriaSwitch
-                  checked={hasEmail}
-                  label="Has email address"
-                  onCheckedChange={setHasEmail}
-                />
-              </div>
+              {liveBusinessPhase ? (
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">
+                    Qualification criteria
+                  </h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    This first live version uses the business type and location
+                    above. Additional qualification filters will be added in a
+                    later phase.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <h2 className="text-base font-semibold text-foreground">
+                      Advanced Criteria
+                    </h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Optional signals Jen can use to qualify results.
+                    </p>
+                  </div>
+                  <div className="space-y-3">
+                    <p className="text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Must have
+                    </p>
+                    <CriteriaSwitch
+                      checked={hasWebsite}
+                      label="Must be in the specified location"
+                      onCheckedChange={setHasWebsite}
+                    />
+                    <CriteriaSwitch
+                      checked={hasPhone}
+                      label="Must match the vertical/profession"
+                      onCheckedChange={setHasPhone}
+                    />
+                    <p className="pt-2 text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Nice to have
+                    </p>
+                    <CriteriaSwitch
+                      checked={hasWebsite}
+                      label="Has website"
+                      onCheckedChange={setHasWebsite}
+                    />
+                    <CriteriaSwitch
+                      checked={hasPhone}
+                      label="Has phone number"
+                      onCheckedChange={setHasPhone}
+                    />
+                    <CriteriaSwitch
+                      checked={hasEmail}
+                      label="Has email address"
+                      onCheckedChange={setHasEmail}
+                    />
+                  </div>
+                </>
+              )}
             </section>
 
             <label

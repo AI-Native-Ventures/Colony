@@ -1116,13 +1116,19 @@ mod tests {
 
         assert!(sql.contains("CREATE TABLE discovery_run_source_plans"));
         assert!(sql.contains("CREATE TABLE discovery_run_sources"));
+        assert!(sql.contains("CREATE TABLE discovery_source_usage"));
+        assert!(sql.contains("CREATE TABLE discovery_source_observation_batches"));
+        assert!(sql.contains("discovery_protocol_version"));
+        assert!(sql.contains("CREATE TRIGGER trg_discovery_seed_legacy_run_plan"));
+        assert!(sql.contains("CREATE TRIGGER trg_discovery_sync_legacy_run_source"));
         assert!(sql.contains("PRIMARY KEY (community_id, run_id, source_key)"));
         assert!(sql.contains("UNIQUE (community_id, run_id, position)"));
         assert!(sql.contains("'waterfall', ARRAY['google_maps']::TEXT[]"));
         assert!(sql.contains("'outscraper', 'brave_search', 'exa_search'"));
-        assert!(sql.contains(
-            "PRIMARY KEY (community_id, run_id, provider, provider_request_id, batch_index)"
-        ));
+        assert!(sql.contains("ON CONFLICT (community_id, run_id) DO UPDATE SET"));
+        assert!(!sql.contains("DROP CONSTRAINT discovery_usage_pkey"));
+        assert!(!sql.contains("DROP CONSTRAINT discovery_observation_batches_pkey"));
+        assert!(!sql.contains("ALTER COLUMN dedupe_digest_version SET DEFAULT 1"));
         assert!(sql.contains("dedupe_digest_version"));
         assert!(!sql.contains("UPDATE discovery_business_observations"));
         assert!(!sql.contains("api_key"));
@@ -1540,9 +1546,48 @@ mod tests {
         .await
         .expect("insert legacy observation batch");
 
+        let mut preexisting_active_duplicates = Vec::new();
+        for _ in 0..2 {
+            let duplicate_run_id = uuid::Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO discovery_runs \
+                 (community_id,id,campaign_id,requested_by,start_idempotency_key,total_steps) \
+                 VALUES ($1,$2,$3,$4,$5,1)",
+            )
+            .bind(community_id)
+            .bind(duplicate_run_id)
+            .bind(campaign_id)
+            .bind(&actor)
+            .bind(uuid::Uuid::new_v4())
+            .execute(&pool)
+            .await
+            .expect("insert preexisting duplicate active run");
+            preexisting_active_duplicates.push(duplicate_run_id);
+        }
+
         run_migrations(&pool)
             .await
             .expect("upgrade populated Discovery database");
+
+        let duplicate_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM discovery_runs \
+             WHERE community_id=$1 AND campaign_id=$2 AND state='queued'",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count preserved preexisting active duplicates");
+        assert_eq!(duplicate_count, 2);
+        sqlx::query(
+            "UPDATE discovery_runs SET state='cancelled',cancel_requested=TRUE,updated_at=now() \
+             WHERE community_id=$1 AND id=ANY($2)",
+        )
+        .bind(community_id)
+        .bind(&preexisting_active_duplicates)
+        .execute(&pool)
+        .await
+        .expect("drain preexisting duplicate active runs");
 
         let campaign: (String, Vec<String>) = sqlx::query_as(
             "SELECT source_mode,source_keys FROM discovery_campaigns \
@@ -1638,6 +1683,15 @@ mod tests {
         .await
         .expect("read preserved usage");
         assert_eq!(usage_provider, "outscraper");
+        let source_usage_provider: String = sqlx::query_scalar(
+            "SELECT provider FROM discovery_source_usage WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read provider-aware usage copy");
+        assert_eq!(source_usage_provider, "outscraper");
         let batch_provider: String = sqlx::query_scalar(
             "SELECT provider FROM discovery_observation_batches \
              WHERE community_id=$1 AND run_id=$2",
@@ -1648,6 +1702,297 @@ mod tests {
         .await
         .expect("read preserved batch");
         assert_eq!(batch_provider, "outscraper");
+
+        // The previous relay binary must remain able to use its released SQL
+        // conflict targets after the expand migration, and its writes must be
+        // visible to the provider-aware runtime for safe rolling deploys.
+        sqlx::query(
+            "INSERT INTO discovery_usage \
+             (community_id,run_id,provider,provider_request_id,returned_count) \
+             VALUES ($1,$2,'outscraper','legacy-job-1',2) \
+             ON CONFLICT (community_id, run_id) DO UPDATE SET \
+               returned_count=EXCLUDED.returned_count,updated_at=now() \
+             WHERE discovery_usage.provider=EXCLUDED.provider \
+               AND discovery_usage.provider_request_id=EXCLUDED.provider_request_id",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("released usage SQL remains valid after migration");
+        let mirrored_returned_count: i32 = sqlx::query_scalar(
+            "SELECT returned_count FROM discovery_source_usage \
+             WHERE community_id=$1 AND run_id=$2 AND provider='outscraper'",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read mirrored legacy usage");
+        assert_eq!(mirrored_returned_count, 2);
+
+        sqlx::query(
+            "INSERT INTO discovery_observation_batches \
+             (community_id,run_id,provider_request_id,batch_index,batch_fingerprint,\
+              accepted_count,existing_count) VALUES ($1,$2,'legacy-job-1',1,$3,1,0)",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .bind(vec![12_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("released observation-batch SQL remains valid after migration");
+        let legacy_batch_provider: String = sqlx::query_scalar(
+            "SELECT provider FROM discovery_observation_batches \
+             WHERE community_id=$1 AND run_id=$2 AND batch_index=1",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read legacy batch provider default");
+        assert_eq!(legacy_batch_provider, "outscraper");
+        let mirrored_batch_provider: String = sqlx::query_scalar(
+            "SELECT provider FROM discovery_source_observation_batches \
+             WHERE community_id=$1 AND run_id=$2 AND batch_index=1",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read provider-aware legacy batch copy");
+        assert_eq!(mirrored_batch_provider, "outscraper");
+
+        for provider in ["brave_search", "exa_search"] {
+            sqlx::query(
+                "INSERT INTO discovery_source_observation_batches \
+                 (community_id,run_id,provider,provider_request_id,batch_index,\
+                  batch_fingerprint,accepted_count,existing_count) \
+                 VALUES ($1,$2,$3,'shared-provider-request',0,$4,1,0)",
+            )
+            .bind(community_id)
+            .bind(run_id)
+            .bind(provider)
+            .bind(vec![provider.as_bytes()[0]; 32])
+            .execute(&pool)
+            .await
+            .expect("provider-scoped batches may share opaque request IDs");
+        }
+        let provider_batch_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM discovery_source_observation_batches \
+             WHERE community_id=$1 AND run_id=$2 \
+               AND provider_request_id='shared-provider-request'",
+        )
+        .bind(community_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count provider-scoped collision fixture");
+        assert_eq!(provider_batch_count, 2);
+
+        // Execute the released run/checkpoint/usage lifecycle after migration.
+        // The database must seed and advance its V1 source projection because
+        // the old binary has no source-plan SQL at all.
+        let rolling_run_id = uuid::Uuid::new_v4();
+        let rolling_request_id = format!("rolling-job-{}", rolling_run_id.simple());
+        sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,total_steps) \
+             VALUES ($1,$2,$3,$4,$5,1)",
+        )
+        .bind(community_id)
+        .bind(rolling_run_id)
+        .bind(campaign_id)
+        .bind(&actor)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("released run insert remains compatible");
+        sqlx::query(
+            "INSERT INTO discovery_run_business_searches \
+             (community_id,run_id,query,location,result_limit,language,region) \
+             VALUES ($1,$2,'dentists','Sandton, South Africa',100,'en','ZA')",
+        )
+        .bind(community_id)
+        .bind(rolling_run_id)
+        .execute(&pool)
+        .await
+        .expect("released search insert remains compatible");
+        sqlx::query(
+            "UPDATE discovery_runs SET state='running',claim_id=$3,\
+             lease_until=now()+interval '1 minute',updated_at=now() \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(rolling_run_id)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("released claim update remains compatible");
+        sqlx::query(
+            "INSERT INTO discovery_run_checkpoints \
+             (community_id,run_id,sequence,checkpoint_kind,provider,provider_request_id,\
+              request_fingerprint,action_event_id) \
+             VALUES ($1,$2,1,'provider_submitted','outscraper',$3,$4,$5)",
+        )
+        .bind(community_id)
+        .bind(rolling_run_id)
+        .bind(&rolling_request_id)
+        .bind(vec![13_u8; 32])
+        .bind(vec![14_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("released checkpoint insert remains compatible");
+        sqlx::query(
+            "INSERT INTO discovery_usage \
+             (community_id,run_id,provider,provider_request_id,stored_count,existing_count,\
+              returned_count) VALUES ($1,$2,'outscraper',$3,2,1,3)",
+        )
+        .bind(community_id)
+        .bind(rolling_run_id)
+        .bind(&rolling_request_id)
+        .execute(&pool)
+        .await
+        .expect("released usage insert remains compatible");
+        sqlx::query(
+            "UPDATE discovery_runs SET state='succeeded',completed_steps=1,\
+             claim_id=NULL,lease_until=NULL,updated_at=now() \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(rolling_run_id)
+        .execute(&pool)
+        .await
+        .expect("released completion update remains compatible");
+        let rolling_source: (String, i32, i32, i32, i32) = sqlx::query_as(
+            "SELECT status,request_count,returned_count,retained_count,duplicate_count \
+             FROM discovery_run_sources WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community_id)
+        .bind(rolling_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read trigger-maintained V1 source");
+        assert_eq!(rolling_source, ("completed".to_owned(), 1, 3, 2, 1));
+
+        // Multi-source adoption drains an already-paid V1 run instead of
+        // rejecting its late Outscraper results or risking cross-provider
+        // duplicates. The durable marker closes the workspace to new V1 work
+        // only after every queued/running V1 run is terminal.
+        let draining_run_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,total_steps) \
+             VALUES ($1,$2,$3,$4,$5,1)",
+        )
+        .bind(community_id)
+        .bind(draining_run_id)
+        .bind(campaign_id)
+        .bind(&actor)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("insert V1 run to drain");
+        sqlx::query(
+            "UPDATE discovery_runs SET state='running',claim_id=$3,\
+             lease_until=now()+interval '1 minute',updated_at=now() \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(draining_run_id)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("start V1 run to drain");
+        let adoption_while_v1_active =
+            sqlx::query("INSERT INTO discovery_workspace_protocols (community_id) VALUES ($1)")
+                .bind(community_id)
+                .execute(&pool)
+                .await;
+        assert!(adoption_while_v1_active.is_err());
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,\
+              observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper','paid-v1-in-flight','Paid V1 result',$4)",
+        )
+        .bind(community_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(draining_run_id)
+        .bind(vec![17_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("paid V1 result remains storable while adoption waits");
+        sqlx::query(
+            "UPDATE discovery_runs SET state='succeeded',completed_steps=1,\
+             claim_id=NULL,lease_until=NULL,updated_at=now() \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(draining_run_id)
+        .execute(&pool)
+        .await
+        .expect("finish drained V1 run");
+        sqlx::query("INSERT INTO discovery_workspace_protocols (community_id) VALUES ($1)")
+            .bind(community_id)
+            .execute(&pool)
+            .await
+            .expect("adopt multi-source after V1 drain");
+
+        let v2_run_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,total_steps,\
+              discovery_protocol_version) VALUES ($1,$2,$3,$4,$5,1,2)",
+        )
+        .bind(community_id)
+        .bind(v2_run_id)
+        .bind(campaign_id)
+        .bind(&actor)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("insert V2 adoption marker run");
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,\
+              dedupe_digest_version,observation_fingerprint) \
+             VALUES ($1,$2,$3,'brave_search','brave:adoption','Retained Brave result',1,$4)",
+        )
+        .bind(community_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(v2_run_id)
+        .bind(vec![15_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("insert retained multi-source adoption marker");
+        let rejected_v1_run = sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,total_steps) \
+             VALUES ($1,$2,$3,$4,$5,1)",
+        )
+        .bind(community_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(campaign_id)
+        .bind(&actor)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await;
+        assert!(rejected_v1_run.is_err());
+
+        let rejected_v1_observation = sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,\
+              observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper','late-legacy-place','Late legacy result',$4)",
+        )
+        .bind(community_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(rolling_run_id)
+        .bind(vec![16_u8; 32])
+        .execute(&pool)
+        .await;
+        assert!(rejected_v1_observation.is_err());
     }
 
     #[tokio::test]

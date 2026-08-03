@@ -311,6 +311,8 @@ impl WorkerProtocol for FakeProtocol {
 
 struct MultiSourceProtocol {
     lease: Mutex<DiscoveryWorkerLeaseProjection>,
+    terminal_runs: Mutex<Vec<DiscoveryRunProjection>>,
+    fail_salvage_runs: Mutex<Vec<Uuid>>,
     calls: Mutex<Vec<&'static str>>,
     completed: AtomicBool,
     heartbeat_count: AtomicUsize,
@@ -321,6 +323,8 @@ impl MultiSourceProtocol {
     fn new(lease: DiscoveryWorkerLeaseProjection) -> Self {
         Self {
             lease: Mutex::new(lease),
+            terminal_runs: Mutex::new(Vec::new()),
+            fail_salvage_runs: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
             completed: AtomicBool::new(false),
             heartbeat_count: AtomicUsize::new(0),
@@ -331,6 +335,8 @@ impl MultiSourceProtocol {
     fn cancelling(lease: DiscoveryWorkerLeaseProjection, heartbeat: usize) -> Self {
         Self {
             lease: Mutex::new(lease),
+            terminal_runs: Mutex::new(Vec::new()),
+            fail_salvage_runs: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
             completed: AtomicBool::new(false),
             heartbeat_count: AtomicUsize::new(0),
@@ -342,14 +348,33 @@ impl MultiSourceProtocol {
         self.lease.lock().expect("multi-source lease").clone()
     }
 
+    fn add_terminal_run(&self, run: DiscoveryRunProjection) {
+        self.terminal_runs.lock().expect("terminal runs").push(run);
+    }
+
+    fn reject_salvage_for(&self, run_id: Uuid) {
+        self.fail_salvage_runs
+            .lock()
+            .expect("failed salvage runs")
+            .push(run_id);
+    }
+
     fn record(&self, call: &'static str) {
         self.calls.lock().expect("multi-source calls").push(call);
     }
 }
 
 impl WorkerProtocol for MultiSourceProtocol {
-    fn status(&self, _: Uuid) -> crate::discovery_worker::protocol::RunStatusFuture<'_> {
-        Box::pin(async { Ok(self.lease().run) })
+    fn status(&self, run_id: Uuid) -> crate::discovery_worker::protocol::RunStatusFuture<'_> {
+        let run = self
+            .terminal_runs
+            .lock()
+            .expect("terminal runs")
+            .iter()
+            .find(|run| run.run_id == run_id)
+            .cloned()
+            .unwrap_or_else(|| self.lease().run);
+        Box::pin(async move { Ok(run) })
     }
 
     fn claim(&self, _: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
@@ -451,6 +476,32 @@ impl WorkerProtocol for MultiSourceProtocol {
             Ok(DiscoveryWorkerReceiptOutcome::ObservationsStored(
                 DiscoveryWorkerStoredObservationsProjection {
                     lease: lease.clone(),
+                    accepted_count,
+                    existing_count: 0,
+                },
+            ))
+        })
+    }
+
+    fn salvage_observations(
+        &self,
+        request: DiscoveryWorkerSalvageBatchRequest,
+    ) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            self.record("salvage_observations");
+            if self
+                .fail_salvage_runs
+                .lock()
+                .expect("failed salvage runs")
+                .contains(&request.run_id)
+            {
+                return Err("fixture salvage rejection".to_owned());
+            }
+            let accepted_count = u16::try_from(request.observations.len())
+                .map_err(|_| "too many salvage fixture observations".to_owned())?;
+            Ok(DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(
+                DiscoveryWorkerSalvagedObservationsProjection {
+                    run: self.lease().run,
                     accepted_count,
                     existing_count: 0,
                 },
@@ -902,69 +953,8 @@ async fn fresh_run_heartbeats_checkpoints_twice_and_completes() {
     );
 }
 
-#[tokio::test]
-async fn reclaimed_run_resumes_after_provider_submitted() {
-    let submitted = DiscoveryWorkerCheckpoint {
-        sequence: 1,
-        kind: DiscoveryCheckpointKind::ProviderSubmitted,
-        provider: DiscoveryProvider::Outscraper,
-        provider_request_id: Some("fixture-request".to_string()),
-        item_count: None,
-    };
-    let lease = lease(Some(submitted));
-    let protocol = FakeProtocol::new(vec![
-        lease_outcome(&lease),
-        lease_outcome(&lease),
-        lease_outcome(&lease),
-        lease_outcome(&lease),
-        DiscoveryWorkerReceiptOutcome::Completed(lease.run.clone()),
-    ]);
-    let outcome = run_once_with_credential(
-        &protocol,
-        lease.worker_id,
-        Duration::ZERO,
-        Zeroizing::new("fixture".to_string()),
-    )
-    .await
-    .expect("resumed run");
-    assert_eq!(outcome, HostRunOutcome::Completed);
-    assert_eq!(
-        protocol
-            .calls
-            .lock()
-            .expect("calls")
-            .iter()
-            .filter(|call| **call == "checkpoint")
-            .count(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn lost_lease_during_paused_step_sends_no_checkpoint_or_completion() {
-    let mut lease = lease(None);
-    lease.lease_until = Utc::now() + chrono::Duration::milliseconds(150);
-    let protocol = FakeProtocol::new(vec![
-        lease_outcome(&lease),
-        lease_outcome(&lease),
-        DiscoveryWorkerReceiptOutcome::LostLease(lease.run.clone()),
-    ]);
-    let outcome = run_once_with_credential(
-        &protocol,
-        lease.worker_id,
-        Duration::from_millis(180),
-        Zeroizing::new("fixture".to_string()),
-    )
-    .await
-    .expect("lost lease");
-    assert_eq!(outcome, HostRunOutcome::LostLease);
-    assert!(!protocol
-        .calls
-        .lock()
-        .expect("calls")
-        .iter()
-        .any(|call| *call == "checkpoint" || *call == "complete"));
-}
+#[path = "worker_host_legacy_tests.rs"]
+mod legacy_tests;
 
 #[path = "worker_host_integration_tests.rs"]
 mod integration_tests;

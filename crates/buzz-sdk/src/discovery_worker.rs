@@ -7,6 +7,7 @@ use buzz_core::{
         DiscoveryWorkerCheckpoint, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
         DiscoveryWorkerLeaseRequest, DiscoveryWorkerObservationBatchRequest,
         DiscoveryWorkerOperation, DiscoveryWorkerReceipt, DiscoveryWorkerReceiptOutcome,
+        DiscoveryWorkerSalvageBatchRequest, DiscoveryWorkerSalvagedObservationsProjection,
         DiscoveryWorkerSourceProgressRequest, DiscoveryWorkerStoredObservationsProjection,
     },
     kind::{KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKER_RECEIPT},
@@ -217,6 +218,33 @@ pub fn build_discovery_worker_store_observations_action(
     )
 }
 
+/// Build a member-signable recovery action for a durable paid-result batch.
+pub fn build_discovery_worker_salvage_observations_action(
+    relay_pubkey: PublicKey,
+    request: &DiscoveryWorkerSalvageBatchRequest,
+) -> Result<EventBuilder, DiscoverySdkError> {
+    request
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery salvage batch"))?;
+    build_action(
+        relay_pubkey,
+        DiscoveryWorkerWireVersion::V2,
+        DiscoveryWorkerOperation::SalvageObservations,
+        request.request_id,
+        request.idempotency_key,
+        request.worker_id,
+        None,
+        Some(request.provider),
+        Some(request.run_id),
+        None,
+        None,
+        None,
+        Some(request.provider_request_id.clone()),
+        Some(request.batch_index),
+        Some(request.observations.clone()),
+    )
+}
+
 /// Build a member-signable privacy-safe source progress action.
 pub fn build_discovery_worker_source_progress_action(
     relay_pubkey: PublicKey,
@@ -361,10 +389,12 @@ pub fn parse_discovery_worker_action(
     let tuple = required_tuple_tag(event, "discovery-worker-action", 5)?;
     let wire_version = parse_wire_version(&tuple[1], "discovery-worker-action")?;
     let operation = parse_operation(&tuple[2])?;
-    let required = if operation == DiscoveryWorkerOperation::Claim {
-        ["p", "worker", "discovery-worker-action"].as_slice()
-    } else {
-        ["p", "worker", "run", "lease", "discovery-worker-action"].as_slice()
+    let required = match operation {
+        DiscoveryWorkerOperation::Claim => ["p", "worker", "discovery-worker-action"].as_slice(),
+        DiscoveryWorkerOperation::SalvageObservations => {
+            ["p", "worker", "run", "discovery-worker-action"].as_slice()
+        }
+        _ => ["p", "worker", "run", "lease", "discovery-worker-action"].as_slice(),
     };
     require_exact_tag_names(event, required, "discovery worker action")?;
     let relay_pubkey = parse_pubkey(required_scalar_tag(event, "p")?, "discovery worker action")?;
@@ -503,6 +533,47 @@ pub fn parse_discovery_worker_action(
                 .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery observation batch"))?;
             DiscoveryWorkerAction::StoreObservations(request)
         }
+        DiscoveryWorkerOperation::SalvageObservations
+            if content.available_providers.is_none()
+                && content.checkpoint.is_none()
+                && content.source_progress.is_none()
+                && content.lease_id.is_none() =>
+        {
+            let run_id = parse_uuid(
+                required_scalar_tag(event, "run")?,
+                "discovery worker action",
+            )?;
+            if content.run_id != Some(run_id) {
+                return Err(DiscoverySdkError::TagContentMismatch(
+                    "discovery worker action",
+                ));
+            }
+            let request =
+                DiscoveryWorkerSalvageBatchRequest {
+                    request_id,
+                    idempotency_key,
+                    worker_id,
+                    run_id,
+                    provider: content
+                        .provider
+                        .ok_or(DiscoverySdkError::TagContentMismatch(
+                            "discovery worker action",
+                        ))?,
+                    provider_request_id: content.provider_request_id.ok_or(
+                        DiscoverySdkError::TagContentMismatch("discovery worker action"),
+                    )?,
+                    batch_index: content.batch_index.ok_or(
+                        DiscoverySdkError::TagContentMismatch("discovery worker action"),
+                    )?,
+                    observations: content.observations.ok_or(
+                        DiscoverySdkError::TagContentMismatch("discovery worker action"),
+                    )?,
+                };
+            request
+                .validate()
+                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery salvage batch"))?;
+            DiscoveryWorkerAction::SalvageObservations(request)
+        }
         _ => {
             return Err(DiscoverySdkError::TagContentMismatch(
                 "discovery worker action",
@@ -593,7 +664,11 @@ pub fn build_discovery_worker_receipt_for_version(
 ) -> Result<EventBuilder, DiscoverySdkError> {
     validate_receipt(receipt)?;
     if wire_version == DiscoveryWorkerWireVersion::V1
-        && receipt.operation == DiscoveryWorkerOperation::SourceProgress
+        && matches!(
+            receipt.operation,
+            DiscoveryWorkerOperation::SourceProgress
+                | DiscoveryWorkerOperation::SalvageObservations
+        )
     {
         return Err(DiscoverySdkError::InvalidEnvelope(
             "discovery worker receipt",
@@ -692,6 +767,7 @@ fn receipt_for_wire_version(
             DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
                 make_lease_v1_compatible(&mut stored.lease);
             }
+            DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(_) => {}
             DiscoveryWorkerReceiptOutcome::Idle
             | DiscoveryWorkerReceiptOutcome::LostLease(_)
             | DiscoveryWorkerReceiptOutcome::Completed(_)
@@ -790,6 +866,9 @@ fn validate_receipt(receipt: &DiscoveryWorkerReceipt) -> Result<(), DiscoverySdk
         DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
             validate_stored_observations(stored, receipt.worker_id)?;
         }
+        DiscoveryWorkerReceiptOutcome::ObservationsSalvaged(salvaged) => {
+            validate_salvaged_observations(salvaged)?;
+        }
         DiscoveryWorkerReceiptOutcome::LostLease(run)
         | DiscoveryWorkerReceiptOutcome::Completed(run)
         | DiscoveryWorkerReceiptOutcome::Failed(run) => validate_run_projection(run)?,
@@ -868,6 +947,29 @@ fn validate_stored_observations(
     Ok(())
 }
 
+fn validate_salvaged_observations(
+    salvaged: &DiscoveryWorkerSalvagedObservationsProjection,
+) -> Result<(), DiscoverySdkError> {
+    validate_run_projection(&salvaged.run)?;
+    if !salvaged.run.state.is_terminal() {
+        return Err(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ));
+    }
+    let total = salvaged
+        .accepted_count
+        .checked_add(salvaged.existing_count)
+        .ok_or(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ))?;
+    if total == 0 || total > 25 {
+        return Err(DiscoverySdkError::InvalidEnvelope(
+            "discovery worker receipt",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_run_projection(run: &DiscoveryRunProjection) -> Result<(), DiscoverySdkError> {
     validate_uuid(run.run_id, "discovery worker receipt")?;
     validate_uuid(run.campaign_id, "discovery worker receipt")?;
@@ -891,6 +993,7 @@ fn operation_tag(operation: DiscoveryWorkerOperation) -> &'static str {
         DiscoveryWorkerOperation::Checkpoint => "checkpoint",
         DiscoveryWorkerOperation::SourceProgress => "source_progress",
         DiscoveryWorkerOperation::StoreObservations => "store_observations",
+        DiscoveryWorkerOperation::SalvageObservations => "salvage_observations",
         DiscoveryWorkerOperation::Fail => "fail",
         DiscoveryWorkerOperation::Complete => "complete",
     }
@@ -903,6 +1006,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkerOperation, DiscoverySdk
         "checkpoint" => Ok(DiscoveryWorkerOperation::Checkpoint),
         "source_progress" => Ok(DiscoveryWorkerOperation::SourceProgress),
         "store_observations" => Ok(DiscoveryWorkerOperation::StoreObservations),
+        "salvage_observations" => Ok(DiscoveryWorkerOperation::SalvageObservations),
         "fail" => Ok(DiscoveryWorkerOperation::Fail),
         "complete" => Ok(DiscoveryWorkerOperation::Complete),
         _ => Err(DiscoverySdkError::InvalidEnvelope(

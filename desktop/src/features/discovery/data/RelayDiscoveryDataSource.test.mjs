@@ -22,6 +22,7 @@ function harness(
   active,
   receiptSecret = RELAY_SECRET,
   credentialStatuses = {},
+  workerReceiptVersion = "2",
 ) {
   let published = null;
   let campaign = null;
@@ -29,6 +30,7 @@ function harness(
   let runAction = null;
   let runActions = 0;
   let run = null;
+  const publishedEvents = [];
   const workerId = "1f507956-6f08-4e6a-bf38-3a7011565047";
   const lead = {
     lead_id: "b53e6fb2-2a91-45bc-a382-60feb217767a",
@@ -54,6 +56,7 @@ function harness(
   const operations = [];
   return {
     operations,
+    publishedEvents,
     get runActions() {
       return runActions;
     },
@@ -72,6 +75,7 @@ function harness(
         ),
       publish: async (event) => {
         published = event;
+        publishedEvents.push(event);
         if (event.kind === 40017) {
           runActions += 1;
           runAction = event;
@@ -132,7 +136,7 @@ function harness(
                 ["run", run.run_id],
                 [
                   "discovery-receipt",
-                  "1",
+                  "2",
                   action.operation,
                   action.request_id,
                   action.idempotency_key,
@@ -140,7 +144,7 @@ function harness(
                 ],
               ],
               content: canonicalDiscoveryJson({
-                schema: "colony.discovery-receipt/v1",
+                schema: "colony.discovery-receipt/v2",
                 operation: action.operation,
                 request_id: action.request_id,
                 idempotency_key: action.idempotency_key,
@@ -184,7 +188,7 @@ function harness(
                     ["worker", workerId],
                     [
                       "discovery-worker-receipt",
-                      "1",
+                      workerReceiptVersion,
                       "complete",
                       "4e0d1dd4-3b51-41a4-b04f-9348d34113f5",
                       "557b730a-2081-493c-9cb9-34c1388e21e0",
@@ -192,7 +196,7 @@ function harness(
                     ],
                   ],
                   content: canonicalDiscoveryJson({
-                    schema: "colony.discovery-worker-receipt/v1",
+                    schema: `colony.discovery-worker-receipt/v${workerReceiptVersion}`,
                     operation: "complete",
                     request_id: "4e0d1dd4-3b51-41a4-b04f-9348d34113f5",
                     idempotency_key: "557b730a-2081-493c-9cb9-34c1388e21e0",
@@ -218,6 +222,10 @@ function harness(
           result = { result: "access", active };
         } else if (operation === "create_campaign") {
           const input = request.payload.campaign;
+          const sourceConfig = input.source_config ?? {
+            mode: "waterfall",
+            sources: ["google_maps"],
+          };
           campaign = {
             campaign_id: input.campaign_id,
             name: input.name,
@@ -231,7 +239,7 @@ function harness(
             description: input.description,
             language: input.language,
             region: input.region,
-            source_config: input.source_config,
+            source_config: sourceConfig,
             lead_count: 0,
             latest_run: null,
             latest_run_sources: [],
@@ -275,14 +283,14 @@ function harness(
               ["e", published.id, "", "discovery-workspace-action"],
               [
                 "discovery-workspace-receipt",
-                "1",
+                "2",
                 operation,
                 request.request_id,
                 request.idempotency_key,
               ],
             ],
             content: canonicalDiscoveryJson({
-              schema: "colony.discovery-workspace-receipt/v1",
+              schema: "colony.discovery-workspace-receipt/v2",
               receipt: {
                 operation,
                 request_id: request.request_id,
@@ -400,6 +408,23 @@ test("active LAKA access switches taxonomy campaigns onto persisted relay data",
     order: ["google_maps"],
   });
   assert.equal(created.status, "ready");
+  const createEvent = live.publishedEvents.find(
+    (event) =>
+      event.kind === 40021 &&
+      JSON.parse(event.content).request.payload.operation === "create_campaign",
+  );
+  assert.ok(createEvent, "the workspace create action was published");
+  const createContent = JSON.parse(createEvent.content);
+  assert.equal(createContent.schema, "colony.discovery-workspace-action/v2");
+  assert.equal(
+    Object.hasOwn(createContent.request.payload.campaign, "source_config"),
+    false,
+    "the default source plan must be omitted to match Rust canonical JSON",
+  );
+  assert.equal(
+    createEvent.tags.find((tag) => tag[0] === "discovery-workspace-action")[1],
+    "2",
+  );
 
   const vertical = await source.getVertical("automotive", "auto-repair");
   assert.deepEqual(
@@ -441,6 +466,25 @@ test("live campaigns persist and reload the selected source plan", async () => {
     order: ["exa_search", "google_maps", "brave_search"],
   });
   assert.ok(live.operations.includes("update_campaign_sources"));
+  const workspaceEvents = live.publishedEvents.filter((event) => {
+    if (event.kind !== 40021) return false;
+    const operation = JSON.parse(event.content).request.payload.operation;
+    return (
+      operation === "create_campaign" || operation === "update_campaign_sources"
+    );
+  });
+  assert.deepEqual(
+    JSON.parse(workspaceEvents[0].content).request.payload.campaign
+      .source_config,
+    { mode: "concurrent", sources: ["brave_search", "exa_search"] },
+  );
+  assert.deepEqual(
+    JSON.parse(workspaceEvents[1].content).request.payload.source_config,
+    {
+      mode: "waterfall",
+      sources: ["exa_search", "google_maps", "brave_search"],
+    },
+  );
   assert.deepEqual((await source.getCampaign(created.id)).sourceConfig, {
     mode: "waterfall",
     order: ["exa_search", "google_maps", "brave_search"],
@@ -549,4 +593,22 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
   assert.equal(page.leads[0].score, 0);
   assert.equal(page.leads[0].source, "brave_search");
   assert.equal(page.leads[0].sourceLabel, "Brave Web Search");
+});
+
+test("a released V1 worker receipt still wakes the V2 desktop run loop", async () => {
+  const live = harness(true, RELAY_SECRET, {}, "1");
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const campaign = await source.createCampaign({
+    name: "Legacy worker compatibility",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+  });
+
+  const events = [];
+  for await (const event of source.startDiscovery(campaign.id)) {
+    events.push(event);
+  }
+  assert.equal(events.at(-1).type, "session_completed");
 });

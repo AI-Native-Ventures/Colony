@@ -11,9 +11,10 @@ use buzz_core::{
         DiscoverySourceMode, DiscoveryStartRequest,
     },
     discovery_worker::{
-        DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryWorkerCheckpoint,
-        DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
-        DiscoveryWorkerReceiptOutcome,
+        DiscoveryCheckpointKind, DiscoveryProvider, DiscoveryRunSourceStatus,
+        DiscoveryWorkerCheckpoint, DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest,
+        DiscoveryWorkerLeaseRequest, DiscoveryWorkerReceiptOutcome,
+        DiscoveryWorkerSourceProgressRequest,
     },
     discovery_workspace::{
         DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryWorkspaceActionPayload,
@@ -31,7 +32,8 @@ use buzz_sdk::{
     discovery_worker::{
         build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
         build_discovery_worker_complete_action, build_discovery_worker_heartbeat_action,
-        parse_discovery_worker_receipt, ParsedDiscoveryWorkerReceipt,
+        build_discovery_worker_source_progress_action, parse_discovery_worker_receipt,
+        ParsedDiscoveryWorkerReceipt,
     },
     discovery_workspace::{build_discovery_workspace_action, parse_discovery_workspace_receipt},
 };
@@ -778,6 +780,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
     };
     assert_eq!(lease_a.run.run_id, first_run);
     assert_eq!(lease_a.attempt, 1);
+    let provider_request_id = format!("outscraper_req_{}", Uuid::new_v4().simple());
 
     let submitted = DiscoveryWorkerCheckpointRequest {
         lease: DiscoveryWorkerLeaseRequest {
@@ -791,7 +794,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
             sequence: 1,
             kind: DiscoveryCheckpointKind::ProviderSubmitted,
             provider: DiscoveryProvider::Outscraper,
-            provider_request_id: Some("outscraper_req_001".into()),
+            provider_request_id: Some(provider_request_id.clone()),
             item_count: None,
         },
     };
@@ -832,7 +835,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
             .last_checkpoint
             .as_ref()
             .and_then(|value| value.provider_request_id.as_deref()),
-        Some("outscraper_req_001")
+        Some(provider_request_id.as_str())
     );
 
     let stale = DiscoveryWorkerCheckpointRequest {
@@ -1001,6 +1004,60 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
     .await;
     assert!(matches!(
         heartbeat.receipt.outcome,
+        DiscoveryWorkerReceiptOutcome::Lease(_)
+    ));
+    let source_started = submit_worker_action(
+        &mut actor_client,
+        &actor,
+        relay,
+        build_discovery_worker_source_progress_action(
+            relay,
+            &DiscoveryWorkerSourceProgressRequest {
+                lease: DiscoveryWorkerLeaseRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    ..live_lease.clone()
+                },
+                provider: DiscoveryProvider::Outscraper,
+                status: DiscoveryRunSourceStatus::Active,
+                request_cursor: None,
+                request_count: 0,
+                returned_count: 0,
+                failure_class: None,
+            },
+        )
+        .expect("source start builder"),
+    )
+    .await;
+    assert!(matches!(
+        source_started.receipt.outcome,
+        DiscoveryWorkerReceiptOutcome::Lease(_)
+    ));
+    let source_finished = submit_worker_action(
+        &mut actor_client,
+        &actor,
+        relay,
+        build_discovery_worker_source_progress_action(
+            relay,
+            &DiscoveryWorkerSourceProgressRequest {
+                lease: DiscoveryWorkerLeaseRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    ..live_lease.clone()
+                },
+                provider: DiscoveryProvider::Outscraper,
+                status: DiscoveryRunSourceStatus::Exhausted,
+                request_cursor: None,
+                request_count: 1,
+                returned_count: 0,
+                failure_class: None,
+            },
+        )
+        .expect("source progress builder"),
+    )
+    .await;
+    assert!(matches!(
+        source_finished.receipt.outcome,
         DiscoveryWorkerReceiptOutcome::Lease(_)
     ));
     let completed = submit_worker_action(

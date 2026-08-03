@@ -5,7 +5,8 @@ use buzz_core_pkg::{
     discovery_worker::{
         DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
         DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerOperation,
-        DiscoveryWorkerReceiptOutcome, DiscoveryWorkerSourceProgressRequest,
+        DiscoveryWorkerReceiptOutcome, DiscoveryWorkerSalvageBatchRequest,
+        DiscoveryWorkerSourceProgressRequest,
     },
     kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKER_RECEIPT},
 };
@@ -13,7 +14,8 @@ use buzz_sdk_pkg::discovery::{build_discovery_status_action, parse_discovery_rec
 use buzz_sdk_pkg::discovery_worker::{
     build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
     build_discovery_worker_complete_action, build_discovery_worker_fail_action,
-    build_discovery_worker_heartbeat_action, build_discovery_worker_source_progress_action,
+    build_discovery_worker_heartbeat_action, build_discovery_worker_salvage_observations_action,
+    build_discovery_worker_source_progress_action,
     build_discovery_worker_store_observations_action, parse_discovery_worker_receipt,
 };
 use nostr::{Event, EventBuilder, EventId, Keys, PublicKey};
@@ -37,6 +39,12 @@ pub(super) trait WorkerProtocol: Send + Sync {
         &self,
         request: DiscoveryWorkerObservationBatchRequest,
     ) -> ProtocolFuture<'_>;
+    fn salvage_observations(
+        &self,
+        _request: DiscoveryWorkerSalvageBatchRequest,
+    ) -> ProtocolFuture<'_> {
+        Box::pin(async { Err("Discovery paid-result recovery is unavailable".to_owned()) })
+    }
     fn fail(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
     fn complete(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
 }
@@ -91,16 +99,7 @@ impl<'a> RelayWorkerProtocol<'a> {
         let event = builder
             .sign_with_keys(&self.keys)
             .map_err(|_| "failed to sign Discovery worker action".to_string())?;
-        let expected = ExpectedReceipt {
-            action_event_id: event.id,
-            relay_pubkey: self.relay_pubkey,
-            actor_pubkey: self.keys.public_key(),
-            operation,
-            request_id,
-            idempotency_key,
-            worker_id: self.worker_id,
-        };
-        let response = relay::submit_signed_event_at_with_keys(
+        let response = relay::submit_signed_event_at_with_keys_allow_rejected(
             &event,
             self.state,
             &self.api_base_url,
@@ -109,6 +108,16 @@ impl<'a> RelayWorkerProtocol<'a> {
         .await?;
         let message: serde_json::Value = serde_json::from_str(&response.message)
             .map_err(|_| "Discovery worker response is malformed".to_string())?;
+        let action_event_id = expected_action_event_id(&response, &message, event.id)?;
+        let expected = ExpectedReceipt {
+            action_event_id,
+            relay_pubkey: self.relay_pubkey,
+            actor_pubkey: self.keys.public_key(),
+            operation,
+            request_id,
+            idempotency_key,
+            worker_id: self.worker_id,
+        };
         let receipt_id = message
             .get("receipt_event_id")
             .and_then(serde_json::Value::as_str)
@@ -161,6 +170,30 @@ impl<'a> RelayWorkerProtocol<'a> {
         }
         Ok(())
     }
+}
+
+fn expected_action_event_id(
+    response: &relay::SubmitEventResponse,
+    message: &serde_json::Value,
+    submitted_event_id: EventId,
+) -> Result<EventId, String> {
+    if response.accepted {
+        return Ok(submitted_event_id);
+    }
+    if message
+        .get("duplicate")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err(format!("relay rejected event: {}", response.message));
+    }
+    let original_action_event_id = message
+        .get("original_action_event_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Discovery worker duplicate response has no original action".to_string())?;
+    EventId::from_hex(original_action_event_id).map_err(|_| {
+        "Discovery worker duplicate response has an invalid original action".to_string()
+    })
 }
 
 impl WorkerProtocol for RelayWorkerProtocol<'_> {
@@ -311,6 +344,24 @@ impl WorkerProtocol for RelayWorkerProtocol<'_> {
         })
     }
 
+    fn salvage_observations(
+        &self,
+        request: DiscoveryWorkerSalvageBatchRequest,
+    ) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            let builder =
+                build_discovery_worker_salvage_observations_action(self.relay_pubkey, &request)
+                    .map_err(|_| "invalid Discovery salvage batch".to_string())?;
+            self.execute(
+                builder,
+                DiscoveryWorkerOperation::SalvageObservations,
+                request.request_id,
+                request.idempotency_key,
+            )
+            .await
+        })
+    }
+
     fn fail(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
         Box::pin(async move {
             let builder = build_discovery_worker_fail_action(self.relay_pubkey, &request)
@@ -447,6 +498,70 @@ mod tests {
             validate_receipt_event(&receipt, expected),
             Ok(DiscoveryWorkerReceiptOutcome::Idle)
         );
+    }
+
+    #[test]
+    fn idempotent_retry_validates_the_original_action_receipt() {
+        let (original_action, receipt, mut expected, actor, relay) = fixture();
+        let parsed_original =
+            buzz_sdk_pkg::discovery_worker::parse_discovery_worker_action(&original_action)
+                .expect("original action");
+        let retry = build_discovery_worker_claim_action(
+            relay.public_key(),
+            match &parsed_original.action {
+                buzz_core_pkg::discovery_worker::DiscoveryWorkerAction::Claim(request) => request,
+                _ => panic!("expected claim"),
+            },
+        )
+        .expect("retry builder")
+        .custom_created_at(nostr::Timestamp::from(
+            original_action.created_at.as_secs() + 1,
+        ))
+        .sign_with_keys(&actor)
+        .expect("signed retry");
+        assert_ne!(retry.id, original_action.id);
+
+        let response = relay::SubmitEventResponse {
+            event_id: original_action.id.to_hex(),
+            accepted: false,
+            message: serde_json::json!({
+                "duplicate": true,
+                "original_action_event_id": original_action.id.to_hex(),
+                "receipt_event_id": receipt.id.to_hex(),
+            })
+            .to_string(),
+        };
+        let message = serde_json::from_str(&response.message).expect("duplicate response");
+        expected.action_event_id =
+            expected_action_event_id(&response, &message, retry.id).expect("original action ID");
+        assert_eq!(
+            validate_receipt_event(&receipt, expected),
+            Ok(DiscoveryWorkerReceiptOutcome::Idle)
+        );
+    }
+
+    #[test]
+    fn non_duplicate_rejection_and_invalid_original_action_are_rejected() {
+        let (_, _, expected, _, _) = fixture();
+        let rejected = relay::SubmitEventResponse {
+            event_id: expected.action_event_id.to_hex(),
+            accepted: false,
+            message: serde_json::json!({"error": "denied"}).to_string(),
+        };
+        let message = serde_json::from_str(&rejected.message).expect("rejected response");
+        assert!(expected_action_event_id(&rejected, &message, expected.action_event_id).is_err());
+
+        let malformed = relay::SubmitEventResponse {
+            event_id: expected.action_event_id.to_hex(),
+            accepted: false,
+            message: serde_json::json!({
+                "duplicate": true,
+                "original_action_event_id": "not-an-event-id"
+            })
+            .to_string(),
+        };
+        let message = serde_json::from_str(&malformed.message).expect("duplicate response");
+        assert!(expected_action_event_id(&malformed, &message, expected.action_event_id).is_err());
     }
 
     #[test]

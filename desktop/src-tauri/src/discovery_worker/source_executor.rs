@@ -5,7 +5,7 @@ use super::{
         execute_source_plan, PlanExecution, SourceExecution, SourceExecutor, SourceFuture,
     },
     outbox::{DiscoveryOutbox, SynchronousCallState},
-    outscraper::OutscraperError,
+    outscraper::{OutscraperError, OutscraperSubmitFailure},
     protocol::WorkerProtocol,
     provider_context::{LocalProviderCredentials, ProductionProviderClients},
     source_errors::{
@@ -26,6 +26,9 @@ use buzz_core_pkg::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+#[path = "source_executor_outscraper.rs"]
+mod outscraper_execution;
 
 const OBSERVATION_BATCH_SIZE: usize = 25;
 
@@ -168,20 +171,36 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 return Ok(recovered);
             }
         }
-        let run_id = self.lease.lock().await.run.run_id;
-        let intent = self.outbox.begin_call(run_id, provider)?;
         let credential = self
             .credentials
             .credential(provider)
             .ok_or_else(|| "configured Brave Search credential disappeared".to_owned())?;
         let search = self.lease.lock().await.business_search.clone();
-        let provider_request_id = intent.call_id.to_string();
-        if !self
-            .ensure_submitted(provider, &provider_request_id)
-            .await?
-        {
-            return Ok(SourceExecution::LostLease);
+        if let Err(error) = super::brave::BraveSearchClient::validate_search(&search) {
+            return self
+                .finish_source_failure(provider, None, 0, brave_failure(error))
+                .await;
         }
+        if self.dynamic_remaining(remaining_target) == 0 {
+            if !self
+                .source_progress(
+                    provider,
+                    DiscoveryRunSourceStatus::SkippedTargetMet,
+                    None,
+                    0,
+                    0,
+                    None,
+                )
+                .await?
+            {
+                return Ok(SourceExecution::LostLease);
+            }
+            return Ok(SourceExecution::Succeeded { retained: 0 });
+        }
+        let before = self.source_state(provider).await?.retained_count;
+        let run_id = self.lease.lock().await.run.run_id;
+        let intent = self.outbox.begin_call(run_id, provider)?;
+        let provider_request_id = intent.call_id.to_string();
         let outcome = self
             .clients
             .brave
@@ -189,7 +208,14 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 &search,
                 credential,
                 || usize::try_from(self.dynamic_remaining(remaining_target)).unwrap_or(usize::MAX),
-                || async { self.heartbeat_once().await.unwrap_or(false) },
+                || async {
+                    if !self.heartbeat_once().await.unwrap_or(false) {
+                        return false;
+                    }
+                    self.ensure_submitted(provider, &provider_request_id)
+                        .await
+                        .unwrap_or(false)
+                },
                 |page, request_count| {
                     let provider_request_id = provider_request_id.clone();
                     async move {
@@ -217,7 +243,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                     Some(provider_request_id),
                     outcome.request_count,
                 )?;
-                self.finish_synchronous(intent.call_id, provider).await
+                self.finish_synchronous(intent.call_id, provider, before)
+                    .await
             }
             Err(error) => {
                 if self.cancellation.is_cancelled() {
@@ -240,6 +267,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                     brave_failure(error.error),
                     brave_is_uncertain(error.error),
                     error.request_count,
+                    before,
                 )
                 .await
             }
@@ -264,6 +292,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             .credential(provider)
             .ok_or_else(|| "configured Exa Search credential disappeared".to_owned())?;
         let search = self.lease.lock().await.business_search.clone();
+        let before = self.source_state(provider).await?.retained_count;
         let remaining = self.dynamic_remaining(remaining_target);
         let outcome = self
             .clients
@@ -284,7 +313,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                     outcome.request_count,
                     outcome.observations,
                 )?;
-                self.finish_synchronous(intent.call_id, provider).await
+                self.finish_synchronous(intent.call_id, provider, before)
+                    .await
             }
             Err(error) => {
                 self.finish_synchronous_error(
@@ -293,6 +323,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                     exa_failure(error.error),
                     exa_is_uncertain(error.error),
                     error.request_count,
+                    before,
                 )
                 .await
             }
@@ -316,12 +347,13 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         };
         match self.outbox.state_for(run_id, provider) {
             Some(SynchronousCallState::Ready) => {
+                let before = self.source_state(provider).await?.retained_count;
                 let metadata = self
                     .outbox
                     .ready_metadata(call.call_id)?
                     .ok_or_else(|| "Discovery synchronous results disappeared".to_owned())?;
                 if metadata.response_complete {
-                    self.finish_synchronous(call.call_id, provider)
+                    self.finish_synchronous(call.call_id, provider, before)
                         .await
                         .map(Some)
                 } else {
@@ -331,6 +363,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                         DiscoveryRunSourceFailureClass::OutcomeUnknown,
                         true,
                         metadata.request_count,
+                        before,
                     )
                     .await
                     .map(Some)
@@ -346,6 +379,9 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 .mark_synchronous_outcome_unknown(Some(call.call_id), provider, 1)
                 .await
                 .map(Some),
+            Some(SynchronousCallState::Submitted) => {
+                Err("invalid synchronous Discovery outbox state".to_owned())
+            }
             None => Ok(None),
         }
     }
@@ -354,8 +390,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         &self,
         call_id: Uuid,
         provider: DiscoveryProvider,
+        before: u32,
     ) -> Result<SourceExecution, String> {
-        let before = self.source_state(provider).await?.retained_count;
         let metadata = self
             .outbox
             .ready_metadata(call_id)?
@@ -421,7 +457,6 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         self.outbox.remove_after_relay_ack(call_id)?;
         let after = self.source_state(provider).await?.retained_count;
         let retained = after.saturating_sub(before);
-        self.retained.fetch_add(retained, Ordering::AcqRel);
         Ok(SourceExecution::Succeeded { retained })
     }
 
@@ -432,12 +467,12 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         failure: DiscoveryRunSourceFailureClass,
         uncertain: bool,
         request_count: u16,
+        before: u32,
     ) -> Result<SourceExecution, String> {
         if self.cancellation.is_cancelled() {
             return Ok(SourceExecution::LostLease);
         }
         if let Some(metadata) = self.outbox.ready_metadata(call_id)? {
-            let before = self.source_state(provider).await?.retained_count;
             if !self
                 .ensure_submitted(provider, &metadata.provider_request_id)
                 .await?
@@ -485,7 +520,6 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             self.outbox.remove_after_relay_ack(call_id)?;
             let after = self.source_state(provider).await?.retained_count;
             let retained = after.saturating_sub(before);
-            self.retained.fetch_add(retained, Ordering::AcqRel);
             return Ok(SourceExecution::Failed { retained });
         }
         if uncertain {
@@ -507,7 +541,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         {
             return Ok(SourceExecution::LostLease);
         }
-        self.outbox.remove_after_relay_ack(call_id)?;
+        self.outbox.discard_unsubmitted(call_id)?;
         Ok(SourceExecution::Failed { retained: 0 })
     }
 
@@ -530,174 +564,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         {
             return Ok(SourceExecution::LostLease);
         }
-        if let Some(call_id) = call_id {
-            self.outbox.remove_after_relay_ack(call_id)?;
-        }
+        let _ = call_id;
         Ok(SourceExecution::Failed { retained: 0 })
-    }
-
-    async fn execute_outscraper(&self, _: u32) -> Result<SourceExecution, String> {
-        let provider = DiscoveryProvider::Outscraper;
-        let credential = self
-            .credentials
-            .credential(provider)
-            .ok_or_else(|| "configured Outscraper credential disappeared".to_owned())?;
-        let mut state = self.source_state(provider).await?;
-        let search = self.lease.lock().await.business_search.clone();
-        let recovered_checkpoint = self
-            .lease
-            .lock()
-            .await
-            .last_checkpoint
-            .clone()
-            .filter(|checkpoint| {
-                checkpoint.kind == DiscoveryCheckpointKind::ProviderSubmitted
-                    && checkpoint.provider == provider
-            })
-            .and_then(|checkpoint| checkpoint.provider_request_id);
-        let (provider_request_id, ready) = if let Some(cursor) = state.request_cursor.clone() {
-            (cursor, None)
-        } else if let Some(provider_request_id) = recovered_checkpoint {
-            (provider_request_id, None)
-        } else {
-            let submission = match self
-                .clients
-                .outscraper
-                .submit(&search, credential, &self.cancellation)
-                .await
-            {
-                Ok(submission) => submission,
-                Err(error) => return self.finish_outscraper_submit_error(error).await,
-            };
-            if !self
-                .ensure_submitted(provider, &submission.request_id)
-                .await?
-            {
-                return Ok(SourceExecution::LostLease);
-            }
-            state = self.source_state(provider).await?;
-            (submission.request_id, submission.ready)
-        };
-        let observations = if let Some(ready) = ready {
-            ready
-        } else {
-            match self
-                .clients
-                .outscraper
-                .poll_until_ready(&provider_request_id, credential, &self.cancellation)
-                .await
-            {
-                Ok(observations) => observations,
-                Err(error) => return self.finish_outscraper_poll_error(error, &state).await,
-            }
-        };
-        if observations.len() > 500 {
-            return self
-                .finish_source_failure(
-                    provider,
-                    state.request_cursor,
-                    state.request_count.max(1),
-                    DiscoveryRunSourceFailureClass::ResponseTooLarge,
-                )
-                .await;
-        }
-        let before = state.retained_count;
-        if !self
-            .store_observations(provider, &provider_request_id, observations.clone())
-            .await?
-        {
-            return Ok(SourceExecution::LostLease);
-        }
-        let item_count = u32::try_from(observations.len())
-            .map_err(|_| "Outscraper returned too many businesses".to_owned())?;
-        if !self
-            .checkpoint(
-                DiscoveryCheckpointKind::ProviderResultsReady,
-                provider,
-                None,
-                Some(item_count),
-            )
-            .await?
-        {
-            return Ok(SourceExecution::LostLease);
-        }
-        let status = if item_count == 0 {
-            DiscoveryRunSourceStatus::Exhausted
-        } else {
-            DiscoveryRunSourceStatus::Completed
-        };
-        if !self
-            .source_progress(
-                provider,
-                status,
-                Some(provider_request_id),
-                state.request_count.max(1),
-                item_count,
-                None,
-            )
-            .await?
-        {
-            return Ok(SourceExecution::LostLease);
-        }
-        let after = self.source_state(provider).await?.retained_count;
-        let retained = after.saturating_sub(before);
-        self.retained.fetch_add(retained, Ordering::AcqRel);
-        Ok(SourceExecution::Succeeded { retained })
-    }
-
-    async fn finish_outscraper_submit_error(
-        &self,
-        error: OutscraperError,
-    ) -> Result<SourceExecution, String> {
-        if self.cancellation.is_cancelled() || error == OutscraperError::Cancelled {
-            return Ok(SourceExecution::LostLease);
-        }
-        if matches!(
-            error,
-            OutscraperError::ProviderUnavailable | OutscraperError::RequestTimedOut
-        ) {
-            return self
-                .finish_source_failure(
-                    DiscoveryProvider::Outscraper,
-                    None,
-                    1,
-                    DiscoveryRunSourceFailureClass::OutcomeUnknown,
-                )
-                .await;
-        }
-        self.finish_source_failure(
-            DiscoveryProvider::Outscraper,
-            None,
-            1,
-            outscraper_failure(error),
-        )
-        .await
-    }
-
-    async fn finish_outscraper_poll_error(
-        &self,
-        error: OutscraperError,
-        state: &DiscoveryRunSourceProjection,
-    ) -> Result<SourceExecution, String> {
-        if self.cancellation.is_cancelled() || error == OutscraperError::Cancelled {
-            return Ok(SourceExecution::LostLease);
-        }
-        if matches!(
-            error,
-            OutscraperError::RateLimited
-                | OutscraperError::ProviderUnavailable
-                | OutscraperError::RequestTimedOut
-                | OutscraperError::PollExhausted
-        ) {
-            return Err("Outscraper polling paused for safe resumption".to_owned());
-        }
-        self.finish_source_failure(
-            DiscoveryProvider::Outscraper,
-            state.request_cursor.clone(),
-            state.request_count.max(1),
-            outscraper_failure(error),
-        )
-        .await
     }
 
     async fn finish_source_failure(
@@ -827,7 +695,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             };
             match self.protocol.store_observations(request).await? {
                 DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
-                    self.merge_lease(stored.lease).await?;
+                    self.merge_observation_lease(provider, stored.lease).await?;
                 }
                 DiscoveryWorkerReceiptOutcome::LostLease(run) => {
                     self.handle_lost_lease(&run)?;
@@ -862,7 +730,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             };
             match self.protocol.store_observations(request).await? {
                 DiscoveryWorkerReceiptOutcome::ObservationsStored(stored) => {
-                    self.merge_lease(stored.lease).await?;
+                    self.merge_observation_lease(batch.provider, stored.lease)
+                        .await?;
                     self.outbox.acknowledge_batch(call_id, batch.batch_index)?;
                 }
                 DiscoveryWorkerReceiptOutcome::LostLease(run) => {
@@ -961,6 +830,21 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 .is_none_or(|existing| next.sequence >= existing.sequence)
         }) {
             current.last_checkpoint = updated.last_checkpoint;
+        }
+        Ok(())
+    }
+
+    async fn merge_observation_lease(
+        &self,
+        provider: DiscoveryProvider,
+        updated: DiscoveryWorkerLeaseProjection,
+    ) -> Result<(), String> {
+        let before = self.source_state(provider).await?.retained_count;
+        self.merge_lease(updated).await?;
+        let after = self.source_state(provider).await?.retained_count;
+        let retained = after.saturating_sub(before);
+        if retained > 0 {
+            self.retained.fetch_add(retained, Ordering::AcqRel);
         }
         Ok(())
     }

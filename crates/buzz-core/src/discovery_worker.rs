@@ -28,6 +28,8 @@ pub enum DiscoveryWorkerOperation {
     SourceProgress,
     /// Persist a bounded batch of normalized provider observations.
     StoreObservations,
+    /// Recover a paid result batch after its original run became terminal.
+    SalvageObservations,
     /// Mark a currently leased run failed without retaining provider details.
     Fail,
     /// Mark a currently owned run successful.
@@ -261,36 +263,95 @@ impl DiscoveryWorkerObservationBatchRequest {
         {
             return Err(DiscoveryObservationError::InvalidField("lease"));
         }
-        validate_identifier(
+        validate_observation_batch(
+            self.provider,
             &self.provider_request_id,
-            MAX_PROVIDER_REQUEST_ID_BYTES,
-            false,
-            "provider_request_id",
-        )?;
-        if self.batch_index > MAX_OBSERVATION_BATCH_INDEX {
-            return Err(DiscoveryObservationError::InvalidField("batch_index"));
+            self.batch_index,
+            &self.observations,
+        )
+    }
+}
+
+fn validate_observation_batch(
+    provider: DiscoveryProvider,
+    provider_request_id: &str,
+    batch_index: u32,
+    observations: &[DiscoveryBusinessObservationInput],
+) -> Result<(), DiscoveryObservationError> {
+    validate_identifier(
+        provider_request_id,
+        MAX_PROVIDER_REQUEST_ID_BYTES,
+        false,
+        "provider_request_id",
+    )?;
+    if batch_index > MAX_OBSERVATION_BATCH_INDEX {
+        return Err(DiscoveryObservationError::InvalidField("batch_index"));
+    }
+    if observations.is_empty() || observations.len() > MAX_OBSERVATIONS_PER_BATCH {
+        return Err(DiscoveryObservationError::InvalidField("observations"));
+    }
+    let mut provider_ids = HashSet::with_capacity(observations.len());
+    let mut retained_text_bytes = provider_request_id.len();
+    for observation in observations {
+        observation.validate()?;
+        if observation.provider != provider {
+            return Err(DiscoveryObservationError::InvalidField("provider"));
         }
-        if self.observations.is_empty() || self.observations.len() > MAX_OBSERVATIONS_PER_BATCH {
+        if !provider_ids.insert(observation.provider_record_id.as_str()) {
             return Err(DiscoveryObservationError::InvalidField("observations"));
         }
-        let mut provider_ids = HashSet::with_capacity(self.observations.len());
-        let mut retained_text_bytes = self.provider_request_id.len();
-        for observation in &self.observations {
-            observation.validate()?;
-            if observation.provider != self.provider {
-                return Err(DiscoveryObservationError::InvalidField("provider"));
-            }
-            if !provider_ids.insert(observation.provider_record_id.as_str()) {
-                return Err(DiscoveryObservationError::InvalidField("observations"));
-            }
-            retained_text_bytes = retained_text_bytes
-                .checked_add(observation.retained_text_bytes())
-                .ok_or(DiscoveryObservationError::InvalidField("observations"))?;
+        retained_text_bytes = retained_text_bytes
+            .checked_add(observation.retained_text_bytes())
+            .ok_or(DiscoveryObservationError::InvalidField("observations"))?;
+    }
+    if retained_text_bytes > MAX_OBSERVATION_BATCH_TEXT_BYTES {
+        return Err(DiscoveryObservationError::InvalidField("observations"));
+    }
+    Ok(())
+}
+
+/// Request to recover one durable paid-result batch after lease loss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryWorkerSalvageBatchRequest {
+    /// Unique identifier for this command attempt.
+    pub request_id: Uuid,
+    /// Stable retry key for this exact result batch.
+    pub idempotency_key: Uuid,
+    /// Stable identifier for this local worker installation.
+    pub worker_id: Uuid,
+    /// Original terminal run that paid for the observations.
+    pub run_id: Uuid,
+    /// Provider that produced every observation in this batch.
+    pub provider: DiscoveryProvider,
+    /// Opaque provider request reference retained in the local outbox.
+    pub provider_request_id: String,
+    /// Zero-based batch position within the bounded response.
+    pub batch_index: u32,
+    /// Normalized allowlisted observations.
+    pub observations: Vec<DiscoveryBusinessObservationInput>,
+}
+
+impl DiscoveryWorkerSalvageBatchRequest {
+    /// Validate terminal recovery identifiers and observation bounds.
+    pub fn validate(&self) -> Result<(), DiscoveryObservationError> {
+        if [
+            self.request_id,
+            self.idempotency_key,
+            self.worker_id,
+            self.run_id,
+        ]
+        .into_iter()
+        .any(|value| value.is_nil())
+        {
+            return Err(DiscoveryObservationError::InvalidField("salvage"));
         }
-        if retained_text_bytes > MAX_OBSERVATION_BATCH_TEXT_BYTES {
-            return Err(DiscoveryObservationError::InvalidField("observations"));
-        }
-        Ok(())
+        validate_observation_batch(
+            self.provider,
+            &self.provider_request_id,
+            self.batch_index,
+            &self.observations,
+        )
     }
 }
 
@@ -303,6 +364,18 @@ pub struct DiscoveryWorkerStoredObservationsProjection {
     /// Records inserted by this write.
     pub accepted_count: u16,
     /// Identical records already present from an earlier write.
+    pub existing_count: u16,
+}
+
+/// Private result of recovering one paid batch into a terminal run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryWorkerSalvagedObservationsProjection {
+    /// Original terminal run that now owns the recovered Leads.
+    pub run: DiscoveryRunProjection,
+    /// Records inserted by this write.
+    pub accepted_count: u16,
+    /// Identical workspace records already present.
     pub existing_count: u16,
 }
 
@@ -672,20 +745,20 @@ impl DiscoveryWorkerSourceProgressRequest {
                 self.request_count > 0 && self.returned_count == 0 && self.failure_class.is_none()
             }
             DiscoveryRunSourceStatus::Failed => {
-                self.request_count > 0
-                    && matches!(
-                        self.failure_class,
-                        Some(
-                            DiscoveryRunSourceFailureClass::CredentialRejected
-                                | DiscoveryRunSourceFailureClass::BillingRequired
-                                | DiscoveryRunSourceFailureClass::InvalidRequest
-                                | DiscoveryRunSourceFailureClass::RateLimited
-                                | DiscoveryRunSourceFailureClass::ProviderUnavailable
-                                | DiscoveryRunSourceFailureClass::ResponseTooLarge
-                                | DiscoveryRunSourceFailureClass::RequestTimedOut
-                                | DiscoveryRunSourceFailureClass::MalformedResponse
-                        )
+                matches!(
+                    self.failure_class,
+                    Some(
+                        DiscoveryRunSourceFailureClass::CredentialRejected
+                            | DiscoveryRunSourceFailureClass::BillingRequired
+                            | DiscoveryRunSourceFailureClass::InvalidRequest
+                            | DiscoveryRunSourceFailureClass::RateLimited
+                            | DiscoveryRunSourceFailureClass::ProviderUnavailable
+                            | DiscoveryRunSourceFailureClass::ResponseTooLarge
+                            | DiscoveryRunSourceFailureClass::RequestTimedOut
+                            | DiscoveryRunSourceFailureClass::MalformedResponse
                     )
+                ) && (self.request_count > 0
+                    || self.failure_class == Some(DiscoveryRunSourceFailureClass::InvalidRequest))
             }
             DiscoveryRunSourceStatus::Cancelled => {
                 self.failure_class == Some(DiscoveryRunSourceFailureClass::Cancelled)
@@ -747,6 +820,8 @@ pub enum DiscoveryWorkerAction {
     SourceProgress(DiscoveryWorkerSourceProgressRequest),
     /// Persist normalized observations.
     StoreObservations(DiscoveryWorkerObservationBatchRequest),
+    /// Recover normalized paid results after the original lease was lost.
+    SalvageObservations(DiscoveryWorkerSalvageBatchRequest),
     /// Fail a current run without a provider error payload.
     Fail(DiscoveryWorkerLeaseRequest),
     /// Complete a current run.
@@ -762,6 +837,7 @@ impl DiscoveryWorkerAction {
             Self::Checkpoint(_) => DiscoveryWorkerOperation::Checkpoint,
             Self::SourceProgress(_) => DiscoveryWorkerOperation::SourceProgress,
             Self::StoreObservations(_) => DiscoveryWorkerOperation::StoreObservations,
+            Self::SalvageObservations(_) => DiscoveryWorkerOperation::SalvageObservations,
             Self::Fail(_) => DiscoveryWorkerOperation::Fail,
             Self::Complete(_) => DiscoveryWorkerOperation::Complete,
         }
@@ -775,6 +851,7 @@ impl DiscoveryWorkerAction {
             Self::Checkpoint(value) => value.lease.request_id,
             Self::SourceProgress(value) => value.lease.request_id,
             Self::StoreObservations(value) => value.lease.request_id,
+            Self::SalvageObservations(value) => value.request_id,
         }
     }
 
@@ -788,6 +865,7 @@ impl DiscoveryWorkerAction {
             Self::Checkpoint(value) => value.lease.idempotency_key,
             Self::SourceProgress(value) => value.lease.idempotency_key,
             Self::StoreObservations(value) => value.lease.idempotency_key,
+            Self::SalvageObservations(value) => value.idempotency_key,
         }
     }
 
@@ -799,6 +877,7 @@ impl DiscoveryWorkerAction {
             Self::Checkpoint(value) => value.lease.worker_id,
             Self::SourceProgress(value) => value.lease.worker_id,
             Self::StoreObservations(value) => value.lease.worker_id,
+            Self::SalvageObservations(value) => value.worker_id,
         }
     }
 }
@@ -839,6 +918,8 @@ pub enum DiscoveryWorkerReceiptOutcome {
     Lease(DiscoveryWorkerLeaseProjection),
     /// A bounded normalized batch was retained or already existed.
     ObservationsStored(DiscoveryWorkerStoredObservationsProjection),
+    /// A durable paid batch was recovered after the run became terminal.
+    ObservationsSalvaged(DiscoveryWorkerSalvagedObservationsProjection),
     /// The supplied lease is no longer current.
     LostLease(DiscoveryRunProjection),
     /// The current lease completed its run.
