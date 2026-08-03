@@ -1122,6 +1122,14 @@ async fn apply_worker_action_tx(
                     current.projection(),
                 ));
             }
+            require_worker_lease_protocol_tx(
+                tx,
+                community_id,
+                request.run_id,
+                request.lease_id,
+                action_event,
+            )
+            .await?;
             let row = sqlx::query(
                 "UPDATE discovery_runs SET lease_until=$5, updated_at=now() \
                  WHERE community_id=$1 AND id=$2 AND claim_id=$3 AND worker_id=$4 \
@@ -1158,6 +1166,14 @@ async fn apply_worker_action_tx(
                     current.projection(),
                 ));
             }
+            require_worker_lease_protocol_tx(
+                tx,
+                community_id,
+                request.lease.run_id,
+                request.lease.lease_id,
+                action_event,
+            )
+            .await?;
             let sequence = i32::try_from(request.checkpoint.sequence).map_err(|_| {
                 DbError::InvalidData("Discovery checkpoint sequence exceeds i32::MAX".into())
             })?;
@@ -1327,6 +1343,14 @@ async fn apply_worker_action_tx(
                     current.projection(),
                 ));
             }
+            require_worker_lease_protocol_tx(
+                tx,
+                community_id,
+                request.lease.run_id,
+                request.lease.lease_id,
+                action_event,
+            )
+            .await?;
             if request.provider != DiscoveryProvider::Outscraper
                 && request.status == DiscoveryRunSourceStatus::Active
             {
@@ -1444,6 +1468,14 @@ async fn apply_worker_action_tx(
                     current.projection(),
                 ));
             }
+            require_worker_lease_protocol_tx(
+                tx,
+                community_id,
+                request.lease.run_id,
+                request.lease.lease_id,
+                action_event,
+            )
+            .await?;
             let submitted: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM discovery_run_checkpoints \
                  WHERE community_id=$1 AND run_id=$2 \
@@ -1687,7 +1719,15 @@ async fn apply_worker_action_tx(
                     current.projection(),
                 ));
             }
-            if !is_v1_worker_action(action_event) {
+            let lease_protocol_version = require_worker_lease_protocol_tx(
+                tx,
+                community_id,
+                request.run_id,
+                request.lease_id,
+                action_event,
+            )
+            .await?;
+            if lease_protocol_version != 1 {
                 let all_sources_terminal: bool = sqlx::query_scalar(
                     "SELECT NOT EXISTS (SELECT 1 FROM discovery_run_sources \
                      WHERE community_id=$1 AND run_id=$2 AND status IN ('pending','active'))",
@@ -1734,7 +1774,15 @@ async fn apply_worker_action_tx(
                     current.projection(),
                 ));
             }
-            if !is_v1_worker_action(action_event) {
+            let lease_protocol_version = require_worker_lease_protocol_tx(
+                tx,
+                community_id,
+                request.run_id,
+                request.lease_id,
+                action_event,
+            )
+            .await?;
+            if lease_protocol_version != 1 {
                 let all_sources_terminal: bool = sqlx::query_scalar(
                     "SELECT NOT EXISTS (SELECT 1 FROM discovery_run_sources \
                      WHERE community_id=$1 AND run_id=$2 AND status IN ('pending','active'))",
@@ -1816,6 +1864,40 @@ fn is_v1_worker_action(event: &Event) -> bool {
             .is_some_and(|value| value == "discovery-worker-action")
             && parts.get(1).is_some_and(|value| value == "1")
     })
+}
+
+async fn require_worker_lease_protocol_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    run_id: Uuid,
+    lease_id: Uuid,
+    action_event: &Event,
+) -> Result<i16> {
+    let marker: Option<(Option<i16>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT lease_worker_protocol_version,lease_worker_protocol_claim_id \
+         FROM discovery_runs WHERE community_id=$1 AND id=$2 AND claim_id=$3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .bind(lease_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let action_protocol_version = if is_v1_worker_action(action_event) {
+        1
+    } else {
+        2
+    };
+    let Some((Some(lease_protocol_version), Some(protocol_claim_id))) = marker else {
+        return Err(DbError::AccessDenied(
+            "Discovery worker lease is missing its protocol fence".into(),
+        ));
+    };
+    if protocol_claim_id != lease_id || lease_protocol_version != action_protocol_version {
+        return Err(DbError::AccessDenied(
+            "Discovery worker action protocol does not match the current lease".into(),
+        ));
+    }
+    Ok(lease_protocol_version)
 }
 
 fn worker_lease_matches(
@@ -3596,6 +3678,12 @@ mod tests {
             DiscoveryWorkerAction::Claim(request) => {
                 build_discovery_worker_claim_action(relay.public_key(), request)
             }
+            DiscoveryWorkerAction::Heartbeat(request) => {
+                build_discovery_worker_heartbeat_action(relay.public_key(), request)
+            }
+            DiscoveryWorkerAction::Checkpoint(request) => {
+                build_discovery_worker_checkpoint_action(relay.public_key(), request)
+            }
             DiscoveryWorkerAction::Fail(request) => {
                 build_discovery_worker_fail_action(relay.public_key(), request)
             }
@@ -4048,6 +4136,106 @@ mod tests {
         .await
         .expect("read rollback-fenced external-worker run");
         assert_eq!(unchanged, ("queued".to_owned(), 0, None, None, None));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn protocol_v2_lease_rejects_a_signed_v1_terminal_downgrade() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let actor_bytes = actor.public_key().to_bytes();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor_bytes.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker identity");
+
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &actor_bytes, campaign_id, &search).await;
+        let run_id = match db
+            .create_discovery_run_once(
+                community,
+                &actor_bytes,
+                campaign_id,
+                Uuid::new_v4(),
+                1,
+                &search,
+            )
+            .await
+            .expect("create default-source protocol V2 run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+
+        let relay = Keys::generate();
+        let worker_id = Uuid::new_v4();
+        let claim = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id,
+                    available_providers: vec![DiscoveryProvider::Outscraper],
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("protocol V2 worker claims default-source run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(lease) = claim else {
+            panic!("protocol V2 worker must receive the run");
+        };
+        assert_eq!(lease.run.run_id, run_id);
+
+        let downgraded = apply_v1_worker_action(
+            &db,
+            community,
+            &actor,
+            &relay,
+            DiscoveryWorkerAction::Complete(lease_request(worker_id, run_id, lease.lease_id)),
+            Duration::seconds(30),
+        )
+        .await;
+        assert!(matches!(
+            downgraded,
+            Err(DbError::AccessDenied(message))
+                if message.contains("protocol does not match the current lease")
+        ));
+
+        let unchanged_run: String =
+            sqlx::query_scalar("SELECT state FROM discovery_runs WHERE community_id=$1 AND id=$2")
+                .bind(community.as_uuid())
+                .bind(run_id)
+                .fetch_one(&db.pool)
+                .await
+                .expect("read downgrade-fenced run");
+        let unchanged_source: String = sqlx::query_scalar(
+            "SELECT status FROM discovery_run_sources \
+             WHERE community_id=$1 AND run_id=$2 AND provider='outscraper'",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("read downgrade-fenced source");
+        assert_eq!(unchanged_run, "running");
+        assert_eq!(unchanged_source, "pending");
     }
 
     #[tokio::test]
@@ -5008,7 +5196,7 @@ mod tests {
             available_providers: vec![DiscoveryProvider::Outscraper],
         });
         let first = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,
@@ -5039,7 +5227,7 @@ mod tests {
             checkpoint: submitted.clone(),
         });
         let checkpointed = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,
@@ -5058,7 +5246,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
         let second_worker = Uuid::new_v4();
         let second = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,
@@ -5082,7 +5270,7 @@ mod tests {
         assert_eq!(second_lease.last_checkpoint, Some(submitted));
 
         let stale = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,
@@ -5107,7 +5295,7 @@ mod tests {
             item_count: Some(37),
         };
         let current_checkpoint = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,
@@ -5193,7 +5381,7 @@ mod tests {
         .expect("mark released-worker failure run as protocol V1");
         let failure_worker = Uuid::new_v4();
         let failure_claim = applied_worker_outcome(
-            apply_worker_action(
+            apply_v1_worker_action(
                 &db,
                 community,
                 &actor,

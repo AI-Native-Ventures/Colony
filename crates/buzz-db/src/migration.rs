@@ -1121,6 +1121,7 @@ mod tests {
         assert!(sql.contains("discovery_protocol_version"));
         assert!(sql.contains("lease_worker_protocol_version"));
         assert!(sql.contains("lease_worker_protocol_claim_id"));
+        assert!(sql.contains("lease_worker_protocol_claim_id=claim_id"));
         assert!(sql.contains("discovery_guard_lease_worker_protocol"));
         assert!(sql.contains("RETURN NULL"));
         assert!(sql.contains("CREATE TRIGGER trg_discovery_seed_legacy_run_plan"));
@@ -1568,14 +1569,43 @@ mod tests {
             .expect("insert preexisting duplicate active run");
             preexisting_active_duplicates.push(duplicate_run_id);
         }
+        let preexisting_lease_run_id = preexisting_active_duplicates[0];
+        let preexisting_lease_claim_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "UPDATE discovery_runs SET state='running',claim_id=$3, \
+             lease_until=now() - interval '1 second',worker_id=$4,lease_owner_pubkey=$5 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(preexisting_lease_run_id)
+        .bind(preexisting_lease_claim_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(&actor)
+        .execute(&pool)
+        .await
+        .expect("seed in-flight released V1 lease");
 
         run_migrations(&pool)
             .await
             .expect("upgrade populated Discovery database");
 
+        let upgraded_lease_marker: (Option<i16>, Option<uuid::Uuid>) = sqlx::query_as(
+            "SELECT lease_worker_protocol_version,lease_worker_protocol_claim_id \
+             FROM discovery_runs WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(preexisting_lease_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read upgraded released V1 lease fence");
+        assert_eq!(
+            upgraded_lease_marker,
+            (Some(1), Some(preexisting_lease_claim_id))
+        );
+
         let duplicate_count: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM discovery_runs \
-             WHERE community_id=$1 AND campaign_id=$2 AND state='queued'",
+             WHERE community_id=$1 AND campaign_id=$2 AND state IN ('queued','running')",
         )
         .bind(community_id)
         .bind(campaign_id)

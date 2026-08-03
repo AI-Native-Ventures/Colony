@@ -28,6 +28,14 @@ ALTER TABLE discovery_runs
         CHECK (lease_worker_protocol_version IN (1, 2)),
     ADD COLUMN lease_worker_protocol_claim_id UUID;
 
+-- Every pre-0039 lease belongs to the released V1 worker contract. Preserve
+-- those in-flight leases so their signed heartbeat/checkpoint/terminal actions
+-- remain valid after the protocol fence becomes mandatory.
+UPDATE discovery_runs
+SET lease_worker_protocol_version=1,
+    lease_worker_protocol_claim_id=claim_id
+WHERE claim_id IS NOT NULL;
+
 CREATE FUNCTION discovery_guard_active_campaign_run() RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.state NOT IN ('queued','running') THEN
