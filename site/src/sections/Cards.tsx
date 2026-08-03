@@ -103,7 +103,13 @@ export function Cards() {
             // eye actually tracks across the three cards. A fixed offset
             // aligns the headings; the grid still stretches every card to the
             // tallest one, so the bottom edges stay level too.
-            className="relative flex min-h-[24rem] flex-col rounded-2xl bg-white p-6 shadow-sm shadow-colony-ink/5"
+            // Both the height floor and the tile-to-heading gap are sm+ only.
+            // Stacked at phone width the cards are already full-bleed and
+            // short, so a 24rem floor and a 8rem gap put three screens of
+            // empty white between the reader and the next section. The open
+            // space is doing layout work in a three-across row; on one column
+            // it is just scrolling.
+            className="relative flex flex-col rounded-2xl bg-white p-6 shadow-sm shadow-colony-ink/5 sm:min-h-[24rem]"
           >
             <div
               className="flex h-24 w-24 items-center justify-center rounded-2xl"
@@ -115,7 +121,7 @@ export function Cards() {
               <AntMark className="w-16" />
             </div>
 
-            <div className="mt-32">
+            <div className="mt-10 sm:mt-32">
               <h3 className="text-sm font-semibold text-colony-ink">
                 {card.title}
               </h3>
