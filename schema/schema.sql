@@ -1172,6 +1172,7 @@ CREATE TABLE discovery_runs (
         CHECK (discovery_protocol_version IN (1, 2)),
     lease_worker_protocol_version SMALLINT
         CHECK (lease_worker_protocol_version IN (1, 2)),
+    lease_worker_protocol_claim_id UUID,
     state TEXT NOT NULL DEFAULT 'queued'
         CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
     completed_steps INTEGER NOT NULL DEFAULT 0 CHECK (completed_steps >= 0),
@@ -1234,12 +1235,17 @@ CREATE FUNCTION discovery_guard_lease_worker_protocol() RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.claim_id IS NULL THEN
         NEW.lease_worker_protocol_version := NULL;
+        NEW.lease_worker_protocol_claim_id := NULL;
         RETURN NEW;
     END IF;
-    IF NEW.lease_worker_protocol_version IS NULL THEN
-        NEW.lease_worker_protocol_version := 1;
+    IF NEW.lease_worker_protocol_version=2
+       AND NEW.lease_worker_protocol_claim_id=NEW.claim_id
+    THEN
+        RETURN NEW;
     END IF;
-    IF NEW.discovery_protocol_version=2 AND NEW.lease_worker_protocol_version <> 2 THEN
+    NEW.lease_worker_protocol_version := 1;
+    NEW.lease_worker_protocol_claim_id := NEW.claim_id;
+    IF NEW.discovery_protocol_version=2 THEN
         RAISE EXCEPTION
             'Discovery protocol V1 worker cannot claim a protocol V2 run'
             USING ERRCODE = 'check_violation';
@@ -1249,7 +1255,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trg_discovery_guard_lease_worker_protocol
-BEFORE INSERT OR UPDATE OF claim_id,discovery_protocol_version,lease_worker_protocol_version
+BEFORE INSERT OR UPDATE OF claim_id,discovery_protocol_version,
+    lease_worker_protocol_version,lease_worker_protocol_claim_id
 ON discovery_runs
 FOR EACH ROW EXECUTE FUNCTION discovery_guard_lease_worker_protocol();
 

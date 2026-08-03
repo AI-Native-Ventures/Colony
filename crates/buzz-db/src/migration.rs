@@ -1120,6 +1120,7 @@ mod tests {
         assert!(sql.contains("CREATE TABLE discovery_source_observation_batches"));
         assert!(sql.contains("discovery_protocol_version"));
         assert!(sql.contains("lease_worker_protocol_version"));
+        assert!(sql.contains("lease_worker_protocol_claim_id"));
         assert!(sql.contains("discovery_guard_lease_worker_protocol"));
         assert!(sql.contains("RETURN NULL"));
         assert!(sql.contains("CREATE TRIGGER trg_discovery_seed_legacy_run_plan"));

@@ -1087,6 +1087,7 @@ async fn apply_worker_action_tx(
                  UPDATE discovery_runs r \
                  SET state='running', claim_id=$2, lease_until=$3, worker_id=$4, \
                      lease_owner_pubkey=$5, lease_worker_protocol_version=2, \
+                     lease_worker_protocol_claim_id=$2, \
                      attempt=r.attempt+1, updated_at=now() \
                  FROM candidate c WHERE r.community_id=$1 AND r.id=c.id \
                  RETURNING r.id, r.community_id, r.campaign_id, r.requested_by, \
@@ -3860,12 +3861,13 @@ mod tests {
         assert_eq!(unchanged, ("queued".to_owned(), None));
 
         let current_claim_id = Uuid::new_v4();
-        let current_claim: (Uuid, i16) = sqlx::query_as(
+        let current_claim: (Uuid, i16, Option<Uuid>) = sqlx::query_as(
             "UPDATE discovery_runs \
              SET state='running',claim_id=$3,lease_until=$4,worker_id=$5, \
-                 lease_owner_pubkey=$6,lease_worker_protocol_version=2,updated_at=now() \
+                 lease_owner_pubkey=$6,lease_worker_protocol_version=2, \
+                 lease_worker_protocol_claim_id=$3,updated_at=now() \
              WHERE community_id=$1 AND id=$2 \
-             RETURNING id,lease_worker_protocol_version",
+             RETURNING id,lease_worker_protocol_version,lease_worker_protocol_claim_id",
         )
         .bind(community.as_uuid())
         .bind(run_id)
@@ -3876,19 +3878,67 @@ mod tests {
         .fetch_one(&db.pool)
         .await
         .expect("protocol V2 worker may claim protocol V2 run");
-        assert_eq!(current_claim, (run_id, 2));
+        assert_eq!(current_claim, (run_id, 2, Some(current_claim_id)));
 
-        let cleared: Option<i16> = sqlx::query_scalar(
+        sqlx::query(
+            "UPDATE discovery_runs SET lease_until=now() - interval '1 second' \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .execute(&db.pool)
+        .await
+        .expect("expire protocol V2 lease");
+
+        let stale_reclaim_id = Uuid::new_v4();
+        let stale_legacy_reclaim = sqlx::query(
+            "WITH candidate AS ( \
+                 SELECT community_id, id FROM discovery_runs \
+                 WHERE state IN ('queued', 'running') \
+                   AND (claim_id IS NULL OR lease_until < now()) \
+                 ORDER BY created_at, id \
+                 FOR UPDATE SKIP LOCKED LIMIT 1 \
+             ) \
+             UPDATE discovery_runs r \
+             SET state='running', claim_id=$1, lease_until=$2, worker_id=NULL, \
+                 lease_owner_pubkey=NULL, attempt=r.attempt+1, updated_at=now() \
+             FROM candidate c WHERE r.community_id=c.community_id AND r.id=c.id \
+             RETURNING r.id",
+        )
+        .bind(stale_reclaim_id)
+        .bind(Utc::now() + Duration::seconds(30))
+        .fetch_optional(&db.pool)
+        .await;
+        assert!(matches!(
+            stale_legacy_reclaim,
+            Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23514")
+        ));
+
+        let preserved_claim: (Uuid, i16, Option<Uuid>) = sqlx::query_as(
+            "SELECT claim_id,lease_worker_protocol_version,lease_worker_protocol_claim_id \
+             FROM discovery_runs WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("protocol V2 lease claim remains fenced");
+        assert_eq!(
+            preserved_claim,
+            (current_claim_id, 2, Some(current_claim_id))
+        );
+
+        let cleared: (Option<i16>, Option<Uuid>) = sqlx::query_as(
             "UPDATE discovery_runs SET state='cancelled',claim_id=NULL,lease_until=NULL, \
              worker_id=NULL,lease_owner_pubkey=NULL WHERE community_id=$1 AND id=$2 \
-             RETURNING lease_worker_protocol_version",
+             RETURNING lease_worker_protocol_version,lease_worker_protocol_claim_id",
         )
         .bind(community.as_uuid())
         .bind(run_id)
         .fetch_one(&db.pool)
         .await
         .expect("terminal transition clears worker protocol marker");
-        assert_eq!(cleared, None);
+        assert_eq!(cleared, (None, None));
     }
 
     #[tokio::test]
