@@ -1,4 +1,9 @@
 // site/src/sections/ProductShowcase.tsx
+//
+// The screenshot is imported rather than referenced from public/ so Vite
+// content-hashes it. Under a stable /product-channel.png the first deploy of
+// this shot went out successfully and Cloudflare's edge kept serving the old
+// engineering-channel capture to anyone without a cache-busting query.
 // The single largest piece of evidence on the page: an actual Colony
 // screenshot instead of another description. Captured from the real desktop
 // app via the E2E screenshot pipeline (just desktop-screenshot), not staged
@@ -14,6 +19,8 @@
 // #211f1f, not colony-ink (#171717): a frame at pure ink matched the body
 // text's own colour and flattened against the footer's dark band. Lifting it
 // a few points keeps it reading as a surface.
+import productShotUrl from "@/assets/product-channel.png";
+
 const FRAME = "#211f1f";
 
 // Regenerating product-channel.png:
@@ -21,7 +28,7 @@ const FRAME = "#211f1f";
 //   cd desktop && pnpm build:e2e
 //   pnpm exec playwright test tests/e2e/site-feature-screenshots.spec.ts \
 //     --project=smoke -g "company channel"
-//   cp test-results/site-features/product-channel.png ../site/public/
+//   cp test-results/site-features/product-channel.png ../site/src/assets/
 //
 // The spec ("capture: the company channel hero shot") owns the whole frame:
 // the people, the agents, the seeded thread, and the sidebar. It captures the
@@ -44,7 +51,7 @@ export function ProductShowcase() {
           style={{ backgroundColor: FRAME }}
         >
           <img
-            src="/product-channel.png"
+            src={productShotUrl}
             alt="A Colony growth channel: Maya Chen sets fit over volume, the agent Scout posts a ranked table of twenty target companies with named decision makers, Daniel Okafor tells it to drop numbers that don't work, the agent Forager reports twenty drafted emails queued for approval with reactions and a reply, and Aisha Bello approves the first ten."
             width={2560}
             height={1640}

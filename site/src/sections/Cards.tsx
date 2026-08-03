@@ -14,6 +14,9 @@
 // there ships in the deploy. They are reproducible whenever a features page
 // wants them: run desktop/tests/e2e/site-feature-screenshots.spec.ts and copy
 // test-results/site-features/feature-*.png back in.
+import foragerArt from "@/assets/forager.png";
+import scoutArt from "@/assets/scout.png";
+import tenderArt from "@/assets/tender.png";
 import { PheromoneTrail } from "@/brand/PheromoneTrail";
 import { getActiveHue, HUE_ACCENT, HUE_SCATTER_TONES } from "@/brand/hue";
 
@@ -25,22 +28,22 @@ import { getActiveHue, HUE_ACCENT, HUE_SCATTER_TONES } from "@/brand/hue";
 // lighting instead of the flat mark on a tinted tile that stood in for it.
 //
 // Regenerating: ffmpeg -i desktop/public/onboarding/starter-team/<name>.png \
-//   -frames:v 1 site/public/starter-team/<name>.png
+//   -frames:v 1 site/src/assets/<name>.png
 // (the source is a ~1MB animated PNG; one frame is ~30KB, and a landing page
 // does not need three megabytes of looping avatars).
 const CARDS = [
   {
-    art: "/starter-team/tender.png",
+    art: tenderArt,
     title: "Communicate with your team",
     body: "Keep people, context, decisions, and next steps in one shared room. No more chasing threads, docs, and status updates.",
   },
   {
-    art: "/starter-team/scout.png",
+    art: scoutArt,
     title: "Bring in your agents",
     body: "Invite specialized agents into the conversation so they compare notes, divide work, and build on your team's context.",
   },
   {
-    art: "/starter-team/forager.png",
+    art: foragerArt,
     title: "Manage your git projects",
     body: "Turn the discussion into plans, code, reviews, and PRs without hopping between your tracker, chat app, and dev tools.",
   },
