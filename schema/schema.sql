@@ -1170,6 +1170,8 @@ CREATE TABLE discovery_runs (
     start_idempotency_key UUID NOT NULL,
     discovery_protocol_version SMALLINT NOT NULL DEFAULT 1
         CHECK (discovery_protocol_version IN (1, 2)),
+    lease_worker_protocol_version SMALLINT
+        CHECK (lease_worker_protocol_version IN (1, 2)),
     state TEXT NOT NULL DEFAULT 'queued'
         CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
     completed_steps INTEGER NOT NULL DEFAULT 0 CHECK (completed_steps >= 0),
@@ -1196,6 +1198,22 @@ BEGIN
     PERFORM id FROM discovery_campaigns
     WHERE community_id=NEW.community_id AND id=NEW.campaign_id
     FOR UPDATE;
+    IF TG_OP='UPDATE' THEN
+        IF OLD.state IN ('queued','running')
+           AND OLD.community_id=NEW.community_id
+           AND OLD.campaign_id=NEW.campaign_id
+        THEN
+            IF NEW.claim_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM discovery_runs
+                WHERE community_id=NEW.community_id AND campaign_id=NEW.campaign_id
+                  AND state IN ('queued','running') AND id <> NEW.id
+                  AND claim_id IS NOT NULL AND lease_until >= now()
+            ) THEN
+                RETURN NULL;
+            END IF;
+            RETURN NEW;
+        END IF;
+    END IF;
     IF EXISTS (
         SELECT 1 FROM discovery_runs
         WHERE community_id=NEW.community_id AND campaign_id=NEW.campaign_id
@@ -1211,6 +1229,29 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_discovery_guard_active_campaign_run
 BEFORE INSERT OR UPDATE OF state,community_id,campaign_id ON discovery_runs
 FOR EACH ROW EXECUTE FUNCTION discovery_guard_active_campaign_run();
+
+CREATE FUNCTION discovery_guard_lease_worker_protocol() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.claim_id IS NULL THEN
+        NEW.lease_worker_protocol_version := NULL;
+        RETURN NEW;
+    END IF;
+    IF NEW.lease_worker_protocol_version IS NULL THEN
+        NEW.lease_worker_protocol_version := 1;
+    END IF;
+    IF NEW.discovery_protocol_version=2 AND NEW.lease_worker_protocol_version <> 2 THEN
+        RAISE EXCEPTION
+            'Discovery protocol V1 worker cannot claim a protocol V2 run'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_discovery_guard_lease_worker_protocol
+BEFORE INSERT OR UPDATE OF claim_id,discovery_protocol_version,lease_worker_protocol_version
+ON discovery_runs
+FOR EACH ROW EXECUTE FUNCTION discovery_guard_lease_worker_protocol();
 
 CREATE TABLE discovery_workspace_protocols (
     community_id UUID NOT NULL PRIMARY KEY REFERENCES communities(id) ON DELETE CASCADE,

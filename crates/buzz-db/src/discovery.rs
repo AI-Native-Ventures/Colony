@@ -873,6 +873,7 @@ impl Db {
             "WITH candidate AS ( \
                  SELECT community_id, id FROM discovery_runs \
                  WHERE state IN ('queued', 'running') \
+                   AND discovery_protocol_version=1 \
                    AND (claim_id IS NULL OR lease_until < now()) \
                  ORDER BY created_at, id \
                  FOR UPDATE SKIP LOCKED LIMIT 1 \
@@ -1085,7 +1086,8 @@ async fn apply_worker_action_tx(
                  ) \
                  UPDATE discovery_runs r \
                  SET state='running', claim_id=$2, lease_until=$3, worker_id=$4, \
-                     lease_owner_pubkey=$5, attempt=r.attempt+1, updated_at=now() \
+                     lease_owner_pubkey=$5, lease_worker_protocol_version=2, \
+                     attempt=r.attempt+1, updated_at=now() \
                  FROM candidate c WHERE r.community_id=$1 AND r.id=c.id \
                  RETURNING r.id, r.community_id, r.campaign_id, r.requested_by, \
                  r.start_idempotency_key, r.state, r.completed_steps, r.total_steps, \
@@ -3793,6 +3795,104 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
+    async fn released_v1_worker_cannot_claim_protocol_v2_run() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        sqlx::query(
+            "UPDATE discovery_campaigns \
+             SET source_mode='concurrent',source_keys=ARRAY['brave_search','exa_search']::TEXT[] \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .execute(&db.pool)
+        .await
+        .expect("configure protocol V2 Campaign");
+        let run_id = match db
+            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 1, &search)
+            .await
+            .expect("create protocol V2 run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+
+        // Keep this query byte-for-byte aligned with origin/develop's released
+        // in-process worker claim. A rollback must be refused before it can
+        // return a lease and make an Outscraper call for a Brave/Exa run.
+        let legacy_claim = sqlx::query(
+            "WITH candidate AS ( \
+                 SELECT community_id, id FROM discovery_runs \
+                 WHERE state IN ('queued', 'running') \
+                   AND (claim_id IS NULL OR lease_until < now()) \
+                 ORDER BY created_at, id \
+                 FOR UPDATE SKIP LOCKED LIMIT 1 \
+             ) \
+             UPDATE discovery_runs r \
+             SET state='running', claim_id=$1, lease_until=$2, worker_id=NULL, \
+                 lease_owner_pubkey=NULL, attempt=r.attempt+1, updated_at=now() \
+             FROM candidate c WHERE r.community_id=c.community_id AND r.id=c.id \
+             RETURNING r.id",
+        )
+        .bind(Uuid::new_v4())
+        .bind(Utc::now() + Duration::seconds(30))
+        .fetch_optional(&db.pool)
+        .await;
+        assert!(matches!(
+            legacy_claim,
+            Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23514")
+        ));
+
+        let unchanged: (String, Option<Uuid>) = sqlx::query_as(
+            "SELECT state,claim_id FROM discovery_runs WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("read rollback-fenced run");
+        assert_eq!(unchanged, ("queued".to_owned(), None));
+
+        let current_claim_id = Uuid::new_v4();
+        let current_claim: (Uuid, i16) = sqlx::query_as(
+            "UPDATE discovery_runs \
+             SET state='running',claim_id=$3,lease_until=$4,worker_id=$5, \
+                 lease_owner_pubkey=$6,lease_worker_protocol_version=2,updated_at=now() \
+             WHERE community_id=$1 AND id=$2 \
+             RETURNING id,lease_worker_protocol_version",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .bind(current_claim_id)
+        .bind(Utc::now() + Duration::seconds(30))
+        .bind(Uuid::new_v4())
+        .bind(human.as_slice())
+        .fetch_one(&db.pool)
+        .await
+        .expect("protocol V2 worker may claim protocol V2 run");
+        assert_eq!(current_claim, (run_id, 2));
+
+        let cleared: Option<i16> = sqlx::query_scalar(
+            "UPDATE discovery_runs SET state='cancelled',claim_id=NULL,lease_until=NULL, \
+             worker_id=NULL,lease_owner_pubkey=NULL WHERE community_id=$1 AND id=$2 \
+             RETURNING lease_worker_protocol_version",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("terminal transition clears worker protocol marker");
+        assert_eq!(cleared, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn worker_claim_requires_every_provider_in_the_run_snapshot() {
         let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
         let (db, community, _, _) = database_fixture().await;
@@ -5709,7 +5809,19 @@ mod tests {
             .create_discovery_run_once(community, &human, campaign, key, 3, &campaign_search)
             .await
             .expect("create run");
-        assert!(matches!(first, DiscoveryRunCreate::Created(_)));
+        let first_run_id = match first {
+            DiscoveryRunCreate::Created(run) => run.id,
+            DiscoveryRunCreate::Existing(_) => panic!("first run must be newly created"),
+        };
+        sqlx::query(
+            "UPDATE discovery_runs SET discovery_protocol_version=1 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(first_run_id)
+        .execute(&db.pool)
+        .await
+        .expect("mark in-process worker fixture as protocol V1");
         let duplicate = db
             .create_discovery_run_once(community, &agent, campaign, key, 3, &campaign_search)
             .await
@@ -5786,6 +5898,15 @@ mod tests {
         let revoke_id = match revoke {
             DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
         };
+        sqlx::query(
+            "UPDATE discovery_runs SET discovery_protocol_version=1 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(revoke_id)
+        .execute(&db.pool)
+        .await
+        .expect("mark revocation fixture as protocol V1");
         let revoke_claim = db
             .claim_discovery_run(Duration::seconds(5))
             .await
@@ -5849,6 +5970,15 @@ mod tests {
         let lease_id = match lease {
             DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
         };
+        sqlx::query(
+            "UPDATE discovery_runs SET discovery_protocol_version=1 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(lease_id)
+        .execute(&db.pool)
+        .await
+        .expect("mark lease fixture as protocol V1");
         let stale = db
             .claim_discovery_run(Duration::milliseconds(50))
             .await

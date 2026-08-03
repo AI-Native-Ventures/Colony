@@ -1119,6 +1119,9 @@ mod tests {
         assert!(sql.contains("CREATE TABLE discovery_source_usage"));
         assert!(sql.contains("CREATE TABLE discovery_source_observation_batches"));
         assert!(sql.contains("discovery_protocol_version"));
+        assert!(sql.contains("lease_worker_protocol_version"));
+        assert!(sql.contains("discovery_guard_lease_worker_protocol"));
+        assert!(sql.contains("RETURN NULL"));
         assert!(sql.contains("CREATE TRIGGER trg_discovery_seed_legacy_run_plan"));
         assert!(sql.contains("CREATE TRIGGER trg_discovery_sync_legacy_run_source"));
         assert!(sql.contains("PRIMARY KEY (community_id, run_id, source_key)"));
@@ -1579,15 +1582,90 @@ mod tests {
         .await
         .expect("count preserved preexisting active duplicates");
         assert_eq!(duplicate_count, 2);
+        let first_claim_id = uuid::Uuid::new_v4();
+        let first_claimed: Option<uuid::Uuid> = sqlx::query_scalar(
+            "WITH candidate AS ( \
+                 SELECT community_id,id FROM discovery_runs \
+                 WHERE state IN ('queued','running') \
+                   AND (claim_id IS NULL OR lease_until < now()) \
+                 ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1 \
+             ) \
+             UPDATE discovery_runs r SET state='running',claim_id=$1,lease_until=$2, \
+                 worker_id=NULL,lease_owner_pubkey=NULL,attempt=r.attempt+1,updated_at=now() \
+             FROM candidate c WHERE r.community_id=c.community_id AND r.id=c.id \
+             RETURNING r.id",
+        )
+        .bind(first_claim_id)
+        .bind(chrono::Utc::now() + chrono::Duration::seconds(30))
+        .fetch_optional(&pool)
+        .await
+        .expect("released worker claims first legacy duplicate");
+        let first_claimed = first_claimed.expect("first legacy duplicate must drain");
+        assert!(preexisting_active_duplicates.contains(&first_claimed));
+
+        let blocked_while_live: Option<uuid::Uuid> = sqlx::query_scalar(
+            "WITH candidate AS ( \
+                 SELECT community_id,id FROM discovery_runs \
+                 WHERE state IN ('queued','running') \
+                   AND (claim_id IS NULL OR lease_until < now()) \
+                 ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1 \
+             ) \
+             UPDATE discovery_runs r SET state='running',claim_id=$1,lease_until=$2, \
+                 worker_id=NULL,lease_owner_pubkey=NULL,attempt=r.attempt+1,updated_at=now() \
+             FROM candidate c WHERE r.community_id=c.community_id AND r.id=c.id \
+             RETURNING r.id",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(chrono::Utc::now() + chrono::Duration::seconds(30))
+        .fetch_optional(&pool)
+        .await
+        .expect("second legacy claim is safely deferred");
+        assert_eq!(blocked_while_live, None);
+
         sqlx::query(
-            "UPDATE discovery_runs SET state='cancelled',cancel_requested=TRUE,updated_at=now() \
-             WHERE community_id=$1 AND id=ANY($2)",
+            "UPDATE discovery_runs SET state='succeeded',completed_steps=total_steps, \
+             claim_id=NULL,lease_until=NULL,worker_id=NULL,lease_owner_pubkey=NULL,updated_at=now() \
+             WHERE community_id=$1 AND id=$2 AND claim_id=$3",
         )
         .bind(community_id)
-        .bind(&preexisting_active_duplicates)
+        .bind(first_claimed)
+        .bind(first_claim_id)
         .execute(&pool)
         .await
-        .expect("drain preexisting duplicate active runs");
+        .expect("finish first legacy duplicate");
+
+        let second_claim_id = uuid::Uuid::new_v4();
+        let second_claimed: Option<uuid::Uuid> = sqlx::query_scalar(
+            "WITH candidate AS ( \
+                 SELECT community_id,id FROM discovery_runs \
+                 WHERE state IN ('queued','running') \
+                   AND (claim_id IS NULL OR lease_until < now()) \
+                 ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1 \
+             ) \
+             UPDATE discovery_runs r SET state='running',claim_id=$1,lease_until=$2, \
+                 worker_id=NULL,lease_owner_pubkey=NULL,attempt=r.attempt+1,updated_at=now() \
+             FROM candidate c WHERE r.community_id=c.community_id AND r.id=c.id \
+             RETURNING r.id",
+        )
+        .bind(second_claim_id)
+        .bind(chrono::Utc::now() + chrono::Duration::seconds(30))
+        .fetch_optional(&pool)
+        .await
+        .expect("released worker claims second legacy duplicate after first drains");
+        let second_claimed = second_claimed.expect("second legacy duplicate must drain");
+        assert_ne!(second_claimed, first_claimed);
+        assert!(preexisting_active_duplicates.contains(&second_claimed));
+        sqlx::query(
+            "UPDATE discovery_runs SET state='cancelled',cancel_requested=TRUE,claim_id=NULL, \
+             lease_until=NULL,worker_id=NULL,lease_owner_pubkey=NULL,updated_at=now() \
+             WHERE community_id=$1 AND id=$2 AND claim_id=$3",
+        )
+        .bind(community_id)
+        .bind(second_claimed)
+        .bind(second_claim_id)
+        .execute(&pool)
+        .await
+        .expect("finish second legacy duplicate");
 
         let campaign: (String, Vec<String>) = sqlx::query_as(
             "SELECT source_mode,source_keys FROM discovery_campaigns \
