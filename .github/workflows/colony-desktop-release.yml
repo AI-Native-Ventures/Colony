@@ -125,6 +125,11 @@ jobs:
         run: |
           . ./bin/activate-hermit
           export PATH="$HOME/.cargo/bin:$PATH"
+          # Presence, never the values: build.rs silently produces an app
+          # without an updater when either is missing, and that is invisible
+          # in every artifact the build emits.
+          echo "updater public key present: ${BUZZ_UPDATER_PUBLIC_KEY:+yes}"
+          echo "updater endpoint present:   ${BUZZ_UPDATER_ENDPOINT:+yes}"
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
       - name: Verify the bundle
@@ -148,7 +153,13 @@ jobs:
         run: |
           set -euo pipefail
           BIN=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop
-          if ! strings -a "$BIN" | grep -q "buzz-updater-enabled"; then
+          # `grep -c`, not `grep -q`: -q exits at the first match, which sends
+          # SIGPIPE to `strings` mid-stream on a 130MB binary, and under
+          # `pipefail` that failure becomes the pipeline's result. The gate
+          # then reports "missing" precisely when the marker IS present.
+          MARKERS=$(strings -a "$BIN" | grep -c "buzz-updater-enabled" || true)
+          echo "updater marker occurrences: ${MARKERS:-0}"
+          if [ "${MARKERS:-0}" -eq 0 ]; then
             echo "::error::The updater plugin is not compiled into this build. \
           build.rs needs BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT in \
           the build step's environment; without them the app ships unable to \
