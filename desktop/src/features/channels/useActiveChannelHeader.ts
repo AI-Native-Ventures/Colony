@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useAgentNameProfiles } from "@/features/agents/useAgentNameProfiles";
 import { useEphemeralChannelDisplay } from "@/features/channels/useEphemeralChannelDisplay";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
@@ -47,6 +48,12 @@ export function useActiveChannelHeader(
   const activeDmProfilesQuery = useUsersBatchQuery(activeDmParticipantPubkeys, {
     enabled: activeDmParticipantPubkeys.length > 0,
   });
+  // Registry overlay: an agent peer whose kind:0 hasn't reached this relay
+  // yet must still resolve to its registry name, not its raw pubkey.
+  const activeDmProfiles = useAgentNameProfiles(
+    activeDmProfilesQuery.data?.profiles,
+    currentPubkey,
+  );
   const activeChannelEphemeralDisplay =
     useEphemeralChannelDisplay(activeChannel);
   const activeDmPresenceStatus: PresenceStatus | null =
@@ -57,7 +64,7 @@ export function useActiveChannelHeader(
       : null;
   const activeDmAvatarUrl =
     activeDmParticipantPubkeys.length > 0
-      ? (activeDmProfilesQuery.data?.profiles?.[
+      ? (activeDmProfiles?.[
           normalizePubkey(activeDmParticipantPubkeys[0] ?? "")
         ]?.avatarUrl ?? null)
       : null;
@@ -65,22 +72,20 @@ export function useActiveChannelHeader(
     () =>
       activeDmParticipants.map((participant) => {
         const profile =
-          activeDmProfilesQuery.data?.profiles?.[
-            normalizePubkey(participant.pubkey)
-          ] ?? null;
+          activeDmProfiles?.[normalizePubkey(participant.pubkey)] ?? null;
 
         return {
           pubkey: participant.pubkey,
           displayName: resolveUserLabel({
             currentPubkey,
             fallbackName: participant.fallbackName,
-            profiles: activeDmProfilesQuery.data?.profiles,
+            profiles: activeDmProfiles,
             pubkey: participant.pubkey,
           }),
           avatarUrl: profile?.avatarUrl ?? null,
         };
       }),
-    [activeDmParticipants, activeDmProfilesQuery.data?.profiles, currentPubkey],
+    [activeDmParticipants, activeDmProfiles, currentPubkey],
   );
 
   return {
@@ -88,7 +93,7 @@ export function useActiveChannelHeader(
       ? resolveChannelDisplayLabel(
           activeChannel,
           currentPubkey,
-          activeDmProfilesQuery.data?.profiles,
+          activeDmProfiles,
         )
       : "Channels",
     activeDmAvatarUrl,
