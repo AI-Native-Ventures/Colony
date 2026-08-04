@@ -167,6 +167,15 @@ pub enum AskParseError {
         /// The maximum allowed value ([`MAX_ASK_WINDOW_SECS`]).
         max: u64,
     },
+    /// A delegation grant named a category on [`HARD_LIST_CATEGORIES`]
+    /// (spec: the hard list is absolute -- no grant may delegate it).
+    #[error("category `{0}` is on the hard list and can never be delegated")]
+    GrantOnHardList(String),
+    /// A delegation grant's `scope` was a wildcard (`"*"` or `"all"`). An
+    /// unbounded grant is indistinguishable from no policy at all -- exactly
+    /// the failure mode a scoped grant exists to prevent.
+    #[error("grant scope must be specific, not a wildcard: {0}")]
+    VagueGrantScope(String),
 }
 
 /// A validated Ask event (kind [`crate::kind::KIND_ASK`]), ready for broker processing.
@@ -216,6 +225,48 @@ pub struct ParsedWithdrawal {
     pub ask_event_hex: String,
     /// The content `reason` field: why the Ask was withdrawn.
     pub reason: String,
+}
+
+/// A validated delegation grant event (kind [`crate::kind::KIND_DELEGATION_GRANT`]).
+///
+/// A NIP-33 head: the founder saying "handle this yourselves next time",
+/// turned into a precise, signed, revocable object. Owner-authored --
+/// ingest enforces authorship separately from this parser, since a
+/// well-formed grant is not the same thing as an authorized one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedGrant {
+    /// The `d` tag: this grant's stable id.
+    pub grant_id: String,
+    /// The content `category` field: what kind of decision this delegates.
+    /// Never a value on [`HARD_LIST_CATEGORIES`].
+    pub category: String,
+    /// The content `scope` field: the precise boundary of the delegation.
+    /// Never a wildcard (`"*"` or `"all"`).
+    pub scope: String,
+    /// The content `cap_nano_usd` field: an optional spending cap, in
+    /// integer nanoUSD.
+    pub cap_nano_usd: Option<i64>,
+    /// The content `active` field: whether this grant currently authorizes
+    /// autonomous action. `false` revokes it without deleting the record.
+    pub active: bool,
+}
+
+/// A validated decision log event (kind [`crate::kind::KIND_DECISION_LOG`]).
+///
+/// A leader or executive recording a decision it made on its own authority
+/// under a delegation grant, including the undo path -- reversibility is
+/// the license for autonomy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedDecisionLog {
+    /// The `grant` tag: the delegation grant this decision was made under.
+    pub grant_id: String,
+    /// All `task` tag values (one or more): the task(s) this decision covers.
+    pub task_ids: Vec<String>,
+    /// The content `decision` field: what was decided.
+    pub decision: String,
+    /// The content `undo_path` field: how to undo this decision. Required
+    /// and non-empty -- spec: no stateable undo path means no autonomy.
+    pub undo_path: String,
 }
 
 /// Returns `true` if `s` is exactly 64 lowercase hex characters.
@@ -298,6 +349,19 @@ fn required_content_field(
         return Err(AskParseError::EmptyField(field.to_owned()));
     }
     Ok(value.to_owned())
+}
+
+/// Extract and validate a required boolean field from grant content JSON.
+/// Missing or non-boolean both map to [`AskParseError::EmptyField`], matching
+/// that variant's "empty (or missing)" contract for required content fields.
+fn required_content_bool_field(
+    content: &serde_json::Value,
+    field: &'static str,
+) -> Result<bool, AskParseError> {
+    content
+        .get(field)
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| AskParseError::EmptyField(field.to_owned()))
 }
 
 /// Parse Ask event JSON content into a `serde_json::Value`.
@@ -448,6 +512,91 @@ pub fn parse_withdrawal(event: &nostr::Event) -> Result<ParsedWithdrawal, AskPar
     Ok(ParsedWithdrawal {
         ask_event_hex,
         reason,
+    })
+}
+
+/// Wildcard `scope` values a delegation grant may not use (spec: vague
+/// grants are rejected). An unbounded grant is indistinguishable from no
+/// policy at all -- exactly the failure mode a scoped grant exists to
+/// prevent.
+const VAGUE_GRANT_SCOPES: &[&str] = &["*", "all"];
+
+/// Parse and validate a Colony delegation grant event
+/// (kind [`crate::kind::KIND_DELEGATION_GRANT`]).
+///
+/// A NIP-33 parameterized-replaceable head; the `d` tag is the grant id.
+/// Content JSON carries `category` and `scope` (both required, non-empty),
+/// `active` (required boolean), and an optional `cap_nano_usd` spending cap.
+///
+/// `category` must not be on [`HARD_LIST_CATEGORIES`] (spec: the hard list
+/// is absolute -- no configuration, no override). `scope` must not be a
+/// wildcard (`"*"` or `"all"`): a grant this vague is indistinguishable
+/// from no policy at all, which is the failure mode this record exists to
+/// prevent.
+///
+/// This parser enforces schema only. Authorship -- that the signer
+/// currently holds the community's owner role -- is an ingest-time,
+/// database-backed check, not something a pure parser can verify; see
+/// `buzz-relay::interrupt_gate::enforce_grant_authorship`.
+pub fn parse_grant(event: &nostr::Event) -> Result<ParsedGrant, AskParseError> {
+    let grant_id = single_tag_value(event, "d")?;
+
+    let content = parse_content(event)?;
+    let category = required_content_field(&content, "category")?;
+    if is_hard_list_category(&category) {
+        return Err(AskParseError::GrantOnHardList(category));
+    }
+
+    let scope = required_content_field(&content, "scope")?;
+    if VAGUE_GRANT_SCOPES.contains(&scope.as_str()) {
+        return Err(AskParseError::VagueGrantScope(scope));
+    }
+
+    let active = required_content_bool_field(&content, "active")?;
+
+    let cap_nano_usd = content
+        .get("cap_nano_usd")
+        .and_then(serde_json::Value::as_i64);
+
+    Ok(ParsedGrant {
+        grant_id,
+        category,
+        scope,
+        cap_nano_usd,
+        active,
+    })
+}
+
+/// Parse and validate a Colony interrupt decision log event
+/// (kind [`crate::kind::KIND_DECISION_LOG`]).
+///
+/// Tags: exactly one `grant` (the delegation grant this decision was made
+/// under) and one or more `task`. Content JSON carries `decision` and
+/// `undo_path` (both required, non-empty) -- spec: no stateable undo path
+/// means no autonomy, so a decision log missing one is rejected outright
+/// rather than accepted and merely flagged.
+///
+/// This parser enforces schema only. That the signer is currently ranked
+/// `Leader` or `Executive`, and that the cited grant resolves to a
+/// currently active, owner-authored head, are ingest-time, database-backed
+/// checks; see `buzz-relay::interrupt_gate::enforce_decision_log_authority`.
+pub fn parse_decision_log(event: &nostr::Event) -> Result<ParsedDecisionLog, AskParseError> {
+    let grant_id = single_tag_value(event, "grant")?;
+
+    let task_ids: Vec<String> = tag_values(event, "task").collect();
+    if task_ids.is_empty() {
+        return Err(AskParseError::MissingTaskTag);
+    }
+
+    let content = parse_content(event)?;
+    let decision = required_content_field(&content, "decision")?;
+    let undo_path = required_content_field(&content, "undo_path")?;
+
+    Ok(ParsedDecisionLog {
+        grant_id,
+        task_ids,
+        decision,
+        undo_path,
     })
 }
 
@@ -773,6 +922,181 @@ mod tests {
         assert!(matches!(
             parse_withdrawal(&event),
             Err(AskParseError::EmptyField(field)) if field == "reason"
+        ));
+    }
+
+    // ── Delegation grant parsing ───────────────────────────────────────
+
+    fn sign_grant(tags: Vec<nostr::Tag>, content: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        EventBuilder::new(
+            Kind::Custom(crate::kind::KIND_DELEGATION_GRANT as u16),
+            content,
+        )
+        .tags(tags)
+        .sign_with_keys(&keys)
+        .expect("sign")
+    }
+
+    #[test]
+    fn parse_grant_happy_path_extracts_all_fields() {
+        let tags = vec![t(&["d", "grant-1"])];
+        let content = r#"{"category":"copy_change","scope":"blog_post_titles","active":true,"cap_nano_usd":500000}"#;
+        let event = sign_grant(tags, content);
+
+        let grant = parse_grant(&event).expect("parse");
+        assert_eq!(grant.grant_id, "grant-1");
+        assert_eq!(grant.category, "copy_change");
+        assert_eq!(grant.scope, "blog_post_titles");
+        assert!(grant.active);
+        assert_eq!(grant.cap_nano_usd, Some(500000));
+    }
+
+    #[test]
+    fn parse_grant_accepts_absent_cap() {
+        let tags = vec![t(&["d", "grant-1"])];
+        let content = r#"{"category":"copy_change","scope":"blog_post_titles","active":true}"#;
+        let event = sign_grant(tags, content);
+
+        let grant = parse_grant(&event).expect("parse");
+        assert_eq!(grant.cap_nano_usd, None);
+    }
+
+    #[test]
+    fn parse_grant_rejects_hard_list_category() {
+        let tags = vec![t(&["d", "grant-1"])];
+        let content = r#"{"category":"spend","scope":"marketing_budget","active":true}"#;
+        let event = sign_grant(tags, content);
+        assert!(matches!(
+            parse_grant(&event),
+            Err(AskParseError::GrantOnHardList(category)) if category == "spend"
+        ));
+    }
+
+    #[test]
+    fn parse_grant_rejects_vague_scope() {
+        for vague in ["*", "all"] {
+            let tags = vec![t(&["d", "grant-1"])];
+            let content =
+                format!(r#"{{"category":"copy_change","scope":"{vague}","active":true}}"#);
+            let event = sign_grant(tags, &content);
+            assert!(
+                matches!(
+                    parse_grant(&event),
+                    Err(AskParseError::VagueGrantScope(scope)) if scope == vague
+                ),
+                "scope `{vague}` must be rejected as vague"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_grant_rejects_empty_scope() {
+        let tags = vec![t(&["d", "grant-1"])];
+        let content = r#"{"category":"copy_change","scope":"","active":true}"#;
+        let event = sign_grant(tags, content);
+        assert!(matches!(
+            parse_grant(&event),
+            Err(AskParseError::EmptyField(field)) if field == "scope"
+        ));
+    }
+
+    #[test]
+    fn parse_grant_rejects_non_boolean_active() {
+        let tags = vec![t(&["d", "grant-1"])];
+        let content = r#"{"category":"copy_change","scope":"blog_post_titles","active":"yes"}"#;
+        let event = sign_grant(tags, content);
+        assert!(matches!(
+            parse_grant(&event),
+            Err(AskParseError::EmptyField(field)) if field == "active"
+        ));
+    }
+
+    // ── Decision log parsing ───────────────────────────────────────────
+
+    fn sign_decision_log(tags: Vec<nostr::Tag>, content: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        EventBuilder::new(Kind::Custom(crate::kind::KIND_DECISION_LOG as u16), content)
+            .tags(tags)
+            .sign_with_keys(&keys)
+            .expect("sign")
+    }
+
+    #[test]
+    fn parse_decision_log_happy_path_extracts_all_fields() {
+        let tags = vec![
+            t(&["grant", "grant-1"]),
+            t(&["task", "task-9"]),
+            t(&["task", "task-10"]),
+        ];
+        let content =
+            r#"{"decision":"Used stock photo B instead of A","undo_path":"revert commit abc123"}"#;
+        let event = sign_decision_log(tags, content);
+
+        let log = parse_decision_log(&event).expect("parse");
+        assert_eq!(log.grant_id, "grant-1");
+        assert_eq!(
+            log.task_ids,
+            vec!["task-9".to_string(), "task-10".to_string()]
+        );
+        assert_eq!(log.decision, "Used stock photo B instead of A");
+        assert_eq!(log.undo_path, "revert commit abc123");
+    }
+
+    #[test]
+    fn parse_decision_log_rejects_missing_undo_path() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"decision":"Used stock photo B instead of A"}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::EmptyField(field)) if field == "undo_path"
+        ));
+    }
+
+    #[test]
+    fn parse_decision_log_rejects_empty_undo_path() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"decision":"x","undo_path":"   "}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::EmptyField(field)) if field == "undo_path"
+        ));
+    }
+
+    #[test]
+    fn parse_decision_log_rejects_missing_decision() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"undo_path":"revert commit abc123"}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::EmptyField(field)) if field == "decision"
+        ));
+    }
+
+    #[test]
+    fn parse_decision_log_rejects_missing_task_tag() {
+        let tags = vec![t(&["grant", "grant-1"])];
+        let content = r#"{"decision":"x","undo_path":"y"}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::MissingTaskTag)
+        ));
+    }
+
+    #[test]
+    fn parse_decision_log_rejects_missing_grant_tag() {
+        let tags = vec![t(&["task", "task-9"])];
+        let content = r#"{"decision":"x","undo_path":"y"}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::TagCardinality(field)) if field == "grant"
         ));
     }
 }

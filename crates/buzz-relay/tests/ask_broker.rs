@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use buzz_auth::Scope;
 use buzz_core::kind::{
-    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_COMPANY_PROFILE, KIND_STREAM_MESSAGE,
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_COMPANY_PROFILE, KIND_DECISION_LOG,
+    KIND_DELEGATION_GRANT, KIND_STREAM_MESSAGE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
@@ -292,6 +293,47 @@ fn sign_withdrawal(author: &Keys, ask_event_hex: &str, reason: &str) -> Event {
         .expect("sign withdrawal")
 }
 
+fn grant_tags(grant_id: &str) -> Vec<Tag> {
+    vec![tag(&["d", grant_id])]
+}
+
+fn grant_content(category: &str, scope: &str, active: bool) -> String {
+    serde_json::json!({
+        "category": category,
+        "scope": scope,
+        "active": active,
+    })
+    .to_string()
+}
+
+fn sign_grant(author: &Keys, tags: Vec<Tag>, content: &str) -> Event {
+    EventBuilder::new(Kind::Custom(KIND_DELEGATION_GRANT as u16), content)
+        .tags(tags)
+        .sign_with_keys(author)
+        .expect("sign grant")
+}
+
+fn decision_log_tags(grant_id: &str, task_ids: &[&str]) -> Vec<Tag> {
+    let mut tags = vec![tag(&["grant", grant_id])];
+    tags.extend(task_ids.iter().map(|task_id| tag(&["task", task_id])));
+    tags
+}
+
+fn decision_log_content(decision: &str, undo_path: &str) -> String {
+    serde_json::json!({
+        "decision": decision,
+        "undo_path": undo_path,
+    })
+    .to_string()
+}
+
+fn sign_decision_log(author: &Keys, tags: Vec<Tag>, content: &str) -> Event {
+    EventBuilder::new(Kind::Custom(KIND_DECISION_LOG as u16), content)
+        .tags(tags)
+        .sign_with_keys(author)
+        .expect("sign decision log")
+}
+
 fn assert_applied(outcome: AskBrokerOutcome, what: &str) {
     match outcome {
         AskBrokerOutcome::Applied => {}
@@ -299,6 +341,25 @@ fn assert_applied(outcome: AskBrokerOutcome, what: &str) {
         AskBrokerOutcome::Refused { message } => {
             panic!("{what}: expected Applied, got Refused: {message}")
         }
+    }
+}
+
+/// Assert that a real-ingest-pipeline call was rejected and return the
+/// `Debug`-formatted error message. `IngestResult` does not implement
+/// `Debug`, so `Result::expect_err` cannot be used directly here.
+fn expect_ingest_rejected(
+    result: Result<
+        buzz_relay::handlers::ingest::IngestResult,
+        buzz_relay::handlers::ingest::IngestError,
+    >,
+    what: &str,
+) -> String {
+    match result {
+        Err(error) => format!("{error:?}"),
+        Ok(accepted) => panic!(
+            "{what}: expected rejection, got accepted={} message={}",
+            accepted.accepted, accepted.message
+        ),
     }
 }
 
@@ -2286,4 +2347,344 @@ async fn a_skipped_candidate_does_not_block_a_sibling_in_the_same_pass() {
             .is_none(),
         "the owner-audience sibling must still resolve despite the other candidate being skipped"
     );
+}
+
+// ---------------------------------------------------------------------
+// Task 7: delegation grants and decision logs
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_grant_signed_by_a_non_owner_is_rejected_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let event = sign_grant(
+        &leader,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::UsersWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a grant signed by a non-owner",
+    );
+    assert!(
+        message.contains("owner"),
+        "expected an owner-authorship refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected grant must not be stored"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_grant_signed_by_a_current_owner_is_accepted_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    let event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: owner.public_key(),
+        scopes: vec![Scope::UsersWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, event.clone(), auth)
+        .await
+        .unwrap_or_else(|error| panic!("an owner-signed grant must be accepted: {error:?}"));
+    assert!(
+        result.accepted,
+        "grant must be accepted: {}",
+        result.message
+    );
+
+    let stored = db
+        .get_event_by_id(community, event.id.as_bytes())
+        .await
+        .expect("query stored grant")
+        .expect("an owner-signed grant must be stored");
+    assert_eq!(stored.event.id, event.id);
+}
+
+/// A grant naming a hard-list category must never reach storage, no matter
+/// who signs it -- the hard list is absolute (spec: no configuration, no
+/// override).
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_grant_naming_a_hard_list_category_is_rejected_even_from_the_owner() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    let event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("spend", "marketing_budget", true),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: owner.public_key(),
+        scopes: vec![Scope::UsersWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a hard-list grant, even from the owner",
+    );
+    assert!(
+        message.contains("hard list"),
+        "expected a hard-list refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected grant must not be stored"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_citing_a_missing_grant_is_rejected_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let event = sign_decision_log(
+        &executive,
+        decision_log_tags("grant-does-not-exist", &["task-1"]),
+        &decision_log_content("Used stock photo B instead of A", "revert commit abc123"),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: executive.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log citing a missing grant",
+    );
+    assert!(
+        message.contains("not currently active"),
+        "expected a missing-grant refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected decision log must not be stored"
+    );
+}
+
+/// A grant published with `active: false` (revoked, or never activated)
+/// must not back a decision log even though the head itself exists --
+/// existence is not the same as being currently active.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_citing_a_revoked_grant_is_rejected_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", false),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store revoked grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &executive,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content("Used stock photo B instead of A", "revert commit abc123"),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: executive.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log citing a revoked grant",
+    );
+    assert!(
+        message.contains("not currently active"),
+        "expected a not-active-grant refusal, got: {message}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_signed_by_a_worker_is_rejected_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &worker,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content("Used stock photo B instead of A", "revert commit abc123"),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: worker.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log signed by a worker",
+    );
+    assert!(
+        message.contains("leader or executive"),
+        "expected a tier refusal, got: {message}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_signed_by_a_leader_citing_an_active_grant_is_accepted_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content("Used stock photo B instead of A", "revert commit abc123"),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, event.clone(), auth)
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "a leader-signed decision log citing an active grant must be accepted: {error:?}"
+            )
+        });
+    assert!(
+        result.accepted,
+        "decision log must be accepted: {}",
+        result.message
+    );
+
+    let stored = db
+        .get_event_by_id(community, event.id.as_bytes())
+        .await
+        .expect("query stored decision log")
+        .expect("the decision log event itself must be stored");
+    assert_eq!(stored.event.id, event.id);
 }

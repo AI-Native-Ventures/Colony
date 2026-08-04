@@ -16,20 +16,20 @@ use buzz_core::kind::{
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL,
     KIND_AUTH, KIND_BLOCK_ACTION, KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST,
     KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION,
-    KIND_CONTACT_LIST, KIND_DELETION, KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION,
-    KIND_DISCOVERY_WORKSPACE_ACTION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
-    KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT,
-    KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH,
-    KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE,
-    KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
-    KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
-    KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST,
-    KIND_IA_UNARCHIVE_REQUEST, KIND_LEDGER_ACTION, KIND_LONG_FORM, KIND_MANAGED_AGENT,
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN,
-    KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN,
-    KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
-    KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
-    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
+    KIND_CONTACT_LIST, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
+    KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
+    KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
+    KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
+    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
+    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED,
+    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LEDGER_ACTION, KIND_LONG_FORM,
+    KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT,
+    KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP,
+    KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA,
+    KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
     KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PARTY_ACTION, KIND_PERSONA,
     KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION,
     KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
@@ -340,6 +340,15 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // ordinary message-shaped writes; the ask_broker enforces altitude,
         // dedupe, and resolver/withdrawer authorization past this gate.
         KIND_ASK | KIND_ASK_RESOLUTION | KIND_ASK_WITHDRAWAL => Ok(Scope::MessagesWrite),
+        // Colony delegation grant (30188): owner-authored NIP-33 head, same
+        // ownership shape as KIND_PERSONA/KIND_TEAM/KIND_MANAGED_AGENT above.
+        // The actual owner-authorship check runs past this gate, in
+        // `interrupt_gate::enforce_grant_authorship`.
+        KIND_DELEGATION_GRANT => Ok(Scope::UsersWrite),
+        // Colony decision log (44303): leader/executive-authored audit
+        // record. The tier and cited-grant checks run past this gate, in
+        // `interrupt_gate::enforce_decision_log_authority`.
+        KIND_DECISION_LOG => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -474,6 +483,11 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // keyed by (pubkey, kind, d_tag). A stray `h` tag must not channel-scope them.
             | KIND_TEAM
             | KIND_MANAGED_AGENT
+            // Colony delegation grant (30188): owner-authored NIP-33 head,
+            // keyed by (pubkey, kind, d_tag=grant_id). Same reasoning as
+            // KIND_TEAM/KIND_MANAGED_AGENT above -- a stray `h` tag must not
+            // channel-scope a company-wide policy record.
+            | KIND_DELEGATION_GRANT
             // Block manifests and relay-authored catalog heads are immutable or
             // addressable global definitions. Instances remain kind:9 messages.
             | KIND_BLOCK_MANIFEST
@@ -2504,6 +2518,37 @@ async fn ingest_event_inner(
     if kind_u32 == KIND_PERSONA {
         validate_persona_envelope(&event)
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
+    // Colony interrupt-core: a delegation grant is the founder's promise
+    // that a category of decision no longer needs asking -- it is only as
+    // good as the pubkey that signed it. Schema (hard-list category, vague
+    // scope, required `active`) is `parse_grant`'s job; authorship (must be
+    // a CURRENT community owner, not merely whoever happened to sign it) is
+    // `enforce_grant_authorship`'s. See design doc: "the whole point is that
+    // autonomy is granted deliberately and can be withdrawn in one action,
+    // rather than accumulating as vague trust."
+    if kind_u32 == KIND_DELEGATION_GRANT {
+        buzz_core::interrupt::parse_grant(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        crate::interrupt_gate::enforce_grant_authorship(tenant, state, &event)
+            .await
+            .map_err(IngestError::AuthFailed)?;
+    }
+
+    // Colony interrupt-core: a decision log is only as trustworthy as the
+    // grant it cites. Schema (non-empty `undo_path` -- spec: no stateable
+    // undo path means no autonomy) is `parse_decision_log`'s job; authority
+    // (signer tier is Leader/Executive, cited grant currently exists and is
+    // active) is `enforce_decision_log_authority`'s. A decision log citing a
+    // revoked or absent grant must be rejected: an audit trail that accepts
+    // unfounded claims of authority is worse than none.
+    if kind_u32 == KIND_DECISION_LOG {
+        let parsed = buzz_core::interrupt::parse_decision_log(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        crate::interrupt_gate::enforce_decision_log_authority(tenant, state, &event, &parsed)
+            .await
+            .map_err(IngestError::AuthFailed)?;
     }
 
     // Track pre-created channel UUID for compensation on insert failure.

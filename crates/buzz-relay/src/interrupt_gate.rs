@@ -9,10 +9,10 @@
 //! rather than in a client or a prompt, because a relay write-rule cannot be
 //! skipped on a bad day the way a prompt can. See `docs/nips/NIP-IQ.md`.
 
-use buzz_core::interrupt::AgentTier;
+use buzz_core::interrupt::{parse_grant, AgentTier, ParsedDecisionLog, ParsedGrant};
 use buzz_core::kind::{
-    KIND_DM_OPEN, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT,
-    KIND_STREAM_MESSAGE_V2,
+    KIND_DELEGATION_GRANT, KIND_DM_OPEN, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_V2,
 };
 use buzz_core::tenant::TenantContext;
 use nostr::{Event, PublicKey};
@@ -315,4 +315,141 @@ fn find_marked_e_tag(event: &Event, marker: &str) -> Option<Vec<u8>> {
             None
         }
     })
+}
+
+/// Upper bound on how many of the most recent delegation-grant heads at a
+/// given `d` tag [`active_grant`] will scan looking for one authored by a
+/// current owner.
+///
+/// Same reasoning as [`MAX_CANDIDATE_TIER_HEADS`]: `KIND_DELEGATION_GRANT`
+/// is a NIP-33 head addressed by `(pubkey, kind, d_tag)`, so ANY authenticated
+/// author could in principle publish a grant at a `d` tag they do not
+/// legitimately own. Trusting whichever head is newest, unconditionally,
+/// would let a non-owner shadow a real grant (or an expired one shadow its
+/// own revocation). Scanning a bounded number of candidates, newest first,
+/// finds the legitimate owner-authored head underneath a handful of
+/// impostors without an unbounded query.
+const MAX_CANDIDATE_GRANT_HEADS: i64 = 20;
+
+/// Resolve the currently-active delegation grant head at `grant_id` (kind
+/// [`KIND_DELEGATION_GRANT`]), scoped to `tenant`.
+///
+/// Scans the most recent [`MAX_CANDIDATE_GRANT_HEADS`] heads at this `d` tag,
+/// newest first, and uses the first one whose author currently holds the
+/// community's `owner` role -- mirroring [`agent_tier`]'s owner-authorship
+/// scan: authorship of a grant head is never treated as authority to grant
+/// on its own, since an agent with unrestricted `UsersWrite` scope could
+/// otherwise self-publish a grant declaring its own autonomy at a `d` tag no
+/// owner ever used.
+///
+/// Returns `Ok(None)` when there is no grant head at this id at all, when
+/// none of the scanned candidates were authored by a current owner, or when
+/// the trusted head's content fails [`parse_grant`].
+pub async fn active_grant(
+    tenant: &TenantContext,
+    state: &AppState,
+    grant_id: &str,
+) -> Result<Option<ParsedGrant>, String> {
+    let rows = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_DELEGATION_GRANT as i32]),
+            d_tag: Some(grant_id.to_owned()),
+            global_only: true,
+            limit: Some(MAX_CANDIDATE_GRANT_HEADS),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| format!("error: internal error loading delegation grant head: {error}"))?;
+
+    for stored in rows {
+        // Fail closed: same reasoning as `agent_tier`'s per-candidate author
+        // check.
+        let author_hex = stored.event.pubkey.to_hex();
+        let author_is_owner = state
+            .db
+            .get_relay_member(tenant.community(), &author_hex)
+            .await
+            .map_err(|error| {
+                format!("error: internal error checking delegation grant author: {error}")
+            })?
+            .is_some_and(|member| member.role == "owner");
+        if !author_is_owner {
+            continue;
+        }
+
+        // NIP-33 latest-wins among the owner's own heads -- stop here even
+        // if this head's content turns out to be malformed, rather than
+        // falling through to an older head the owner has already superseded
+        // (same reasoning as `agent_tier`'s malformed-content handling).
+        return Ok(parse_grant(&stored.event).ok());
+    }
+
+    Ok(None)
+}
+
+/// Enforce that a delegation grant (kind [`KIND_DELEGATION_GRANT`]) is
+/// authored by a pubkey that CURRENTLY holds the community's `owner` role
+/// (spec: grants are owner-authored).
+///
+/// Authorship alone is never authority: `KIND_DELEGATION_GRANT` carries only
+/// `Scope::UsersWrite` at ingest (any authenticated member can write one),
+/// so without this check an agent could publish a grant declaring its own
+/// autonomy. Fails closed on a database error.
+pub async fn enforce_grant_authorship(
+    tenant: &TenantContext,
+    state: &AppState,
+    event: &Event,
+) -> Result<(), String> {
+    let author_hex = event.pubkey.to_hex();
+    let author_is_owner = state
+        .db
+        .get_relay_member(tenant.community(), &author_hex)
+        .await
+        .map_err(|error| {
+            format!("error: internal error checking delegation grant author: {error}")
+        })?
+        .is_some_and(|member| member.role == "owner");
+    if !author_is_owner {
+        return Err(
+            "restricted: delegation grants may only be signed by a current community owner"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Enforce that a decision log (kind [`buzz_core::kind::KIND_DECISION_LOG`])
+/// is signed by a `Leader` or `Executive` agent, and that the grant it cites
+/// resolves to a currently ACTIVE, owner-authored delegation grant head
+/// (spec: decision logs).
+///
+/// A decision log citing a revoked or absent grant is worse than no audit
+/// trail at all -- it would let an agent's own record claim delegated
+/// authority it does not currently hold. Fails closed on a database error.
+pub async fn enforce_decision_log_authority(
+    tenant: &TenantContext,
+    state: &AppState,
+    event: &Event,
+    parsed: &ParsedDecisionLog,
+) -> Result<(), String> {
+    let signer_tier = agent_tier(tenant, state, &event.pubkey).await?;
+    if !matches!(
+        signer_tier,
+        Some(AgentTier::Leader) | Some(AgentTier::Executive)
+    ) {
+        return Err(
+            "restricted: only a leader or executive agent may record a decision log".to_string(),
+        );
+    }
+
+    let grant = active_grant(tenant, state, &parsed.grant_id).await?;
+    if !grant.is_some_and(|grant| grant.active) {
+        return Err(format!(
+            "restricted: decision log cites a grant that is not currently active: {}",
+            parsed.grant_id
+        ));
+    }
+
+    Ok(())
 }
