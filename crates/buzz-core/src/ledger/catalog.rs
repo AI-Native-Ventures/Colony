@@ -482,6 +482,59 @@ mod tests {
 
     /// The remote document is held to the same validation as the shipped
     /// one; a signed feed is not a reason to trust its arithmetic.
+    /// The catalog has to price the string the *meter* records, which is the
+    /// resolved snapshot from the provider's response body, not the alias a
+    /// caller asked for. Three of the five entries this catalog started with
+    /// priced nothing at all for exactly this reason.
+    #[test]
+    fn the_shipped_catalog_prices_the_snapshots_providers_report() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let now = 1_790_553_600; // 2026-09-28, after every entry below takes effect
+        for observed in [
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-1-20250805",
+            "claude-opus-4-5-20251101",
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-20250514",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "gpt-4o-2024-08-06",
+            "gpt-5.6-sol",
+            "gpt-5.3-codex",
+        ] {
+            assert!(
+                book.rates_for(observed, now).is_some(),
+                "{observed} is unpriced; the meter records this exact string"
+            );
+        }
+    }
+
+    /// Sonnet 5's introductory rate is the case effective dating exists for,
+    /// and it is in the shipped catalog as two rows rather than one edit.
+    #[test]
+    fn the_shipped_catalog_carries_both_sides_of_the_sonnet_5_price_change() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let during_intro = 1_787_529_600; // 2026-08-24
+        let after_change = 1_790_553_600; // 2026-09-28
+        assert_eq!(
+            book.rates_for("claude-sonnet-5", during_intro)
+                .map(|r| r.input_nanousd_per_token),
+            Some(2_000),
+            "introductory $2/MTok while it was in force"
+        );
+        assert_eq!(
+            book.rates_for("claude-sonnet-5", after_change)
+                .map(|r| r.input_nanousd_per_token),
+            Some(3_000),
+            "standard $3/MTok from 2026-09-01"
+        );
+    }
+
     #[test]
     fn a_remote_document_is_validated_like_the_shipped_one() {
         let json = r#"{"version":1,"entries":[{"model":"m","effectiveFrom":"2026-01-01T00:00:00Z",

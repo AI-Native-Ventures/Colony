@@ -64,6 +64,33 @@ pub struct PriceEntry {
     pub origin: PriceOrigin,
 }
 
+/// Whether `alias` is `observed` with its date suffix removed.
+///
+/// Providers publish an undated alias and resolve it to a dated snapshot in
+/// the response: `claude-sonnet-4-5` becomes `claude-sonnet-4-5-20250929`,
+/// `gpt-4o` becomes `gpt-4o-2024-08-06`. A price written against the alias
+/// has to reach the snapshot or it prices nothing.
+///
+/// The remainder must be **entirely** a date, which is what keeps this from
+/// becoming a prefix match. A bare prefix rule would let a `gpt-4` row price
+/// `gpt-4o`, and a `claude-sonnet-4` row price `claude-sonnet-4-5-20250929`,
+/// silently charging one model at another's rate. Both are refused here:
+/// `o` and `-5-20250929` are not dates.
+fn alias_matches(alias: &str, observed: &str) -> bool {
+    let Some(remainder) = observed.strip_prefix(alias) else {
+        return false;
+    };
+    let Some(date) = remainder.strip_prefix('-') else {
+        return false;
+    };
+    // `20250929` or `2024-08-06`, the two forms providers use.
+    let digits: Vec<char> = date.chars().filter(|c| *c != '-').collect();
+    let separators = date.len() - digits.len();
+    digits.len() == 8
+        && digits.iter().all(char::is_ascii_digit)
+        && (separators == 0 || (separators == 2 && date.len() == 10))
+}
+
 /// The full append-only price table; content of the `d=pricebook` head.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,12 +106,33 @@ impl PriceBook {
     ///
     /// `None` means the model is unpriced at that instant. Callers must
     /// surface that as an exception, never as a zero cost.
+    ///
+    /// A model is matched exactly, or by its **undated alias**. Providers
+    /// report the resolved snapshot in the response body and the meter
+    /// records that string verbatim, so a call to `claude-sonnet-4-5` is
+    /// recorded as `claude-sonnet-4-5-20250929` and a call to `gpt-4o` as
+    /// `gpt-4o-2024-08-06`. Under exact matching alone, a book row written
+    /// against the alias priced nothing at all, and the spend showed as
+    /// unpriced with no indication that a price for it existed.
+    ///
+    /// See [`alias_matches`] for why the remainder must be date-shaped
+    /// rather than any suffix.
     pub fn rates_for(&self, model: &str, at_unix: u64) -> Option<&PriceRates> {
+        self.rates_matching(at_unix, |candidate| candidate == model)
+            .or_else(|| {
+                // Only when nothing matched exactly. An exact row always wins,
+                // so adding an alias row can never change what an existing
+                // dated row prices.
+                self.rates_matching(at_unix, |candidate| alias_matches(candidate, model))
+            })
+    }
+
+    fn rates_matching(&self, at_unix: u64, is_match: impl Fn(&str) -> bool) -> Option<&PriceRates> {
         let mut best: Option<&PriceEntry> = None;
         for entry in self
             .entries
             .iter()
-            .filter(|e| e.model == model && e.effective_from <= at_unix)
+            .filter(|e| is_match(&e.model) && e.effective_from <= at_unix)
         {
             let wins = match best {
                 None => true,
@@ -296,5 +344,148 @@ mod tests {
             !PriceBook::extends(&old, &truncated),
             "dropping entries must be rejected"
         );
+    }
+
+    // --- alias resolution ------------------------------------------------
+
+    /// The defect this closes, written as the failure it produced.
+    ///
+    /// The meter records the `model` string a provider puts in its response
+    /// body, and providers resolve an undated alias to a dated snapshot. So
+    /// a catalog row for `claude-sonnet-4-5` was compared against
+    /// `claude-sonnet-4-5-20250929` under exact equality, matched nothing,
+    /// and the spend reported as unpriced while a price for it sat in the
+    /// book.
+    #[test]
+    fn an_alias_row_prices_the_dated_snapshot_a_provider_reports() {
+        let book = PriceBook {
+            entries: vec![entry(
+                "claude-sonnet-4-5",
+                1_000,
+                rates(3_000, 300, 3_750, 6_000, 15_000),
+            )],
+        };
+        assert_eq!(
+            book.rates_for("claude-sonnet-4-5-20250929", 2_000)
+                .map(|r| r.input_nanousd_per_token),
+            Some(3_000),
+            "the alias must reach the snapshot the provider actually reports"
+        );
+        // The hyphenated form OpenAI uses too.
+        let book = PriceBook {
+            entries: vec![entry("gpt-4o", 1_000, rates(2_500, 1_250, 0, 0, 10_000))],
+        };
+        assert_eq!(
+            book.rates_for("gpt-4o-2024-08-06", 2_000)
+                .map(|r| r.input_nanousd_per_token),
+            Some(2_500)
+        );
+    }
+
+    /// The reason the remainder has to be a date and not any suffix.
+    ///
+    /// A bare prefix rule would charge one model at another's rate, which is
+    /// worse than leaving it unpriced: unpriced is visible, wrong is not.
+    #[test]
+    fn a_suffix_that_is_not_a_date_never_matches() {
+        let book = PriceBook {
+            entries: vec![
+                entry("gpt-4", 1_000, rates(30_000, 0, 0, 0, 60_000)),
+                entry("claude-sonnet-4", 1_000, rates(3_000, 0, 0, 0, 15_000)),
+            ],
+        };
+        assert_eq!(
+            book.rates_for("gpt-4o", 2_000),
+            None,
+            "gpt-4 must not price gpt-4o"
+        );
+        assert_eq!(
+            book.rates_for("gpt-4o-2024-08-06", 2_000),
+            None,
+            "nor the dated form of a different model"
+        );
+        assert_eq!(
+            book.rates_for("claude-sonnet-4-5-20250929", 2_000),
+            None,
+            "a generation is not a date suffix"
+        );
+    }
+
+    /// An exact row always wins, so adding an alias row cannot change what
+    /// an existing dated row already prices.
+    #[test]
+    fn an_exact_row_beats_an_alias_row() {
+        let book = PriceBook {
+            entries: vec![
+                entry("claude-haiku-4-5", 1_000, rates(1, 0, 0, 0, 0)),
+                entry("claude-haiku-4-5-20251001", 1_000, rates(999, 0, 0, 0, 0)),
+            ],
+        };
+        assert_eq!(
+            book.rates_for("claude-haiku-4-5-20251001", 2_000)
+                .map(|r| r.input_nanousd_per_token),
+            Some(999)
+        );
+        // And the alias still prices its own bare form.
+        assert_eq!(
+            book.rates_for("claude-haiku-4-5", 2_000)
+                .map(|r| r.input_nanousd_per_token),
+            Some(1)
+        );
+    }
+
+    /// Effective dating still decides within an alias match, or a promotion
+    /// would price the wrong window for every snapshot-reporting provider.
+    #[test]
+    fn effective_dating_still_applies_through_an_alias() {
+        let book = PriceBook {
+            entries: vec![
+                entry(
+                    "claude-sonnet-5",
+                    1_000,
+                    rates(2_000, 200, 2_500, 4_000, 10_000),
+                ),
+                entry(
+                    "claude-sonnet-5",
+                    5_000,
+                    rates(3_000, 300, 3_750, 6_000, 15_000),
+                ),
+            ],
+        };
+        assert_eq!(
+            book.rates_for("claude-sonnet-5-20260701", 2_000)
+                .map(|r| r.input_nanousd_per_token),
+            Some(2_000),
+            "introductory rate while it was in force"
+        );
+        assert_eq!(
+            book.rates_for("claude-sonnet-5-20260701", 9_000)
+                .map(|r| r.input_nanousd_per_token),
+            Some(3_000),
+            "standard rate after it took effect"
+        );
+    }
+
+    #[test]
+    fn a_malformed_date_suffix_is_refused() {
+        let book = PriceBook {
+            entries: vec![entry("m", 1_000, rates(1, 0, 0, 0, 0))],
+        };
+        for observed in [
+            "m-2025092",   // seven digits
+            "m-202509299", // nine digits
+            "m-2025-0929", // wrong separator placement
+            "m-notadate",
+            "m2025-09-29", // no separating hyphen
+            "m-",
+        ] {
+            assert_eq!(
+                book.rates_for(observed, 2_000),
+                None,
+                "{observed} must not match"
+            );
+        }
+        assert!(book.rates_for("m-20250929", 2_000).is_some());
+        assert!(book.rates_for("m-2025-09-29", 2_000).is_some());
     }
 }
