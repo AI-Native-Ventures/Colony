@@ -424,6 +424,103 @@ async fn leader_audience_ask_with_no_executive_is_left_untouched() {
     );
 }
 
+/// C1 regression (Task 8 fix round): after a promotion, resolving the
+/// promoted ask must wake the ORIGINAL worker, not the relay. Before the
+/// fix, `promote_to`'s successor was relay-signed with no provenance tag,
+/// so both the `asks.filer_pubkey` column AND `ask_broker::handle_resolution`'s
+/// wake-up receipt (which re-derives the filer from the loaded ask event's
+/// own signer) ended up naming the relay -- the blocked worker got nothing.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn resolving_a_promoted_ask_wakes_the_original_worker_not_the_relay() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let root = store_root(&db, community, channel_id, &worker, "kicking off").await;
+    let mut tags = ask_tags("decision", &leader.public_key(), "init-1", "batch-size");
+    tags.push(tag(&["e", &root.id.to_hex()]));
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        tags,
+        &content_no_default("Choose batch size"),
+        Some(channel_id),
+    )
+    .await;
+
+    let now = ask.created_at.as_secs() as i64 + 100;
+    let stats = run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+    assert_eq!(stats.promoted, 1, "the worker->leader ask must promote");
+
+    let promoted_row = db
+        .find_open_ask_by_need(community, "init-1", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("promotion must have created the new open ask");
+    assert_eq!(
+        promoted_row.filer_pubkey,
+        worker.public_key().to_bytes().to_vec(),
+        "the promoted ask must still record the ORIGINAL worker as filer"
+    );
+
+    // The executive resolves the promoted ask.
+    let promoted_event_hex = hex::encode(&promoted_row.ask_event_id);
+    let content =
+        serde_json::json!({"answer": {"choice": "B"}, "default_executed": false}).to_string();
+    let resolution = EventBuilder::new(Kind::Custom(KIND_ASK_RESOLUTION as u16), content)
+        .tags(vec![tag(&["e", &promoted_event_hex])])
+        .sign_with_keys(&executive)
+        .expect("sign resolution");
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "executive resolving the promoted ask");
+
+    let receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(channel_id),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipt messages");
+    assert_eq!(receipts.len(), 1, "expected exactly one wake-up receipt");
+    let worker_hex = worker.public_key().to_hex();
+    let relay_hex = relay_keys.public_key().to_hex();
+    assert!(
+        receipts[0].event.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == worker_hex
+        }),
+        "receipt must p-tag the ORIGINAL WORKER, not the relay"
+    );
+    assert!(
+        !receipts[0].event.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == relay_hex
+        }),
+        "receipt must NOT p-tag the relay"
+    );
+}
+
 // ---------------------------------------------------------------------
 // (b) owner-audience ask with a default past deadline default-executes
 // ---------------------------------------------------------------------

@@ -212,6 +212,14 @@ pub struct ParsedAsk {
     pub default_window_secs: Option<u64>,
     /// The content `headline` field: a short summary of the Ask.
     pub headline: String,
+    /// Hex pubkey of the optional `filer` tag: the original filer to carry
+    /// forward when the relay re-signs this ask on someone else's behalf
+    /// (an interrupt-sweep promotion). Only ever honoured by a caller when
+    /// the event is relay-signed -- see
+    /// `buzz-relay::ask_broker::handle_ask`'s use of this field, gated on
+    /// the same relay-identity check as `check_altitude`'s bypass, so an
+    /// ordinary agent cannot spoof its own filer by adding this tag itself.
+    pub filer_hex: Option<String>,
 }
 
 /// A validated Ask resolution event (kind [`crate::kind::KIND_ASK_RESOLUTION`]).
@@ -382,10 +390,10 @@ fn parse_content(event: &nostr::Event) -> Result<serde_json::Value, AskParseErro
 /// Parse and validate a Colony interrupt Ask event (kind [`crate::kind::KIND_ASK`]).
 ///
 /// Enforces the pinned tag schema (`ask-type`, `p`, `initiative`, one or more
-/// `task`, `need`, optional `e`/`prior`/`category`) and the content JSON
-/// schema (`headline`, `cost_of_delay` required and non-empty; `default_option`
-/// forbidden on hard-list categories, on stall asks, and unless it names a
-/// declared option).
+/// `task`, `need`, optional `e`/`prior`/`filer`/`category`) and the content
+/// JSON schema (`headline`, `cost_of_delay` required and non-empty;
+/// `default_option` forbidden on hard-list categories, on stall asks, and
+/// unless it names a declared option).
 pub fn parse_ask(event: &nostr::Event) -> Result<ParsedAsk, AskParseError> {
     let ask_type_raw = single_tag_value(event, "ask-type")?;
     let ask_type =
@@ -414,6 +422,11 @@ pub fn parse_ask(event: &nostr::Event) -> Result<ParsedAsk, AskParseError> {
     let prior_ask_hex = optional_tag_value(event, "prior")?;
     if let Some(hex) = &prior_ask_hex {
         validate_hex64_field("prior", hex)?;
+    }
+
+    let filer_hex = optional_tag_value(event, "filer")?;
+    if let Some(hex) = &filer_hex {
+        validate_hex64_field("filer", hex)?;
     }
 
     let category = optional_tag_value(event, "category")?;
@@ -476,6 +489,7 @@ pub fn parse_ask(event: &nostr::Event) -> Result<ParsedAsk, AskParseError> {
         default_option,
         default_window_secs,
         headline,
+        filer_hex,
     })
 }
 
@@ -733,6 +747,37 @@ mod tests {
         assert_eq!(ask.default_option.as_deref(), Some("B"));
         assert_eq!(ask.default_window_secs, Some(3600));
         assert_eq!(ask.headline, "Choose batch size");
+        assert_eq!(ask.filer_hex, None, "no filer tag was set on this event");
+    }
+
+    /// Interrupt-sweep promotion regression (Task 8 fix round, C1): the
+    /// optional `filer` tag lets a relay-signed promotion carry the
+    /// ORIGINAL filer forward, so `ask_broker::handle_ask` can preserve
+    /// provenance instead of recording the relay itself as the filer.
+    /// Parsing itself is signer-agnostic -- honouring the tag only for a
+    /// relay-signed event is `handle_ask`'s job, not this parser's.
+    #[test]
+    fn parse_ask_extracts_optional_filer_tag() {
+        let audience = nostr::Keys::generate();
+        let filer = nostr::Keys::generate();
+        let mut tags = happy_path_tags(&audience.public_key());
+        tags.push(t(&["filer", &filer.public_key().to_hex()]));
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+
+        let ask = parse_ask(&event).expect("parse");
+        assert_eq!(ask.filer_hex, Some(filer.public_key().to_hex()));
+    }
+
+    #[test]
+    fn parse_ask_rejects_invalid_filer_hex() {
+        let audience = nostr::Keys::generate();
+        let mut tags = happy_path_tags(&audience.public_key());
+        tags.push(t(&["filer", "not-valid-hex"]));
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::InvalidHex { field, .. }) if field == "filer"
+        ));
     }
 
     #[test]

@@ -156,6 +156,7 @@ async fn handle_ask(
         .to_vec();
     let origin_thread_bytes = decode_hex64(parsed.origin_thread_hex.as_deref())?;
     let prior_ask_bytes = decode_hex64(parsed.prior_ask_hex.as_deref())?;
+    let filer_bytes = resolve_filer(state, event, &parsed)?.to_bytes().to_vec();
 
     // Dedupe above is check-then-act: two filers can both pass
     // `find_open_ask_by_need` before either commits, so the loser's insert
@@ -175,7 +176,7 @@ async fn handle_ask(
                 initiative_id: &parsed.initiative_id,
                 need_key: &parsed.need_key,
                 audience_pubkey: &audience_bytes,
-                filer_pubkey: event.pubkey.as_bytes(),
+                filer_pubkey: &filer_bytes,
                 origin_thread: origin_thread_bytes.as_deref(),
                 prior_ask: prior_ask_bytes.as_deref(),
                 category: parsed.category.as_deref(),
@@ -237,6 +238,42 @@ fn decode_hex64(hex_value: Option<&str>) -> Result<Option<Vec<u8>>, String> {
             "internal error: a validated hex64 field failed to decode".to_string()
         })?)),
         None => Ok(None),
+    }
+}
+
+/// The effective filer of an ask event: normally its own signer, but for a
+/// relay-signed ask carrying an optional `filer` tag (an interrupt-sweep
+/// promotion: `interrupt_runtime::promote_to` signs the successor as the
+/// relay, not as the original filer), the tag's pubkey instead.
+///
+/// Without this, every consumer that asks "who is blocked on this ask" --
+/// [`handle_ask`]'s own `filer_pubkey` column, and [`handle_resolution`] /
+/// [`handle_withdrawal`]'s wake-up receipt, which re-derives the filer from
+/// the loaded ask EVENT's signer rather than the `asks` row -- would treat
+/// a promoted ask's filer as the relay itself, so every wake-up for it
+/// would p-tag the relay instead of the agent actually waiting.
+///
+/// The tag is honoured ONLY under the exact same relay-identity condition
+/// `check_altitude`'s bypass uses (durable key configured AND the ask
+/// event's signer is the relay's own key). `parse_ask` extracts `filer_hex`
+/// regardless of signer -- it is signer-agnostic -- so an ordinary agent CAN
+/// put a `filer` tag on its own filing, but this function simply ignores
+/// it: only a relay-signed event's `filer` tag is ever trusted, exactly
+/// like `prior` and the altitude bypass itself are relay-only privileges.
+fn resolve_filer(
+    state: &AppState,
+    ask_event: &Event,
+    parsed: &ParsedAsk,
+) -> Result<PublicKey, String> {
+    let is_relay_signed = state.config.relay_private_key.is_some()
+        && ask_event.pubkey == state.relay_keypair.public_key();
+    if !is_relay_signed {
+        return Ok(ask_event.pubkey);
+    }
+    match &parsed.filer_hex {
+        Some(hex) => PublicKey::from_hex(hex)
+            .map_err(|_| "internal error: filer hex is not a valid pubkey".to_string()),
+        None => Ok(ask_event.pubkey),
     }
 }
 
@@ -434,12 +471,17 @@ async fn handle_resolution(
     }
 
     if let Some(origin_thread_hex) = &ask.origin_thread_hex {
+        // C1 fix: `stored_ask.event.pubkey` is the signer of the ASK EVENT
+        // itself, which for a promoted ask is the relay, not the original
+        // filer -- `resolve_filer` prefers the `filer` tag in that case so
+        // the wake-up receipt reaches the agent actually blocked.
+        let blocked_agent = resolve_filer(state, &stored_ask.event, &ask)?;
         emit_ask_receipt(
             tenant,
             state,
             origin_thread_hex,
             &format!("Ask resolved: {}", ask.headline),
-            stored_ask.event.pubkey,
+            blocked_agent,
             stored_ask.channel_id,
         )
         .await;
@@ -547,12 +589,14 @@ async fn handle_withdrawal(
     }
 
     if let Some(origin_thread_hex) = &ask.origin_thread_hex {
+        // C1 fix: see `handle_resolution`'s identical comment.
+        let blocked_agent = resolve_filer(state, &stored_ask.event, &ask)?;
         emit_ask_receipt(
             tenant,
             state,
             origin_thread_hex,
             &format!("Ask withdrawn: {}", parsed.reason),
-            stored_ask.event.pubkey,
+            blocked_agent,
             stored_ask.channel_id,
         )
         .await;

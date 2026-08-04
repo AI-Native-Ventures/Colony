@@ -384,7 +384,7 @@ async fn promote_to(
         .filter(|tag| {
             !matches!(
                 tag.as_slice().first().map(String::as_str),
-                Some("p") | Some("prior")
+                Some("p") | Some("prior") | Some("filer")
             )
         })
         .cloned()
@@ -393,6 +393,20 @@ async fn promote_to(
     tags.push(
         Tag::parse(["prior", &stored_ask.event.id.to_hex()])
             .map_err(|error| format!("failed to build `prior` tag: {error}"))?,
+    );
+    // Carry the ORIGINAL filer forward (C1 fix): this event is relay-signed,
+    // so `ask_broker::handle_ask`'s `filer_pubkey` would otherwise record
+    // the relay itself as the blocked agent, and every downstream wake-up
+    // receipt (Task 6's auto-resolve, `handle_resolution`,
+    // `handle_withdrawal`) would p-tag the relay instead of the worker
+    // actually waiting. `row.filer_pubkey` is already correct across
+    // arbitrarily many hops -- it was itself resolved by this same
+    // preference the last time this need was filed or promoted.
+    let filer_pubkey = PublicKey::from_slice(&row.filer_pubkey)
+        .map_err(|error| format!("stored filer pubkey is invalid: {error}"))?;
+    tags.push(
+        Tag::parse(["filer", &filer_pubkey.to_hex()])
+            .map_err(|error| format!("failed to build `filer` tag: {error}"))?,
     );
 
     let promoted_event =

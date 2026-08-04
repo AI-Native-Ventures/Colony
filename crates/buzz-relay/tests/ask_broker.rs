@@ -671,6 +671,94 @@ async fn relay_signed_ask_bypass_requires_a_durable_relay_key() {
     assert_refused(outcome, "relay-signed ask without a durable relay key");
 }
 
+/// C1 regression (Task 8 fix round): a relay-signed ask carrying a `filer`
+/// tag (an interrupt-sweep promotion) must record the ORIGINAL filer named
+/// by the tag, not the relay itself -- otherwise every wake-up receipt for
+/// the promoted ask would p-tag the relay instead of the agent actually
+/// blocked.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn relay_signed_ask_prefers_the_filer_tag_over_the_relay_signer() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let untiered_audience = Keys::generate();
+    let original_filer = Keys::generate();
+    let mut tags = ask_tags(
+        "stall",
+        &untiered_audience.public_key(),
+        "init-1",
+        "silent-task",
+    );
+    tags.push(tag(&["filer", &original_filer.public_key().to_hex()]));
+    let event = sign_ask(
+        &relay_keys,
+        tags,
+        &ask_content("Task went silent for 2h", None),
+    );
+
+    let outcome = handle_ask_event(&tenant, &state, &event)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "relay-signed ask with a filer tag");
+
+    let row = db
+        .find_open_ask_by_need(community, "init-1", "silent-task")
+        .await
+        .expect("query asks projection")
+        .expect("an open ask row must exist");
+    assert_eq!(
+        row.filer_pubkey,
+        original_filer.public_key().to_bytes().to_vec(),
+        "filer_pubkey must be the ORIGINAL filer named by the tag, not the relay signer"
+    );
+}
+
+/// The `filer` tag is signer-agnostic to parse (`parse_ask` extracts it
+/// regardless of who signed) but must never be honoured from a
+/// non-relay-signed event -- otherwise any agent could claim any pubkey as
+/// the "real" filer of its own ask.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn non_relay_signed_ask_ignores_a_spoofed_filer_tag() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let spoofed_filer = Keys::generate();
+    let mut tags = ask_tags("decision", &leader.public_key(), "init-1", "batch-size");
+    tags.push(tag(&["filer", &spoofed_filer.public_key().to_hex()]));
+    let event = sign_ask(&worker, tags, &ask_content("Choose batch size", None));
+
+    let outcome = handle_ask_event(&tenant, &state, &event)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "worker ask with a spoofed filer tag");
+
+    let row = db
+        .find_open_ask_by_need(community, "init-1", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("an open ask row must exist");
+    assert_eq!(
+        row.filer_pubkey,
+        worker.public_key().to_bytes().to_vec(),
+        "filer_pubkey must be the actual signer; a non-relay-signed filer tag must be ignored"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Rule 3: dedupe
 // ---------------------------------------------------------------------
