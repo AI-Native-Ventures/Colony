@@ -14,7 +14,7 @@ import type {
 import {
   mergeAgentNamesIntoProfiles,
   mergeMemberAgentFlagsIntoProfiles,
-} from "./useChannelActivityTyping";
+} from "@/features/agents/lib/agentProfileOverlay";
 
 /**
  * The channel screen's message-row profile lookup: the `users-batch` query

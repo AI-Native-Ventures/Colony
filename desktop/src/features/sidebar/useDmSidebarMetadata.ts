@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useAgentNameProfiles } from "@/features/agents/useAgentNameProfiles";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
@@ -51,7 +52,12 @@ export function useDmSidebarMetadata({
   const dmProfilesQuery = useUsersBatchQuery(dmParticipantPubkeys, {
     enabled: enabled && directMessages.length > 0,
   });
-  const dmProfiles = dmProfilesQuery.data?.profiles;
+  // Registry overlay: agent DMs must label from the managed/relay agent
+  // registries when the relay has no kind:0 for the peer yet.
+  const dmProfiles = useAgentNameProfiles(
+    dmProfilesQuery.data?.profiles,
+    currentPubkey,
+  );
   const dmPresenceByChannelId = React.useMemo(
     () =>
       Object.fromEntries(
@@ -85,14 +91,10 @@ export function useDmSidebarMetadata({
       Object.fromEntries(
         directMessages.map((channel) => [
           channel.id,
-          resolveChannelDisplayLabel(
-            channel,
-            currentPubkey,
-            dmProfilesQuery.data?.profiles,
-          ),
+          resolveChannelDisplayLabel(channel, currentPubkey, dmProfiles),
         ]),
       ),
-    [currentPubkey, directMessages, dmProfilesQuery.data],
+    [currentPubkey, directMessages, dmProfiles],
   );
   const dmParticipantsByChannelId = React.useMemo(
     () =>

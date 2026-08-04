@@ -8,10 +8,8 @@ import {
   resetAgentWorkingSignal,
 } from "../../agents/agentWorkingSignal.ts";
 import { resetActiveAgentTurnsStore } from "../../agents/activeAgentTurnsStore.ts";
-import {
-  channelScopedBotTypingPubkeyKey,
-  mergeMemberAgentFlagsIntoProfiles,
-} from "./useChannelActivityTyping.ts";
+import { mergeMemberAgentFlagsIntoProfiles } from "../../agents/lib/agentProfileOverlay.ts";
+import { channelScopedBotTypingPubkeyKey } from "./useChannelActivityTyping.ts";
 
 const AGENT =
   "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
