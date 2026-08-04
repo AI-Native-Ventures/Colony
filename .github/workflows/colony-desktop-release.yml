@@ -8,10 +8,15 @@ name: Colony desktop release
 # certificates; this fork ships an ad-hoc-signed Apple Silicon dmg instead.
 #
 # The build runs on a self-hosted Mac runner (labels: self-hosted, macOS,
-# colony-builder). Colony is a private repo, so GitHub-hosted macOS minutes
-# bill at a 10x multiplier and a cold-workspace build of the whole Rust
-# workspace would not fit the plan's included minutes; the self-hosted
-# runner's persistent workspace keeps the cargo cache warm between releases.
+# colony-builder). Hosted macOS runners would work now that the repo is
+# public, but a release rebuilds the whole Rust workspace cold every time;
+# the self-hosted runner's persistent workspace keeps the cargo cache warm,
+# which is the difference between a ~20 minute release and an hour.
+#
+# It also publishes the auto-update loop: the app polls latest.json on the
+# rolling colony-desktop-latest release, and this workflow signs the updater
+# archive, uploads it, and rewrites that manifest. The endpoint is compiled
+# into each build, so it can never change without stranding installs.
 #
 # Normal releases arrive through the push:tags trigger. The tag is created
 # by auto-tag-on-release-pr-merge.yml when a merged PR bumps the version in
@@ -40,6 +45,13 @@ concurrency:
 defaults:
   run:
     shell: bash
+
+env:
+  # The manifest the shipped app polls. It lives on a rolling release tag so
+  # the URL never changes; every release clobbers latest.json there. Changing
+  # this string strands every already-installed copy, because the endpoint is
+  # compiled into the binary at build time.
+  UPDATER_ENDPOINT: https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json
 
 jobs:
   build-and-publish:
@@ -83,11 +95,29 @@ jobs:
             fi
           done
 
+      # Writes desktop/src-tauri/tauri.release.conf.json: the updater pubkey
+      # and endpoint, plus createUpdaterArtifacts so the build emits the
+      # .app.tar.gz and its signature. It is a delta merged over
+      # tauri.conf.json, so the ad-hoc signingIdentity in the base config
+      # still applies. The build also needs the signing key in the
+      # environment: without it Tauri emits the archive unsigned and every
+      # client rejects the update.
+      - name: Write the release config
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
+        run: |
+          . ./bin/activate-hermit
+          cd desktop && node scripts/build-release-config.mjs
+
       - name: Build desktop app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           . ./bin/activate-hermit
           export PATH="$HOME/.cargo/bin:$PATH"
-          just desktop-release-build aarch64-apple-darwin
+          just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
       - name: Verify the bundle
         run: |
@@ -103,6 +133,26 @@ jobs:
           fi
           codesign --verify --deep --strict "$APP"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Locate the updater archive
+        # Tauri writes Colony.app.tar.gz next to the .app and signs it with the
+        # updater key. An unsigned or missing archive means the build silently
+        # lost TAURI_SIGNING_PRIVATE_KEY, which would publish a manifest no
+        # client can verify, so fail here rather than ship it.
+        run: |
+          set -euo pipefail
+          BUNDLE=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+          ARCHIVE=$(find "$BUNDLE/macos" -name '*.app.tar.gz' ! -name '*.sig' -type f | head -1)
+          if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE" ]; then
+            echo "::error::No updater archive in $BUNDLE/macos — is createUpdaterArtifacts on?"
+            exit 1
+          fi
+          if [ ! -s "${ARCHIVE}.sig" ]; then
+            echo "::error::${ARCHIVE}.sig missing or empty — the build had no signing key"
+            exit 1
+          fi
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "ARCHIVE_SIG=${ARCHIVE}.sig" >> "$GITHUB_ENV"
 
       # The token is minted after the long build so its one-hour lifetime
       # cannot expire before the upload. Same App as the release tagger,
@@ -145,8 +195,69 @@ jobs:
             gh release create "$TAG" --repo AI-Native-Ventures/colony-releases \
               --title "Colony ${VERSION}" --notes-file "$STAGING/notes.md"
           fi
+          cp "$ARCHIVE" "$STAGING/Colony_${VERSION}_aarch64.app.tar.gz"
           gh release upload "$TAG" --repo AI-Native-Ventures/colony-releases --clobber \
-            "$STAGING/Colony_${VERSION}_aarch64.dmg" "$STAGING/Colony_aarch64.dmg"
+            "$STAGING/Colony_${VERSION}_aarch64.dmg" "$STAGING/Colony_aarch64.dmg" \
+            "$STAGING/Colony_${VERSION}_aarch64.app.tar.gz"
+
+      # The auto-update loop. The app polls one fixed URL, so the manifest
+      # lives on a rolling tag that every release overwrites, while the
+      # archive it points at keeps its version in the filename: a client that
+      # cached an older manifest then downloads the archive that manifest was
+      # signed for, instead of a newer archive its signature cannot verify.
+      - name: Publish the update manifest
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          ROLLING=colony-desktop-latest
+          STAGING=$(mktemp -d)
+          ARCHIVE_NAME="Colony_${VERSION}_aarch64.app.tar.gz"
+          cp "$ARCHIVE" "$STAGING/$ARCHIVE_NAME"
+          ARCHIVE_URL="https://github.com/AI-Native-Ventures/colony-releases/releases/download/${ROLLING}/${ARCHIVE_NAME}"
+
+          desktop/scripts/generate-oss-latest-json.sh "$VERSION" \
+            "darwin-aarch64:${ARCHIVE_SIG}:${ARCHIVE_URL}" > "$STAGING/latest.json"
+
+          if ! gh release view "$ROLLING" --repo AI-Native-Ventures/colony-releases >/dev/null 2>&1; then
+            gh release create "$ROLLING" --repo AI-Native-Ventures/colony-releases \
+              --prerelease --title "Colony auto-update manifest" \
+              --notes "Rolling target for the desktop auto-updater. Do not download from here; use the versioned release."
+          fi
+          # Archive first: a manifest that references an asset nobody has
+          # uploaded yet turns every client's update check into a 404.
+          gh release upload "$ROLLING" --repo AI-Native-Ventures/colony-releases --clobber \
+            "$STAGING/$ARCHIVE_NAME"
+          gh release upload "$ROLLING" --repo AI-Native-Ventures/colony-releases --clobber \
+            "$STAGING/latest.json"
+
+      - name: Verify the update manifest
+        run: |
+          set -euo pipefail
+          MANIFEST=$(curl -sL "$UPDATER_ENDPOINT")
+          GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
+          GOT_URL=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].url')
+          GOT_SIG=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].signature')
+          if [ "$GOT_VERSION" != "$VERSION" ]; then
+            echo "::error::Manifest says version $GOT_VERSION, expected $VERSION"
+            exit 1
+          fi
+          if [ "$GOT_SIG" != "$(cat "$ARCHIVE_SIG")" ]; then
+            echo "::error::Manifest signature does not match the signature this build produced"
+            exit 1
+          fi
+          EXPECTED=$(stat -f %z "$ARCHIVE")
+          for attempt in 1 2 3 4 5; do
+            SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${SERVED:-0}" = "$EXPECTED" ]; then
+              echo "Manifest and archive agree: v${VERSION}, ${SERVED} bytes"
+              exit 0
+            fi
+            echo "Attempt $attempt: archive served ${SERVED:-none} bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::The archive the manifest points at is not the one this build produced"
+          exit 1
 
       - name: Verify the public download
         run: |

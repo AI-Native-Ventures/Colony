@@ -68,3 +68,10 @@ identity.key
 
 # Helm dependency tarballs — regenerable from Chart.lock via `helm dependency build`
 deploy/charts/*/charts/*.tgz
+
+# Release-only Tauri config overlay, written per build by
+# desktop/scripts/build-release-config.mjs. It carries the updater endpoint
+# and public key for the machine that built it; committing it would apply
+# those to every local build.
+desktop/src-tauri/tauri.release.conf.json
+.gstack/

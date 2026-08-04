@@ -239,11 +239,19 @@ desktop-tauri-test-compiled-flags: _ensure-sidecar-stubs
 # Build the full desktop Tauri app locally (unsigned, for testing)
 # Sidecar binary list must stay in sync with _ensure-sidecar-stubs above.
 # pnpm install is unconditional here: release builds must start from a clean dep tree.
+#
+# The optional second argument is a Tauri config overlay, merged on top of
+# tauri.conf.json. The release lane passes the file written by
+# desktop/scripts/build-release-config.mjs, which turns on the updater
+# (pubkey + endpoint) and createUpdaterArtifacts. Without it the build is a
+# plain local build with no updater compiled in, which is what a developer
+# running this by hand wants.
 [positional-arguments]
-desktop-release-build target="aarch64-apple-darwin":
+desktop-release-build target="aarch64-apple-darwin" config="":
     #!/usr/bin/env bash
     set -euo pipefail
     TARGET="$1"
+    CONFIG="${2:-}"
     mkdir -p desktop/src-tauri/binaries
     touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
@@ -251,7 +259,12 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-$TARGET"
     pnpm install
-    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target "$TARGET"
+    cd {{desktop_dir}}
+    if [ -n "$CONFIG" ]; then
+        pnpm tauri build --features mesh-llm --target "$TARGET" --config "$CONFIG"
+    else
+        pnpm tauri build --features mesh-llm --target "$TARGET"
+    fi
 
 # Build an owned-company desktop distribution for a reviewed public relay.
 [positional-arguments]
