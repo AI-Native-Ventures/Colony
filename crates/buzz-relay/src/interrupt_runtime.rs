@@ -62,6 +62,7 @@ use std::sync::Arc;
 use buzz_core::interrupt::{parse_ask, AgentTier};
 use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_MANAGED_AGENT};
 use buzz_core::tenant::TenantContext;
+use buzz_core::CommunityId;
 use buzz_db::asks::AskRow;
 use nostr::{EventBuilder, Kind, PublicKey, Tag};
 
@@ -160,9 +161,17 @@ async fn process_due_ask(
         .map_err(|error| format!("database error loading community host: {error}"))?
     else {
         // The community was archived or removed since this ask was filed --
-        // nothing safe to sign into. Leave the row as-is; if the community
-        // is ever restored, a later tick can pick it up again.
-        return Ok(());
+        // nothing safe to sign into. Re-deadline (C2 fix) rather than leave
+        // the row permanently stuck at the head of the cross-tenant due
+        // batch: if the community is ever restored, a later tick can pick
+        // it up again once its deadline next arrives.
+        tracing::warn!(
+            ask_event_id = %hex::encode(&row.ask_event_id),
+            community_id = %row.community_id,
+            "interrupt sweep: ask's community has no resolvable host (archived or removed); \
+             re-deadlining rather than leaving it stuck"
+        );
+        return redeadline(state, row.community_id, row, now_secs).await;
     };
     let tenant = TenantContext::resolved(row.community_id, host);
 
@@ -176,11 +185,11 @@ async fn process_due_ask(
 
     if audience_is_owner {
         if let Some(default_option) = row.default_option.as_deref() {
-            return execute_default(state, &tenant, row, default_option, stats).await;
+            return execute_default(state, &tenant, row, default_option, now_secs, stats).await;
         }
         // Owner-audience ask with no default: already at the very top of the
         // ladder, nowhere higher to escalate. Re-deadline rather than spin.
-        return redeadline(state, &tenant, row, now_secs).await;
+        return redeadline(state, tenant.community(), row, now_secs).await;
     }
 
     promote_or_redeadline(state, &tenant, row, now_secs, stats).await
@@ -208,6 +217,7 @@ async fn execute_default(
     tenant: &TenantContext,
     row: &AskRow,
     default_option: &str,
+    now_secs: i64,
     stats: &mut InterruptTickStats,
 ) -> Result<(), String> {
     let Some(stored_ask) = state
@@ -216,6 +226,15 @@ async fn execute_default(
         .await
         .map_err(|error| format!("database error loading ask event: {error}"))?
     else {
+        // Invariant violation -- an `asks` row should never outlive its
+        // backing event -- but must still yield its batch slot (C2 fix)
+        // rather than camp at the head of the due queue forever.
+        if let Err(redeadline_error) = redeadline(state, tenant.community(), row, now_secs).await {
+            tracing::warn!(
+                %redeadline_error,
+                "interrupt sweep: failed to re-deadline an ask with no backing event"
+            );
+        }
         return Err("ask row exists with no backing event".to_string());
     };
     let ask = parse_ask(&stored_ask.event)
@@ -290,9 +309,13 @@ async fn execute_default(
 /// Resolve where a due, non-owner-audience ask should go next and act on it:
 /// promote a leader-audience ask to the community's unique executive, or
 /// re-deadline an ask that is already addressed to the executive (nowhere
-/// higher to go). Never guesses a target it cannot confidently resolve --
-/// design point 3: silently choosing an executive nobody appointed would
-/// route a founder's decisions through the wrong agent.
+/// higher to go), or whose target cannot be confidently resolved at all.
+/// Never guesses a target -- design point 3: silently choosing an executive
+/// nobody appointed would route a founder's decisions through the wrong
+/// agent -- but every branch still re-deadlines rather than leaving the row
+/// untouched (C2 fix): a due ask this function declines to act on must not
+/// permanently occupy a slot in the cross-tenant due batch and starve every
+/// other community's due asks behind it.
 async fn promote_or_redeadline(
     state: &Arc<AppState>,
     tenant: &TenantContext,
@@ -311,13 +334,14 @@ async fn promote_or_redeadline(
                     ask_event_id = %hex::encode(&row.ask_event_id),
                     community_id = %tenant.community(),
                     "interrupt sweep: cannot promote, community has zero or multiple \
-                     executives; never guessing which one to route to"
+                     executives; never guessing which one to route to -- re-deadlining \
+                     so this row does not starve the rest of the batch"
                 );
-                return Ok(());
+                return redeadline(state, tenant.community(), row, now_secs).await;
             };
-            promote_to(state, tenant, row, executive, stats).await
+            promote_to(state, tenant, row, executive, now_secs, stats).await
         }
-        Some(AgentTier::Executive) => redeadline(state, tenant, row, now_secs).await,
+        Some(AgentTier::Executive) => redeadline(state, tenant.community(), row, now_secs).await,
         Some(AgentTier::Worker) | None => {
             // A worker is never a legitimate ask audience (workers only
             // raise asks, never receive them), and `None` here means the
@@ -326,14 +350,16 @@ async fn promote_or_redeadline(
             // mean the tier data underneath this open ask changed since it
             // was filed (e.g. the agent was demoted or its managed-agent
             // head was replaced). Never guess a promotion target for a state
-            // that should not exist; leave the row for a human to notice.
+            // that should not exist; leave the row for a human to notice --
+            // but still re-deadline it (C2 fix) so it does not starve the
+            // rest of the batch while waiting to be noticed.
             tracing::warn!(
                 ask_event_id = %hex::encode(&row.ask_event_id),
                 community_id = %tenant.community(),
                 "interrupt sweep: due ask's audience no longer resolves to a leader, \
-                 executive, or owner; leaving it untouched rather than guessing"
+                 executive, or owner; re-deadlining rather than guessing a target"
             );
-            Ok(())
+            redeadline(state, tenant.community(), row, now_secs).await
         }
     }
 }
@@ -366,6 +392,7 @@ async fn promote_to(
     tenant: &TenantContext,
     row: &AskRow,
     target: PublicKey,
+    now_secs: i64,
     stats: &mut InterruptTickStats,
 ) -> Result<(), String> {
     let Some(stored_ask) = state
@@ -374,6 +401,16 @@ async fn promote_to(
         .await
         .map_err(|error| format!("database error loading ask event to promote: {error}"))?
     else {
+        // Invariant violation, same reasoning as `execute_default`'s
+        // identical guard -- still must yield its batch slot (C2 fix). The
+        // original row is still `open` here (nothing has been claimed yet),
+        // so a plain re-deadline is the right compensation.
+        if let Err(redeadline_error) = redeadline(state, tenant.community(), row, now_secs).await {
+            tracing::warn!(
+                %redeadline_error,
+                "interrupt sweep: failed to re-deadline an ask with no backing event to promote"
+            );
+        }
         return Err("ask row exists with no backing event to promote".to_string());
     };
 
@@ -482,8 +519,26 @@ async fn promote_to(
 }
 
 /// Re-arm a due ask's deadline to `now_secs` plus its own original window,
-/// without promoting or resolving it (design point 4: an ask already at the
-/// top of the ladder must not spin through this sweep on every tick).
+/// without promoting or resolving it. Backs two distinct situations:
+///
+/// - design point 4: an ask already at the top of the ladder (owner or
+///   executive audience, no default to fall back on) must not spin through
+///   this sweep on every tick;
+/// - C2 fix (Task 8 fix round): EVERY branch that declines to act on a due
+///   ask -- an unresolvable promotion target, an archived community, a data
+///   invariant violation -- must also yield its place, or it permanently
+///   occupies a slot in [`buzz_db::Db::query_due_asks`]'s cross-tenant,
+///   deadline-ordered, batch-capped result. Left untouched, enough such
+///   rows accumulate at the head of that ordering to starve every other due
+///   ask in every other community: the batch fills with the same declined
+///   rows on every tick and nothing beyond them is ever reached, silently.
+///   Declining to promote or resolve a row is a legitimate outcome; leaving
+///   its deadline untouched afterward is not.
+///
+/// Takes a bare [`CommunityId`] rather than `&TenantContext` because the
+/// community-not-found decline branch (`process_due_ask`) has no resolved
+/// tenant to offer -- `extend_ask_deadline` only ever needed the community
+/// id, never the host.
 ///
 /// Reuses the ask's own original window (`deadline_at - created_at` on the
 /// row, floored at [`MIN_REDEADLINE_WINDOW_SECS`]) rather than a hardcoded
@@ -492,7 +547,7 @@ async fn promote_to(
 /// platform default.
 async fn redeadline(
     state: &Arc<AppState>,
-    tenant: &TenantContext,
+    community: CommunityId,
     row: &AskRow,
     now_secs: i64,
 ) -> Result<(), String> {
@@ -508,7 +563,7 @@ async fn redeadline(
     // commits or it does not.
     state
         .db
-        .extend_ask_deadline(tenant.community(), &row.ask_event_id, new_deadline)
+        .extend_ask_deadline(community, &row.ask_event_id, new_deadline)
         .await
         .map_err(|error| format!("database error extending ask deadline: {error}"))?;
     Ok(())

@@ -382,10 +382,20 @@ async fn leader_audience_ask_past_deadline_promotes_to_the_executive() {
 }
 
 /// Design point 3: zero executives configured must never be guessed at --
-/// the sweep logs and leaves the row alone rather than routing to nobody.
+/// the sweep never promotes or resolves this row without a confidently
+/// resolved target.
+///
+/// C2 regression (Task 8 fix round): "never guess a target" is not the same
+/// as "never touch the row". `query_due_asks` orders by `deadline_at ASC`
+/// with a cross-tenant `LIMIT`, so a row the sweep declines to act on but
+/// leaves at its old deadline permanently occupies a batch slot and starves
+/// every other due ask behind it -- this is exactly the scenario
+/// [`declined_rows_are_redeadlined_so_they_do_not_starve_the_batch`] proves
+/// end to end. This test asserts the narrower, per-row half of that fix:
+/// the row stays open (not promoted, not resolved) but its deadline moves.
 #[tokio::test]
 #[ignore = "requires Postgres"]
-async fn leader_audience_ask_with_no_executive_is_left_untouched() {
+async fn leader_audience_ask_with_no_executive_stays_open_but_is_redeadlined() {
     let (db, pool) = setup().await;
     let community = community(&pool).await;
     let relay_keys = Keys::generate();
@@ -411,6 +421,11 @@ async fn leader_audience_ask_with_no_executive_is_left_untouched() {
     )
     .await;
 
+    let before = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    let old_deadline = before
+        .deadline_at
+        .expect("a filed ask always has a deadline");
+
     let now = ask.created_at.as_secs() as i64 + 100;
     let stats = run_interrupt_tick(&state, now, 100)
         .await
@@ -420,7 +435,120 @@ async fn leader_audience_ask_with_no_executive_is_left_untouched() {
     let row = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
     assert_eq!(
         row.status, "open",
-        "must not promote or otherwise touch the row without a confidently resolved executive"
+        "must not promote or otherwise close the row without a confidently resolved executive"
+    );
+    assert!(
+        row.deadline_at.expect("still has a deadline") > old_deadline,
+        "must still re-deadline so this row does not occupy a due-batch slot forever"
+    );
+}
+
+/// C2 regression (Task 8 fix round): `query_due_asks` is cross-tenant,
+/// ordered `deadline_at ASC`, and capped at `batch_limit`. Before the fix,
+/// a row the sweep declined to act on (here: a community that goes missing
+/// right after filing, so `process_due_ask` can never even resolve a
+/// tenant) kept its OLD deadline, so it sorted first on every future tick
+/// forever and permanently occupied a batch slot. Enough such rows
+/// accumulate to starve every other due ask in every other community,
+/// silently -- exactly what was observed and initially misdiagnosed as
+/// test-database pollution while developing Task 8.
+///
+/// Seeds three "stuck" asks (each in its own community, archived
+/// immediately after filing) with early deadlines, plus one legitimately
+/// promotable ask filed later (so it sorts last). With `batch_limit = 3`,
+/// tick 1 can only reach the three stuck rows -- the legitimate one is due
+/// too, but never gets a batch slot. Tick 2, at the SAME `now_secs`: if the
+/// stuck rows were re-deadlined into the future, they no longer compete for
+/// slots, and the legitimate row is finally reached and promotes. Before
+/// the fix, tick 2 would re-select the same three stuck rows again, and the
+/// legitimate ask would never be reached no matter how many further ticks
+/// ran.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn declined_rows_are_redeadlined_so_they_do_not_starve_the_batch() {
+    let (db, pool) = setup().await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    for _ in 0..3 {
+        let stuck_community = community(&pool).await;
+        let tenant = TenantContext::resolved(stuck_community, "test-host");
+        let stuck_owner = Keys::generate();
+        add_owner(&pool, stuck_community, &stuck_owner.public_key().to_hex()).await;
+        let audience = Keys::generate();
+        let filer = Keys::generate();
+        set_tier(&db, stuck_community, &stuck_owner, &filer, "worker").await;
+        set_tier(&db, stuck_community, &stuck_owner, &audience, "leader").await;
+        file_ask(
+            &db,
+            &tenant,
+            &state,
+            &filer,
+            ask_tags("decision", &audience.public_key(), "init-1", "batch-size"),
+            &content_no_default("Choose batch size"),
+            None,
+        )
+        .await;
+        // Archive the community only AFTER filing succeeds -- the sweep
+        // must never be able to reach it again, which is the whole point
+        // of this "stuck" row: `process_due_ask`'s community-host lookup
+        // will find nothing for it on every subsequent tick.
+        sqlx::query("UPDATE communities SET archived_at = now() WHERE id = $1")
+            .bind(stuck_community.as_uuid())
+            .execute(&pool)
+            .await
+            .expect("archive stuck community");
+    }
+
+    // A real clock gap so this ask's `created_at` (and therefore its
+    // `deadline_at`, both one second later) sorts strictly after the three
+    // stuck asks' -- nostr timestamps are second-granularity, so without a
+    // gap, ties would make the batch ordering nondeterministic.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let community = community(&pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+    let legit_ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-1", "batch-size"),
+        &content_no_default("Choose batch size"),
+        None,
+    )
+    .await;
+
+    let now = legit_ask.created_at.as_secs() as i64 + 100;
+
+    let stats1 = run_interrupt_tick(&state, now, 3)
+        .await
+        .expect("tick 1 must not error");
+    assert_eq!(
+        stats1,
+        InterruptTickStats::default(),
+        "tick 1's batch of 3 should only reach the three earlier-deadline stuck rows"
+    );
+
+    let stats2 = run_interrupt_tick(&state, now, 3)
+        .await
+        .expect("tick 2 must not error");
+    assert_eq!(
+        stats2,
+        InterruptTickStats {
+            promoted: 1,
+            defaults_executed: 0
+        },
+        "tick 2, same now_secs: the stuck rows must have been re-deadlined out of \
+         contention, freeing a batch slot for the legitimate ask"
     );
 }
 
