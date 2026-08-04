@@ -28,6 +28,26 @@ test("a DM named with the peer's raw pubkey shows the peer's name", () => {
   );
 });
 
+test("a pubkey-named DM with no participants still resolves the peer", () => {
+  // The case that shipped. `participantPubkeys` can arrive empty, and the
+  // fallback then returned the channel name verbatim: a 64-character key
+  // across the header and the sidebar. The name is the peer's key, so it is
+  // enough to resolve from.
+  assert.equal(
+    resolveChannelDisplayLabel(dmNamed(PEER, []), ME, PROFILES),
+    "Chief of Staff",
+  );
+});
+
+test("an unknown peer degrades to a truncated key, never the full one", () => {
+  const label = resolveChannelDisplayLabel(dmNamed(PEER, []), ME, {});
+  assert.notEqual(label, PEER, "a 64-character key is not a name");
+  assert.ok(
+    label.length < PEER.length,
+    `expected a truncated key, got ${label}`,
+  );
+});
+
 test("an npub-named DM resolves the same way", () => {
   const npub = `npub1${"q".repeat(58)}`;
   assert.equal(
