@@ -18,7 +18,11 @@ BUZZ_AUTO_MIGRATE = "true"
 BUZZ_DOMAIN = "relay.colony.ainative.ventures"
 BUZZ_MEDIA_BASE_URL = "https://relay.colony.ainative.ventures/media"
 BUZZ_MEDIA_SERVER_DOMAIN = "relay.colony.ainative.ventures"
-BUZZ_CORS_ORIGINS = "https://relay.colony.ainative.ventures"
+# BUZZ_CORS_ORIGINS is deliberately unset (permissive CORS). Every HTTP API
+# is NIP-98-authed with no cookie/ambient credentials, so an origin
+# allowlist adds nothing - and any allowlist here silently blocks the
+# desktop webview (origin tauri://localhost), whose fetches to /api/*
+# fail closed with no server-side trace. Broke invite-link minting in prod.
 BUZZ_S3_ENDPOINT = "https://fly.storage.tigris.dev"
 BUZZ_S3_BUCKET = "colony-relay-media"
 # Production identity and posture. Without RELAY_URL the relay advertises
