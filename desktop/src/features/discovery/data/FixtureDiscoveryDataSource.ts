@@ -149,6 +149,24 @@ type ActiveDiscoveryRun = {
   cancelled: boolean;
 };
 
+const LEGACY_INDUSTRY_ALIASES: Readonly<Record<string, string>> = {
+  finance: "financial-services",
+  mining: "mining-resources",
+  tourism: "hospitality",
+};
+
+const LEGACY_VERTICAL_ALIASES: Readonly<Record<string, string>> = {
+  "professional-services/accounting-practices": "accounting-financial-advisory",
+};
+
+function canonicalIndustryId(industryId: string): string {
+  return LEGACY_INDUSTRY_ALIASES[industryId] ?? industryId;
+}
+
+function canonicalVerticalId(industryId: string, verticalId: string): string {
+  return LEGACY_VERTICAL_ALIASES[`${industryId}/${verticalId}`] ?? verticalId;
+}
+
 export function createFixtureDiscoveryDataSource(
   options: CreateFixtureDiscoveryDataSourceOptions = {},
 ): DiscoveryDataSource {
@@ -233,9 +251,10 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   }
 
   async getVerticals(industryId: string): Promise<Vertical[]> {
+    const canonicalIndustry = canonicalIndustryId(industryId);
     return clone(
       FIXTURE_VERTICAL_DETAILS.filter(
-        (item) => item.industryId === industryId,
+        (item) => item.industryId === canonicalIndustry,
       ).map(({ campaigns: _campaigns, ...vertical }) => vertical),
     );
   }
@@ -244,8 +263,14 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     industryId: string,
     verticalId: string,
   ): Promise<VerticalDetail> {
+    const canonicalIndustry = canonicalIndustryId(industryId);
+    const canonicalVertical = canonicalVerticalId(
+      canonicalIndustry,
+      verticalId,
+    );
     const vertical = FIXTURE_VERTICAL_DETAILS.find(
-      (item) => item.industryId === industryId && item.id === verticalId,
+      (item) =>
+        item.industryId === canonicalIndustry && item.id === canonicalVertical,
     );
     if (!vertical) {
       throw new Error(
@@ -255,8 +280,8 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     const campaigns = [...this.campaigns.values()]
       .filter(
         (campaign) =>
-          campaign.industryId === industryId &&
-          campaign.verticalId === verticalId,
+          campaign.industryId === canonicalIndustry &&
+          campaign.verticalId === canonicalVertical,
       )
       .map((campaign) => toCampaignSummary(campaign));
     return clone({ ...vertical, campaigns });

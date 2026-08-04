@@ -21,6 +21,8 @@ export const DISCOVERY_ASSETS = {
     "/discovery/industries/environmental-services.png",
   "industry.fashion-apparel":
     "/discovery/industries/fashion-apparel-premium.png",
+  "industry.home-living": "/discovery/industries/home-living-premium.png",
+  "industry.financial-services": "/discovery/industries/finance.png",
   "industry.finance": "/discovery/industries/finance.png",
   "industry.food-beverage": "/discovery/industries/food-beverage-premium.png",
   "industry.gambling-casinos": "/discovery/industries/gambling-casinos.png",
@@ -37,6 +39,7 @@ export const DISCOVERY_ASSETS = {
   "industry.media-entertainment":
     "/discovery/industries/media-entertainment.png",
   "industry.mining": "/discovery/industries/mining.png",
+  "industry.mining-resources": "/discovery/industries/mining.png",
   "industry.non-profit": "/discovery/industries/non-profit.png",
   "industry.pharmaceuticals-life-sciences":
     "/discovery/industries/pharmaceuticals-life-sciences.png",
@@ -46,6 +49,7 @@ export const DISCOVERY_ASSETS = {
   "industry.technology": "/discovery/industries/technology-premium.png",
   "industry.telecommunications": "/discovery/industries/telecommunications.png",
   "industry.tourism": "/discovery/industries/tourism.png",
+  "industry.hospitality": "/discovery/industries/tourism.png",
   "industry.transportation": "/discovery/industries/transportation.png",
   // SalesTeams uses the parent Automotive image for the vertical catalog and
   // its campaign drawer. Keep that visual contract until vertical-specific
