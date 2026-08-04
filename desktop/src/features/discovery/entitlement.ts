@@ -7,7 +7,6 @@ export type DiscoveryEntitlementState =
 export type DiscoveryEntitlement = {
   feature: "discovery_engine";
   state: DiscoveryEntitlementState;
-  planName?: string;
   manageUrl?: string;
   /** Whether this read model is the cost-free preview or persisted live data. */
   experience?: "demo" | "live";

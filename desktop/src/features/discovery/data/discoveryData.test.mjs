@@ -217,7 +217,6 @@ test("entitlement is provider-neutral and does not invent a price", async () => 
   assert.deepEqual(entitlement, {
     feature: "discovery_engine",
     state: "not_entitled",
-    planName: "LAKA",
   });
   assert.equal(canStartDiscovery(entitlement), false);
   assert.equal(

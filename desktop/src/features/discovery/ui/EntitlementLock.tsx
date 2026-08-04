@@ -78,7 +78,6 @@ export function EntitlementLock({
     );
   }
 
-  const planName = entitlement?.planName ?? "LAKA";
   return (
     <>
       <Button
@@ -89,7 +88,7 @@ export function EntitlementLock({
         variant="outline"
       >
         <LockKeyhole aria-hidden="true" />
-        Unlock with {planName}
+        Discovery access required
       </Button>
       <Dialog onOpenChange={setOpen} open={open}>
         <DialogContent
@@ -99,11 +98,11 @@ export function EntitlementLock({
         >
           <DialogHeader>
             <DialogTitle id="discovery-entitlement-title">
-              Discovery is part of {planName}
+              Discovery access required
             </DialogTitle>
             <DialogDescription id="discovery-entitlement-description">
               This workspace can browse industries, verticals, and campaign
-              setup. Activate the {planName} plan to run a discovery search.
+              setup. Restore Discovery access to run a live search.
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
@@ -121,7 +120,7 @@ export function EntitlementLock({
               </Button>
             </DialogClose>
             <Button disabled type="button">
-              LAKA access required
+              Access required
             </Button>
           </DialogFooter>
         </DialogContent>

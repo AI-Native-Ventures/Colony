@@ -775,7 +775,6 @@ function normalizeEntitlement(
       return {
         feature: "discovery_engine",
         state: "not_entitled",
-        planName: "LAKA",
       };
     case "loading":
       return { feature: "discovery_engine", state: "loading" };
@@ -785,7 +784,6 @@ function normalizeEntitlement(
       return {
         feature: "discovery_engine",
         state: "entitled",
-        planName: "LAKA",
       };
   }
 }

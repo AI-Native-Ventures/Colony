@@ -276,7 +276,7 @@ export function mapRun(campaign: CampaignProjection): DiscoveryRun {
         ? (metrics.find((metric) => metric.error)?.error ??
           "Discovery stopped because every selected source failed.")
         : run.terminal_reason === "entitlement_revoked"
-          ? "Discovery stopped because LAKA access is no longer active."
+          ? "Discovery stopped because this workspace no longer has Discovery access."
           : undefined,
   };
 }
