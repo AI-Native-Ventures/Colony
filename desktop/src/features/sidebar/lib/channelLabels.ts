@@ -5,6 +5,14 @@ import {
 import { formatDmParticipantDisplayName } from "@/features/channels/lib/dmParticipantDisplay";
 import type { Channel } from "@/shared/api/types";
 
+/// A DM name that carries no information a person would want to read, and so
+/// should give way to the participants' resolved profile names.
+///
+/// A bare key counts. A DM created before its peer's profile was known is
+/// named with that peer's raw pubkey, and the old test only recognised words
+/// like "dm" or "group dm", so the header and sidebar rendered
+/// `0e74f2eaeb629ba9…` while the conversation's own intro line, which resolves
+/// profiles by a different path, said "Chief of Staff" directly underneath.
 function isGenericDmChannelName(name: string) {
   const normalized = name.trim().toLowerCase();
   return (
@@ -12,7 +20,10 @@ function isGenericDmChannelName(name: string) {
     normalized === "dm" ||
     normalized === "direct message" ||
     normalized === "direct messages" ||
-    /^group dm\s*(\(\d+\))?$/.test(normalized)
+    /^group dm\s*(\(\d+\))?$/.test(normalized) ||
+    // 64-hex pubkey, or its bech32 npub form.
+    /^[0-9a-f]{64}$/.test(normalized) ||
+    /^npub1[02-9ac-hj-np-z]{58}$/.test(normalized)
   );
 }
 

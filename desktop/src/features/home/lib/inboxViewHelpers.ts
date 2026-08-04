@@ -16,7 +16,7 @@ import type {
   RelayEvent,
   UserProfileSummary,
 } from "@/shared/api/types";
-import { KIND_REMINDER } from "@/shared/constants/kinds";
+import { KIND_REMINDER, KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 
@@ -178,6 +178,27 @@ export function getReactionTargetId(tags: string[][]) {
  * version dropped them, structurally disabling the card on the inbox
  * surface.
  */
+/**
+ * Whether a formatted timeline message belongs in the inbox thread pane.
+ *
+ * Kind 40099 is relay bookkeeping: "dm_created", membership changes, and the
+ * moderation notice row. The channel timeline routes those to
+ * SystemMessageRow, which renders the types it knows and nothing at all for
+ * the rest. This pane has no such renderer and prints whatever it is handed,
+ * so an unhandled one reached the screen as its raw JSON body attributed to
+ * the relay's own key:
+ * `{"actor":"8bb2…","participants":[…],"type":"dm_created"}` sitting inside a
+ * conversation.
+ *
+ * Deletions are unaffected: they ride kind 5 / NIP-29 delete and are applied
+ * while formatting, so hiding 40099 here removes only the notice row.
+ */
+export function isInboxConversationMessage(message: {
+  kind?: number;
+}): boolean {
+  return message.kind !== KIND_SYSTEM_MESSAGE;
+}
+
 export function toInboxContextMessage(
   message: TimelineMessage,
   context: {
