@@ -589,6 +589,10 @@ export function useWelcomeKickoff(
           channelId,
           activeCommunity?.relayUrl,
         );
+        // Null means the community is already staffed by another member's
+        // fleet: nothing to provision and no kickoff to run - the existing
+        // team's opener is already in the channel.
+        if (!welcomeTeam) return;
         await queryClient.invalidateQueries({
           queryKey: managedAgentsQueryKey,
         });
