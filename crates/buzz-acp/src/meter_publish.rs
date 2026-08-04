@@ -5,7 +5,7 @@
 //! agent still leaves behind what it spent.
 
 use buzz_core::usage_record::{encrypt_usage_record, PaymentMode, UsageRecordPayload, UsageSource};
-use buzz_meter::MeteredCall;
+use buzz_meter::{CallCredential, MeteredCall};
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
 
 /// Ambient facts about the harness that every record carries.
@@ -13,8 +13,23 @@ use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
 pub struct PublishContext {
     /// Harness name, e.g. `buzz-acp`.
     pub harness: String,
-    /// Whether spend is metered money or a subscription's shadow cost.
-    pub payment_mode: PaymentMode,
+    /// Record every call as shadow cost regardless of which credential paid,
+    /// for a fleet funded entirely by seats.
+    pub force_imputed: bool,
+}
+
+impl PublishContext {
+    /// How a given call is priced: money when our own key paid for it, shadow
+    /// cost when the agent's subscription did.
+    fn payment_mode(&self, credential: CallCredential) -> PaymentMode {
+        if self.force_imputed {
+            return PaymentMode::Imputed;
+        }
+        match credential {
+            CallCredential::Metered => PaymentMode::Metered,
+            CallCredential::Subscription => PaymentMode::Imputed,
+        }
+    }
 }
 
 /// Build the signed `kind:44210` event for one observed call.
@@ -37,7 +52,7 @@ pub fn build_usage_record_event(
         request_id: call.request_id,
         model: call.model,
         timestamp: call.timestamp,
-        payment_mode: context.payment_mode,
+        payment_mode: context.payment_mode(call.credential),
         tokens: Some(tokens),
         amount_nanousd: None,
         harness: Some(context.harness.clone()),
@@ -99,13 +114,14 @@ mod tests {
             }),
             timestamp: "2026-08-02T10:00:00.000Z".to_string(),
             agent_label: "agent-0".to_string(),
+            credential: CallCredential::Metered,
         }
     }
 
     fn context() -> PublishContext {
         PublishContext {
             harness: "buzz-acp".to_string(),
-            payment_mode: PaymentMode::Metered,
+            force_imputed: false,
         }
     }
 
@@ -155,7 +171,7 @@ mod tests {
         let owner = Keys::generate();
         let context = PublishContext {
             harness: "buzz-acp".to_string(),
-            payment_mode: PaymentMode::Imputed,
+            force_imputed: true,
         };
         let event = build_usage_record_event(call(), &agent, &owner.public_key(), &context)
             .expect("record")

@@ -345,17 +345,22 @@ pub struct CliArgs {
     pub no_meter: bool,
 
     /// Real Anthropic credential. Held by the metering checkpoint and never
-    /// placed in an agent's environment.
+    /// placed in an agent's environment. Optional: without it the checkpoint
+    /// still counts tokens, forwarding each agent's own credential (e.g. a CLI
+    /// subscription login) and recording the spend as shadow cost.
     #[arg(long, env = "BUZZ_METER_ANTHROPIC_KEY", hide_env_values = true)]
     pub meter_anthropic_key: Option<String>,
 
     /// Real OpenAI credential. Held by the metering checkpoint and never
-    /// placed in an agent's environment.
+    /// placed in an agent's environment. Optional, on the same terms as the
+    /// Anthropic key above.
     #[arg(long, env = "BUZZ_METER_OPENAI_KEY", hide_env_values = true)]
     pub meter_openai_key: Option<String>,
 
-    /// Record usage as subscription-backed shadow cost rather than money
-    /// spent. Tokens are still counted and priced at API-equivalent rates.
+    /// Force every record to subscription-backed shadow cost, even calls the
+    /// checkpoint's own key paid for. Calls made with an agent's own
+    /// credential are already recorded that way without this flag; it exists
+    /// for a fleet funded entirely by seats.
     #[arg(long, env = "BUZZ_ACP_IMPUTED_COST")]
     pub imputed_cost: bool,
 

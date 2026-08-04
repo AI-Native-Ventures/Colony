@@ -2985,6 +2985,10 @@ mod tests {
         let meter = crate::meter_env::MeterEnv {
             port: 51234,
             virtual_key: "colony-vk-test".to_string(),
+            metered: crate::meter_env::MeteredProviders {
+                anthropic: true,
+                openai: true,
+            },
         };
         let observed = spawn_named_and_read_child_env_metered(
             "masking-probe",
@@ -3012,12 +3016,20 @@ mod tests {
         let meter = crate::meter_env::MeterEnv {
             port: 51999,
             virtual_key: "colony-vk-test".to_string(),
+            metered: crate::meter_env::MeteredProviders {
+                anthropic: true,
+                openai: true,
+            },
         };
         let observed =
             spawn_named_and_read_child_env_metered("base-url-probe", VAR, &[], Some(&meter)).await;
         std::env::remove_var(VAR);
 
-        assert_eq!(observed, "http://127.0.0.1:51999/anthropic");
+        assert_eq!(
+            observed, "http://127.0.0.1:51999/anthropic/k/colony-vk-test",
+            "the checkpoint URL carries the agent's key, so attribution survives \
+             an agent that keeps its own credential"
+        );
     }
 
     /// With metering off, nothing changes: the parent value is inherited
@@ -3328,6 +3340,10 @@ mod tests {
         crate::meter_env::MeterEnv {
             port: 51234,
             virtual_key: "colony-vk-abc123".to_string(),
+            metered: crate::meter_env::MeteredProviders {
+                anthropic: true,
+                openai: true,
+            },
         }
     }
 
@@ -3509,6 +3525,10 @@ mod tests {
         let meter = crate::meter_env::MeterEnv {
             port: meter_port,
             virtual_key: handle.issue_virtual_key("agent-live"),
+            metered: crate::meter_env::MeteredProviders {
+                anthropic: true,
+                openai: true,
+            },
         };
 
         // A wrapper named codex-acp, with an isolated CODEX_HOME so the run

@@ -1413,20 +1413,47 @@ async fn tokio_main() -> Result<()> {
             openai_api_key: config.meter_openai_key.clone(),
             ..buzz_meter::MeterConfig::default()
         };
+        // Which providers we pay for. Where we hold no key the agent keeps its
+        // own login and the checkpoint only counts tokens, so metering never
+        // becomes a reason an agent cannot run.
+        let metered_providers = meter_env::MeteredProviders {
+            anthropic: meter_config
+                .anthropic_api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty()),
+            openai: meter_config
+                .openai_api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty()),
+        };
         match buzz_meter::start_meter(meter_config).await {
             Ok((port, mut calls, handle)) => {
-                if meter_env::set_active_meter(meter_env::ActiveMeter { port, handle }).is_err() {
+                if meter_env::set_active_meter(meter_env::ActiveMeter {
+                    port,
+                    handle,
+                    metered: metered_providers,
+                })
+                .is_err()
+                {
                     tracing::error!("metering checkpoint was already installed");
                 }
-                tracing::info!(port, "metering checkpoint listening on loopback");
+                if metered_providers.none_configured() {
+                    tracing::info!(
+                        port,
+                        "metering checkpoint listening on loopback; no provider key configured, \
+                         agents keep their own credentials and usage records as subscription cost"
+                    );
+                } else {
+                    tracing::info!(port, "metering checkpoint listening on loopback");
+                }
 
                 let publish_context = meter_publish::PublishContext {
                     harness: crate::config::normalize_agent_command_identity(&config.agent_command),
-                    payment_mode: if config.imputed_cost {
-                        buzz_core::usage_record::PaymentMode::Imputed
-                    } else {
-                        buzz_core::usage_record::PaymentMode::Metered
-                    },
+                    // Per call, not per process: a harness can hold a key for
+                    // one provider and none for the other, and each call is
+                    // then priced honestly. `--imputed-cost` still forces
+                    // every record to shadow cost for a seat-funded fleet.
+                    force_imputed: config.imputed_cost,
                 };
                 let agent_keys = config.keys.clone();
                 let rest = relay.rest_client();
