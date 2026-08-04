@@ -34,6 +34,8 @@ pub mod core_blocks;
 pub mod error;
 /// WebSocket message handlers for NIP-01 client commands.
 pub mod handlers;
+/// Colony interrupt-core: tier lookup and the owner-contact gate.
+pub mod interrupt_gate;
 /// Stateless HMAC-signed relay invite tokens (mint/verify).
 pub mod invite_token;
 /// Inter-relay mesh startup wiring (`BUZZ_MESH` seam).

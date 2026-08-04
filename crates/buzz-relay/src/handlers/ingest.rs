@@ -406,6 +406,13 @@ pub(crate) async fn derive_reaction_channel(
 /// this branch returns BEFORE the ban/timeout write-block, so routing them here
 /// would let a banned or timed-out owner mutate company or party state. They are
 /// brokered further down, past that gate.
+///
+/// DM open is excluded for the same shape of reason, plus one more: it must
+/// reach the Colony interrupt-core owner-contact gate
+/// (`interrupt_gate::enforce_owner_contact`), which also sits past the
+/// ban/timeout block, so a Worker or Leader agent cannot open a DM straight
+/// to a community owner. It is re-dispatched to `handle_command` explicitly,
+/// after both gates.
 pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
     buzz_core::kind::is_command_kind(kind)
         && kind != KIND_COMPANY_ACTION
@@ -414,6 +421,7 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
         && kind != KIND_DISCOVERY_ACTION
         && kind != KIND_DISCOVERY_WORKER_ACTION
         && kind != KIND_DISCOVERY_WORKSPACE_ACTION
+        && kind != KIND_DM_OPEN
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -1746,6 +1754,24 @@ async fn ingest_event_inner(
                 )));
             }
         }
+    }
+
+    // Colony interrupt-core: a Worker or Leader agent may never address a
+    // community owner directly (spec: tiers), with one thread-scoped reply
+    // exemption. Checked here, after the ban/timeout write-block and before
+    // any handler runs, so the rule holds regardless of which path below
+    // would otherwise store or route the event.
+    crate::interrupt_gate::enforce_owner_contact(tenant, state, &event)
+        .await
+        .map_err(IngestError::AuthFailed)?;
+
+    // DM open is a command kind (`is_command_kind`) but is deliberately
+    // excluded from the generic command branch above (see
+    // `takes_generic_command_branch`) so it reaches the ban/timeout
+    // write-block and the owner-contact gate just checked. Past both gates,
+    // it re-enters the same dispatch the generic branch would have used.
+    if kind_u32 == KIND_DM_OPEN {
+        return super::command_executor::handle_command(tenant, state, event, auth).await;
     }
 
     // Company mutations are community-global governance requests authorized by
@@ -3436,7 +3462,9 @@ mod tests {
     /// NOT take the
     /// generic command branch: that branch returns before the ban/timeout
     /// write-block, so routing them there would let a banned owner mutate
-    /// company or party state.
+    /// company or party state. DM open joins them for the same reason, plus
+    /// the Colony interrupt-core owner-contact gate, which also sits past
+    /// that write-block.
     #[test]
     fn brokered_actions_are_excluded_from_the_generic_command_branch() {
         let brokered = [
@@ -3446,6 +3474,7 @@ mod tests {
             KIND_DISCOVERY_WORKER_ACTION,
             KIND_DISCOVERY_WORKSPACE_ACTION,
             buzz_core::kind::KIND_LEDGER_ACTION,
+            KIND_DM_OPEN,
         ];
         for kind in brokered {
             assert!(
