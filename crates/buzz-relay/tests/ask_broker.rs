@@ -121,6 +121,27 @@ async fn channel(pool: &PgPool, community: CommunityId, name: &str) -> Uuid {
     id
 }
 
+/// A `private` channel, unlike [`channel`]'s `open` one -- `open` channels
+/// let anyone post regardless of an explicit membership row
+/// (`check_channel_membership`'s open-fallback), so a private channel is
+/// what a "foreign, unauthorized channel" test actually needs.
+async fn private_channel(pool: &PgPool, community: CommunityId, name: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO channels \
+            (id, community_id, name, channel_type, visibility, created_by) \
+         VALUES ($1, $2, $3, 'stream'::channel_type, 'private'::channel_visibility, $4)",
+    )
+    .bind(id)
+    .bind(community.as_uuid())
+    .bind(format!("{name}-{}", id.simple()))
+    .bind([0x11_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("insert private channel");
+    id
+}
+
 async fn archive_channel(pool: &PgPool, channel_id: Uuid) {
     sqlx::query("UPDATE channels SET archived_at = now() WHERE id = $1")
         .bind(channel_id)
@@ -1036,6 +1057,86 @@ async fn resolution_by_the_audience_resolves_and_wakes_the_filer() {
             parts.len() == 2 && parts[0] == "p" && parts[1] == leader_hex
         }),
         "receipt must p-tag the blocked filer so it wakes"
+    );
+}
+
+/// C3 regression: `emit_ask_receipt` must not deliver a relay-signed
+/// message into whatever channel a client-supplied `origin_thread` happens
+/// to resolve to. A tiered agent could otherwise name any event id in the
+/// community and have the relay post attacker-chosen text into a private
+/// channel it has no relationship to, under the relay's own identity.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn resolution_receipt_is_not_posted_into_a_channel_foreign_to_the_filer() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let foreign_channel = private_channel(&pool, community, "private-other").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // A root event in a PRIVATE channel the leader (the filer) is not a
+    // member of, authored by an unrelated third party. The ask itself is
+    // never stored in any channel (`file_leader_ask_to_executive` stores it
+    // with `channel_id: None`), so the only thing tying the ask to this
+    // channel at all is the filer's own `e` tag -- exactly the
+    // attacker-controlled reference the fix must not trust blindly.
+    let outsider = Keys::generate();
+    let foreign_root = store_root(
+        &db,
+        community,
+        foreign_channel,
+        &outsider,
+        "private conversation",
+    )
+    .await;
+
+    let harness = Harness {
+        db: &db,
+        tenant: &tenant,
+        state: &state,
+    };
+    let ask_event = file_leader_ask_to_executive(
+        &harness,
+        &leader,
+        &executive,
+        &foreign_root,
+        "decision",
+        "batch-size",
+        "Choose batch size",
+    )
+    .await;
+
+    let resolution = sign_resolution(
+        &executive,
+        &ask_event.id.to_hex(),
+        serde_json::json!({"choice": "B"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution by the ask's audience");
+
+    let receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(foreign_channel),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipt messages");
+    assert!(
+        receipts.is_empty(),
+        "no receipt should be posted into a private channel foreign to the filer, found {}",
+        receipts.len()
     );
 }
 

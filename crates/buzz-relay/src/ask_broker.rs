@@ -383,6 +383,7 @@ async fn handle_resolution(
             origin_thread_hex,
             &format!("Ask resolved: {}", ask.headline),
             stored_ask.event.pubkey,
+            stored_ask.channel_id,
         )
         .await;
     }
@@ -495,6 +496,7 @@ async fn handle_withdrawal(
             origin_thread_hex,
             &format!("Ask withdrawn: {}", parsed.reason),
             stored_ask.event.pubkey,
+            stored_ask.channel_id,
         )
         .await;
     }
@@ -506,6 +508,9 @@ async fn handle_withdrawal(
 /// `origin_thread_hex`'s root event belongs to, tagged into that thread and
 /// p-tagging `blocked_agent` so the agent whose work stalled on the ask
 /// wakes back up where it stalled.
+///
+/// `ask_channel_id` is the ASK EVENT's own stored channel (not the
+/// receipt's), used to authorize the target channel below.
 ///
 /// Mirrors `handlers::side_effects::emit_system_message`'s shape (bare
 /// insert + fan-out, tolerant of failure) rather than the full
@@ -519,6 +524,7 @@ async fn emit_ask_receipt(
     origin_thread_hex: &str,
     content: &str,
     blocked_agent: PublicKey,
+    ask_channel_id: Option<uuid::Uuid>,
 ) {
     let Ok(origin_thread_bytes) = hex::decode(origin_thread_hex) else {
         return;
@@ -538,6 +544,28 @@ async fn emit_ask_receipt(
     let Some(channel_id) = root.channel_id else {
         return;
     };
+
+    // The `e` tag naming this origin thread is filer-controlled: it can
+    // name any event id in the community, not just one the ask actually
+    // belongs to. Refuse silently (matching this function's best-effort
+    // contract) unless the thread's channel is either the ask's own
+    // channel, or one `blocked_agent` may legitimately post in (a member,
+    // or an open channel) -- otherwise the relay would deliver
+    // attacker-chosen text into a channel the filer cannot write to, under
+    // the relay's own identity.
+    let legitimate = ask_channel_id == Some(channel_id)
+        || crate::handlers::ingest::check_channel_membership(
+            tenant,
+            state,
+            channel_id,
+            blocked_agent.as_bytes(),
+            None,
+        )
+        .await
+        .is_ok();
+    if !legitimate {
+        return;
+    }
 
     let mut tags = Vec::new();
     if let Ok(tag) = Tag::parse(["h", &channel_id.to_string()]) {
