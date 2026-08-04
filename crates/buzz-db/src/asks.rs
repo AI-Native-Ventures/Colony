@@ -116,7 +116,7 @@ fn row_to_ask_row(row: sqlx::postgres::PgRow) -> Result<AskRow> {
 ///
 /// Fails with a Postgres unique-violation error (surfaced as
 /// [`crate::DbError::Sqlx`]) if an OPEN ask already exists for this
-/// `(community, initiative_id, need_key)` — that partial unique index is the
+/// `(community, initiative_id, need_key)`: that partial unique index is the
 /// dedupe guarantee described on the module. The slot reopens once the
 /// existing open ask is resolved, withdrawn, or promoted.
 pub async fn insert_ask(pool: &PgPool, community: CommunityId, row: NewAskRow<'_>) -> Result<()> {
@@ -234,7 +234,7 @@ pub async fn withdraw_ask(
 ///
 /// Returns `true` if an open row was flipped, `false` if no open ask with
 /// this `ask_event_id` existed in `community`. Releases the dedupe slot for
-/// its `(initiative_id, need_key)` — the promoted-to ask claims it instead.
+/// its `(initiative_id, need_key)`: the promoted-to ask claims it instead.
 pub async fn mark_ask_promoted(
     pool: &PgPool,
     community: CommunityId,
@@ -364,7 +364,7 @@ mod tests {
         }
     }
 
-    /// Reads a row regardless of status — the public API only exposes open
+    /// Reads a row regardless of status: the public API only exposes open
     /// asks, so tests that need to inspect a closed row read the table
     /// directly rather than adding a test-only backdoor to the module.
     async fn fetch_any_ask(pool: &PgPool, community: CommunityId, ask_event_id: &[u8]) -> AskRow {
@@ -460,7 +460,7 @@ mod tests {
     }
 
     /// Load-bearing dedupe test, half 2: once the open ask is resolved, the
-    /// dedupe slot must reopen — a fresh ask for the same need succeeds, and
+    /// dedupe slot must reopen: a fresh ask for the same need succeeds, and
     /// `find_open_ask_by_need` no longer returns the resolved row.
     #[tokio::test]
     #[ignore = "requires Postgres"]
@@ -628,7 +628,7 @@ mod tests {
     }
 
     /// `resolve_ask`/`withdraw_ask`/`mark_ask_promoted` return `false`
-    /// (rather than erroring) when there is no open row to close — a stale
+    /// (rather than erroring) when there is no open row to close: a stale
     /// event replay or a race against another resolution.
     #[tokio::test]
     #[ignore = "requires Postgres"]
