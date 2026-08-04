@@ -39,10 +39,28 @@ async fn setup() -> (Db, PgPool) {
 /// to be set; using a random `Keys::generate()` for one but not the other
 /// would trip that guard in every resolution/withdrawal test).
 async fn state(db: Db, pool: &PgPool, relay_keys: Keys) -> Arc<AppState> {
+    state_with_key_config(db, pool, relay_keys, true).await
+}
+
+/// Like [`state`], but leaves `config.relay_private_key` unset while
+/// `relay_keys` still signs as `state.relay_keypair` -- reproducing the real
+/// dev-mode shape (`main.rs`'s hardcoded fallback keypair with no durable
+/// key configured) so tests can exercise what a relay-signed write does
+/// when the relay identity is not backed by a durable secret.
+async fn state_without_durable_key(db: Db, pool: &PgPool, relay_keys: Keys) -> Arc<AppState> {
+    state_with_key_config(db, pool, relay_keys, false).await
+}
+
+async fn state_with_key_config(
+    db: Db,
+    pool: &PgPool,
+    relay_keys: Keys,
+    durable_key: bool,
+) -> Arc<AppState> {
     let mut config = buzz_relay::config::Config::from_env().expect("default config loads");
     config.require_relay_membership = false;
     config.redis_url = "redis://127.0.0.1:1".to_string();
-    config.relay_private_key = Some(relay_keys.secret_key().to_secret_hex());
+    config.relay_private_key = durable_key.then(|| relay_keys.secret_key().to_secret_hex());
     let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .expect("redis pool (lazy, never connected by this suite)");
@@ -504,6 +522,42 @@ async fn relay_signed_ask_bypasses_the_altitude_ladder() {
         .await
         .expect("no internal error");
     assert_applied(outcome, "relay-signed ask");
+}
+
+/// C1 regression: the relay-identity bypass on FILING must require a
+/// durable relay key, exactly like the resolution/withdrawal bypasses
+/// already do. Without this guard, a relay running on the hardcoded dev
+/// fallback key (`BUZZ_RELAY_PRIVATE_KEY` unset, `require_auth_token =
+/// false`, per `main.rs`) would let anyone who reads the source sign a
+/// kind 44300 with that public key and file an ask straight to any
+/// audience -- including a human owner -- with no tier and no membership.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn relay_signed_ask_bypass_requires_a_durable_relay_key() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state_without_durable_key(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    // No owner, no tiers -- exactly the shape that must be refused now that
+    // the relay identity is not backed by a durable secret.
+    let untiered_audience = Keys::generate();
+    let event = sign_ask(
+        &relay_keys,
+        ask_tags(
+            "stall",
+            &untiered_audience.public_key(),
+            "init-1",
+            "silent-task",
+        ),
+        &ask_content("Task went silent for 2h", None),
+    );
+
+    let outcome = handle_ask_event(&tenant, &state, &event)
+        .await
+        .expect("no internal error");
+    assert_refused(outcome, "relay-signed ask without a durable relay key");
 }
 
 // ---------------------------------------------------------------------

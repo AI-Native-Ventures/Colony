@@ -189,14 +189,23 @@ fn decode_hex64(hex_value: Option<&str>) -> Result<Option<Vec<u8>>, String> {
 /// owner), `None` when the filing may proceed.
 ///
 /// Relay-signed asks bypass the ladder entirely -- Tasks 8 and 9 file
-/// promotions and stalls that way.
+/// promotions and stalls that way. The bypass requires a durable relay key
+/// (`state.config.relay_private_key`), same as the relay-signed bypasses on
+/// resolution and withdrawal: without one, `state.relay_keypair` is the
+/// hardcoded fallback every install shares (`main.rs`'s dev keypair when
+/// `BUZZ_RELAY_PRIVATE_KEY` is unset and `require_auth_token` is false), so
+/// trusting that identity here would let anyone who reads this repo forge a
+/// kind 44300 straight to a human owner with no tier and no membership. The
+/// relay pubkey is an authorization credential on the filing path, not
+/// merely a signing key, even though filing itself never signs anything.
 async fn check_altitude(
     tenant: &TenantContext,
     state: &AppState,
     event: &Event,
     parsed: &ParsedAsk,
 ) -> Result<Option<String>, String> {
-    if event.pubkey == state.relay_keypair.public_key() {
+    if state.config.relay_private_key.is_some() && event.pubkey == state.relay_keypair.public_key()
+    {
         return Ok(None);
     }
 
