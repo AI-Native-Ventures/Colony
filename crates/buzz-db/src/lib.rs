@@ -5665,6 +5665,19 @@ impl Db {
         asks::mark_ask_promoted(&self.pool, community, ask_event_id, promoted_to_event_id).await
     }
 
+    /// Reverts a `promoted` row back to `open`, clearing the promotion
+    /// pointer, but ONLY when it is still promoted toward exactly
+    /// `expected_promoted_to`. Returns `false` if it no longer matches. See
+    /// [`asks::reopen_promoted_ask`].
+    pub async fn reopen_promoted_ask(
+        &self,
+        community: CommunityId,
+        ask_event_id: &[u8],
+        expected_promoted_to: &[u8],
+    ) -> Result<bool> {
+        asks::reopen_promoted_ask(&self.pool, community, ask_event_id, expected_promoted_to).await
+    }
+
     /// Returns open asks whose deadline has passed, across every community,
     /// capped at `limit` rows. Mirrors [`Db::query_due_reminders`].
     pub async fn query_due_asks(&self, now_secs: i64, limit: i64) -> Result<Vec<asks::AskRow>> {

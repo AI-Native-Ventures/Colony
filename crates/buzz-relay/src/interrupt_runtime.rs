@@ -376,14 +376,29 @@ async fn promote_or_redeadline(
 /// claim) MUST run before [`crate::ask_broker::handle_ask_event`] (the side
 /// effect that actually creates the new open row) can succeed. A crash
 /// before the claim commits leaves the original open and due, no side
-/// effect has happened, and the next tick retries cleanly. A crash after
-/// the claim commits but before the new ask is created leaves the original
-/// row reading `promoted` toward an event id that was never actually
-/// created -- unlike the default-execution path, this is not merely a lost
-/// notification: the need has no open ask at any tier until something else
-/// notices. This is the one crash window this sweep does not close on its
-/// own; a future stall-detection sweep (over initiatives with no open ask
-/// and no recent activity) is the natural place to add coverage for it.
+/// effect has happened, and the next tick retries cleanly.
+///
+/// A crash exactly between the claim committing and the new ask being
+/// created leaves the original row reading `promoted` toward an event id
+/// that was never actually created -- unlike the default-execution path,
+/// this is not merely a lost notification: the need has no open ask at any
+/// tier until something else notices. This IS the one window this sweep
+/// cannot close on its own: no in-process compensation survives a genuine
+/// process crash at that exact instant. A future stall-detection sweep
+/// (over initiatives with no open ask and no recent activity) is the
+/// natural place to add coverage for it.
+///
+/// An ORDINARY failure in that same window -- `handle_ask_event` returning
+/// `Err` (a database error) or `AskBrokerOutcome::Refused` -- is different
+/// from a crash: the process is still running, so [`reopen_after_promotion_failure`]
+/// compensates by reverting the claim (predicated on the row still being
+/// promoted toward exactly this attempt's event id, so it cannot resurrect
+/// a row closed some other way), giving the original ask another chance on
+/// the next tick instead of leaving it permanently orphaned. A single bad
+/// second on the database connection is a real, reachable failure mode
+/// (unlike a hard crash), so deferring it the same way as the crash-only
+/// residual above would not have been defensible.
+///
 /// Once claimed, the new ask event is stored and dispatched last and
 /// best-effort, mirroring `execute_default`: the projection row from
 /// `handle_ask_event` is what actually matters, not the fan-out.
@@ -472,13 +487,29 @@ async fn promote_to(
         return Ok(());
     }
 
-    match handle_ask_event(tenant, state, &promoted_event).await? {
+    // C3 fix: an ordinary Err or a Refused here both mean the claim above
+    // already committed but the successor never became a real open ask --
+    // the need would otherwise be permanently orphaned (no open ask at any
+    // tier, and `query_due_asks` never returns a `promoted` row again).
+    // Compensate by reopening the original in both arms; see this
+    // function's doc comment for exactly what residual risk this narrows
+    // down to.
+    let outcome = match handle_ask_event(tenant, state, &promoted_event).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            reopen_after_promotion_failure(state, tenant, row, promoted_event.id.as_bytes()).await;
+            return Err(error);
+        }
+    };
+    match outcome {
         AskBrokerOutcome::Applied => {}
         AskBrokerOutcome::Duplicate { .. } => {
             // Vanishingly narrow: something else claimed this exact need in
             // the instant between the claim above and this call. The need
             // still has a live open ask -- the racing one -- so it is not
-            // orphaned, just not this promotion. Nothing more to do.
+            // orphaned, just not this promotion. Nothing more to do (and
+            // nothing to reopen: the original correctly stays `promoted`,
+            // superseded by whatever won the race).
             tracing::warn!(
                 ask_event_id = %hex::encode(&row.ask_event_id),
                 "interrupt sweep: promoted ask lost a filing race for its need; \
@@ -487,6 +518,7 @@ async fn promote_to(
             return Ok(());
         }
         AskBrokerOutcome::Refused { message } => {
+            reopen_after_promotion_failure(state, tenant, row, promoted_event.id.as_bytes()).await;
             return Err(format!(
                 "internal error: relay-signed promotion was refused: {message}"
             ));
@@ -516,6 +548,45 @@ async fn promote_to(
 
     stats.promoted += 1;
     Ok(())
+}
+
+/// Compensate for a promotion whose successor failed after
+/// [`buzz_db::Db::mark_ask_promoted`] already committed (C3 fix, `promote_to`):
+/// revert the original back to `open` via [`buzz_db::Db::reopen_promoted_ask`],
+/// predicated on it still being promoted toward exactly `promoted_event_id`
+/// so a concurrent close by something else is never clobbered.
+///
+/// Best-effort and swallows its own failure: the caller has already decided
+/// to return an error for the promotion attempt itself, and a failure here
+/// (the compensating `UPDATE` erroring, or simply finding the row no longer
+/// matches) must not mask that error, only narrow how much can be said
+/// about what state the row is left in.
+async fn reopen_after_promotion_failure(
+    state: &Arc<AppState>,
+    tenant: &TenantContext,
+    row: &AskRow,
+    promoted_event_id: &[u8],
+) {
+    match state
+        .db
+        .reopen_promoted_ask(tenant.community(), &row.ask_event_id, promoted_event_id)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            // Already reverted by a concurrent attempt, or closed some
+            // other way in the meantime -- not this call's problem either
+            // way.
+        }
+        Err(error) => {
+            tracing::warn!(
+                ask_event_id = %hex::encode(&row.ask_event_id),
+                %error,
+                "interrupt sweep: failed to reopen a promoted ask after its successor failed; \
+                 it will stay stuck `promoted` until noticed some other way"
+            );
+        }
+    }
 }
 
 /// Re-arm a due ask's deadline to `now_secs` plus its own original window,

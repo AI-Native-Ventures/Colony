@@ -255,6 +255,50 @@ pub async fn mark_ask_promoted(
     Ok(result.rows_affected() > 0)
 }
 
+/// Reverts a `promoted` row back to `open`, clearing the promotion pointer,
+/// but ONLY when it is still promoted toward EXACTLY `expected_promoted_to`.
+///
+/// Compensates for a promotion whose successor failed to be created after
+/// [`mark_ask_promoted`] already committed -- the interrupt sweep's
+/// `promote_to` calls this when the follow-up `insert_ask` (via
+/// `buzz-relay`'s `ask_broker::handle_ask_event`) errors or is refused, so
+/// the original ask gets another chance instead of being permanently stuck
+/// `promoted` toward an event that was never actually created. Once
+/// `status = 'promoted'`, the row no longer surfaces from
+/// [`query_due_asks`], so nothing else in this crate would ever notice or
+/// retry it.
+///
+/// The predicate on `resolution_event = expected_promoted_to` is what makes
+/// this idempotent and unable to resurrect a row a human closed some other
+/// way: it can only ever undo the EXACT promotion attempt named by
+/// `expected_promoted_to`, never a different promotion, and never a row
+/// that is not (or is no longer) `promoted` at all. Multiple relay
+/// instances can safely race this the same way they race
+/// [`mark_ask_promoted`] itself -- at most one will match the predicate.
+///
+/// Returns `true` if the row was reverted, `false` if it no longer matches
+/// (already reverted, resolved some other way, or promoted toward a
+/// different successor).
+pub async fn reopen_promoted_ask(
+    pool: &PgPool,
+    community: CommunityId,
+    ask_event_id: &[u8],
+    expected_promoted_to: &[u8],
+) -> Result<bool> {
+    let now = Utc::now().timestamp();
+    let result = sqlx::query(
+        "UPDATE asks SET status = 'open', resolution_event = NULL, updated_at = $1 \
+         WHERE community_id = $2 AND ask_event_id = $3 AND status = 'promoted' \
+           AND resolution_event = $4",
+    )
+    .bind(now)
+    .bind(community.as_uuid())
+    .bind(ask_event_id)
+    .bind(expected_promoted_to)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
 /// Pushes an open ask's `deadline_at` forward to `new_deadline_at`, without
 /// otherwise touching its status, resolution, or any other column.
 ///
@@ -688,6 +732,87 @@ mod tests {
         )
         .await
         .expect("insert ask after prior was promoted");
+    }
+
+    /// `reopen_promoted_ask` (Task 8 fix round, C3) must revert a `promoted`
+    /// row to `open`, clear its promotion pointer, and report `true` -- but
+    /// only when the row is still promoted toward the EXACT successor
+    /// named. A second call (already reverted) and a call naming the wrong
+    /// successor must both report `false` and leave the row untouched,
+    /// proving the compensation is idempotent and cannot resurrect a row
+    /// closed some other way.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn reopen_promoted_ask_reverts_only_the_exact_promotion_it_names() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let audience = random_bytes32();
+        let filer = random_bytes32();
+
+        let original_id = random_bytes32();
+        insert_ask(
+            &pool,
+            community,
+            new_ask(&original_id, &audience, &filer, None),
+        )
+        .await
+        .expect("insert original ask");
+
+        let promoted_to = random_bytes32();
+        let promoted = mark_ask_promoted(&pool, community, &original_id, &promoted_to)
+            .await
+            .expect("mark ask promoted");
+        assert!(promoted);
+
+        // Naming the WRONG successor must not touch the row.
+        let wrong_successor = random_bytes32();
+        let reverted_wrong = reopen_promoted_ask(&pool, community, &original_id, &wrong_successor)
+            .await
+            .expect("reopen with wrong successor");
+        assert!(
+            !reverted_wrong,
+            "must not revert when the named successor does not match"
+        );
+        let still_promoted = fetch_any_ask(&pool, community, &original_id).await;
+        assert_eq!(still_promoted.status, "promoted");
+
+        // Naming the RIGHT successor reverts it.
+        let reverted = reopen_promoted_ask(&pool, community, &original_id, &promoted_to)
+            .await
+            .expect("reopen with correct successor");
+        assert!(
+            reverted,
+            "reopen_promoted_ask must report the promoted row was flipped"
+        );
+        let reopened = fetch_any_ask(&pool, community, &original_id).await;
+        assert_eq!(reopened.status, "open");
+        assert!(
+            reopened.resolution_event.is_none(),
+            "the promotion pointer must be cleared on reopen"
+        );
+
+        // The dedupe slot is free again: a fresh ask for the same need
+        // succeeds, matching every other closing-then-reopening path.
+        let after_reopen = random_bytes32();
+        insert_ask(
+            &pool,
+            community,
+            new_ask(&after_reopen, &audience, &filer, None),
+        )
+        .await
+        .expect_err(
+            "the REOPENED row itself now holds the dedupe slot again; a second insert must fail",
+        );
+
+        // Calling it again (already reverted) must be a no-op, not an error
+        // and not a second flip -- idempotency.
+        let reverted_again = reopen_promoted_ask(&pool, community, &original_id, &promoted_to)
+            .await
+            .expect("reopen an already-open row");
+        assert!(
+            !reverted_again,
+            "reopening an already-open row must report false, not flip it again"
+        );
     }
 
     /// `resolve_ask`/`withdraw_ask`/`mark_ask_promoted` return `false`
