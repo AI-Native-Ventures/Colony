@@ -39,6 +39,9 @@ pub mod error;
 pub mod handlers;
 /// Colony interrupt-core: tier lookup and the owner-contact gate.
 pub mod interrupt_gate;
+/// Colony interrupt-core: the escalation-timer sweep (auto-promotion and
+/// default execution for asks whose deadline has passed).
+pub mod interrupt_runtime;
 /// Stateless HMAC-signed relay invite tokens (mint/verify).
 pub mod invite_token;
 /// Inter-relay mesh startup wiring (`BUZZ_MESH` seam).

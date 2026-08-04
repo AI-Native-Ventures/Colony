@@ -575,7 +575,10 @@ async fn handle_withdrawal(
 /// already durably resolved or withdrawn, and losing the wake notification
 /// must not roll that back, so lookup/storage/fan-out failures here are
 /// logged and swallowed rather than propagated.
-async fn emit_ask_receipt(
+///
+/// `pub(crate)`: also used by `interrupt_runtime`'s default-execution path,
+/// which wakes a filer exactly the way a human resolution would.
+pub(crate) async fn emit_ask_receipt(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     origin_thread_hex: &str,

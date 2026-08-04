@@ -5671,6 +5671,18 @@ impl Db {
         asks::query_due_asks(&self.pool, now_secs, limit).await
     }
 
+    /// Pushes an open ask's deadline forward without otherwise touching it.
+    /// Returns `false` if no open ask with this `ask_event_id` existed in
+    /// `community`. See [`asks::extend_ask_deadline`].
+    pub async fn extend_ask_deadline(
+        &self,
+        community: CommunityId,
+        ask_event_id: &[u8],
+        new_deadline_at: i64,
+    ) -> Result<bool> {
+        asks::extend_ask_deadline(&self.pool, community, ask_event_id, new_deadline_at).await
+    }
+
     /// Returns every open ask rooted at `thread_root`. Backs owner
     /// thread-reply auto-resolution. See [`asks::find_open_asks_by_thread`].
     pub async fn find_open_asks_by_thread(

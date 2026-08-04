@@ -255,6 +255,38 @@ pub async fn mark_ask_promoted(
     Ok(result.rows_affected() > 0)
 }
 
+/// Pushes an open ask's `deadline_at` forward to `new_deadline_at`, without
+/// otherwise touching its status, resolution, or any other column.
+///
+/// Backs the interrupt sweep's no-spin rule for an ask already at the top of
+/// the altitude ladder (executive audience with no default, or an
+/// owner-audience ask with no default): rather than promoting it -- there is
+/// nowhere higher to go -- the sweep re-arms its deadline so [`query_due_asks`]
+/// does not keep handing back the same row on every tick.
+///
+/// Returns `true` if an open row was flipped, `false` if no open ask with
+/// this `ask_event_id` existed in `community` (already resolved/withdrawn/
+/// promoted by a race that landed first, or never filed).
+pub async fn extend_ask_deadline(
+    pool: &PgPool,
+    community: CommunityId,
+    ask_event_id: &[u8],
+    new_deadline_at: i64,
+) -> Result<bool> {
+    let now = Utc::now().timestamp();
+    let result = sqlx::query(
+        "UPDATE asks SET deadline_at = $1, updated_at = $2 \
+         WHERE community_id = $3 AND ask_event_id = $4 AND status = 'open'",
+    )
+    .bind(new_deadline_at)
+    .bind(now)
+    .bind(community.as_uuid())
+    .bind(ask_event_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Returns open asks whose `deadline_at` is at or before `now_secs`, across
 /// every community, ordered by deadline then event ID, capped at `limit`
 /// rows. Mirrors [`crate::event::query_due_reminders`]'s cross-tenant sweep
@@ -829,6 +861,64 @@ mod tests {
         assert!(!due_ids.contains(&not_yet_due.as_slice()));
         assert!(!due_ids.contains(&no_deadline.as_slice()));
         assert!(!due_ids.contains(&resolved_past_due.as_slice()));
+    }
+
+    /// `extend_ask_deadline` must push `deadline_at` forward and leave
+    /// `status` (and every other column) untouched, and must report `false`
+    /// -- not error -- when there is no open row to extend.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn extend_ask_deadline_pushes_the_deadline_and_leaves_status_open() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let audience = random_bytes32();
+        let filer = random_bytes32();
+        let now = Utc::now().timestamp();
+
+        let ask_id = random_bytes32();
+        insert_ask(
+            &pool,
+            community,
+            new_ask(&ask_id, &audience, &filer, Some(now - 60)),
+        )
+        .await
+        .expect("insert ask");
+
+        let new_deadline = now + 3600;
+        let extended = extend_ask_deadline(&pool, community, &ask_id, new_deadline)
+            .await
+            .expect("extend deadline");
+        assert!(
+            extended,
+            "extend_ask_deadline must report the open row was flipped"
+        );
+
+        let row = fetch_any_ask(&pool, community, &ask_id).await;
+        assert_eq!(row.deadline_at, Some(new_deadline));
+        assert_eq!(row.status, "open");
+        assert!(
+            row.updated_at >= row.created_at,
+            "extend_ask_deadline must set updated_at"
+        );
+
+        // No longer due at the OLD deadline's time -- the sweep must not
+        // pick this row up again immediately.
+        let due = query_due_asks(&pool, now, 100)
+            .await
+            .expect("query due asks");
+        assert!(
+            !due.iter().any(|due_row| due_row.ask_event_id == ask_id),
+            "an extended ask must not still read as due"
+        );
+
+        // Closing an already-closed (here: nonexistent) ask reports false
+        // rather than erroring, matching resolve_ask/withdraw_ask/mark_ask_promoted.
+        let ghost_id = random_bytes32();
+        assert!(
+            !extend_ask_deadline(&pool, community, &ghost_id, new_deadline)
+                .await
+                .expect("extend nonexistent ask")
+        );
     }
 
     /// `find_open_asks_by_thread` backs owner thread-reply auto-resolution
