@@ -82,6 +82,61 @@ test("fixture source returns the SalesTeams-shaped discovery hierarchy", async (
   assert.equal(accounting.campaigns[0].leadCount, 308);
 });
 
+test("every advertised business industry exposes the complete SalesTeams taxonomy", async () => {
+  const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
+  const industries = await source.getIndustries();
+  const verticalGroups = await Promise.all(
+    industries.map(async (industry) => ({
+      industry,
+      verticals: await source.getVerticals(industry.id),
+    })),
+  );
+
+  assert.equal(industries.length, 34);
+  assert.equal(
+    verticalGroups.reduce(
+      (total, { verticals }) => total + verticals.length,
+      0,
+    ),
+    531,
+  );
+
+  for (const { industry, verticals } of verticalGroups) {
+    assert.equal(
+      verticals.length,
+      industry.verticalCount,
+      `${industry.name} vertical count`,
+    );
+    assert.ok(verticals.length > 0, `${industry.name} has verticals`);
+    assert.equal(
+      new Set(verticals.map(({ id }) => id)).size,
+      verticals.length,
+      `${industry.name} vertical IDs are unique`,
+    );
+  }
+
+  const realEstate = verticalGroups.find(
+    ({ industry }) => industry.id === "real-estate",
+  );
+  assert.ok(realEstate);
+  assert.equal(realEstate.verticals.length, 14);
+  assert.ok(
+    realEstate.verticals.some(
+      ({ name }) =>
+        name === "Residential Real Estate (Estate Agents & Property Sales)",
+    ),
+  );
+  assert.ok(
+    realEstate.verticals.some(
+      ({ name }) =>
+        name === "Commercial Real Estate (Office & Retail Properties)",
+    ),
+  );
+  assert.ok(
+    realEstate.verticals.some(({ name }) => name === "Property Development"),
+  );
+});
+
 test("fixture source returns the complete SalesTeams people hierarchy", async () => {
   const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
   const fields = await source.getFields();
