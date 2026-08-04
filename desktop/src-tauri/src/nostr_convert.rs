@@ -126,12 +126,12 @@ pub fn channel_info_from_event(
         "open".to_string()
     };
 
-    // For DM-type channels, p-tags identify the participants.
+    // p-tags are identities; `participants` is names, which this event has none
+    // of. Cloning keys in there printed a key where a name belongs.
     let participant_pubkeys: Vec<String> = tags_named(event, "p")
         .filter_map(|s| s.get(1).cloned())
         .collect();
-    let participants = participant_pubkeys.clone();
-
+    let participants: Vec<String> = Vec::new();
     // Summary sidecar carries member_count + last_message_at as JSON content.
     let (member_count, last_message_at) = if let Some(s) = summary {
         let v: Value = serde_json::from_str(&s.content).unwrap_or(Value::Null);
