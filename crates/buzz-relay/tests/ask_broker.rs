@@ -121,6 +121,14 @@ async fn channel(pool: &PgPool, community: CommunityId, name: &str) -> Uuid {
     id
 }
 
+async fn archive_channel(pool: &PgPool, channel_id: Uuid) {
+    sqlx::query("UPDATE channels SET archived_at = now() WHERE id = $1")
+        .bind(channel_id)
+        .execute(pool)
+        .await
+        .expect("archive channel");
+}
+
 async fn add_owner(pool: &PgPool, community: CommunityId, pubkey_hex: &str) {
     sqlx::query("INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'owner')")
         .bind(community.as_uuid())
@@ -837,6 +845,66 @@ async fn a_valid_ask_through_the_real_ingest_pipeline_is_stored_and_queryable() 
         .expect("query asks projection")
         .expect("an open ask row must exist");
     assert_eq!(row.ask_event_id, event.id.as_bytes().to_vec());
+}
+
+/// C2 regression: the broker's `insert_ask` (and the storage-time-later
+/// archived-channel check) must not be allowed to disagree. If the broker
+/// commits an `open` `asks` row before ingest's later rejection paths get a
+/// chance to run, an ask that names an archived channel commits a row
+/// pointing at an event that never actually lands -- wedging the need
+/// permanently, since a retry hits `Duplicate` against a ghost, and
+/// resolution/withdrawal refuse with "the referenced ask does not exist".
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn ask_filed_into_an_archived_channel_leaves_no_asks_row() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    archive_channel(&pool, channel_id).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    let worker = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+
+    let mut tags = ask_tags("blocker", &leader.public_key(), "init-1", "vendor-signoff");
+    tags.push(tag(&["h", &channel_id.to_string()]));
+    let event = sign_ask(&worker, tags, &ask_content("Need vendor sign-off", None));
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: worker.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    match ingest_event(&state, &tenant, event.clone(), auth).await {
+        Err(_) => {}
+        Ok(accepted) => panic!(
+            "filing into an archived channel must be rejected, got accepted={} message={}",
+            accepted.accepted, accepted.message
+        ),
+    }
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "vendor-signoff")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "a rejected ask must leave no row in the asks projection"
+    );
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected ask must not be stored as an event either"
+    );
 }
 
 // ---------------------------------------------------------------------

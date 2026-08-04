@@ -2115,39 +2115,6 @@ async fn ingest_event_inner(
         };
     }
 
-    // Colony interrupt Ask, resolution, and withdrawal (44300-44302) are,
-    // unlike the actions brokered above, never consumed: an Applied outcome
-    // falls through to the ordinary storage path below rather than
-    // returning early, so ask-protocol events are stored like any other
-    // event and channels/future UI can subscribe to them. Only a Duplicate
-    // or Refused outcome short-circuits here, since those must not be
-    // stored at all.
-    if crate::ask_broker::is_ask_candidate(&event) {
-        match crate::ask_broker::handle_ask_event(tenant, state, &event)
-            .await
-            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
-        {
-            crate::ask_broker::AskBrokerOutcome::Applied => {}
-            crate::ask_broker::AskBrokerOutcome::Duplicate {
-                original_ask_event_id,
-            } => {
-                let original_event_id_hex = hex::encode(original_ask_event_id);
-                return Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: format!("duplicate: original ask {original_event_id_hex}"),
-                });
-            }
-            crate::ask_broker::AskBrokerOutcome::Refused { message } => {
-                return Ok(IngestResult {
-                    event_id: event_id_hex,
-                    accepted: false,
-                    message: format!("conflict: {message}"),
-                });
-            }
-        }
-    }
-
     let mut channel_id = if kind_u32 == KIND_REACTION {
         match derive_reaction_channel(tenant.community(), &state.db, &event).await {
             ReactionChannelResult::Channel(ch_id) => Some(ch_id),
@@ -2938,6 +2905,51 @@ async fn ingest_event_inner(
             accepted: true,
             message: String::new(),
         });
+    }
+
+    // Colony interrupt Ask, resolution, and withdrawal (44300-44302) are,
+    // unlike the actions brokered above, never consumed: an Applied outcome
+    // falls through to the ordinary storage path immediately below rather
+    // than returning early, so ask-protocol events are stored like any
+    // other event and channels/future UI can subscribe to them. Only a
+    // Duplicate or Refused outcome short-circuits here, since those must
+    // not be stored at all.
+    //
+    // Placed as late as possible -- immediately before the storage decision
+    // below, after every remaining rejection path (channel-scoped-token/
+    // global-event, membership, archived-channel, per-kind validators) --
+    // so `Applied` really is the last word. An earlier placement let the
+    // broker's `insert_ask` commit before a later rejection (e.g. an ask
+    // naming an archived channel) discarded the event: the `asks` row
+    // stayed `open` pointing at an event that was never actually stored,
+    // wedging the need permanently (every retry read back as `Duplicate`
+    // against a ghost, and resolution/withdrawal refused with "the
+    // referenced ask does not exist"). Dedupe still runs before the event
+    // lands, which is all it needs.
+    if crate::ask_broker::is_ask_candidate(&event) {
+        match crate::ask_broker::handle_ask_event(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::ask_broker::AskBrokerOutcome::Applied => {}
+            crate::ask_broker::AskBrokerOutcome::Duplicate {
+                original_ask_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_ask_event_id);
+                return Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original ask {original_event_id_hex}"),
+                });
+            }
+            crate::ask_broker::AskBrokerOutcome::Refused { message } => {
+                return Ok(IngestResult {
+                    event_id: event_id_hex,
+                    accepted: false,
+                    message: format!("conflict: {message}"),
+                });
+            }
+        }
     }
 
     let (stored_event, was_inserted) = if buzz_core::kind::is_replaceable(kind_u32) {
