@@ -247,3 +247,29 @@ test("nanoUSD formats as money without floating point", () => {
   // Past what a double can represent exactly, and still exact.
   assert.equal(formatNanousd(90_071_992_547_409_930n), "$90,071,992.55");
 });
+
+test("a price row without an origin is treated as the owner's", () => {
+  // Every row written before origins existed was owner-published, and must
+  // keep beating Colony's catalog.
+  const book = parsePriceBook(priceBookEvent([ENTRY]), RELAY_PUBKEY);
+  assert.equal(book.entries[0].origin, "owner");
+});
+
+test("a catalog origin round-trips", () => {
+  const book = parsePriceBook(
+    priceBookEvent([{ ...ENTRY, origin: "catalog" }]),
+    RELAY_PUBKEY,
+  );
+  assert.equal(book.entries[0].origin, "catalog");
+});
+
+test("an unknown origin is refused rather than assumed", () => {
+  assert.throws(
+    () =>
+      parsePriceBook(
+        priceBookEvent([{ ...ENTRY, origin: "vendor" }]),
+        RELAY_PUBKEY,
+      ),
+    /origin is unknown/,
+  );
+});

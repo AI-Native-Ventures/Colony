@@ -27,6 +27,25 @@ pub struct PriceRates {
     pub output_nanousd_per_token: u64,
 }
 
+/// Where a price row came from.
+///
+/// A company's own rate must survive a catalog refresh. Colony ships a
+/// maintained catalog of public vendor prices and re-applies it as vendors
+/// change them, which would otherwise silently overwrite a negotiated rate
+/// the owner published for the same model and instant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PriceOrigin {
+    /// Published by the company's owner. Wins ties.
+    ///
+    /// The default, and deliberately so: every entry written before origins
+    /// existed was owner-published, and must keep beating the catalog.
+    #[default]
+    Owner,
+    /// Seeded from Colony's maintained catalog of public vendor prices.
+    Catalog,
+}
+
 /// One append-only price row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +58,10 @@ pub struct PriceEntry {
     pub rates: PriceRates,
     /// Free text for the human reading the book later ("80% cut", "promo ends").
     pub note: Option<String>,
+    /// Who published this row. Absent on rows written before origins
+    /// existed, which were all owner-published.
+    #[serde(default)]
+    pub origin: PriceOrigin,
 }
 
 /// The full append-only price table; content of the `d=pricebook` head.
@@ -63,14 +86,25 @@ impl PriceBook {
             .iter()
             .filter(|e| e.model == model && e.effective_from <= at_unix)
         {
-            match best {
-                None => best = Some(entry),
-                // `>=` rather than `>`: a later append at the same timestamp
-                // supersedes the earlier one.
-                Some(current) if entry.effective_from >= current.effective_from => {
-                    best = Some(entry);
-                }
-                Some(_) => {}
+            let wins = match best {
+                None => true,
+                Some(current) => match entry.effective_from.cmp(&current.effective_from) {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Less => false,
+                    // Same instant. An owner's rate beats the catalog
+                    // whichever order they were appended in, because a
+                    // catalog refresh lands after the rate a company
+                    // negotiated for itself and must not overwrite it.
+                    // Between two rows of the same origin, the later append
+                    // supersedes the earlier.
+                    std::cmp::Ordering::Equal => !matches!(
+                        (entry.origin, current.origin),
+                        (PriceOrigin::Catalog, PriceOrigin::Owner)
+                    ),
+                },
+            };
+            if wins {
+                best = Some(entry);
             }
         }
         best.map(|entry| &entry.rates)
@@ -125,6 +159,7 @@ mod tests {
             effective_from,
             rates: r,
             note: None,
+            origin: PriceOrigin::Owner,
         }
     }
 

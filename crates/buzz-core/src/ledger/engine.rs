@@ -490,6 +490,7 @@ mod tests {
     use super::*;
     use crate::company::{AgentWorkContext, AttributionState, CommercialPurpose};
     use crate::ledger::attribution::{AttributionRule, Correction};
+    use crate::ledger::prices::PriceOrigin;
     use crate::ledger::prices::{PriceEntry, PriceRates};
     use crate::usage_record::{UsageBreakdown, UsageSource};
 
@@ -518,6 +519,7 @@ mod tests {
                     output_nanousd_per_token: 5_000,
                 },
                 note: None,
+                origin: PriceOrigin::Owner,
             }],
         }
     }
