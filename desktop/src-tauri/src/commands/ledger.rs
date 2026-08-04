@@ -804,6 +804,11 @@ pub async fn ledger_add_price(
             model: request.model.trim().to_string(),
             effective_from,
             rates,
+            // The dialog publishes an unconditional rate. Conditional rows
+            // (a batch tier, a long-context tier, peak hours) come from
+            // Colony's catalog; an owner entering one by hand is not a form
+            // this screen should grow before anyone asks for it.
+            conditions: Default::default(),
             note: request
                 .note
                 .map(|value| value.trim().to_string())

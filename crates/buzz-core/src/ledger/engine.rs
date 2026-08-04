@@ -521,6 +521,7 @@ mod tests {
                     output_nanousd_per_mtok: 5_000_000_000,
                 },
                 note: None,
+                conditions: Default::default(),
                 origin: PriceOrigin::Owner,
             }],
         }

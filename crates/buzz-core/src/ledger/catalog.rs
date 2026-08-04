@@ -24,6 +24,7 @@
 
 use serde::Deserialize;
 
+use super::conditions::{DailyWindow, PriceConditions};
 use super::prices::{PriceEntry, PriceOrigin, PriceRates};
 
 /// The catalog as it ships, before conversion into book entries.
@@ -48,6 +49,72 @@ struct CatalogRow {
     cache_write_1h_per_mtok: String,
     output_per_mtok: String,
     note: Option<String>,
+    /// Service tier this rate is for: `batch`, `flex`, `fast`. Absent means
+    /// the rate applies whatever tier the call used.
+    tier: Option<String>,
+    /// Long-context tier: applies at or above this many input tokens.
+    min_input_tokens: Option<u64>,
+    /// Short-context tier: applies below this many input tokens.
+    max_input_tokens: Option<u64>,
+    /// Recurring local-time windows this rate applies in, e.g. peak hours.
+    #[serde(default)]
+    hours: Vec<CatalogWindow>,
+}
+
+/// A recurring window, written the way a vendor publishes it.
+///
+/// `"09:00"` rather than `540` because this file is edited by hand and read
+/// by people checking it against a vendor's page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CatalogWindow {
+    /// Local start time, `HH:MM`, inclusive.
+    start: String,
+    /// Local end time, `HH:MM`, exclusive. Earlier than `start` wraps midnight.
+    end: String,
+    /// Minutes to add to UTC to reach the vendor's local time. Beijing is 480.
+    utc_offset_minutes: i32,
+}
+
+/// `HH:MM` to minutes past midnight.
+fn parse_hh_mm(value: &str, model: &str) -> Result<u32, CatalogError> {
+    let bad = || CatalogError(format!("{model}: {value} is not an HH:MM local time"));
+    let (hours, minutes) = value.split_once(':').ok_or_else(bad)?;
+    if hours.len() != 2 || minutes.len() != 2 {
+        return Err(bad());
+    }
+    let hours: u32 = hours.parse().map_err(|_| bad())?;
+    let minutes: u32 = minutes.parse().map_err(|_| bad())?;
+    if hours > 24 || minutes > 59 || (hours == 24 && minutes != 0) {
+        return Err(bad());
+    }
+    Ok(hours * 60 + minutes)
+}
+
+fn parse_conditions(row: &CatalogRow) -> Result<PriceConditions, CatalogError> {
+    let mut hours = Vec::with_capacity(row.hours.len());
+    for window in &row.hours {
+        hours.push(DailyWindow {
+            start_minute: parse_hh_mm(&window.start, &row.model)?,
+            end_minute: parse_hh_mm(&window.end, &row.model)?,
+            utc_offset_minutes: window.utc_offset_minutes,
+        });
+    }
+    let conditions = PriceConditions {
+        tier: row.tier.clone(),
+        min_input_tokens: row.min_input_tokens,
+        max_input_tokens: row.max_input_tokens,
+        hours,
+    };
+    // A row nothing can satisfy looks like the price is covered while every
+    // call falls through to something else.
+    if !conditions.is_valid() {
+        return Err(CatalogError(format!(
+            "{}: no call could satisfy these conditions",
+            row.model
+        )));
+    }
+    Ok(conditions)
 }
 
 /// The catalog shipped with this build.
@@ -132,11 +199,19 @@ fn parse_catalog(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
     let mut seen = std::collections::BTreeSet::new();
     for row in file.entries {
         let effective_from = parse_rfc3339(&row.effective_from, &row.model)?;
-        // Two rows for one model at one instant have no defined winner, and
-        // whichever landed second would silently decide the price.
-        if !seen.insert((row.model.clone(), effective_from)) {
+        let conditions = parse_conditions(&row)?;
+        // Two rows for one model at one instant *under the same conditions*
+        // have no defined winner, and whichever landed second would silently
+        // decide the price. Conditions are part of the key because a short-
+        // and a long-context rate legitimately share a model and a date.
+        let key = (
+            row.model.clone(),
+            effective_from,
+            serde_json::to_string(&conditions).map_err(|e| CatalogError(e.to_string()))?,
+        );
+        if !seen.insert(key) {
             return Err(CatalogError(format!(
-                "{} has two entries effective {}",
+                "{} has two entries effective {} under the same conditions",
                 row.model, row.effective_from
             )));
         }
@@ -170,6 +245,7 @@ fn parse_catalog(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
             },
             model: row.model,
             effective_from,
+            conditions,
             note: row.note,
             origin: PriceOrigin::Catalog,
         });
@@ -259,13 +335,20 @@ pub fn merge_catalogs(
 /// engine charges, since an owner's row wins the tie, but it would leave two
 /// contradictory rows in a book people read to understand their costs.
 pub fn missing_from(catalog: &[PriceEntry], existing: &[PriceEntry]) -> Vec<PriceEntry> {
-    let present: std::collections::BTreeSet<(&str, u64)> = existing
-        .iter()
-        .map(|entry| (entry.model.as_str(), entry.effective_from))
-        .collect();
+    // Keyed on conditions as well as model and date: a long-context rate and
+    // a short-context rate share both, and keying on the pair alone would
+    // seed whichever came first and silently drop the other.
+    let key = |entry: &PriceEntry| {
+        (
+            entry.model.clone(),
+            entry.effective_from,
+            serde_json::to_string(&entry.conditions).unwrap_or_default(),
+        )
+    };
+    let present: std::collections::BTreeSet<_> = existing.iter().map(key).collect();
     catalog
         .iter()
-        .filter(|entry| !present.contains(&(entry.model.as_str(), entry.effective_from)))
+        .filter(|entry| !present.contains(&key(entry)))
         .cloned()
         .collect()
 }
@@ -380,6 +463,7 @@ mod tests {
                 output_nanousd_per_mtok: 0,
             },
             note: None,
+            conditions: Default::default(),
             origin: PriceOrigin::Owner,
         }
     }
@@ -567,6 +651,65 @@ mod tests {
                 .map(|r| r.cache_read_nanousd_per_mtok),
             Some(3_625_000),
             "$0.003625 per million tokens"
+        );
+    }
+
+    /// OpenAI bills prompts over 272K input tokens at 2x input and 1.5x
+    /// output. Without a conditional row the book carries only the short
+    /// rate, so a long call is understated by half and nothing about the
+    /// result looks wrong.
+    #[test]
+    fn the_shipped_catalog_charges_openai_long_context_at_the_higher_rate() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let now = 1_790_553_600;
+        let facts = |input_tokens| super::super::conditions::CallFacts {
+            input_tokens,
+            at_unix: now,
+            tier: None,
+        };
+
+        let short = book
+            .rates_for_call("gpt-5.6-sol", &facts(272_000))
+            .expect("short rate");
+        assert_eq!(short.input_nanousd_per_mtok, 5_000_000_000);
+        assert_eq!(short.output_nanousd_per_mtok, 30_000_000_000);
+
+        let long = book
+            .rates_for_call("gpt-5.6-sol", &facts(272_001))
+            .expect("long rate");
+        assert_eq!(
+            long.input_nanousd_per_mtok, 10_000_000_000,
+            "2x input above the threshold"
+        );
+        assert_eq!(
+            long.output_nanousd_per_mtok, 45_000_000_000,
+            "1.5x output above the threshold"
+        );
+    }
+
+    /// The threshold is on the whole prompt, so cached tokens count toward
+    /// it. Summing only uncached input would leave a heavily cached long
+    /// prompt on the short rate.
+    #[test]
+    fn cached_tokens_count_toward_the_long_context_threshold() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let tokens = crate::usage_record::UsageBreakdown {
+            input_uncached_tokens: 2_000,
+            cache_read_tokens: 270_002,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            output_tokens: 1_000_000,
+        };
+        // 272_002 input tokens in total, so the long rate applies and the
+        // million output tokens cost $45 rather than $30.
+        assert_eq!(
+            book.price_tokens("gpt-5.6-sol", &tokens, 1_790_553_600)
+                .unwrap(),
+            2_000 * 10_000 + 270_002 * 1_000 + 1_000_000 * 45_000
         );
     }
 

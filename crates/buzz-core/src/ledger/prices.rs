@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::conditions::{CallFacts, PriceConditions};
 use crate::usage_record::UsageBreakdown;
 
 /// Rates in nanoUSD **per million tokens** for one model over one effective
@@ -166,6 +167,13 @@ pub struct PriceEntry {
     pub effective_from: u64,
     /// Rates in force from `effective_from` until a later entry supersedes them.
     pub rates: PriceRates,
+    /// When this row applies, beyond the date it took effect.
+    ///
+    /// Absent means always, which is what every row published before
+    /// conditions existed means, so those books keep pricing exactly as they
+    /// did. See [`super::conditions`] for why vendors need this at all.
+    #[serde(default, skip_serializing_if = "PriceConditions::is_unconditional")]
+    pub conditions: PriceConditions,
     /// Free text for the human reading the book later ("80% cut", "promo ends").
     pub note: Option<String>,
     /// Who published this row. Absent on rows written before origins
@@ -243,37 +251,73 @@ impl PriceBook {
     /// See [`alias_matches`] for why the remainder must be date-shaped
     /// rather than any suffix.
     pub fn rates_for(&self, model: &str, at_unix: u64) -> Option<&PriceRates> {
-        self.rates_matching(at_unix, |candidate| candidate == model)
+        self.rates_for_call(
+            model,
+            &CallFacts {
+                input_tokens: 0,
+                at_unix,
+                tier: None,
+            },
+        )
+    }
+
+    /// Rates in effect for a specific call.
+    ///
+    /// Same model and date selection as [`Self::rates_for`], and then among
+    /// the rows a call satisfies, the **most specific** wins: a long-context
+    /// batch rate beats a plain batch rate, which beats the unconditional
+    /// rate. Ties on specificity fall through to the later effective date,
+    /// and then to the owner over the catalog, exactly as before.
+    ///
+    /// Specificity outranks the effective date on purpose. A vendor
+    /// introducing a long-context tier publishes it *after* the base rate,
+    /// but a newer unconditional row must not start pricing long calls at
+    /// the short rate. Date decides which generation of a rate applies;
+    /// conditions decide which rate within it.
+    pub fn rates_for_call(&self, model: &str, facts: &CallFacts) -> Option<&PriceRates> {
+        self.rates_matching(facts, |candidate| candidate == model)
             .or_else(|| {
                 // Only when nothing matched exactly. An exact row always wins,
                 // so adding an alias row can never change what an existing
                 // dated row prices.
-                self.rates_matching(at_unix, |candidate| alias_matches(candidate, model))
+                self.rates_matching(facts, |candidate| alias_matches(candidate, model))
             })
     }
 
-    fn rates_matching(&self, at_unix: u64, is_match: impl Fn(&str) -> bool) -> Option<&PriceRates> {
+    fn rates_matching(
+        &self,
+        facts: &CallFacts,
+        is_match: impl Fn(&str) -> bool,
+    ) -> Option<&PriceRates> {
         let mut best: Option<&PriceEntry> = None;
-        for entry in self
-            .entries
-            .iter()
-            .filter(|e| is_match(&e.model) && e.effective_from <= at_unix)
-        {
+        for entry in self.entries.iter().filter(|e| {
+            is_match(&e.model) && e.effective_from <= facts.at_unix && e.conditions.matches(facts)
+        }) {
             let wins = match best {
                 None => true,
-                Some(current) => match entry.effective_from.cmp(&current.effective_from) {
+                Some(current) => match entry
+                    .conditions
+                    .specificity()
+                    .cmp(&current.conditions.specificity())
+                {
                     std::cmp::Ordering::Greater => true,
                     std::cmp::Ordering::Less => false,
-                    // Same instant. An owner's rate beats the catalog
-                    // whichever order they were appended in, because a
-                    // catalog refresh lands after the rate a company
-                    // negotiated for itself and must not overwrite it.
-                    // Between two rows of the same origin, the later append
-                    // supersedes the earlier.
-                    std::cmp::Ordering::Equal => !matches!(
-                        (entry.origin, current.origin),
-                        (PriceOrigin::Catalog, PriceOrigin::Owner)
-                    ),
+                    std::cmp::Ordering::Equal => {
+                        match entry.effective_from.cmp(&current.effective_from) {
+                            std::cmp::Ordering::Greater => true,
+                            std::cmp::Ordering::Less => false,
+                            // Same instant. An owner's rate beats the catalog
+                            // whichever order they were appended in, because a
+                            // catalog refresh lands after the rate a company
+                            // negotiated for itself and must not overwrite it.
+                            // Between two rows of the same origin, the later
+                            // append supersedes the earlier.
+                            std::cmp::Ordering::Equal => !matches!(
+                                (entry.origin, current.origin),
+                                (PriceOrigin::Catalog, PriceOrigin::Owner)
+                            ),
+                        }
+                    }
                 },
             };
             if wins {
@@ -288,7 +332,34 @@ impl PriceBook {
     /// `None` when the model is unpriced then. Every category is multiplied by
     /// its own rate; nothing is inferred from a total.
     pub fn price_tokens(&self, model: &str, tokens: &UsageBreakdown, at_unix: u64) -> Option<u128> {
-        let rates = self.rates_for(model, at_unix)?;
+        self.price_call(model, tokens, at_unix, None)
+    }
+
+    /// Exact cost in nanoUSD, given the service tier the meter observed.
+    ///
+    /// `tier` of `None` means the meter did not capture one, which is not
+    /// the same as standard: a row conditioned on a tier is skipped rather
+    /// than matched, so an uncaptured tier leaves the call on the base rate
+    /// instead of quietly earning a discount it may not be entitled to.
+    pub fn price_call(
+        &self,
+        model: &str,
+        tokens: &UsageBreakdown,
+        at_unix: u64,
+        tier: Option<&str>,
+    ) -> Option<u128> {
+        let facts = CallFacts {
+            // Every input category, because the context a vendor charges a
+            // long-context premium on is the whole prompt, cached or not.
+            input_tokens: tokens
+                .input_uncached_tokens
+                .saturating_add(tokens.cache_read_tokens)
+                .saturating_add(tokens.cache_write_5m_tokens)
+                .saturating_add(tokens.cache_write_1h_tokens),
+            at_unix,
+            tier: tier.map(str::to_owned),
+        };
+        let rates = self.rates_for_call(model, &facts)?;
 
         // Summed first, divided once. Dividing each category separately
         // would discard a sub-unit remainder five times over instead of
@@ -346,6 +417,7 @@ mod tests {
             effective_from,
             rates: r,
             note: None,
+            conditions: Default::default(),
             origin: PriceOrigin::Owner,
         }
     }
@@ -719,6 +791,7 @@ mod tests {
                     output_nanousd_per_mtok: 280_000_000,
                 },
                 note: None,
+                conditions: Default::default(),
                 origin: PriceOrigin::Catalog,
             }],
         };
@@ -755,6 +828,7 @@ mod tests {
                     output_nanousd_per_mtok: 0,
                 },
                 note: None,
+                conditions: Default::default(),
                 origin: PriceOrigin::Catalog,
             }],
         };
