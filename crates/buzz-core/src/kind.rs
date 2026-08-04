@@ -252,6 +252,11 @@ pub const KIND_CORRECTION_BOOK: u32 = 30186;
 /// `d={cost_centre_id}:{period}` where period is `YYYY-MM`).
 pub const KIND_LEDGER_BUDGET: u32 = 30187;
 
+/// Colony interrupt delegation grant (parameterized replaceable, owner-authored).
+/// Authorizes one agent tier to delegate asks to a lower tier or a specific pubkey
+/// (d-tag encodes the delegation scope; JSON content defines conditions).
+pub const KIND_DELEGATION_GRANT: u32 = 30188;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -610,6 +615,29 @@ pub const KIND_AGENT_TURN_METRIC: u32 = 44200;
 /// reads them from the provider's own response.
 pub const KIND_USAGE_RECORD: u32 = 44210;
 
+// Colony interrupt protocol (44300–44303)
+/// Colony interrupt Ask (stored, non-replaceable, owner-authored).
+/// An escalation event requesting human judgment on a decision, question, credential,
+/// blocker, or stall (kind:40002 agent shutdown context). Tags: `ask-type`, `ask-category`,
+/// `agent` (escalating agent pubkey), optional `ask-default`, optional `ask-timeout`.
+pub const KIND_ASK: u32 = 44300;
+
+/// Colony interrupt Ask resolution (stored, non-replaceable, owner-authored).
+/// An Answer to a pending Ask event (tag `e` references the Ask). Ends the Ask lifecycle
+/// and closes the owner thread without further relay processing.
+pub const KIND_ASK_RESOLUTION: u32 = 44301;
+
+/// Colony interrupt Ask withdrawal (stored, non-replaceable, agent-authored).
+/// An agent-initiated cancellation of a pending Ask event (tag `e` references the Ask).
+/// The owner may still Answer afterward, but the relay stops escalation and promotes
+/// unhandled descendants forward.
+pub const KIND_ASK_WITHDRAWAL: u32 = 44302;
+
+/// Colony interrupt decision log (stored, non-replaceable, relay-authored sidecar).
+/// Relay-signed log of every decision and its resolution: who asked, what kind,
+/// how it resolved, and the chain of delegation. Enables auditing and policy tuning.
+pub const KIND_DECISION_LOG: u32 = 44303;
+
 // Forum / social (45000–45999)
 // V1 used addressable range (30001–30003) — wrong.
 /// A forum post (thread root).
@@ -733,6 +761,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_ATTRIBUTION_RULEBOOK,
     KIND_CORRECTION_BOOK,
     KIND_LEDGER_BUDGET,
+    KIND_DELEGATION_GRANT,
     KIND_LEDGER_ACTION,
     KIND_LEDGER_RECEIPT,
     KIND_TEAM,
@@ -806,6 +835,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_AGENT_TURN_METRIC,
     KIND_USAGE_RECORD,
+    KIND_ASK,
+    KIND_ASK_RESOLUTION,
+    KIND_ASK_WITHDRAWAL,
+    KIND_DECISION_LOG,
     KIND_WORKFLOW_DEF,
     KIND_LONG_FORM,
     KIND_USER_STATUS,
@@ -1002,9 +1035,14 @@ const _: () = assert!(!is_ephemeral(KIND_AGENT_TURN_METRIC));
 const _: () = assert!(!is_replaceable(KIND_AGENT_TURN_METRIC));
 const _: () = assert!(!is_parameterized_replaceable(KIND_AGENT_TURN_METRIC));
 const _: () = assert!(KIND_AGENT_TURN_METRIC <= u16::MAX as u32);
-// Moderation kinds fit u16 and are neither replaceable nor ephemeral:
-// 1984 is a regular event (persisted to the queue, never fanned out);
-// 9040–9044 are direct commands (executed, never stored).
+// Compile-time: interrupt kinds are regular stored, non-replaceable.
+const _: () = assert!(!is_ephemeral(KIND_ASK));
+const _: () = assert!(!is_replaceable(KIND_ASK));
+const _: () = assert!(KIND_ASK <= u16::MAX as u32);
+const _: () = assert!(is_parameterized_replaceable(KIND_DELEGATION_GRANT)); // 30188 in 30000-39999
+                                                                            // Moderation kinds fit u16 and are neither replaceable nor ephemeral:
+                                                                            // 1984 is a regular event (persisted to the queue, never fanned out);
+                                                                            // 9040–9044 are direct commands (executed, never stored).
 const _: () = assert!(KIND_REPORT <= u16::MAX as u32);
 const _: () = assert!(KIND_MODERATION_RESOLVE_REPORT <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_REPORT));
