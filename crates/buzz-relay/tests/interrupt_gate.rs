@@ -2,11 +2,13 @@
 //! (spec: tiers). Requires Postgres; mirrors the harness in
 //! `block_attention_feed.rs`.
 
+use buzz_auth::Scope;
 use buzz_core::kind::{KIND_DM_OPEN, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::event::ThreadMetadataParams;
 use buzz_db::Db;
+use buzz_relay::handlers::ingest::{ingest_event, IngestAuth, IngestError};
 use buzz_relay::interrupt_gate::enforce_owner_contact;
 use buzz_relay::state::AppState;
 use chrono::{DateTime, Utc};
@@ -561,4 +563,107 @@ async fn ordinary_message_with_no_p_tags_is_never_gated() {
     enforce_owner_contact(&tenant, &state, &msg)
         .await
         .expect("a message with no p tags must never be gated");
+}
+
+// -- End-to-end pipeline tests -----------------------------------------------
+//
+// Every test above calls `enforce_owner_contact` directly, which proves the
+// gate's own logic but not that kind 41010 (DM open) actually reaches it
+// inside `ingest_event_inner`. DM open is a `is_command_kind` kind, and
+// `takes_generic_command_branch` used to route it through `handle_command`
+// *before* the ban/timeout write-block and this gate -- the gate would never
+// have run for a real DM-open write. The two tests below drive the real
+// `ingest_event` entry point end to end to prove both halves of the fix:
+// the rejection path, and that a legitimate DM open still reaches
+// `handle_dm_open` after the gate.
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn worker_dm_open_through_real_ingest_pipeline_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    let worker = Keys::generate();
+    let worker_hex = worker.public_key().to_hex();
+    set_tier(&db, community, &owner_keys, &worker, "worker").await;
+
+    let open = dm_open(
+        &worker,
+        vec![tag(&["p", &owner_hex]), tag(&["p", &worker_hex])],
+    );
+    let auth = IngestAuth::Nip42 {
+        pubkey: worker.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, open, auth).await;
+    match result {
+        Err(IngestError::AuthFailed(message)) => {
+            assert!(
+                message.contains("cannot open a DM with an owner"),
+                "unexpected message: {message}"
+            );
+        }
+        Err(other) => panic!(
+            "expected AuthFailed rejection through the real pipeline, got a different IngestError: {other:?}"
+        ),
+        Ok(accepted) => panic!(
+            "expected rejection through the real pipeline, got accepted={} message={}",
+            accepted.accepted, accepted.message
+        ),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn legitimate_dm_open_through_real_ingest_pipeline_reaches_handle_dm_open() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    // Two ordinary humans: no managed-agent head, no owner among the
+    // participants. The gate must let this straight through, and the
+    // re-dispatch added right after it must still deliver the event to
+    // `handle_dm_open` rather than silently dropping it or falling through
+    // to some other path.
+    let alice = Keys::generate();
+    let bob = Keys::generate();
+    let bob_hex = bob.public_key().to_hex();
+
+    let open = dm_open(&alice, vec![tag(&["p", &bob_hex])]);
+    let auth = IngestAuth::Nip42 {
+        pubkey: alice.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, open, auth)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("a legitimate DM open must succeed through the real pipeline: {error:?}")
+        });
+    assert!(
+        result.accepted,
+        "DM open must be accepted, message: {}",
+        result.message
+    );
+    // `handle_dm_open`'s exact response shape (`response:{"channel_id":...,
+    // "created":true}`) is only produced by that handler -- this proves the
+    // post-gate re-dispatch actually delivered the event there, not merely
+    // that `ingest_event` returned `Ok` via some other path.
+    assert!(
+        result.message.starts_with("response:") && result.message.contains("\"created\":true"),
+        "expected handle_dm_open's response shape, got: {}",
+        result.message
+    );
 }
