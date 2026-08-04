@@ -791,6 +791,10 @@ pub async fn ledger_add_price(
                 .note
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            // Published from this app by the company's owner, so it wins its
+            // instant against Colony's catalog: a rate somebody negotiated
+            // must survive the next catalog refresh.
+            origin: buzz_core_pkg::ledger::prices::PriceOrigin::Owner,
         },
     );
 

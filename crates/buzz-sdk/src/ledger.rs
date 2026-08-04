@@ -619,6 +619,7 @@ mod tests {
             effective_from: 1_785_628_800,
             rates: rates(),
             note: None,
+            origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         })
     }
 
@@ -739,6 +740,7 @@ mod tests {
             effective_from: 0,
             rates: rates(),
             note: None,
+            origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         });
         assert_eq!(
             blank_model.validate(),

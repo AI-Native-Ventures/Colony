@@ -52,6 +52,15 @@ export interface PriceEntry {
   effectiveFrom: number;
   rates: PriceRates;
   note: string | null;
+  /**
+   * Who published this row.
+   *
+   * `owner` for anything a company published for itself, including every
+   * row written before origins existed. `catalog` for Colony's maintained
+   * vendor prices, which are re-applied as vendors change them and must
+   * never displace an owner's own rate.
+   */
+  origin: PriceOrigin;
 }
 
 export interface PriceBook {
@@ -116,6 +125,23 @@ function asObject(value: unknown, label: string): Record<string, unknown> {
     fail(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+/** Where a price row came from. */
+export type PriceOrigin = "owner" | "catalog";
+
+/**
+ * Read an entry's origin, defaulting to `owner`.
+ *
+ * Absent on rows written before origins existed, and those were all
+ * owner-published, so the default is what keeps them beating the catalog.
+ */
+function parseOrigin(value: unknown, label: string): PriceOrigin {
+  if (value === undefined || value === null) return "owner";
+  if (value !== "owner" && value !== "catalog") {
+    fail(`${label}.origin is unknown: ${String(value)}`);
+  }
+  return value;
 }
 
 function requireExactKeys(
@@ -335,7 +361,7 @@ export function parsePriceBook(
       const raw = asObject(entry, entryLabel);
       requireExactKeys(
         raw,
-        ["model", "effectiveFrom", "rates", "note"],
+        ["model", "effectiveFrom", "rates", "note", "origin"],
         entryLabel,
       );
       return {
@@ -343,6 +369,7 @@ export function parsePriceBook(
         effectiveFrom: requireWholeNumber(raw, "effectiveFrom", entryLabel),
         rates: parseRates(raw.rates, `${entryLabel}.rates`),
         note: optionalString(raw, "note", entryLabel),
+        origin: parseOrigin(raw.origin, entryLabel),
       };
     }),
   };

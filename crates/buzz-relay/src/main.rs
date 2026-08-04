@@ -472,6 +472,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Apply Colony's maintained model price catalog. Same shape as the Block
+    // catalog above and for the same reason: a vendor's price change should
+    // reach every community when the relay deploys, not when each owner
+    // notices and retypes it. Idempotent, so this is a no-op once applied.
+    // Non-fatal: an unpriced community reports its spend as unpriced rather
+    // than as zero, which is visible rather than silently wrong.
+    match buzz_relay::price_catalog::ensure_catalog_prices_for_all_communities(&state).await {
+        Ok(count) => info!(count, "model price catalog reconciled on startup"),
+        Err(error) => {
+            warn!(%error, "price catalog startup reconciliation failed; spend may show as unpriced")
+        }
+    }
+
     // Inter-relay mesh (BUZZ_MESH seam). `boot_mesh` returns None when the
     // kill switch is off — nothing is bound, published, or spawned, so the
     // relay behaves byte-identically to a build without the mesh. When
