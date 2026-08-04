@@ -3,6 +3,7 @@ import * as React from "react";
 import type { InboxContextMessage, InboxItem } from "@/features/home/lib/inbox";
 import {
   getReactionTargetId,
+  isInboxConversationMessage,
   toInboxContextMessage,
 } from "@/features/home/lib/inboxViewHelpers";
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
@@ -64,7 +65,7 @@ export function useHomeInboxContextMessages({
       ownerProfiles,
     );
 
-    return timelineMessages.map((message) =>
+    return timelineMessages.filter(isInboxConversationMessage).map((message) =>
       toInboxContextMessage(message, {
         eventById,
         fallbackAuthorPubkey: selectedItem.item.pubkey,
