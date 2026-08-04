@@ -3,6 +3,9 @@
 //! NIP-01 WebSocket relay for Buzz private team communication.
 
 mod admission;
+/// Colony interrupt-core: the Ask broker (filing, altitude rules, dedupe,
+/// resolution/withdrawal receipts).
+pub mod ask_broker;
 mod block_broker;
 /// Validation for chat-native Block event envelopes.
 pub mod blocks;
