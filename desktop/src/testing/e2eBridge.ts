@@ -10537,6 +10537,14 @@ export function maybeInstallE2eTauriMocks() {
       // Money crosses this boundary as decimal strings, exactly as the real
       // command emits it, so the screen's bigint parsing is exercised rather
       // than bypassed by a friendlier fixture.
+      case "ledger_add_price": {
+        const outcome = activeConfig?.mock?.ledgerCorrectOutcome;
+        return {
+          accepted: outcome?.accepted ?? true,
+          eventId: outcome?.eventId ?? "d".repeat(64),
+          message: outcome?.message ?? "accepted",
+        };
+      }
       case "ledger_correct": {
         const outcome = activeConfig?.mock?.ledgerCorrectOutcome;
         return {

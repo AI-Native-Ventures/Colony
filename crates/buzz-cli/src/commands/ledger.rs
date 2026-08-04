@@ -65,6 +65,7 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
                 effective_from: parse_effective_from(effective_from.as_deref())?,
                 rates,
                 note,
+                origin: buzz_core::ledger::prices::PriceOrigin::Owner,
             };
             publish_action(client, LedgerActionPayload::PriceEntry(entry)).await
         }

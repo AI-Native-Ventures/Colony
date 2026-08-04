@@ -15,11 +15,18 @@ test("all Discovery industries are reachable by scrolling", async ({
   await page.getByTestId("open-discovery-view").click();
   await expect(page).toHaveURL(/#\/discovery/);
 
-  const firstIndustry = page.getByTestId("discovery-industry-card-automotive");
-  const lastIndustry = page.getByTestId(
-    "discovery-industry-card-transportation",
+  // Whichever card the taxonomy currently ends with, not a named one. The
+  // test names an industry it will outlive otherwise: `transportation` was
+  // last when this was written, and the taxonomy expansion to 34 industries
+  // moved it into the middle, where scrolling to the bottom correctly leaves
+  // it above the fold. That failure said nothing about scrolling.
+  const industryCards = page.locator(
+    '[data-testid^="discovery-industry-card-"]',
   );
+  const firstIndustry = industryCards.first();
+  const lastIndustry = industryCards.last();
   await expect(firstIndustry).toBeVisible();
+  await expect(industryCards).not.toHaveCount(0);
   await expect(lastIndustry).toBeAttached();
   await expect(lastIndustry).not.toBeInViewport();
 

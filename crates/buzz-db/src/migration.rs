@@ -640,7 +640,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 40);
+        assert_eq!(migrations.len(), 41);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -693,6 +693,13 @@ mod tests {
             .contains("CREATE TABLE discovery_run_source_plans"));
         assert_eq!(migrations[39].version, 40);
         assert!(migrations[39].sql.as_str().contains("'source_progress'"));
+        assert_eq!(migrations[40].version, 41);
+        let discovery_trials = migrations[40].sql.as_str();
+        assert!(discovery_trials.contains("ADD COLUMN expires_at TIMESTAMPTZ"));
+        assert!(discovery_trials.contains("now() + interval '30 days'"));
+        assert!(discovery_trials.contains("CREATE FUNCTION provision_discovery_trial"));
+        assert!(discovery_trials.contains("AFTER INSERT ON communities"));
+        assert!(discovery_trials.contains("communities_provision_discovery_trial"));
         assert!(migrations[0]
             .sql
             .as_str()
@@ -2102,6 +2109,86 @@ mod tests {
         .execute(&pool)
         .await;
         assert!(rejected_v1_observation.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn discovery_trial_upgrade_seeds_existing_and_future_communities() {
+        let pool = connect_test_pool().await;
+        reset_public_schema(&pool).await;
+        MIGRATOR
+            .run_to(40, &pool)
+            .await
+            .expect("apply migrations through pre-trial Discovery");
+
+        let active_community = uuid::Uuid::new_v4();
+        let inactive_community = uuid::Uuid::new_v4();
+        for (community_id, label) in [
+            (active_community, "active"),
+            (inactive_community, "inactive"),
+        ] {
+            sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
+                .bind(community_id)
+                .bind(format!(
+                    "pre-trial-{label}-{}.example",
+                    community_id.simple()
+                ))
+                .execute(&pool)
+                .await
+                .expect("insert pre-trial community");
+        }
+        sqlx::query(
+            "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
+             VALUES ($1,TRUE,now()),($2,FALSE,now())",
+        )
+        .bind(active_community)
+        .bind(inactive_community)
+        .execute(&pool)
+        .await
+        .expect("insert legacy entitlements");
+
+        run_migrations(&pool).await.expect("apply trial migration");
+
+        let active_expiry: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+            "SELECT expires_at FROM discovery_entitlements WHERE community_id=$1 AND active",
+        )
+        .bind(active_community)
+        .fetch_one(&pool)
+        .await
+        .expect("preserve permanent active entitlement");
+        assert_eq!(active_expiry, None);
+
+        let inactive_expiry: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT expires_at FROM discovery_entitlements WHERE community_id=$1 AND active",
+        )
+        .bind(inactive_community)
+        .fetch_one(&pool)
+        .await
+        .expect("upgrade inactive community to trial");
+        let inactive_remaining = inactive_expiry - chrono::Utc::now();
+        assert!(inactive_remaining > chrono::Duration::days(29));
+        assert!(inactive_remaining <= chrono::Duration::days(30));
+
+        let future_community = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
+            .bind(future_community)
+            .bind(format!(
+                "trial-future-{}.example",
+                future_community.simple()
+            ))
+            .execute(&pool)
+            .await
+            .expect("insert community after trial migration");
+        let future_expiry: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT expires_at FROM discovery_entitlements WHERE community_id=$1 AND active",
+        )
+        .bind(future_community)
+        .fetch_one(&pool)
+        .await
+        .expect("trigger must provision future community trial");
+        let future_remaining = future_expiry - chrono::Utc::now();
+        assert!(future_remaining > chrono::Duration::days(29));
+        assert!(future_remaining <= chrono::Duration::days(30));
     }
 
     #[tokio::test]

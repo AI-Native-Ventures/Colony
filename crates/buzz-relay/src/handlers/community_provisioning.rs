@@ -306,6 +306,12 @@ pub(crate) async fn create_community_for_owner(
     );
     publish_membership_snapshot_if_required(state, record.id, &record.host).await;
     let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
+    let warning = match warning {
+        // A Block-catalog failure is the more serious of the two, so it keeps
+        // the response's single warning slot.
+        Some(existing) => Some(existing),
+        None => crate::price_catalog::seed_prices_warning(state, record.id, &record.host).await,
+    };
     Ok(ProvisionCommunityResponse {
         community_id: record.id.to_string(),
         host: record.host,
@@ -398,6 +404,12 @@ pub async fn provision_community(
     );
 
     let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
+    let warning = match warning {
+        // A Block-catalog failure is the more serious of the two, so it keeps
+        // the response's single warning slot.
+        Some(existing) => Some(existing),
+        None => crate::price_catalog::seed_prices_warning(state, record.id, &record.host).await,
+    };
     Ok(ProvisionCommunityResponse {
         community_id: record.id.to_string(),
         host: record.host,

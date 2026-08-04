@@ -282,8 +282,8 @@ async fn apply_workspace_operation_tx(
     match payload {
         DiscoveryWorkspaceActionPayload::Access => {
             let active: bool = sqlx::query_scalar(
-                "SELECT COALESCE((SELECT active FROM discovery_entitlements \
-                 WHERE community_id=$1), FALSE)",
+                "SELECT COALESCE((SELECT active AND (expires_at IS NULL OR expires_at > now()) \
+                 FROM discovery_entitlements WHERE community_id=$1), FALSE)",
             )
             .bind(community_id.as_uuid())
             .fetch_one(&mut **tx)

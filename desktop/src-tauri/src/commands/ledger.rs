@@ -388,6 +388,45 @@ mod tests {
         usage_record::PaymentMode,
     };
 
+    /// $3 per million tokens is 3000 nanoUSD per token. Getting this wrong
+    /// by a factor of a thousand would misstate every future total without
+    /// anything looking broken.
+    #[test]
+    fn dollars_per_million_tokens_convert_exactly() {
+        assert_eq!(per_mtok_to_nanousd("3", "Input").unwrap(), 3_000);
+        assert_eq!(per_mtok_to_nanousd("15", "Output").unwrap(), 15_000);
+        assert_eq!(per_mtok_to_nanousd("0.30", "Cache read").unwrap(), 300);
+        assert_eq!(per_mtok_to_nanousd("3.75", "Cache write").unwrap(), 3_750);
+        assert_eq!(per_mtok_to_nanousd("0", "Input").unwrap(), 0);
+    }
+
+    /// Parsed as text, never through a float.
+    #[test]
+    fn a_decimal_that_a_float_would_mangle_stays_exact() {
+        // 0.1 through an f64 is 0.09999999999999999.
+        assert_eq!(usd_text_to_nanousd("0.1", "Input").unwrap(), 100_000_000);
+        assert_eq!(
+            usd_text_to_nanousd("0.000000001", "Input").unwrap(),
+            1,
+            "one nanoUSD must survive"
+        );
+    }
+
+    /// A rate finer than one nanoUSD per token is refused, not rounded.
+    #[test]
+    fn sub_nanousd_per_token_precision_is_refused() {
+        let error = per_mtok_to_nanousd("0.0000001", "Input").unwrap_err();
+        assert!(error.contains("will not round it"), "{error}");
+    }
+
+    #[test]
+    fn a_malformed_amount_names_the_field() {
+        for bad in ["", "  ", "-1", "1.2.3", "3x", "$3"] {
+            let error = usd_text_to_nanousd(bad, "Input").unwrap_err();
+            assert!(error.contains("Input"), "{bad} -> {error}");
+        }
+    }
+
     /// Larger than `Number.MAX_SAFE_INTEGER` (2^53 - 1), which is about
     /// $9,007 in nanoUSD.
     const PAST_SAFE_INTEGER: u128 = 9_007_199_254_740_993;
@@ -619,6 +658,161 @@ pub async fn ledger_correct(
     };
     let builder = buzz_sdk_pkg::ledger::build_ledger_action(&action)
         .map_err(|error| format!("invalid correction: {error}"))?;
+
+    let response = crate::relay::submit_event_with_keys(builder, &state, &keys, None).await?;
+    Ok(CorrectionOutcome {
+        event_id: response.event_id,
+        accepted: response.accepted,
+        message: response.message,
+    })
+}
+
+// ── Prices ──────────────────────────────────────────────────────────────────
+
+/// A price row the owner is publishing, quoted the way vendors quote.
+///
+/// Rates arrive as dollars per million tokens, because that is the unit on
+/// every vendor's pricing page. Converting here rather than in the renderer
+/// keeps one text-to-integer path for money in the whole app.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriceRequest {
+    /// Model identifier exactly as the provider names it.
+    pub model: String,
+    /// Uncached input, dollars per million tokens.
+    pub input_per_mtok: String,
+    /// Cache reads, dollars per million tokens.
+    pub cache_read_per_mtok: String,
+    /// 5-minute cache writes, dollars per million tokens.
+    pub cache_write_5m_per_mtok: String,
+    /// 1-hour cache writes, dollars per million tokens.
+    pub cache_write_1h_per_mtok: String,
+    /// Output, dollars per million tokens.
+    pub output_per_mtok: String,
+    /// RFC 3339 instant the price takes effect. Absent means now.
+    pub effective_from: Option<String>,
+    /// Free note for whoever reads the book later.
+    pub note: Option<String>,
+}
+
+/// Convert a plain dollar amount to integer nanoUSD.
+///
+/// Parsed as text, never through a float, so 0.1 cannot arrive as
+/// 0.09999999999999999. Sub-nanoUSD precision is refused rather than
+/// rounded: a ledger that silently rounds is a ledger that silently lies.
+fn usd_text_to_nanousd(value: &str, field: &str) -> Result<u64, String> {
+    let trimmed = value.trim();
+    let bad = || format!("{field} must be a plain dollar amount, got {value}");
+    if trimmed.is_empty() || trimmed.starts_with('-') {
+        return Err(bad());
+    }
+    let (whole, fraction) = trimmed.split_once('.').unwrap_or((trimmed, ""));
+    if whole.is_empty() || !whole.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    if !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    if fraction.len() > 9 {
+        return Err(format!("{field} is finer than one nanoUSD"));
+    }
+    let dollars: u64 = whole.parse().map_err(|_| bad())?;
+    let mut padded = fraction.to_owned();
+    while padded.len() < 9 {
+        padded.push('0');
+    }
+    let nanos: u64 = padded.parse().map_err(|_| bad())?;
+    dollars
+        .checked_mul(1_000_000_000)
+        .and_then(|scaled| scaled.checked_add(nanos))
+        .ok_or_else(bad)
+}
+
+/// Dollars per million tokens to nanoUSD per token.
+fn per_mtok_to_nanousd(value: &str, field: &str) -> Result<u64, String> {
+    let nanos = usd_text_to_nanousd(value, field)?;
+    if nanos % 1_000_000 != 0 {
+        return Err(format!(
+            "{field} is finer than one nanoUSD per token; the ledger will not round it"
+        ));
+    }
+    Ok(nanos / 1_000_000)
+}
+
+/// Publish a price row for one model.
+///
+/// Prices are append-only and effective-dated: publishing a new row never
+/// edits an older one, so a spend computed last month keeps the price that
+/// was in force then. That is what lets a vendor's price change, or a promo
+/// ending, be recorded without restating history.
+#[tauri::command]
+pub async fn ledger_add_price(
+    state: State<'_, AppState>,
+    request: PriceRequest,
+) -> Result<CorrectionOutcome, String> {
+    if request.model.trim().is_empty() {
+        return Err("name the model this price applies to".to_string());
+    }
+    let rates = buzz_core_pkg::ledger::prices::PriceRates {
+        input_nanousd_per_token: per_mtok_to_nanousd(&request.input_per_mtok, "Input")?,
+        cache_read_nanousd_per_token: per_mtok_to_nanousd(
+            &request.cache_read_per_mtok,
+            "Cache read",
+        )?,
+        cache_write_5m_nanousd_per_token: per_mtok_to_nanousd(
+            &request.cache_write_5m_per_mtok,
+            "5-minute cache write",
+        )?,
+        cache_write_1h_nanousd_per_token: per_mtok_to_nanousd(
+            &request.cache_write_1h_per_mtok,
+            "1-hour cache write",
+        )?,
+        output_nanousd_per_token: per_mtok_to_nanousd(&request.output_per_mtok, "Output")?,
+    };
+    let effective_from = match request.effective_from.as_deref() {
+        Some(value) => chrono::DateTime::parse_from_rfc3339(value)
+            .map_err(|_| format!("{value} is not an RFC 3339 instant"))?
+            .timestamp()
+            .max(0) as u64,
+        None => chrono::Utc::now().timestamp().max(0) as u64,
+    };
+
+    let keys = state.signing_keys()?;
+    let relay_pubkey = fetch_relay_self(&state)
+        .await?
+        .ok_or_else(|| "the relay does not publish its own key".to_string())?;
+
+    let payload = buzz_sdk_pkg::ledger::LedgerActionPayload::PriceEntry(
+        buzz_core_pkg::ledger::prices::PriceEntry {
+            model: request.model.trim().to_string(),
+            effective_from,
+            rates,
+            note: request
+                .note
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            // Published from this app by the company's owner, so it wins its
+            // instant against Colony's catalog: a rate somebody negotiated
+            // must survive the next catalog refresh.
+            origin: buzz_core_pkg::ledger::prices::PriceOrigin::Owner,
+        },
+    );
+
+    let expected_head = fetch_book_head(&state, &relay_pubkey, KIND_PRICE_BOOK, PRICE_BOOK_D_TAG)
+        .await?
+        .map(|event| event.id.to_hex());
+
+    let action = buzz_sdk_pkg::ledger::LedgerAction {
+        relay_pubkey: relay_pubkey.clone(),
+        operation: payload.operation(),
+        request_id: uuid::Uuid::new_v4(),
+        idempotency_key: uuid::Uuid::new_v4(),
+        target: buzz_sdk_pkg::ledger::ledger_coordinate(&relay_pubkey, &payload),
+        expected_head,
+        payload,
+    };
+    let builder = buzz_sdk_pkg::ledger::build_ledger_action(&action)
+        .map_err(|error| format!("invalid price: {error}"))?;
 
     let response = crate::relay::submit_event_with_keys(builder, &state, &keys, None).await?;
     Ok(CorrectionOutcome {

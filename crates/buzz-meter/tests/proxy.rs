@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use buzz_core::usage_record::UsageBreakdown;
-use buzz_meter::{start_meter, MeterConfig, MeterHandle, MeteredCall};
+use buzz_meter::{start_meter, CallCredential, MeterConfig, MeterHandle, MeteredCall};
 use tokio::sync::mpsc::Receiver;
 use upstream::{FakeUpstream, UpstreamReply};
 
@@ -686,4 +686,163 @@ async fn shutdown_closes_the_call_channel() {
         .await
         .expect("channel must close within 10s");
     assert!(closed.is_none(), "shutdown must close the call channel");
+}
+
+// --- subscription-backed metering ---
+//
+// The checkpoint exists to count tokens, not to own the money. An agent logged
+// into a CLI subscription has no API key to give us and needs none: its own
+// credential goes upstream untouched, and the call is still counted, attributed,
+// and priced as shadow cost.
+
+/// Start a checkpoint with no provider key at all: every call is then
+/// subscription-backed.
+async fn meter_without_keys(fake: &FakeUpstream) -> (u16, Receiver<MeteredCall>, MeterHandle) {
+    start_meter(MeterConfig {
+        anthropic_upstream: fake.base_url.clone(),
+        ..MeterConfig::default()
+    })
+    .await
+    .expect("start meter")
+}
+
+#[tokio::test]
+async fn a_subscription_credential_is_forwarded_untouched_and_still_counted() {
+    let fake = FakeUpstream::start(UpstreamReply::json(ANTHROPIC_JSON)).await;
+    let (port, mut rx, handle) = meter_without_keys(&fake).await;
+    let key = handle.issue_virtual_key("sift");
+
+    // The agent identifies itself by the URL it was pointed at, and carries
+    // its own login in the credential header.
+    let response = client()
+        .post(format!(
+            "http://127.0.0.1:{port}/anthropic/k/{key}/v1/messages"
+        ))
+        .header("authorization", "Bearer sk-ant-oat-SUBSCRIPTION-TOKEN")
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .expect("proxied request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let forwarded = fake.requests();
+    assert_eq!(forwarded.len(), 1, "the call must reach the provider");
+    assert_eq!(
+        forwarded[0].path, "/v1/messages",
+        "the attribution segment must not reach the provider"
+    );
+    assert_eq!(
+        forwarded[0]
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer sk-ant-oat-SUBSCRIPTION-TOKEN"),
+        "the agent's own credential is the only thing that can authenticate this call"
+    );
+
+    let call = next_call(&mut rx).await;
+    assert_eq!(call.agent_label, "sift", "attribution comes from the URL");
+    assert_eq!(
+        call.credential,
+        CallCredential::Subscription,
+        "no money moved through our key, so this is shadow cost"
+    );
+    assert_eq!(
+        call.tokens,
+        Some(UsageBreakdown {
+            input_uncached_tokens: 1_200,
+            cache_read_tokens: 38_000,
+            cache_write_5m_tokens: 100,
+            cache_write_1h_tokens: 2_000,
+            output_tokens: 750,
+        }),
+        "tokens are counted exactly as in metered mode"
+    );
+    handle.shutdown();
+}
+
+#[tokio::test]
+async fn a_configured_key_still_replaces_the_agents_credential() {
+    let fake = FakeUpstream::start(UpstreamReply::json(ANTHROPIC_JSON)).await;
+    let (port, mut rx, handle) = meter_for_anthropic(&fake).await;
+    let key = handle.issue_virtual_key("scout");
+
+    let response = client()
+        .post(format!(
+            "http://127.0.0.1:{port}/anthropic/k/{key}/v1/messages"
+        ))
+        .header("x-api-key", "sk-ant-AGENTS-OWN-KEY")
+        .body("{}")
+        .send()
+        .await
+        .expect("proxied request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let forwarded = fake.requests();
+    assert_eq!(
+        forwarded[0]
+            .headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok()),
+        Some(REAL_ANTHROPIC_KEY),
+        "when the checkpoint pays, its key is the one that goes upstream"
+    );
+    let call = next_call(&mut rx).await;
+    assert_eq!(call.credential, CallCredential::Metered);
+    assert_eq!(call.agent_label, "scout");
+    handle.shutdown();
+}
+
+#[tokio::test]
+async fn a_virtual_key_is_never_forwarded_when_no_real_key_exists() {
+    let fake = FakeUpstream::start(UpstreamReply::json(ANTHROPIC_JSON)).await;
+    let (port, _rx, handle) = meter_without_keys(&fake).await;
+    let key = handle.issue_virtual_key("scout");
+
+    // The harness pointed the agent here and stripped its credential without
+    // having one to substitute. Forwarding the virtual key would leak an
+    // internal token and authenticate nothing.
+    let response = client()
+        .post(format!(
+            "http://127.0.0.1:{port}/anthropic/k/{key}/v1/messages"
+        ))
+        .header("x-api-key", &key)
+        .body("{}")
+        .send()
+        .await
+        .expect("proxied request");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        fake.request_count(),
+        0,
+        "a virtual key must never be forwarded upstream as a credential"
+    );
+    handle.shutdown();
+}
+
+#[tokio::test]
+async fn an_unknown_agent_in_the_url_is_rejected() {
+    let fake = FakeUpstream::start(UpstreamReply::json(ANTHROPIC_JSON)).await;
+    let (port, _rx, handle) = meter_without_keys(&fake).await;
+
+    let response = client()
+        .post(format!(
+            "http://127.0.0.1:{port}/anthropic/k/colony-vk-never-issued/v1/messages"
+        ))
+        .header("authorization", "Bearer sk-ant-oat-SUBSCRIPTION-TOKEN")
+        .body("{}")
+        .send()
+        .await
+        .expect("proxied request");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        fake.request_count(),
+        0,
+        "an unattributable call is never forwarded, subscription or not"
+    );
+    handle.shutdown();
 }

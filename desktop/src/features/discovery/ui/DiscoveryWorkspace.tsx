@@ -110,9 +110,7 @@ function entitlementMessage(entitlement: DiscoveryEntitlement | null) {
   if (!entitlement || entitlement.state === "entitled") return null;
   if (entitlement.state === "loading") return "Checking Discovery access";
   if (entitlement.state === "not_entitled") {
-    return entitlement.planName
-      ? `Discovery is available on ${entitlement.planName}`
-      : "Discovery access is not enabled for this workspace";
+    return "Discovery access is not enabled for this workspace";
   }
   return "Discovery access could not be confirmed";
 }

@@ -92,6 +92,22 @@ fn provider_slug_from_upstream(upstream: &str) -> Option<String> {
     (!vendor.is_empty()).then(|| vendor.to_ascii_lowercase())
 }
 
+/// Which credential paid for an observed call.
+///
+/// The checkpoint's job is to observe token counts, not to own the money. It
+/// can do that in two arrangements, and the difference is a pricing fact
+/// rather than an access-control one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallCredential {
+    /// Forwarded with the checkpoint's own provider key: real money, billed
+    /// to us per token.
+    Metered,
+    /// Forwarded with the agent's own credential, typically a CLI's
+    /// subscription login. No per-token bill exists, so the tokens are still
+    /// counted and priced at API-equivalent rates as shadow cost.
+    Subscription,
+}
+
 /// One observed provider call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeteredCall {
@@ -109,8 +125,10 @@ pub struct MeteredCall {
     pub tokens: Option<UsageBreakdown>,
     /// RFC 3339 UTC timestamp captured at response completion.
     pub timestamp: String,
-    /// Label bound to the virtual key that authenticated the call.
+    /// Label bound to the agent that made the call.
     pub agent_label: String,
+    /// Whose credential the call was forwarded with.
+    pub credential: CallCredential,
 }
 
 /// How the checkpoint reaches each provider, and with which real credential.
@@ -305,19 +323,34 @@ async fn unroutable(uri: Uri) -> Response {
     local_error(StatusCode::BAD_GATEWAY, UNROUTABLE_BODY)
 }
 
-/// The upstream path, taken raw off the request line.
+/// Who made the call and what to ask upstream for, taken raw off the request
+/// line.
 ///
 /// Deliberately not the `Path` extractor: that percent-decodes, which would
 /// turn an encoded `%2F` inside a path segment into a real separator and send
 /// the provider a different path than the agent asked for.
-fn upstream_path(uri: &Uri, provider: Provider) -> &str {
+///
+/// A base URL of `/anthropic/k/<virtual-key>` carries the caller's identity in
+/// the URL, which is what lets the credential header stay the agent's own. The
+/// bare `/anthropic` form still works and attributes by credential instead.
+fn split_agent_path(uri: &Uri, provider: Provider) -> (Option<&str>, &str) {
     let prefix = match provider {
         Provider::Anthropic => "/anthropic/",
         Provider::OpenAi => "/openai/",
     };
     // The route only matches when the prefix is present, so the fallback is
     // unreachable; it exists so a routing change cannot panic here.
-    uri.path().strip_prefix(prefix).unwrap_or("")
+    let rest = uri.path().strip_prefix(prefix).unwrap_or("");
+    let Some(after_marker) = rest.strip_prefix("k/") else {
+        return (None, rest);
+    };
+    match after_marker.split_once('/') {
+        Some((key, tail)) if !key.is_empty() => (Some(key), tail),
+        // `/anthropic/k/<key>` with nothing after it: still attributable, and
+        // the empty upstream path is answered by the provider, not guessed at.
+        None if !after_marker.is_empty() => (Some(after_marker), ""),
+        _ => (None, rest),
+    }
 }
 
 async fn forward(
@@ -328,25 +361,54 @@ async fn forward(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    // Authenticate before anything else touches the network. An unknown,
-    // revoked, or absent credential is answered here and never forwarded.
-    let Some(token) = extract_credential(&headers) else {
-        return local_error(StatusCode::UNAUTHORIZED, UNKNOWN_KEY_BODY);
+    // Identify the caller before anything else touches the network. Identity
+    // comes from the URL when the agent kept its own credential, and from the
+    // credential itself when the checkpoint issued it.
+    let (path_key, upstream_rest) = split_agent_path(&uri, provider);
+    let header_token = extract_credential(&headers);
+    let agent_label = match path_key.and_then(|key| state.keys.get(key)) {
+        Some(entry) => entry.value().clone(),
+        None => {
+            let Some(label) = header_token
+                .as_ref()
+                .and_then(|token| state.keys.get(token))
+                .map(|entry| entry.value().clone())
+            else {
+                return local_error(StatusCode::UNAUTHORIZED, UNKNOWN_KEY_BODY);
+            };
+            label
+        }
     };
-    let Some(agent_label) = state.keys.get(&token).map(|entry| entry.value().clone()) else {
-        return local_error(StatusCode::UNAUTHORIZED, UNKNOWN_KEY_BODY);
-    };
-    let Some(real_key) = state.config.credential(provider) else {
-        // Deliberately not a forward: sending the virtual key upstream would
-        // leak an internal token to the provider and bill nobody.
-        return local_error(StatusCode::UNAUTHORIZED, NO_CREDENTIAL_BODY);
-    };
-    let Some((credential_name, credential_value)) = credential_header(provider, real_key) else {
-        tracing::error!(
-            provider = provider.slug(),
-            "colony-meter: configured provider key is not a valid HTTP header value"
-        );
-        return local_error(StatusCode::BAD_GATEWAY, UPSTREAM_FAILED_BODY);
+
+    // Whose credential goes upstream. A configured provider key means the
+    // checkpoint pays and the agent never holds a real one. Without it the
+    // agent's own credential rides through untouched, which is how a CLI
+    // logged into a subscription keeps working: its tokens are still counted
+    // here, they are simply not billed to us per call.
+    let (credential, forwarded_credential) = match state.config.credential(provider) {
+        Some(real_key) => {
+            let Some(header) = credential_header(provider, real_key) else {
+                tracing::error!(
+                    provider = provider.slug(),
+                    "colony-meter: configured provider key is not a valid HTTP header value"
+                );
+                return local_error(StatusCode::BAD_GATEWAY, UPSTREAM_FAILED_BODY);
+            };
+            (CallCredential::Metered, Some(header))
+        }
+        None => {
+            // A virtual key must never reach a provider: it would authenticate
+            // nothing and leak an internal token. This is the harness pointing
+            // an agent at the checkpoint while stripping the credential that
+            // would have paid for the call.
+            let agent_holds_own_credential = header_token
+                .as_ref()
+                .is_some_and(|token| !state.keys.contains_key(token));
+            if !agent_holds_own_credential {
+                return local_error(StatusCode::UNAUTHORIZED, NO_CREDENTIAL_BODY);
+            }
+            (CallCredential::Subscription, None)
+        }
     };
 
     // The only body rewrite the checkpoint is allowed to make.
@@ -360,7 +422,12 @@ async fn forward(
 
     let mut outbound_headers = HeaderMap::with_capacity(headers.len() + 1);
     for (name, value) in headers.iter() {
-        if is_stripped_request_header(name) {
+        // The agent's credential headers are dropped when the checkpoint
+        // supplies its own, and kept when it does not: in subscription mode
+        // they are the only thing that can authenticate the call.
+        if is_stripped_request_header(name)
+            && !(credential == CallCredential::Subscription && is_credential_header(name))
+        {
             continue;
         }
         outbound_headers.append(name.clone(), value.clone());
@@ -372,12 +439,14 @@ async fn forward(
         HeaderName::from_static("accept-encoding"),
         HeaderValue::from_static("identity"),
     );
-    outbound_headers.insert(credential_name, credential_value);
+    if let Some((credential_name, credential_value)) = forwarded_credential {
+        outbound_headers.insert(credential_name, credential_value);
+    }
 
     let mut url = format!(
         "{}/{}",
         state.config.upstream(provider).trim_end_matches('/'),
-        upstream_path(&uri, provider)
+        upstream_rest
     );
     if let Some(query) = uri.query() {
         url.push('?');
@@ -424,6 +493,7 @@ async fn forward(
         provider,
         provider_slug: state.config.provider_slug(provider),
         agent_label,
+        credential,
         http_status: status,
         header_request_id: header_request_id(&upstream_headers),
         is_sse: is_event_stream(&upstream_headers),
@@ -524,6 +594,11 @@ fn is_stripped_request_header(name: &HeaderName) -> bool {
         )
 }
 
+/// Headers carrying a caller credential, in either provider's dialect.
+fn is_credential_header(name: &HeaderName) -> bool {
+    matches!(name.as_str(), "x-api-key" | "authorization")
+}
+
 fn header_request_id(headers: &HeaderMap) -> Option<String> {
     headers
         .get("request-id")
@@ -554,6 +629,10 @@ struct CallMeta {
     /// recorded as OpenAI and reconciled against the wrong invoice.
     provider_slug: String,
     agent_label: String,
+    /// Whose credential this call was forwarded with. Decided per call, so a
+    /// harness holding a key for one provider and not the other records each
+    /// accurately.
+    credential: CallCredential,
     http_status: StatusCode,
     header_request_id: Option<String>,
     is_sse: bool,
@@ -646,6 +725,7 @@ impl Tee {
             tokens: parsed.tokens,
             timestamp: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             agent_label: meta.agent_label,
+            credential: meta.credential,
         };
 
         // Never block the agent's response on the ledger writer.

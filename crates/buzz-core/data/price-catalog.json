@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "model": "claude-sonnet-4-5",
+      "effectiveFrom": "2025-09-29T00:00:00Z",
+      "inputPerMtok": "3",
+      "cacheReadPerMtok": "0.30",
+      "cacheWrite5mPerMtok": "3.75",
+      "cacheWrite1hPerMtok": "6",
+      "outputPerMtok": "15",
+      "note": "Anthropic list price, prompts up to 200K tokens"
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "effectiveFrom": "2025-10-01T00:00:00Z",
+      "inputPerMtok": "1",
+      "cacheReadPerMtok": "0.10",
+      "cacheWrite5mPerMtok": "1.25",
+      "cacheWrite1hPerMtok": "2",
+      "outputPerMtok": "5",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "gpt-4o",
+      "effectiveFrom": "2024-08-06T00:00:00Z",
+      "inputPerMtok": "2.50",
+      "cacheReadPerMtok": "1.25",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "10",
+      "note": "OpenAI list price. OpenAI does not bill for cache writes."
+    },
+    {
+      "model": "gpt-4o-mini",
+      "effectiveFrom": "2024-07-18T00:00:00Z",
+      "inputPerMtok": "0.15",
+      "cacheReadPerMtok": "0.075",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "0.60",
+      "note": "OpenAI list price"
+    },
+    {
+      "model": "deepseek-chat",
+      "effectiveFrom": "2025-09-05T00:00:00Z",
+      "inputPerMtok": "0.56",
+      "cacheReadPerMtok": "0.07",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "1.68",
+      "note": "DeepSeek list price, cache miss input"
+    }
+  ]
+}

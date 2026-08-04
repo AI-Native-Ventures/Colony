@@ -8,6 +8,7 @@ import {
   loadRulebook,
 } from "./ledgerRepository";
 import { type CorrectionRequest, submitCorrection } from "./corrections";
+import { type PriceRequest, publishPrice } from "./prices";
 import { type LedgerReport, loadLedgerReport } from "./report";
 
 /**
@@ -106,6 +107,28 @@ export function useRecordCorrection(communityId: string) {
       });
       void queryClient.invalidateQueries({
         queryKey: correctionBookQueryKey(communityId),
+      });
+    },
+  });
+}
+
+/**
+ * Publish a price, then refetch the ledger.
+ *
+ * A price makes previously unpriced calls countable, so the totals change
+ * the moment it lands. Leaving the old figures on screen would make it look
+ * as though nothing had happened.
+ */
+export function usePublishPrice(communityId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: PriceRequest) => publishPrice(request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ledgerReportQueryKey(communityId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: priceBookQueryKey(communityId),
       });
     },
   });

@@ -13,6 +13,27 @@
 //! by the agent, and that agent could then bill the company from outside the
 //! ledger's view.
 
+/// Which providers the checkpoint holds a real credential for.
+///
+/// Only these have the agent's own credential taken away. For the rest the
+/// agent keeps whatever it was logged in with (typically a CLI subscription),
+/// and the checkpoint counts the tokens without paying for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MeteredProviders {
+    /// A real Anthropic key is configured.
+    pub anthropic: bool,
+    /// A real OpenAI key is configured.
+    pub openai: bool,
+}
+
+impl MeteredProviders {
+    /// True when the checkpoint pays for nothing, so every agent keeps its own
+    /// login and every observed call is subscription-backed.
+    pub fn none_configured(self) -> bool {
+        !self.anthropic && !self.openai
+    }
+}
+
 /// Where the checkpoint is listening and which key this agent authenticates
 /// with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,24 +42,30 @@ pub struct MeterEnv {
     pub port: u16,
     /// Per-agent virtual key minted by the checkpoint.
     pub virtual_key: String,
+    /// Providers whose credential the checkpoint owns.
+    pub metered: MeteredProviders,
 }
 
-/// Provider credential variables the harness overwrites when metering is on.
+/// Provider credential variables the harness overwrites, per provider.
 ///
-/// An agent must not be able to read a real provider credential from its
-/// environment, whether the operator exported one or a persona supplied it.
-pub const METERED_CREDENTIAL_VARS: &[&str] =
-    &["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"];
+/// When the checkpoint holds that provider's key, an agent must not be able to
+/// read a real credential from its environment, whether the operator exported
+/// one or a persona supplied it. When the checkpoint holds no key, the
+/// opposite is true: taking the agent's credential away would leave nothing
+/// able to authenticate the call, which is exactly how a subscription login
+/// used to fail with "no provider credential configured".
+pub const ANTHROPIC_CREDENTIAL_VARS: &[&str] = &["ANTHROPIC_API_KEY"];
+pub const OPENAI_CREDENTIAL_VARS: &[&str] = &["OPENAI_API_KEY", "OPENROUTER_API_KEY"];
 
 /// Base-URL variables pointing agents at the checkpoint.
 ///
 /// Several names for the same two endpoints, because SDKs and harnesses
 /// disagree about which one they read. Setting one an agent ignores costs
 /// nothing; missing the one it reads means its spend is never counted.
-fn base_url_vars(port: u16) -> Vec<(String, String)> {
-    let anthropic = format!("http://127.0.0.1:{port}/anthropic");
-    let openai_root = format!("http://127.0.0.1:{port}/openai");
-    let openai_v1 = openai_v1_url(port);
+fn base_url_vars(port: u16, virtual_key: &str) -> Vec<(String, String)> {
+    let anthropic = format!("http://127.0.0.1:{port}/anthropic/k/{virtual_key}");
+    let openai_root = format!("http://127.0.0.1:{port}/openai/k/{virtual_key}");
+    let openai_v1 = openai_v1_url(port, virtual_key);
     vec![
         ("ANTHROPIC_BASE_URL".to_string(), anthropic.clone()),
         ("ANTHROPIC_HOST".to_string(), anthropic),
@@ -50,8 +77,8 @@ fn base_url_vars(port: u16) -> Vec<(String, String)> {
 
 /// The one OpenAI-dialect checkpoint endpoint, shared by the env vars and the
 /// codex gateway so the two routes cannot drift onto different URLs.
-fn openai_v1_url(port: u16) -> String {
-    format!("http://127.0.0.1:{port}/openai/v1")
+fn openai_v1_url(port: u16, virtual_key: &str) -> String {
+    format!("http://127.0.0.1:{port}/openai/k/{virtual_key}/v1")
 }
 
 /// ACP `providers/set` params pointing a Codex adapter at the checkpoint.
@@ -66,7 +93,7 @@ pub fn metered_gateway_params(meter: &MeterEnv) -> serde_json::Value {
     serde_json::json!({
         "providerId": "custom-gateway",
         "apiType": "openai",
-        "baseUrl": openai_v1_url(meter.port),
+        "baseUrl": openai_v1_url(meter.port, &meter.virtual_key),
         "headers": {
             "Authorization": format!("Bearer {}", meter.virtual_key),
         },
@@ -78,9 +105,18 @@ pub fn metered_gateway_params(meter: &MeterEnv) -> serde_json::Value {
 /// These are applied last and unconditionally by `spawn`, so they override
 /// both persona `extra_env` and anything inherited from the parent process.
 pub fn meter_env_vars(meter: &MeterEnv) -> Vec<(String, String)> {
-    let mut vars = base_url_vars(meter.port);
-    for name in METERED_CREDENTIAL_VARS {
-        vars.push(((*name).to_string(), meter.virtual_key.clone()));
+    let mut vars = base_url_vars(meter.port, &meter.virtual_key);
+    // The agent is identified by the URL it calls, so its credential only has
+    // to be replaced where the checkpoint has one of its own to substitute.
+    if meter.metered.anthropic {
+        for name in ANTHROPIC_CREDENTIAL_VARS {
+            vars.push(((*name).to_string(), meter.virtual_key.clone()));
+        }
+    }
+    if meter.metered.openai {
+        for name in OPENAI_CREDENTIAL_VARS {
+            vars.push(((*name).to_string(), meter.virtual_key.clone()));
+        }
     }
     vars
 }
@@ -99,6 +135,8 @@ pub struct ActiveMeter {
     pub port: u16,
     /// Mints and revokes virtual keys.
     pub handle: buzz_meter::MeterHandle,
+    /// Providers the checkpoint holds a real credential for.
+    pub metered: MeteredProviders,
 }
 
 /// Install the process-wide checkpoint. Returns `Err` if one is already set.
@@ -121,6 +159,7 @@ pub fn issue_for_agent(label: &str) -> Option<MeterEnv> {
     Some(MeterEnv {
         port: meter.port,
         virtual_key: meter.handle.issue_virtual_key(label),
+        metered: meter.metered,
     })
 }
 
@@ -132,13 +171,20 @@ mod tests {
         MeterEnv {
             port: 51234,
             virtual_key: "colony-vk-abc123".to_string(),
+            metered: MeteredProviders {
+                anthropic: true,
+                openai: true,
+            },
         }
     }
 
     #[test]
     fn every_credential_variable_carries_the_virtual_key() {
         let vars = meter_env_vars(&sample());
-        for name in METERED_CREDENTIAL_VARS {
+        for name in ANTHROPIC_CREDENTIAL_VARS
+            .iter()
+            .chain(OPENAI_CREDENTIAL_VARS)
+        {
             let value = vars
                 .iter()
                 .find(|(key, _)| key == name)
@@ -151,6 +197,61 @@ mod tests {
         }
     }
 
+    /// A checkpoint holding no key must not take the agent's credential away:
+    /// that is what turned a working subscription login into
+    /// "no provider credential configured".
+    #[test]
+    fn a_subscription_agent_keeps_its_own_credential() {
+        let vars = meter_env_vars(&MeterEnv {
+            port: 51234,
+            virtual_key: "colony-vk-abc123".to_string(),
+            metered: MeteredProviders::default(),
+        });
+
+        for name in ANTHROPIC_CREDENTIAL_VARS
+            .iter()
+            .chain(OPENAI_CREDENTIAL_VARS)
+        {
+            assert!(
+                !vars.iter().any(|(key, _)| key == name),
+                "{name} must be left alone when the checkpoint has no key to substitute"
+            );
+        }
+        assert_eq!(
+            vars.iter()
+                .find(|(key, _)| key == "ANTHROPIC_BASE_URL")
+                .map(|(_, value)| value.as_str()),
+            Some("http://127.0.0.1:51234/anthropic/k/colony-vk-abc123"),
+            "attribution moves to the URL so the credential header can stay the agent's"
+        );
+    }
+
+    /// One key present and the other absent is the common real case: it must
+    /// be decided per provider, not for the whole harness.
+    #[test]
+    fn only_the_funded_provider_has_its_credential_replaced() {
+        let vars = meter_env_vars(&MeterEnv {
+            port: 51234,
+            virtual_key: "colony-vk-abc123".to_string(),
+            metered: MeteredProviders {
+                anthropic: false,
+                openai: true,
+            },
+        });
+
+        assert!(
+            !vars.iter().any(|(key, _)| key == "ANTHROPIC_API_KEY"),
+            "no Anthropic key is configured, so the agent keeps its subscription login"
+        );
+        assert_eq!(
+            vars.iter()
+                .find(|(key, _)| key == "OPENAI_API_KEY")
+                .map(|(_, value)| value.as_str()),
+            Some("colony-vk-abc123"),
+            "the funded provider still routes through the checkpoint's own key"
+        );
+    }
+
     #[test]
     fn base_urls_point_at_the_loopback_checkpoint() {
         let vars = meter_env_vars(&sample());
@@ -160,14 +261,28 @@ mod tests {
                 .map(|(_, value)| value.clone())
                 .unwrap_or_else(|| panic!("{name} must be set"))
         };
+        // Each URL carries the agent's virtual key, which is what identifies
+        // the caller when the credential header belongs to the agent.
         assert_eq!(
             get("ANTHROPIC_BASE_URL"),
-            "http://127.0.0.1:51234/anthropic"
+            "http://127.0.0.1:51234/anthropic/k/colony-vk-abc123"
         );
-        assert_eq!(get("ANTHROPIC_HOST"), "http://127.0.0.1:51234/anthropic");
-        assert_eq!(get("OPENAI_BASE_URL"), "http://127.0.0.1:51234/openai/v1");
-        assert_eq!(get("OPENAI_API_BASE"), "http://127.0.0.1:51234/openai/v1");
-        assert_eq!(get("OPENAI_HOST"), "http://127.0.0.1:51234/openai");
+        assert_eq!(
+            get("ANTHROPIC_HOST"),
+            "http://127.0.0.1:51234/anthropic/k/colony-vk-abc123"
+        );
+        assert_eq!(
+            get("OPENAI_BASE_URL"),
+            "http://127.0.0.1:51234/openai/k/colony-vk-abc123/v1"
+        );
+        assert_eq!(
+            get("OPENAI_API_BASE"),
+            "http://127.0.0.1:51234/openai/k/colony-vk-abc123/v1"
+        );
+        assert_eq!(
+            get("OPENAI_HOST"),
+            "http://127.0.0.1:51234/openai/k/colony-vk-abc123"
+        );
 
         // Loopback only. A checkpoint reachable off-box would be a provider
         // credential exposed to the network.
@@ -187,7 +302,10 @@ mod tests {
         let params = metered_gateway_params(&sample());
         assert_eq!(params["providerId"], "custom-gateway");
         assert_eq!(params["apiType"], "openai");
-        assert_eq!(params["baseUrl"], "http://127.0.0.1:51234/openai/v1");
+        assert_eq!(
+            params["baseUrl"],
+            "http://127.0.0.1:51234/openai/k/colony-vk-abc123/v1"
+        );
         assert_eq!(
             params["headers"]["Authorization"],
             "Bearer colony-vk-abc123"

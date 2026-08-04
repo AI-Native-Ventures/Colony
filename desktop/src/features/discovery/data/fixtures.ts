@@ -3,6 +3,7 @@ import {
   DEFAULT_SOURCE_CONFIG,
   DISCOVERY_SOURCE_LABELS,
 } from "../sourceConfig";
+import { BUSINESS_TAXONOMY } from "./businessTaxonomy/index";
 import type {
   CampaignDetail,
   CampaignSummary,
@@ -16,146 +17,56 @@ import type {
   VerticalDetail,
 } from "../types";
 
-const INDUSTRY_DEFINITIONS = [
-  ["automotive", "Automotive", 10],
-  ["professional-services", "Professional Services", 18],
-  ["aerospace-defense", "Aerospace & Defense", 14],
-  ["agriculture", "Agriculture", 17],
-  ["aviation-airlines", "Aviation & Airlines", 14],
-  ["beauty-wellness", "Beauty & Wellness", 13],
-  ["chemicals", "Chemicals", 13],
-  ["construction", "Construction", 20],
-  ["education", "Education", 10],
-  ["energy", "Energy", 18],
-  ["environmental-services", "Environmental Services", 11],
-  ["fashion-apparel", "Fashion & Apparel", 7],
-  ["finance", "Finance", 18],
-  ["food-beverage", "Food & Beverage", 18],
-  ["gambling-casinos", "Gambling & Casinos", 7],
-  ["government-public-sector", "Government & Public Sector", 18],
-  ["healthcare", "Healthcare", 20],
-  ["human-resources", "Human Resources", 10],
-  ["insurance", "Insurance", 15],
-  ["legal", "Legal", 12],
-  ["manufacturing", "Manufacturing", 20],
-  ["marine-ports", "Marine & Ports", 10],
-  ["marketing-advertising", "Marketing & Advertising", 15],
-  ["media-entertainment", "Media & Entertainment", 16],
-  ["mining", "Mining", 12],
-  ["non-profit", "Non-Profit", 12],
-  ["pharmaceuticals-life-sciences", "Pharmaceuticals & Life Sciences", 18],
-  ["real-estate", "Real Estate", 18],
-  ["retail", "Retail", 18],
-  ["security", "Security", 12],
-  ["technology", "Technology", 20],
-  ["telecommunications", "Telecommunications", 14],
-  ["tourism", "Tourism", 12],
-  ["transportation", "Transportation", 20],
-] as const;
+const DEMO_VERTICAL_LEAD_COUNTS = new Map<string, number>([
+  ["automotive/auto-repair", 10],
+  ["professional-services/accounting-financial-advisory", 308],
+]);
 
-export const FIXTURE_INDUSTRIES: Industry[] = INDUSTRY_DEFINITIONS.map(
-  ([id, name, verticalCount]) => ({
-    id,
-    slug: id,
-    name,
-    description: `Discover companies across ${name.toLowerCase()} verticals.`,
-    imageKey: `industry.${id}`,
-    verticalCount,
-    leadCount:
-      id === "automotive" ? 10 : id === "professional-services" ? 308 : 0,
-    campaignCount:
-      id === "automotive" || id === "professional-services" ? 1 : 0,
-    status:
-      id === "automotive" || id === "professional-services"
-        ? "active"
-        : "available",
-  }),
+export const FIXTURE_INDUSTRIES: Industry[] = BUSINESS_TAXONOMY.map(
+  (industry) => {
+    const leadCount = industry.verticals.reduce(
+      (total, vertical) =>
+        total +
+        (DEMO_VERTICAL_LEAD_COUNTS.get(`${industry.slug}/${vertical.slug}`) ??
+          0),
+      0,
+    );
+    return {
+      id: industry.slug,
+      slug: industry.slug,
+      name: industry.name,
+      description:
+        industry.description ??
+        `Discover companies across ${industry.name.toLowerCase()} verticals.`,
+      imageKey: `industry.${industry.slug}`,
+      verticalCount: industry.verticals.length,
+      leadCount,
+      campaignCount: leadCount > 0 ? 1 : 0,
+      status: leadCount > 0 ? "active" : "available",
+    };
+  },
 );
 
-export const FIXTURE_VERTICALS: Vertical[] = [
-  {
-    id: "auto-repair",
-    slug: "auto-repair",
-    industryId: "automotive",
-    name: "Auto Repair",
-    description: "Independent workshops and specialist repair centres.",
-    imageKey: "vertical.auto-repair",
-    campaignCount: 1,
-    leadCount: 10,
-    status: "active",
-  },
-  {
-    id: "auto-manufacturing",
-    slug: "auto-manufacturing",
-    industryId: "automotive",
-    name: "Auto Manufacturing",
-    imageKey: "vertical.auto-manufacturing",
-    campaignCount: 0,
-    leadCount: 0,
-    status: "available",
-  },
-  {
-    id: "auto-parts-stores",
-    slug: "auto-parts-stores",
-    industryId: "automotive",
-    name: "Auto Parts Stores",
-    imageKey: "vertical.auto-parts-stores",
-    campaignCount: 0,
-    leadCount: 0,
-    status: "available",
-  },
-  ...[
-    ["auto-parts-suppliers", "Auto Parts Suppliers"],
-    ["car-dealerships", "Car Dealerships"],
-    ["car-rentals", "Car Rentals"],
-    ["engine-repair-garages", "Engine Repair Garages"],
-    ["fleet-vehicle-leasing-services", "Fleet & Vehicle Leasing Services"],
-    ["panel-beaters", "Panel Beaters"],
-    ["petrol-stations", "Petrol Stations"],
-  ].map(([id, name]) => ({
-    id,
-    slug: id,
-    industryId: "automotive",
-    name,
-    imageKey: `vertical.${id}`,
-    campaignCount: 0,
-    leadCount: 0,
-    status: "available" as const,
-  })),
-  ...[
-    "Accounting Practices",
-    "Architecture Firms",
-    "Audit Firms",
-    "Business Consultancies",
-    "Engineering Consultancies",
-    "Financial Advisory Firms",
-    "Human Resources Consultancies",
-    "Insurance Brokers",
-    "IT Consultancies",
-    "Law Firms",
-    "Management Consultancies",
-    "Marketing Agencies",
-    "Payroll Services",
-    "Public Relations Agencies",
-    "Recruitment Agencies",
-    "Tax Consultants",
-    "Training Providers",
-    "Virtual Assistant Services",
-  ].map((name) => {
-    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const active = id === "accounting-practices";
-    return {
-      id,
-      slug: id,
-      industryId: "professional-services",
-      name,
-      imageKey: "industry.professional-services",
-      campaignCount: active ? 1 : 0,
-      leadCount: active ? 308 : 0,
-      status: active ? ("active" as const) : ("available" as const),
-    };
-  }),
-];
+export const FIXTURE_VERTICALS: Vertical[] = BUSINESS_TAXONOMY.flatMap(
+  (industry) =>
+    industry.verticals.map((vertical) => {
+      const leadCount =
+        DEMO_VERTICAL_LEAD_COUNTS.get(`${industry.slug}/${vertical.slug}`) ?? 0;
+      return {
+        id: vertical.slug,
+        slug: vertical.slug,
+        industryId: industry.slug,
+        name: vertical.name,
+        description:
+          vertical.description ??
+          `Discover businesses in the ${vertical.name} vertical.`,
+        imageKey: `industry.${industry.slug}`,
+        campaignCount: leadCount > 0 ? 1 : 0,
+        leadCount,
+        status: leadCount > 0 ? "active" : "available",
+      };
+    }),
+);
 
 const FIELD_DEFINITIONS = [
   {
@@ -498,16 +409,16 @@ export const FIXTURE_PEOPLE_CAMPAIGN: CampaignDetail = {
 };
 
 export const FIXTURE_PRO_SERVICES_CAMPAIGN_SUMMARY: CampaignSummary = {
-  id: "accounting-practices-united-states",
-  name: "Accounting Practices — United States",
+  id: "accounting-financial-advisory-united-states",
+  name: "Accounting & Financial Advisory — United States",
   targetType: "business",
   industryId: "professional-services",
-  verticalId: "accounting-practices",
+  verticalId: "accounting-financial-advisory",
   industryName: "Professional Services",
-  verticalName: "Accounting Practices",
+  verticalName: "Accounting & Financial Advisory",
   location: "United States",
   description:
-    "Find independent accounting practices across the United States.",
+    "Find accounting and financial advisory firms across the United States.",
   status: "completed",
   target: 300,
   targetLeads: 300,
@@ -808,7 +719,7 @@ export const FIXTURE_PRO_SERVICES_LEADS: Lead[] = Array.from(
       source,
       {
         industryId: "professional-services",
-        verticalId: "accounting-practices",
+        verticalId: "accounting-financial-advisory",
         campaignIds: [FIXTURE_PRO_SERVICES_CAMPAIGN_SUMMARY.id],
         email:
           index < 205
@@ -861,7 +772,7 @@ export const FIXTURE_VERTICAL_DETAILS: VerticalDetail[] = FIXTURE_VERTICALS.map(
     campaigns:
       vertical.id === "auto-repair"
         ? [FIXTURE_CAMPAIGN_SUMMARY]
-        : vertical.id === "accounting-practices"
+        : vertical.id === "accounting-financial-advisory"
           ? [FIXTURE_PRO_SERVICES_CAMPAIGN_SUMMARY]
           : [],
   }),

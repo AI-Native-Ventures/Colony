@@ -62,6 +62,7 @@ function EmptyState() {
 export function LedgerScreen({
   error,
   isLoading,
+  onAddPrice,
   onAttribute,
   report,
 }: {
@@ -69,6 +70,8 @@ export function LedgerScreen({
   isLoading: boolean;
   /** Absent when the viewer cannot correct, e.g. is not the owner. */
   onAttribute?: (entry: LedgerEntry) => void;
+  /** Absent when the viewer cannot publish prices. */
+  onAddPrice?: () => void;
   report: LedgerReport | null;
 }) {
   const hasSpend =
@@ -107,7 +110,10 @@ export function LedgerScreen({
 
           {!isLoading && !error && report ? (
             <>
-              <LedgerAttention items={attentionItems(report)} />
+              <LedgerAttention
+                items={attentionItems(report)}
+                onAddPrice={onAddPrice}
+              />
               {hasSpend ? (
                 <>
                   <LedgerTotals report={report} />

@@ -407,6 +407,7 @@ mod tests {
             effective_from,
             rates: rates(input),
             note: None,
+            origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         })
     }
 

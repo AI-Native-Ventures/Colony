@@ -26,7 +26,7 @@ const SCREENSHOTS = [
   "discovery-people-leads.png",
   "discovery-outreach.png",
   "discovery-conversations.png",
-  "discovery-laka-locked.png",
+  "discovery-access-locked.png",
 ] as const;
 
 test.describe.configure({ mode: "serial" });
@@ -98,7 +98,23 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
     page.getByText("New Opportunities", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("34 available", { exact: true })).toBeVisible();
+  await expect(page.getByText(/LAKA/i)).toHaveCount(0);
   await capture(appWorkspace(page), page, "discovery-industries.png");
+
+  await page.getByTestId("discovery-industry-card-real-estate").click();
+  await expect(
+    page.getByRole("heading", { name: "Real Estate" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("14 Verticals Available", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-testid^="discovery-vertical-card-"]'),
+  ).toHaveCount(14);
+  await expect(
+    page.getByTestId("discovery-vertical-card-property-development"),
+  ).toBeAttached();
+  await page.getByText("Back to Industries", { exact: true }).click();
 
   await page.getByTestId("discovery-industry-card-automotive").click();
   await expect(page.getByRole("heading", { name: "Automotive" })).toBeVisible();
@@ -106,7 +122,7 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
     page.getByText("Back to Industries", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("10 Verticals Available", { exact: true }),
+    page.getByText("11 Verticals Available", { exact: true }),
   ).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-verticals.png");
 
@@ -132,6 +148,9 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(
     campaignDrawer.getByText("Advanced Criteria", { exact: true }),
   ).toBeVisible();
+  await expect(
+    campaignDrawer.getByRole("button", { name: "Create Campaign" }),
+  ).toBeEnabled();
   await capture(campaignDrawer, page, "discovery-campaign-drawer.png");
   await campaignDrawer.getByRole("button", { name: "Cancel" }).click();
   await expect(campaignDrawer).not.toBeVisible();
@@ -182,6 +201,7 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
 
   await page.getByRole("tab", { name: "Concurrent" }).click();
   await expect(page.getByRole("button", { name: /Reorder / })).toHaveCount(0);
+  await waitForAnimations(page);
   const exaRow = sourceList.locator('[data-source="exa_search"]');
   const exaSwitch = exaRow.getByRole("switch");
   await expect(exaSwitch).toBeEnabled();
@@ -291,8 +311,8 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(page.getByRole("textbox", { name: "Reply" })).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-conversations.png");
 
-  // The fixture source is entitled by default. The e2e-only init hook below
-  // exercises the same persisted campaign route with the LAKA lock visible.
+  // The fixture source is entitled by default, matching the automatic trial.
+  // This e2e-only override proves the generic expired-access boundary.
   await page.addInitScript(() => {
     (
       window as Window & { __BUZZ_E2E_DISCOVERY_ENTITLEMENT__?: string }
@@ -303,12 +323,13 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   );
   await page.reload();
   await expect(
-    page.getByRole("button", { name: "Unlock with LAKA" }),
+    page.getByRole("button", { name: "Discovery access required" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Unlock with LAKA" }).click();
+  await page.getByRole("button", { name: "Discovery access required" }).click();
   const entitlementDialog = page.getByRole("dialog");
-  await expect(entitlementDialog).toContainText("Discovery is part of LAKA");
-  await capture(entitlementDialog, page, "discovery-laka-locked.png");
+  await expect(entitlementDialog).toContainText("Discovery access required");
+  await expect(entitlementDialog).not.toContainText(/LAKA/i);
+  await capture(entitlementDialog, page, "discovery-access-locked.png");
 
   expect(errors, "Discovery parity flow emitted browser errors").toEqual([]);
 });

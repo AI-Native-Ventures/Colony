@@ -8,6 +8,7 @@
 //! and reconciled against what the provider says it billed.
 
 pub mod attribution;
+pub mod catalog;
 pub mod crosscheck;
 pub mod engine;
 pub mod prices;

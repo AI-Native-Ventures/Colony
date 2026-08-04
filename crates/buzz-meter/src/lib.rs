@@ -28,7 +28,7 @@ mod sse;
 
 use buzz_core::usage_record::UsageBreakdown;
 
-pub use server::{start_meter, MeterConfig, MeterError, MeterHandle, MeteredCall};
+pub use server::{start_meter, CallCredential, MeterConfig, MeterError, MeterHandle, MeteredCall};
 
 /// What one provider response yielded when parsed.
 ///
