@@ -243,9 +243,10 @@ impl Db {
         let mut tx = self.pool.begin().await?;
         lock_discovery_authority_tx(&mut tx, community_id).await?;
         sqlx::query(
-            "INSERT INTO discovery_entitlements (community_id, active, updated_at) \
-             VALUES ($1, $2, now()) \
-             ON CONFLICT (community_id) DO UPDATE SET active=EXCLUDED.active, updated_at=now()",
+            "INSERT INTO discovery_entitlements (community_id, active, expires_at, updated_at) \
+             VALUES ($1, $2, NULL, now()) \
+             ON CONFLICT (community_id) DO UPDATE \
+             SET active=EXCLUDED.active, expires_at=NULL, updated_at=now()",
         )
         .bind(community_id.as_uuid())
         .bind(active)
@@ -960,7 +961,8 @@ impl Db {
         }
 
         let entitled: bool = sqlx::query_scalar(
-            "SELECT active FROM discovery_entitlements WHERE community_id=$1 FOR UPDATE",
+            "SELECT active AND (expires_at IS NULL OR expires_at > now()) \
+             FROM discovery_entitlements WHERE community_id=$1 FOR UPDATE",
         )
         .bind(community_id.as_uuid())
         .fetch_optional(&mut *tx)
@@ -2850,7 +2852,10 @@ async fn discovery_authorization_pool(
 ) -> Result<DiscoveryAuthorization> {
     let actor_hex = hex::encode(actor_pubkey);
     let row = sqlx::query(
-        "SELECT COALESCE(e.active, FALSE) AS entitled, \
+        "SELECT COALESCE( \
+                    e.active AND (e.expires_at IS NULL OR e.expires_at > now()), \
+                    FALSE \
+                ) AS entitled, \
                 rm.pubkey IS NOT NULL AS member, \
                 u.agent_owner_pubkey IS NOT NULL AS is_agent, \
                 COALESCE(g.active, FALSE) AS granted \
@@ -2879,7 +2884,10 @@ pub(crate) async fn require_discovery_authorized_tx(
     lock_discovery_authority_tx(tx, community_id).await?;
     let actor_hex = hex::encode(actor_pubkey);
     let row = sqlx::query(
-        "SELECT COALESCE(e.active, FALSE) AS entitled, \
+        "SELECT COALESCE( \
+                    e.active AND (e.expires_at IS NULL OR e.expires_at > now()), \
+                    FALSE \
+                ) AS entitled, \
                 rm.pubkey IS NOT NULL AS member, \
                 u.agent_owner_pubkey IS NOT NULL AS is_agent, \
                 COALESCE(g.active, FALSE) AS granted \
@@ -6114,6 +6122,65 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
+    async fn database_enforces_trial_expiry_and_permanent_access() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+
+        let (active, expires_at): (bool, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+            "SELECT active, expires_at FROM discovery_entitlements WHERE community_id=$1",
+        )
+        .bind(community.as_uuid())
+        .fetch_one(&db.pool)
+        .await
+        .expect("load automatically provisioned trial");
+        assert!(active);
+        let expires_at = expires_at.expect("trial must expire");
+        let remaining = expires_at - chrono::Utc::now();
+        assert!(remaining > Duration::days(29));
+        assert!(remaining <= Duration::days(30));
+        assert_eq!(
+            db.discovery_authorization(community, &human)
+                .await
+                .expect("trial authorization"),
+            DiscoveryAuthorization::AuthorizedHuman
+        );
+
+        sqlx::query(
+            "UPDATE discovery_entitlements SET expires_at=now() - interval '1 second' \
+             WHERE community_id=$1",
+        )
+        .bind(community.as_uuid())
+        .execute(&db.pool)
+        .await
+        .expect("expire trial");
+        assert_eq!(
+            db.discovery_authorization(community, &human)
+                .await
+                .expect("expired authorization"),
+            DiscoveryAuthorization::EntitlementInactive
+        );
+
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("activate permanent access");
+        let expires_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+            "SELECT expires_at FROM discovery_entitlements WHERE community_id=$1",
+        )
+        .bind(community.as_uuid())
+        .fetch_one(&db.pool)
+        .await
+        .expect("load permanent entitlement");
+        assert_eq!(expires_at, None);
+        assert_eq!(
+            db.discovery_authorization(community, &human)
+                .await
+                .expect("permanent authorization"),
+            DiscoveryAuthorization::AuthorizedHuman
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn database_enforces_entitlement_grants_idempotency_and_fenced_stops() {
         let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
         let (db, community, human, agent) = database_fixture().await;
@@ -6121,7 +6188,7 @@ mod tests {
             db.discovery_authorization(community, &human)
                 .await
                 .expect("authorization"),
-            DiscoveryAuthorization::EntitlementInactive
+            DiscoveryAuthorization::AuthorizedHuman
         );
         db.set_discovery_entitlement(community, true)
             .await
