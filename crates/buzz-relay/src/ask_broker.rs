@@ -123,13 +123,8 @@ async fn handle_ask(
         .await
         .map_err(|error| format!("database error checking for a duplicate ask: {error}"))?
     {
-        let original_ask_event_id: [u8; 32] = existing
-            .ask_event_id
-            .as_slice()
-            .try_into()
-            .map_err(|_| "internal error: stored ask event id is not 32 bytes".to_string())?;
         return Ok(AskBrokerOutcome::Duplicate {
-            original_ask_event_id,
+            original_ask_event_id: ask_row_event_id(&existing)?,
         });
     }
 
@@ -146,7 +141,15 @@ async fn handle_ask(
     let origin_thread_bytes = decode_hex64(parsed.origin_thread_hex.as_deref())?;
     let prior_ask_bytes = decode_hex64(parsed.prior_ask_hex.as_deref())?;
 
-    state
+    // Dedupe above is check-then-act: two filers can both pass
+    // `find_open_ask_by_need` before either commits, so the loser's insert
+    // below can still hit the `asks_open_need_uniq` partial unique index
+    // directly. Losing that race must read the same as losing the
+    // pre-check -- a `Duplicate` naming the winner -- not a raw database
+    // error the losing agent has no way to act on (spec: five agents
+    // blocked on one missing API key must produce one ask, not four errors
+    // and one ask).
+    match state
         .db
         .insert_ask(
             tenant.community(),
@@ -165,9 +168,47 @@ async fn handle_ask(
             },
         )
         .await
-        .map_err(|error| format!("database error filing ask: {error}"))?;
+    {
+        Ok(()) => Ok(AskBrokerOutcome::Applied),
+        Err(error) if is_unique_violation(&error) => {
+            let winner = state
+                .db
+                .find_open_ask_by_need(tenant.community(), &parsed.initiative_id, &parsed.need_key)
+                .await
+                .map_err(|error| {
+                    format!("database error re-checking after a filing race: {error}")
+                })?
+                .ok_or_else(|| {
+                    "internal error: lost an insert race but no open ask now exists for this need"
+                        .to_string()
+                })?;
+            Ok(AskBrokerOutcome::Duplicate {
+                original_ask_event_id: ask_row_event_id(&winner)?,
+            })
+        }
+        Err(error) => Err(format!("database error filing ask: {error}")),
+    }
+}
 
-    Ok(AskBrokerOutcome::Applied)
+/// Extract an `AskRow`'s event id as a fixed-size array. The `asks` table
+/// only ever stores 32-byte event ids, so a mismatch is an internal
+/// invariant violation, not a bad request.
+fn ask_row_event_id(row: &buzz_db::asks::AskRow) -> Result<[u8; 32], String> {
+    row.ask_event_id
+        .as_slice()
+        .try_into()
+        .map_err(|_| "internal error: stored ask event id is not 32 bytes".to_string())
+}
+
+/// Whether `error` is a Postgres unique-constraint violation (SQLSTATE
+/// 23505) -- the shape `insert_ask` fails with when it loses a filing race
+/// against the `asks_open_need_uniq` partial unique index.
+fn is_unique_violation(error: &buzz_db::DbError) -> bool {
+    matches!(
+        error,
+        buzz_db::DbError::Sqlx(sqlx::Error::Database(db_error))
+            if db_error.code().as_deref() == Some("23505")
+    )
 }
 
 /// Decode a tag value `parse_ask`/`parse_resolution`/`parse_withdrawal`
@@ -603,5 +644,101 @@ async fn emit_ask_receipt(
         .await
     {
         tracing::warn!(%error, "ask receipt: failed to fan out receipt message");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1 -- local test-only credentials
+
+    async fn setup_pool() -> PgPool {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| TEST_DB_URL.to_owned());
+        let pool = PgPool::connect(&database_url)
+            .await
+            .expect("connect to test Postgres");
+        buzz_db::migration::run_migrations(&pool)
+            .await
+            .expect("apply migrations");
+        pool
+    }
+
+    /// I4 unit coverage: `is_unique_violation` must recognize the exact
+    /// error shape a losing `insert_ask` call produces when it races
+    /// another filer for the same `(community, initiative, need)`.
+    ///
+    /// Reproduced deterministically here via two SEQUENTIAL inserts (no
+    /// concurrency needed to reproduce the error SHAPE -- Postgres raises
+    /// the identical SQLSTATE 23505 whether the second writer arrives a
+    /// microsecond or a millisecond after the first). The
+    /// `handle_ask`-level integration test in `tests/ask_broker.rs`
+    /// (`concurrent_asks_for_the_same_need_yield_one_applied_and_the_rest_duplicate`)
+    /// covers genuinely racing filers reaching this classifier through the
+    /// broker; this test covers the classifier itself in isolation.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn is_unique_violation_recognizes_a_real_dedupe_conflict() {
+        let pool = setup_pool().await;
+        let community_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(community_id)
+            .bind(format!("ask-broker-unit-{}.example", community_id.simple()))
+            .execute(&pool)
+            .await
+            .expect("insert test community");
+        let community = buzz_core::CommunityId::from_uuid(community_id);
+
+        let audience = [0x11_u8; 32];
+        let filer = [0x22_u8; 32];
+        let first_id = [0x33_u8; 32];
+        let second_id = [0x44_u8; 32];
+
+        buzz_db::asks::insert_ask(
+            &pool,
+            community,
+            NewAskRow {
+                ask_event_id: &first_id,
+                ask_type: "decision",
+                initiative_id: "init-1",
+                need_key: "need-1",
+                audience_pubkey: &audience,
+                filer_pubkey: &filer,
+                origin_thread: None,
+                prior_ask: None,
+                category: None,
+                default_option: None,
+                deadline_at: None,
+            },
+        )
+        .await
+        .expect("first insert must succeed");
+        let conflict = buzz_db::asks::insert_ask(
+            &pool,
+            community,
+            NewAskRow {
+                ask_event_id: &second_id,
+                ask_type: "decision",
+                initiative_id: "init-1",
+                need_key: "need-1",
+                audience_pubkey: &audience,
+                filer_pubkey: &filer,
+                origin_thread: None,
+                prior_ask: None,
+                category: None,
+                default_option: None,
+                deadline_at: None,
+            },
+        )
+        .await
+        .expect_err("second open ask for the same need must be rejected");
+
+        assert!(
+            is_unique_violation(&conflict),
+            "expected a unique-violation error, got: {conflict:?}"
+        );
     }
 }

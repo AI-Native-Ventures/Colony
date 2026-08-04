@@ -33,6 +33,27 @@ async fn setup() -> (Db, PgPool) {
     (Db::from_pool(pool.clone()), pool)
 }
 
+/// Like [`setup`], but with a pool wide enough that every racer in a
+/// concurrency test gets its own connection immediately -- the default
+/// pool's connection limit would otherwise queue most racers, letting
+/// earlier ones fully complete (check AND insert) before a later one even
+/// starts its own check, which dilutes the very race the test exists to
+/// reproduce.
+async fn setup_with_max_connections(max_connections: u32) -> (Db, PgPool) {
+    let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| TEST_DB_URL.to_owned());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(max_connections)
+        .connect(&database_url)
+        .await
+        .expect("connect to test Postgres");
+    buzz_db::migration::run_migrations(&pool)
+        .await
+        .expect("apply migrations");
+    (Db::from_pool(pool.clone()), pool)
+}
+
 /// Build an `AppState` for the broker under test, with `relay_keys` wired
 /// through as BOTH the signing keypair AND `config.relay_private_key` (the
 /// broker's durable-key guard on relay-signed receipts requires the latter
@@ -648,6 +669,108 @@ async fn a_second_ask_for_the_same_need_is_a_duplicate_of_the_first() {
             }
             other => panic!("expected Duplicate, got {other:?}"),
         }
+    }
+}
+
+/// I4 regression: dedupe is check-then-act (`find_open_ask_by_need` then a
+/// separate `insert_ask`), so two concurrent filers can both pass the
+/// pre-check before either commits. The loser's `insert_ask` then hits the
+/// `asks_open_need_uniq` partial unique index directly rather than the
+/// pre-check -- exactly the "five agents blocked on one missing API key"
+/// scenario the rule exists for. The broker must classify that database
+/// conflict as `Duplicate` carrying the winner's event id, not surface a
+/// raw database error the losing agents have no way to act on.
+///
+/// `tokio::spawn` (not a plain `join_all` on unspawned futures, which stays
+/// on one task and only interleaves at `.await` points within it) onto a
+/// multi-threaded runtime, so racers genuinely run on different OS threads
+/// and their DB round trips can truly land in either order. Uses
+/// [`setup_with_max_connections`] sized comfortably above the racer count
+/// so no racer queues for a connection -- queuing let earlier racers fully
+/// complete before a queued one even started, which measurably reduced how
+/// often this reproduced the race during development.
+///
+/// This is a best-effort concurrency proof, not a guaranteed-every-run
+/// trigger: the assertions hold whichever way a given run resolves the
+/// race (pre-check catches it, or the unique-index conflict does), so a
+/// run where nothing actually collided still passes -- it just isn't
+/// exercising the new recovery path that run. The deterministic proof that
+/// the recovery path itself classifies correctly is
+/// `ask_broker::tests::is_unique_violation_recognizes_a_real_dedupe_conflict`
+/// in `src/ask_broker.rs`. Observed failing against the pre-fix code with
+/// a raw "duplicate key value violates unique constraint" error escaping
+/// as `Err`, which is the defect this test guards against.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "requires Postgres"]
+async fn concurrent_asks_for_the_same_need_yield_one_applied_and_the_rest_duplicate() {
+    const RACERS: usize = 20;
+    let (db, pool) = setup_with_max_connections(RACERS as u32 + 10).await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let mut events = Vec::with_capacity(RACERS);
+    let mut handles = Vec::with_capacity(RACERS);
+    for i in 0..RACERS {
+        let worker = Keys::generate();
+        set_tier(&db, community, &owner, &worker, "worker").await;
+        let event = sign_ask(
+            &worker,
+            ask_tags("credential", &leader.public_key(), "init-1", "shared-key"),
+            &ask_content(&format!("Need the shared key ({i})"), None),
+        );
+        events.push(event.clone());
+        let state = state.clone();
+        let tenant = tenant.clone();
+        handles.push(tokio::spawn(async move {
+            handle_ask_event(&tenant, &state, &event).await
+        }));
+    }
+
+    let mut applied_event_id: Option<[u8; 32]> = None;
+    let mut duplicate_ids: Vec<[u8; 32]> = Vec::new();
+    for (i, handle) in handles.into_iter().enumerate() {
+        let outcome = handle
+            .await
+            .unwrap_or_else(|error| panic!("racer {i}: task panicked: {error}"))
+            .unwrap_or_else(|error| panic!("racer {i}: expected no internal error, got: {error}"));
+        match outcome {
+            AskBrokerOutcome::Applied => {
+                assert!(
+                    applied_event_id.is_none(),
+                    "more than one racer was Applied for the same need"
+                );
+                applied_event_id = Some(*events[i].id.as_bytes());
+            }
+            AskBrokerOutcome::Duplicate {
+                original_ask_event_id,
+            } => {
+                duplicate_ids.push(original_ask_event_id);
+            }
+            AskBrokerOutcome::Refused { message } => {
+                panic!("racer {i}: expected Applied or Duplicate, got Refused: {message}");
+            }
+        }
+    }
+
+    let applied_event_id =
+        applied_event_id.expect("exactly one racer must have been Applied for this need");
+    assert_eq!(
+        duplicate_ids.len(),
+        RACERS - 1,
+        "every other racer must resolve to Duplicate"
+    );
+    for id in duplicate_ids {
+        assert_eq!(
+            id, applied_event_id,
+            "every duplicate must point at the one winning ask"
+        );
     }
 }
 
