@@ -2203,3 +2203,87 @@ async fn owner_thread_reply_resolves_every_open_ask_bound_to_that_thread() {
         "the second ask bound to this thread must resolve too, not just the first"
     );
 }
+
+/// Fix-round regression (Task 6 review, round 1): a candidate that does not
+/// resolve must not block a sibling bound to the same thread from
+/// resolving in the same pass. This exercises the reachable, ordinary skip
+/// (an ask still climbing the altitude ladder -- audience is the
+/// executive, not an owner) alongside a sibling that IS owner-audience and
+/// rooted at the same thread, both discovered in the same
+/// `find_open_asks_by_thread` call. A genuine per-candidate database
+/// failure (the other way a candidate can fail to resolve) is not
+/// reachable from ordinary test setup without fault-injection scaffolding
+/// -- see the Task 6 fix-round report for why that half is proven by
+/// inspection rather than by a test here.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_skipped_candidate_does_not_block_a_sibling_in_the_same_pass() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let root = store_root(
+        &db,
+        community,
+        channel_id,
+        &executive,
+        "one thread, two asks, different audiences",
+    )
+    .await;
+    let harness = Harness {
+        db: &db,
+        tenant: &tenant,
+        state: &state,
+    };
+    // Audience = executive: still climbing the ladder, must be skipped.
+    file_leader_ask_to_executive(
+        &harness,
+        &leader,
+        &executive,
+        &root,
+        "decision",
+        "batch-size",
+        "Choose batch size",
+    )
+    .await;
+    // Audience = owner: eligible, must resolve even though the row above
+    // (order from `find_open_asks_by_thread` is unspecified) is skipped.
+    file_executive_ask_to_owner(
+        &harness,
+        &executive,
+        &owner,
+        &root,
+        "decision",
+        "ad-budget",
+        "Approve the ad budget increase?",
+    )
+    .await;
+
+    let reply = sign_thread_reply(&owner, channel_id, &root, "approved the budget one");
+    ingest_reply(&state, &tenant, &owner, reply).await;
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "batch-size")
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "the still-climbing-the-ladder ask must stay open (skipped, not resolved)"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "ad-budget")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "the owner-audience sibling must still resolve despite the other candidate being skipped"
+    );
+}

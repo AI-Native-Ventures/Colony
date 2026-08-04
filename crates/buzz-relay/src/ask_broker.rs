@@ -696,13 +696,21 @@ async fn emit_ask_receipt(
 /// happened to p-tag it by hand.
 ///
 /// Called AFTER the owner's message is already durably stored (see
-/// `handlers::ingest::ingest_event_inner`): a `?` here returns `Err`
-/// immediately on the first database failure rather than trying to salvage
-/// a partial pass over several matched asks, but the caller is responsible
-/// for logging and swallowing that error rather than letting it turn an
-/// already-accepted message into a rejection -- a missed auto-resolve is
-/// recoverable (the owner can still tap the card, or reply again), an
-/// owner whose message got bounced over interrupt-core bookkeeping is not.
+/// `handlers::ingest::ingest_event_inner`); the caller is responsible for
+/// logging and swallowing whatever this returns rather than letting it
+/// turn an already-accepted message into a rejection -- a missed
+/// auto-resolve is recoverable (the owner can still tap the card, or reply
+/// again), an owner whose message got bounced over interrupt-core
+/// bookkeeping is not.
+///
+/// The two database reads before the loop below (the signer's own role,
+/// and the set of candidate asks) still fail the whole call via `?` on
+/// error -- there is nothing to iterate yet, so there is no partial pass to
+/// protect. Once inside the loop, each candidate goes through
+/// [`try_resolve_one_candidate`], which never propagates a failure back up
+/// here: a thread can bind several open owner-audience asks, and a
+/// database failure resolving one of them must not silently skip the
+/// others in the same pass.
 pub async fn try_auto_resolve_from_reply(
     tenant: &TenantContext,
     state: &Arc<AppState>,
@@ -743,41 +751,74 @@ pub async fn try_auto_resolve_from_reply(
 
     let thread_root_hex = hex::encode(&thread_root);
     for row in candidates {
-        let audience_hex = hex::encode(&row.audience_pubkey);
-        let audience_is_owner = state
-            .db
-            .get_relay_member(tenant.community(), &audience_hex)
-            .await
-            .map_err(|error| {
-                format!("database error checking ask audience for auto-resolve: {error}")
-            })?
-            .is_some_and(|member| member.role == "owner");
-        if !audience_is_owner {
-            // Still climbing the altitude ladder -- an owner's passing
-            // comment in a thread it also occupies must not close it.
-            continue;
+        if let Err(error) =
+            try_resolve_one_candidate(tenant, state, &row, event, &thread_root_hex).await
+        {
+            // Isolated per candidate on purpose: a thread can bind several
+            // open owner-audience asks (see
+            // `owner_thread_reply_resolves_every_open_ask_bound_to_that_thread`
+            // in `tests/ask_broker.rs`), and a database failure resolving
+            // one of them must not silently skip the rest of the same
+            // pass. Log and move on to the next row.
+            tracing::warn!(
+                ask_event_id = %hex::encode(&row.ask_event_id),
+                %error,
+                "auto-resolve: failed to resolve one candidate ask, continuing with any siblings"
+            );
         }
-
-        let flipped = state
-            .db
-            .resolve_ask(
-                tenant.community(),
-                &row.ask_event_id,
-                event.id.as_bytes(),
-                event.pubkey.as_bytes(),
-                false,
-            )
-            .await
-            .map_err(|error| format!("database error auto-resolving ask from reply: {error}"))?;
-        if !flipped {
-            // Lost a race against a card resolution/withdrawal that closed
-            // this exact ask a moment earlier -- nothing left to wake.
-            continue;
-        }
-
-        wake_filer_after_auto_resolve(tenant, state, &row, &thread_root_hex).await;
     }
 
+    Ok(())
+}
+
+/// Resolve a single candidate ask -- already known to be OPEN and rooted at
+/// this thread -- if its `audience_pubkey` currently holds the owner role,
+/// then wake its filer. A no-op `Ok(())` when the audience is not (or no
+/// longer) an owner, or when `resolve_ask` reports it lost a race against a
+/// card resolution/withdrawal that closed this exact ask a moment earlier.
+///
+/// `Err` only on a genuine database failure checking the audience or
+/// resolving the row; see [`try_auto_resolve_from_reply`] for why the
+/// caller must catch this per candidate rather than letting it abort the
+/// whole pass.
+async fn try_resolve_one_candidate(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    row: &AskRow,
+    event: &Event,
+    thread_root_hex: &str,
+) -> Result<(), String> {
+    let audience_hex = hex::encode(&row.audience_pubkey);
+    let audience_is_owner = state
+        .db
+        .get_relay_member(tenant.community(), &audience_hex)
+        .await
+        .map_err(|error| format!("database error checking ask audience for auto-resolve: {error}"))?
+        .is_some_and(|member| member.role == "owner");
+    if !audience_is_owner {
+        // Still climbing the altitude ladder -- an owner's passing comment
+        // in a thread it also occupies must not close it.
+        return Ok(());
+    }
+
+    let flipped = state
+        .db
+        .resolve_ask(
+            tenant.community(),
+            &row.ask_event_id,
+            event.id.as_bytes(),
+            event.pubkey.as_bytes(),
+            false,
+        )
+        .await
+        .map_err(|error| format!("database error auto-resolving ask from reply: {error}"))?;
+    if !flipped {
+        // Lost a race against a card resolution/withdrawal that closed
+        // this exact ask a moment earlier -- nothing left to wake.
+        return Ok(());
+    }
+
+    wake_filer_after_auto_resolve(tenant, state, row, thread_root_hex).await;
     Ok(())
 }
 
