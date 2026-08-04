@@ -12,6 +12,7 @@ import {
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
+import { describeExportOutcome, exportLeadsToCsv } from "../lib/exportLeads";
 import type { CampaignDetail, LeadPage } from "../types";
 import {
   EMPTY_LEAD_FILTERS,
@@ -33,8 +34,15 @@ export type LeadsWorkspaceProps = {
   initialMode?: LeadMode;
 };
 
-function actionMessage(action: string) {
-  return `${action} completed in the local Discovery preview.`;
+/**
+ * The message for an action that is not built yet.
+ *
+ * It says so plainly. The previous wording claimed the action had
+ * "completed", which told the person their leads had been deduplicated or
+ * grouped when nothing had happened at all.
+ */
+function notYetAvailable(action: string) {
+  return `${action} is not available yet.`;
 }
 
 function ViewToggle({
@@ -201,7 +209,19 @@ function CampaignLeads({
           </p>
         </div>
         <CampaignActionBar
-          onAction={(action) => setMessage(actionMessage(action))}
+          onAction={(action) => {
+            if (action !== "Export") {
+              setMessage(notYetAvailable(action));
+              return;
+            }
+            void exportLeadsToCsv(visibleLeads, campaign.name ?? "leads").then(
+              (outcome) =>
+                setMessage(
+                  describeExportOutcome(outcome, people ? "people" : "leads") ??
+                    "",
+                ),
+            );
+          }}
         />
       </div>
       <ActionStatus message={message} />
@@ -298,6 +318,19 @@ function GlobalLeads({
         mode={mode}
         onModeChange={setMode}
         onAction={setMessage}
+        onExport={() => {
+          void exportLeadsToCsv(
+            visibleLeads,
+            mode === "people" ? "people" : "companies",
+          ).then((outcome) =>
+            setMessage(
+              describeExportOutcome(
+                outcome,
+                mode === "people" ? "people" : "companies",
+              ) ?? "",
+            ),
+          );
+        }}
       />
       <GlobalLeadStatsRow leads={modeLeads} people={mode === "people"} />
       <ActionStatus message={message} />
@@ -326,10 +359,12 @@ function GlobalLeads({
 function GlobalLeadsHeader({
   mode,
   onAction,
+  onExport,
   onModeChange,
 }: {
   mode: LeadMode;
   onAction: (message: string) => void;
+  onExport: () => void;
   onModeChange: (mode: LeadMode) => void;
 }) {
   return (
@@ -346,7 +381,7 @@ function GlobalLeadsHeader({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button
-          onClick={() => onAction(actionMessage("Groups"))}
+          onClick={() => onAction(notYetAvailable("Groups"))}
           size="sm"
           type="button"
           variant="outline"
@@ -354,17 +389,12 @@ function GlobalLeadsHeader({
           <UsersRound aria-hidden="true" />
           Groups
         </Button>
-        <Button
-          onClick={() => onAction(actionMessage("Export"))}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
+        <Button onClick={onExport} size="sm" type="button" variant="outline">
           <Download aria-hidden="true" />
           Export
         </Button>
         <Button
-          onClick={() => onAction(actionMessage("New campaign"))}
+          onClick={() => onAction(notYetAvailable("New campaign"))}
           size="sm"
           type="button"
         >

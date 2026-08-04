@@ -21,6 +21,7 @@ mod channel_window;
 mod channels;
 mod clipboard;
 pub mod company_blueprint;
+pub mod discovery_export;
 mod dms;
 mod engrams;
 mod export_util;

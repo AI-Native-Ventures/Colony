@@ -831,6 +831,7 @@ pub fn run() {
             list_teams,
             commands::company_blueprint::execute_company_blueprint,
             commands::company_blueprint::complete_company_blueprint,
+            commands::discovery_export::save_leads_csv,
             commands::ledger::ledger_report,
             commands::ledger::ledger_correct,
             commands::initiative::advance_initiative,
