@@ -3,6 +3,8 @@ import * as React from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
 
+import { toSpeechText } from "./speechText";
+
 const AGENT_PUBKEY_REFRESH_INTERVAL_MS = 30_000;
 
 /**
@@ -86,7 +88,11 @@ export function useTtsSubscription(
         if (event.content.trim().length <= 1) return;
         // Legacy: skip [System]-prefixed messages from before kind:48106.
         if (event.content.startsWith("[System]")) return;
-        invoke("speak_agent_message", { text: event.content }).catch((err) => {
+        // Agents write markdown; the TTS engine wants speech. Raw content
+        // spoke "hash hash" for headings and full URLs for links.
+        const speech = toSpeechText(event.content);
+        if (speech.length === 0) return;
+        invoke("speak_agent_message", { text: speech }).catch((err) => {
           console.warn(
             "[huddle] TTS speak failed (backpressure or pipeline unavailable):",
             err,
