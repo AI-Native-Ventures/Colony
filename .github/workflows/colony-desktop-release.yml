@@ -112,6 +112,14 @@ jobs:
 
       - name: Build desktop app
         env:
+          # build.rs reads these two, not just the config generator: it only
+          # emits cfg(buzz_updater_enabled) when both are present, and without
+          # that cfg lib.rs compiles the updater plugin out of the binary
+          # entirely. 0.8.0 and 0.9.0 shipped that way — signed archive,
+          # correct manifest, and an app that answers "plugin updater not
+          # found" — because this step had the signing key but not these.
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
@@ -133,6 +141,21 @@ jobs:
           fi
           codesign --verify --deep --strict "$APP"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Check the updater is actually in the binary
+        # The one property no downstream artifact reveals. Everything else
+        # about a release can be correct while the app cannot update itself.
+        run: |
+          set -euo pipefail
+          BIN=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop
+          if ! strings -a "$BIN" | grep -q "buzz-updater-enabled"; then
+            echo "::error::The updater plugin is not compiled into this build. \
+          build.rs needs BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT in \
+          the build step's environment; without them the app ships unable to \
+          update itself while every other release artifact looks correct."
+            exit 1
+          fi
+          echo "Updater plugin present in the shipped binary"
 
       - name: Locate the updater archive
         # Tauri writes Colony.app.tar.gz next to the .app and signs it with the

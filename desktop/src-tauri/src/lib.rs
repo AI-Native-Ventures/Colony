@@ -337,6 +337,21 @@ pub fn run() {
             .build()
     });
 
+    // A marker the release workflow greps for in the built binary.
+    //
+    // 0.8.0 and 0.9.0 shipped with the updater compiled out: the build step
+    // was missing BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT, so
+    // build.rs never set this cfg. Every downstream signal still looked
+    // healthy — tauri.conf carried the endpoint and public key, the bundler
+    // produced a correctly signed archive, and the published manifest
+    // verified — because none of those depend on the plugin being registered.
+    // The only place the difference shows is inside the running app, where
+    // `check()` answers "plugin updater not found". `#[used]` keeps the
+    // symbol through LTO so the grep is meaningful.
+    #[cfg(buzz_updater_enabled)]
+    #[used]
+    static UPDATER_COMPILED_MARKER: [u8; 21] = *b"buzz-updater-enabled\0";
+
     // Register the updater only in configured release builds; omit it locally.
     #[cfg(buzz_updater_enabled)]
     let builder = if cfg!(debug_assertions) {
