@@ -62,24 +62,33 @@ pub(super) fn resolve_legacy_avatar(
 /// reconciliation proceeds.
 ///
 /// Query and publish target the relay returned by `effective_agent_relay_url`
-/// for every agent regardless of backend: an explicit per-agent `relay_url`
-/// wins, and a blank one falls back to the active workspace relay. This keeps
-/// reconciliation following the session's relay for never-pinned agents while
-/// honoring a deliberate pin wherever it points.
+/// — always the active workspace relay; the stored per-record pin is ignored
+/// (agents-everywhere, #2122). Callers acting on a specific runtime pair
+/// should use [`reconcile_profile_at`] with the pair's relay instead,
+/// so the profile lands on the relay that process actually connects to.
 pub(crate) async fn reconcile_agent_profile(
     state: &AppState,
     app: &AppHandle,
     agent_pubkey: &str,
     data: &ProfileReconcileData,
 ) -> Result<(), String> {
-    use crate::relay::{query_agent_profile, sync_managed_agent_profile};
-
-    // An explicit per-agent relay wins; an empty one falls back to the active
-    // workspace relay. Resolved once and used for both the read and write-back.
     let relay_url = crate::relay::effective_agent_relay_url(
         &data.relay_url,
         &relay_ws_url_with_override(state),
     );
+    reconcile_profile_at(state, app, agent_pubkey, data, &relay_url).await
+}
+
+/// [`reconcile_agent_profile`] against an explicit relay. Runtime-pair starts
+/// pass the pair's own relay, which may not be the active workspace relay.
+pub(crate) async fn reconcile_profile_at(
+    state: &AppState,
+    app: &AppHandle,
+    agent_pubkey: &str,
+    data: &ProfileReconcileData,
+    relay_url: &str,
+) -> Result<(), String> {
+    use crate::relay::{query_agent_profile, sync_managed_agent_profile};
 
     if !state
         .managed_agent_profile_reconcile_enabled
@@ -89,7 +98,7 @@ pub(crate) async fn reconcile_agent_profile(
     }
 
     // Query the relay for the agent's existing kind:0 profile.
-    let existing = query_agent_profile(state, &relay_url, agent_pubkey).await?;
+    let existing = query_agent_profile(state, relay_url, agent_pubkey).await?;
 
     // Resolve the expected avatar — backfilling for legacy records that have no
     // stored avatar_url yet.
@@ -152,7 +161,7 @@ pub(crate) async fn reconcile_agent_profile(
 
     sync_managed_agent_profile(
         state,
-        &relay_url,
+        relay_url,
         &agent_keys,
         &data.name,
         expected_avatar.as_deref(),

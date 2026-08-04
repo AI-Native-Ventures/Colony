@@ -284,6 +284,7 @@ fn start_pair(
         .ok()
         .map(|keys| keys.public_key().to_hex());
     let mut process = spawn_agent_child(&app, record, &key.relay_url, lazy, owner.as_deref())?;
+    let process_log_path = process.log_path.clone();
     let now = crate::util::now_iso();
     let receipt = ManagedAgentRuntimeReceipt {
         key: key.clone(),
@@ -301,11 +302,55 @@ fn start_pair(
     record.last_started_at = Some(now);
     record.last_stopped_at = None;
     record.last_error = None;
+    // Snapshot reconcile inputs while the record is in scope. The pair's own
+    // relay is the target: this spawn may serve a community other than the
+    // active workspace, and the profile must land where the process connects.
+    let reconcile_personas = load_personas(&app).unwrap_or_default();
+    let reconcile_data = crate::commands::ProfileReconcileData {
+        private_key_nsec: record.private_key_nsec.clone(),
+        name: record.name.clone(),
+        relay_url: record.relay_url.clone(),
+        avatar_url: record.avatar_url.clone(),
+        auth_tag: record.auth_tag.clone(),
+        pubkey: record.pubkey.clone(),
+        agent_command: record_agent_command(record, &reconcile_personas),
+        persona_id: record.persona_id.clone(),
+    };
     runtimes.insert(key.clone(), ManagedAgentPairRuntime::starting(process));
     let status = status_for(&app, record, &key, runtimes.get(&key), None);
     drop(runtimes);
     save_managed_agents(&app, &records)?;
     emit_status(&app, &status);
+
+    // ── Profile reconciliation (fire-and-forget) ────────────────────────────
+    // Pair spawns (sidebar Start, runtime reconcile, restarts) used to skip
+    // this entirely, so an agent could run on a relay that had no kind:0 for
+    // it — and every surface resolving names from relay profiles alone then
+    // rendered the agent's raw pubkey. Same pattern as the UI start path;
+    // failures are appended to the pair log so they are actually findable.
+    let reconcile_app = app.clone();
+    let reconcile_pubkey = key.pubkey.clone();
+    let reconcile_relay = key.relay_url.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = reconcile_app.state::<AppState>();
+        if let Err(error) = crate::commands::reconcile_profile_at(
+            &state,
+            &reconcile_app,
+            &reconcile_pubkey,
+            &reconcile_data,
+            &reconcile_relay,
+        )
+        .await
+        {
+            let _ = append_log_marker(
+                &process_log_path,
+                &format!("=== profile reconcile failed: {error} ==="),
+            );
+            eprintln!(
+                "buzz-desktop: profile reconciliation failed for agent {reconcile_pubkey}: {error}"
+            );
+        }
+    });
     Ok(status)
 }
 
