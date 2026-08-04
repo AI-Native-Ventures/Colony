@@ -20,7 +20,8 @@ and two release lines make "higher version" stop meaning "newer".
      self-hosted Mac runner (`colony-mac-builder`) and publishes
      `Colony_<v>_aarch64.dmg` plus the fixed-name `Colony_aarch64.dmg` to
      `AI-Native-Ventures/colony-releases`. The site's download button
-     follows `/releases/latest`, so publishing is the whole deploy.
+     follows `/releases/latest`, so publishing is the whole deploy. The same
+     job also ships the auto-update (see below).
    - `relay-v<v>` runs `docker.yml`: builds and pushes
      `ghcr.io/ai-native-ventures/colony-relay:<v>`.
 5. Deploying the relay image to Fly stays a deliberate step: dispatch the
@@ -35,6 +36,47 @@ service on the build Mac (`~/actions-runner-colony`, check with
 `./svc.sh status`). If a release must go out while either is broken, push
 the tag by hand at the release commit; the publisher fires exactly as the
 App would, and `workflow_dispatch` at the tag ref re-runs a publisher.
+
+### Auto-update
+
+Installed copies check for updates on launch and every six hours
+(`BACKGROUND_UPDATE_CHECK_INTERVAL_MS` in
+`desktop/src/features/settings/hooks/UpdaterProvider.tsx`). They fetch one
+fixed URL:
+
+```
+https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json
+```
+
+`colony-desktop-latest` is a rolling prerelease. Every desktop release
+overwrites `latest.json` there and uploads that build's
+`Colony_<v>_aarch64.app.tar.gz` alongside it. The archive keeps its version
+in the filename on purpose: a client holding a cached manifest downloads the
+archive that manifest was signed for, instead of a newer archive whose
+signature will not verify.
+
+Three things make a build updatable, and missing any one silently produces a
+release nobody can update to:
+
+- `vars.BUZZ_UPDATER_PUBLIC_KEY` and the endpoint, which
+  `desktop/scripts/build-release-config.mjs` writes into a config overlay.
+  `build.rs` only compiles the updater plugin in when both are present, so a
+  build without them ships with no updater at all.
+- `secrets.TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) during the build, which
+  signs the archive. The workflow fails if the `.sig` is missing or empty.
+- The manifest publish step, which the workflow verifies afterwards by
+  refetching the endpoint and comparing version, signature, and byte count
+  against what it just built.
+
+**The signing key is a one-way door.** Every shipped binary trusts exactly
+that public key. Lose the private half and no existing install can ever be
+updated again; leak it and anyone can serve a signed update to every install.
+It was generated 2026-08-04 and lives in the repo secrets plus a local copy
+at `~/Desktop/colony-updater-key/` on the build Mac, which should move to a
+password manager.
+
+Anyone still on 0.7.0 or earlier has no updater compiled in and must
+download once from the site; 0.8.0 onward updates itself.
 
 Everything below this section is the upstream Buzz release process, kept
 for reference; its desktop lane (`just release-desktop`, `release.yml`) is
