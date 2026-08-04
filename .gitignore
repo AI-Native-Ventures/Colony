@@ -75,3 +75,6 @@ deploy/charts/*/charts/*.tgz
 # those to every local build.
 desktop/src-tauri/tauri.release.conf.json
 .gstack/
+
+# Superpowers SDD scratch workspaces
+.superpowers/

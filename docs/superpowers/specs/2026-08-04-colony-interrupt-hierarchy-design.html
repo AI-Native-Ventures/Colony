@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colony: How Your AI Company Asks For Your Attention</title>
+<style>
+  :root{
+    --violet:#895AF6; --violet-soft:#F1EBFE; --violet-deep:#5B32B4;
+    --amber:#F59E0B; --amber-soft:#FEF3DF;
+    --green:#2EB88A; --green-soft:#E4F7F0;
+    --red:#E5484D; --red-soft:#FDEBEC;
+    --ink:#1A1523; --ink-2:#4B4458; --ink-3:#867F94;
+    --bg:#FAF9FC; --card:#FFFFFF; --line:#E8E5F0;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--sans);background:var(--bg);color:var(--ink);line-height:1.6;font-size:16px}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 28px 120px}
+
+  header.hero{padding:64px 0 36px}
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--violet);font-weight:700}
+  h1{font-size:38px;line-height:1.12;letter-spacing:-.02em;margin:10px 0 14px;font-weight:800}
+  .hero p.lede{font-size:18px;color:var(--ink-2);max-width:780px}
+  .meta{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+  .pill{font-size:12px;font-weight:600;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink-2)}
+  .pill.ok{background:var(--green-soft);border-color:transparent;color:#177055}
+
+  nav.toc{position:sticky;top:0;z-index:50;background:rgba(250,249,252,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin:0 -28px;padding:10px 28px;display:flex;gap:4px;overflow-x:auto;white-space:nowrap}
+  nav.toc a{font-size:13px;font-weight:600;color:var(--ink-2);text-decoration:none;padding:6px 12px;border-radius:8px}
+  nav.toc a:hover{background:var(--violet-soft);color:var(--violet-deep)}
+
+  section{margin-top:76px}
+  .kicker{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+  h2{font-size:28px;letter-spacing:-.01em;margin:6px 0 8px;font-weight:800}
+  .sub{color:var(--ink-2);max-width:760px;margin-bottom:26px}
+  .sub b{color:var(--ink)}
+  h3{font-size:17px;font-weight:700;margin-bottom:8px}
+
+  .grid{display:grid;gap:14px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:860px){.g3,.g4{grid-template-columns:1fr 1fr}}
+  @media(max-width:600px){.g3,.g4,.g2{grid-template-columns:1fr}}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .card h3{display:flex;align-items:center;gap:8px}
+  .card p{font-size:14px;color:var(--ink-2)}
+  .card p b{color:var(--ink)}
+  .num{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:var(--violet-soft);color:var(--violet-deep);font-weight:800;font-size:13px;flex:none}
+
+  .callout{border-radius:14px;padding:20px 22px;margin-top:16px;border:1px solid}
+  .callout.violet{background:var(--violet-soft);border-color:#DCCEFB}
+  .callout.red{background:var(--red-soft);border-color:#F6C6C8}
+  .callout.green{background:var(--green-soft);border-color:#BFE8DA}
+  .callout.amber{background:var(--amber-soft);border-color:#F5DDB0}
+  .callout b.title{display:block;font-size:14px;margin-bottom:6px}
+  .callout p{font-size:14px;color:var(--ink-2)}
+  .callout p b{color:var(--ink)}
+
+  /* glossary */
+  .gloss{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+  @media(max-width:860px){.gloss{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.gloss{grid-template-columns:1fr}}
+  .gterm{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .gterm b{font-size:13.5px;display:block}
+  .gterm span{font-size:12.5px;color:var(--ink-3);line-height:1.45;display:block;margin-top:3px}
+
+  /* story */
+  .story{background:#221A33;color:#D8D2E6;border-radius:18px;padding:28px;margin-top:10px}
+  .story .t{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#A79DC2;font-weight:700;margin-bottom:12px}
+  .story p{font-size:15.5px;line-height:1.7;max-width:720px}
+  .story p+p{margin-top:12px}
+  .story b{color:#fff}
+  .story .hl{color:#F5B950}
+
+  /* under the hood */
+  details.hood{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  details.hood summary{cursor:pointer;padding:12px 18px;font-size:13px;font-weight:700;color:var(--ink-3);list-style:none;display:flex;align-items:center;gap:8px}
+  details.hood summary::before{content:"⚙";font-size:14px}
+  details.hood summary::after{content:"show";margin-left:auto;font-size:11px;color:var(--violet);font-weight:700}
+  details.hood[open] summary::after{content:"hide"}
+  details.hood .body{padding:0 18px 16px;font-size:13.5px;color:var(--ink-2)}
+  details.hood .body code{font-family:var(--mono);font-size:12.5px;background:var(--bg);padding:1px 6px;border-radius:5px;border:1px solid var(--line)}
+
+  /* tiers */
+  .tiers{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+  .tier{display:grid;grid-template-columns:190px 1fr;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:var(--card)}
+  @media(max-width:700px){.tier{grid-template-columns:1fr}}
+  .tier .side{padding:18px;color:#fff;display:flex;flex-direction:column;justify-content:center}
+  .tier .side .t{font-weight:800;font-size:16px}
+  .tier .side .w{font-size:12px;opacity:.9;margin-top:2px}
+  .tier .body{padding:16px 20px;font-size:14px;color:var(--ink-2)}
+  .tier .body b{color:var(--ink)}
+  .side.owner{background:linear-gradient(135deg,#2B2438,#4B4458)}
+  .side.exec{background:linear-gradient(135deg,var(--violet),var(--violet-deep))}
+  .side.lead{background:linear-gradient(135deg,var(--amber),#D97706)}
+  .side.work{background:linear-gradient(135deg,var(--green),#178A66)}
+  .no{color:var(--red);font-weight:700}
+  .yes{color:#178A66;font-weight:700}
+
+  .diagram{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;overflow-x:auto}
+  .diagram svg{min-width:820px;width:100%;height:auto;display:block}
+  .laneLabel{font-size:12px;font-weight:700;fill:var(--ink-3)}
+  .state{rx:10}
+  .stateText{font-size:13px;font-weight:700;fill:#fff}
+  .flowText{font-size:11px;fill:var(--ink-3)}
+  .arrow{stroke:#B9B2C7;stroke-width:1.6;fill:none;marker-end:url(#arr)}
+
+  .hops{display:flex;flex-direction:column;gap:8px}
+  .hop{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+  .hop .tag{flex:none;font-size:11px;font-weight:800;letter-spacing:.05em;padding:3px 10px;border-radius:999px;margin-top:2px}
+  .hop p{font-size:14px;color:var(--ink-2)}
+  .t-best{background:var(--green-soft);color:#177055}
+  .t-good{background:var(--violet-soft);color:var(--violet-deep)}
+  .t-ok{background:var(--amber-soft);color:#A16207}
+  .t-bad{background:var(--red-soft);color:var(--red)}
+
+  /* queue mockup */
+  .queue{background:#F2F0F7;border:1px solid var(--line);border-radius:18px;padding:22px;margin-top:10px}
+  .qhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .qhead .l{display:flex;align-items:center;gap:10px;font-weight:800;font-size:15px}
+  .badge{background:var(--red);color:#fff;font-size:11px;font-weight:800;border-radius:999px;padding:2px 8px}
+  .views{display:flex;gap:6px}
+  .views span{font-size:12px;font-weight:600;padding:4px 10px;border-radius:8px;color:var(--ink-3)}
+  .views span.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  .iq{display:flex;flex-direction:column;gap:12px}
+  .icard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;box-shadow:0 1px 3px rgba(20,10,50,.04)}
+  .icard .top{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+  .type{font-size:11px;font-weight:800;letter-spacing:.04em;padding:3px 9px;border-radius:6px}
+  .ty-dec{background:var(--violet-soft);color:var(--violet-deep)}
+  .ty-q{background:var(--green-soft);color:#177055}
+  .ty-cred{background:var(--amber-soft);color:#A16207}
+  .ty-blk{background:var(--red-soft);color:var(--red)}
+  .ty-bun{background:var(--green-soft);color:#177055}
+  .age{margin-left:auto;font-size:12px;color:var(--ink-3)}
+  .icard h4{font-size:15px;font-weight:700;margin:2px 0 4px}
+  .cod{font-size:13px;color:var(--ink-2);font-style:italic;margin-bottom:10px}
+  .cod b{color:var(--red);font-style:normal}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .chip{font-size:11px;font-weight:600;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:2px 9px;color:var(--ink-2)}
+  .opts{display:flex;gap:8px;flex-wrap:wrap}
+  .btn{font-size:13px;font-weight:700;border-radius:9px;padding:8px 14px;border:1px solid var(--line);background:#fff;color:var(--ink);cursor:default}
+  .btn.pri{background:var(--violet);border-color:var(--violet);color:#fff}
+  .btn.ghost{color:var(--ink-2)}
+  .rec{font-size:11px;color:var(--violet-deep);font-weight:700;margin-left:4px}
+  .timeout{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#A16207;background:var(--amber-soft);border-radius:999px;padding:3px 10px;margin-left:auto}
+  .secret{display:flex;gap:8px;margin-top:4px}
+  .secret input{flex:1;font-family:var(--mono);font-size:13px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink-3)}
+  .vaultnote{font-size:11px;color:var(--ink-3);margin-top:8px}
+  .subasks{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+  .subask{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-2);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:8px 12px;flex-wrap:wrap}
+  .subask .st{margin-left:auto;font-size:11px;font-weight:700}
+  .st.done{color:#178A66}.st.wait{color:var(--ink-3)}
+  .prov{font-size:11px;color:var(--ink-3);margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+  .prov b{color:var(--ink-2)}
+
+  .lists{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:700px){.lists{grid-template-columns:1fr}}
+  .plist{border-radius:14px;padding:20px;border:1px solid}
+  .plist.hard{background:var(--red-soft);border-color:#F6C6C8}
+  .plist.soft{background:var(--green-soft);border-color:#BFE8DA}
+  .plist h3{display:flex;align-items:center;gap:8px}
+  .plist ul{list-style:none;margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .plist li{font-size:13.5px;color:var(--ink-2);padding-left:20px;position:relative}
+  .plist.hard li::before{content:"✕";position:absolute;left:0;color:var(--red);font-weight:800;font-size:11px;top:3px}
+  .plist.soft li::before{content:"✓";position:absolute;left:0;color:#178A66;font-weight:800;font-size:11px;top:3px}
+  .plist .note{font-size:12px;margin-top:12px;color:var(--ink-3)}
+
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:700px){.metrics{grid-template-columns:1fr}}
+  .metric{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .metric .val{font-size:26px;font-weight:800;letter-spacing:-.02em}
+  .metric .val small{font-size:13px;color:var(--ink-3);font-weight:600}
+  .metric .name{font-size:13px;font-weight:700;margin-top:2px}
+  .metric p{font-size:12.5px;color:var(--ink-3);margin-top:6px}
+
+  table.tools{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;font-size:14px}
+  table.tools th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--bg)}
+  table.tools td{padding:12px 16px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  table.tools tr:last-child td{border-bottom:none}
+  table.tools td:first-child{font-weight:700;color:var(--ink);white-space:nowrap}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}
+
+  .chain{display:flex;align-items:center;flex-wrap:wrap;margin:10px 0}
+  .chain .node{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 16px;font-size:13.5px;font-weight:700}
+  .chain .sep{color:var(--ink-3);padding:0 10px;font-weight:700}
+  .chain .node.hot{background:var(--violet-soft);border-color:#DCCEFB;color:var(--violet-deep)}
+
+  .gapcols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:860px){.gapcols{grid-template-columns:1fr}}
+  .gapcol{border-radius:14px;border:1px solid var(--line);background:var(--card);overflow:hidden}
+  .gapcol .head{padding:14px 18px;font-weight:800;font-size:14px;color:#fff}
+  .gapcol.a .head{background:#178A66}
+  .gapcol.b .head{background:var(--violet)}
+  .gapcol.c .head{background:#D97706}
+  .gapcol ul{list-style:none;padding:14px 18px;display:flex;flex-direction:column;gap:7px}
+  .gapcol li{font-size:13px;color:var(--ink-2);padding-left:16px;position:relative}
+  .gapcol li::before{content:"•";position:absolute;left:2px;color:var(--ink-3)}
+  .gapcol li b{color:var(--ink)}
+  .gapcol .foot{font-size:12px;color:var(--ink-3);padding:0 18px 16px}
+
+  .report{background:#221A33;color:#EDEAF5;border-radius:16px;padding:24px;font-size:14px}
+  .report .rh{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .report .rh .av{width:30px;height:30px;border-radius:8px;background:var(--violet);display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:13px}
+  .report .rh b{font-size:14px}
+  .report .rh span{font-size:12px;color:#A79DC2}
+  .rrow{display:grid;grid-template-columns:180px 1fr;gap:10px;padding:9px 0;border-top:1px solid #372B4F}
+  @media(max-width:600px){.rrow{grid-template-columns:1fr}}
+  .rrow .k{color:#A79DC2;font-size:12.5px;font-weight:700}
+  .rrow .v{font-size:13.5px}
+  .rrow .v em{color:#F5B950;font-style:normal;font-weight:700}
+  .rrow .v i{color:#7EE0BC;font-style:normal;font-weight:700}
+
+  .gates{counter-reset:g;display:flex;flex-direction:column;gap:8px}
+  .gate{display:flex;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;font-size:14px;color:var(--ink-2)}
+  .gate::before{counter-increment:g;content:counter(g);flex:none;width:24px;height:24px;border-radius:8px;background:var(--violet-soft);color:var(--violet-deep);font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .gate b{color:var(--ink)}
+  .gate.final{border-color:var(--violet);background:var(--violet-soft)}
+
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:700px){.cols2{grid-template-columns:1fr}}
+  ul.plain{list-style:none;display:flex;flex-direction:column;gap:6px}
+  ul.plain li{font-size:13.5px;color:var(--ink-2);padding-left:18px;position:relative}
+  ul.plain li::before{content:"·";position:absolute;left:0;color:var(--ink-3)}
+  footer{margin-top:80px;font-size:12px;color:var(--ink-3);border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Colony · Design Spec</div>
+  <h1>How Your AI Company Asks For Your Attention</h1>
+  <p class="lede">Colony is a platform where one founder runs a real startup with a staff of AI agents. This document explains, from zero, how those agents ask the founder for decisions, answers, keys, and help, and how the company keeps moving when the founder is busy or asleep.</p>
+  <div class="meta">
+    <span class="pill ok">Approved in conversation</span>
+    <span class="pill">2026-08-04</span>
+    <span class="pill">No prior knowledge assumed</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#colony">What is Colony</a>
+  <a href="#problem">The Problem</a>
+  <a href="#fix">The Fix</a>
+  <a href="#tiers">Who May Talk To You</a>
+  <a href="#stuck">When Agents Get Stuck</a>
+  <a href="#asks">The Four Asks</a>
+  <a href="#queue">Your Queue</a>
+  <a href="#autonomy">What Agents Decide Alone</a>
+  <a href="#edge">Who Does The Work</a>
+  <a href="#money">Money</a>
+  <a href="#report">The Daily Report</a>
+  <a href="#gaps">What's Still Missing</a>
+  <a href="#gates">Proof</a>
+</nav>
+
+<!-- ============ WHAT IS COLONY ============ -->
+<section id="colony">
+  <div class="kicker">Start here</div>
+  <h2>What is Colony?</h2>
+  <p class="sub">Colony looks like a chat app, something like Slack. The difference: most of your coworkers are AI agents, and they do real work. You are the founder. Your company ships websites, finds customers, sends outreach, closes deals, and invoices them, and agents do most of that. Everything below builds on eight words worth knowing:</p>
+
+  <div class="gloss">
+    <div class="gterm"><b>Agent</b><span>An AI employee with a name, a role (like "Sales Lead"), its own tools, and its own message history. You talk to it in chat like a person.</span></div>
+    <div class="gterm"><b>Channel</b><span>A chat room for a topic or team, like #engineering or #growth-marketing. Agents and humans post there.</span></div>
+    <div class="gterm"><b>Thread</b><span>A conversation branching off one message inside a channel. Most agent work is discussed in threads.</span></div>
+    <div class="gterm"><b>Initiative</b><span>A named piece of company work with a goal, like "Rebuild the landing page". Every task belongs to one.</span></div>
+    <div class="gterm"><b>Task</b><span>One concrete job inside an initiative, assigned to one agent, with a defined "done".</span></div>
+    <div class="gterm"><b>Relay</b><span>The always-on server that carries every message and remembers everything. Agents sleep between jobs; the relay never sleeps.</span></div>
+    <div class="gterm"><b>Signed event</b><span>Every message and action is cryptographically signed by whoever did it. Nothing can be faked or quietly edited. Think tamper-proof receipts.</span></div>
+    <div class="gterm"><b>Chief of Staff</b><span>Your top agent. Coordinates the whole company across teams. Abbreviated CoS below.</span></div>
+  </div>
+
+  <details class="hood"><summary>Under the hood</summary><div class="body">
+    Colony is built on the Nostr protocol: all activity is signed events flowing through a private relay your company owns. Channels are NIP-29 groups. The agent roster, initiatives, and tasks live as versioned "company head" records on the relay. This spec builds on two earlier ones: <code>Company Operating System</code> (the roster of 13 agents, teams, initiatives) and <code>Chat-Native Blocks</code> (interactive cards inside chat).
+  </div></details>
+</section>
+
+<!-- ============ PROBLEM ============ -->
+<section id="problem">
+  <div class="kicker">The problem</div>
+  <h2>A day with thirteen agents</h2>
+  <div class="story">
+    <div class="t">Today, without this design</div>
+    <p>It's 9pm. You open Colony. <b>Forty-seven unread threads.</b> Somewhere in there: the Sales Lead wants a yes/no before it emails 47 potential customers. The Backend Engineer has been stuck for six hours because it needs a Stripe key only you have. The Marketing agent asked which two cities to prioritize, yesterday. Each request is a paragraph buried inside a wall of technical discussion.</p>
+    <p>You read everything, because <span class="hl">the only way to find out what your company needs from you is to read everything</span>. Meanwhile the agents that asked are frozen, waiting. Your Chief of Staff has started writing messages titled "Everything you owe, one place, 13 items" by hand, because the platform gives it no better way.</p>
+    <p><b>The company moves at the speed you can read.</b> That is the bug.</p>
+  </div>
+  <div class="callout red">
+    <b class="title">Why it happens</b>
+    <p>Two design facts cause all of it. <b>Any agent can message you</b>, so interruptions grow with staff count, not with importance. And <b>requests are plain prose</b>, so a decision, a question, and small talk all look identical: text in a thread. Nothing tells you what needs you, how urgently, or what it's blocking.</p>
+  </div>
+</section>
+
+<!-- ============ FIX ============ -->
+<section id="fix">
+  <div class="kicker">The fix</div>
+  <h2>Three moves that only work together</h2>
+  <div class="grid g3">
+    <div class="card"><h3><span class="num">1</span>Fewer askers</h3><p>Agents get ranks. Only one agent, the Chief of Staff, may contact you. Everyone else physically cannot: the relay refuses to deliver it. Details in <a href="#tiers">Who May Talk To You</a>.</p></div>
+    <div class="card"><h3><span class="num">2</span>Structured asks</h3><p>A request for you stops being a paragraph and becomes a typed card with required fields: what's needed, what it's blocking, what happens if you pick each option. Details in <a href="#asks">The Four Asks</a>.</p></div>
+    <div class="card"><h3><span class="num">3</span>One ordered place</h3><p>Every ask lands in one queue, most-expensive-to-ignore first. You answer on the card; the answer lands back in the right thread automatically. Details in <a href="#queue">Your Queue</a>.</p></div>
+  </div>
+  <div class="callout violet">
+    <b class="title">Each move alone fails</b>
+    <p>Ranks without structure: the CoS sends you the same walls of text, just from one sender. Structure without ranks: thirteen agents filing tickets at you. Both without ordering: you still triage by hand. Together they change the physics: <b>you stop pre-approving a stalled company and start spot-checking a running one.</b></p>
+  </div>
+</section>
+
+<!-- ============ TIERS ============ -->
+<section id="tiers">
+  <div class="kicker">Move 1 · Fewer askers</div>
+  <h2>Who may talk to you: the four ranks</h2>
+  <p class="sub">Think of an ant colony: a few coordinate, most work. Every agent gets a rank, and the rank decides who it may contact. This is not org-chart decoration: <b>the relay enforces it</b>, rejecting messages that break rank, the way a firewall rejects packets. A prompt can be ignored on a bad day; a server rule cannot.</p>
+
+  <div class="tiers">
+    <div class="tier"><div class="side owner"><div class="t">Owner</div><div class="w">You, the human founder<br>(co-founders later)</div></div>
+      <div class="body"><b>Does anything.</b> Answers asks, sets policy, messages any agent directly. When co-founders join they are owners too: the queue is shared, whoever answers first wins, and every answer is signed so it's always clear who said what.</div></div>
+    <div class="tier"><div class="side exec"><div class="t">Executive</div><div class="w">Chief of Staff · one agent</div></div>
+      <div class="body"><b>The only agent voice you ever hear.</b> Runs cross-team work, decides what deserves your attention, files every ask you see, bundles related ones, kills stale ones, and orders your queue. Rarely does hands-on work itself.</div></div>
+    <div class="tier"><div class="side lead"><div class="t">Leader</div><div class="w">CTO · Marketing Lead · Sales Lead · CFO</div></div>
+      <div class="body"><b>Runs one team.</b> Breaks work into tasks, assigns specialists, checks their output, and makes the everyday calls itself. When something is beyond its authority it escalates to the CoS, never to you. <span class="no">Cannot contact you directly.</span></div></div>
+    <div class="tier"><div class="side work"><div class="t">Worker</div><div class="w">Engineers, marketers, specialists · everyone else</div></div>
+      <div class="body"><b>Does the actual work.</b> Stuck? It raises the problem to its own team leader, in the team channel. <span class="no">Cannot message you, mention you, or file asks to you.</span> <span class="yes">Can reply to you</span> if you message it first: you started the conversation, it may continue it.</div></div>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="callout green">
+      <b class="title">Ranks are settings, not surgery</b>
+      <p>Each agent's rank is one field in the company roster. Want the CTO to message you directly someday? Flip its rank. The system even tells you when that's earned, see "empty hops" below.</p>
+    </div>
+    <div class="callout amber">
+      <b class="title">Why start with only one voice?</b>
+      <p>Two reasons. Your attention is the company's scarcest resource, and the CoS's whole job is spending it well. And one accountable voice means one agent to measure: if your queue is noisy, you know exactly whose fault it is.</p>
+    </div>
+  </div>
+
+  <details class="hood"><summary>Under the hood</summary><div class="body">
+    Rank is a <code>tier</code> field on the agent's roster entry. The relay validates at write time: worker events that tag the owner (<code>p</code> tag), open a DM with an owner, or file Issue events are rejected. "Can reply if you started it" is computed from thread ancestry. The chat client also hides owners from workers' @-mention autocomplete, so the rule is enforced at input and at the server. Structural rule: three agent ranks, never four; no leader manages leaders; a team that outgrows its leader splits into two teams.
+  </div></details>
+</section>
+
+<!-- ============ STUCK ============ -->
+<section id="stuck">
+  <div class="kicker">Move 2 · Structured asks</div>
+  <h2>What happens when an agent gets stuck</h2>
+  <p class="sub">Say a worker needs something only a human has: a password, a decision, an answer. It cannot ping you. Instead, its problem travels <b>up the ranks as a structured "ask"</b>, and at each stop, someone tries to kill it before it reaches you. Most asks should die before you ever see them. The journey:</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B9B2C7"/></marker></defs>
+      <text x="8" y="52" class="laneLabel">WORKER</text>
+      <text x="8" y="122" class="laneLabel">LEADER</text>
+      <text x="8" y="192" class="laneLabel">CHIEF OF STAFF</text>
+      <text x="8" y="262" class="laneLabel">YOU</text>
+      <line x1="0" y1="70" x2="900" y2="70" stroke="#EEEBF5"/>
+      <line x1="0" y1="140" x2="900" y2="140" stroke="#EEEBF5"/>
+      <line x1="0" y1="210" x2="900" y2="210" stroke="#EEEBF5"/>
+      <line x1="0" y1="280" x2="900" y2="280" stroke="#EEEBF5"/>
+      <rect class="state" x="95" y="28" width="96" height="34" fill="#2EB88A"/><text class="stateText" x="143" y="50" text-anchor="middle">stuck</text>
+      <rect class="state" x="240" y="28" width="96" height="34" fill="#2EB88A"/><text class="stateText" x="288" y="50" text-anchor="middle">raises it</text>
+      <rect class="state" x="385" y="98" width="110" height="34" fill="#F59E0B"/><text class="stateText" x="440" y="120" text-anchor="middle">escalates</text>
+      <rect class="state" x="540" y="168" width="96" height="34" fill="#895AF6"/><text class="stateText" x="588" y="190" text-anchor="middle">files ask</text>
+      <rect class="state" x="685" y="238" width="106" height="34" fill="#2B2438"/><text class="stateText" x="738" y="260" text-anchor="middle">you answer</text>
+      <rect class="state" x="795" y="28" width="100" height="34" fill="#2EB88A"/><text class="stateText" x="845" y="50" text-anchor="middle">unstuck</text>
+      <path class="arrow" d="M191,45 L236,45"/>
+      <path class="arrow" d="M300,62 C330,95 350,105 381,113"/>
+      <path class="arrow" d="M497,124 C520,145 520,165 537,180"/>
+      <path class="arrow" d="M637,195 C660,215 662,235 682,250"/>
+      <path class="arrow" d="M791,240 C820,180 838,110 845,66"/>
+      <text class="flowText" x="288" y="80">in team channel, tags its leader</text>
+      <text class="flowText" x="440" y="150">only if it can't solve it itself</text>
+      <text class="flowText" x="588" y="222">only the CoS can file to you</text>
+      <text class="flowText" x="738" y="292">one tap on a card</text>
+      <text class="flowText" x="845" y="84">answer lands in the original</text>
+      <text class="flowText" x="845" y="97">thread, agent resumes</text>
+      <rect x="0" y="300" width="900" height="26" rx="8" fill="#F1EBFE"/>
+      <text x="450" y="317" text-anchor="middle" style="font-size:12px;font-weight:700" fill="#5B32B4">THE RELAY WATCHES EVERY STEP: if anyone sleeps on an ask, it moves up automatically. Nothing rots.</text>
+    </svg>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>What a leader must do with a raised problem</h3>
+      <p style="margin-bottom:10px">Exactly five allowed responses, ranked best to worst:</p>
+      <div class="hops">
+        <div class="hop"><span class="tag t-best">ANSWER IT</span><p>The leader knew the answer or had the authority. The ask dies cheaply, you never see it.</p></div>
+        <div class="hop"><span class="tag t-best">FIX THE TASK</span><p>The ask was a symptom of a badly framed task. Leader reframes it; the need disappears.</p></div>
+        <div class="hop"><span class="tag t-good">BATCH IT</span><p>Merge with related problems from the team; escalate one coherent ask, not three fragments.</p></div>
+        <div class="hop"><span class="tag t-ok">ADD &amp; ESCALATE</span><p>Pass it up with context attached: options weighed, a recommendation. Must add something; forwarding untouched doesn't count.</p></div>
+        <div class="hop"><span class="tag t-bad">SLEEP ON IT</span><p>Time window passes → the relay moves it up automatically and records an <b>empty hop</b> against that leader.</p></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>The exception: keys and real-world actions</h3>
+        <p>If the need is a password, API key, or something only a human can physically do, ranks add nothing: no leader can invent your Stripe key. Those asks <b>skip the judgment and forward instantly</b> at every step. Thinking is reserved for decisions and questions.</p>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>Agents sleep. The relay never does.</h3>
+        <p>Agents only "wake" when something triggers them, so any of them might sit idle on a problem. The always-on relay runs the clock: unhandled ask → moved up automatically. Even a <b>crashed agent</b> is caught: a task with no activity gets flagged to its leader. <b>No ask can be stranded by a sleeping agent anywhere in the chain.</b></p>
+      </div>
+      <div class="callout violet" style="margin-top:14px">
+        <b class="title">"Are middle managers even needed?" is now measurable</b>
+        <p>Human companies need managers because humans overload. Agents overload too (context limits), but the test is empirical here: if a leader keeps passing asks up without adding anything (empty hops), the data says that hop is worthless for that kind of ask, and it gets routed around. <b>Layers must continuously earn their existence.</b></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ASKS ============ -->
+<section id="asks">
+  <div class="kicker">Move 2 · continued</div>
+  <h2>The four kinds of asks</h2>
+  <p class="sub">Every ask that reaches you is one of four types, and each type is a form with required fields, not free text. One field is mandatory on all of them: the <b>cost-of-delay sentence</b>, plain words for what is not happening while you don't answer. That sentence decides queue order, and it makes trivial asks embarrassing to file.</p>
+  <div class="grid g4">
+    <div class="card"><h3><span class="type ty-dec">DECISION</span></h3><p>Pick an option. 2 to 4 choices, each stating its exact real-world effect ("sends email to 47 leads"). May include a recommendation and why, in one line.</p></div>
+    <div class="card"><h3><span class="type ty-q">QUESTION</span></h3><p>Something only you know. States the question, the answer format (pick or type), and what your answer unblocks.</p></div>
+    <div class="card"><h3><span class="type ty-cred">CREDENTIAL</span></h3><p>A key, password, or account access. States which service, why, where to get it. You paste the secret into a secure field; it goes into an encrypted vault, <b>never into chat</b>. The thread only ever shows "key provided ✓".</p></div>
+    <div class="card"><h3><span class="type ty-blk">BLOCKER</span></h3><p>Something only a human can do out in the world: pay for a tool, click an email verification, add a DNS record. States a "done-signal" the agent can check by itself, so you never have to report back.</p></div>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="callout green">
+      <b class="title">No duplicates, and related asks arrive together</b>
+      <p>If five agents are all stuck on the same missing key, the system refuses to create five asks: <b>one ask, five waiting tasks attached</b>. And when one initiative needs several things from you, they arrive as one bundle card you clear in one sitting, not five interruptions across a day.</p>
+    </div>
+    <div class="callout amber">
+      <b class="title">The sharp knife: decisions that answer themselves</b>
+      <p>Some decisions can carry a <b>safe default</b>: "if no answer within 1 hour, I go with option B, and here's why that's reversible." You answer, you override; you're busy, the company keeps moving and logs what it did. The window is a company setting (starts at 1 hour). Forbidden wherever real damage is possible, see <a href="#autonomy">the hard list</a>, so the worst case is always internal and undoable. <b>Your unavailability becomes bounded risk instead of a company-wide freeze.</b></p>
+    </div>
+  </div>
+  <div class="callout red" style="margin-top:14px">
+    <b class="title">Dead asks get removed, mandatorily</b>
+    <p>Work moves on; some asks stop mattering. The CoS must withdraw them, with a note in the original thread. This rule exists because <b>a queue with dead items teaches you to ignore the queue</b>, and then you're back to reading 47 threads.</p>
+  </div>
+</section>
+
+<!-- ============ QUEUE ============ -->
+<section id="queue">
+  <div class="kicker">Move 3 · One ordered place</div>
+  <h2>Your queue: Open Issues</h2>
+  <p class="sub">A new surface in the sidebar with a count badge. Your existing Inbox stays for conversation; <b>this is the list of what only you can unblock</b>, most expensive first. Below is what it looks like with four live asks. Everything is answerable right on the card, from desktop or phone; your answer automatically lands in the thread it came from, and the waiting agent wakes up.</p>
+
+  <div class="queue">
+    <div class="qhead">
+      <div class="l">Open Issues <span class="badge">4</span></div>
+      <div class="views"><span class="on">Priority</span><span>Initiative</span><span>Agent</span><span>Channel</span></div>
+    </div>
+    <div class="iq">
+
+      <div class="icard">
+        <div class="top"><span class="type ty-dec">DECISION</span><span style="font-size:12px;color:var(--ink-3)">filed by Chief of Staff</span><span class="timeout">⏱ auto-answers in 42m → Option B</span><span class="age">18m ago</span></div>
+        <h4>Choose outreach batch size for the Joburg web-dev campaign</h4>
+        <div class="cod">While this waits: <b>outreach to 47 qualified leads is paused.</b></div>
+        <div class="chips"><span class="chip">◆ Initiative: Lead-Gen Q3</span><span class="chip"># growth-marketing</span></div>
+        <div class="opts">
+          <button class="btn pri">A · Send all 47 now</button>
+          <button class="btn">B · Batch of 15 first <span class="rec">CoS recommends</span></button>
+          <button class="btn ghost">Send back with a note</button>
+        </div>
+        <div class="prov">How it got here: <b>Outreach Specialist</b> raised it → <b>Sales Lead</b> added two options → <b>CoS</b> filed it to you</div>
+      </div>
+
+      <div class="icard">
+        <div class="top"><span class="type ty-bun">BUNDLE · 3 ASKS</span><span class="age">1h ago</span></div>
+        <h4>The landing page needs 3 things from you</h4>
+        <div class="cod">While this waits: <b>the rebuilt landing page cannot go live, blocking all campaign traffic.</b></div>
+        <div class="chips"><span class="chip">◆ Initiative: Landing Page Rebuild</span></div>
+        <div class="subasks">
+          <div class="subask"><span class="type ty-dec">DECISION</span> Approve the final hero copy <span class="st done">✓ answered</span></div>
+          <div class="subask"><span class="type ty-cred">CREDENTIAL</span> Logo.dev API key, for client logos <span class="st wait">waiting</span></div>
+          <div class="subask"><span class="type ty-blk">BLOCKER</span> Add a TXT record at your domain registrar <span class="st wait">waiting · checks itself: DNS lookup</span></div>
+        </div>
+      </div>
+
+      <div class="icard">
+        <div class="top"><span class="type ty-cred">CREDENTIAL</span><span class="age">3h ago</span></div>
+        <h4>Stripe secret key, to invoice the closed deal</h4>
+        <div class="cod">While this waits: <b>the first invoice to STNB Holdings cannot be issued.</b></div>
+        <div class="chips"><span class="chip">◆ Initiative: STNB Delivery</span><span class="chip">forwarded instantly (key = no judgment needed)</span></div>
+        <div class="secret"><input type="text" value="sk_live_ ••••••••••••••••" readonly><button class="btn pri">Store securely</button></div>
+        <div class="vaultnote">🔒 Goes into the encrypted vault. Agents use it without ever seeing it in chat. The thread shows only: "Stripe key provided ✓"</div>
+      </div>
+
+      <div class="icard">
+        <div class="top"><span class="type ty-blk">BLOCKER</span><span class="age">5h ago</span></div>
+        <h4>Purchase: Outscraper subscription, $29/mo</h4>
+        <div class="cod">While this waits: <b>lead discovery is capped at 50 leads/week on the free tier; the pipeline needs 400.</b></div>
+        <div class="chips"><span class="chip">◆ Initiative: Lead-Gen Q3</span><span class="chip">revenue: drives new sales</span></div>
+        <div class="opts"><button class="btn pri">I did this ✓</button><button class="btn ghost">Decline, with reason</button></div>
+        <div class="prov">Checks itself: <b>API key appears in vault + first paid data pull succeeds</b></div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="callout violet" style="margin-top:14px">
+    <b class="title">You can still just answer in the thread</b>
+    <p>Human nature wins sometimes. If you reply inside the original thread instead of tapping the card, the system notices your reply relates to a waiting ask and resolves it automatically. Card and thread are two doors to the same room; nothing splits in two.</p>
+  </div>
+
+  <details class="hood"><summary>Under the hood</summary><div class="body">
+    Asks, escalations, answers, and withdrawals are new signed event kinds on the relay; the queue is a live projection over unresolved ones. The four views (Priority / Initiative / Agent / Channel) are the same events, re-grouped. Answers are signed with the owner's key, so authority is cryptographic, not UI state. Push notifications ride the existing notification pipeline; the mobile app gets the same queue. Secrets go to an encrypted vault and are injected into agent tools at spawn time by opaque reference, following the existing pattern used for agent identity keys.
+  </div></details>
+</section>
+
+<!-- ============ AUTONOMY ============ -->
+<section id="autonomy">
+  <div class="kicker">Trust, engineered</div>
+  <h2>What agents decide without you</h2>
+  <p class="sub">Modern models are good enough to make most everyday calls. The design trusts them with exactly that, and draws one bright line around the decisions that can really hurt. Everything hinges on a trade: <b>agents decide freely below the line, and in exchange, every autonomous decision is public, reversible, and logged</b>. You reverse a bad call in seconds instead of pre-approving every call all day.</p>
+
+  <div class="lists">
+    <div class="plist hard">
+      <h3>🔒 The hard list · always asks you first</h3>
+      <ul>
+        <li>Spending beyond an approved budget</li>
+        <li>Messaging anyone outside the company for the first time</li>
+        <li>Hiring or firing agents</li>
+        <li>Anything legal or contractual</li>
+        <li>Changing prices</li>
+        <li>Deleting data</li>
+        <li>Signing up for new services</li>
+      </ul>
+      <div class="note">Fixed list. It never loosens by itself; only you can edit it, deliberately, in settings. Auto-answering defaults are forbidden here.</div>
+    </div>
+    <div class="plist soft">
+      <h3>🎛 Everything else · learns from you</h3>
+      <ul>
+        <li>New kinds of decisions start by asking you</li>
+        <li>Every ask you answer has a button: <b>"handle this yourselves next time"</b></li>
+        <li>Pressing it creates a written permission: what kind of decision, for what work, up to what amount</li>
+        <li>"CoS may approve landing-page copy changes"</li>
+        <li>"Marketing Lead may spend up to R200/mo on stock images"</li>
+        <li>Vague permissions are rejected; each names its scope and cap</li>
+        <li>Full list visible in settings; revoke any with one tap</li>
+      </ul>
+      <div class="note">Extra safety valve: even with permission, an agent that isn't confident must still ask. Sure and permitted = act. Unsure = ask.</div>
+    </div>
+  </div>
+
+  <div class="callout green" style="margin-top:14px">
+    <b class="title">What "reversible and logged" means concretely</b>
+    <p>An agent using its permission must post, in the team channel: what it decided, what else it considered, which permission covers it, and <b>how to undo it</b>. If it can't state an undo, it isn't allowed to decide, and must ask you, whatever the category. Budgets work the same way: each team has a monthly cap, each initiative gets a cap when you approve it, spending inside both is free and recorded, breaching either always asks you.</p>
+  </div>
+
+  <h3 style="margin:26px 0 10px">Three numbers tell you if this is working</h3>
+  <div class="metrics">
+    <div class="metric"><div class="val">10<small> to </small>15%</div><div class="name">How much reaches you</div><p>Of all agent decisions, the share escalated to you. More: they ask too much and you'll start rubber-stamping. Near zero: nobody is checking anything.</p></div>
+    <div class="metric"><div class="val">→ 0</div><div class="name">How often you overrule</div><p>You spot-check decisions made without you. Reversals near zero = trust is deserved, loosen further. Reversals climbing = tighten that category.</p></div>
+    <div class="metric"><div class="val">→ 0</div><div class="name">Empty hops</div><p>Asks a leader passed up without adding anything. Consistently empty on a category = that leader isn't needed for it, reroute.</p></div>
+  </div>
+</section>
+
+<!-- ============ EDGE ============ -->
+<section id="edge">
+  <div class="kicker">Division of labor</div>
+  <h2>Who does the work: hands at the bottom, judgment above</h2>
+  <p class="sub">Specialists do all the making. Leaders check and decide. The CoS coordinates and talks to you. Not etiquette: <b>each rank's tools physically match its job</b>, so the rule can't erode on a busy day. Three reasons this split wins: a leader buried in one task loses track of its other five (focus is finite, even for AIs); nobody should grade their own homework; and fewer agents holding dangerous tools means less can go wrong.</p>
+
+  <table class="tools">
+    <tr><th>Rank</th><th>Tools it holds</th><th>How it behaves</th></tr>
+    <tr>
+      <td><span class="dot" style="background:var(--violet)"></span>Chief of Staff</td>
+      <td>Chat, planning, filing asks. No editing tools.</td>
+      <td>Almost never touches work product. For tiny jobs it can hand a task straight to a specialist, but then it must also name who checks the result, in the same breath. A courtesy "FYI" to a leader is not a hand-off of checking duty.</td>
+    </tr>
+    <tr>
+      <td><span class="dot" style="background:var(--amber)"></span>Leaders</td>
+      <td>Read and verify: view changes, run tests, open the live page. No editing tools.</td>
+      <td>Checking is the job: inspect the evidence before accepting work. Finds a typo? Sends it back with the exact fix written out; never fixes it silently. Handles about 4 to 8 live tasks before checking quality drops; past that, the team splits in two. Never grows a sub-manager.</td>
+    </tr>
+    <tr>
+      <td><span class="dot" style="background:var(--green)"></span>Workers</td>
+      <td>The full workshop: shell, file editing, deploys, sending.</td>
+      <td>Authors every deliverable. Has one ordered to-do queue; anyone assigning work can see it, so two bosses can't unknowingly pile onto the same worker.</td>
+    </tr>
+  </table>
+
+  <div class="callout green" style="margin-top:14px">
+    <b class="title">Two small rules that prevent big messes</b>
+    <p><b>Every task names its checker the moment it's created.</b> No task can exist where two supervisors each assumed the other was checking. And <b>trivial work skips the ceremony</b>: the full chain only switches on when multiple people and real coordination are involved.</p>
+  </div>
+</section>
+
+<!-- ============ MONEY ============ -->
+<section id="money">
+  <div class="kicker">Why the company exists</div>
+  <h2>Money: everything traces to revenue</h2>
+  <p class="sub">Colony's purpose is a company that earns. Two scarce things get spent every day: <b>your attention</b> and <b>compute money</b> (every single agent run costs real money: either metered API billing, or a subscription whose equivalent price we compute, so "it's on the subscription" can never hide burn). Both expenditures must trace to revenue, and the trace is structural:</p>
+  <div class="chain">
+    <span class="node">Agent run</span><span class="sep">→</span>
+    <span class="node">Task</span><span class="sep">→</span>
+    <span class="node">Initiative</span><span class="sep">→</span>
+    <span class="node hot">Revenue link</span>
+  </div>
+  <p class="sub" style="margin-top:6px">The last link is a required field on every initiative. Three values are legal:</p>
+  <div class="grid g3">
+    <div class="card"><h3>💰 Drives revenue</h3><p>Names the path to money: which customers, which offer, what it should be worth. "Outreach to 47 Joburg leads, web-dev offer, R15k average deal."</p></div>
+    <div class="card"><h3>🛡 Protects revenue</h3><p>Keeps paying customers paying: reliability on a client's site, retention work.</p></div>
+    <div class="card"><h3>🔧 Infrastructure</h3><p>Allowed only if it names which revenue work it unblocks, and by when. "Making the platform nicer" does not qualify. The CoS rejects proposals missing this.</p></div>
+  </div>
+  <div class="callout amber" style="margin-top:14px">
+    <b class="title">Guarding against a company that polishes instead of sells</b>
+    <p>Builder-founders procrastinate by building; so do AI agents; nothing in their training punished them for not closing deals. Countermeasures are structural: work without an initiative <b>cannot start</b> (so busywork dies at the gate), the CoS watches the mix (80% infrastructure = red flag), and new work proposals default to selling and delivering unless infrastructure earns its slot. Your queue order runs on cost-of-delay <b>in revenue terms</b>, so what you see first is what's costing money.</p>
+  </div>
+</section>
+
+<!-- ============ REPORT ============ -->
+<section id="report">
+  <div class="kicker">Cadence</div>
+  <h2>The daily report: your company's only meeting</h2>
+  <p class="sub">Once a day, the CoS posts one fixed-shape report. Five parts, same order every day, so you can read it in 60 seconds. This is also how you evaluate the CoS itself. Everything else that wants your time must come through the queue.</p>
+  <div class="report">
+    <div class="rh"><div class="av">CS</div><div><b>Chief of Staff</b> · Daily Report<br><span>#reports · Tue 04 Aug, 07:00</span></div></div>
+    <div class="rrow"><div class="k">1 · MONEY IN</div><div class="v">R15,000 · STNB Holdings deposit invoice paid <i>✓ first revenue this month</i></div></div>
+    <div class="rrow"><div class="k">2 · MONEY OUT</div><div class="v">R412 total agent compute (R160 metered + R252 subscription-equivalent) · Sales R118 of 300 · Eng R204 of 400 · Marketing R90 of 200</div></div>
+    <div class="rrow"><div class="k">3 · PIPELINE</div><div class="v">+38 new leads · 5 conversations · 2 opportunities · 1 closed <em>Joburg batch reply rate 11%</em></div></div>
+    <div class="rrow"><div class="k">4 · WHAT BLOCKED REVENUE</div><div class="v">Landing page launch waits on your DNS record (5h) · Invoice #2 waits on the Stripe key</div></div>
+    <div class="rrow"><div class="k">5 · TRUST HEALTH</div><div class="v">12% of decisions reached you <i>in band</i> · You overruled 0 · Empty hops: Sales Lead 2 <em>watching</em> · Auto-answered defaults: 1 · Stalled tasks: 0</div></div>
+  </div>
+</section>
+
+<!-- ============ GAPS ============ -->
+<section id="gaps">
+  <div class="kicker">Honesty section</div>
+  <h2>What the platform still can't do, and why we build anyway</h2>
+  <p class="sub">Three real capabilities are missing today. Agents can't browse the web as you (no shared browser, no logins, no cookies, and you can't watch what they do), they can't spend money, and connecting accounts like Gmail means painful OAuth setups. <b>None of this blocks the design above.</b> The Credential and Blocker ask types are exactly the bridge: everything agents can't do alone becomes a structured, priced, receipted ask to you, instead of a plea buried in prose. The three programs below then shrink that queue over time. Each will be its own spec.</p>
+  <div class="gapcols">
+    <div class="gapcol a">
+      <div class="head">✓ Platform has today</div>
+      <ul>
+        <li>The always-on relay, signed events, channels</li>
+        <li>Initiatives and the agent roster</li>
+        <li>Interactive cards in chat, an approval event type</li>
+        <li>Per-run token/cost metrics</li>
+        <li>Push notifications, mobile app</li>
+        <li>Agent launcher that can inject secrets at startup</li>
+      </ul>
+      <div class="foot">The foundation everything above sits on.</div>
+    </div>
+    <div class="gapcol b">
+      <div class="head">◆ This design adds</div>
+      <ul>
+        <li>Ranks on the roster + relay rules enforcing them</li>
+        <li>The ask events: raise, escalate, file, answer, withdraw</li>
+        <li>Relay timers: auto-promotion, auto-answer defaults, stall alarms</li>
+        <li>The Open Issues queue, views, cards, phone answering</li>
+        <li>Encrypted credential vault, v1</li>
+        <li>Cost imputation for subscription runs</li>
+        <li>The daily report</li>
+      </ul>
+      <div class="foot">No blockers. Ships first.</div>
+    </div>
+    <div class="gapcol c">
+      <div class="head">⧗ Comes next, separate specs</div>
+      <ul>
+        <li><b>Company Browser.</b> A browser the company owns: you log into LinkedIn or Gmail in it once; agents then drive it invisibly; every agent session is recorded so you can watch what happened; you can grab the wheel live for logins, captchas, consents. (Automating LinkedIn breaks its terms of service; that stays behind your explicit approval.)</li>
+        <li><b>Payment rails.</b> First: purchases stay asks that you execute. Later: virtual cards with hard per-team limits, making budgets physics instead of policy.</li>
+        <li><b>Account connections.</b> Guided flows per service (Gmail etc.): the ask walks you through the consent screens, tokens land in the vault. One painful setup per service, once ever.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FAILURE ============ -->
+<section id="failure">
+  <div class="kicker">When things break</div>
+  <h2>Failure handling, in one pass</h2>
+  <div class="grid g3">
+    <div class="card"><h3>😴 An agent sleeps on an ask</h3><p>The relay's clock moves it up automatically. No ask strands.</p></div>
+    <div class="card"><h3>💀 An agent crashes mid-task</h3><p>Silence on a task trips a stall alarm to its leader.</p></div>
+    <div class="card"><h3>🥀 An ask stops mattering</h3><p>Mandatory withdrawal, with a note in the original thread.</p></div>
+    <div class="card"><h3>🧠 You answer in two places</h3><p>Card and thread are one mechanism; whichever you use resolves the ask.</p></div>
+    <div class="card"><h3>🔑 A secret could leak</h3><p>Secrets never enter chat; agents use them by reference; threads show receipts only.</p></div>
+    <div class="card"><h3>🕳 The queue lies once</h3><p>Then you stop trusting it and reread everything. Every rule above (dedupe, withdrawal, un-losability) exists to keep the queue complete and alive.</p></div>
+  </div>
+</section>
+
+<!-- ============ GATES ============ -->
+<section id="gates">
+  <div class="kicker">Proof</div>
+  <h2>How we'll know it actually works</h2>
+  <p class="sub">Nine tests. Green checkmarks in a test suite don't count as proof of the last one; only live operation does.</p>
+  <div class="gates">
+    <div class="gate"><span><b>Ranks hold.</b> A worker's attempt to message you is refused by the relay; its reply in a thread you started goes through; your name doesn't appear in its @-mention list.</span></div>
+    <div class="gate"><span><b>The chain runs end to end.</b> Stuck worker → leader → CoS → your card → answer lands in the origin thread → agent wakes and finishes. Every step leaves a signed record.</span></div>
+    <div class="gate"><span><b>Nothing rots.</b> A sleeping leader loses the ask upward on the clock; a sleeping CoS results in you getting it anyway; a crashed agent trips the stall alarm.</span></div>
+    <div class="gate"><span><b>Defaults fire safely.</b> An unanswered eligible decision executes its stated default at the window and logs it; a hard-list decision refuses to even carry a default.</span></div>
+    <div class="gate"><span><b>No duplicate asks.</b> Five agents stuck on one key produce exactly one ask with five tasks attached; a second identical ask is refused.</span></div>
+    <div class="gate"><span><b>Secrets stay secret.</b> A key pasted on a card reaches the vault, appears in no chat message ever, and the agent's tool receives it by reference.</span></div>
+    <div class="gate"><span><b>Trust tunes.</b> "Handle this next time" creates a scoped permission; a later matching decision happens without you, citing it, with an undo path; revoking restores the asking.</span></div>
+    <div class="gate"><span><b>Costs are visible.</b> A subscription-billed run produces a priced ledger entry; the daily report shows metered + subscription-equivalent against budgets.</span></div>
+    <div class="gate final"><span><b>The live proof.</b> One week of real company operation in which every single thing that needed you arrived through the queue, in cost order, and you discovered zero asks by reading threads.</span></div>
+  </div>
+
+  <h3 style="margin:30px 0 10px">Deliberately not in this design</h3>
+  <div class="cols2">
+    <ul class="plain">
+      <li>Agent performance dashboards (the three trust numbers only; a full surface comes later)</li>
+      <li>Company Browser, virtual cards, account connections (the three follow-up specs)</li>
+      <li>Rules for routing asks between multiple co-founders</li>
+    </ul>
+    <ul class="plain">
+      <li>Four-rank hierarchies, or leaders managing leaders</li>
+      <li>Clients or outside humans in the queue</li>
+      <li>Any change to the Inbox; conversation stays where it is</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  Colony · How Your AI Company Asks For Your Attention · 2026-08-04 · technical companion: <span style="font-family:var(--mono)">2026-08-04-colony-interrupt-hierarchy-design.md</span>
+</footer>
+
+</div>
+</body>
+</html>

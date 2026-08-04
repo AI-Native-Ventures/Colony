@@ -48,6 +48,29 @@ test("an unknown peer degrades to a truncated key, never the full one", () => {
   );
 });
 
+test("a pubkey handed in as a participant name is not treated as a name", () => {
+  // The Tauri channel decoder filled `participants` with raw pubkeys, and
+  // resolveUserLabel returns a non-empty fallback before consulting profiles,
+  // so the label was the full 64-character key.
+  const channel = {
+    channelType: "dm",
+    name: "dm",
+    participantPubkeys: [ME, PEER],
+    participants: [ME, PEER],
+  };
+  assert.equal(
+    resolveChannelDisplayLabel(channel, ME, PROFILES),
+    "Chief of Staff",
+  );
+
+  const unknown = resolveChannelDisplayLabel(channel, ME, {});
+  assert.notEqual(unknown, PEER, "a 64-character key is not a name");
+  assert.ok(
+    unknown.length < PEER.length,
+    `expected truncation, got ${unknown}`,
+  );
+});
+
 test("an npub-named DM resolves the same way", () => {
   const npub = `npub1${"q".repeat(58)}`;
   assert.equal(
