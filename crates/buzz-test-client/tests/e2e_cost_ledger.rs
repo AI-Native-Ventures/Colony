@@ -46,7 +46,7 @@ use buzz_core::ledger::attribution::{
 use buzz_core::ledger::engine::{
     compute_ledger, AttributionMethod, LedgerException, StoredUsageRecord,
 };
-use buzz_core::ledger::prices::{PriceBook, PriceEntry, PriceRates};
+use buzz_core::ledger::prices::{PriceBook, PriceEntry, PriceOrigin, PriceRates};
 use buzz_core::usage_record::{
     decrypt_usage_record, encrypt_usage_record, PaymentMode, UsageBreakdown, UsageRecordPayload,
     UsageSource,
@@ -350,6 +350,7 @@ async fn a_non_owner_cannot_change_what_spending_cost() {
         effective_from: 1_000,
         rates: rates(1_000_000, 1_000_000),
         note: Some("should never land".to_string()),
+        origin: PriceOrigin::Owner,
     });
     let action = action(&relay, payload, None);
 
@@ -387,6 +388,7 @@ async fn price_entries_append_and_never_rewrite_history() {
         effective_from: 1_000,
         rates: rates(5_000, 15_000),
         note: Some("launch price".to_string()),
+        origin: PriceOrigin::Owner,
     });
     let (outcome, head_id, message) = broker(
         &mut client,
@@ -406,6 +408,7 @@ async fn price_entries_append_and_never_rewrite_history() {
         effective_from: 2_000,
         rates: rates(1_000, 3_000),
         note: Some("80% cut".to_string()),
+        origin: PriceOrigin::Owner,
     });
     let (outcome, _, message) = broker(
         &mut client,
@@ -469,6 +472,7 @@ async fn an_append_prepared_against_a_stale_book_is_refused() {
             effective_from: 1_000,
             rates: rates(1_000, 1_000),
             note: Some(note.to_string()),
+            origin: PriceOrigin::Owner,
         })
     };
 
@@ -623,6 +627,7 @@ async fn an_unpriced_model_is_flagged_then_priced_without_republishing() {
         effective_from: 0,
         rates: rates(1_000, 5_000),
         note: None,
+        origin: PriceOrigin::Owner,
     });
     let (outcome, _, message) = broker(
         &mut client,
@@ -688,6 +693,7 @@ async fn a_correction_moves_a_record_without_erasing_what_it_said() {
             effective_from: 0,
             rates: rates(1_000, 0),
             note: None,
+            origin: PriceOrigin::Owner,
         }],
     };
 
@@ -847,6 +853,7 @@ async fn a_rule_attributes_a_record_that_named_no_work() {
             effective_from: 0,
             rates: rates(1_000, 0),
             note: None,
+            origin: PriceOrigin::Owner,
         }],
     };
     let mine: Vec<StoredUsageRecord> = stored_records(&mut client, &owner)
