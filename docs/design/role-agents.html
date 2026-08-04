@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Role Agents: one agent, every member, any device</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1d21; --muted: #5c6470; --line: #e3e6ea;
+    --accent: #6d5ef0; --accent-soft: #efedfd; --warn: #b45309; --warn-soft: #fef3e2;
+    --ok: #047857; --ok-soft: #e6f6f0; --code-bg: #f4f5f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --fg: #e8eaed; --muted: #9aa2ad; --line: #2c3038;
+      --accent: #a49bf7; --accent-soft: #262346; --warn: #f59e0b; --warn-soft: #3a2d14;
+      --ok: #34d399; --ok-soft: #123527; --code-bg: #22252c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); margin: 0 0 32px; }
+  h2 { font-size: 1.25rem; margin: 44px 0 12px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.02rem; margin: 24px 0 8px; }
+  p, li { color: var(--fg); }
+  .muted { color: var(--muted); }
+  code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; font-size: .88em; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: .93rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: .78rem; font-weight: 600; }
+  .pill.chosen { background: var(--ok-soft); color: var(--ok); }
+  .pill.rejected { background: var(--warn-soft); color: var(--warn); }
+  .pill.later { background: var(--accent-soft); color: var(--accent); }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin: 14px 0; }
+  .card.accent { border-left: 4px solid var(--accent); }
+  .card.warn { border-left: 4px solid var(--warn); }
+  .rule { font-weight: 650; }
+  figure { margin: 22px 0; }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: 6px; }
+  .scroll { overflow-x: auto; }
+  svg text { font: 13px -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--fg); }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg .box { fill: none; stroke: var(--line); stroke-width: 1.5; rx: 8; }
+  svg .role { fill: var(--accent-soft); stroke: var(--accent); }
+  svg .flow { stroke: var(--accent); stroke-width: 1.6; fill: none; marker-end: url(#arr); }
+  svg .dim { stroke: var(--line); stroke-width: 1.4; fill: none; stroke-dasharray: 4 4; }
+  ol.phases li { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Role Agents</h1>
+<p class="subtitle">One agent identity per workspace role, runnable on any member's device, with attribution intact. Design agreed 2026-08-04.</p>
+
+<h2>Problem</h2>
+<p>Today each install mints its own agents: keys in the local keychain, processes on the local machine, billed to that machine's subscription. When a second member joins a community, their app provisions its own starter team, so the workspace ends up with two Chiefs of Staff that share nothing: separate identities, separate memory, separate DM threads. For a company workspace this is wrong. "Chief of Staff" should be one colleague everyone talks to.</p>
+<p>This is upstream Buzz working as designed: Buzz binds every agent to exactly one human owner (NIP-OA auth tag), because attribution is its core promise: who instructed the agent, and whose agent did the work. Colony diverges deliberately, and the design below keeps both attribution guarantees while merging the entity.</p>
+
+<h2>Options considered</h2>
+<div class="scroll">
+<table>
+  <tr><th>Model</th><th>Entity</th><th>Compute and billing</th><th>Verdict</th></tr>
+  <tr>
+    <td>Per-owner fleets (upstream Buzz)</td>
+    <td>N clones per workspace</td><td>Each owner's machine and subscription</td>
+    <td><span class="pill rejected">Rejected</span> duplicate colleagues, split memory</td>
+  </tr>
+  <tr>
+    <td>Owner-hosted, shared access (open <code>respond_to</code>)</td>
+    <td>One, owned by one member</td><td>Host member pays for everyone</td>
+    <td><span class="pill rejected">Stopgap only</span> host must be online, host pays all tokens</td>
+  </tr>
+  <tr>
+    <td><strong>Role agent, requester executes</strong></td>
+    <td>One shared identity</td><td>Requester's device and subscription</td>
+    <td><span class="pill chosen">Chosen</span></td>
+  </tr>
+  <tr>
+    <td>Cloud-hosted workspace agents</td>
+    <td>One, hosted off-device</td><td>Workspace-billed infrastructure</td>
+    <td><span class="pill later">Later</span> consistency-perfect, but needs a runtime we do not have yet</td>
+  </tr>
+</table>
+</div>
+
+<h2>The model</h2>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 820 300" width="820" height="300" role="img" aria-label="Two member devices each running the same role agent identity, talking to one relay">
+  <defs><marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L8,4.5 L0,9" fill="none" stroke="var(--accent)" stroke-width="1.4"/></marker></defs>
+  <rect class="box" x="20" y="40" width="250" height="200" rx="10"/>
+  <text x="36" y="66">Basheer's Mac</text>
+  <rect class="box role" x="36" y="84" width="218" height="60" rx="8"/>
+  <text x="52" y="110">Chief of Staff</text>
+  <text class="small" x="52" y="128">same key, responds to Basheer only</text>
+  <text class="small" x="36" y="172">runs on Basheer's subscription</text>
+  <rect class="box" x="550" y="40" width="250" height="200" rx="10"/>
+  <text x="566" y="66">Co-founder's Mac</text>
+  <rect class="box role" x="566" y="84" width="218" height="60" rx="8"/>
+  <text x="582" y="110">Chief of Staff</text>
+  <text class="small" x="582" y="128">same key, responds to co-founder only</text>
+  <text class="small" x="566" y="172">runs on co-founder's subscription</text>
+  <rect class="box" x="330" y="90" width="160" height="120" rx="10"/>
+  <text x="358" y="118">Relay</text>
+  <text class="small" x="346" y="140">one member entry</text>
+  <text class="small" x="346" y="158">one DM thread</text>
+  <text class="small" x="346" y="176">shared chat memory</text>
+  <path class="flow" d="M270 120 L330 130"/>
+  <path class="flow" d="M550 120 L490 130"/>
+  <path class="dim" d="M270 200 C 400 265, 420 265, 550 200"/>
+  <text class="small" x="332" y="262">identity key synced between devices (NIP-AB pairing)</text>
+</svg>
+</div>
+<figcaption>One role identity, two harnesses. A message wakes only its author's device, so there is no election and no double reply.</figcaption>
+</figure>
+
+<div class="card accent">
+<p class="rule">Rule 1: the requester's device executes.</p>
+<p>Every member's machine runs the role agent with the shared key, filtered to respond only to that machine's own user. Your message wakes your copy; your co-founder's wakes theirs. No leader election, no duplicate replies, and the asker is by definition online, so the agent never looks dead because someone closed a laptop.</p>
+</div>
+
+<div class="card accent">
+<p class="rule">Rule 2: attribution moves from ownership to operation.</p>
+<p>Who instructed the agent is already provable: prompts are signed human messages. Who did the work becomes an <code>operator</code> tag on every agent event, naming the member whose device executed that turn. The relay admits the role key on the strength of member-level auth (multiple owner tags or a team-level tag) instead of a single owner's NIP-OA tag. Both of Buzz's attribution promises survive; the entity merges.</p>
+</div>
+
+<div class="card accent">
+<p class="rule">Rule 3: work products live on the relay, not the laptop.</p>
+<p>Chat memory is already shared through the relay. Work memory is not: a file drafted on one machine is invisible to the other, and "continue where you left off" breaks exactly when continuity matters. Workspace agents therefore write to relay-hosted git and Blocks; local disk is scratch space. This is also simply good collaboration hygiene for the humans.</p>
+</div>
+
+<div class="card warn">
+<p class="rule">Rule 4: privileged agents stay pinned.</p>
+<p>An agent holding deploy keys or production credentials keeps the shared identity but executes on exactly one designated host. "Runs anywhere" is for thinking work, not for credentials. And personal agents remain a legitimate separate category: per-user, private, clearly labeled, never auto-shared by joining a workspace.</p>
+</div>
+
+<h2>Billing</h2>
+<p>Requester-pays falls out of Rule 1 for free: each turn runs on the asking member's device with that member's LLM credentials. The cost ledger records spend per operator, so the workspace sees who spent what through one agent, rather than every member funding a private clone.</p>
+
+<h2>What has to be built</h2>
+<div class="scroll">
+<table>
+  <tr><th>Piece</th><th>What it is</th><th>Builds on</th></tr>
+  <tr><td>Join-flow dedup</td><td>Joining a community that already has role agents must not mint a duplicate starter team</td><td>Welcome/team provisioning flow</td></tr>
+  <tr><td>Role key sync</td><td>Distribute a role agent's key to authorized member devices</td><td>NIP-AB device pairing, already used for human identity</td></tr>
+  <tr><td>Requester filter</td><td>Harness responds only to messages authored by its device's user</td><td>Existing mention filter and owner resolution in buzz-acp</td></tr>
+  <tr><td>Operator tag</td><td>Agent events carry which member's device executed the turn</td><td>Event builders in buzz-sdk; relay verification</td></tr>
+  <tr><td>Member-level admission</td><td>Relay accepts the role key backed by any authorized member, not one owner</td><td>NIP-OA verification in the relay</td></tr>
+  <tr><td>Key rotation on member exit</td><td>A departing member holds the role key; removal must rotate it and re-sync remaining devices</td><td>Role key sync</td></tr>
+</table>
+</div>
+
+<h2>Rollout</h2>
+<ol class="phases">
+  <li><strong>Stopgap, config only:</strong> open <code>respond_to</code> on the existing fleet plus join-flow dedup. One fleet, owner-hosted. Kills the duplicate-colleague problem this week at the cost of host-online and host-pays.</li>
+  <li><strong>Role identity:</strong> key sync, requester-executes filter, operator tags, member-level admission. The full model above.</li>
+  <li><strong>Relay-resident work:</strong> agents route work products through relay git and Blocks so continuity holds across devices.</li>
+  <li><strong>Optional, later:</strong> cloud-hosted execution for roles that want perfect consistency and workspace billing. The identity and attribution layers from phase 2 carry over unchanged; only the execution host moves.</li>
+</ol>
+
+<h2>Risks and open questions</h2>
+<ul>
+  <li><strong>Key distribution is the crown jewel.</strong> A role key on N devices is N chances to leak it. Pairing must be explicit, per-device, revocable, and rotation on member removal is not optional.</li>
+  <li><strong>Environment divergence.</strong> The same agent with different tools installed behaves differently per device. Phase 3 narrows this; role manifests (declared tool expectations) could narrow it further.</li>
+  <li><strong>Presence flapping.</strong> Two harnesses setting presence for one identity need a shared-presence convention (online if any device is online).</li>
+  <li><strong>Buzz upstream drift.</strong> This is a protocol extension in our fork. Upstream merges touching NIP-OA or the harness owner logic will need care.</li>
+</ul>
+
+<p class="muted" style="margin-top:40px">Colony · docs/design/role-agents.html · supersedes the per-owner starter-team behavior for workspace agents.</p>
+
+</main>
+</body>
+</html>
