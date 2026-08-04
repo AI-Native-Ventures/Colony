@@ -180,6 +180,72 @@ pub fn shipped_catalog() -> Result<Vec<PriceEntry>, CatalogError> {
     parse_catalog(CATALOG_JSON)
 }
 
+/// Parse a catalog document that did not ship with this build.
+///
+/// Same schema, same validation. Used for the signed remote price feed, so a
+/// vendor's price change reaches a running relay without a deploy.
+pub fn parse_catalog_document(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
+    parse_catalog(json)
+}
+
+/// One coordinate carrying two different prices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogConflict {
+    /// Model both sources priced.
+    pub model: String,
+    /// Instant they priced differently.
+    pub effective_from: u64,
+}
+
+/// Combine the shipped catalog with a remote feed, remote winning.
+///
+/// The shipped file is a frozen snapshot and an offline floor; the feed is
+/// the maintained source. So where both describe the same `(model,
+/// effective date)` the feed's rates are the ones kept.
+///
+/// Disagreement at a coordinate means one of the two is wrong about a price
+/// that has already been in force, which is worth saying out loud rather
+/// than resolving in silence; the returned conflicts are for the caller to
+/// log. Identical rates are not a conflict; the feed is expected to be a
+/// superset of the file.
+///
+/// Note this only decides what the *catalog* says. Whether it reaches a book
+/// is still [`missing_from`]'s call, and a coordinate already seeded from the
+/// shipped file is never restated, because an append-only book does not rewrite
+/// spend it has already reported.
+pub fn merge_catalogs(
+    shipped: Vec<PriceEntry>,
+    remote: Vec<PriceEntry>,
+) -> (Vec<PriceEntry>, Vec<CatalogConflict>) {
+    let mut conflicts = Vec::new();
+    let mut merged: Vec<PriceEntry> = Vec::with_capacity(shipped.len() + remote.len());
+    let mut index: std::collections::BTreeMap<(String, u64), usize> =
+        std::collections::BTreeMap::new();
+
+    for entry in shipped {
+        index.insert((entry.model.clone(), entry.effective_from), merged.len());
+        merged.push(entry);
+    }
+    for entry in remote {
+        match index.get(&(entry.model.clone(), entry.effective_from)) {
+            Some(&position) => {
+                if merged[position].rates != entry.rates {
+                    conflicts.push(CatalogConflict {
+                        model: entry.model.clone(),
+                        effective_from: entry.effective_from,
+                    });
+                }
+                merged[position] = entry;
+            }
+            None => {
+                index.insert((entry.model.clone(), entry.effective_from), merged.len());
+                merged.push(entry);
+            }
+        }
+    }
+    (merged, conflicts)
+}
+
 /// The catalog entries missing from `existing`.
 ///
 /// Idempotent by `(model, effective_from)`: re-applying the catalog adds
@@ -351,5 +417,81 @@ mod tests {
                 .map(|r| r.input_nanousd_per_token),
             Some(42)
         );
+    }
+
+    fn catalog_entry(model: &str, effective_from: u64, input: u64) -> PriceEntry {
+        let mut entry = owner_entry(model, effective_from, input);
+        entry.origin = PriceOrigin::Catalog;
+        entry
+    }
+
+    /// A feed carrying a model the shipped file never heard of is the point
+    /// of the feed: a model released after this build still gets priced.
+    #[test]
+    fn a_model_only_the_feed_knows_about_is_added() {
+        let (merged, conflicts) = merge_catalogs(
+            vec![catalog_entry("shipped", 1_000, 1)],
+            vec![catalog_entry("brand-new", 2_000, 5)],
+        );
+        assert_eq!(merged.len(), 2);
+        assert!(conflicts.is_empty());
+        assert!(merged.iter().any(|entry| entry.model == "brand-new"));
+    }
+
+    /// The feed is expected to restate what the file already says. That is
+    /// not a conflict and must not be reported as one, or every refresh
+    /// would log noise that hides a real disagreement.
+    #[test]
+    fn a_feed_restating_a_shipped_price_is_not_a_conflict() {
+        let (merged, conflicts) = merge_catalogs(
+            vec![catalog_entry("m", 1_000, 7)],
+            vec![catalog_entry("m", 1_000, 7)],
+        );
+        assert_eq!(merged.len(), 1);
+        assert!(conflicts.is_empty());
+    }
+
+    /// Two different prices for one instant means one source is wrong about
+    /// money already spent. The feed wins, and the caller is told.
+    #[test]
+    fn a_disagreement_at_one_coordinate_is_reported_and_the_feed_wins() {
+        let (merged, conflicts) = merge_catalogs(
+            vec![catalog_entry("m", 1_000, 7)],
+            vec![catalog_entry("m", 1_000, 9)],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].rates.input_nanousd_per_token, 9);
+        assert_eq!(
+            conflicts,
+            vec![CatalogConflict {
+                model: "m".to_owned(),
+                effective_from: 1_000,
+            }]
+        );
+    }
+
+    /// Merging must not reorder or drop the shipped entries, since a relay
+    /// with an unreachable feed falls back to exactly this list.
+    #[test]
+    fn merging_an_empty_feed_leaves_the_shipped_catalog_untouched() {
+        let shipped = shipped_catalog().unwrap();
+        let (merged, conflicts) = merge_catalogs(shipped.clone(), Vec::new());
+        assert_eq!(merged, shipped);
+        assert!(conflicts.is_empty());
+    }
+
+    /// The remote document is held to the same validation as the shipped
+    /// one; a signed feed is not a reason to trust its arithmetic.
+    #[test]
+    fn a_remote_document_is_validated_like_the_shipped_one() {
+        let json = r#"{"version":1,"entries":[{"model":"m","effectiveFrom":"2026-01-01T00:00:00Z",
+            "inputPerMtok":"3","cacheReadPerMtok":"0.30","cacheWrite5mPerMtok":"3.75",
+            "cacheWrite1hPerMtok":"6","outputPerMtok":"15"}]}"#;
+        let entries = parse_catalog_document(json).unwrap();
+        assert_eq!(entries[0].rates.input_nanousd_per_token, 3_000);
+        assert_eq!(entries[0].origin, PriceOrigin::Catalog);
+
+        assert!(parse_catalog_document(r#"{"version":2,"entries":[]}"#).is_err());
+        assert!(parse_catalog_document("not json").is_err());
     }
 }

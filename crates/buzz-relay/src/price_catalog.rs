@@ -18,10 +18,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use buzz_core::kind::KIND_PRICE_BOOK;
-use buzz_core::ledger::catalog::{missing_from, shipped_catalog};
-use buzz_core::ledger::prices::PriceBook;
-#[cfg(test)]
-use buzz_core::ledger::prices::PriceEntry;
+use buzz_core::ledger::catalog::missing_from;
+use buzz_core::ledger::prices::{PriceBook, PriceEntry};
 use buzz_core::CommunityId;
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 use tracing::{info, warn};
@@ -31,7 +29,12 @@ use crate::state::AppState;
 /// `d` tag of the singleton price book.
 const PRICE_BOOK_D_TAG: &str = "pricebook";
 
-/// Apply the shipped catalog to one community's price book.
+/// Apply the catalog in force to one community's price book.
+///
+/// "In force" is the shipped file plus the most recent accepted price feed,
+/// so a community provisioned between relay deploys is priced from the same
+/// catalog as one seeded at startup rather than from a snapshot of whenever
+/// this build was cut.
 ///
 /// Returns how many entries were appended, which is zero on every run after
 /// the first unless the catalog itself grew.
@@ -39,8 +42,21 @@ pub async fn ensure_catalog_prices(
     state: &AppState,
     community: CommunityId,
 ) -> anyhow::Result<usize> {
-    let catalog = shipped_catalog().context("bundled price catalog is invalid")?;
+    let catalog = crate::price_feed::effective_catalog()?;
+    apply_catalog(state, community, &catalog).await
+}
 
+/// Apply a caller-supplied catalog to one community's price book.
+///
+/// The catalog passed here is the shipped file merged with the signed remote
+/// feed when one is configured (see [`crate::price_feed`]). Everything below
+/// this point is identical either way: a feed is a source of catalog rows,
+/// not a second code path with its own rules about what may overwrite what.
+pub async fn apply_catalog(
+    state: &AppState,
+    community: CommunityId,
+    catalog: &[PriceEntry],
+) -> anyhow::Result<usize> {
     let head = load_price_head(state, community)
         .await
         .context("failed to read the price book head")?;
@@ -50,7 +66,7 @@ pub async fn ensure_catalog_prices(
             .context("stored price book is unreadable; refusing to overwrite it")?,
     };
 
-    let additions = missing_from(&catalog, &book.entries);
+    let additions = missing_from(catalog, &book.entries);
     if additions.is_empty() {
         return Ok(0);
     }
@@ -71,6 +87,18 @@ pub async fn ensure_catalog_prices(
 /// Every community is attempted even if one fails, and the error names each
 /// failure, so a single unreadable book cannot leave the rest unpriced.
 pub async fn ensure_catalog_prices_for_all_communities(state: &AppState) -> anyhow::Result<usize> {
+    let catalog = crate::price_feed::effective_catalog()?;
+    apply_catalog_to_all_communities(state, &catalog).await
+}
+
+/// Apply a caller-supplied catalog to every active community.
+///
+/// Every community is attempted even if one fails, and the error names each
+/// failure, so a single unreadable book cannot leave the rest unpriced.
+pub async fn apply_catalog_to_all_communities(
+    state: &AppState,
+    catalog: &[PriceEntry],
+) -> anyhow::Result<usize> {
     let communities = state
         .db
         .list_active_communities()
@@ -80,7 +108,7 @@ pub async fn ensure_catalog_prices_for_all_communities(state: &AppState) -> anyh
     let mut failures = Vec::new();
 
     for community in communities {
-        match ensure_catalog_prices(state, community.id).await {
+        match apply_catalog(state, community.id, catalog).await {
             Ok(count) => appended += count,
             Err(error) => {
                 warn!(
@@ -191,12 +219,16 @@ fn build_price_head(
 /// Entries the catalog would add to `existing`. Exposed for tests.
 #[cfg(test)]
 pub(crate) fn catalog_additions(existing: &[PriceEntry]) -> Vec<PriceEntry> {
-    missing_from(&shipped_catalog().expect("catalog"), existing)
+    missing_from(
+        &buzz_core::ledger::catalog::shipped_catalog().expect("catalog"),
+        existing,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use buzz_core::ledger::catalog::shipped_catalog;
     use buzz_core::ledger::prices::{PriceOrigin, PriceRates};
 
     fn owner_row(model: &str, effective_from: u64) -> PriceEntry {

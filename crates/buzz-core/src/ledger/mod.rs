@@ -11,6 +11,7 @@ pub mod attribution;
 pub mod catalog;
 pub mod crosscheck;
 pub mod engine;
+pub mod feed;
 pub mod prices;
 pub mod reconcile;
 
@@ -24,5 +25,6 @@ pub use engine::{
     compute_ledger, AttributionMethod, BudgetStatus, ClassTotals, DailySum, LedgerEntry,
     LedgerException, LedgerReport, MissingSide, StoredUsageRecord,
 };
+pub use feed::{sign_feed_document, verify_feed_document, FeedError};
 pub use prices::{PriceBook, PriceEntry, PriceRates};
 pub use reconcile::{diagnose, reconcile, ProviderDailyCost};
