@@ -616,26 +616,24 @@ pub const KIND_AGENT_TURN_METRIC: u32 = 44200;
 pub const KIND_USAGE_RECORD: u32 = 44210;
 
 // Colony interrupt protocol (44300–44303)
-/// Colony interrupt Ask (stored, non-replaceable, owner-authored).
+/// Colony interrupt Ask (stored, non-replaceable, agent-signed or relay-signed).
 /// An escalation event requesting human judgment on a decision, question, credential,
-/// blocker, or stall (kind:40002 agent shutdown context). Tags: `ask-type`, `ask-category`,
-/// `agent` (escalating agent pubkey), optional `ask-default`, optional `ask-timeout`.
+/// blocker, or stall. Tags: `ask-type`, `ask-category`, `agent` (escalating agent pubkey),
+/// optional `ask-default`, optional `ask-timeout`.
 pub const KIND_ASK: u32 = 44300;
 
-/// Colony interrupt Ask resolution (stored, non-replaceable, owner-authored).
+/// Colony interrupt Ask resolution (stored, non-replaceable, audience-signed or relay-signed).
 /// An Answer to a pending Ask event (tag `e` references the Ask). Ends the Ask lifecycle
-/// and closes the owner thread without further relay processing.
+/// without further relay processing.
 pub const KIND_ASK_RESOLUTION: u32 = 44301;
 
-/// Colony interrupt Ask withdrawal (stored, non-replaceable, agent-authored).
+/// Colony interrupt Ask withdrawal (stored, non-replaceable, executive-signed).
 /// An agent-initiated cancellation of a pending Ask event (tag `e` references the Ask).
-/// The owner may still Answer afterward, but the relay stops escalation and promotes
-/// unhandled descendants forward.
 pub const KIND_ASK_WITHDRAWAL: u32 = 44302;
 
-/// Colony interrupt decision log (stored, non-replaceable, relay-authored sidecar).
-/// Relay-signed log of every decision and its resolution: who asked, what kind,
-/// how it resolved, and the chain of delegation. Enables auditing and policy tuning.
+/// Colony interrupt decision log (stored, non-replaceable, leader/executive-signed).
+/// Record of a decision made autonomously under a delegation grant: the ask filed,
+/// the decision made, and the undo path. Enables auditing and policy tuning.
 pub const KIND_DECISION_LOG: u32 = 44303;
 
 // Forum / social (45000–45999)
