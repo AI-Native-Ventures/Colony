@@ -108,6 +108,12 @@ type TimelineMessageListProps = {
   threadUnreadCounts?: ReadonlyMap<string, number>;
   /** Content rendered as the first virtual row before channel history. */
   leadingContent?: React.ReactNode;
+  /** Hide date boundaries for a huddle's live transcript. */
+  hideDayDividers?: boolean;
+  /** Show speaker identity on every row instead of grouping consecutive messages. */
+  alwaysShowMessageIdentity?: boolean;
+  /** Hide agent access-policy badges in the purpose-built Huddle chat. */
+  hideAgentAccessBadges?: boolean;
   /**
    * True when the loaded window provably starts at the channel's beginning.
    * Proves the oldest loaded day's boundary so its divider may render.
@@ -157,6 +163,9 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   unfollowThreadById,
   leadingContent,
   historyExhausted = false,
+  hideDayDividers = false,
+  alwaysShowMessageIdentity = false,
+  hideAgentAccessBadges = false,
   useVirtualizer = false,
   onStartReached,
   onAtBottomStateChange,
@@ -267,8 +276,15 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               highlightedMessageId={highlightedMessageId}
               huddleMemberPubkeys={huddleMemberPubkeys}
               huddleMemberPubkeysPending={huddleMemberPubkeysPending}
-              isContinuation={item.isContinuation}
-              isFollowedByContinuation={item.isFollowedByContinuation}
+              hideAgentAccessBadges={hideAgentAccessBadges}
+              isContinuation={
+                alwaysShowMessageIdentity ? false : item.isContinuation
+              }
+              isFollowedByContinuation={
+                alwaysShowMessageIdentity
+                  ? false
+                  : item.isFollowedByContinuation
+              }
               isFollowingThreadById={isFollowingThreadById}
               isUnread={isMessageUnreadById?.(item.entry.message.id)}
               playEntrance={item.entry.message.id === entranceMessageId}
@@ -294,11 +310,13 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     },
     [
       channelId,
+      alwaysShowMessageIdentity,
       currentPubkey,
       followThreadById,
       highlightedMessageId,
       huddleMemberPubkeys,
       huddleMemberPubkeysPending,
+      hideAgentAccessBadges,
       isFollowingThreadById,
       isMessageUnreadById,
       entranceMessageId,
@@ -326,6 +344,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       <VirtualizedTimelineRows
         dayGroups={dayGroups}
         historyExhausted={historyExhausted}
+        hideDayDividers={hideDayDividers}
         leadingContent={leadingContent}
         onAtBottomStateChange={onAtBottomStateChange}
         onStartReached={onStartReached}
@@ -343,7 +362,8 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
         <section
           className={cn(
             "relative flex flex-col",
-            group.headingTimestamp !== null &&
+            !hideDayDividers &&
+              group.headingTimestamp !== null &&
               "before:absolute before:inset-x-0 before:top-4 before:h-px before:bg-border/35 before:content-['']",
           )}
           data-day-label={
@@ -354,7 +374,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           data-testid="message-timeline-day-group"
           key={group.key}
         >
-          {group.headingTimestamp === null ? null : (
+          {hideDayDividers || group.headingTimestamp === null ? null : (
             <DayDivider label={formatDayHeading(group.headingTimestamp)} />
           )}
           {group.items.map((item) => (
@@ -377,6 +397,7 @@ function timelineItemMessageId(item: TimelineNonDayItem): string | null {
 type VirtualizedTimelineRowsProps = {
   dayGroups: TimelineDayGroup[];
   historyExhausted: boolean;
+  hideDayDividers: boolean;
   leadingContent?: React.ReactNode;
   onAtBottomStateChange?: (atBottom: boolean) => void;
   onStartReached?: () => boolean;
@@ -416,6 +437,7 @@ function VirtualizedTimelineItemShell({
 function VirtualizedTimelineRows({
   dayGroups,
   historyExhausted,
+  hideDayDividers,
   leadingContent,
   onAtBottomStateChange,
   onStartReached,
@@ -449,8 +471,14 @@ function VirtualizedTimelineRows({
     [],
   );
   const items = React.useMemo(
-    () => buildVirtualizedItems(dayGroups, leadingContent, historyExhausted),
-    [dayGroups, historyExhausted, leadingContent],
+    () =>
+      buildVirtualizedItems(
+        dayGroups,
+        leadingContent,
+        historyExhausted,
+        !hideDayDividers,
+      ),
+    [dayGroups, hideDayDividers, historyExhausted, leadingContent],
   );
   const keys = React.useMemo(() => items.map(virtualizedItemKey), [items]);
   itemsLengthRef.current = items.length;
@@ -716,6 +744,7 @@ type MessageRowItemProps = Pick<
   | "highlightedMessageId"
   | "huddleMemberPubkeys"
   | "huddleMemberPubkeysPending"
+  | "hideAgentAccessBadges"
   | "isFollowingThreadById"
   | "onDelete"
   | "onEdit"
@@ -749,6 +778,7 @@ function MessageRowItem({
   highlightedMessageId,
   huddleMemberPubkeys,
   huddleMemberPubkeysPending,
+  hideAgentAccessBadges,
   isContinuation = false,
   isFollowedByContinuation = false,
   isFollowingThreadById,
@@ -794,6 +824,7 @@ function MessageRowItem({
           hoverBackground={false}
           huddleMemberPubkeys={huddleMemberPubkeys}
           huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+          hideAgentAccessBadge={hideAgentAccessBadges}
           isFollowingThread={
             isFollowingThreadById
               ? isFollowingThreadById(message.id)
@@ -851,6 +882,7 @@ function MessageRowItem({
         highlighted={message.id === highlightedMessageId || isSearchActive}
         huddleMemberPubkeys={huddleMemberPubkeys}
         huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+        hideAgentAccessBadge={hideAgentAccessBadges}
         isContinuation={isContinuation}
         isUnread={isUnread}
         playEntrance={playEntrance}
