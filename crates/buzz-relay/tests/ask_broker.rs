@@ -15,7 +15,7 @@ use buzz_relay::ask_broker::{handle_ask_event, is_ask_candidate, AskBrokerOutcom
 use buzz_relay::handlers::ingest::{ingest_event, IngestAuth};
 use buzz_relay::state::AppState;
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
 
 const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1 -- local test-only credentials
@@ -1824,4 +1824,382 @@ async fn relay_signed_withdrawal_bypasses_the_tier_check() {
         .await
         .expect("no internal error");
     assert_applied(outcome, "relay-signed withdrawal");
+}
+
+// ---------------------------------------------------------------------
+// Rule 7: owner thread-reply auto-resolution (Task 6, spec: "You can still
+// just answer in the thread")
+// ---------------------------------------------------------------------
+
+/// Files an executive -> owner ask with `root` as its origin thread,
+/// asserts it was applied, and returns the signed ask event. See
+/// `file_leader_ask_to_executive` for why this also stores the raw ask
+/// event itself.
+async fn file_executive_ask_to_owner(
+    harness: &Harness<'_>,
+    executive: &Keys,
+    owner: &Keys,
+    root: &Event,
+    ask_type: &str,
+    need: &str,
+    headline: &str,
+) -> Event {
+    let mut tags = ask_tags(ask_type, &owner.public_key(), "init-1", need);
+    tags.push(tag(&["e", &root.id.to_hex()]));
+    let event = sign_ask(executive, tags, &ask_content(headline, None));
+    let outcome = handle_ask_event(harness.tenant, harness.state, &event)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "executive -> owner ask");
+    let (_, inserted) = harness
+        .db
+        .insert_event(harness.tenant.community(), &event, None)
+        .await
+        .expect("store ask event");
+    assert!(inserted);
+    event
+}
+
+/// A plain kind:9 message from `author`, first-level-replying to `root`
+/// (NIP-10 `reply` marker pointing straight at the root, matching how
+/// `desktop/src/features/messages/lib/threading.ts` tags a direct reply to
+/// a thread's first message) -- no Ask card involved.
+fn sign_thread_reply(author: &Keys, channel_id: Uuid, root: &Event, content: &str) -> Event {
+    EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), content)
+        .tags(vec![
+            tag(&["h", &channel_id.to_string()]),
+            tag(&["e", &root.id.to_hex(), "", "reply"]),
+        ])
+        .sign_with_keys(author)
+        .expect("sign thread reply")
+}
+
+/// Drives `event` through the real `ingest_event` pipeline as `author`,
+/// asserts it was accepted, and returns it -- this section's tests need the
+/// real pipeline (not a direct broker call) since auto-resolution is wired
+/// into `ingest_event_inner` as a post-storage hook, not into
+/// `handle_ask_event`.
+async fn ingest_reply(
+    state: &Arc<AppState>,
+    tenant: &TenantContext,
+    author: &Keys,
+    event: Event,
+) -> Event {
+    let auth = IngestAuth::Nip42 {
+        pubkey: author.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+    let result = ingest_event(state, tenant, event.clone(), auth)
+        .await
+        .unwrap_or_else(|error| panic!("thread reply must be accepted: {error:?}"));
+    assert!(
+        result.accepted,
+        "thread reply must be accepted: {}",
+        result.message
+    );
+    event
+}
+
+/// Raw `asks` row fields not exposed by any `Db` read (the public API only
+/// returns open asks) -- read directly, the same way `buzz-db`'s own
+/// `asks::tests::fetch_any_ask` does for its module-internal tests.
+struct RawAskRow {
+    status: String,
+    resolution_event: Option<Vec<u8>>,
+    resolved_by: Option<Vec<u8>>,
+    default_executed: bool,
+}
+
+async fn fetch_ask_row(pool: &PgPool, community: CommunityId, ask_event_id: &[u8]) -> RawAskRow {
+    let row = sqlx::query(
+        "SELECT status, resolution_event, resolved_by, default_executed FROM asks \
+         WHERE community_id = $1 AND ask_event_id = $2",
+    )
+    .bind(community.as_uuid())
+    .bind(ask_event_id)
+    .fetch_one(pool)
+    .await
+    .expect("ask row must exist");
+    RawAskRow {
+        status: row.get("status"),
+        resolution_event: row.get("resolution_event"),
+        resolved_by: row.get("resolved_by"),
+        default_executed: row.get("default_executed"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn owner_thread_reply_auto_resolves_the_open_ask() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let root = store_root(
+        &db,
+        community,
+        channel_id,
+        &executive,
+        "need budget sign-off",
+    )
+    .await;
+    let harness = Harness {
+        db: &db,
+        tenant: &tenant,
+        state: &state,
+    };
+    let ask_event = file_executive_ask_to_owner(
+        &harness,
+        &executive,
+        &owner,
+        &root,
+        "decision",
+        "ad-budget",
+        "Approve the ad budget increase?",
+    )
+    .await;
+
+    let reply = sign_thread_reply(&owner, channel_id, &root, "yes, go ahead");
+    let reply = ingest_reply(&state, &tenant, &owner, reply).await;
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "ad-budget")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "an owner's thread reply must resolve the open ask"
+    );
+
+    let closed = fetch_ask_row(&pool, community, ask_event.id.as_bytes()).await;
+    assert_eq!(closed.status, "resolved");
+    assert_eq!(
+        closed.resolution_event.as_deref(),
+        Some(reply.id.as_bytes().as_slice()),
+        "resolution_event must be the owner's own message id"
+    );
+    assert_eq!(
+        closed.resolved_by.as_deref(),
+        Some(owner.public_key().to_bytes().as_slice()),
+        "resolved_by must be the owner"
+    );
+    assert!(
+        !closed.default_executed,
+        "a thread-reply resolution is not a default-on-timeout execution"
+    );
+
+    // The blocked filer must still be woken: the owner's own message is not
+    // guaranteed to p-tag it, and agents only respond to messages that
+    // mention them (see AGENTS.md's mention-filter rule), so skipping the
+    // receipt would leave the executive blocked forever.
+    let receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(channel_id),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipt messages");
+    assert_eq!(
+        receipts.len(),
+        1,
+        "expected exactly one relay-signed wake-up receipt"
+    );
+    let receipt = &receipts[0].event;
+    assert!(
+        receipt.content.contains("Approve the ad budget increase?"),
+        "receipt content: {}",
+        receipt.content
+    );
+    let executive_hex = executive.public_key().to_hex();
+    assert!(
+        receipt.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == executive_hex
+        }),
+        "receipt must p-tag the blocked filer so it wakes"
+    );
+}
+
+/// Design point 1: only a member whose role is exactly `owner` triggers
+/// this. A bystander replying in the same thread must not resolve anything.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn non_owner_thread_reply_does_not_auto_resolve() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let root = store_root(
+        &db,
+        community,
+        channel_id,
+        &executive,
+        "need budget sign-off",
+    )
+    .await;
+    let harness = Harness {
+        db: &db,
+        tenant: &tenant,
+        state: &state,
+    };
+    file_executive_ask_to_owner(
+        &harness,
+        &executive,
+        &owner,
+        &root,
+        "decision",
+        "ad-budget",
+        "Approve the ad budget increase?",
+    )
+    .await;
+
+    let bystander = Keys::generate();
+    let reply = sign_thread_reply(&bystander, channel_id, &root, "following along");
+    ingest_reply(&state, &tenant, &bystander, reply).await;
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "ad-budget")
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "a non-owner's thread reply must not resolve the ask"
+    );
+}
+
+/// Design point 2: an ask still climbing the altitude ladder (audience is
+/// the executive, not an owner) must not be resolved by an owner's passing
+/// comment in a thread it also happens to occupy.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn owner_thread_reply_does_not_resolve_an_ask_still_climbing_the_ladder() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let root = store_root(&db, community, channel_id, &leader, "kicking off").await;
+    let harness = Harness {
+        db: &db,
+        tenant: &tenant,
+        state: &state,
+    };
+    file_leader_ask_to_executive(
+        &harness,
+        &leader,
+        &executive,
+        &root,
+        "decision",
+        "batch-size",
+        "Choose batch size",
+    )
+    .await;
+
+    let reply = sign_thread_reply(&owner, channel_id, &root, "just watching this thread");
+    ingest_reply(&state, &tenant, &owner, reply).await;
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "batch-size")
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "an owner's passing comment must not resolve an ask still climbing the altitude ladder"
+    );
+}
+
+/// Design point 3: every open owner-audience ask bound to the thread
+/// resolves, not just the first one found.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn owner_thread_reply_resolves_every_open_ask_bound_to_that_thread() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let root = store_root(
+        &db,
+        community,
+        channel_id,
+        &executive,
+        "two asks, one thread",
+    )
+    .await;
+    let harness = Harness {
+        db: &db,
+        tenant: &tenant,
+        state: &state,
+    };
+    file_executive_ask_to_owner(
+        &harness,
+        &executive,
+        &owner,
+        &root,
+        "decision",
+        "need-a",
+        "First question",
+    )
+    .await;
+    file_executive_ask_to_owner(
+        &harness,
+        &executive,
+        &owner,
+        &root,
+        "decision",
+        "need-b",
+        "Second question",
+    )
+    .await;
+
+    let reply = sign_thread_reply(&owner, channel_id, &root, "yes to both");
+    ingest_reply(&state, &tenant, &owner, reply).await;
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "need-a")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "the first ask bound to this thread must resolve"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "need-b")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "the second ask bound to this thread must resolve too, not just the first"
+    );
 }

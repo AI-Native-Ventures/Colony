@@ -277,6 +277,37 @@ pub async fn query_due_asks(pool: &PgPool, now_secs: i64, limit: i64) -> Result<
     rows.into_iter().map(row_to_ask_row).collect()
 }
 
+/// Returns every OPEN ask rooted at `thread_root` (its `origin_thread`
+/// column), in `community`. Backs owner thread-reply auto-resolution: an
+/// owner posting into the thread an ask was raised from can close it
+/// without tapping the Ask card.
+///
+/// No audience filtering happens here -- a thread can host asks addressed
+/// to different tiers (a worker's ask to its leader and, later, that
+/// leader's escalation to the executive can share a root). The caller
+/// decides which of the returned rows are actually eligible to auto-resolve
+/// (only owner-audience asks -- see `buzz-relay`'s `ask_broker`).
+pub async fn find_open_asks_by_thread(
+    pool: &PgPool,
+    community: CommunityId,
+    thread_root: &[u8],
+) -> Result<Vec<AskRow>> {
+    let rows = sqlx::query(
+        "SELECT community_id, ask_event_id, ask_type, initiative_id, need_key, \
+                audience_pubkey, filer_pubkey, origin_thread, prior_ask, category, \
+                default_option, deadline_at, status, resolution_event, resolved_by, \
+                default_executed, created_at, updated_at \
+         FROM asks \
+         WHERE community_id = $1 AND origin_thread = $2 AND status = 'open'",
+    )
+    .bind(community.as_uuid())
+    .bind(thread_root)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_ask_row).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,5 +829,101 @@ mod tests {
         assert!(!due_ids.contains(&not_yet_due.as_slice()));
         assert!(!due_ids.contains(&no_deadline.as_slice()));
         assert!(!due_ids.contains(&resolved_past_due.as_slice()));
+    }
+
+    /// `find_open_asks_by_thread` backs owner thread-reply auto-resolution
+    /// (Task 6): it must return every OPEN ask rooted at `thread_root`, and
+    /// nothing else -- not asks rooted elsewhere, and not an ask that was
+    /// rooted there but has already closed (resolved, withdrawn, or
+    /// promoted), since a closed ask has nothing left for a reply to
+    /// auto-resolve.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn find_open_asks_by_thread_returns_only_open_asks_rooted_there() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let audience = random_bytes32();
+        let filer = random_bytes32();
+        let thread_root = random_bytes32();
+
+        let first_id = random_bytes32();
+        insert_ask(
+            &pool,
+            community,
+            NewAskRow {
+                origin_thread: Some(&thread_root),
+                ..new_ask_for_need(&first_id, "need-a", &audience, &filer, None)
+            },
+        )
+        .await
+        .expect("insert first ask");
+
+        let second_id = random_bytes32();
+        insert_ask(
+            &pool,
+            community,
+            NewAskRow {
+                origin_thread: Some(&thread_root),
+                ..new_ask_for_need(&second_id, "need-b", &audience, &filer, None)
+            },
+        )
+        .await
+        .expect("insert second ask");
+
+        // Rooted in a DIFFERENT thread -- must not come back.
+        let other_thread = random_bytes32();
+        let third_id = random_bytes32();
+        insert_ask(
+            &pool,
+            community,
+            NewAskRow {
+                origin_thread: Some(&other_thread),
+                ..new_ask_for_need(&third_id, "need-c", &audience, &filer, None)
+            },
+        )
+        .await
+        .expect("insert third ask");
+
+        // Rooted in the SAME thread but already resolved -- must not come
+        // back either.
+        let fourth_id = random_bytes32();
+        insert_ask(
+            &pool,
+            community,
+            NewAskRow {
+                origin_thread: Some(&thread_root),
+                ..new_ask_for_need(&fourth_id, "need-d", &audience, &filer, None)
+            },
+        )
+        .await
+        .expect("insert fourth ask");
+        resolve_ask(
+            &pool,
+            community,
+            &fourth_id,
+            &random_bytes32(),
+            &random_bytes32(),
+            false,
+        )
+        .await
+        .expect("resolve fourth ask");
+
+        let found = find_open_asks_by_thread(&pool, community, &thread_root)
+            .await
+            .expect("query open asks by thread");
+        let found_ids: Vec<&[u8]> = found
+            .iter()
+            .map(|row| row.ask_event_id.as_slice())
+            .collect();
+
+        assert_eq!(
+            found.len(),
+            2,
+            "expected exactly the two still-open asks rooted in this thread"
+        );
+        assert!(found_ids.contains(&first_id.as_slice()));
+        assert!(found_ids.contains(&second_id.as_slice()));
+        assert!(!found_ids.contains(&third_id.as_slice()));
+        assert!(!found_ids.contains(&fourth_id.as_slice()));
     }
 }

@@ -3087,6 +3087,39 @@ async fn ingest_event_inner(
     )
     .await;
 
+    // Colony interrupt-core: an owner replying inside the origin thread of
+    // one of their own open asks closes it exactly like tapping the Ask
+    // card would (spec: "You can still just answer in the thread") --
+    // otherwise the open queue keeps showing an ask the owner believes
+    // they already answered, and the whole point of asking instead of
+    // reading every thread is lost.
+    //
+    // Scoped to plain message kinds (9, 40002);
+    // `ask_broker::try_auto_resolve_from_reply` itself early-returns for
+    // every non-owner signer, so this is a cheap no-op on the overwhelming
+    // majority of writes. Placed AFTER storage and dispatch above rather
+    // than alongside the ask-broker's pre-storage branch near line 2929:
+    // that branch had to move immediately before storage because an
+    // earlier placement let it commit an `asks` row before a later
+    // rejection (an ask naming an archived channel) discarded the event,
+    // wedging the dedupe slot on a row that pointed at nothing. Nothing
+    // downstream of storage in THIS function can still reject the write --
+    // side effects and dispatch above are already best-effort and
+    // log-only on failure -- so there is no equivalent hazard here, only
+    // the mirror-image one: a failure below must never turn an
+    // already-accepted owner message into an error response. Log and
+    // continue.
+    if matches!(kind_u32, KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2) {
+        if let Err(error) =
+            crate::ask_broker::try_auto_resolve_from_reply(tenant, state, &stored_event.event).await
+        {
+            warn!(
+                event_id = %event_id_hex,
+                "auto-resolve from owner thread reply failed: {error}"
+            );
+        }
+    }
+
     info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
 
     Ok(IngestResult {

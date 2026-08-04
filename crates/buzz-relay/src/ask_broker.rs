@@ -20,6 +20,11 @@
 //! promotions and stalls that way. A signer with no recognized tier
 //! (a human, or an unmanaged client) can never file: owners answer asks,
 //! they do not file them.
+//!
+//! [`try_auto_resolve_from_reply`] is the odd one out: it runs AFTER
+//! storage, on ordinary kind 9/40002 messages rather than an ask-protocol
+//! kind, when an owner answers by replying in the thread instead of
+//! tapping the Ask card.
 
 use std::sync::Arc;
 
@@ -28,12 +33,13 @@ use buzz_core::interrupt::{
 };
 use buzz_core::kind::{
     KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_COMPANY_PROFILE, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_V2,
 };
 use buzz_core::tenant::TenantContext;
-use buzz_db::asks::NewAskRow;
+use buzz_db::asks::{AskRow, NewAskRow};
 use nostr::{Event, EventBuilder, Kind, PublicKey, Tag};
 
-use crate::interrupt_gate::agent_tier;
+use crate::interrupt_gate::{agent_tier, extract_thread_root};
 use crate::state::AppState;
 
 /// Default filing-to-deadline window, in seconds, used when neither the
@@ -655,6 +661,178 @@ async fn emit_ask_receipt(
     {
         tracing::warn!(%error, "ask receipt: failed to fan out receipt message");
     }
+}
+
+/// Resolve every open owner-audience ask rooted at the thread `event`
+/// replies into, when `event`'s signer currently holds the community's
+/// `owner` role (spec: "You can still just answer in the thread").
+///
+/// An owner does not have to tap the Ask card: replying in the thread the
+/// ask was raised from closes it exactly like a card resolution would,
+/// with the owner's own message standing in as the resolution event. Left
+/// unhandled, a thread reply that does not resolve its ask makes the open
+/// queue lie -- it keeps showing an ask the owner believes they already
+/// answered, which is the exact failure this whole system exists to
+/// prevent.
+///
+/// Scope and gating, all `Ok(())` no-ops rather than errors:
+/// - Only kind 9/40002 (plain stream messages) are considered.
+/// - Only a signer whose relay-membership role is exactly `"owner"`
+///   triggers this; an agent replying in the same thread never does.
+/// - Only asks whose `audience_pubkey` itself resolves to a current owner
+///   are eligible. An ask still climbing the altitude ladder (audience is
+///   a leader or the executive -- see [`check_altitude`]) is untouched by
+///   an owner's passing comment in a thread it also happens to occupy.
+/// - The event must carry a NIP-10 thread root ([`extract_thread_root`]);
+///   a root-level, non-reply message resolves nothing.
+///
+/// Every open owner-audience ask bound to the thread resolves, not just
+/// the first match, and each gets the same relay-signed wake-up receipt a
+/// card resolution would ([`emit_ask_receipt`], via
+/// [`wake_filer_after_auto_resolve`]): the owner's own message is already
+/// visible in the thread, but it is not guaranteed to p-tag the blocked
+/// filer, and agents only respond to messages that mention them -- skipping
+/// the receipt would leave a filer blocked forever unless the owner
+/// happened to p-tag it by hand.
+///
+/// Called AFTER the owner's message is already durably stored (see
+/// `handlers::ingest::ingest_event_inner`): a `?` here returns `Err`
+/// immediately on the first database failure rather than trying to salvage
+/// a partial pass over several matched asks, but the caller is responsible
+/// for logging and swallowing that error rather than letting it turn an
+/// already-accepted message into a rejection -- a missed auto-resolve is
+/// recoverable (the owner can still tap the card, or reply again), an
+/// owner whose message got bounced over interrupt-core bookkeeping is not.
+pub async fn try_auto_resolve_from_reply(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    event: &Event,
+) -> Result<(), String> {
+    if !matches!(
+        event.kind.as_u16() as u32,
+        KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2
+    ) {
+        return Ok(());
+    }
+
+    let signer_hex = event.pubkey.to_hex();
+    let signer_is_owner = state
+        .db
+        .get_relay_member(tenant.community(), &signer_hex)
+        .await
+        .map_err(|error| format!("database error checking owner role for auto-resolve: {error}"))?
+        .is_some_and(|member| member.role == "owner");
+    if !signer_is_owner {
+        return Ok(());
+    }
+
+    let Some(thread_root) = extract_thread_root(event) else {
+        return Ok(());
+    };
+
+    let candidates = state
+        .db
+        .find_open_asks_by_thread(tenant.community(), &thread_root)
+        .await
+        .map_err(|error| {
+            format!("database error loading asks bound to this thread for auto-resolve: {error}")
+        })?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let thread_root_hex = hex::encode(&thread_root);
+    for row in candidates {
+        let audience_hex = hex::encode(&row.audience_pubkey);
+        let audience_is_owner = state
+            .db
+            .get_relay_member(tenant.community(), &audience_hex)
+            .await
+            .map_err(|error| {
+                format!("database error checking ask audience for auto-resolve: {error}")
+            })?
+            .is_some_and(|member| member.role == "owner");
+        if !audience_is_owner {
+            // Still climbing the altitude ladder -- an owner's passing
+            // comment in a thread it also occupies must not close it.
+            continue;
+        }
+
+        let flipped = state
+            .db
+            .resolve_ask(
+                tenant.community(),
+                &row.ask_event_id,
+                event.id.as_bytes(),
+                event.pubkey.as_bytes(),
+                false,
+            )
+            .await
+            .map_err(|error| format!("database error auto-resolving ask from reply: {error}"))?;
+        if !flipped {
+            // Lost a race against a card resolution/withdrawal that closed
+            // this exact ask a moment earlier -- nothing left to wake.
+            continue;
+        }
+
+        wake_filer_after_auto_resolve(tenant, state, &row, &thread_root_hex).await;
+    }
+
+    Ok(())
+}
+
+/// Best-effort wake-up for the filer of an ask [`try_auto_resolve_from_reply`]
+/// just closed: loads the original ask event back to recover its headline
+/// and channel, then posts the same relay-signed receipt a card resolution
+/// would ([`emit_ask_receipt`]).
+///
+/// The ask is already resolved by the time this runs, so unlike
+/// [`try_auto_resolve_from_reply`]'s own database calls, a failure here is
+/// logged and swallowed rather than propagated: there is no partial-pass
+/// state left to protect, only a filer that will learn about the
+/// resolution some other way (its next status check) instead of being
+/// woken immediately.
+async fn wake_filer_after_auto_resolve(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    row: &AskRow,
+    thread_root_hex: &str,
+) {
+    let filer = match PublicKey::from_slice(&row.filer_pubkey) {
+        Ok(filer) => filer,
+        Err(error) => {
+            tracing::warn!(%error, "auto-resolve: stored filer pubkey is not valid, cannot wake it");
+            return;
+        }
+    };
+
+    let stored_ask = match state
+        .db
+        .get_event_by_id(tenant.community(), &row.ask_event_id)
+        .await
+    {
+        Ok(stored_ask) => stored_ask,
+        Err(error) => {
+            tracing::warn!(%error, "auto-resolve: failed to load the ask event to wake its filer");
+            return;
+        }
+    };
+    let Some(stored_ask) = stored_ask else {
+        return;
+    };
+    let headline = parse_ask(&stored_ask.event)
+        .map(|ask| ask.headline)
+        .unwrap_or_default();
+
+    emit_ask_receipt(
+        tenant,
+        state,
+        thread_root_hex,
+        &format!("Ask resolved: {headline}"),
+        filer,
+        stored_ask.channel_id,
+    )
+    .await;
 }
 
 #[cfg(test)]

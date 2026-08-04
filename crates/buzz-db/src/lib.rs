@@ -5671,6 +5671,16 @@ impl Db {
         asks::query_due_asks(&self.pool, now_secs, limit).await
     }
 
+    /// Returns every open ask rooted at `thread_root`. Backs owner
+    /// thread-reply auto-resolution. See [`asks::find_open_asks_by_thread`].
+    pub async fn find_open_asks_by_thread(
+        &self,
+        community: CommunityId,
+        thread_root: &[u8],
+    ) -> Result<Vec<asks::AskRow>> {
+        asks::find_open_asks_by_thread(&self.pool, community, thread_root).await
+    }
+
     /// Mints a v2 use-limited relay invite. The plaintext code is returned
     /// exactly once; only its SHA-256 hash is persisted.
     ///

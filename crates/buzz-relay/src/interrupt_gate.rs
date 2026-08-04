@@ -296,7 +296,11 @@ fn extract_p_tags(event: &Event) -> Vec<String> {
 /// carries only a `reply` marker, itself pointing at the root). `None` when
 /// neither marker is present: the event is not inside a thread, so no reply
 /// exemption is possible.
-fn extract_thread_root(event: &Event) -> Option<Vec<u8>> {
+///
+/// `pub(crate)`: also used by `ask_broker::try_auto_resolve_from_reply` to
+/// find the thread an owner just replied in, so it can match that thread
+/// against open asks' `origin_thread`.
+pub(crate) fn extract_thread_root(event: &Event) -> Option<Vec<u8>> {
     find_marked_e_tag(event, "root").or_else(|| find_marked_e_tag(event, "reply"))
 }
 
