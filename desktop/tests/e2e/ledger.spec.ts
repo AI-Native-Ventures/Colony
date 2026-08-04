@@ -232,4 +232,61 @@ test.describe("Spend", () => {
     expect(request.costCentreId).toBe("web-delivery");
     expect(request.reason).toContain("misfiled as internal");
   });
+
+  test("offers to publish a price when none exists, instead of naming a command", async ({
+    page,
+  }) => {
+    await seedActiveIdentity(page);
+    // A relay with no price book at all: every model is unpriced, so the
+    // totals cannot be trusted and the screen has to say so.
+    await installMockBridge(page, {
+      ledgerReport: { ...REPORT, exceptions: [], priceBookMissing: true },
+    });
+    await page.goto("/");
+
+    await page.getByTestId("open-spend-view").click();
+    const attention = page.getByTestId("ledger-attention");
+    await expect(attention).toContainText("No price list has been published");
+    // The remedy must be actionable here, not an instruction to open a
+    // terminal.
+    await expect(attention).not.toContainText("buzz ledger");
+
+    await page.getByTestId("ledger-add-price").click();
+    const dialog = page.getByTestId("ledger-price-dialog");
+    await expect(dialog).toBeVisible();
+
+    const submit = page.getByTestId("ledger-price-submit");
+    // Rates start blank, because a pre-filled zero is a free price published
+    // by not noticing.
+    await expect(submit).toBeDisabled();
+
+    await dialog
+      .getByPlaceholder("claude-sonnet-4-5")
+      .fill("claude-sonnet-4-5");
+    const rates = dialog.getByPlaceholder("0");
+    await rates.nth(0).fill("3");
+    await rates.nth(1).fill("15");
+    await rates.nth(2).fill("0.30");
+    await rates.nth(3).fill("3.75");
+    await rates.nth(4).fill("6");
+    await expect(submit).toBeEnabled();
+
+    await waitForAnimations(page);
+    await page.screenshot({ path: `${OUTPUT_DIR}/05-price-dialog.png` });
+
+    await submit.click();
+    await expect(dialog).toBeHidden();
+
+    const sent = await page.evaluate(() =>
+      (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+        (entry) => entry.command === "ledger_add_price",
+      ),
+    );
+    expect(sent).toHaveLength(1);
+    const request = (sent[0].payload as { request: Record<string, unknown> })
+      .request;
+    expect(request.model).toBe("claude-sonnet-4-5");
+    expect(request.inputPerMtok).toBe("3");
+    expect(request.outputPerMtok).toBe("15");
+  });
 });
