@@ -132,7 +132,17 @@ async fn handle_ask(
         Some(secs) => secs,
         None => company_ask_window_secs(tenant, state).await,
     };
-    let deadline_at = event.created_at.as_secs() as i64 + window_secs as i64;
+    // `parse_ask` already bounds the ask's own `default_window_secs` at
+    // `MAX_ASK_WINDOW_SECS`, but the company default read above comes from
+    // a DIFFERENT, relay/owner-authored event's content and is never run
+    // through that validation. Clamp here too (defense in depth) and use
+    // `saturating_add` rather than a raw cast-and-add: an unbounded u64
+    // cast to i64 can reinterpret as negative, landing the deadline in the
+    // past and firing the default-on-timeout answer immediately -- exactly
+    // the "acting without waiting for the human" a deadline exists to
+    // prevent.
+    let window_secs = window_secs.min(buzz_core::interrupt::MAX_ASK_WINDOW_SECS);
+    let deadline_at = event.created_at.as_secs().saturating_add(window_secs) as i64;
 
     let audience_bytes = PublicKey::from_hex(&parsed.audience_hex)
         .map_err(|_| "internal error: audience hex is not a valid pubkey".to_string())?

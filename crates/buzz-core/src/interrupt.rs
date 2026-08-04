@@ -21,6 +21,18 @@ pub fn is_hard_list_category(category: &str) -> bool {
     HARD_LIST_CATEGORIES.contains(&category)
 }
 
+/// Upper bound on `default_window_secs`, in seconds: how far past filing an
+/// ask's default-on-timeout deadline may be pushed.
+///
+/// `default_window_secs` is filer-controlled. Without a bound, a huge value
+/// wraps or overflows once a broker adds it to `created_at`
+/// (`deadline_at = created_at + default_window_secs`), landing the
+/// deadline in the past and firing the default-on-timeout answer
+/// immediately -- the very thing a deadline exists to prevent, and a
+/// direct bypass of "wait for a human". 30 days generously covers any
+/// legitimate slow-moving ask; nothing in the spec calls for longer.
+pub const MAX_ASK_WINDOW_SECS: u64 = 30 * 24 * 60 * 60;
+
 /// The type of a Colony Ask event (tag `ask-type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskType {
@@ -145,6 +157,16 @@ pub enum AskParseError {
     /// and never carry a default-on-timeout answer.
     #[error("stall asks may not carry a default_option")]
     StallCarriesDefault,
+    /// `default_window_secs` exceeded [`MAX_ASK_WINDOW_SECS`]. A value this
+    /// large would overflow or land the deadline in the past once a broker
+    /// adds it to `created_at`.
+    #[error("default_window_secs must not exceed {max} seconds, got {got}")]
+    DefaultWindowSecsOutOfRange {
+        /// The value that was rejected.
+        got: u64,
+        /// The maximum allowed value ([`MAX_ASK_WINDOW_SECS`]).
+        max: u64,
+    },
 }
 
 /// A validated Ask event (kind [`crate::kind::KIND_ASK`]), ready for broker processing.
@@ -334,6 +356,14 @@ pub fn parse_ask(event: &nostr::Event) -> Result<ParsedAsk, AskParseError> {
     let default_window_secs = content
         .get("default_window_secs")
         .and_then(serde_json::Value::as_u64);
+    if let Some(window_secs) = default_window_secs {
+        if window_secs > MAX_ASK_WINDOW_SECS {
+            return Err(AskParseError::DefaultWindowSecsOutOfRange {
+                got: window_secs,
+                max: MAX_ASK_WINDOW_SECS,
+            });
+        }
+    }
 
     if let Some(default_option) = &default_option {
         if ask_type == AskType::Stall {
@@ -634,6 +664,39 @@ mod tests {
             parse_ask(&event),
             Err(AskParseError::StallCarriesDefault)
         ));
+    }
+
+    /// I5 regression: `default_window_secs` is filer-controlled and, unbounded,
+    /// can overflow or wrap negative once the broker adds it to `created_at`
+    /// (`deadline_at = created_at + default_window_secs`), landing an ask's
+    /// deadline in the past and firing its default-on-timeout immediately --
+    /// the very thing a deadline exists to prevent. Parsing must reject a
+    /// value above `MAX_ASK_WINDOW_SECS` outright, before it ever reaches
+    /// that arithmetic.
+    #[test]
+    fn parse_ask_rejects_default_window_secs_above_the_max() {
+        let audience = nostr::Keys::generate();
+        let content = format!(
+            r#"{{"headline":"Choose batch size","cost_of_delay":"47 leads wait","options":[{{"label":"A","consequence":"sends 47 emails"}}],"default_option":"A","default_window_secs":{}}}"#,
+            MAX_ASK_WINDOW_SECS + 1
+        );
+        let event = sign_ask(happy_path_tags(&audience.public_key()), &content);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::DefaultWindowSecsOutOfRange { got, max })
+                if got == MAX_ASK_WINDOW_SECS + 1 && max == MAX_ASK_WINDOW_SECS
+        ));
+    }
+
+    #[test]
+    fn parse_ask_accepts_default_window_secs_at_the_max() {
+        let audience = nostr::Keys::generate();
+        let content = format!(
+            r#"{{"headline":"Choose batch size","cost_of_delay":"47 leads wait","options":[{{"label":"A","consequence":"sends 47 emails"}}],"default_option":"A","default_window_secs":{MAX_ASK_WINDOW_SECS}}}"#
+        );
+        let event = sign_ask(happy_path_tags(&audience.public_key()), &content);
+        let ask = parse_ask(&event).expect("value exactly at the max must be accepted");
+        assert_eq!(ask.default_window_secs, Some(MAX_ASK_WINDOW_SECS));
     }
 
     #[test]

@@ -854,6 +854,58 @@ async fn deadline_falls_back_to_the_company_default_window() {
     );
 }
 
+/// I5 regression, layer 2: the company profile's `ask_window_secs` content
+/// field is NOT run through `parse_ask` (it lives on a different,
+/// relay/owner-authored event), so parse-time validation alone cannot
+/// bound it. An out-of-range company default must still be clamped by the
+/// broker itself before it reaches `created_at + window_secs`, or a
+/// misconfigured company profile would land every ask's deadline in the
+/// past (and, once Task 8 ships, fire its default-on-timeout immediately).
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn deadline_clamps_an_out_of_range_company_default_window() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    set_company_ask_window(&db, community, &relay_keys, u64::MAX).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    let worker = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+
+    let event = sign_ask(
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-1", "batch-size"),
+        &ask_content("Choose batch size", None),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &event)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "ask with no window, u64::MAX company default");
+
+    let row = db
+        .find_open_ask_by_need(community, "init-1", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("an open ask row must exist");
+    let deadline_at = row.deadline_at.expect("a deadline must always be stamped");
+    let created_at = event.created_at.as_secs() as i64;
+    assert!(
+        deadline_at > created_at,
+        "deadline {deadline_at} must be after created_at {created_at}, not wrapped negative"
+    );
+    assert!(
+        deadline_at <= created_at + buzz_core::interrupt::MAX_ASK_WINDOW_SECS as i64,
+        "deadline {deadline_at} must be clamped to the max window, not the raw company default"
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires Postgres"]
 async fn deadline_falls_back_to_3600_with_no_company_profile_at_all() {
