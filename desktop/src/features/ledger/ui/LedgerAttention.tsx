@@ -1,5 +1,7 @@
 import { AlertTriangle, Info } from "lucide-react";
 
+import { Button } from "@/shared/ui/button";
+
 import type { AttentionItem } from "../lib/summarize";
 
 /**
@@ -12,8 +14,11 @@ import type { AttentionItem } from "../lib/summarize";
  */
 export function LedgerAttention({
   items,
+  onAddPrice,
 }: {
   items: readonly AttentionItem[];
+  /** Absent when the viewer cannot publish prices. */
+  onAddPrice?: () => void;
 }) {
   if (items.length === 0) return null;
 
@@ -51,6 +56,18 @@ export function LedgerAttention({
               <p className="mt-0.5 text-sm text-muted-foreground">
                 {item.detail}
               </p>
+              {item.action === "add-price" && onAddPrice ? (
+                <Button
+                  className="mt-2"
+                  data-testid="ledger-add-price"
+                  onClick={onAddPrice}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  Add a price
+                </Button>
+              ) : null}
             </div>
           </div>
         );

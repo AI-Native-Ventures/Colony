@@ -834,6 +834,7 @@ pub fn run() {
             commands::discovery_export::save_leads_csv,
             commands::ledger::ledger_report,
             commands::ledger::ledger_correct,
+            commands::ledger::ledger_add_price,
             commands::initiative::advance_initiative,
             commands::initiative::ensure_chat_task,
             create_team,

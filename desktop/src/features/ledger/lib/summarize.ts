@@ -27,6 +27,13 @@ export interface AttentionItem {
   detail: string;
   /** Blocking means the totals shown are known to be incomplete. */
   severity: AttentionSeverity;
+  /**
+   * A remedy the screen can offer directly, when one exists.
+   *
+   * An instruction the reader cannot act on where they are standing is not
+   * a remedy; it is a referral to a terminal.
+   */
+  action?: "add-price";
 }
 
 /**
@@ -145,8 +152,9 @@ export function attentionItems(report: LedgerReport): AttentionItem[] {
 
   if (report.priceBookMissing) {
     items.push({
+      action: "add-price",
       detail:
-        "No prices have been published, so no usage can be costed. Add prices with `buzz ledger prices-add` and every recorded call becomes countable, with no need to re-record anything.",
+        "No prices have been published, so no usage can be costed. Add the rates for the models your agents use and every call already recorded becomes countable, with nothing to re-record.",
       id: "no-price-book",
       severity: "blocking",
       title: "No price list has been published",
@@ -159,6 +167,7 @@ export function attentionItems(report: LedgerReport): AttentionItem[] {
     );
     for (const model of unpricedModels) {
       items.push({
+        action: "add-price",
         detail: `Calls to ${model} are recorded but have no price, so their cost is unknown and excluded from the totals. Adding a price for it counts them, retroactively.`,
         id: `unpriced:${model}`,
         severity: "blocking",
