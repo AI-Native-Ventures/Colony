@@ -1966,5 +1966,8 @@ CREATE TABLE IF NOT EXISTS asks (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS asks_open_need_uniq
     ON asks (community_id, initiative_id, need_key) WHERE status = 'open';
-CREATE INDEX IF NOT EXISTS asks_due_idx ON asks (community_id, deadline_at) WHERE status = 'open';
+-- No community_id predicate: the interrupt sweep scans due asks across every
+-- community (see query_due_asks), so this index leads with deadline_at to
+-- give that cross-tenant scan a real range scan instead of a full scan.
+CREATE INDEX IF NOT EXISTS asks_due_idx ON asks (deadline_at) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS asks_audience_idx ON asks (community_id, audience_pubkey) WHERE status = 'open';
