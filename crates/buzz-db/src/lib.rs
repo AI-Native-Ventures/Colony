@@ -15,6 +15,8 @@ pub mod admin_moderation;
 pub mod api_token;
 /// Relay-scoped archived identity persistence (NIP-IA).
 pub mod archived_identities;
+/// Interrupt Asks projection: open-need dedupe and due-deadline sweep.
+pub mod asks;
 /// Channel and membership persistence.
 pub mod channel;
 /// Private entitlement, authorization, and durable run persistence for Discovery.
@@ -5599,6 +5601,74 @@ impl Db {
     /// inserted, or 0 if the `pubkey_allowlist` table doesn't exist.
     pub async fn backfill_from_allowlist(&self, community: CommunityId) -> Result<u64> {
         relay_members::backfill_from_allowlist(&self.pool, community).await
+    }
+
+    /// Files a new open ask. See [`asks::insert_ask`] for the dedupe
+    /// guarantee (fails on a Postgres unique violation if an open ask
+    /// already exists for this need).
+    pub async fn insert_ask(&self, community: CommunityId, row: asks::NewAskRow<'_>) -> Result<()> {
+        asks::insert_ask(&self.pool, community, row).await
+    }
+
+    /// Returns the currently open ask for `(community, initiative_id,
+    /// need_key)`, or `None` if there isn't one.
+    pub async fn find_open_ask_by_need(
+        &self,
+        community: CommunityId,
+        initiative_id: &str,
+        need_key: &str,
+    ) -> Result<Option<asks::AskRow>> {
+        asks::find_open_ask_by_need(&self.pool, community, initiative_id, need_key).await
+    }
+
+    /// Marks an open ask resolved. Returns `false` if no open ask with this
+    /// `ask_event_id` existed in `community`.
+    pub async fn resolve_ask(
+        &self,
+        community: CommunityId,
+        ask_event_id: &[u8],
+        resolution_event_id: &[u8],
+        resolved_by: &[u8],
+        default_executed: bool,
+    ) -> Result<bool> {
+        asks::resolve_ask(
+            &self.pool,
+            community,
+            ask_event_id,
+            resolution_event_id,
+            resolved_by,
+            default_executed,
+        )
+        .await
+    }
+
+    /// Marks an open ask withdrawn. Returns `false` if no open ask with this
+    /// `ask_event_id` existed in `community`.
+    pub async fn withdraw_ask(
+        &self,
+        community: CommunityId,
+        ask_event_id: &[u8],
+        withdrawal_event_id: &[u8],
+    ) -> Result<bool> {
+        asks::withdraw_ask(&self.pool, community, ask_event_id, withdrawal_event_id).await
+    }
+
+    /// Marks an open ask promoted to a new ask further up the agent
+    /// hierarchy. Returns `false` if no open ask with this `ask_event_id`
+    /// existed in `community`.
+    pub async fn mark_ask_promoted(
+        &self,
+        community: CommunityId,
+        ask_event_id: &[u8],
+        promoted_to_event_id: &[u8],
+    ) -> Result<bool> {
+        asks::mark_ask_promoted(&self.pool, community, ask_event_id, promoted_to_event_id).await
+    }
+
+    /// Returns open asks whose deadline has passed, across every community,
+    /// capped at `limit` rows. Mirrors [`Db::query_due_reminders`].
+    pub async fn query_due_asks(&self, now_secs: i64, limit: i64) -> Result<Vec<asks::AskRow>> {
+        asks::query_due_asks(&self.pool, now_secs, limit).await
     }
 
     /// Mints a v2 use-limited relay invite. The plaintext code is returned
