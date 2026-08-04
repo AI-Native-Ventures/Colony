@@ -385,14 +385,13 @@ test("a failed source remains visible without discarding another source's succes
   assert.equal(campaign.run.sourceMetrics[1].stored, 3);
 });
 
-test("active LAKA access switches taxonomy campaigns onto persisted relay data", async () => {
+test("active Discovery access switches taxonomy campaigns onto persisted relay data", async () => {
   const live = harness(true);
   const source = new RelayDiscoveryDataSource(live.dependencies);
 
   assert.deepEqual(await source.getEntitlement(), {
     feature: "discovery_engine",
     state: "entitled",
-    planName: "LAKA",
     experience: "live",
   });
   const created = await source.createCampaign({
@@ -533,7 +532,7 @@ test("inactive workspaces stay on the cost-free demo and cannot create live reco
       location: "Sandton",
       target: 10,
     }),
-    /Activate LAKA/,
+    /Discovery access is required/,
   );
   assert.deepEqual(locked.operations, ["access"]);
 });

@@ -574,7 +574,6 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
             state: result.active
               ? ("entitled" as const)
               : ("not_entitled" as const),
-            planName: "LAKA",
             experience: result.active ? ("live" as const) : ("demo" as const),
           };
         })
@@ -724,7 +723,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   async createCampaign(input: CampaignDraft): Promise<CampaignDetail> {
     if (!(await this.live())) {
       throw new Error(
-        "Activate LAKA before creating a live Discovery campaign.",
+        "Discovery access is required to create a live campaign.",
       );
     }
     if ((input.targetType ?? "business") !== "business") {
@@ -809,7 +808,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     campaignId: string,
   ): AsyncIterable<DiscoveryEvent> {
     if (!(await this.live())) {
-      throw new Error("Activate LAKA before running live Discovery.");
+      throw new Error("Discovery access is required to run live Discovery.");
     }
     const current = await this.getCampaign(campaignId);
     const unsupported = current.sourceConfig.order.filter(

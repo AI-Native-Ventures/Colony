@@ -1102,8 +1102,23 @@ CREATE TABLE block_catalog_action_claims (
 CREATE TABLE discovery_entitlements (
     community_id UUID NOT NULL PRIMARY KEY REFERENCES communities(id) ON DELETE CASCADE,
     active BOOLEAN NOT NULL DEFAULT FALSE,
+    expires_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE FUNCTION provision_discovery_trial() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO discovery_entitlements
+        (community_id, active, expires_at, updated_at)
+    VALUES (NEW.id, TRUE, now() + interval '30 days', now());
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER communities_provision_discovery_trial
+AFTER INSERT ON communities
+FOR EACH ROW EXECUTE FUNCTION provision_discovery_trial();
 
 CREATE TABLE discovery_actor_grants (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,

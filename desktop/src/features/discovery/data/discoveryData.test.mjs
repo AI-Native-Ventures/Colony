@@ -15,36 +15,38 @@ test("fixture source returns the SalesTeams-shaped discovery hierarchy", async (
   const industries = await source.getIndustries();
 
   assert.equal(industries.length, 34);
-  assert.equal(industries[0].slug, "automotive");
+  assert.equal(industries[0].slug, "fashion-apparel");
   assert.ok(industries[0].imageKey);
 
   const verticals = await source.getVerticals("automotive");
-  assert.equal(verticals.length, 10);
+  assert.equal(verticals.length, 11);
   assert.deepEqual(
     verticals.map(({ id, name, industryId }) => ({ id, name, industryId })),
     [
-      "Auto Repair",
       "Auto Manufacturing",
       "Auto Parts Stores",
       "Auto Parts Suppliers",
+      "Auto Repair",
       "Car Dealerships",
       "Car Rentals",
       "Engine Repair Garages",
       "Fleet & Vehicle Leasing Services",
       "Panel Beaters",
       "Petrol Stations",
+      "Tyre Services",
     ].map((name, index) => ({
       id: [
-        "auto-repair",
         "auto-manufacturing",
         "auto-parts-stores",
         "auto-parts-suppliers",
+        "auto-repair",
         "car-dealerships",
         "car-rentals",
         "engine-repair-garages",
         "fleet-vehicle-leasing-services",
         "panel-beaters",
         "petrol-stations",
+        "tyre-services",
       ][index],
       name,
       industryId: "automotive",
@@ -77,9 +79,69 @@ test("fixture source returns the SalesTeams-shaped discovery hierarchy", async (
   assert.equal(professionalServices.length, 18);
   const accounting = await source.getVertical(
     "professional-services",
-    "accounting-practices",
+    "accounting-financial-advisory",
   );
   assert.equal(accounting.campaigns[0].leadCount, 308);
+  const legacyAccounting = await source.getVertical(
+    "professional-services",
+    "accounting-practices",
+  );
+  assert.equal(legacyAccounting.id, "accounting-financial-advisory");
+});
+
+test("every advertised business industry exposes the complete SalesTeams taxonomy", async () => {
+  const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
+  const industries = await source.getIndustries();
+  const verticalGroups = await Promise.all(
+    industries.map(async (industry) => ({
+      industry,
+      verticals: await source.getVerticals(industry.id),
+    })),
+  );
+
+  assert.equal(industries.length, 34);
+  assert.equal(
+    verticalGroups.reduce(
+      (total, { verticals }) => total + verticals.length,
+      0,
+    ),
+    531,
+  );
+
+  for (const { industry, verticals } of verticalGroups) {
+    assert.equal(
+      verticals.length,
+      industry.verticalCount,
+      `${industry.name} vertical count`,
+    );
+    assert.ok(verticals.length > 0, `${industry.name} has verticals`);
+    assert.equal(
+      new Set(verticals.map(({ id }) => id)).size,
+      verticals.length,
+      `${industry.name} vertical IDs are unique`,
+    );
+  }
+
+  const realEstate = verticalGroups.find(
+    ({ industry }) => industry.id === "real-estate",
+  );
+  assert.ok(realEstate);
+  assert.equal(realEstate.verticals.length, 14);
+  assert.ok(
+    realEstate.verticals.some(
+      ({ name }) =>
+        name === "Residential Real Estate (Estate Agents & Property Sales)",
+    ),
+  );
+  assert.ok(
+    realEstate.verticals.some(
+      ({ name }) =>
+        name === "Commercial Real Estate (Office & Retail Properties)",
+    ),
+  );
+  assert.ok(
+    realEstate.verticals.some(({ name }) => name === "Property Development"),
+  );
 });
 
 test("fixture source returns the complete SalesTeams people hierarchy", async () => {
@@ -155,7 +217,6 @@ test("entitlement is provider-neutral and does not invent a price", async () => 
   assert.deepEqual(entitlement, {
     feature: "discovery_engine",
     state: "not_entitled",
-    planName: "LAKA",
   });
   assert.equal(canStartDiscovery(entitlement), false);
   assert.equal(

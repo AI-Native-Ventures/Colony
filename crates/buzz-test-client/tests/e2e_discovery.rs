@@ -522,12 +522,14 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
         .await
         .expect("authenticate actor");
     sqlx::query(
-        "UPDATE discovery_entitlements SET active=FALSE,updated_at=now() WHERE community_id=$1",
+        "UPDATE discovery_entitlements \
+         SET active=TRUE,expires_at=now() - interval '1 second',updated_at=now() \
+         WHERE community_id=$1",
     )
     .bind(community_id)
     .execute(&pool)
     .await
-    .expect("begin with inactive entitlement");
+    .expect("begin with expired trial");
     let access_request = DiscoveryWorkspaceRequest {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
@@ -583,7 +585,8 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
         DiscoveryWorkspaceResult::Access { active: false }
     ));
     sqlx::query(
-        "UPDATE discovery_entitlements SET active=TRUE,updated_at=now() WHERE community_id=$1",
+        "UPDATE discovery_entitlements SET active=TRUE,expires_at=NULL,updated_at=now() \
+         WHERE community_id=$1",
     )
     .bind(community_id)
     .execute(&pool)

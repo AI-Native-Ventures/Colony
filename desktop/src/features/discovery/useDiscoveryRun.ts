@@ -317,7 +317,7 @@ export function useDiscoveryRun(
         setError(
           entitlement?.state === "error"
             ? "Discovery access could not be confirmed."
-            : "Activate LAKA before running discovery.",
+            : "Discovery access is required to run discovery.",
         );
         return;
       }
