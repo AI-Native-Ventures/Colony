@@ -618,8 +618,12 @@ pub const KIND_USAGE_RECORD: u32 = 44210;
 // Colony interrupt protocol (44300–44303)
 /// Colony interrupt Ask (stored, non-replaceable, agent-signed or relay-signed).
 /// An escalation event requesting human judgment on a decision, question, credential,
-/// blocker, or stall. Tags: `ask-type`, `ask-category`, `agent` (escalating agent pubkey),
-/// optional `ask-default`, optional `ask-timeout`.
+/// blocker, or stall. Tags: exactly one `ask-type`, one `p` (audience pubkey), one
+/// `initiative`, one or more `task`, one `need` (dedupe key); optional `e` (origin
+/// thread root), `prior` (escalation chain), `category`, `h` (channel, present on
+/// raises). Content JSON carries `headline` and `cost_of_delay` (both required,
+/// non-empty), `options`, and optional `default_option` / `default_window_secs`.
+/// See [`crate::interrupt::parse_ask`].
 pub const KIND_ASK: u32 = 44300;
 
 /// Colony interrupt Ask resolution (stored, non-replaceable, audience-signed or relay-signed).

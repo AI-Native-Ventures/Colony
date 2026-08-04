@@ -2,6 +2,8 @@
 //!
 //! Pure event/tag/JSON logic only. No IO. See docs/nips/NIP-IQ.md.
 
+use thiserror::Error;
+
 /// Escalation categories that must always reach a human owner and may never
 /// carry a default-on-timeout (spec: the hard list).
 pub const HARD_LIST_CATEGORIES: &[&str] = &[
@@ -102,6 +104,323 @@ impl AgentTier {
     }
 }
 
+/// Errors produced by Ask/resolution/withdrawal event parsing and validation.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum AskParseError {
+    /// A single-valued tag was missing (zero occurrences) or ambiguous (two or
+    /// more occurrences). Carries the tag name.
+    #[error("tag `{0}` must appear exactly once")]
+    TagCardinality(String),
+    /// The `task` tag must appear at least once; zero were found.
+    #[error("at least one `task` tag is required")]
+    MissingTaskTag,
+    /// `ask-type` tag value is not in the pinned `AskType` vocabulary.
+    #[error("unknown ask-type: {0}")]
+    UnknownAskType(String),
+    /// A hex field was not a 64-character lowercase hex string.
+    #[error("{field} must be a 64-character lowercase hex string, got: {value}")]
+    InvalidHex {
+        /// Name of the field that failed hex validation.
+        field: String,
+        /// The offending value.
+        value: String,
+    },
+    /// The `need` tag value did not match the dedupe-key slug format `[a-z0-9-]{1,64}`.
+    #[error("need key must match [a-z0-9-]{{1,64}}: {0}")]
+    InvalidNeedKey(String),
+    /// Event content was not valid JSON.
+    #[error("invalid ask content JSON: {0}")]
+    InvalidJson(String),
+    /// A required content field was empty (or missing). Carries the field name.
+    #[error("{0} must not be empty")]
+    EmptyField(String),
+    /// `default_option` was present while `category` is on the immutable hard
+    /// list (spec: default-on-timeout may never bypass a hard-list category).
+    #[error("default_option is not allowed for hard-list category: {0}")]
+    DefaultOnHardList(String),
+    /// `default_option` did not match any `options[].label`.
+    #[error("default_option `{0}` does not match any option label")]
+    DefaultOptionNotInOptions(String),
+    /// `ask_type` = stall carried a `default_option`; stalls are relay-detected
+    /// and never carry a default-on-timeout answer.
+    #[error("stall asks may not carry a default_option")]
+    StallCarriesDefault,
+}
+
+/// A validated Ask event (kind [`crate::kind::KIND_ASK`]), ready for broker processing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedAsk {
+    /// The `ask-type` tag, parsed into the pinned vocabulary.
+    pub ask_type: AskType,
+    /// Hex pubkey of the `p` tag: who this Ask is addressed to.
+    pub audience_hex: String,
+    /// The `initiative` tag value.
+    pub initiative_id: String,
+    /// All `task` tag values (one or more).
+    pub task_ids: Vec<String>,
+    /// Hex event id of the optional `e` tag: the origin thread root.
+    pub origin_thread_hex: Option<String>,
+    /// The `need` tag value: the dedupe key for this Ask.
+    pub need_key: String,
+    /// Hex event id of the optional `prior` tag: the escalation chain.
+    pub prior_ask_hex: Option<String>,
+    /// The optional `category` tag value.
+    pub category: Option<String>,
+    /// The content `cost_of_delay` field: what waiting costs.
+    pub cost_of_delay: String,
+    /// The content `default_option` field: the answer applied on timeout, if any.
+    pub default_option: Option<String>,
+    /// The content `default_window_secs` field: seconds until the default applies.
+    pub default_window_secs: Option<u64>,
+    /// The content `headline` field: a short summary of the Ask.
+    pub headline: String,
+}
+
+/// A validated Ask resolution event (kind [`crate::kind::KIND_ASK_RESOLUTION`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedResolution {
+    /// Hex event id of the `e` tag: the Ask event this resolves.
+    pub ask_event_hex: String,
+    /// The content `answer` field: the answer to the Ask, as raw JSON.
+    pub answer: serde_json::Value,
+    /// The content `default_executed` field: whether the default-on-timeout fired.
+    pub default_executed: bool,
+}
+
+/// A validated Ask withdrawal event (kind [`crate::kind::KIND_ASK_WITHDRAWAL`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedWithdrawal {
+    /// Hex event id of the `e` tag: the Ask event being withdrawn.
+    pub ask_event_hex: String,
+    /// The content `reason` field: why the Ask was withdrawn.
+    pub reason: String,
+}
+
+/// Returns `true` if `s` is exactly 64 lowercase hex characters.
+fn is_hex64_lowercase(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() && b <= b'f')
+}
+
+/// Validate a hex64 field, mapping failure to [`AskParseError::InvalidHex`].
+fn validate_hex64_field(field: &str, value: &str) -> Result<(), AskParseError> {
+    if is_hex64_lowercase(value) {
+        Ok(())
+    } else {
+        Err(AskParseError::InvalidHex {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
+    }
+}
+
+/// Returns `true` if `s` matches the `need` dedupe-key slug format `[a-z0-9-]{1,64}`.
+fn is_valid_need_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'-')
+}
+
+/// Return the single value of a tag named `name`, erroring if it appears zero
+/// or more than once.
+fn single_tag_value(event: &nostr::Event, name: &str) -> Result<String, AskParseError> {
+    let mut values = tag_values(event, name);
+    let first = values
+        .next()
+        .ok_or_else(|| AskParseError::TagCardinality(name.to_owned()))?;
+    if values.next().is_some() {
+        return Err(AskParseError::TagCardinality(name.to_owned()));
+    }
+    Ok(first)
+}
+
+/// Return the single value of an optional tag named `name`. `Ok(None)` if
+/// absent; errors if it appears more than once.
+fn optional_tag_value(event: &nostr::Event, name: &str) -> Result<Option<String>, AskParseError> {
+    let mut values = tag_values(event, name);
+    let first = match values.next() {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    if values.next().is_some() {
+        return Err(AskParseError::TagCardinality(name.to_owned()));
+    }
+    Ok(Some(first))
+}
+
+/// Iterate the values of every exact two-element tag named `name`.
+fn tag_values<'a>(event: &'a nostr::Event, name: &'a str) -> impl Iterator<Item = String> + 'a {
+    event.tags.iter().filter_map(move |tag| {
+        let parts = tag.as_slice();
+        if parts.len() == 2 && parts[0].as_str() == name {
+            Some(parts[1].clone())
+        } else {
+            None
+        }
+    })
+}
+
+/// Extract and validate a required non-empty string field from Ask content JSON.
+fn required_content_field(
+    content: &serde_json::Value,
+    field: &'static str,
+) -> Result<String, AskParseError> {
+    let value = content
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if value.is_empty() {
+        return Err(AskParseError::EmptyField(field.to_owned()));
+    }
+    Ok(value.to_owned())
+}
+
+/// Parse Ask event JSON content into a `serde_json::Value`.
+fn parse_content(event: &nostr::Event) -> Result<serde_json::Value, AskParseError> {
+    serde_json::from_str(&event.content)
+        .map_err(|error| AskParseError::InvalidJson(error.to_string()))
+}
+
+/// Parse and validate a Colony interrupt Ask event (kind [`crate::kind::KIND_ASK`]).
+///
+/// Enforces the pinned tag schema (`ask-type`, `p`, `initiative`, one or more
+/// `task`, `need`, optional `e`/`prior`/`category`) and the content JSON
+/// schema (`headline`, `cost_of_delay` required and non-empty; `default_option`
+/// forbidden on hard-list categories, on stall asks, and unless it names a
+/// declared option).
+pub fn parse_ask(event: &nostr::Event) -> Result<ParsedAsk, AskParseError> {
+    let ask_type_raw = single_tag_value(event, "ask-type")?;
+    let ask_type =
+        AskType::parse(&ask_type_raw).ok_or(AskParseError::UnknownAskType(ask_type_raw))?;
+
+    let audience_hex = single_tag_value(event, "p")?;
+    validate_hex64_field("p", &audience_hex)?;
+
+    let initiative_id = single_tag_value(event, "initiative")?;
+
+    let need_key = single_tag_value(event, "need")?;
+    if !is_valid_need_slug(&need_key) {
+        return Err(AskParseError::InvalidNeedKey(need_key));
+    }
+
+    let task_ids: Vec<String> = tag_values(event, "task").collect();
+    if task_ids.is_empty() {
+        return Err(AskParseError::MissingTaskTag);
+    }
+
+    let origin_thread_hex = optional_tag_value(event, "e")?;
+    if let Some(hex) = &origin_thread_hex {
+        validate_hex64_field("e", hex)?;
+    }
+
+    let prior_ask_hex = optional_tag_value(event, "prior")?;
+    if let Some(hex) = &prior_ask_hex {
+        validate_hex64_field("prior", hex)?;
+    }
+
+    let category = optional_tag_value(event, "category")?;
+
+    let content = parse_content(event)?;
+    let headline = required_content_field(&content, "headline")?;
+    let cost_of_delay = required_content_field(&content, "cost_of_delay")?;
+
+    let default_option = content
+        .get("default_option")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let default_window_secs = content
+        .get("default_window_secs")
+        .and_then(serde_json::Value::as_u64);
+
+    if let Some(default_option) = &default_option {
+        if ask_type == AskType::Stall {
+            return Err(AskParseError::StallCarriesDefault);
+        }
+        if let Some(category) = &category {
+            if is_hard_list_category(category) {
+                return Err(AskParseError::DefaultOnHardList(category.clone()));
+            }
+        }
+        let has_matching_option = content
+            .get("options")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|options| {
+                options.iter().any(|option| {
+                    option.get("label").and_then(serde_json::Value::as_str)
+                        == Some(default_option.as_str())
+                })
+            });
+        if !has_matching_option {
+            return Err(AskParseError::DefaultOptionNotInOptions(
+                default_option.clone(),
+            ));
+        }
+    }
+
+    Ok(ParsedAsk {
+        ask_type,
+        audience_hex,
+        initiative_id,
+        task_ids,
+        origin_thread_hex,
+        need_key,
+        prior_ask_hex,
+        category,
+        cost_of_delay,
+        default_option,
+        default_window_secs,
+        headline,
+    })
+}
+
+/// Parse and validate a Colony interrupt Ask resolution event
+/// (kind [`crate::kind::KIND_ASK_RESOLUTION`]).
+///
+/// The `e` tag (exactly one, hex64) names the Ask being resolved. Content
+/// carries `answer` (any JSON value; absent is treated as `null`) and
+/// `default_executed` (defaults to `false` if absent).
+pub fn parse_resolution(event: &nostr::Event) -> Result<ParsedResolution, AskParseError> {
+    let ask_event_hex = single_tag_value(event, "e")?;
+    validate_hex64_field("e", &ask_event_hex)?;
+
+    let content = parse_content(event)?;
+    let answer = content
+        .get("answer")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let default_executed = content
+        .get("default_executed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    Ok(ParsedResolution {
+        ask_event_hex,
+        answer,
+        default_executed,
+    })
+}
+
+/// Parse and validate a Colony interrupt Ask withdrawal event
+/// (kind [`crate::kind::KIND_ASK_WITHDRAWAL`]).
+///
+/// The `e` tag (exactly one, hex64) names the Ask being withdrawn. Content
+/// carries a required, non-empty `reason`.
+pub fn parse_withdrawal(event: &nostr::Event) -> Result<ParsedWithdrawal, AskParseError> {
+    let ask_event_hex = single_tag_value(event, "e")?;
+    validate_hex64_field("e", &ask_event_hex)?;
+
+    let content = parse_content(event)?;
+    let reason = required_content_field(&content, "reason")?;
+
+    Ok(ParsedWithdrawal {
+        ask_event_hex,
+        reason,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +466,250 @@ mod tests {
         );
         assert!(is_hard_list_category("spend"));
         assert!(!is_hard_list_category("copy_change"));
+    }
+
+    // ── Ask event parsing ──────────────────────────────────────────────
+
+    fn t(parts: &[&str]) -> nostr::Tag {
+        nostr::Tag::parse(parts.iter().copied()).expect("valid test tag")
+    }
+
+    fn sign_ask(tags: Vec<nostr::Tag>, content: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        EventBuilder::new(Kind::Custom(crate::kind::KIND_ASK as u16), content)
+            .tags(tags)
+            .sign_with_keys(&keys)
+            .expect("sign")
+    }
+
+    fn sign_resolution(tags: Vec<nostr::Tag>, content: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        EventBuilder::new(
+            Kind::Custom(crate::kind::KIND_ASK_RESOLUTION as u16),
+            content,
+        )
+        .tags(tags)
+        .sign_with_keys(&keys)
+        .expect("sign")
+    }
+
+    fn sign_withdrawal(tags: Vec<nostr::Tag>, content: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        EventBuilder::new(
+            Kind::Custom(crate::kind::KIND_ASK_WITHDRAWAL as u16),
+            content,
+        )
+        .tags(tags)
+        .sign_with_keys(&keys)
+        .expect("sign")
+    }
+
+    fn happy_path_tags(audience: &nostr::PublicKey) -> Vec<nostr::Tag> {
+        vec![
+            t(&["ask-type", "decision"]),
+            nostr::Tag::public_key(*audience),
+            t(&["initiative", "init-1"]),
+            t(&["need", "batch-size"]),
+            t(&["task", "task-9"]),
+            t(&["category", "outreach_pacing"]),
+        ]
+    }
+
+    const HAPPY_PATH_CONTENT: &str = r#"{"headline":"Choose batch size","cost_of_delay":"47 leads wait","options":[{"label":"A","consequence":"sends 47 emails"},{"label":"B","consequence":"sends 15 emails","recommended":true}],"default_option":"B","default_window_secs":3600}"#;
+
+    #[test]
+    fn parse_ask_happy_path_extracts_all_fields() {
+        let audience = nostr::Keys::generate();
+        let event = sign_ask(happy_path_tags(&audience.public_key()), HAPPY_PATH_CONTENT);
+
+        let ask = parse_ask(&event).expect("parse");
+        assert_eq!(ask.ask_type, AskType::Decision);
+        assert_eq!(ask.audience_hex, audience.public_key().to_hex());
+        assert_eq!(ask.initiative_id, "init-1");
+        assert_eq!(ask.task_ids, vec!["task-9".to_string()]);
+        assert_eq!(ask.origin_thread_hex, None);
+        assert_eq!(ask.need_key, "batch-size");
+        assert_eq!(ask.prior_ask_hex, None);
+        assert_eq!(ask.category.as_deref(), Some("outreach_pacing"));
+        assert_eq!(ask.cost_of_delay, "47 leads wait");
+        assert_eq!(ask.default_option.as_deref(), Some("B"));
+        assert_eq!(ask.default_window_secs, Some(3600));
+        assert_eq!(ask.headline, "Choose batch size");
+    }
+
+    #[test]
+    fn parse_ask_rejects_wrong_tag_cardinality() {
+        let audience = nostr::Keys::generate();
+
+        // Two ask-type tags: ambiguous, must be rejected.
+        let mut tags = happy_path_tags(&audience.public_key());
+        tags.push(t(&["ask-type", "question"]));
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::TagCardinality(field)) if field == "ask-type"
+        ));
+
+        // Zero p tags: missing audience, must be rejected.
+        let tags: Vec<nostr::Tag> = happy_path_tags(&audience.public_key())
+            .into_iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) != Some("p"))
+            .collect();
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::TagCardinality(field)) if field == "p"
+        ));
+    }
+
+    #[test]
+    fn parse_ask_rejects_missing_task_tag() {
+        let audience = nostr::Keys::generate();
+        let tags: Vec<nostr::Tag> = happy_path_tags(&audience.public_key())
+            .into_iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) != Some("task"))
+            .collect();
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::MissingTaskTag)
+        ));
+    }
+
+    #[test]
+    fn parse_ask_rejects_empty_headline_or_cost_of_delay() {
+        let audience = nostr::Keys::generate();
+
+        let content = r#"{"headline":"","cost_of_delay":"47 leads wait"}"#;
+        let event = sign_ask(happy_path_tags(&audience.public_key()), content);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::EmptyField(field)) if field == "headline"
+        ));
+
+        let content = r#"{"headline":"Choose batch size","cost_of_delay":"   "}"#;
+        let event = sign_ask(happy_path_tags(&audience.public_key()), content);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::EmptyField(field)) if field == "cost_of_delay"
+        ));
+    }
+
+    #[test]
+    fn parse_ask_rejects_default_on_hard_list() {
+        let audience = nostr::Keys::generate();
+        let mut tags = happy_path_tags(&audience.public_key());
+        tags.retain(|tag| tag.as_slice().first().map(String::as_str) != Some("category"));
+        tags.push(t(&["category", "spend"]));
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::DefaultOnHardList(category)) if category == "spend"
+        ));
+    }
+
+    #[test]
+    fn parse_ask_rejects_default_option_without_matching_label() {
+        let audience = nostr::Keys::generate();
+        let content = r#"{"headline":"Choose batch size","cost_of_delay":"47 leads wait","options":[{"label":"A","consequence":"sends 47 emails"}],"default_option":"C"}"#;
+        let event = sign_ask(happy_path_tags(&audience.public_key()), content);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::DefaultOptionNotInOptions(option)) if option == "C"
+        ));
+    }
+
+    #[test]
+    fn parse_ask_rejects_stall_with_default_option() {
+        let audience = nostr::Keys::generate();
+        let mut tags = happy_path_tags(&audience.public_key());
+        tags.retain(|tag| tag.as_slice().first().map(String::as_str) != Some("ask-type"));
+        tags.push(t(&["ask-type", "stall"]));
+        let content = r#"{"headline":"Task went silent","cost_of_delay":"no progress for 2h","options":[{"label":"A","consequence":"sends 47 emails"}],"default_option":"A"}"#;
+        let event = sign_ask(tags, content);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::StallCarriesDefault)
+        ));
+    }
+
+    #[test]
+    fn parse_ask_rejects_invalid_hex_field() {
+        let audience_hex_wrong_case = "A".repeat(64);
+        let tags = vec![
+            t(&["ask-type", "decision"]),
+            t(&["p", &audience_hex_wrong_case]),
+            t(&["initiative", "init-1"]),
+            t(&["need", "batch-size"]),
+            t(&["task", "task-9"]),
+        ];
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::InvalidHex { field, .. }) if field == "p"
+        ));
+    }
+
+    #[test]
+    fn parse_ask_rejects_invalid_need_slug() {
+        let audience = nostr::Keys::generate();
+        let mut tags = happy_path_tags(&audience.public_key());
+        tags.retain(|tag| tag.as_slice().first().map(String::as_str) != Some("need"));
+        tags.push(t(&["need", "Batch Size!"]));
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::InvalidNeedKey(need)) if need == "Batch Size!"
+        ));
+    }
+
+    #[test]
+    fn parse_resolution_happy_path_extracts_all_fields() {
+        let ask_hex = "a".repeat(64);
+        let tags = vec![t(&["e", &ask_hex])];
+        let content = r#"{"answer":{"choice":"B"},"default_executed":false}"#;
+        let event = sign_resolution(tags, content);
+
+        let resolution = parse_resolution(&event).expect("parse");
+        assert_eq!(resolution.ask_event_hex, ask_hex);
+        assert_eq!(resolution.answer, serde_json::json!({"choice": "B"}));
+        assert!(!resolution.default_executed);
+    }
+
+    #[test]
+    fn parse_resolution_rejects_wrong_e_tag_cardinality() {
+        let content = r#"{"answer":{"choice":"B"},"default_executed":false}"#;
+        let event = sign_resolution(Vec::new(), content);
+        assert!(matches!(
+            parse_resolution(&event),
+            Err(AskParseError::TagCardinality(field)) if field == "e"
+        ));
+    }
+
+    #[test]
+    fn parse_withdrawal_happy_path_extracts_all_fields() {
+        let ask_hex = "b".repeat(64);
+        let tags = vec![t(&["e", &ask_hex])];
+        let content = r#"{"reason":"stale, superseded by a new plan"}"#;
+        let event = sign_withdrawal(tags, content);
+
+        let withdrawal = parse_withdrawal(&event).expect("parse");
+        assert_eq!(withdrawal.ask_event_hex, ask_hex);
+        assert_eq!(withdrawal.reason, "stale, superseded by a new plan");
+    }
+
+    #[test]
+    fn parse_withdrawal_rejects_empty_reason() {
+        let ask_hex = "b".repeat(64);
+        let tags = vec![t(&["e", &ask_hex])];
+        let content = r#"{"reason":"  "}"#;
+        let event = sign_withdrawal(tags, content);
+        assert!(matches!(
+            parse_withdrawal(&event),
+            Err(AskParseError::EmptyField(field)) if field == "reason"
+        ));
     }
 }
