@@ -17,8 +17,15 @@ pub const HARD_LIST_CATEGORIES: &[&str] = &[
 ];
 
 /// Returns `true` if `category` is on the immutable hard list.
+///
+/// Compares case-insensitively (ASCII-folded): the hard list is absolute --
+/// spec: no configuration, no override -- and a rule that a caller can defeat
+/// by spelling the category `"Spend"` or `"SPEND"` instead of `"spend"` is
+/// not actually absolute. [`HARD_LIST_CATEGORIES`] itself is already
+/// lowercase, so only `category` needs folding.
 pub fn is_hard_list_category(category: &str) -> bool {
-    HARD_LIST_CATEGORIES.contains(&category)
+    let folded = category.to_ascii_lowercase();
+    HARD_LIST_CATEGORIES.contains(&folded.as_str())
 }
 
 /// Upper bound on `default_window_secs`, in seconds: how far past filing an
@@ -238,10 +245,12 @@ pub struct ParsedGrant {
     /// The `d` tag: this grant's stable id.
     pub grant_id: String,
     /// The content `category` field: what kind of decision this delegates.
-    /// Never a value on [`HARD_LIST_CATEGORIES`].
+    /// ASCII-lowercased by [`parse_grant`]; never a value on
+    /// [`HARD_LIST_CATEGORIES`] regardless of the as-typed casing.
     pub category: String,
     /// The content `scope` field: the precise boundary of the delegation.
-    /// Never a wildcard (`"*"` or `"all"`).
+    /// ASCII-lowercased by [`parse_grant`]; never a wildcard (`"*"` or
+    /// `"all"`) regardless of the as-typed casing.
     pub scope: String,
     /// The content `cap_nano_usd` field: an optional spending cap, in
     /// integer nanoUSD.
@@ -518,7 +527,8 @@ pub fn parse_withdrawal(event: &nostr::Event) -> Result<ParsedWithdrawal, AskPar
 /// Wildcard `scope` values a delegation grant may not use (spec: vague
 /// grants are rejected). An unbounded grant is indistinguishable from no
 /// policy at all -- exactly the failure mode a scoped grant exists to
-/// prevent.
+/// prevent. Already lowercase; the input side is ASCII-folded before this
+/// comparison (same reasoning as [`is_hard_list_category`]).
 const VAGUE_GRANT_SCOPES: &[&str] = &["*", "all"];
 
 /// Parse and validate a Colony delegation grant event
@@ -532,7 +542,11 @@ const VAGUE_GRANT_SCOPES: &[&str] = &["*", "all"];
 /// is absolute -- no configuration, no override). `scope` must not be a
 /// wildcard (`"*"` or `"all"`): a grant this vague is indistinguishable
 /// from no policy at all, which is the failure mode this record exists to
-/// prevent.
+/// prevent. Both checks are case-insensitive, and the returned
+/// [`ParsedGrant`] carries the ASCII-lowercased `category`/`scope`, not the
+/// as-typed casing -- every downstream consumer compares against an
+/// already-canonical value instead of each having to remember to fold case
+/// itself.
 ///
 /// This parser enforces schema only. Authorship -- that the signer
 /// currently holds the community's owner role -- is an ingest-time,
@@ -546,11 +560,13 @@ pub fn parse_grant(event: &nostr::Event) -> Result<ParsedGrant, AskParseError> {
     if is_hard_list_category(&category) {
         return Err(AskParseError::GrantOnHardList(category));
     }
+    let category = category.to_ascii_lowercase();
 
     let scope = required_content_field(&content, "scope")?;
-    if VAGUE_GRANT_SCOPES.contains(&scope.as_str()) {
+    if VAGUE_GRANT_SCOPES.contains(&scope.to_ascii_lowercase().as_str()) {
         return Err(AskParseError::VagueGrantScope(scope));
     }
+    let scope = scope.to_ascii_lowercase();
 
     let active = required_content_bool_field(&content, "active")?;
 
@@ -790,6 +806,24 @@ mod tests {
         ));
     }
 
+    /// Fix-round regression (Task 7 review): `is_hard_list_category` did a
+    /// case-sensitive exact match, so a hard-list category spelled with any
+    /// different casing (e.g. `"SPEND"`) slipped past the default-on-hard-list
+    /// ban -- the very rule the spec calls absolute. Guards the predicate fix
+    /// at this call site (parse_ask), not just at parse_grant's.
+    #[test]
+    fn parse_ask_rejects_default_on_hard_list_regardless_of_case() {
+        let audience = nostr::Keys::generate();
+        let mut tags = happy_path_tags(&audience.public_key());
+        tags.retain(|tag| tag.as_slice().first().map(String::as_str) != Some("category"));
+        tags.push(t(&["category", "SPEND"]));
+        let event = sign_ask(tags, HAPPY_PATH_CONTENT);
+        assert!(matches!(
+            parse_ask(&event),
+            Err(AskParseError::DefaultOnHardList(category)) if category == "SPEND"
+        ));
+    }
+
     #[test]
     fn parse_ask_rejects_default_option_without_matching_label() {
         let audience = nostr::Keys::generate();
@@ -974,6 +1008,25 @@ mod tests {
         ));
     }
 
+    /// Fix-round regression (Task 7 review): the hard list is supposed to be
+    /// absolute -- "no configuration, no override" -- but `is_hard_list_category`
+    /// did a case-sensitive exact match against the lowercase constants, so
+    /// `"Spend"` or `"SPEND"` slipped through as an ordinary, delegable
+    /// category. One character of case defeated the entire rule.
+    #[test]
+    fn parse_grant_rejects_hard_list_category_regardless_of_case() {
+        for variant in ["Spend", "SPEND", "SpEnD"] {
+            let tags = vec![t(&["d", "grant-1"])];
+            let content =
+                format!(r#"{{"category":"{variant}","scope":"marketing_budget","active":true}}"#);
+            let event = sign_grant(tags, &content);
+            assert!(
+                matches!(parse_grant(&event), Err(AskParseError::GrantOnHardList(_))),
+                "category `{variant}` must be rejected as hard-listed regardless of case"
+            );
+        }
+    }
+
     #[test]
     fn parse_grant_rejects_vague_scope() {
         for vague in ["*", "all"] {
@@ -989,6 +1042,37 @@ mod tests {
                 "scope `{vague}` must be rejected as vague"
             );
         }
+    }
+
+    /// Fix-round regression (Task 7 review): `VAGUE_GRANT_SCOPES` had the
+    /// identical case-sensitivity gap as the hard list -- `"ALL"` or `"All"`
+    /// passed as a specific scope, defeating the vague-scope rejection.
+    #[test]
+    fn parse_grant_rejects_vague_scope_regardless_of_case() {
+        for variant in ["ALL", "All", "aLL"] {
+            let tags = vec![t(&["d", "grant-1"])];
+            let content =
+                format!(r#"{{"category":"copy_change","scope":"{variant}","active":true}}"#);
+            let event = sign_grant(tags, &content);
+            assert!(
+                matches!(parse_grant(&event), Err(AskParseError::VagueGrantScope(_))),
+                "scope `{variant}` must be rejected as vague regardless of case"
+            );
+        }
+    }
+
+    /// Fix-round (Task 7 review): the normalized value, not just the
+    /// original-cased one, is what `ParsedGrant` carries forward -- so every
+    /// downstream consumer compares against an already-canonical value
+    /// instead of each having to remember to fold case itself.
+    #[test]
+    fn parse_grant_normalizes_category_and_scope_case() {
+        let tags = vec![t(&["d", "grant-1"])];
+        let content = r#"{"category":"Copy_Change","scope":"Blog_Post_Titles","active":true}"#;
+        let event = sign_grant(tags, content);
+        let grant = parse_grant(&event).expect("parse");
+        assert_eq!(grant.category, "copy_change");
+        assert_eq!(grant.scope, "blog_post_titles");
     }
 
     #[test]
