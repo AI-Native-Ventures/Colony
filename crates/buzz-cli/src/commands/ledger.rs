@@ -48,17 +48,17 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
             note,
         } => {
             let rates = PriceRates {
-                input_nanousd_per_token: per_mtok_to_nanousd(&input, "--input")?,
-                cache_read_nanousd_per_token: per_mtok_to_nanousd(&cache_read, "--cache-read")?,
-                cache_write_5m_nanousd_per_token: per_mtok_to_nanousd(
+                input_nanousd_per_mtok: per_mtok_to_nanousd(&input, "--input")?,
+                cache_read_nanousd_per_mtok: per_mtok_to_nanousd(&cache_read, "--cache-read")?,
+                cache_write_5m_nanousd_per_mtok: per_mtok_to_nanousd(
                     &cache_write_5m,
                     "--cache-write-5m",
                 )?,
-                cache_write_1h_nanousd_per_token: per_mtok_to_nanousd(
+                cache_write_1h_nanousd_per_mtok: per_mtok_to_nanousd(
                     &cache_write_1h,
                     "--cache-write-1h",
                 )?,
-                output_nanousd_per_token: per_mtok_to_nanousd(&output, "--output")?,
+                output_nanousd_per_mtok: per_mtok_to_nanousd(&output, "--output")?,
             };
             let entry = PriceEntry {
                 model,
@@ -714,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn a_price_finer_than_one_nanousd_per_token_is_refused_not_rounded() {
+    fn a_price_finer_than_one_nanousd_per_mtok_is_refused_not_rounded() {
         let error = per_mtok_to_nanousd("0.0001", "--input")
             .expect_err("sub-nano precision must be refused");
         assert!(

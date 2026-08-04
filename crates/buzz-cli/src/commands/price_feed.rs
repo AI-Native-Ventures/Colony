@@ -103,7 +103,7 @@ mod tests {
         let entries =
             verify_feed_document(signed.trim(), &keys.public_key().to_hex(), now, 86_400).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].rates.input_nanousd_per_token, 3_000);
+        assert_eq!(entries[0].rates.input_nanousd_per_mtok, 3_000_000_000);
     }
 
     /// Publishing the catalog we ship is the runbook's first step; it must

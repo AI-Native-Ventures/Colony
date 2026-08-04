@@ -292,6 +292,26 @@
       "note": "OpenAI list price, verified 2026-08-05. No caching offered. Date is a floor."
     },
     {
+      "model": "deepseek-v4-flash",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "0.14",
+      "cacheReadPerMtok": "0.0028",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "0.28",
+      "note": "DeepSeek list price, cache-miss input. No cache-write charge. Verified 2026-08-05; date is a floor. Excludes the announced peak-hour multiplier, which the book cannot express."
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "0.435",
+      "cacheReadPerMtok": "0.003625",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "0.87",
+      "note": "DeepSeek list price, cache-miss input. No cache-write charge. Verified 2026-08-05; date is a floor. Excludes the announced peak-hour multiplier, which the book cannot express."
+    },
+    {
       "model": "gpt-5.3-codex",
       "effectiveFrom": "2026-08-05T00:00:00Z",
       "inputPerMtok": "1.75",
