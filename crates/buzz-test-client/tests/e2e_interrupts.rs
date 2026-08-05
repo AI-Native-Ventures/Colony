@@ -38,6 +38,18 @@ fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
 }
 
+/// The Host the relay will see, derived from the same `RELAY_URL` the client
+/// dials. The relay binds every request to a community by Host header, so a
+/// hardcoded host silently 404s whenever `RELAY_URL` points anywhere but the
+/// default port.
+fn relay_host() -> String {
+    relay_url()
+        .trim_start_matches("wss://")
+        .trim_start_matches("ws://")
+        .trim_end_matches('/')
+        .to_string()
+}
+
 fn relay_http_url() -> String {
     relay_url()
         .replace("wss://", "https://")
@@ -314,7 +326,8 @@ fn has_p_tag(event: &serde_json::Value, pubkey_hex: &str) -> bool {
 #[ignore = "requires Postgres"]
 async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
     let url = relay_url();
-    let host = "localhost:3000";
+    let host = relay_host();
+    let host = host.as_str();
     let community_id = ensure_test_community(host).await;
 
     // ---- Step 1: identities, owner role, tiers, channel -----------------

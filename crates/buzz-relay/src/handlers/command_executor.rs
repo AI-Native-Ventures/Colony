@@ -75,21 +75,36 @@ pub async fn handle_command(
     }
 }
 
-/// Result of persisting a command event: either a duplicate (already processed)
-/// or an open transaction that the handler must commit after executing mutations.
+/// Result of persisting a command event.
+///
+/// Three-way, not two-way, for the reason [`buzz_db::ReplaceOutcome`] is: this
+/// function runs its own NIP-33 dominance check for command events carrying a
+/// `d` tag, so "nothing was inserted" has the same two very different meanings.
+/// Collapsing them made a dominated `buzz workflows update` report that the
+/// event had landed while the definition row was never touched.
 enum PersistResult {
-    /// Event was already processed — return idempotent success.
-    Duplicate,
+    /// The identical event was already stored, so this call changed nothing and
+    /// the submitted event IS in the store. An idempotent repeat.
+    AlreadyStored,
+    /// A different head at the same `(kind, pubkey, d_tag)` dominates this
+    /// event, so it was discarded and no domain mutation ran.
+    Superseded {
+        /// Raw id of the event that won the coordinate.
+        winner_event_id: Vec<u8>,
+    },
     /// Event inserted — transaction is open, handler must commit after mutations.
     Inserted(sqlx::Transaction<'static, sqlx::Postgres>),
 }
 
 /// Persist a command event inside a transaction. Returns the OPEN transaction
-/// as an idempotency guard — if the event was already stored, `Duplicate` is
-/// returned and the handler skips execution.
+/// as an idempotency guard: if nothing was inserted the handler skips
+/// execution, and the variant says which of the two reasons it was.
 ///
-/// If the event is a duplicate (ON CONFLICT DO NOTHING), the transaction is
-/// rolled back and `PersistResult::Duplicate` is returned — no mutations needed.
+/// `AlreadyStored` means the insert hit ON CONFLICT DO NOTHING, so this exact
+/// event is present. `Superseded` means the NIP-33 dominance check below found
+/// a newer head at this coordinate, so the event was discarded and the caller
+/// must report it as not stored. Either way the transaction is rolled back and
+/// no mutations run.
 ///
 /// NOTE: Domain mutations (open_dm, upsert_workflow, etc.) execute on the
 /// connection pool, NOT inside this transaction. The pattern is idempotent but
@@ -184,7 +199,17 @@ async fn persist_command_event(
             let dominated = created_at < existing_ts
                 || (created_at == existing_ts && incoming_id >= existing_id.as_slice());
             if dominated {
-                return Ok(PersistResult::Duplicate);
+                // The head that beat us being this very event means the write
+                // already landed; any other head means it was discarded and the
+                // domain mutation below never runs, so the caller must not be
+                // told the event is stored.
+                return Ok(if existing_id.as_slice() == incoming_id {
+                    PersistResult::AlreadyStored
+                } else {
+                    PersistResult::Superseded {
+                        winner_event_id: existing_id,
+                    }
+                });
             }
 
             sqlx::query(
@@ -224,11 +249,29 @@ async fn persist_command_event(
     .map_err(|e| IngestError::Internal(format!("error: insert event: {e}")))?;
 
     if result.rows_affected() == 0 {
-        // Duplicate — rollback (implicit on drop) and signal idempotent success.
-        Ok(PersistResult::Duplicate)
+        // ON CONFLICT fired on the events primary key, so this exact event is
+        // already stored. Rollback (implicit on drop) and signal the idempotent
+        // repeat, which really did land.
+        Ok(PersistResult::AlreadyStored)
     } else {
         Ok(PersistResult::Inserted(tx))
     }
+}
+
+/// The response for a command event that a newer head at the same
+/// `(kind, pubkey, d_tag)` coordinate beat.
+///
+/// Nothing was stored and the domain mutation never ran, so this must not
+/// report the event as landed. `buzz workflows update` with a stale timestamp
+/// used to answer `accepted: true` here while the definition row kept its old
+/// value.
+fn superseded_command_result(event: &Event, winner_event_id: Vec<u8>) -> IngestResult {
+    let winner_hex = hex::encode(winner_event_id);
+    IngestResult::superseded(
+        event.id.to_hex(),
+        &winner_hex,
+        format!("superseded by event {winner_hex}"),
+    )
 }
 
 /// Extract all `p` tag values (hex pubkeys) from an event.
@@ -347,11 +390,14 @@ async fn handle_dm_open(
 
     // Persist the command event (idempotency) — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
-        PersistResult::Duplicate => {
+        PersistResult::AlreadyStored => {
             return Ok(IngestResult::already_stored(
                 event.id.to_hex(),
-                "duplicate: identical event already stored",
+                "identical event already stored",
             ));
+        }
+        PersistResult::Superseded { winner_event_id } => {
+            return Ok(superseded_command_result(event, winner_event_id));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -506,11 +552,14 @@ async fn handle_dm_add_member(
 
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
-        PersistResult::Duplicate => {
+        PersistResult::AlreadyStored => {
             return Ok(IngestResult::already_stored(
                 event.id.to_hex(),
-                "duplicate: identical event already stored",
+                "identical event already stored",
             ));
+        }
+        PersistResult::Superseded { winner_event_id } => {
+            return Ok(superseded_command_result(event, winner_event_id));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -610,11 +659,14 @@ async fn handle_dm_hide(
 
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
-        PersistResult::Duplicate => {
+        PersistResult::AlreadyStored => {
             return Ok(IngestResult::already_stored(
                 event.id.to_hex(),
-                "duplicate: identical event already stored",
+                "identical event already stored",
             ));
+        }
+        PersistResult::Superseded { winner_event_id } => {
+            return Ok(superseded_command_result(event, winner_event_id));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -742,11 +794,14 @@ async fn handle_workflow_def(
 
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
-        PersistResult::Duplicate => {
+        PersistResult::AlreadyStored => {
             return Ok(IngestResult::already_stored(
                 event.id.to_hex(),
-                "duplicate: identical event already stored",
+                "identical event already stored",
             ));
+        }
+        PersistResult::Superseded { winner_event_id } => {
+            return Ok(superseded_command_result(event, winner_event_id));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -879,11 +934,14 @@ async fn handle_workflow_trigger(
     // trigger event itself only carries the workflow UUID. Storing channel
     // triggers as global events leaks workflow IDs to unrelated relay members.
     let tx = match persist_command_event(state, tenant, event, workflow.channel_id).await? {
-        PersistResult::Duplicate => {
+        PersistResult::AlreadyStored => {
             return Ok(IngestResult::already_stored(
                 event.id.to_hex(),
-                "duplicate: identical event already stored",
+                "identical event already stored",
             ));
+        }
+        PersistResult::Superseded { winner_event_id } => {
+            return Ok(superseded_command_result(event, winner_event_id));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -1058,11 +1116,14 @@ async fn handle_approval_grant(
 
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
-        PersistResult::Duplicate => {
+        PersistResult::AlreadyStored => {
             return Ok(IngestResult::already_stored(
                 event.id.to_hex(),
-                "duplicate: identical event already stored",
+                "identical event already stored",
             ));
+        }
+        PersistResult::Superseded { winner_event_id } => {
+            return Ok(superseded_command_result(event, winner_event_id));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -1167,11 +1228,14 @@ async fn handle_approval_deny(
 
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
-        PersistResult::Duplicate => {
+        PersistResult::AlreadyStored => {
             return Ok(IngestResult::already_stored(
                 event.id.to_hex(),
-                "duplicate: identical event already stored",
+                "identical event already stored",
             ));
+        }
+        PersistResult::Superseded { winner_event_id } => {
+            return Ok(superseded_command_result(event, winner_event_id));
         }
         PersistResult::Inserted(tx) => tx,
     };

@@ -70,6 +70,9 @@ export function isDuplicateReactionError(error: unknown) {
   return (
     message.includes("duplicate: reaction already exists") ||
     message.includes("identical reaction already applied") ||
-    message.includes("superseded by original reaction")
+    message.includes("superseded by original reaction") ||
+    // A legacy `reactions` row with no linked kind:7 event: the relay cannot
+    // name a holder, but the emoji is still on the note.
+    message.includes("an active reaction already exists")
   );
 }

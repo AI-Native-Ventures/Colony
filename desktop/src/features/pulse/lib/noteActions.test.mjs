@@ -73,6 +73,17 @@ test("isDuplicateReactionError covers both post-contract relay messages", () => 
     ),
     true,
   );
+  // A legacy reactions row with no linked kind:7 event. Before the contract
+  // change all four cases produced the one matched string, so missing this is
+  // the only way a re-like could newly surface an error toast.
+  assert.equal(
+    isDuplicateReactionError(
+      new Error(
+        "relay rejected event: conflict: an active reaction already exists for this emoji",
+      ),
+    ),
+    true,
+  );
 });
 
 test("isDuplicateReactionError rejects unrelated errors and non-errors", () => {

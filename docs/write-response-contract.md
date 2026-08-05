@@ -73,17 +73,24 @@ mapping one-to-one onto `accepted`:
 | `duplicate:` | true | `already_stored` |
 | `conflict:` | false | `superseded` or `refused` |
 
+The set is closed and exhaustive. Every message that is not `stored` carries
+one of the two prefixes, including the broker paths whose detail is a JSON
+object: those put the JSON inside the prefix (`conflict: {"duplicate":true,…}`),
+so reading the prefix alone is never wrong.
+
 A `superseded` message names the winning event id in its text.
 
 `duplicate:` therefore carries NIP-01's actual meaning, "I already have this
 event", and never appears on a write that was thrown away. That was the old
 bug: a discarded write answered `accepted: true` with a bare `duplicate:`.
 
-Both transports render the discriminator through
-`WriteOutcome::as_wire_token` in `crates/buzz-relay/src/handlers/ingest.rs`, so
-the HTTP field and the WebSocket prefix cannot drift apart.
-`duplicate_write_contract.rs` pins the tokens, so renaming one reads as a wire
-break rather than a refactor.
+The prefix is not hand-written per call site. Every `IngestResult` is built by
+a constructor that takes a bare reason and prepends
+`WriteOutcome::message_prefix` (`crates/buzz-relay/src/handlers/ingest.rs`), so
+a relay path cannot pair `already_stored` with a `conflict:` message: there is
+no argument through which to say it. `duplicate_write_contract.rs` pins both
+the HTTP tokens and the prefix-to-outcome mapping, so changing either reads as
+a wire break rather than a refactor.
 
 ## Relays that predate this contract
 

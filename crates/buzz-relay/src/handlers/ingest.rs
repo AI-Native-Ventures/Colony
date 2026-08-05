@@ -194,16 +194,32 @@ pub enum WriteOutcome {
 }
 
 impl WriteOutcome {
-    /// Stable wire token for this outcome.
-    ///
-    /// Both transports render the discriminator through this one function so
-    /// the HTTP `outcome` field and the WebSocket message can never disagree.
+    /// Stable wire token for this outcome, used as the HTTP `outcome` field.
     pub fn as_wire_token(&self) -> &'static str {
         match self {
             Self::Stored => "stored",
             Self::AlreadyStored => "already_stored",
             Self::Superseded { .. } => "superseded",
             Self::Refused => "refused",
+        }
+    }
+
+    /// The message prefix this outcome must carry.
+    ///
+    /// NIP-01's `OK` frame is four elements with no room for
+    /// [`Self::as_wire_token`], so on WebSocket the prefix IS the
+    /// discriminator. It is derived here and prepended by the [`IngestResult`]
+    /// constructors rather than hand-written per site, so a construction site
+    /// cannot pair `already_stored` with a `conflict:` message: there is no
+    /// argument through which to say it.
+    ///
+    /// `Stored` has no prefix. Its message is either empty or a payload for the
+    /// caller (a `response:{…}` body, or a broker's receipt JSON).
+    pub fn message_prefix(&self) -> Option<&'static str> {
+        match self {
+            Self::Stored => None,
+            Self::AlreadyStored => Some("duplicate:"),
+            Self::Superseded { .. } | Self::Refused => Some("conflict:"),
         }
     }
 
@@ -236,11 +252,11 @@ pub struct IngestResult {
     pub event_id: String,
     /// What the relay did with the submitted event.
     pub outcome: WriteOutcome,
-    /// Human-readable detail. Machine logic belongs on `outcome`.
+    /// Human-readable detail, always carrying the prefix its outcome requires.
     ///
-    /// By convention: empty or a `response:`/JSON payload when stored,
-    /// `duplicate: …` for an idempotent repeat, and `conflict: …` when the
-    /// write was discarded.
+    /// Never assembled by hand: every constructor takes a bare reason and
+    /// prepends [`WriteOutcome::message_prefix`], which is what makes the
+    /// WebSocket prefix and the HTTP `outcome` field impossible to disagree.
     pub message: String,
 }
 
@@ -250,59 +266,71 @@ impl IngestResult {
         self.outcome.is_accepted()
     }
 
+    /// Build a result, prefixing `reason` according to `outcome`.
+    ///
+    /// The single place a `message` is assembled. An empty reason yields the
+    /// bare prefix rather than a dangling separator.
+    fn new(event_id: String, outcome: WriteOutcome, reason: &str) -> Self {
+        let message = match outcome.message_prefix() {
+            None => reason.to_owned(),
+            Some(prefix) if reason.is_empty() => prefix.to_owned(),
+            Some(prefix) => format!("{prefix} {reason}"),
+        };
+        Self {
+            event_id,
+            outcome,
+            message,
+        }
+    }
+
     /// The submitted event was newly stored, with no message.
     pub fn stored(event_id: impl Into<String>) -> Self {
-        Self {
-            event_id: event_id.into(),
-            outcome: WriteOutcome::Stored,
-            message: String::new(),
-        }
+        Self::new(event_id.into(), WriteOutcome::Stored, "")
     }
 
     /// The submitted event was newly stored, with a payload for the caller
     /// (a command `response:{…}` body, or a broker's receipt JSON).
-    pub fn stored_with_message(event_id: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            event_id: event_id.into(),
-            outcome: WriteOutcome::Stored,
-            message: message.into(),
-        }
+    ///
+    /// `Stored` takes no prefix, so `payload` is the whole message.
+    pub fn stored_with_message(event_id: impl Into<String>, payload: impl AsRef<str>) -> Self {
+        Self::new(event_id.into(), WriteOutcome::Stored, payload.as_ref())
     }
 
     /// The identical event was already stored -- an idempotent repeat.
-    pub fn already_stored(event_id: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            event_id: event_id.into(),
-            outcome: WriteOutcome::AlreadyStored,
-            message: message.into(),
-        }
+    ///
+    /// `reason` is bare: the `duplicate:` prefix is added here.
+    pub fn already_stored(event_id: impl Into<String>, reason: impl AsRef<str>) -> Self {
+        Self::new(
+            event_id.into(),
+            WriteOutcome::AlreadyStored,
+            reason.as_ref(),
+        )
     }
 
     /// A different event won the address, so the submitted event was discarded.
     ///
     /// `submitted_event_id` is the client's own id and stays in the id slot;
-    /// `winner_event_id` names the event that beat it.
+    /// `winner_event_id` names the event that beat it. `reason` is bare: the
+    /// `conflict:` prefix is added here.
     pub fn superseded(
         submitted_event_id: impl Into<String>,
         winner_event_id: impl Into<String>,
-        message: impl Into<String>,
+        reason: impl AsRef<str>,
     ) -> Self {
-        Self {
-            event_id: submitted_event_id.into(),
-            outcome: WriteOutcome::Superseded {
+        Self::new(
+            submitted_event_id.into(),
+            WriteOutcome::Superseded {
                 winner_event_id: winner_event_id.into(),
             },
-            message: message.into(),
-        }
+            reason.as_ref(),
+        )
     }
 
     /// The relay refused the write, and no other event is named as the reason.
-    pub fn refused(event_id: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            event_id: event_id.into(),
-            outcome: WriteOutcome::Refused,
-            message: message.into(),
-        }
+    ///
+    /// `reason` is bare: the `conflict:` prefix is added here.
+    pub fn refused(event_id: impl Into<String>, reason: impl AsRef<str>) -> Self {
+        Self::new(event_id.into(), WriteOutcome::Refused, reason.as_ref())
     }
 }
 
@@ -334,16 +362,12 @@ fn broker_duplicate_result(
     noun: &str,
 ) -> IngestResult {
     let outcome = broker_duplicate_outcome(&submitted_event_id, &original_event_id);
-    let message = if outcome.is_accepted() {
-        format!("duplicate: identical {noun} already applied")
+    let reason = if outcome.is_accepted() {
+        format!("identical {noun} already applied")
     } else {
-        format!("conflict: superseded by original {noun} {original_event_id}")
+        format!("superseded by original {noun} {original_event_id}")
     };
-    IngestResult {
-        event_id: submitted_event_id,
-        outcome,
-        message,
-    }
+    IngestResult::new(submitted_event_id, outcome, &reason)
 }
 
 /// Ingestion error — the caller maps this to their transport's error format.
@@ -1992,9 +2016,9 @@ async fn ingest_event_inner(
             )),
             // The owner's request lost, but a durable receipt says so. Report
             // it as not accepted rather than as a protocol error.
-            crate::company_broker::CompanyBrokerOutcome::Refused { message } => Ok(
-                IngestResult::refused(event_id_hex, format!("conflict: {message}")),
-            ),
+            crate::company_broker::CompanyBrokerOutcome::Refused { message } => {
+                Ok(IngestResult::refused(event_id_hex, message))
+            }
         };
     }
 
@@ -2024,9 +2048,9 @@ async fn ingest_event_inner(
             )),
             // The owner's request lost, but a durable receipt says so. Report
             // it as not accepted rather than as a protocol error.
-            crate::party_broker::PartyBrokerOutcome::Refused { message } => Ok(
-                IngestResult::refused(event_id_hex, format!("conflict: {message}")),
-            ),
+            crate::party_broker::PartyBrokerOutcome::Refused { message } => {
+                Ok(IngestResult::refused(event_id_hex, message))
+            }
         };
     }
 
@@ -2053,9 +2077,9 @@ async fn ingest_event_inner(
                 hex::encode(original_action_event_id),
                 "action",
             )),
-            crate::ledger_broker::LedgerBrokerOutcome::Refused { message } => Ok(
-                IngestResult::refused(event_id_hex, format!("conflict: {message}")),
-            ),
+            crate::ledger_broker::LedgerBrokerOutcome::Refused { message } => {
+                Ok(IngestResult::refused(event_id_hex, message))
+            }
         };
     }
 
@@ -2110,18 +2134,14 @@ async fn ingest_event_inner(
             } => {
                 let original_event_id_hex = hex::encode(original_action_event_id);
                 let outcome = broker_duplicate_outcome(&event_id_hex, &original_event_id_hex);
-                let message = serde_json::json!({
+                let reason = serde_json::json!({
                     "duplicate": true,
                     "outcome": outcome.as_wire_token(),
                     "original_action_event_id": original_event_id_hex,
                     "receipt_event_id": hex::encode(receipt_event_id),
                 })
                 .to_string();
-                Ok(IngestResult {
-                    event_id: event_id_hex,
-                    outcome,
-                    message,
-                })
+                Ok(IngestResult::new(event_id_hex, outcome, &reason))
             }
         };
     }
@@ -2176,18 +2196,14 @@ async fn ingest_event_inner(
             } => {
                 let original_event_id_hex = hex::encode(original_action_event_id);
                 let outcome = broker_duplicate_outcome(&event_id_hex, &original_event_id_hex);
-                let message = serde_json::json!({
+                let reason = serde_json::json!({
                     "duplicate": true,
                     "outcome": outcome.as_wire_token(),
                     "original_action_event_id": original_event_id_hex,
                     "receipt_event_id": hex::encode(receipt_event_id),
                 })
                 .to_string();
-                Ok(IngestResult {
-                    event_id: event_id_hex,
-                    outcome,
-                    message,
-                })
+                Ok(IngestResult::new(event_id_hex, outcome, &reason))
             }
         };
     }
@@ -2239,7 +2255,7 @@ async fn ingest_event_inner(
             } => {
                 let original_event_id_hex = hex::encode(original_action_event_id);
                 let outcome = broker_duplicate_outcome(&event_id_hex, &original_event_id_hex);
-                let message = serde_json::json!({
+                let reason = serde_json::json!({
                     "duplicate": true,
                     "outcome": outcome.as_wire_token(),
                     "original_action_event_id": original_event_id_hex,
@@ -2247,11 +2263,7 @@ async fn ingest_event_inner(
                     "run": run,
                 })
                 .to_string();
-                Ok(IngestResult {
-                    event_id: event_id_hex,
-                    outcome,
-                    message,
-                })
+                Ok(IngestResult::new(event_id_hex, outcome, &reason))
             }
         };
     }
@@ -2829,7 +2841,7 @@ async fn ingest_event_inner(
                 // winner, so this is a plain refusal.
                 return Ok(IngestResult::refused(
                     event_id_hex,
-                    "conflict: channel already exists",
+                    "channel already exists",
                 ));
             }
             pre_created_channel = Some(client_uuid);
@@ -3031,7 +3043,7 @@ async fn ingest_event_inner(
                     }
                     None => IngestResult::refused(
                         event_id_hex,
-                        "conflict: an active reaction already exists for this emoji",
+                        "an active reaction already exists for this emoji",
                     ),
                 });
             }
@@ -3260,13 +3272,12 @@ async fn ingest_event_inner(
                 IngestResult::superseded(
                     event_id_hex,
                     &winner_hex,
-                    format!("conflict: superseded by event {winner_hex}"),
+                    format!("superseded by event {winner_hex}"),
                 )
             }
-            _ => IngestResult::already_stored(
-                event_id_hex,
-                "duplicate: identical event already stored",
-            ),
+            buzz_db::ReplaceOutcome::AlreadyStored | buzz_db::ReplaceOutcome::Inserted => {
+                IngestResult::already_stored(event_id_hex, "identical event already stored")
+            }
         });
     }
 

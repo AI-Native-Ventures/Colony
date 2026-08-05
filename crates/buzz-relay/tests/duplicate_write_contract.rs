@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use buzz_auth::Scope;
-use buzz_core::kind::KIND_DELEGATION_GRANT;
+use buzz_core::kind::{KIND_DELEGATION_GRANT, KIND_WORKFLOW_DEF};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::Db;
@@ -97,6 +97,62 @@ async fn add_owner(pool: &PgPool, community: CommunityId, pubkey_hex: &str) {
         .execute(pool)
         .await
         .expect("insert owner relay member");
+}
+
+async fn channel(pool: &PgPool, community: CommunityId, name: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO channels \
+            (id, community_id, name, channel_type, visibility, created_by) \
+         VALUES ($1, $2, $3, 'stream'::channel_type, 'open'::channel_visibility, $4)",
+    )
+    .bind(id)
+    .bind(community.as_uuid())
+    .bind(format!("{name}-{}", id.simple()))
+    .bind([0x11_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("insert channel");
+    id
+}
+
+async fn add_channel_member(
+    pool: &PgPool,
+    community: CommunityId,
+    channel_id: Uuid,
+    pubkey: &[u8],
+) {
+    sqlx::query(
+        "INSERT INTO channel_members (community_id, channel_id, pubkey, role) \
+         VALUES ($1, $2, $3, 'member')",
+    )
+    .bind(community.as_uuid())
+    .bind(channel_id)
+    .bind(pubkey)
+    .execute(pool)
+    .await
+    .expect("insert channel member");
+}
+
+/// A kind:30620 workflow definition, the shape `buzz-sdk`'s
+/// `build_workflow_def` emits: a `d` tag carrying the workflow id, which is
+/// what puts it on `persist_command_event`'s NIP-33 branch.
+fn workflow_def(
+    author: &Keys,
+    workflow_id: &str,
+    channel_id: &str,
+    created_at: u64,
+    name: &str,
+) -> Event {
+    let yaml = format!(
+        "name: {name}\ntrigger:\n  on: message_posted\nsteps:\n  - id: notify\n    \
+         action: send_message\n    text: '{name}'\n"
+    );
+    EventBuilder::new(Kind::Custom(KIND_WORKFLOW_DEF as u16), yaml)
+        .custom_created_at(nostr::Timestamp::from_secs(created_at))
+        .tags(vec![tag(&["d", workflow_id]), tag(&["h", channel_id])])
+        .sign_with_keys(author)
+        .expect("sign workflow definition")
 }
 
 fn tag(parts: &[&str]) -> Tag {
@@ -351,4 +407,209 @@ fn wire_tokens_are_stable() {
     }
     .is_accepted());
     assert!(!WriteOutcome::Refused.is_accepted());
+}
+
+/// I1: the message prefix a WebSocket client reads must agree with the
+/// `outcome` an HTTP client reads, on every outcome.
+///
+/// NIP-01's OK frame has no room for the token, so the prefix IS the
+/// discriminator on that transport, and the two agreeing is the whole reason a
+/// client can trust either one. The constructors derive the prefix from the
+/// outcome, so this asserts the derivation rather than a hand-written string at
+/// each site.
+#[test]
+fn every_message_carries_the_prefix_its_outcome_requires() {
+    let cases = [
+        (IngestResult::stored("mine"), None),
+        (
+            IngestResult::stored_with_message("mine", r#"response:{"ok":true}"#),
+            None,
+        ),
+        (
+            IngestResult::already_stored("mine", "identical event already stored"),
+            Some("duplicate:"),
+        ),
+        (
+            IngestResult::superseded("mine", "theirs", "superseded by event theirs"),
+            Some("conflict:"),
+        ),
+        (
+            IngestResult::refused("mine", "channel already exists"),
+            Some("conflict:"),
+        ),
+    ];
+
+    for (result, expected) in cases {
+        assert_eq!(
+            result.outcome.message_prefix(),
+            expected,
+            "outcome {:?} maps to the wrong prefix",
+            result.outcome
+        );
+        match expected {
+            Some(prefix) => assert!(
+                result.message.starts_with(prefix),
+                "outcome {:?} produced message {:?}, which does not start with {prefix}",
+                result.outcome,
+                result.message
+            ),
+            None => assert!(
+                !result.message.starts_with("duplicate:")
+                    && !result.message.starts_with("conflict:"),
+                "a stored write must not look like a discard: {:?}",
+                result.message
+            ),
+        }
+        // The prefix set is closed on `accepted`: `duplicate:` only ever
+        // accompanies an accepted write, `conflict:` only a rejected one. A
+        // client branching on the prefix alone must never be misled.
+        if result.message.starts_with("duplicate:") {
+            assert!(result.accepted(), "duplicate: implies accepted");
+        }
+        if result.message.starts_with("conflict:") {
+            assert!(!result.accepted(), "conflict: implies not accepted");
+        }
+    }
+}
+
+/// I2: a discovery broker's JSON payload lives INSIDE the prefix, so this path
+/// obeys the same closed prefix set as every other duplicate path.
+///
+/// A bare JSON message would read as `stored` to a WebSocket client following
+/// the documented table, even when `accepted` is false.
+#[test]
+fn a_json_payload_still_carries_its_outcome_prefix() {
+    let superseded = IngestResult::superseded("mine", "theirs", r#"{"duplicate":true}"#);
+    assert!(
+        superseded.message.starts_with("conflict: "),
+        "got: {}",
+        superseded.message
+    );
+    assert!(
+        superseded.message.contains(r#"{"duplicate":true}"#),
+        "the payload must survive the prefixing: {}",
+        superseded.message
+    );
+}
+
+/// An empty reason yields the bare prefix, not a dangling separator.
+#[test]
+fn an_empty_reason_yields_a_bare_prefix() {
+    assert_eq!(
+        IngestResult::already_stored("mine", "").message,
+        "duplicate:"
+    );
+    assert_eq!(IngestResult::stored("mine").message, "");
+}
+
+/// C1: a command event beaten by a newer head at the same NIP-33 coordinate is
+/// NOT accepted, and the domain mutation behind it did not run.
+///
+/// `persist_command_event` runs its own dominance check, separate from
+/// `replace_parameterized_event`, and its two-variant result collapsed the same
+/// two cases #100 is about. A stale `buzz workflows update` reported
+/// `accepted: true, outcome: already_stored` while the definition row kept its
+/// old value, which is a stronger falsehood than the bug this branch fixed.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_dominated_command_write_is_not_accepted_and_names_the_winner() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db, &pool, Keys::generate()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let author = Keys::generate();
+    add_owner(&pool, community, &author.public_key().to_hex()).await;
+    let channel_id = channel(&pool, community, "workflows").await;
+    add_channel_member(
+        &pool,
+        community,
+        channel_id,
+        &author.public_key().to_bytes(),
+    )
+    .await;
+
+    let workflow_id = Uuid::new_v4().to_string();
+    let now = nostr::Timestamp::now().as_secs();
+    let newer = workflow_def(&author, &workflow_id, &channel_id.to_string(), now, "newer");
+    let stale = workflow_def(
+        &author,
+        &workflow_id,
+        &channel_id.to_string(),
+        now - 60,
+        "stale",
+    );
+
+    let first = ingest(&state, &tenant, &newer).await;
+    assert!(
+        first.accepted(),
+        "the first definition must be stored: {}",
+        first.message
+    );
+
+    let second = ingest(&state, &tenant, &stale).await;
+
+    assert!(
+        !second.accepted(),
+        "a command write the relay discarded must not be reported as accepted; got: {}",
+        second.message
+    );
+    assert_eq!(
+        second.outcome,
+        WriteOutcome::Superseded {
+            winner_event_id: newer.id.to_hex(),
+        },
+        "the discarded command write must name the head that beat it"
+    );
+    assert_eq!(
+        second.event_id,
+        stale.id.to_hex(),
+        "the response must identify the SUBMITTED event"
+    );
+    assert!(
+        !is_stored(&pool, community, &stale).await,
+        "the dominated command event must not be in the store"
+    );
+}
+
+/// The other half: re-sending the identical command event is an idempotent
+/// repeat, so it stays accepted.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn re_submitting_the_identical_command_event_is_accepted() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db, &pool, Keys::generate()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let author = Keys::generate();
+    add_owner(&pool, community, &author.public_key().to_hex()).await;
+    let channel_id = channel(&pool, community, "workflows").await;
+    add_channel_member(
+        &pool,
+        community,
+        channel_id,
+        &author.public_key().to_bytes(),
+    )
+    .await;
+
+    let workflow_id = Uuid::new_v4().to_string();
+    let def = workflow_def(
+        &author,
+        &workflow_id,
+        &channel_id.to_string(),
+        nostr::Timestamp::now().as_secs(),
+        "only",
+    );
+
+    assert!(ingest(&state, &tenant, &def).await.accepted());
+    let retry = ingest(&state, &tenant, &def).await;
+
+    assert!(
+        retry.accepted(),
+        "the retried command write DID land: {}",
+        retry.message
+    );
+    assert_eq!(retry.outcome, WriteOutcome::AlreadyStored);
+    assert_eq!(retry.event_id, def.id.to_hex());
 }
