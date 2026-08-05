@@ -78,6 +78,28 @@ pub struct AgentModelCapabilities {
     pub available_models_raw: Option<serde_json::Value>,
 }
 
+/// Cached outcome of the per-channel company-onboarding status lookup.
+///
+/// `Settled` is a real answer -- inject or don't, and never look again for
+/// the life of this session. `Unknown` means the lookup itself failed or
+/// timed out: the protocol is withheld for the message that triggered it
+/// (never guess toward injecting), but -- unlike `Settled(Approved)` --
+/// the channel's *next* message gets another attempt rather than the
+/// process silently carrying a false "it's Approved" belief for the rest
+/// of the session. See issue #98's follow-up: collapsing both into
+/// `Settled(Approved)` let a single cold-start relay timeout durably
+/// suppress the Chief of Staff's very first onboarding interview, with
+/// nothing in the product telling the founder why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingResolution {
+    /// A real answer was obtained: inject when `should_inject_company_onboarding`
+    /// says so, never re-checked for this session.
+    Settled(Option<buzz_core::company::CompanyOnboardingStatus>),
+    /// The lookup could not be completed. Worth trying again on the next
+    /// message to this channel.
+    Unknown,
+}
+
 /// Per-channel session IDs and turn counters.
 ///
 /// Separated from `OwnedAgent` so the state machine is testable without
@@ -102,6 +124,14 @@ pub struct SessionState {
     /// fetch fails — all fail open. Cleared on session invalidation alongside
     /// `core_sections` so the next session picks up any canvas change.
     pub canvas_sections: HashMap<Uuid, String>,
+    /// channel_id → last company-onboarding status lookup outcome.
+    ///
+    /// `Settled` is cached for the life of the session (no per-turn re-check).
+    /// `Unknown` is retried on the channel's next message rather than being
+    /// treated as a final answer. Cleared on session invalidation like
+    /// `core_sections`/`canvas_sections`, so a freshly (re)created session
+    /// always starts from a clean lookup.
+    pub onboarding_resolution: HashMap<Uuid, OnboardingResolution>,
 }
 
 impl SessionState {
@@ -124,6 +154,7 @@ impl SessionState {
         self.turn_counts.remove(channel_id);
         self.core_sections.remove(channel_id);
         self.canvas_sections.remove(channel_id);
+        self.onboarding_resolution.remove(channel_id);
         self.sessions.remove(channel_id).is_some()
     }
 
@@ -135,6 +166,7 @@ impl SessionState {
         self.heartbeat_turn_count = 0;
         self.core_sections.clear();
         self.canvas_sections.clear();
+        self.onboarding_resolution.clear();
     }
 
     #[cfg(test)]
@@ -143,6 +175,7 @@ impl SessionState {
             || self.turn_counts.contains_key(channel_id)
             || self.core_sections.contains_key(channel_id)
             || self.canvas_sections.contains_key(channel_id)
+            || self.onboarding_resolution.contains_key(channel_id)
     }
 }
 
@@ -859,6 +892,99 @@ async fn resolve_new_session_channel_context(
     (is_dm, title_channel)
 }
 
+/// Whether a channel needs a fresh onboarding-status lookup: either it has
+/// no session yet (first message ever, or a prior retry already invalidated
+/// it), or its cached resolution is `Unknown` (the previous attempt could
+/// not reach the relay, worth trying again). A `Settled` cache entry, in
+/// either direction, is never re-checked -- only `Unknown` retries.
+///
+/// Pure and synchronous so the retry decision is testable without a live
+/// relay or agent process.
+fn needs_onboarding_lookup(state: &SessionState, cid: &Uuid) -> bool {
+    !state.sessions.contains_key(cid)
+        || state.onboarding_resolution.get(cid) == Some(&OnboardingResolution::Unknown)
+}
+
+/// Apply a freshly resolved onboarding lookup to session state.
+///
+/// Caches the resolution unconditionally. When the resolution is `Settled`
+/// and says the protocol should now be injected, AND the channel already
+/// has a live session, that session was built without the protocol -- a
+/// lookup only re-runs when the cache was `Unknown` or absent, per
+/// `needs_onboarding_lookup` -- so it is invalidated here, and the next
+/// session creation for this channel will carry it. Returns `true` when
+/// that invalidation happened, purely so the caller can log it; nothing
+/// else should branch on the return value.
+///
+/// Pure (no I/O) so the retry-recovery behavior is testable directly
+/// against a `SessionState`, without spawning an agent or a relay.
+fn apply_onboarding_resolution(
+    state: &mut SessionState,
+    cid: Uuid,
+    resolution: OnboardingResolution,
+) -> bool {
+    let has_session = state.sessions.contains_key(&cid);
+    let should_invalidate = matches!(
+        resolution,
+        OnboardingResolution::Settled(status)
+            if has_session && crate::should_inject_company_onboarding(status)
+    );
+    if should_invalidate {
+        state.invalidate_channel(&cid);
+    }
+    // Insert AFTER any invalidation above: invalidate_channel clears this
+    // same map entry, and the freshly resolved value must win.
+    state.onboarding_resolution.insert(cid, resolution);
+    should_invalidate
+}
+
+/// The onboarding section for a session about to be created, read from the
+/// resolution cache. `None` for `Unknown` or no entry -- withhold rather
+/// than guess. Only meaningful when a NEW session is about to be created;
+/// an existing session's prompt was already sent and cannot be amended.
+fn cached_onboarding_section(state: &SessionState, cid: &Uuid) -> Option<&'static str> {
+    match state.onboarding_resolution.get(cid) {
+        Some(OnboardingResolution::Settled(status)) => {
+            crate::should_inject_company_onboarding(*status)
+                .then_some(crate::COMPANY_ONBOARDING_PROMPT)
+        }
+        _ => None,
+    }
+}
+
+/// Bounded lookup of the workspace's company onboarding status for one
+/// channel. Timeout and transport/parse failure both resolve as `Unknown`
+/// -- worth trying again -- rather than being folded into a settled
+/// `Approved`, which would make a single cold-start relay hiccup
+/// indistinguishable from "onboarding is actually done" for the rest of
+/// the session (issue #98 follow-up).
+async fn resolve_onboarding_for_channel(rest: &RestClient, cid: Uuid) -> OnboardingResolution {
+    // Bounded -- same shape as the core-memory fetch: a stalled relay must
+    // not block session creation on this lookup.
+    const ONBOARDING_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
+    let fetch = crate::work_context::fetch_company_onboarding_status(rest);
+    match tokio::time::timeout(ONBOARDING_FETCH_TIMEOUT, fetch).await {
+        Ok(Ok(status)) => OnboardingResolution::Settled(status),
+        Ok(Err(error)) => {
+            tracing::warn!(
+                target: "pool::session",
+                channel = %cid,
+                "could not resolve company onboarding status, will retry on the channel's next message: {error}"
+            );
+            OnboardingResolution::Unknown
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "pool::session",
+                channel = %cid,
+                timeout_ms = ONBOARDING_FETCH_TIMEOUT.as_millis() as u64,
+                "company onboarding status fetch timed out, will retry on the channel's next message"
+            );
+            OnboardingResolution::Unknown
+        }
+    }
+}
+
 /// Create a new ACP session via `session_new_full()`, populate model capabilities
 /// on the agent (first session only), and apply `desired_model` if set.
 ///
@@ -1446,6 +1572,47 @@ pub async fn run_prompt_task(
         .unwrap_or_default();
     let _reaction_guard = ReactionGuard::new(ctx.rest_client.clone(), reaction_ids.clone());
 
+    // Company onboarding protocol -- resolved once per channel-session
+    // lifetime, with a bounded retry on the channel's NEXT message when the
+    // previous attempt could not reach the relay. Never per turn on a
+    // settled answer, and never for heartbeats (the protocol tells the
+    // agent to publish Blocks into a channel, which a heartbeat session has
+    // none of). Must run before every other per-session fetch below: if a
+    // retry invalidates the channel's session (see below), core memory and
+    // canvas need to see that BEFORE deciding whether to re-fetch, or a
+    // freshly recreated session would carry stale/missing sections.
+    //
+    // A settled answer (we successfully asked and got Draft/Approved/no
+    // company) is cached per channel and never re-fetched for the life of
+    // that session -- re-checking every turn would add a relay round trip
+    // to the hot path for a status that changes on the order of an
+    // onboarding conversation, not a message.
+    //
+    // An unresolved answer (the fetch failed or timed out) is NOT cached as
+    // if it were a settled "Approved": that collapse let a single
+    // cold-start relay timeout durably suppress the Chief of Staff's very
+    // first onboarding interview, with nothing in the product telling the
+    // founder why (issue #98 follow-up). Instead it is retried on the
+    // channel's next message. If that retry settles to a status that
+    // should now inject and the channel already has a live session (which,
+    // by construction, was created without the protocol), the channel's
+    // session is invalidated so the next session creation carries it. A
+    // retry that settles to "should not inject" (Approved) or is still
+    // unknown leaves the live session untouched.
+    if let PromptSource::Channel(cid) = &source {
+        if needs_onboarding_lookup(&agent.state, cid) {
+            let resolution = resolve_onboarding_for_channel(&ctx.rest_client, *cid).await;
+            if apply_onboarding_resolution(&mut agent.state, *cid, resolution) {
+                tracing::info!(
+                    target: "pool::session",
+                    channel = %cid,
+                    "company onboarding status resolved after a prior unknown; invalidating \
+                     the session so the protocol reaches the agent"
+                );
+            }
+        }
+    }
+
     //
     // Core memory is delivered inside the system prompt the harness already
     // builds (system role for protocol >= 2, the `[System]` user-message
@@ -1526,17 +1693,6 @@ pub async fn run_prompt_task(
     // Channel name for the session title, from the same single resolve the
     // canvas DM check uses — see `resolve_new_session_channel_context`.
     let mut title_channel: Option<String> = None;
-    // Company onboarding protocol -- resolved once per NEW channel session,
-    // never per turn. `should_inject_company_onboarding`'s own doc comment
-    // frames this as a per-session question ("whether a session should
-    // receive..."), and re-checking on every turn would add a relay round
-    // trip to the hot path for a status that changes on the order of an
-    // onboarding conversation, not a message. If the company is approved
-    // mid-session, this session keeps the protocol until it next rotates
-    // (`max_turns_per_session`) or a new channel session is created -- an
-    // acceptable staleness window against a synchronous per-turn lookup on
-    // every agent's every turn, forever, in every workspace.
-    let mut onboarding_section: Option<&'static str> = None;
     if let PromptSource::Channel(cid) = &source {
         let is_new_channel_session = !agent.state.sessions.contains_key(cid);
         let needs_canvas = is_new_channel_session && !agent.state.canvas_sections.contains_key(cid);
@@ -1553,45 +1709,22 @@ pub async fn run_prompt_task(
                 }
             }
         }
-        if is_new_channel_session {
-            // Bounded -- same shape as the core fetch above: a stalled relay
-            // withholds the protocol for this one session rather than
-            // blocking session creation on it. A lookup failure or timeout
-            // is treated as Approved (withhold), not as "no company" (inject):
-            // telling an agent the company "does not exist yet" when that is
-            // merely unknown would be actively wrong, where silently omitting
-            // a reminder for one session is only a soft degradation.
-            const ONBOARDING_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
-            let fetch = crate::work_context::fetch_company_onboarding_status(&ctx.rest_client);
-            let status = match tokio::time::timeout(ONBOARDING_FETCH_TIMEOUT, fetch).await {
-                Ok(Ok(status)) => status,
-                Ok(Err(error)) => {
-                    tracing::warn!(
-                        target: "pool::session",
-                        channel = %cid,
-                        "could not resolve company onboarding status, withholding the protocol: {error}"
-                    );
-                    Some(buzz_core::company::CompanyOnboardingStatus::Approved)
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        target: "pool::session",
-                        channel = %cid,
-                        timeout_ms = ONBOARDING_FETCH_TIMEOUT.as_millis() as u64,
-                        "company onboarding status fetch timed out, withholding the protocol"
-                    );
-                    Some(buzz_core::company::CompanyOnboardingStatus::Approved)
-                }
-            };
-            onboarding_section = crate::should_inject_company_onboarding(status)
-                .then_some(crate::COMPANY_ONBOARDING_PROMPT);
-        }
     }
 
     // The core section to fold into the system prompt for this turn's session.
     // Channel-scoped; heartbeats carry no owner core.
     let agent_core: Option<String> = match &source {
         PromptSource::Channel(cid) => agent.state.core_sections.get(cid).cloned(),
+        PromptSource::Heartbeat => None,
+    };
+
+    // The onboarding section for a session about to be created, from the
+    // cache the resolution block above just populated (or left in place, if
+    // this channel's session already exists and is settled/no lookup was
+    // needed). Cheap in-memory read; only actually consumed below when a new
+    // session is created, which is the only place `onboarding_section` is used.
+    let onboarding_section: Option<&'static str> = match &source {
+        PromptSource::Channel(cid) => cached_onboarding_section(&agent.state, cid),
         PromptSource::Heartbeat => None,
     };
 
@@ -3901,6 +4034,7 @@ async fn clear_reactions(rest: crate::relay::RestClient, event_ids: Vec<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use buzz_core::company::CompanyOnboardingStatus;
     use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
     use serde_json::json;
 
@@ -4758,6 +4892,139 @@ mod tests {
         assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
         assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
+    }
+
+    // ── Company onboarding retry (issue #98 follow-up) ───────────────────────
+    //
+    // A cold-start relay timeout must not durably suppress the onboarding
+    // protocol for a session's whole lifetime. These pin the pure decision
+    // logic `run_prompt_task` calls, without needing a live relay or agent.
+
+    #[test]
+    fn a_first_message_with_no_session_needs_a_lookup() {
+        let s = SessionState::default();
+        let cid = Uuid::new_v4();
+        assert!(needs_onboarding_lookup(&s, &cid));
+    }
+
+    #[test]
+    fn a_settled_answer_never_needs_a_lookup_again() {
+        let mut s = SessionState::default();
+        let cid = Uuid::new_v4();
+        s.sessions.insert(cid, "sess-1".into());
+        s.onboarding_resolution.insert(
+            cid,
+            OnboardingResolution::Settled(Some(CompanyOnboardingStatus::Approved)),
+        );
+        assert!(!needs_onboarding_lookup(&s, &cid));
+
+        s.onboarding_resolution
+            .insert(cid, OnboardingResolution::Settled(None));
+        assert!(!needs_onboarding_lookup(&s, &cid));
+    }
+
+    #[test]
+    fn an_unknown_answer_needs_a_lookup_on_the_next_message() {
+        let mut s = SessionState::default();
+        let cid = Uuid::new_v4();
+        s.sessions.insert(cid, "sess-1".into());
+        s.onboarding_resolution
+            .insert(cid, OnboardingResolution::Unknown);
+        assert!(
+            needs_onboarding_lookup(&s, &cid),
+            "an unresolved status must be retried on the channel's next message, \
+             not treated as a settled answer"
+        );
+    }
+
+    #[test]
+    fn applying_unknown_withholds_and_leaves_any_existing_session_intact() {
+        let mut s = SessionState::default();
+        let cid = Uuid::new_v4();
+        s.sessions.insert(cid, "sess-1".into());
+        let invalidated = apply_onboarding_resolution(&mut s, cid, OnboardingResolution::Unknown);
+        assert!(!invalidated);
+        assert!(s.sessions.contains_key(&cid));
+        assert_eq!(cached_onboarding_section(&s, &cid), None);
+    }
+
+    #[test]
+    fn applying_settled_approved_never_invalidates() {
+        let mut s = SessionState::default();
+        let cid = Uuid::new_v4();
+        s.sessions.insert(cid, "sess-1".into());
+        let invalidated = apply_onboarding_resolution(
+            &mut s,
+            cid,
+            OnboardingResolution::Settled(Some(CompanyOnboardingStatus::Approved)),
+        );
+        assert!(!invalidated);
+        assert!(s.sessions.contains_key(&cid));
+        assert_eq!(cached_onboarding_section(&s, &cid), None);
+    }
+
+    /// The regression this fix closes: a cold-start timeout on the first
+    /// message must not durably suppress the protocol. First message times
+    /// out (`Unknown`, no section, session created anyway per the existing
+    /// fail-open shape). Second message retries, this time settling to
+    /// `Draft` -- the stale session (built without the protocol) is
+    /// invalidated, and the section the NEXT session creation will carry
+    /// is now present. Fails if the `Unknown` retry branch in
+    /// `needs_onboarding_lookup` or the invalidation in
+    /// `apply_onboarding_resolution` is removed.
+    #[test]
+    fn retry_recovers_onboarding_after_a_cold_start_timeout() {
+        let mut s = SessionState::default();
+        let cid = Uuid::new_v4();
+
+        // First message: no session yet, so a lookup is needed regardless.
+        assert!(needs_onboarding_lookup(&s, &cid));
+        let first_invalidated =
+            apply_onboarding_resolution(&mut s, cid, OnboardingResolution::Unknown);
+        assert!(!first_invalidated, "nothing existed yet to invalidate");
+        assert_eq!(
+            cached_onboarding_section(&s, &cid),
+            None,
+            "the first message must not carry the protocol while the status is unknown"
+        );
+
+        // The turn proceeds anyway (existing fail-open shape): a session
+        // gets created without the protocol.
+        s.sessions.insert(cid, "sess-1".into());
+
+        // Second message on the same channel: the cached Unknown must
+        // trigger another attempt, even though a session now exists.
+        assert!(
+            needs_onboarding_lookup(&s, &cid),
+            "an unresolved status must be retried on the channel's next message"
+        );
+        let second_invalidated = apply_onboarding_resolution(
+            &mut s,
+            cid,
+            OnboardingResolution::Settled(Some(CompanyOnboardingStatus::Draft)),
+        );
+        assert!(
+            second_invalidated,
+            "a session built without the protocol must be invalidated once \
+             a retry determines it should have had it"
+        );
+        assert!(
+            !s.sessions.contains_key(&cid),
+            "the stale session must actually be gone, not just flagged"
+        );
+        assert_eq!(
+            cached_onboarding_section(&s, &cid),
+            Some(crate::COMPANY_ONBOARDING_PROMPT),
+            "the recreated session must carry the protocol"
+        );
+
+        // Same turn, `run_prompt_task` creates the replacement session using
+        // the section just asserted above.
+        s.sessions.insert(cid, "sess-2".into());
+
+        // Settled and a session exists again: a third message must not
+        // trigger yet another lookup.
+        assert!(!needs_onboarding_lookup(&s, &cid));
     }
 
     // ── ControlSignal::SwitchModel (Phase 3a, Option ii) ─────────────────────

@@ -1077,6 +1077,41 @@ mod pool_wiring_tests {
             "the accepted onboarding section must be composed into the system prompt"
         );
     }
+
+    /// Companion to `create_session_and_apply_model_wires_the_onboarding_gate`:
+    /// that test proves the gate is consulted at session creation; this one
+    /// proves `run_prompt_task` actually retries an unresolved lookup rather
+    /// than only checking it once. Complements the pure-logic tests in
+    /// `pool::tests` (`retry_recovers_onboarding_after_a_cold_start_timeout`
+    /// and its neighbors), which prove the retry decision functions
+    /// themselves are correct in isolation but cannot prove anything calls
+    /// them in production.
+    #[test]
+    fn run_prompt_task_wires_the_onboarding_retry() {
+        let definition_start = POOL
+            .find("pub async fn run_prompt_task(")
+            .expect("run_prompt_task exists");
+        let definition_end = POOL[definition_start..]
+            .find("\nasync fn ")
+            .map(|offset| definition_start + offset)
+            .expect("a later top-level async fn bounds this one");
+        let body = &POOL[definition_start..definition_end];
+
+        assert!(
+            body.contains("needs_onboarding_lookup("),
+            "the pool must check whether an onboarding lookup is needed, including on retry"
+        );
+        assert!(
+            body.contains("apply_onboarding_resolution("),
+            "a resolved lookup must be applied -- cached, and the stale session invalidated \
+             when a retry determines it should have carried the protocol"
+        );
+        assert!(
+            body.contains("cached_onboarding_section("),
+            "the onboarding section for a new session must come from the resolution cache, \
+             not a value computed inline and disconnected from the retry cache"
+        );
+    }
 }
 
 /// The base prompt has to tell agents what the work block means.
