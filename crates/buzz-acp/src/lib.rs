@@ -1408,11 +1408,29 @@ async fn tokio_main() -> Result<()> {
         .as_deref()
         .and_then(|hex| nostr::PublicKey::from_hex(hex).ok())
     {
+        let defaults = buzz_meter::MeterConfig::default();
         let meter_config = buzz_meter::MeterConfig {
             anthropic_api_key: config.meter_anthropic_key.clone(),
             openai_api_key: config.meter_openai_key.clone(),
-            ..buzz_meter::MeterConfig::default()
+            anthropic_upstream: config
+                .meter_anthropic_upstream
+                .clone()
+                .unwrap_or(defaults.anthropic_upstream),
+            openai_upstream: config
+                .meter_openai_upstream
+                .clone()
+                .unwrap_or(defaults.openai_upstream),
+            anthropic_provider: config.meter_anthropic_provider.clone(),
+            openai_provider: config.meter_openai_provider.clone(),
         };
+        // Say which vendor each route will be recorded as, because getting it
+        // wrong is silent: the spend still appears, under a name whose invoice
+        // will never contain it.
+        tracing::info!(
+            anthropic = %meter_config.recorded_provider_anthropic(),
+            openai = %meter_config.recorded_provider_openai(),
+            "metering checkpoint provider slugs"
+        );
         // Which providers we pay for. Where we hold no key the agent keeps its
         // own login and the checkpoint only counts tokens, so metering never
         // becomes a reason an agent cannot run.
@@ -5406,6 +5424,10 @@ mod build_mcp_servers_tests {
             no_meter: true,
             meter_anthropic_key: None,
             meter_openai_key: None,
+            meter_anthropic_upstream: None,
+            meter_anthropic_provider: None,
+            meter_openai_upstream: None,
+            meter_openai_provider: None,
             imputed_cost: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
@@ -5631,6 +5653,10 @@ mod error_outcome_emission_tests {
             no_meter: true,
             meter_anthropic_key: None,
             meter_openai_key: None,
+            meter_anthropic_upstream: None,
+            meter_anthropic_provider: None,
+            meter_openai_upstream: None,
+            meter_openai_provider: None,
             imputed_cost: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,

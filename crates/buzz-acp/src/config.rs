@@ -357,6 +357,37 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_METER_OPENAI_KEY", hide_env_values = true)]
     pub meter_openai_key: Option<String>,
 
+    /// Where the checkpoint sends Anthropic-dialect calls. Defaults to
+    /// Anthropic itself.
+    ///
+    /// The checkpoint's two routes are wire formats, not vendors. Point this
+    /// at Bedrock or Vertex to meter Claude bought through them, and pair it
+    /// with `--meter-anthropic-provider` so the spend is recorded under the
+    /// name that will appear on the invoice.
+    #[arg(long, env = "BUZZ_METER_ANTHROPIC_UPSTREAM")]
+    pub meter_anthropic_upstream: Option<String>,
+
+    /// Vendor slug recorded for Anthropic-dialect calls.
+    ///
+    /// Defaults to the upstream's host (`api.deepseek.com` becomes
+    /// `deepseek`). State it when the host does not name the seller, which is
+    /// every reseller, gateway and local runtime. Costs are priced and
+    /// reconciled per provider, so this is the name the price book and the
+    /// invoice must agree on.
+    #[arg(long, env = "BUZZ_METER_ANTHROPIC_PROVIDER")]
+    pub meter_anthropic_provider: Option<String>,
+
+    /// Where the checkpoint sends OpenAI-dialect calls. Defaults to OpenAI
+    /// itself. Point it at any OpenAI-compatible vendor: DeepSeek,
+    /// OpenRouter, Alibaba, or a local runtime.
+    #[arg(long, env = "BUZZ_METER_OPENAI_UPSTREAM")]
+    pub meter_openai_upstream: Option<String>,
+
+    /// Vendor slug recorded for OpenAI-dialect calls, on the same terms as
+    /// `--meter-anthropic-provider`.
+    #[arg(long, env = "BUZZ_METER_OPENAI_PROVIDER")]
+    pub meter_openai_provider: Option<String>,
+
     /// Force every record to subscription-backed shadow cost, even calls the
     /// checkpoint's own key paid for. Calls made with an agent's own
     /// credential are already recorded that way without this flag; it exists
@@ -578,6 +609,16 @@ pub struct Config {
     pub meter_anthropic_key: Option<String>,
     /// Real OpenAI credential for the metering checkpoint.
     pub meter_openai_key: Option<String>,
+    /// Where the checkpoint sends Anthropic-dialect calls. `None` = Anthropic.
+    pub meter_anthropic_upstream: Option<String>,
+    /// Vendor slug recorded for Anthropic-dialect calls. `None` = derive it
+    /// from the upstream host.
+    pub meter_anthropic_provider: Option<String>,
+    /// Where the checkpoint sends OpenAI-dialect calls. `None` = OpenAI.
+    pub meter_openai_upstream: Option<String>,
+    /// Vendor slug recorded for OpenAI-dialect calls. `None` = derive it from
+    /// the upstream host.
+    pub meter_openai_provider: Option<String>,
     /// Usage is subscription-backed shadow cost, not metered money.
     pub imputed_cost: bool,
     /// Inbound author gate mode.
@@ -1143,6 +1184,10 @@ impl Config {
             no_meter: args.no_meter,
             meter_anthropic_key: args.meter_anthropic_key.clone(),
             meter_openai_key: args.meter_openai_key.clone(),
+            meter_anthropic_upstream: args.meter_anthropic_upstream.clone(),
+            meter_anthropic_provider: args.meter_anthropic_provider.clone(),
+            meter_openai_upstream: args.meter_openai_upstream.clone(),
+            meter_openai_provider: args.meter_openai_provider.clone(),
             imputed_cost: args.imputed_cost,
             config_path: args.config,
             context_message_limit: args.context_message_limit,
@@ -1508,6 +1553,10 @@ mod tests {
             no_meter: true,
             meter_anthropic_key: None,
             meter_openai_key: None,
+            meter_anthropic_upstream: None,
+            meter_anthropic_provider: None,
+            meter_openai_upstream: None,
+            meter_openai_provider: None,
             imputed_cost: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
