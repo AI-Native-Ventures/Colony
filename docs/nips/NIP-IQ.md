@@ -11,7 +11,8 @@ This NIP defines Colony's agent-to-human escalation protocol: a typed **Ask**
 credential, or a real-world action, plus the events that answer, withdraw,
 and audit it. Asks travel up a fixed altitude ladder, worker to leader,
 leader to executive, executive to a community owner, and the relay refuses
-to deliver an ordinary agent's message to an owner at all. This turns
+an ordinary agent's direct message to an owner at ingest, on every kind that
+could carry one (see "Owner-contact wall" for the exact list). This turns
 "every agent could message the founder" into a bounded queue where only the
 executive (Chief of Staff) ever reaches a human directly.
 
@@ -263,6 +264,18 @@ the community's `owner` role (an Ask addressed to "the owner" is addressed
 to the role, so any co-owner may answer it, not only the one named), or the
 relay itself.
 
+**Never put a secret in `answer`.** A resolution is an ordinary global
+event: it is stored unencrypted, fans out like any other event, and nothing
+scopes it to the Ask's participants. `answer` accepts any JSON, so nothing
+stops an API key, password, or token being pasted into it, and the relay
+does not reject one. This matters most for a `credential` Ask, whose whole
+point is that the secret travels out of band: the Ask schema deliberately
+carries no secret-value field (see "Ask types" above), and the resolution is
+an acknowledgement that the credential was delivered by that separate
+channel (a vault, a DM, or similar), never the credential itself. The same
+applies to any other Ask type whose answer is tempting to write out in
+full.
+
 ### Kind 44302: Ask Withdrawal
 
 ```jsonc
@@ -379,8 +392,9 @@ For a kind this protocol touches, ingest applies checks in this order
 2. **Ban/timeout write-block**: the generic moderation gate.
 3. **Owner-contact wall** (`interrupt_gate::enforce_owner_contact`):
    applies only to kinds 9 (stream message), 40002 (stream message v2),
-   40003 (stream message edit), and 41010 (DM open); every other kind,
-   including all five interrupt-core kinds, is unaffected by this step.
+   40003 (stream message edit), 41010 (DM open), 41011 (DM add member) and
+   1059 (NIP-17 gift wrap); every other kind, including all five
+   interrupt-core kinds, is unaffected by this step.
 4. **Kind-specific schema and authority checks**: for a delegation grant,
    `parse_grant` then `enforce_grant_authorship`; for a decision log,
    `parse_decision_log` then `enforce_decision_log_authority`.
@@ -404,9 +418,31 @@ with `restricted: worker agents cannot address an owner` (or `leader`).
 `executive`-tier and untiered signers (humans, unmanaged clients) are
 unrestricted.
 
-For DM open (kind 41010), an owner among the participants is always
-rejected (`restricted: {tier} agents cannot open a DM with an owner`); there
-is no reply exemption for opening a new DM.
+**Scope: every kind that can reach a human's inbox.** Kinds 9, 40002 and
+40003 (stream messages and edits), 41010 (DM open), 41011 (DM add member)
+and 1059 (NIP-17 gift wrap). 41010 and 41011 are `is_command_kind` kinds,
+which normally return from ingest *before* the ban/timeout write-block and
+this gate, so both are explicitly excluded from
+`takes_generic_command_branch` and re-dispatched to the command executor
+past both gates. Adding a new kind that can address a pubkey directly owes
+the same treatment.
+
+**The acting identity is the AUTHENTICATED pubkey, not the event's signer.**
+A NIP-17 gift wrap is signed by a throwaway ephemeral key, and ingest
+deliberately allows that pubkey mismatch, so resolving the tier of
+`event.pubkey` would find no managed-agent head and wave every wrap through.
+For every other gated kind ingest has already rejected the write unless the
+two match, so this is the same pubkey either way.
+
+For the direct-contact kinds (41010, 41011, 1059), an owner among the `p`
+tags is always rejected (`restricted: {tier} agents cannot open a DM with an
+owner` / `cannot add an owner to a DM` / `cannot send a private message to
+an owner`); none of them has a thread to carry a reply exemption. On 41011
+the `p` tags name the participants being *added*, which is exactly the
+escalation this refuses (open a permitted DM with the leader, then add the
+owner); it does not restrict a DM that already contained the owner before
+the add, since that DM was necessarily opened by someone this gate already
+let through.
 
 For message kinds (9, 40002, 40003), the write is allowed only under a
 thread-scoped **reply exemption**: the event must carry a NIP-10 `root` (or
@@ -566,7 +602,16 @@ at the batch limit, ordered oldest-deadline-first, cross-community):
   the exact window between the claim committing and the successor being
   filed is **not** repaired here (see "Known limitations").
 - **Audience resolves to `executive` tier** (and is not currently an
-  owner): already at the top of the agent hierarchy; re-deadline.
+  owner): promote one rung further, to the community's unique human
+  **owner**, through the same `promote_to` path as above. This is the last
+  hop, and the only relay-driven path that ever reaches a person: without
+  it, an executive that is dead, hung, or simply not running would silently
+  accumulate asks against it forever while the founder learned nothing.
+  Never guessed, exactly as with the executive: if the community has zero or
+  more than one owner, the row is re-deadlined instead and logged, rather
+  than putting a founder's decision in front of whichever co-owner sorts
+  first. Once addressed to an owner, the Ask is at the genuine top of the
+  ladder and the two owner-audience branches above take over.
 - **Audience resolves to `worker`, or does not resolve to any tier or
   current owner**: an invariant that should not hold (a worker should
   never be an audience; a demoted or re-tiered audience is a data-drift
@@ -622,19 +667,26 @@ act on.
    gone silent"`, no `options`, no `default_option`) through the ordinary
    ask broker, so it dedupes exactly like any other filing.
 
-**Known false negative, stated plainly.** For an *implicit*, chat-derived
-task, `sourceChannelId` is not a dedicated work channel, it **is** the
-human conversation the task was inferred from. This sweep cannot
-distinguish "the agent is still posting progress here" from "two humans
-are chatting about something unrelated in the same channel": either resets
-the silence measurement and suppresses stall detection for as long as the
-channel stays busy. This is backwards from what it should be: implicit
-tasks are exactly the ones nobody deliberately organized under an
-initiative, and so are the likeliest to silently fall through the cracks,
-yet they are also the ones this signal is weakest for. Accepted as the best
-signal available given the current event model (no kind reliably ties an
-ordinary work message to the specific task it advances), not silently
-worked around.
+**Known false negative, stated plainly.** The silence signal is *channel*
+activity, and it applies to **every** in-progress task regardless of origin,
+not only to implicit chat-derived ones. Any task whose `sourceChannelId` is
+a busy channel is equally undetectable: this sweep cannot distinguish "the
+agent is still posting progress here" from "two people are chatting about
+something unrelated in the same channel", and either resets the silence
+measurement and suppresses stall detection for as long as the channel stays
+busy. A dead agent working an explicit task in a team channel where anyone
+else is talking is therefore invisible to this sweep for as long as that
+conversation continues.
+
+It is worst for an *implicit*, chat-derived task, where `sourceChannelId` is
+not a dedicated work channel at all, it **is** the human conversation the
+task was inferred from, so the noise is guaranteed rather than incidental.
+That is backwards from what it should be: implicit tasks are exactly the
+ones nobody deliberately organized under an initiative, and so are the
+likeliest to silently fall through the cracks. Accepted as the best signal
+available given the current event model (no kind reliably ties an ordinary
+work message to the specific task it advances), not silently worked
+around.
 
 ## Client Behavior (`buzz asks`)
 
@@ -673,10 +725,12 @@ signed directly against the schemas above.
 
 ## Known Limitations
 
-- **Stall detection can be suppressed indefinitely for implicit,
-  chat-derived tasks.** See "Known false negative" under "Stall-detection
-  sweep" above: ordinary conversation in a task's own source channel resets
-  the silence signal, exactly for the tasks most likely to actually stall.
+- **Stall detection can be suppressed indefinitely for ANY task in a busy
+  channel.** See "Known false negative" under "Stall-detection sweep" above:
+  ordinary conversation in a task's own source channel resets the silence
+  signal, for every task regardless of origin. It is guaranteed rather than
+  incidental for implicit, chat-derived tasks, which are also the ones most
+  likely to actually stall.
 - **A delegation grant's `cap_nano_usd` spending cap is parsed and stored,
   but enforced nowhere.** It documents intent; nothing in this codebase
   checks a decision log, or anything else, against it.

@@ -309,6 +309,15 @@ async fn filter_open_asks(
 ///
 /// Resolutions carry no `h` tag: they are global events. A channel-scoped
 /// auth token will be rejected; use one authorized to write global events.
+///
+/// **The answer must never carry a secret value.** `answer` is any JSON and
+/// the relay does not inspect it, but the resolution is stored unencrypted,
+/// fans out like any other event, and nothing scopes it to the ask's
+/// participants -- so an API key pasted here is readable by anyone on the
+/// relay. A `credential` ask deliberately carries no secret-value field for
+/// exactly this reason (`docs/nips/NIP-IQ.md`, "Ask types"): the credential
+/// itself travels out of band and this resolution is the acknowledgement
+/// that it did.
 async fn cmd_answer_ask(client: &BuzzClient, ask: &str, answer_json: &str) -> Result<(), CliError> {
     validate_hex64(ask)?;
     let raw_answer = read_or_stdin(answer_json)?;

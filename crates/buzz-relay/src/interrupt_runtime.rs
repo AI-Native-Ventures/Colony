@@ -1152,22 +1152,29 @@ async fn process_stall_candidate(
     // `sourceChannelId` (real work happening where the task lives). Only
     // when BOTH are old does the sweep consider the task silent.
     //
-    // KNOWN FALSE NEGATIVE, stated plainly here rather than only in a report:
-    // for an IMPLICIT, chat-derived task, `sourceChannelId` is not a
-    // dedicated work channel -- it IS the human conversation the task was
-    // inferred from. This sweep cannot tell "the agent is still posting
-    // progress here" apart from "two humans are chatting about something
-    // else in the same channel" -- either one resets `last_activity_secs`
-    // and suppresses stall detection for as long as the channel stays busy.
-    // This is exactly backwards from what ruling 3 (see `NO_INITIATIVE_SENTINEL`)
-    // establishes: implicit tasks are the ones nobody deliberately organized
-    // under an initiative, and so are the likeliest to be the kind that
-    // silently falls through the cracks -- yet they are also the ones this
-    // signal is weakest for, since a busy channel can mask a truly dead
-    // agent indefinitely. Accepted as the best signal available today given
-    // the current event model (no kind reliably ties an ordinary work
-    // message to the specific task it advances -- see `stall_need_key`'s
-    // sibling module docs), not silently worked around.
+    // KNOWN FALSE NEGATIVE, stated plainly here rather than only in a report,
+    // and stated at its real width: the signal below is CHANNEL activity, and
+    // the computation applies to EVERY in-progress task regardless of origin.
+    // Any task whose `sourceChannelId` is a busy channel is undetectable --
+    // this sweep cannot tell "the agent is still posting progress here" apart
+    // from "two people are chatting about something else in the same
+    // channel", and either one resets `last_activity_secs` and suppresses
+    // stall detection for as long as the channel stays busy. A dead agent
+    // working an ORDINARY, explicit task in a team channel where anyone else
+    // is talking is therefore just as invisible as one working an implicit
+    // task. (An earlier version of this comment scoped the limitation to
+    // implicit tasks only; the code never did.)
+    //
+    // It is worst for an IMPLICIT, chat-derived task, where `sourceChannelId`
+    // is not a dedicated work channel at all -- it IS the human conversation
+    // the task was inferred from -- so the noise is guaranteed rather than
+    // incidental. That is exactly backwards from what ruling 3 (see
+    // `NO_INITIATIVE_SENTINEL`) establishes: implicit tasks are the ones
+    // nobody deliberately organized under an initiative, and so are the
+    // likeliest to silently fall through the cracks. Accepted as the best
+    // signal available today given the current event model (no kind reliably
+    // ties an ordinary work message to the specific task it advances -- see
+    // `stall_need_key`'s sibling module docs), not silently worked around.
     let channel_last_activity = state
         .db
         .get_last_message_at(candidate.community_id, source_channel_id)

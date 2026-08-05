@@ -175,9 +175,14 @@ simple and testable.
 thread root events. Any code that inserts replies must update these counters —
 check existing reply handlers for the pattern.
 
-**Agent asks**: agents never message owners directly; they raise typed asks via
-`buzz asks raise` (see docs/nips/NIP-IQ.md). Tiers live in the managed-agent head
-`tier` field.
+**Agent asks**: a `worker`- or `leader`-tier agent cannot message an owner
+directly, and the relay refuses it at ingest rather than trusting a prompt: a
+stream message or edit p-tagging them (kinds 9, 40002, 40003), opening a DM
+with them (41010), adding them to one (41011), and a NIP-17 gift wrap
+addressed to them (1059). The one exemption is thread-scoped (replying inside
+a thread the owner started, or one they pulled the agent into). Agents raise
+typed asks via `buzz asks raise` instead (see docs/nips/NIP-IQ.md). Tiers live
+in the managed-agent head `tier` field.
 
 ---
 

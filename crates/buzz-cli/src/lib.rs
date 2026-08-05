@@ -2485,11 +2485,19 @@ pub enum AsksCmd {
     },
     /// Answer an open ask (kind 44301). Requires a token authorized to
     /// write global events: resolutions carry no channel (`h`) tag.
+    ///
+    /// NEVER put a secret in the answer. A resolution is an ordinary global
+    /// event: stored unencrypted, fanned out like any other event, and
+    /// scoped to nobody. For a `credential` ask the secret travels out of
+    /// band (a vault, a DM, or similar) and this answer is only the
+    /// acknowledgement that it was delivered that way.
     Answer {
         /// The ask event id (64-char hex) being answered
         #[arg(long)]
         ask: String,
-        /// Answer payload as JSON. Use '-' to read from stdin.
+        /// Answer payload as JSON. Use '-' to read from stdin. NEVER an API
+        /// key, password, or token: this is stored as an ordinary
+        /// unencrypted global event that anyone on the relay can read.
         #[arg(long = "answer-json")]
         answer_json: String,
     },
