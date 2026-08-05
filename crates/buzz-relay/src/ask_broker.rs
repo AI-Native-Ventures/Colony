@@ -432,6 +432,73 @@ async fn close_superseded_prior(
     }
 }
 
+/// After a resolution closes an ask that superseded a prior (a manual
+/// escalation chain), wake the PRIOR's filer too: the answer belongs to
+/// whoever was originally blocked, not only to the agent that carried the
+/// ask upward. Additive and best-effort -- the audience receipt has
+/// already gone out.
+///
+/// `prior` is an unauthenticated tag (see [`close_superseded_prior`]), so
+/// the same standing rule gates this wake: the prior ask's audience must
+/// BE the resolved ask's signer, and a relay-filed stall prior is never
+/// woken this way. Without those checks an agent could point `prior` at
+/// any ask in the community and have the relay deliver "resolved" wake-ups
+/// to its filer.
+async fn wake_superseded_prior_filer(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    successor_event: &Event,
+    successor_ask: &ParsedAsk,
+) {
+    let Some(prior_hex) = &successor_ask.prior_ask_hex else {
+        return;
+    };
+    let Ok(prior_bytes) = hex::decode(prior_hex) else {
+        return;
+    };
+    let prior = match state
+        .db
+        .find_ask_by_event_id(tenant.community(), &prior_bytes)
+        .await
+    {
+        Ok(Some(prior)) => prior,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%error, "upstream wake: failed to load the prior ask row");
+            return;
+        }
+    };
+    if prior.ask_type == AskType::Stall.as_str() {
+        return;
+    }
+    if prior.audience_pubkey != successor_event.pubkey.to_bytes().to_vec() {
+        return;
+    }
+    let Some(origin_thread) = &prior.origin_thread else {
+        return;
+    };
+    let Ok(filer) = PublicKey::from_slice(&prior.filer_pubkey) else {
+        return;
+    };
+    // The audience receipt may already have reached this same agent (a
+    // self-escalation, or resolve_filer landing on the same key); one wake
+    // is enough.
+    if let Ok(primary) = resolve_filer(state, successor_event, successor_ask) {
+        if primary == filer {
+            return;
+        }
+    }
+    emit_ask_receipt(
+        tenant,
+        state,
+        &hex::encode(origin_thread),
+        &format!("Ask resolved upstream: {}", successor_ask.headline),
+        filer,
+        None,
+    )
+    .await;
+}
+
 /// Extract an `AskRow`'s event id as a fixed-size array. The `asks` table
 /// only ever stores 32-byte event ids, so a mismatch is an internal
 /// invariant violation, not a bad request.
@@ -711,6 +778,8 @@ async fn handle_resolution(
         )
         .await;
     }
+
+    wake_superseded_prior_filer(tenant, state, &stored_ask.event, &ask).await;
 
     Ok(AskBrokerOutcome::Applied)
 }

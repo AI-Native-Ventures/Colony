@@ -553,6 +553,29 @@ legitimately post in (a member, or an open channel), preventing the relay
 from being tricked into delivering attacker-chosen text into a channel the
 filer cannot write to.
 
+**Resolving an escalated Ask also wakes the superseded prior's filer.**
+When a manual escalation's `prior` tag closed an earlier Ask (see
+"`prior` names the Ask this one supersedes" above), that closure posts no
+receipt of its own: the work is continuing one tier up, not resolved. But
+when the *successor* Ask is later resolved, the agent that carried the Ask
+upward is not the only one waiting on the outcome; the original filer is.
+So resolving a successor Ask also posts a second, additive wake-up receipt
+into the *prior* Ask's own origin thread, p-tagging its original filer, with
+content prefixed `Ask resolved upstream: `. This fires from the resolution
+path alone, independent of whether the successor Ask itself carries an
+origin thread.
+
+The standing rule is the same one that gates the supersede-close itself:
+the prior Ask's `audience` must BE the resolved (successor) Ask's signer.
+Since `prior` is an unauthenticated tag naming any event id in the
+community, without this check an agent could point `prior` at any other
+Ask and have the relay deliver a "resolved" wake-up to its filer. A `stall`
+Ask's filer is never woken this way either, for the same reason a `stall`
+Ask is never closed by a superseding escalation: it has no filer standing
+behind it. If the prior Ask's own wake-up would land on the same pubkey the
+successor's audience receipt above already reached, the upstream wake is
+skipped, since one wake is enough.
+
 ### Owner thread-reply auto-resolution
 
 An owner does not have to answer an Ask through its card. Replying inside

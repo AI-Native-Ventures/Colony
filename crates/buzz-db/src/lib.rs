@@ -5665,6 +5665,16 @@ impl Db {
         asks::find_open_ask_by_event_id(&self.pool, community, ask_event_id).await
     }
 
+    /// Returns the ask whose filing event is `ask_event_id`, regardless of
+    /// status, or `None`. See [`asks::find_ask_by_event_id`].
+    pub async fn find_ask_by_event_id(
+        &self,
+        community: CommunityId,
+        ask_event_id: &[u8],
+    ) -> Result<Option<asks::AskRow>> {
+        asks::find_ask_by_event_id(&self.pool, community, ask_event_id).await
+    }
+
     /// Returns the currently open ask for `(community, initiative_id,
     /// need_key)`, or `None` if there isn't one.
     pub async fn find_open_ask_by_need(
