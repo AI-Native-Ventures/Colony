@@ -201,6 +201,33 @@ async fn process_due_ask(
     };
     let tenant = TenantContext::resolved(row.community_id, host);
 
+    // Load the backing ask event ONCE, here, before any branch decides what
+    // to do with the row (I2, completed). The two guards this replaces sat
+    // inside `execute_default` and `promote_to`, which meant a ghost row was
+    // only ever detected on the paths that happen to need the event: an
+    // owner-audience ask with no `default_option` returned at the
+    // top-of-ladder branch below, and `promote_or_redeadline` declined
+    // before reaching `promote_to` whenever the next rung could not be
+    // resolved, so both re-deadlined a wedged need forever. An executive
+    // filing to the owner with no stated default is the ORDINARY
+    // top-of-ladder ask, so that was the filing whose loss mattered most.
+    // Hoisting the lookup covers every shape structurally, rather than
+    // covering two shapes and leaving the rest to be discovered later.
+    let Some(stored_ask) = state
+        .db
+        .get_event_by_id(tenant.community(), &row.ask_event_id)
+        .await
+        .map_err(|error| format!("database error loading ask event: {error}"))?
+    else {
+        if let Err(close_error) = close_ask_with_no_backing_event(state, &tenant, row).await {
+            tracing::warn!(
+                %close_error,
+                "interrupt sweep: failed to close an ask with no backing event"
+            );
+        }
+        return Err("ask row exists with no backing event".to_string());
+    };
+
     let audience_hex = hex::encode(&row.audience_pubkey);
     let audience_is_owner = state
         .db
@@ -211,14 +238,14 @@ async fn process_due_ask(
 
     if audience_is_owner {
         if let Some(default_option) = row.default_option.as_deref() {
-            return execute_default(state, &tenant, row, default_option, stats).await;
+            return execute_default(state, &tenant, row, &stored_ask, default_option, stats).await;
         }
         // Owner-audience ask with no default: already at the very top of the
         // ladder, nowhere higher to escalate. Re-deadline rather than spin.
         return redeadline(state, tenant.community(), row, now_secs).await;
     }
 
-    promote_or_redeadline(state, &tenant, row, now_secs, stats).await
+    promote_or_redeadline(state, &tenant, row, &stored_ask, now_secs, stats).await
 }
 
 /// Default-execute a due, owner-audience decision: sign a relay-authored
@@ -242,27 +269,10 @@ async fn execute_default(
     state: &Arc<AppState>,
     tenant: &TenantContext,
     row: &AskRow,
+    stored_ask: &buzz_core::StoredEvent,
     default_option: &str,
     stats: &mut InterruptTickStats,
 ) -> Result<(), String> {
-    let Some(stored_ask) = state
-        .db
-        .get_event_by_id(tenant.community(), &row.ask_event_id)
-        .await
-        .map_err(|error| format!("database error loading ask event: {error}"))?
-    else {
-        // Invariant violation -- an `asks` row should never outlive its
-        // backing event -- and re-deadlining it (the original C2 fix) only
-        // yielded the batch slot, leaving the need permanently unfileable.
-        // Close it instead; see [`close_ask_with_no_backing_event`].
-        if let Err(close_error) = close_ask_with_no_backing_event(state, tenant, row).await {
-            tracing::warn!(
-                %close_error,
-                "interrupt sweep: failed to close an ask with no backing event"
-            );
-        }
-        return Err("ask row exists with no backing event".to_string());
-    };
     let ask = parse_ask(&stored_ask.event)
         .map_err(|error| format!("stored ask event failed to parse: {error}"))?;
 
@@ -359,6 +369,7 @@ async fn promote_or_redeadline(
     state: &Arc<AppState>,
     tenant: &TenantContext,
     row: &AskRow,
+    stored_ask: &buzz_core::StoredEvent,
     now_secs: i64,
     stats: &mut InterruptTickStats,
 ) -> Result<(), String> {
@@ -378,7 +389,7 @@ async fn promote_or_redeadline(
                 );
                 return redeadline(state, tenant.community(), row, now_secs).await;
             };
-            promote_to(state, tenant, row, executive, stats).await
+            promote_to(state, tenant, row, stored_ask, executive, stats).await
         }
         Some(AgentTier::Executive) => {
             let Some(owner) = find_unique_owner(tenant, state).await? else {
@@ -391,7 +402,7 @@ async fn promote_or_redeadline(
                 );
                 return redeadline(state, tenant.community(), row, now_secs).await;
             };
-            promote_to(state, tenant, row, owner, stats).await
+            promote_to(state, tenant, row, stored_ask, owner, stats).await
         }
         Some(AgentTier::Worker) | None => {
             // A worker is never a legitimate ask audience (workers only
@@ -459,28 +470,10 @@ async fn promote_to(
     state: &Arc<AppState>,
     tenant: &TenantContext,
     row: &AskRow,
+    stored_ask: &buzz_core::StoredEvent,
     target: PublicKey,
     stats: &mut InterruptTickStats,
 ) -> Result<(), String> {
-    let Some(stored_ask) = state
-        .db
-        .get_event_by_id(tenant.community(), &row.ask_event_id)
-        .await
-        .map_err(|error| format!("database error loading ask event to promote: {error}"))?
-    else {
-        // Invariant violation, same reasoning and same remedy as
-        // `execute_default`'s identical guard. The original row is still
-        // `open` here (nothing has been claimed yet), so
-        // `close_ask_with_no_backing_event`'s conditional `UPDATE` will win.
-        if let Err(close_error) = close_ask_with_no_backing_event(state, tenant, row).await {
-            tracing::warn!(
-                %close_error,
-                "interrupt sweep: failed to close an ask with no backing event to promote"
-            );
-        }
-        return Err("ask row exists with no backing event to promote".to_string());
-    };
-
     let mut tags: Vec<Tag> = stored_ask
         .event
         .tags
@@ -682,9 +675,17 @@ async fn close_ask_with_no_backing_event(
     tenant: &TenantContext,
     row: &AskRow,
 ) -> Result<(), String> {
+    // Describes what was OBSERVED, not a cause inferred from it:
+    // `get_event_by_id` filters out soft-deleted events, so an ask that was
+    // legitimately stored and later deleted is indistinguishable here from
+    // one that never landed. Both wedge the need identically (resolution and
+    // withdrawal load the referenced event through the same filtered read),
+    // so both deserve this closure -- but the reason an operator reads must
+    // not assert the one it cannot tell apart from the other.
     let reason = format!(
-        "closed by the relay: this ask's own event (id {}) was never stored, so the ask could \
-         not be answered, withdrawn, or re-filed. Releasing the need so it can be raised again.",
+        "closed by the relay: this ask's own event (id {}) could not be loaded -- it was never \
+         stored, or has been deleted since -- so the ask could not be answered, withdrawn, or \
+         re-filed. Releasing the need so it can be raised again.",
         hex::encode(&row.ask_event_id)
     );
     let content = serde_json::json!({ "reason": reason }).to_string();

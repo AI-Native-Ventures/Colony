@@ -1235,9 +1235,62 @@ async fn owner_audience_ask_with_no_backing_event_is_closed_not_redeadlined() {
     let parsed = buzz_core::interrupt::parse_withdrawal(&stored.event)
         .expect("the synthetic withdrawal must satisfy the real parser");
     assert!(
-        parsed.reason.contains("never stored"),
-        "the reason must name the cause, got: {}",
+        parsed.reason.contains("could not be loaded"),
+        "the reason must describe the observable condition, got: {}",
         parsed.reason
+    );
+}
+
+/// I2, completed (verification pass): the two guards the original ruling
+/// named only fire on paths that LOAD the event, so this shape -- an
+/// owner-audience ask with no `default_option` -- was still re-deadlined
+/// forever, because `process_due_ask` returns at the top-of-ladder branch
+/// without ever calling `get_event_by_id`. That is precisely the ordinary
+/// shape of an executive filing to the owner, so it is the filing whose loss
+/// matters most, and it was clearable only by a DBA.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn owner_audience_ask_with_no_default_and_no_backing_event_is_closed() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let ghost = file_ghost_ask_row(
+        &db,
+        community,
+        &owner,
+        &executive,
+        "ghost-owner-no-default",
+        // The difference that mattered: no stated default, so the sweep
+        // takes the top-of-ladder re-deadline branch, not `execute_default`.
+        None,
+        now - 10,
+    )
+    .await;
+
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("one bad row must never fail the whole tick");
+
+    let row = fetch_ask_row(&pool, community, &ghost).await;
+    assert_eq!(
+        row.status, "withdrawn",
+        "every shape of ghost row must be closed, not only the two that happen \
+         to load the event"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "ghost-owner-no-default")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "closing the row must release the dedupe slot"
     );
 }
 
