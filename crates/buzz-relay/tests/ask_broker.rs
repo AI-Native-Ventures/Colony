@@ -387,7 +387,7 @@ fn expect_ingest_rejected(
         Ok(accepted) => panic!(
             "{what}: expected rejection, got accepted={} message={}",
             accepted.accepted(),
-            accepted.message
+            accepted.message()
         ),
     }
 }
@@ -1204,7 +1204,7 @@ async fn a_valid_ask_through_the_real_ingest_pipeline_is_stored_and_queryable() 
     assert!(
         result.accepted(),
         "ask must be accepted: {}",
-        result.message
+        result.message()
     );
 
     // Proof it was NOT swallowed the way a Company Action would be: the raw
@@ -1266,7 +1266,7 @@ async fn ask_filed_into_an_archived_channel_leaves_no_asks_row() {
         Ok(accepted) => panic!(
             "filing into an archived channel must be rejected, got accepted={} message={}",
             accepted.accepted(),
-            accepted.message
+            accepted.message()
         ),
     }
 
@@ -2960,7 +2960,7 @@ async fn ingest_reply(
     assert!(
         result.accepted(),
         "thread reply must be accepted: {}",
-        result.message
+        result.message()
     );
     event
 }
@@ -3431,7 +3431,7 @@ async fn a_grant_signed_by_a_current_owner_is_accepted_through_ingest() {
     assert!(
         result.accepted(),
         "grant must be accepted: {}",
-        result.message
+        result.message()
     );
 
     let stored = db
@@ -3680,7 +3680,7 @@ async fn a_decision_log_signed_by_a_leader_citing_an_active_grant_is_accepted_th
     assert!(
         result.accepted(),
         "decision log must be accepted: {}",
-        result.message
+        result.message()
     );
 
     let stored = db
@@ -3937,7 +3937,7 @@ async fn a_decision_log_at_exactly_the_cap_is_accepted() {
     assert!(
         result.accepted(),
         "decision log must be accepted: {}",
-        result.message
+        result.message()
     );
 
     let stored = db
@@ -4003,7 +4003,7 @@ async fn a_decision_log_with_an_amount_under_an_uncapped_grant_is_accepted() {
     assert!(
         result.accepted(),
         "decision log must be accepted: {}",
-        result.message
+        result.message()
     );
 
     let stored = db
@@ -4070,7 +4070,7 @@ async fn a_withdrawal_through_the_real_ingest_pipeline_closes_the_ask_and_is_sto
     assert!(
         result.accepted(),
         "withdrawal must be accepted: {}",
-        result.message
+        result.message()
     );
 
     assert!(

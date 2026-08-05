@@ -619,7 +619,7 @@ async fn worker_dm_open_through_real_ingest_pipeline_is_rejected() {
         ),
         Ok(accepted) => panic!(
             "expected rejection through the real pipeline, got accepted={} message={}",
-            accepted.accepted(), accepted.message
+            accepted.accepted(), accepted.message()
         ),
     }
 }
@@ -657,16 +657,16 @@ async fn legitimate_dm_open_through_real_ingest_pipeline_reaches_handle_dm_open(
     assert!(
         result.accepted(),
         "DM open must be accepted, message: {}",
-        result.message
+        result.message()
     );
     // `handle_dm_open`'s exact response shape (`response:{"channel_id":...,
     // "created":true}`) is only produced by that handler -- this proves the
     // post-gate re-dispatch actually delivered the event there, not merely
     // that `ingest_event` returned `Ok` via some other path.
     assert!(
-        result.message.starts_with("response:") && result.message.contains("\"created\":true"),
+        result.message().starts_with("response:") && result.message().contains("\"created\":true"),
         "expected handle_dm_open's response shape, got: {}",
-        result.message
+        result.message()
     );
 }
 
@@ -738,9 +738,9 @@ async fn open_dm_through_ingest(
     assert!(
         result.accepted(),
         "opening a permitted DM must be accepted: {}",
-        result.message
+        result.message()
     );
-    response_channel_id(&result.message)
+    response_channel_id(result.message())
 }
 
 #[tokio::test]
@@ -793,7 +793,7 @@ async fn worker_dm_add_member_of_an_owner_through_real_ingest_pipeline_is_reject
         ),
         Ok(accepted) => panic!(
             "expected rejection through the real pipeline, got accepted={} message={}",
-            accepted.accepted(), accepted.message
+            accepted.accepted(), accepted.message()
         ),
     }
 }
@@ -831,19 +831,19 @@ async fn legitimate_dm_add_member_through_real_ingest_pipeline_reaches_its_handl
     assert!(
         result.accepted(),
         "DM add-member must be accepted, message: {}",
-        result.message
+        result.message()
     );
     // `handle_dm_add_member`'s response carries a `channel_id` and -- unlike
     // `handle_dm_open`'s -- no `created` field, so this proves the re-dispatch
     // reached that handler specifically, not merely that ingest returned `Ok`
     // through some other path.
     assert!(
-        result.message.starts_with("response:") && !result.message.contains("\"created\""),
+        result.message().starts_with("response:") && !result.message().contains("\"created\""),
         "expected handle_dm_add_member's response shape, got: {}",
-        result.message
+        result.message()
     );
     assert_ne!(
-        response_channel_id(&result.message),
+        response_channel_id(result.message()),
         dm_channel,
         "adding a member creates a NEW dm channel (DM participant sets are immutable)"
     );
@@ -897,7 +897,7 @@ async fn worker_gift_wrap_to_an_owner_through_real_ingest_pipeline_is_rejected()
         ),
         Ok(accepted) => panic!(
             "expected rejection through the real pipeline, got accepted={} message={}",
-            accepted.accepted(), accepted.message
+            accepted.accepted(), accepted.message()
         ),
     }
 }
@@ -931,6 +931,6 @@ async fn gift_wrap_from_an_untiered_sender_to_an_owner_is_still_accepted() {
     assert!(
         result.accepted(),
         "gift wrap must be accepted: {}",
-        result.message
+        result.message()
     );
 }

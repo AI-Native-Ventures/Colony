@@ -39,9 +39,15 @@ fn relay_url() -> String {
 }
 
 /// The Host the relay will see, derived from the same `RELAY_URL` the client
-/// dials. The relay binds every request to a community by Host header, so a
-/// hardcoded host silently 404s whenever `RELAY_URL` points anywhere but the
-/// default port.
+/// dials.
+///
+/// The relay binds every request to a community by Host header, and this test
+/// seeds its fixtures (community, owner role, tiers) against whatever host it
+/// names. A hardcoded host does not fail cleanly when `RELAY_URL` points
+/// somewhere else: the fixtures land in ONE community while the requests bind
+/// to ANOTHER, so the run proceeds against a community that has no owner and
+/// no tiers, and dies on whichever assertion happens to depend on them first.
+/// Deriving both from one source is what keeps the failure legible.
 fn relay_host() -> String {
     relay_url()
         .trim_start_matches("wss://")

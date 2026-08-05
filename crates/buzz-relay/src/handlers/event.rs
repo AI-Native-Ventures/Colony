@@ -731,7 +731,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 // buzz_events_stored_total is emitted inside ingest_event()
                 // (shared WS/HTTP seam), not here.
                 info!(
-                    event_id = %result.event_id,
+                    event_id = %result.event_id(),
                     kind = kind_u32,
                     conn_id = %conn_id,
                     "Event ingested"
@@ -744,9 +744,9 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             // publish by that id always resolves (issue #88). When another
             // event won, the message names it.
             conn.send(RelayMessage::ok(
-                &result.event_id,
+                result.event_id(),
                 result.accepted(),
-                &result.message,
+                result.message(),
             ));
         }
         Err(e) => {

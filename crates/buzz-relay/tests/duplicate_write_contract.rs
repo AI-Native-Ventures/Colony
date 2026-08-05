@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use buzz_auth::Scope;
-use buzz_core::kind::{KIND_DELEGATION_GRANT, KIND_WORKFLOW_DEF};
+use buzz_core::kind::{KIND_ASK_RESOLUTION, KIND_DELEGATION_GRANT, KIND_WORKFLOW_DEF};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::Db;
@@ -247,26 +247,26 @@ async fn a_dominated_nip33_write_is_not_accepted_and_names_the_winner() {
     assert!(
         first.accepted(),
         "the first head must be stored: {}",
-        first.message
+        first.message()
     );
-    assert_eq!(first.outcome, WriteOutcome::Stored);
+    assert_eq!(first.outcome(), &WriteOutcome::Stored);
 
     let second = ingest(&state, &tenant, &loser).await;
 
     assert!(
         !second.accepted(),
         "a write the relay discarded must not be reported as accepted; got message: {}",
-        second.message
+        second.message()
     );
     assert_eq!(
-        second.outcome,
-        WriteOutcome::Superseded {
+        second.outcome(),
+        &WriteOutcome::Superseded {
             winner_event_id: winner.id.to_hex(),
         },
         "the discarded write must name the head that beat it"
     );
     assert_eq!(
-        second.event_id,
+        second.event_id(),
         loser.id.to_hex(),
         "the response must identify the SUBMITTED event, not the winner (issue #88)"
     );
@@ -301,22 +301,22 @@ async fn re_submitting_the_identical_event_is_accepted() {
     let grant = grant_at(&owner, &d_tag, nostr::Timestamp::now().as_secs(), 0);
 
     let first = ingest(&state, &tenant, &grant).await;
-    assert!(first.accepted(), "first write: {}", first.message);
-    assert_eq!(first.outcome, WriteOutcome::Stored);
+    assert!(first.accepted(), "first write: {}", first.message());
+    assert_eq!(first.outcome(), &WriteOutcome::Stored);
 
     let retry = ingest(&state, &tenant, &grant).await;
 
     assert!(
         retry.accepted(),
         "the retried write DID land, so it must not be reported as a conflict; got: {}",
-        retry.message
+        retry.message()
     );
     assert_eq!(
-        retry.outcome,
-        WriteOutcome::AlreadyStored,
+        retry.outcome(),
+        &WriteOutcome::AlreadyStored,
         "an identical re-submission is distinguishable from a dominance discard"
     );
-    assert_eq!(retry.event_id, grant.id.to_hex());
+    assert_eq!(retry.event_id(), grant.id.to_hex());
     assert!(
         is_stored(&pool, community, &grant).await,
         "the event `accepted: true` refers to must actually be in the store"
@@ -345,12 +345,12 @@ async fn a_stale_nip33_write_is_superseded_by_the_newer_head() {
 
     assert!(!stale.accepted(), "a stale write stores nothing");
     assert_eq!(
-        stale.outcome,
-        WriteOutcome::Superseded {
+        stale.outcome(),
+        &WriteOutcome::Superseded {
             winner_event_id: newer.id.to_hex(),
         }
     );
-    assert_eq!(stale.event_id, older.id.to_hex());
+    assert_eq!(stale.event_id(), older.id.to_hex());
 }
 
 /// Issue #88, at the seam both transports read: the id slot is the submitted
@@ -374,10 +374,10 @@ async fn every_outcome_identifies_the_submitted_event() {
     for event in [&winner, &loser, &winner] {
         let result = ingest(&state, &tenant, event).await;
         assert_eq!(
-            result.event_id,
+            result.event_id(),
             event.id.to_hex(),
             "outcome {:?} put the wrong id in the id slot",
-            result.outcome
+            result.outcome()
         );
     }
 }
@@ -441,32 +441,32 @@ fn every_message_carries_the_prefix_its_outcome_requires() {
 
     for (result, expected) in cases {
         assert_eq!(
-            result.outcome.message_prefix(),
+            result.outcome().message_prefix(),
             expected,
             "outcome {:?} maps to the wrong prefix",
-            result.outcome
+            result.outcome()
         );
         match expected {
             Some(prefix) => assert!(
-                result.message.starts_with(prefix),
+                result.message().starts_with(prefix),
                 "outcome {:?} produced message {:?}, which does not start with {prefix}",
-                result.outcome,
-                result.message
+                result.outcome(),
+                result.message()
             ),
             None => assert!(
-                !result.message.starts_with("duplicate:")
-                    && !result.message.starts_with("conflict:"),
+                !result.message().starts_with("duplicate:")
+                    && !result.message().starts_with("conflict:"),
                 "a stored write must not look like a discard: {:?}",
-                result.message
+                result.message()
             ),
         }
         // The prefix set is closed on `accepted`: `duplicate:` only ever
         // accompanies an accepted write, `conflict:` only a rejected one. A
         // client branching on the prefix alone must never be misled.
-        if result.message.starts_with("duplicate:") {
+        if result.message().starts_with("duplicate:") {
             assert!(result.accepted(), "duplicate: implies accepted");
         }
-        if result.message.starts_with("conflict:") {
+        if result.message().starts_with("conflict:") {
             assert!(!result.accepted(), "conflict: implies not accepted");
         }
     }
@@ -481,25 +481,56 @@ fn every_message_carries_the_prefix_its_outcome_requires() {
 fn a_json_payload_still_carries_its_outcome_prefix() {
     let superseded = IngestResult::superseded("mine", "theirs", r#"{"duplicate":true}"#);
     assert!(
-        superseded.message.starts_with("conflict: "),
+        superseded.message().starts_with("conflict: "),
         "got: {}",
-        superseded.message
+        superseded.message()
     );
     assert!(
-        superseded.message.contains(r#"{"duplicate":true}"#),
+        superseded.message().contains(r#"{"duplicate":true}"#),
         "the payload must survive the prefixing: {}",
-        superseded.message
+        superseded.message()
     );
+}
+
+/// N1: a reason is prefixed exactly once.
+///
+/// The I1 change moved prefixing into the constructors but left the ask
+/// broker's refusal arm formatting its own, so every ask refusal read
+/// "conflict: conflict: the referenced ask does not exist". Thirteen refusal
+/// sites funnel through that arm: every altitude rejection, unauthorized
+/// signer, unknown or closed ask, null answer, and non-executive withdrawal.
+#[test]
+fn a_reason_is_prefixed_exactly_once() {
+    for result in [
+        IngestResult::refused("mine", "the referenced ask does not exist"),
+        IngestResult::superseded("mine", "theirs", "superseded by event theirs"),
+        IngestResult::already_stored("mine", "identical event already stored"),
+    ] {
+        let message = result.message();
+        let prefix = result
+            .outcome()
+            .message_prefix()
+            .expect("these outcomes all carry a prefix");
+        assert_eq!(
+            message.matches(prefix).count(),
+            1,
+            "{message:?} repeats the {prefix:?} prefix"
+        );
+        assert!(
+            !message.starts_with(&format!("{prefix} {prefix}")),
+            "double prefix: {message:?}"
+        );
+    }
 }
 
 /// An empty reason yields the bare prefix, not a dangling separator.
 #[test]
 fn an_empty_reason_yields_a_bare_prefix() {
     assert_eq!(
-        IngestResult::already_stored("mine", "").message,
+        IngestResult::already_stored("mine", "").message(),
         "duplicate:"
     );
-    assert_eq!(IngestResult::stored("mine").message, "");
+    assert_eq!(IngestResult::stored("mine").message(), "");
 }
 
 /// C1: a command event beaten by a newer head at the same NIP-33 coordinate is
@@ -544,7 +575,7 @@ async fn a_dominated_command_write_is_not_accepted_and_names_the_winner() {
     assert!(
         first.accepted(),
         "the first definition must be stored: {}",
-        first.message
+        first.message()
     );
 
     let second = ingest(&state, &tenant, &stale).await;
@@ -552,17 +583,17 @@ async fn a_dominated_command_write_is_not_accepted_and_names_the_winner() {
     assert!(
         !second.accepted(),
         "a command write the relay discarded must not be reported as accepted; got: {}",
-        second.message
+        second.message()
     );
     assert_eq!(
-        second.outcome,
-        WriteOutcome::Superseded {
+        second.outcome(),
+        &WriteOutcome::Superseded {
             winner_event_id: newer.id.to_hex(),
         },
         "the discarded command write must name the head that beat it"
     );
     assert_eq!(
-        second.event_id,
+        second.event_id(),
         stale.id.to_hex(),
         "the response must identify the SUBMITTED event"
     );
@@ -608,8 +639,52 @@ async fn re_submitting_the_identical_command_event_is_accepted() {
     assert!(
         retry.accepted(),
         "the retried command write DID land: {}",
-        retry.message
+        retry.message()
     );
-    assert_eq!(retry.outcome, WriteOutcome::AlreadyStored);
-    assert_eq!(retry.event_id, def.id.to_hex());
+    assert_eq!(retry.outcome(), &WriteOutcome::AlreadyStored);
+    assert_eq!(retry.event_id(), def.id.to_hex());
+}
+
+/// N1 at the real ingest boundary: an ask refusal is prefixed once.
+///
+/// The unit test above pins the constructor. This drives an actual
+/// `AskBrokerOutcome::Refused` through `ingest_event`, which is the path that
+/// shipped `conflict: conflict: ...` and which no existing suite covered: the
+/// `ask_broker` tests call `handle_ask_event` directly, so they stayed green
+/// through the whole defect. Thirteen refusal sites funnel through this arm.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn an_ask_refusal_through_ingest_is_prefixed_once() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db, &pool, Keys::generate()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let author = Keys::generate();
+    add_owner(&pool, community, &author.public_key().to_hex()).await;
+
+    // A resolution naming an ask that was never raised: the broker refuses it
+    // with "the referenced ask does not exist".
+    let unknown_ask = "a".repeat(64);
+    let content =
+        serde_json::json!({"answer": {"text": "no"}, "default_executed": false}).to_string();
+    let resolution = EventBuilder::new(Kind::Custom(KIND_ASK_RESOLUTION as u16), content)
+        .tags(vec![tag(&["e", &unknown_ask])])
+        .sign_with_keys(&author)
+        .expect("sign resolution");
+
+    let result = ingest(&state, &tenant, &resolution).await;
+
+    assert!(!result.accepted(), "an unknown ask cannot be resolved");
+    assert_eq!(
+        result.message().matches("conflict:").count(),
+        1,
+        "the refusal must be prefixed exactly once, got: {}",
+        result.message()
+    );
+    assert!(
+        result.message().starts_with("conflict: the referenced ask"),
+        "unexpected refusal message: {}",
+        result.message()
+    );
 }

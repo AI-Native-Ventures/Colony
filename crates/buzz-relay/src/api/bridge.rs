@@ -844,12 +844,12 @@ async fn submit_event_authed(
             // additive -- the three original fields are unchanged in name and
             // meaning.
             let mut body = serde_json::json!({
-                "event_id": result.event_id,
+                "event_id": result.event_id(),
                 "accepted": result.accepted(),
-                "message": result.message,
-                "outcome": result.outcome.as_wire_token(),
+                "message": result.message(),
+                "outcome": result.outcome().as_wire_token(),
             });
-            if let Some(winner) = result.outcome.winner_event_id() {
+            if let Some(winner) = result.outcome().winner_event_id() {
                 body["winner_event_id"] = serde_json::Value::String(winner.to_owned());
             }
             SubmitOutcome::Ok {

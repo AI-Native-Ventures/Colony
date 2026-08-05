@@ -249,18 +249,29 @@ impl WriteOutcome {
 /// winning event's id belongs in `outcome` and in the message, never here.
 pub struct IngestResult {
     /// Hex-encoded id of the event the client submitted.
-    pub event_id: String,
+    event_id: String,
     /// What the relay did with the submitted event.
-    pub outcome: WriteOutcome,
+    outcome: WriteOutcome,
     /// Human-readable detail, always carrying the prefix its outcome requires.
-    ///
-    /// Never assembled by hand: every constructor takes a bare reason and
-    /// prepends [`WriteOutcome::message_prefix`], which is what makes the
-    /// WebSocket prefix and the HTTP `outcome` field impossible to disagree.
-    pub message: String,
+    message: String,
 }
 
 impl IngestResult {
+    /// Hex id of the event the client submitted. Never a winning event's id.
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    /// What the relay did with the submitted event.
+    pub fn outcome(&self) -> &WriteOutcome {
+        &self.outcome
+    }
+
+    /// Human-readable detail, carrying the prefix its outcome requires.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     /// Whether the submitted event is durably stored at the end of the call.
     pub fn accepted(&self) -> bool {
         self.outcome.is_accepted()
@@ -268,9 +279,21 @@ impl IngestResult {
 
     /// Build a result, prefixing `reason` according to `outcome`.
     ///
-    /// The single place a `message` is assembled. An empty reason yields the
-    /// bare prefix rather than a dangling separator.
+    /// The single place a `message` is assembled, and the only way to build an
+    /// `IngestResult` at all: the fields are private, so no site inside or
+    /// outside this module can assemble a message by hand and pair the wrong
+    /// prefix with an outcome.
+    ///
+    /// An empty reason yields the bare prefix rather than a dangling separator.
     fn new(event_id: String, outcome: WriteOutcome, reason: &str) -> Self {
+        // Callers pass a BARE reason; the prefix is this function's job. An
+        // already-prefixed reason means a caller is still formatting its own,
+        // which double-prefixes ("conflict: conflict: ...") and is invisible
+        // until someone reads the wire.
+        debug_assert!(
+            !reason.starts_with("duplicate:") && !reason.starts_with("conflict:"),
+            "reason must be bare, not pre-prefixed; got {reason:?} for {outcome:?}"
+        );
         let message = match outcome.message_prefix() {
             None => reason.to_owned(),
             Some(prefix) if reason.is_empty() => prefix.to_owned(),
@@ -3181,10 +3204,7 @@ async fn ingest_event_inner(
                 ));
             }
             crate::ask_broker::AskBrokerOutcome::Refused { message } => {
-                return Ok(IngestResult::refused(
-                    event_id_hex,
-                    format!("conflict: {message}"),
-                ));
+                return Ok(IngestResult::refused(event_id_hex, message));
             }
         }
     }

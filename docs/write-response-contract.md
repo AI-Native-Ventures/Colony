@@ -69,12 +69,18 @@ mapping one-to-one onto `accepted`:
 
 | Prefix | `accepted` | Outcome it corresponds to |
 |---|---|---|
-| (empty, or a `response:`/JSON payload) | true | `stored` |
+| neither prefix below | true | `stored` |
 | `duplicate:` | true | `already_stored` |
 | `conflict:` | false | `superseded` or `refused` |
 
-The set is closed and exhaustive. Every message that is not `stored` carries
-one of the two prefixes, including the broker paths whose detail is a JSON
+Read the first row as the absence of the other two, not as a list of shapes. A
+`stored` message is whatever the path has to say: usually empty, often a
+`response:{…}` body or a broker's receipt JSON, and sometimes ordinary prose
+(`info: you have left this relay`). Enumerating those was wrong; the operative
+rule is that a stored write never carries `duplicate:` or `conflict:`.
+
+The two discard prefixes are closed and exhaustive. Every message that is not
+`stored` carries one of them, including the broker paths whose detail is a JSON
 object: those put the JSON inside the prefix (`conflict: {"duplicate":true,…}`),
 so reading the prefix alone is never wrong.
 
