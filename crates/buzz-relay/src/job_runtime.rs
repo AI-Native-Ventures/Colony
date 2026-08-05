@@ -77,7 +77,7 @@ pub async fn run_job_lease_tick(state: &Arc<AppState>, now_secs: i64) -> Result<
         // Best effort: the row has already moved, and the next transition
         // republishes. A head that failed to publish costs a worker its
         // realtime nudge, not the job.
-        crate::job_broker::publish_job_head(&tenant, state, &row.job).await;
+        crate::job_broker::publish_job_head(&tenant, state, &row.job.job_id).await;
         tracing::info!(
             job = %hex::encode(&row.job.job_id),
             community_id = %row.community_id,

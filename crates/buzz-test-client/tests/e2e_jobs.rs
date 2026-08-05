@@ -253,6 +253,31 @@ async fn a_job_runs_from_filing_to_result() {
         "nothing is holding an open job"
     );
 
+    // The two subscriptions everything downstream is built on. A worker finds
+    // its own work by `#p` on its own pubkey; an employee's queue is the heads
+    // it authored. Asserted here because the failure mode is silence: a filter
+    // that matches nothing looks exactly like having no work, and an earlier
+    // version of this queue tagged the employee in a way nostr drops, so
+    // `#p` on an employee matched nothing and nothing noticed.
+    let mine = query(
+        &founder,
+        serde_json::json!({ "kinds": [KIND_JOB_HEAD], "#p": [founder.public_key().to_hex()] }),
+    )
+    .await;
+    assert!(
+        mine.iter().any(|head| tag_value(head, "d") == job),
+        "a worker must find its own job by p tag"
+    );
+    let theirs = query(
+        &founder,
+        serde_json::json!({ "kinds": [KIND_JOB_HEAD], "authors": [employee] }),
+    )
+    .await;
+    assert!(
+        theirs.iter().any(|head| tag_value(head, "d") == job),
+        "an employee's queue must be the heads it authored"
+    );
+
     let (accepted, body) = submit(&claim_job(&founder, &job)).await;
     assert!(accepted, "claim not accepted: {body}");
     let leased = await_job_state(&founder, &job, "leased").await;
@@ -272,14 +297,16 @@ async fn a_job_runs_from_filing_to_result() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let (accepted, body) = submit(&heartbeat_job(&founder, &job, attempt)).await;
     assert!(accepted, "heartbeat not accepted: {body}");
-    for _ in 0..40 {
-        let head = await_job_state(&founder, &job, "leased").await;
-        let expires: i64 = tag_value(&head, "lease-expires").parse().unwrap_or(0);
-        if expires > expires_after_claim {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+    // Wait for the deadline to actually move, and fail if it never does. A
+    // loop that only breaks on success passes just as happily when heartbeats
+    // do nothing at all, which would leave every long job in the company
+    // losing its lease mid-run.
+    await_head(&founder, &job, "held open by a heartbeat", |head| {
+        tag_value(head, "lease-expires")
+            .parse::<i64>()
+            .is_ok_and(|expires| expires > expires_after_claim)
+    })
+    .await;
 
     let (accepted, body) = submit(&finish_job(
         &founder,

@@ -344,33 +344,6 @@ pub async fn finish_job(
     row.map(row_to_job).transpose()
 }
 
-/// The jobs a given human owns, newest first.
-pub async fn list_jobs_for_originator(
-    pool: &PgPool,
-    community: CommunityId,
-    originator: &[u8],
-    status: Option<&str>,
-    limit: i64,
-) -> Result<Vec<JobRow>> {
-    let rows = sqlx::query(
-        "SELECT job_id, employee, filed_by, originator, channel_id, thread, instruction, \
-                status, lease_holder, lease_expires_at, attempts, result, failure, \
-                escalated_ask, created_at, updated_at \
-         FROM jobs \
-         WHERE community_id = $1 AND originator = $2 AND ($3::TEXT IS NULL OR status = $3) \
-         ORDER BY created_at DESC, job_id \
-         LIMIT $4",
-    )
-    .bind(community.as_uuid())
-    .bind(originator)
-    .bind(status)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    rows.into_iter().map(row_to_job).collect()
-}
-
 /// Take every lapsed lease away in one statement, across every community.
 ///
 /// A job under the attempt cap goes back to `open` for somebody else to claim.
@@ -444,29 +417,43 @@ pub async fn list_jobs_needing_escalation(
     rows.into_iter().map(row_to_tenant_job).collect()
 }
 
-/// Reserve the `created_at` for this job's next head.
+/// Stamp this job's next head, and read the job in the same statement.
 ///
-/// NIP-33 resolves two revisions of a replaceable event by `created_at`, at
-/// one-second resolution, and a job routinely moves twice within one second:
-/// filing and claiming are two HTTP requests a worker sends back to back. Two
-/// heads stamped with the same second tie, the replacement is undefined, and
-/// readers keep showing the older state — a worker claims a job, reads the
-/// head back, and is told the job is still open.
+/// Two things have to be true of a job head, and one statement is what makes
+/// them true together.
 ///
-/// So the stamp is not the wall clock. It is `GREATEST(head_at + 1, now)`,
-/// bumped and returned in one statement, which makes each job's heads strictly
-/// increasing. Under a burst the stamp runs a few seconds ahead of real time
-/// and then settles back the moment the clock catches up.
-pub async fn next_head_at(
+/// **The stamp has to rise.** NIP-33 resolves two revisions of a replaceable
+/// event by `created_at`, at one-second resolution, and a job routinely moves
+/// twice within one second: filing and claiming are two HTTP requests a worker
+/// sends back to back. Two heads stamped with the same second tie, the
+/// replacement is undefined, and readers keep showing the older state — a
+/// worker claims a job, reads the head back, and is told the job is still
+/// open. So the stamp is `GREATEST(head_at + 1, now)`, which makes each job's
+/// heads strictly increasing. Under a burst it runs a few seconds ahead of
+/// real time and settles back the moment the clock catches up.
+///
+/// **The newest stamp has to carry the newest state.** Publishers each hold a
+/// row snapshot from whenever their own transition ran. If stamping were
+/// separate from reading, two concurrent publishers could invert: the one
+/// holding the older snapshot takes the higher stamp and its stale state wins.
+/// A job would show `open` while the row said `leased`. Returning the row from
+/// the stamping statement removes the window, because whoever gets the higher
+/// stamp necessarily read the row after everyone below them.
+///
+/// `Ok(None)` when the job is gone, so a caller does not publish a head for a
+/// job that no longer exists.
+pub async fn stamp_head(
     pool: &PgPool,
     community: CommunityId,
     job_id: &[u8],
     now: i64,
-) -> Result<i64> {
-    let stamp: Option<i64> = sqlx::query_scalar(
+) -> Result<Option<(i64, JobRow)>> {
+    let row = sqlx::query(
         "UPDATE jobs SET head_at = GREATEST(head_at + 1, $3) \
          WHERE community_id = $1 AND job_id = $2 \
-         RETURNING head_at",
+         RETURNING head_at, job_id, employee, filed_by, originator, channel_id, thread, \
+                   instruction, status, lease_holder, lease_expires_at, attempts, result, \
+                   failure, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)
@@ -474,7 +461,11 @@ pub async fn next_head_at(
     .fetch_optional(pool)
     .await?;
 
-    Ok(stamp.unwrap_or(now))
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let head_at: i64 = row.try_get("head_at")?;
+    Ok(Some((head_at, row_to_job(row)?)))
 }
 
 /// Remember that a human has been asked about this job.

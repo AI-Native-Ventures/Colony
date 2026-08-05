@@ -153,21 +153,12 @@ async fn handle_filing(
 
     // `None` means this filing already produced a job. Republish its head
     // anyway, so a re-run heals a fan-out that was lost the first time.
-    let (job, outcome) = match inserted {
-        Some(job) => (job, JobOutcome::Filed),
-        None => (
-            state
-                .db
-                .find_job(tenant.community(), &job_id)
-                .await
-                .map_err(|error| format!("database error re-reading the job: {error}"))?
-                .ok_or_else(|| "job insert conflicted but no job exists".to_string())?,
-            JobOutcome::AlreadyFiled,
-        ),
-    };
-
-    publish_job_head(tenant, state, &job).await;
-    Ok(outcome)
+    // `publish_job_head` reads the job itself, so nothing here needs to.
+    publish_job_head(tenant, state, &job_id).await;
+    Ok(match inserted {
+        Some(_) => JobOutcome::Filed,
+        None => JobOutcome::AlreadyFiled,
+    })
 }
 
 /// Decide whose work a filing is.
@@ -253,17 +244,11 @@ async fn handle_claim(
 
     // Publish the head either way. A claimant that lost still needs to know,
     // and the head is the only place it will find out.
-    match claimed {
-        Some(job) => {
-            publish_job_head(tenant, state, &job).await;
-            Ok(JobOutcome::Claimed)
-        }
-        None => {
-            let current = load_job(tenant, state, &job_id, &claim.job_hex).await?;
-            publish_job_head(tenant, state, &current).await;
-            Ok(JobOutcome::ClaimLost)
-        }
-    }
+    publish_job_head(tenant, state, &job_id).await;
+    Ok(match claimed {
+        Some(_) => JobOutcome::Claimed,
+        None => JobOutcome::ClaimLost,
+    })
 }
 
 async fn handle_heartbeat(
@@ -290,8 +275,8 @@ async fn handle_heartbeat(
         .map_err(|error| format!("database error extending the lease: {error}"))?;
 
     match beat {
-        Some(job) => {
-            publish_job_head(tenant, state, &job).await;
+        Some(_) => {
+            publish_job_head(tenant, state, &job_id).await;
             Ok(JobOutcome::LeaseExtended)
         }
         // Not an error: a worker that hung past its deadline and came back is
@@ -326,8 +311,8 @@ async fn handle_outcome(
         .map_err(|error| format!("database error recording the outcome: {error}"))?;
 
     match finished {
-        Some(job) => {
-            publish_job_head(tenant, state, &job).await;
+        Some(_) => {
+            publish_job_head(tenant, state, &job_id).await;
             Ok(JobOutcome::Finished)
         }
         // A seat that lost its lease does not get to overwrite the answer of
@@ -365,7 +350,29 @@ fn hex32(field: &str, value: &str) -> Result<Vec<u8>, String> {
 /// job: insert, then fan out. Both are best effort and logged. The durable
 /// record of a job is the row plus the signed events that moved it; a lost
 /// head is republished by the next transition.
-pub(crate) async fn publish_job_head(tenant: &TenantContext, state: &Arc<AppState>, job: &JobRow) {
+pub(crate) async fn publish_job_head(tenant: &TenantContext, state: &Arc<AppState>, job_id: &[u8]) {
+    // Stamp and read in one statement. The stamp has to rise, because two
+    // heads sharing a second tie under NIP-33 and a worker would claim a job
+    // and read back that it is still open. And the newest stamp has to carry
+    // the newest state, or two concurrent publishers invert and a job shows
+    // `open` while the row says `leased`. See `buzz_db::jobs::stamp_head`.
+    let stamped = match state
+        .db
+        .stamp_job_head(tenant.community(), job_id, chrono::Utc::now().timestamp())
+        .await
+    {
+        Ok(Some(stamped)) => stamped,
+        Ok(None) => {
+            warn!("job head skipped: the job no longer exists");
+            return;
+        }
+        Err(error) => {
+            warn!(error = %error, "job head skipped: could not stamp it");
+            return;
+        }
+    };
+    let (head_at, job) = stamped;
+
     let employee = match state
         .db
         .find_employee(tenant.community(), &job.employee)
@@ -395,28 +402,7 @@ pub(crate) async fn publish_job_head(tenant: &TenantContext, state: &Arc<AppStat
         }
     };
 
-    // Stamp the head with a time strictly later than the last one for this
-    // job, not the wall clock. See `buzz_db::jobs::next_head_at`: filing and
-    // claiming land in the same second, and two heads sharing a second tie
-    // under NIP-33, so a worker would claim a job and read back that it is
-    // still open.
-    let head_at = match state
-        .db
-        .next_job_head_at(
-            tenant.community(),
-            &job.job_id,
-            chrono::Utc::now().timestamp(),
-        )
-        .await
-    {
-        Ok(stamp) => stamp,
-        Err(error) => {
-            warn!(error = %error, "job head skipped: could not stamp it");
-            return;
-        }
-    };
-
-    let event = match build_job_head(&keys, job, head_at) {
+    let event = match build_job_head(&keys, &job, head_at) {
         Ok(event) => event,
         Err(error) => {
             warn!(error = %error, "job head could not be built");
@@ -454,10 +440,15 @@ fn build_job_head(keys: &Keys, job: &JobRow, head_at: i64) -> Result<Event, Stri
         vec!["filed-by".to_string(), filed_by_hex],
         vec!["status".to_string(), job.status.clone()],
         vec!["attempts".to_string(), attempts],
-        // Both parties as `p` tags, which is what makes the head findable:
-        // a worker filters on its own pubkey, a roster view filters on the
-        // employee's. The explicit tags above say which is which.
-        vec!["p".to_string(), employee_hex],
+        // The originator as a `p` tag, which is what makes a head findable by
+        // the worker whose job it is: its whole subscription is `#p` on its
+        // own pubkey.
+        //
+        // There is deliberately no `p` tag for the employee. The head is
+        // *signed by* the employee, and nostr drops a `p` tag pointing at an
+        // event's own author, so one here would silently never exist. An
+        // employee's queue is found by author instead, which is the more
+        // honest question anyway: these are the heads that employee published.
         vec!["p".to_string(), originator_hex],
     ];
     if let Some(holder) = &job.lease_holder {
@@ -559,19 +550,33 @@ mod tests {
     }
 
     #[test]
-    fn both_parties_are_findable_by_pubkey() {
-        // A worker's whole subscription is `#p` on its own key. If the head
-        // stopped carrying it, every queue in the company would go quiet
-        // while looking perfectly healthy.
-        let event = build_job_head(&Keys::generate(), &job("open"), 1_700_000_000).unwrap();
+    fn a_worker_can_find_its_own_jobs_and_an_employee_its_own_queue() {
+        // Signed by the employee, because that is what happens in production
+        // and it is the only way this test means anything: nostr silently
+        // drops a `p` tag pointing at an event's own author, so an earlier
+        // version of this test signed with a random key, asserted an employee
+        // `p` tag, and passed against heads that never carried one. Every
+        // `--involving <employee>` query returned nothing and no test noticed.
+        let employee = Keys::generate();
+        let mut row = job("open");
+        row.employee = employee.public_key().to_bytes().to_vec();
+
+        let event = build_job_head(&employee, &row, 1_700_000_000).unwrap();
         let p_tags: Vec<String> = event
             .tags
             .iter()
             .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("p"))
             .filter_map(|tag| tag.as_slice().get(1).cloned())
             .collect();
-        assert!(p_tags.contains(&hex::encode(vec![0x22; 32])), "employee");
-        assert!(p_tags.contains(&hex::encode(vec![0x33; 32])), "originator");
+
+        // A worker finds its own jobs by `#p` on its own pubkey.
+        assert_eq!(
+            p_tags,
+            vec![hex::encode(&row.originator)],
+            "the originator must be the head's only p tag"
+        );
+        // An employee's queue is its own authored heads.
+        assert_eq!(event.pubkey.to_bytes().to_vec(), row.employee);
     }
 
     #[test]

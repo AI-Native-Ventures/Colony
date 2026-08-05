@@ -5767,17 +5767,6 @@ impl Db {
         jobs::finish_job(&self.pool, community, outcome).await
     }
 
-    /// The jobs a given human owns (see [`jobs::list_jobs_for_originator`]).
-    pub async fn list_jobs_for_originator(
-        &self,
-        community: CommunityId,
-        originator: &[u8],
-        status: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<jobs::JobRow>> {
-        jobs::list_jobs_for_originator(&self.pool, community, originator, status, limit).await
-    }
-
     /// Take every lapsed lease away, across every community
     /// (see [`jobs::expire_due_leases`]).
     pub async fn expire_due_leases(
@@ -5799,15 +5788,15 @@ impl Db {
         jobs::list_jobs_needing_escalation(&self.pool, unclaimed_before, limit).await
     }
 
-    /// Reserve the `created_at` for this job's next head
-    /// (see [`jobs::next_head_at`]).
-    pub async fn next_job_head_at(
+    /// Stamp this job's next head and read the job in one statement
+    /// (see [`jobs::stamp_head`]).
+    pub async fn stamp_job_head(
         &self,
         community: CommunityId,
         job_id: &[u8],
         now: i64,
-    ) -> Result<i64> {
-        jobs::next_head_at(&self.pool, community, job_id, now).await
+    ) -> Result<Option<(i64, jobs::JobRow)>> {
+        jobs::stamp_head(&self.pool, community, job_id, now).await
     }
 
     /// Remember that a human has been asked about this job

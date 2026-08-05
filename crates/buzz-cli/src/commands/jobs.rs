@@ -129,13 +129,29 @@ pub async fn cmd_list(
     status: Option<&str>,
     involving: Option<&str>,
 ) -> Result<(), CliError> {
-    let mut filter = serde_json::json!({ "kinds": [KIND_JOB_HEAD] });
-    if let Some(pubkey) = involving {
-        filter["#p"] = serde_json::json!([pubkey]);
+    // A pubkey shows up on a head two different ways, so narrowing to one
+    // person takes two queries. The originator is a `p` tag. The employee is
+    // the head's *author*, because nostr drops a `p` tag pointing at an
+    // event's own author and the employee signs its own heads: filtering only
+    // by `#p` would silently report that an employee has no work at all.
+    let mut events = Vec::new();
+    match involving {
+        Some(pubkey) => {
+            for filter in [
+                serde_json::json!({ "kinds": [KIND_JOB_HEAD], "#p": [pubkey] }),
+                serde_json::json!({ "kinds": [KIND_JOB_HEAD], "authors": [pubkey] }),
+            ] {
+                events.extend(client.query_all(filter).await?);
+            }
+        }
+        None => {
+            events = client
+                .query_all(serde_json::json!({ "kinds": [KIND_JOB_HEAD] }))
+                .await?;
+        }
     }
-    let events = client.query_all(filter).await?;
 
-    let rows: Vec<serde_json::Value> = events
+    let rows: Vec<serde_json::Value> = newest_per_job(events)
         .iter()
         .map(project)
         .filter(|row| match status {
@@ -152,9 +168,11 @@ pub async fn cmd_list(
 
 /// Show one job head, including its instruction and result.
 pub async fn cmd_show(client: &BuzzClient, job: &str) -> Result<(), CliError> {
-    let events = client
-        .query_all(serde_json::json!({ "kinds": [KIND_JOB_HEAD], "#d": [job] }))
-        .await?;
+    let events = newest_per_job(
+        client
+            .query_all(serde_json::json!({ "kinds": [KIND_JOB_HEAD], "#d": [job] }))
+            .await?,
+    );
 
     let Some(event) = events.first() else {
         return Err(CliError::Other(format!("no job {job}")));
@@ -183,6 +201,31 @@ pub async fn cmd_show(client: &BuzzClient, job: &str) -> Result<(), CliError> {
         serde_json::to_string(&row).unwrap_or_else(|_| "{}".to_string())
     );
     Ok(())
+}
+
+/// Keep only the current head for each job.
+///
+/// Job heads are replaceable, and a query returns the revisions the relay has
+/// stored rather than only the winner, so taking whichever came back first
+/// reports whatever state the job happened to be in earlier. A worker acting
+/// on that would decide it had lost a lease it still holds, or that a finished
+/// job is still open.
+fn newest_per_job(events: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut newest: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    for event in events {
+        let job = extract_tag_value(&event, "d");
+        let created = event["created_at"].as_i64().unwrap_or(0);
+        match newest.get(&job) {
+            Some(seen) if seen["created_at"].as_i64().unwrap_or(0) >= created => {}
+            _ => {
+                newest.insert(job, event);
+            }
+        }
+    }
+    let mut rows: Vec<serde_json::Value> = newest.into_values().collect();
+    rows.sort_by_key(|event| event["created_at"].as_i64().unwrap_or(0));
+    rows
 }
 
 /// The tag fields of a job head, as a row.
