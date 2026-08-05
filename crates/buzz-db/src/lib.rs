@@ -25,6 +25,7 @@ pub mod discovery;
 pub mod discovery_workspace;
 /// Direct message channel persistence.
 pub mod dm;
+pub mod employees;
 /// Database error types.
 pub mod error;
 /// Event storage and retrieval.
@@ -5621,6 +5622,48 @@ impl Db {
     /// inserted, or 0 if the `pubkey_allowlist` table doesn't exist.
     pub async fn backfill_from_allowlist(&self, community: CommunityId) -> Result<u64> {
         relay_members::backfill_from_allowlist(&self.pool, community).await
+    }
+
+    /// Record a newly hired employee. `None` when this hire request already
+    /// produced one or the role is filled (see [`employees::insert_employee`]).
+    pub async fn insert_employee(
+        &self,
+        community: CommunityId,
+        employee: employees::NewEmployee<'_>,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::insert_employee(&self.pool, community, employee).await
+    }
+
+    /// The employee a hire request already produced, if any
+    /// (see [`employees::find_employee_by_hire_event`]).
+    pub async fn find_employee_by_hire_event(
+        &self,
+        community: CommunityId,
+        hire_event: &[u8],
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::find_employee_by_hire_event(&self.pool, community, hire_event).await
+    }
+
+    /// Look an employee up by identity (see [`employees::find_employee`]).
+    pub async fn find_employee(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::find_employee(&self.pool, community, pubkey).await
+    }
+
+    /// Every active employee of a community (see [`employees::list_active_employees`]).
+    pub async fn list_active_employees(
+        &self,
+        community: CommunityId,
+    ) -> Result<Vec<employees::EmployeeRow>> {
+        employees::list_active_employees(&self.pool, community).await
+    }
+
+    /// Retire an employee, freeing its role (see [`employees::retire_employee`]).
+    pub async fn retire_employee(&self, community: CommunityId, pubkey: &[u8]) -> Result<bool> {
+        employees::retire_employee(&self.pool, community, pubkey).await
     }
 
     /// Files a new open ask. See [`asks::insert_ask`] for the dedupe

@@ -526,6 +526,9 @@ pub struct AppState {
     pub workflow_engine: Arc<WorkflowEngine>,
     /// Relay signing keypair — used to sign system messages (kind 40099).
     pub relay_keypair: nostr::Keys,
+    /// Seals employee secret keys at rest. `None` when no KEK is configured,
+    /// which makes hiring refuse rather than store a key in the clear.
+    pub employee_key_sealer: Option<crate::employee_key::EmployeeKeySealer>,
 
     /// Recently-published event IDs for local-echo deduplication, keyed by
     /// `(community_id, event_id)`. Events fanned out in-process are added here;
@@ -661,6 +664,12 @@ impl AppState {
         relay_keypair: nostr::Keys,
         media_storage: MediaStorage,
     ) -> (Self, AuditShutdownHandle) {
+        // Parsed here so a malformed KEK fails the process at startup instead
+        // of the first hire; absent is legitimate (hiring simply refuses).
+        let employee_key_sealer = config.employee_kek.as_deref().map(|kek| {
+            crate::employee_key::EmployeeKeySealer::from_hex(kek)
+                .expect("BUZZ_EMPLOYEE_KEK must be 64 hex characters")
+        });
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
         let search_arc = Arc::new(search);
@@ -746,6 +755,7 @@ impl AppState {
             media_upload_semaphore: Arc::new(Semaphore::new(media_max_concurrent_uploads)),
             workflow_engine,
             relay_keypair,
+            employee_key_sealer,
 
             local_event_ids: Arc::new(
                 moka::sync::Cache::builder()

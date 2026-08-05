@@ -22,6 +22,8 @@ pub mod discovery_worker;
 pub mod discovery_workspace;
 /// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
 /// body parse/serialize, envelope build/validate, head selection.
+pub mod employee;
+
 pub mod engram;
 /// Relay-side error types.
 pub mod error;

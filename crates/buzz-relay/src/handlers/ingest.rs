@@ -18,7 +18,7 @@ use buzz_core::kind::{
     KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION,
     KIND_CONTACT_LIST, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
     KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
-    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EMPLOYEE,
     KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
     KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
@@ -2541,6 +2541,37 @@ async fn ingest_event_inner(
         crate::interrupt_gate::enforce_grant_authorship(tenant, state, &event)
             .await
             .map_err(IngestError::AuthFailed)?;
+    }
+
+    // Colony employees: an employee head is the workspace's statement of who
+    // it employs and at what rank, and rank decides who may interrupt a human.
+    // The relay mints and holds every employee key, so a legitimate head can
+    // only ever be signed by the relay on an employee's behalf. Anyone else
+    // can mint a keypair and claim employment, so authorship is checked
+    // against the employees table rather than taken on the event's word. See
+    // `docs/design/company-employees.html`.
+    if kind_u32 == KIND_EMPLOYEE {
+        let parsed = buzz_core::employee::parse_employee_head(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        if !parsed
+            .pubkey_hex
+            .eq_ignore_ascii_case(&event.pubkey.to_hex())
+        {
+            return Err(IngestError::Rejected(
+                "invalid: employee head must be keyed by its own author".to_string(),
+            ));
+        }
+        let is_employee = state
+            .db
+            .find_employee(tenant.community(), &event.pubkey.to_bytes())
+            .await
+            .map_err(|e| IngestError::Internal(format!("database error: {e}")))?
+            .is_some();
+        if !is_employee {
+            return Err(IngestError::AuthFailed(
+                "not an employee of this community".to_string(),
+            ));
+        }
     }
 
     // Colony interrupt-core: a decision log is only as trustworthy as the
