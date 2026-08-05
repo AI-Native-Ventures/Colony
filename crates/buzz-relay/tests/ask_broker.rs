@@ -306,6 +306,16 @@ fn grant_content(category: &str, scope: &str, active: bool) -> String {
     .to_string()
 }
 
+fn grant_content_capped(category: &str, scope: &str, active: bool, cap_nano_usd: i64) -> String {
+    serde_json::json!({
+        "category": category,
+        "scope": scope,
+        "active": active,
+        "cap_nano_usd": cap_nano_usd,
+    })
+    .to_string()
+}
+
 fn sign_grant(author: &Keys, tags: Vec<Tag>, content: &str) -> Event {
     EventBuilder::new(Kind::Custom(KIND_DELEGATION_GRANT as u16), content)
         .tags(tags)
@@ -326,6 +336,23 @@ fn decision_log_content(decision: &str, undo_path: &str) -> String {
         "category": "copy_change",
     })
     .to_string()
+}
+
+fn decision_log_content_with(
+    decision: &str,
+    undo_path: &str,
+    category: &str,
+    amount_nano_usd: Option<i64>,
+) -> String {
+    let mut content = serde_json::json!({
+        "decision": decision,
+        "undo_path": undo_path,
+        "category": category,
+    });
+    if let Some(amount) = amount_nano_usd {
+        content["amount_nano_usd"] = serde_json::json!(amount);
+    }
+    content.to_string()
 }
 
 fn sign_decision_log(author: &Keys, tags: Vec<Tag>, content: &str) -> Event {
@@ -2762,6 +2789,329 @@ async fn a_decision_log_signed_by_a_leader_citing_an_active_grant_is_accepted_th
         .unwrap_or_else(|error| {
             panic!(
                 "a leader-signed decision log citing an active grant must be accepted: {error:?}"
+            )
+        });
+    assert!(
+        result.accepted,
+        "decision log must be accepted: {}",
+        result.message
+    );
+
+    let stored = db
+        .get_event_by_id(community, event.id.as_bytes())
+        .await
+        .expect("query stored decision log")
+        .expect("the decision log event itself must be stored");
+    assert_eq!(stored.event.id, event.id);
+}
+
+/// A grant delegates exactly one category. A decision log citing a real,
+/// active grant but claiming a *different* category is citing authority it
+/// does not hold -- without this check, one active grant would authorize
+/// every decision an agent cares to record, regardless of what the grant
+/// actually names.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_with_a_mismatched_category_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "channel_strategy",
+            None,
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log claiming a category the grant does not delegate",
+    );
+    assert!(
+        message.contains("claims category"),
+        "expected a category-mismatch refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected decision log must not be stored"
+    );
+}
+
+/// A capped grant binds every decision under it to a declared,
+/// machine-readable amount. A missing amount fails closed: no declared
+/// amount means no way to check the cap.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_under_a_capped_grant_without_an_amount_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content_capped("copy_change", "blog_post_titles", true, 10_000_000_000),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store capped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            None,
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log under a capped grant with no declared amount",
+    );
+    assert!(
+        message.contains("must declare amount_nano_usd"),
+        "expected a missing-amount refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected decision log must not be stored"
+    );
+}
+
+/// A declared amount above the grant's cap is refused, regardless of how
+/// small the overage.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_over_the_cap_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content_capped("copy_change", "blog_post_titles", true, 10_000_000_000),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store capped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            Some(10_000_000_001),
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log declaring an amount over the grant's cap",
+    );
+    assert!(
+        message.contains("exceeds"),
+        "expected an over-cap refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected decision log must not be stored"
+    );
+}
+
+/// The cap is inclusive: a decision declaring an amount exactly equal to the
+/// cap is within the delegated authority, not over it.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_at_exactly_the_cap_is_accepted() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content_capped("copy_change", "blog_post_titles", true, 10_000_000_000),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store capped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            Some(10_000_000_000),
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, event.clone(), auth)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("a decision log declaring exactly the cap must be accepted: {error:?}")
+        });
+    assert!(
+        result.accepted,
+        "decision log must be accepted: {}",
+        result.message
+    );
+
+    let stored = db
+        .get_event_by_id(community, event.id.as_bytes())
+        .await
+        .expect("query stored decision log")
+        .expect("the decision log event itself must be stored");
+    assert_eq!(stored.event.id, event.id);
+}
+
+/// An uncapped grant places no ceiling on a declared amount -- declaring
+/// more information than required is never an offence.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_with_an_amount_under_an_uncapped_grant_is_accepted() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store uncapped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            Some(1_000_000),
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, event.clone(), auth)
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "a decision log declaring an amount under an uncapped grant must be accepted: {error:?}"
             )
         });
     assert!(

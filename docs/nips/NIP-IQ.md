@@ -325,14 +325,18 @@ applies.
 **Authority checked at ingest:** the signer's tier must resolve to `leader`
 or `executive` (`enforce_decision_log_authority`), and the cited `grant`
 must resolve, via the same owner-authorship trust rule tiers use, to a
-currently `active` grant. The relay also requires `category` to equal the
-cited grant's `category` exactly, and refuses a mismatch. **The relay does
-not verify that `decision`'s content actually falls within the cited
-grant's `scope`**, nor that the signer is the specific agent the grant was
-"meant" for (grants carry no assignee field): any current leader or
-executive may cite any active grant matching the claimed category. Binding
-a decision log to its grant's stated scope is a convention enforced by the
-filing agent, not by the relay.
+currently `active` grant. Two refusals are normative from there: the relay
+requires `category` to equal the cited grant's `category` exactly, refusing
+a mismatch; and when the cited grant carries a `cap_nano_usd`, the relay
+requires `amount_nano_usd` to be present and refuses both a missing amount
+and one that exceeds the cap (see [Kind 30189](#kind-30189-delegation-grant)
+for the cap's per-decision, non-cumulative scope). **The relay does not
+verify that `decision`'s content actually falls within the cited grant's
+`scope`**, nor that the signer is the specific agent the grant was "meant"
+for (grants carry no assignee field): any current leader or executive may
+cite any active grant matching the claimed category. Binding a decision log
+to its grant's stated scope is a convention enforced by the filing agent,
+not by the relay.
 
 ### Kind 30189: Delegation Grant
 
@@ -362,10 +366,17 @@ additionally requires the event's signer to currently hold the community's
 `owner` role, rejecting otherwise with `restricted: delegation grants may
 only be signed by a current community owner`.
 
-**`cap_nano_usd` is descriptive, not binding.** It is parsed and carried on
-`ParsedGrant`, but nothing in this codebase checks a decision log (or
-anything else) against it. A grant's spending cap is a record of intent,
-not an enforced limit.
+**`cap_nano_usd` is binding per decision, not cumulative.**
+`enforce_decision_log_authority` checks it at decision-log ingest: a capped
+grant requires every decision log citing it to declare `amount_nano_usd`,
+and refuses one that exceeds the cap. The check is per decision only -- the
+relay does not sum amounts already logged under the same grant, so a series
+of individually-under-cap decisions can still add up to far more than the
+cap over time. Tracking cumulative spend across decisions is cost
+imputation, a later plan, not this one. `scope` remains descriptive only:
+the relay does not verify that a decision log's content, or its cited
+grant's `category`, actually falls within the grant's stated `scope` -- see
+the [44303](#kind-44303-decision-log) section above.
 
 #### Hard list
 
@@ -735,9 +746,12 @@ signed directly against the schemas above.
   signal, for every task regardless of origin. It is guaranteed rather than
   incidental for implicit, chat-derived tasks, which are also the ones most
   likely to actually stall.
-- **A delegation grant's `cap_nano_usd` spending cap is parsed and stored,
-  but enforced nowhere.** It documents intent; nothing in this codebase
-  checks a decision log, or anything else, against it.
+- **A delegation grant's `cap_nano_usd` spending cap is enforced per
+  decision, not cumulatively.** Each decision log's declared
+  `amount_nano_usd` is checked against the cap in isolation; the relay does
+  not sum amounts already logged under the same grant, so several
+  individually-under-cap decisions can still exceed the cap in aggregate.
+  Cumulative spend tracking is cost imputation, a later plan.
 - **A crash in the instant between a promotion's claim committing and its
   successor being filed is not repaired by the promotion path itself.**
   `interrupt_runtime::promote_to`'s in-process compensation
