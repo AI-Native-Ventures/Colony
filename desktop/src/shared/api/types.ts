@@ -147,6 +147,8 @@ export type UserProfileSummary = {
   nip05Handle: string | null;
   ownerPubkey: string | null;
   isAgent?: boolean;
+  /** Workspace role from kind-0; groups members' instances of one role. */
+  role?: string | null;
 };
 
 export type UsersBatchResponse = {

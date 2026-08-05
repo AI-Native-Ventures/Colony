@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   activateWelcomeTeamPersonasSequentially,
   buildWelcomeStarterCreateInput,
+  communityAlreadyStaffed,
   LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT,
   pickWelcomeGuideAgent,
   pickWelcomeGuideAgentForRelay,
@@ -205,6 +206,9 @@ test("all Welcome starters use the onboarding runtime preference", async () => {
     assert.equal(input.relayUrl, RELAY_A);
     assert.equal(input.spawnAfterCreate, false);
     assert.equal(input.startOnAppLaunch, false);
+    // Role-agents phase 2: each member owns their own instance, so an agent
+    // only ever answers its owner.
+    assert.equal(input.respondTo, "owner-only");
   }
 });
 
@@ -392,4 +396,33 @@ test("starter matching prefers running, then deployed instances", () => {
     pickWelcomeTeamStarterAgentForRelay([stopped, deployed], fizz, RELAY_A),
     deployed,
   );
+});
+
+function member(pubkey, overrides = {}) {
+  return {
+    pubkey,
+    role: "member",
+    isAgent: false,
+    ...overrides,
+  };
+}
+
+test("communityAlreadyStaffed sees another member's bot", () => {
+  const members = [member(PUB_A), member(PUB_B, { role: "bot" })];
+  assert.equal(communityAlreadyStaffed(members, new Set()), true);
+});
+
+test("communityAlreadyStaffed ignores this install's own agents", () => {
+  const members = [member(PUB_A), member(PUB_B, { role: "bot" })];
+  assert.equal(communityAlreadyStaffed(members, new Set([PUB_B])), false);
+});
+
+test("communityAlreadyStaffed counts isAgent members without a bot role", () => {
+  const members = [member(PUB_B, { isAgent: true })];
+  assert.equal(communityAlreadyStaffed(members, new Set()), true);
+});
+
+test("communityAlreadyStaffed is false for humans-only communities", () => {
+  const members = [member(PUB_A), member(PUB_B)];
+  assert.equal(communityAlreadyStaffed(members, new Set()), false);
 });

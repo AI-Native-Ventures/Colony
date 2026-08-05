@@ -252,10 +252,31 @@ pub const KIND_CORRECTION_BOOK: u32 = 30186;
 /// `d={cost_centre_id}:{period}` where period is `YYYY-MM`).
 pub const KIND_LEDGER_BUDGET: u32 = 30187;
 
+/// Colony cost ledger: signed model price feed (`d=pricefeed`).
+///
+/// The out-of-band form of the price catalog. Content is the same document
+/// the relay ships in `buzz-core/data/price-catalog.json`, signed by
+/// Colony's price publisher and fetched over HTTPS, so a vendor's price
+/// change reaches running relays without a deploy.
+///
+/// **Deliberately absent from [`KINDS`].** It is fetched, verified against a
+/// pinned publisher key, and applied, never accepted over the relay wire.
+/// Registering it would let any authenticated client publish one, which is
+/// the whole attack: prices decide what every company is billed.
+pub const KIND_PRICE_FEED: u32 = 30188;
+
 /// Colony interrupt delegation grant (parameterized replaceable, owner-authored).
-/// Authorizes one agent tier to delegate asks to a lower tier or a specific pubkey
-/// (d-tag encodes the delegation scope; JSON content defines conditions).
-pub const KIND_DELEGATION_GRANT: u32 = 30188;
+///
+/// The founder granting an agent autonomy over one named category of decision,
+/// as a signed and revocable object rather than accumulated trust. Addressed by
+/// `(pubkey, kind, d_tag)` where `d_tag` is the grant id, so revoking is
+/// republishing the same `d_tag` with `active: false` rather than a tombstone.
+/// Content carries the category, the scope that bounds it, an optional spending
+/// cap, and the active flag. A category on the hard list may never be granted.
+///
+/// Ingest accepts this kind only from a pubkey that currently holds the owner
+/// role: an agent must not be able to grant itself autonomy. See docs/nips/NIP-IQ.md.
+pub const KIND_DELEGATION_GRANT: u32 = 30189;
 
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
@@ -1041,7 +1062,7 @@ const _: () = assert!(KIND_AGENT_TURN_METRIC <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_ASK));
 const _: () = assert!(!is_replaceable(KIND_ASK));
 const _: () = assert!(KIND_ASK <= u16::MAX as u32);
-const _: () = assert!(is_parameterized_replaceable(KIND_DELEGATION_GRANT)); // 30188 in 30000-39999
+const _: () = assert!(is_parameterized_replaceable(KIND_DELEGATION_GRANT)); // 30189 in 30000-39999
                                                                             // Moderation kinds fit u16 and are neither replaceable nor ephemeral:
                                                                             // 1984 is a regular event (persisted to the queue, never fanned out);
                                                                             // 9040–9044 are direct commands (executed, never stored).

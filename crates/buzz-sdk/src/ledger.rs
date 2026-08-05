@@ -605,11 +605,11 @@ mod tests {
 
     fn rates() -> PriceRates {
         PriceRates {
-            input_nanousd_per_token: 3_000,
-            cache_read_nanousd_per_token: 300,
-            cache_write_5m_nanousd_per_token: 3_750,
-            cache_write_1h_nanousd_per_token: 6_000,
-            output_nanousd_per_token: 15_000,
+            input_nanousd_per_mtok: 3_000,
+            cache_read_nanousd_per_mtok: 300,
+            cache_write_5m_nanousd_per_mtok: 3_750,
+            cache_write_1h_nanousd_per_mtok: 6_000,
+            output_nanousd_per_mtok: 15_000,
         }
     }
 
@@ -618,6 +618,7 @@ mod tests {
             model: "claude-sonnet-4-5".to_string(),
             effective_from: 1_785_628_800,
             rates: rates(),
+            conditions: Default::default(),
             note: None,
             origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         })
@@ -739,6 +740,7 @@ mod tests {
             model: "  ".to_string(),
             effective_from: 0,
             rates: rates(),
+            conditions: Default::default(),
             note: None,
             origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         });

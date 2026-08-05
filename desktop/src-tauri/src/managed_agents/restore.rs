@@ -418,6 +418,11 @@ pub async fn restore_managed_agents_on_launch(
     // start_managed_agent — ensuring boot-restored agents get the same profile
     // self-healing as UI-started agents.
     let reconcile_personas = super::load_personas(app).unwrap_or_default();
+    // Agents minted before roles existed carry none, so they would never group
+    // with another member's instance of the same role. Adopt it from their
+    // definition here, before the reconcile data below is snapshotted, so the
+    // republished kind:0 advertises the role in the same pass.
+    super::role_backfill::backfill_instance_roles(&mut records, &reconcile_personas);
     let reconcile_items: Vec<(String, crate::commands::ProfileReconcileData)> =
         successfully_spawned
             .iter()
@@ -439,6 +444,7 @@ pub async fn restore_managed_agents_on_launch(
                         pubkey: record.pubkey.clone(),
                         agent_command: effective_command,
                         persona_id: record.persona_id.clone(),
+                        role_id: record.role_id.clone(),
                     },
                 ))
             })

@@ -227,3 +227,54 @@ export function formatTeamMention(
 export function formatBlockMention(blockHandle: string) {
   return `@${blockHandle} `;
 }
+
+/**
+ * Fold a newly seen mention candidate into the one already collected for the
+ * same pubkey. One identity legitimately arrives from several sources (channel
+ * member, relay directory, managed agent, global search), each knowing
+ * different fields, so first-seen wins per field and agent-authored labels
+ * take precedence over human-sourced ones.
+ *
+ * `profile` is that pubkey's published kind-0 summary. It supplies two things
+ * no local source can: the owner of another member's agent, and the workspace
+ * role — local persona records only describe our own agents, so without the
+ * published role another member's instance of a shared role would never merge
+ * with ours (docs/design/role-agents.html).
+ */
+export function mergeMentionCandidate(
+  current: ActorMentionCandidate | undefined,
+  candidate: ActorMentionCandidate & { pubkey: string },
+  profile: { ownerPubkey?: string | null; role?: string | null } | null,
+): ActorMentionCandidate {
+  const publishedRole = profile?.role ?? null;
+  if (!current) {
+    return candidate.roleId
+      ? candidate
+      : { ...candidate, roleId: publishedRole };
+  }
+
+  return {
+    ...current,
+    avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
+    displayName:
+      current.isAgent && !candidate.isAgent
+        ? current.displayName
+        : candidate.isAgent && !current.isAgent
+          ? (candidate.displayName ?? current.displayName)
+          : (current.displayName ?? candidate.displayName),
+    isAgent: current.isAgent || candidate.isAgent,
+    isMember: current.isMember || candidate.isMember,
+    personaId: current.personaId ?? candidate.personaId,
+    personaName: current.personaName ?? candidate.personaName ?? null,
+    role: current.role ?? candidate.role ?? null,
+    roleId: current.roleId ?? candidate.roleId ?? publishedRole,
+    roleTitle: current.roleTitle ?? candidate.roleTitle ?? null,
+    secondaryLabel: current.secondaryLabel ?? candidate.secondaryLabel ?? null,
+    ownerPubkey:
+      current.ownerPubkey ??
+      candidate.ownerPubkey ??
+      (candidate.isAgent && candidate.pubkey ? profile?.ownerPubkey : null) ??
+      null,
+    isManagedAgent: current.isManagedAgent || candidate.isManagedAgent,
+  };
+}

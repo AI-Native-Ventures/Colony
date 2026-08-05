@@ -592,10 +592,13 @@ export function useWelcomeKickoff(
         await queryClient.invalidateQueries({
           queryKey: managedAgentsQueryKey,
         });
+        // A joiner gets their own instance of the role but not a second
+        // intro: the first member's opener is already in the channel.
+        if (welcomeTeam.alreadyStaffed) return;
         // Only the Chief of Staff exists before blueprint approval, so the
         // kickoff has no teammates to coordinate.
         const resolvedAgentSet: WelcomeAgentSet = {
-          lead: welcomeTeam[0],
+          lead: welcomeTeam.agents[0],
           teammates: [],
         };
 

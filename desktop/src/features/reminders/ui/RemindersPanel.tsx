@@ -3,6 +3,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { useAgentNameProfiles } from "@/features/agents/useAgentNameProfiles";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import {
@@ -52,8 +53,12 @@ export function useReminderSources(reminders: readonly Reminder[]) {
     [reminders],
   );
   const usersBatchQuery = useUsersBatchQuery(authorPubkeys);
-  const profiles: UserProfileLookup | undefined =
-    usersBatchQuery.data?.profiles;
+  // Registry overlay: agent authors and agent DM channels label from the
+  // agent registries when the relay has no kind:0 for them yet.
+  const profiles: UserProfileLookup | undefined = useAgentNameProfiles(
+    usersBatchQuery.data?.profiles,
+    currentPubkey,
+  );
 
   return React.useMemo(() => {
     const channelsById = new Map(

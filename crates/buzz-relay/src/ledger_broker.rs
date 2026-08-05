@@ -393,11 +393,11 @@ mod tests {
 
     fn rates(input: u64) -> PriceRates {
         PriceRates {
-            input_nanousd_per_token: input,
-            cache_read_nanousd_per_token: 0,
-            cache_write_5m_nanousd_per_token: 0,
-            cache_write_1h_nanousd_per_token: 0,
-            output_nanousd_per_token: 0,
+            input_nanousd_per_mtok: input,
+            cache_read_nanousd_per_mtok: 0,
+            cache_write_5m_nanousd_per_mtok: 0,
+            cache_write_1h_nanousd_per_mtok: 0,
+            output_nanousd_per_mtok: 0,
         }
     }
 
@@ -406,6 +406,7 @@ mod tests {
             model: model.to_string(),
             effective_from,
             rates: rates(input),
+            conditions: Default::default(),
             note: None,
             origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         })
@@ -453,7 +454,7 @@ mod tests {
         let book: PriceBook = serde_json::from_str(&second.content).expect("decode");
         assert_eq!(book.entries.len(), 2);
         assert_eq!(book.entries[0].effective_from, 100);
-        assert_eq!(book.entries[0].rates.input_nanousd_per_token, 1_000);
+        assert_eq!(book.entries[0].rates.input_nanousd_per_mtok, 1_000);
         assert_eq!(book.entries[1].effective_from, 200);
         assert!(
             PriceBook::extends(

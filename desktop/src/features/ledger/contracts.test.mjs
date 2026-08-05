@@ -21,11 +21,11 @@ const RELAY_PUBKEY = getPublicKey(RELAY_SECRET);
 const IMPOSTOR_SECRET = generateSecretKey();
 
 const RATES = {
-  inputNanousdPerToken: 3000,
-  cacheReadNanousdPerToken: 300,
-  cacheWrite5mNanousdPerToken: 3750,
-  cacheWrite1hNanousdPerToken: 6000,
-  outputNanousdPerToken: 15000,
+  inputNanousdPerMtok: 3000,
+  cacheReadNanousdPerMtok: 300,
+  cacheWrite5mNanousdPerMtok: 3750,
+  cacheWrite1hNanousdPerMtok: 6000,
+  outputNanousdPerMtok: 15000,
 };
 
 const ASSIGNMENT = {
@@ -64,8 +64,8 @@ test("a price book round-trips with money as bigint", () => {
   const book = parsePriceBook(priceBookEvent([ENTRY]), RELAY_PUBKEY);
   assert.equal(book.entries.length, 1);
   assert.equal(book.entries[0].model, "claude-sonnet-4-5");
-  assert.equal(book.entries[0].rates.inputNanousdPerToken, 3000n);
-  assert.equal(typeof book.entries[0].rates.outputNanousdPerToken, "bigint");
+  assert.equal(book.entries[0].rates.inputNanousdPerMtok, 3000n);
+  assert.equal(typeof book.entries[0].rates.outputNanousdPerMtok, "bigint");
   assert.equal(book.entries[0].note, "launch");
 });
 
@@ -92,7 +92,7 @@ test("a tampered book fails signature verification", () => {
     JSON.stringify({
       ...event,
       content: JSON.stringify({
-        entries: [{ ...ENTRY, rates: { ...RATES, inputNanousdPerToken: 1 } }],
+        entries: [{ ...ENTRY, rates: { ...RATES, inputNanousdPerMtok: 1 } }],
       }),
     }),
   );
@@ -121,7 +121,7 @@ test("an amount past exact integer range is refused, never rounded", () => {
   // correctly refuses to let anyone type by hand.
   const unsafe = JSON.parse('{"n": 9007199254740993}').n;
   const event = priceBookEvent([
-    { ...ENTRY, rates: { ...RATES, inputNanousdPerToken: unsafe } },
+    { ...ENTRY, rates: { ...RATES, inputNanousdPerMtok: unsafe } },
   ]);
   assert.throws(
     () => parsePriceBook(event, RELAY_PUBKEY),
@@ -132,10 +132,10 @@ test("an amount past exact integer range is refused, never rounded", () => {
 test("a nanoUSD amount may arrive as a decimal string and stays exact", () => {
   const big = "123456789012345678";
   const event = priceBookEvent([
-    { ...ENTRY, rates: { ...RATES, inputNanousdPerToken: big } },
+    { ...ENTRY, rates: { ...RATES, inputNanousdPerMtok: big } },
   ]);
   const book = parsePriceBook(event, RELAY_PUBKEY);
-  assert.equal(book.entries[0].rates.inputNanousdPerToken, BigInt(big));
+  assert.equal(book.entries[0].rates.inputNanousdPerMtok, BigInt(big));
 });
 
 test("a rulebook round-trips and refuses an unknown purpose", () => {

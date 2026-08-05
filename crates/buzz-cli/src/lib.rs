@@ -523,6 +523,22 @@ pub enum LedgerCmd {
         #[arg(long, default_value_t = 50)]
         floor_tokens: u64,
     },
+    /// Sign a price catalog into the feed document relays fetch.
+    ///
+    /// Local only: touches no relay, and uses the price publisher's key
+    /// rather than BUZZ_PRIVATE_KEY. Host the output as a static file and
+    /// point relays at it with BUZZ_LEDGER_PRICE_FEED_URL.
+    FeedSign {
+        /// Catalog JSON to sign, same schema as crates/buzz-core/data/price-catalog.json
+        #[arg(long)]
+        catalog: String,
+        /// Publisher secret key (hex or nsec). Defaults to COLONY_PRICE_FEED_KEY.
+        #[arg(long)]
+        key: Option<String>,
+        /// Write the signed document here instead of stdout
+        #[arg(long)]
+        out: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2537,6 +2553,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     // until it tried to publish it.
     if let Cmd::Company(CompanyCmd::Blueprint { file }) = &cli.command {
         return commands::company::check_blueprint(file);
+    }
+
+    // Signing the price feed is local, and deliberately does not use
+    // BUZZ_PRIVATE_KEY: the publisher key decides what every Colony company
+    // is billed, so it is a maintainer secret rather than an agent identity.
+    if let Cmd::Ledger(LedgerCmd::FeedSign { catalog, key, out }) = &cli.command {
+        return commands::price_feed::sign_feed(catalog, key.clone(), out.clone());
     }
 
     // Auth: private key is required for all relay operations.

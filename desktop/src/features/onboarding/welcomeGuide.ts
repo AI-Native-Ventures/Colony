@@ -15,6 +15,7 @@ import { listPersonas, setPersonaActive } from "@/shared/api/tauriPersonas";
 import type {
   AcpRuntime,
   AgentPersona,
+  ChannelMember,
   CreateManagedAgentInput,
   ManagedAgent,
 } from "@/shared/api/types";
@@ -67,7 +68,17 @@ export const WELCOME_TEAM_STARTERS = [
 
 export type WelcomeTeamAgents = [ManagedAgent];
 
-const welcomeTeamPromises = new Map<string, Promise<WelcomeTeamAgents>>();
+export type WelcomeTeamProvisioning = {
+  agents: WelcomeTeamAgents;
+  /**
+   * Another member's agents already staff this community. The instance is
+   * still provisioned; only the kickoff choreography is suppressed so the
+   * channel keeps one intro rather than one per member who joins.
+   */
+  alreadyStaffed: boolean;
+};
+
+const welcomeTeamPromises = new Map<string, Promise<WelcomeTeamProvisioning>>();
 
 function normalizeRelayUrl(relayUrl: string | null | undefined) {
   return relayUrl?.trim().replace(/\/+$/, "") ?? null;
@@ -198,6 +209,25 @@ async function ensureWelcomeTeamPersonasActive() {
   );
 }
 
+/**
+ * Whether this community's Welcome channel is already staffed by another
+ * member's agents: it has bot members that are not this install's own.
+ *
+ * Joining a workspace must not mint a second starter team next to the one
+ * that is already there - "Chief of Staff" is one colleague, not one per
+ * member (docs/design/role-agents.html, phase 1).
+ */
+export function communityAlreadyStaffed(
+  members: readonly Pick<ChannelMember, "pubkey" | "role" | "isAgent">[],
+  ownAgentPubkeys: ReadonlySet<string>,
+) {
+  return members.some(
+    (member) =>
+      (member.role === "bot" || member.isAgent) &&
+      !ownAgentPubkeys.has(normalizePubkey(member.pubkey)),
+  );
+}
+
 async function ensureWelcomeTeamMembership(
   channelId: string,
   agents: WelcomeTeamAgents,
@@ -245,6 +275,9 @@ export async function buildWelcomeStarterCreateInput(
     relayUrl: relayUrl ?? undefined,
     spawnAfterCreate: false,
     startOnAppLaunch: false,
+    // Owner-only: every member runs their own instance of the role, so an
+    // agent only ever answers the member who owns it, on that member's
+    // machine and subscription (docs/design/role-agents.html).
     respondTo: "owner-only",
   };
 }
@@ -288,8 +321,19 @@ export function welcomeStarterRuntimeUpdate(
 async function provisionWelcomeTeam(
   channelId: string,
   relayUrl?: string | null,
-): Promise<WelcomeTeamAgents> {
+): Promise<WelcomeTeamProvisioning> {
   const existingAgents = await listManagedAgents();
+
+  // A joiner still mints its own instance of the role - that instance is what
+  // answers them, on their machine and their subscription, and the UI merges
+  // it with the other members' instances into one colleague. What it must not
+  // do is repeat the kickoff, so the channel keeps a single intro.
+  const members = await getChannelMembers(channelId).catch(() => []);
+  const ownPubkeys = new Set(
+    existingAgents.map((agent) => normalizePubkey(agent.pubkey)),
+  );
+  const alreadyStaffed = communityAlreadyStaffed(members, ownPubkeys);
+
   await ensureWelcomeTeamPersonasActive();
   const [personas, runtimeCatalog, globalConfig] = await Promise.all([
     listPersonas(),
@@ -339,17 +383,18 @@ async function provisionWelcomeTeam(
     throw new Error("Chief of Staff provisioning did not return an agent.");
   }
   // No teammate allowlists to wire: the Chief of Staff is the only employee
-  // before approval, and it answers the owner directly (`respondTo`
-  // "owner-only" from the starter definition).
+  // before approval, and it answers every workspace member (`respondTo`
+  // "anyone" from the starter definition; the relay membership gate bounds
+  // the audience).
   const welcomeAgents: WelcomeTeamAgents = [chiefOfStaff];
   await ensureWelcomeTeamMembership(channelId, welcomeAgents);
-  return welcomeAgents;
+  return { agents: welcomeAgents, alreadyStaffed };
 }
 
 export function ensureWelcomeTeam(
   channelId: string,
   relayUrl?: string | null,
-): Promise<WelcomeTeamAgents> {
+): Promise<WelcomeTeamProvisioning> {
   const key = `${normalizeRelayUrl(relayUrl) ?? ""}:${channelId}`;
   const current = welcomeTeamPromises.get(key);
   if (current) return current;

@@ -306,3 +306,83 @@ test("coalesceAgentAutocompleteCandidates: leaves non-agents alone", () => {
 
   assert.deepEqual(coalesce([first, second]), [first, second]);
 });
+
+test("coalesceAgentAutocompleteCandidates: merges two members' instances of one role", () => {
+  // The workspace problem: each member runs their own Chief of Staff, with a
+  // different key, a different owner and (for a relay-sourced candidate) no
+  // persona id at all. Only the role collapses them into one colleague.
+  const mine = makeAgent({
+    pubkey: PUB_A,
+    displayName: "Chief of Staff",
+    ownerPubkey: CURRENT_PUBKEY,
+    isManagedAgent: true,
+    roleId: "chief-of-staff",
+  });
+  const theirs = makeAgent({
+    pubkey: PUB_B,
+    displayName: "Chief of Staff",
+    ownerPubkey: OTHER_OWNER_PUBKEY,
+    isMember: true,
+    roleId: "chief-of-staff",
+  });
+
+  // Mine survives even though theirs is the channel member: acting on the
+  // merged entry must reach the instance that will actually answer me.
+  assert.deepEqual(coalesce([theirs, mine]), [mine]);
+});
+
+test("coalesceAgentAutocompleteCandidates: role merge is case- and space-insensitive", () => {
+  const mine = makeAgent({
+    pubkey: PUB_A,
+    ownerPubkey: CURRENT_PUBKEY,
+    roleId: "chief-of-staff",
+  });
+  const theirs = makeAgent({
+    pubkey: PUB_B,
+    ownerPubkey: OTHER_OWNER_PUBKEY,
+    roleId: " Chief-Of-Staff ",
+  });
+
+  assert.deepEqual(coalesce([mine, theirs]), [mine]);
+});
+
+test("coalesceAgentAutocompleteCandidates: different roles stay distinct", () => {
+  const chief = makeAgent({ pubkey: PUB_A, roleId: "chief-of-staff" });
+  const scout = makeAgent({ pubkey: PUB_B, roleId: "scout" });
+
+  assert.deepEqual(coalesce([chief, scout]), [chief, scout]);
+});
+
+test("coalesceAgentAutocompleteCandidates: role outranks persona id", () => {
+  // Two members' instances of one role, each minted from their own local
+  // persona record, so the persona ids differ and would not have merged.
+  const mine = makeAgent({
+    pubkey: PUB_A,
+    ownerPubkey: CURRENT_PUBKEY,
+    personaId: "persona-mine",
+    roleId: "chief-of-staff",
+  });
+  const theirs = makeAgent({
+    pubkey: PUB_B,
+    ownerPubkey: OTHER_OWNER_PUBKEY,
+    personaId: "persona-theirs",
+    roleId: "chief-of-staff",
+  });
+
+  assert.deepEqual(coalesce([mine, theirs]), [mine]);
+});
+
+test("coalesceAgentAutocompleteCandidates: a non-agent with a role is never merged", () => {
+  const human = makeAgent({
+    pubkey: PUB_A,
+    isAgent: false,
+    roleId: "chief-of-staff",
+  });
+  const other = makeAgent({
+    pubkey: PUB_B,
+    isAgent: false,
+    roleId: "chief-of-staff",
+  });
+
+  assert.deepEqual(coalesce([human, other]), [human, other]);
+});

@@ -44,10 +44,20 @@ export function resolveChannelDisplayLabel(
     return channel.name;
   }
 
-  const participants = channel.participantPubkeys.map((pubkey, index) => ({
-    fallbackName: channel.participants[index] ?? null,
-    pubkey,
-  }));
+  const participants = channel.participantPubkeys.map((pubkey, index) => {
+    const fallbackName = channel.participants[index] ?? null;
+    return {
+      // A key is not a name. Producers have handed this array raw pubkeys
+      // (the Tauri channel decoder did exactly that), and `resolveUserLabel`
+      // returns a non-empty fallback before it ever consults profiles or
+      // truncates — so one bad producer prints 64 characters where a name
+      // belongs. Treating a key-shaped fallback as absent keeps that local to
+      // whoever produced it.
+      fallbackName:
+        fallbackName && isPubkeyName(fallbackName) ? null : fallbackName,
+      pubkey,
+    };
+  });
   const otherParticipants = currentPubkey
     ? participants.filter(
         (participant) =>

@@ -23,6 +23,7 @@ import {
 } from "@/features/messages/lib/threading";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { useAgentNameProfiles } from "@/features/agents/useAgentNameProfiles";
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { getEventById } from "@/shared/api/tauri";
@@ -547,7 +548,12 @@ export function useDraftViewItems(enabled: boolean): DraftViewItem[] {
   const usersBatchQuery = useUsersBatchQuery(profilePubkeys, {
     enabled: profilePubkeys.length > 0,
   });
-  const profiles = usersBatchQuery.data?.profiles;
+  // Registry overlay: agent DM drafts label from the agent registries when
+  // the relay has no kind:0 for the peer yet.
+  const profiles = useAgentNameProfiles(
+    usersBatchQuery.data?.profiles,
+    currentPubkey,
+  );
 
   const sources = React.useMemo(
     () =>

@@ -28,6 +28,9 @@ pub(crate) struct ProfileReconcileData {
     /// backfill to recover the correct avatar from the persona record when the
     /// relay profile has been corrupted.
     pub(crate) persona_id: Option<String>,
+    /// Workspace role this instance fills, published so other members' clients
+    /// can recognise their own instance of the same role.
+    pub(crate) role_id: Option<String>,
 }
 
 /// Resolve the avatar to backfill for a legacy agent record (pre-PR-921, no
@@ -62,24 +65,33 @@ pub(super) fn resolve_legacy_avatar(
 /// reconciliation proceeds.
 ///
 /// Query and publish target the relay returned by `effective_agent_relay_url`
-/// for every agent regardless of backend: an explicit per-agent `relay_url`
-/// wins, and a blank one falls back to the active workspace relay. This keeps
-/// reconciliation following the session's relay for never-pinned agents while
-/// honoring a deliberate pin wherever it points.
+/// — always the active workspace relay; the stored per-record pin is ignored
+/// (agents-everywhere, #2122). Callers acting on a specific runtime pair
+/// should use [`reconcile_profile_at`] with the pair's relay instead,
+/// so the profile lands on the relay that process actually connects to.
 pub(crate) async fn reconcile_agent_profile(
     state: &AppState,
     app: &AppHandle,
     agent_pubkey: &str,
     data: &ProfileReconcileData,
 ) -> Result<(), String> {
-    use crate::relay::{query_agent_profile, sync_managed_agent_profile};
-
-    // An explicit per-agent relay wins; an empty one falls back to the active
-    // workspace relay. Resolved once and used for both the read and write-back.
     let relay_url = crate::relay::effective_agent_relay_url(
         &data.relay_url,
         &relay_ws_url_with_override(state),
     );
+    reconcile_profile_at(state, app, agent_pubkey, data, &relay_url).await
+}
+
+/// [`reconcile_agent_profile`] against an explicit relay. Runtime-pair starts
+/// pass the pair's own relay, which may not be the active workspace relay.
+pub(crate) async fn reconcile_profile_at(
+    state: &AppState,
+    app: &AppHandle,
+    agent_pubkey: &str,
+    data: &ProfileReconcileData,
+    relay_url: &str,
+) -> Result<(), String> {
+    use crate::relay::{query_agent_profile, sync_managed_agent_profile};
 
     if !state
         .managed_agent_profile_reconcile_enabled
@@ -89,7 +101,7 @@ pub(crate) async fn reconcile_agent_profile(
     }
 
     // Query the relay for the agent's existing kind:0 profile.
-    let existing = query_agent_profile(state, &relay_url, agent_pubkey).await?;
+    let existing = query_agent_profile(state, relay_url, agent_pubkey).await?;
 
     // Resolve the expected avatar — backfilling for legacy records that have no
     // stored avatar_url yet.
@@ -136,7 +148,12 @@ pub(crate) async fn reconcile_agent_profile(
         Some(expected_avatar)
     };
 
-    if !profile_needs_sync(existing.as_ref(), &data.name, expected_avatar.as_deref()) {
+    if !profile_needs_sync(
+        existing.as_ref(),
+        &data.name,
+        expected_avatar.as_deref(),
+        data.role_id.as_deref(),
+    ) {
         return Ok(());
     }
 
@@ -152,11 +169,12 @@ pub(crate) async fn reconcile_agent_profile(
 
     sync_managed_agent_profile(
         state,
-        &relay_url,
+        relay_url,
         &agent_keys,
         &data.name,
         expected_avatar.as_deref(),
         data.auth_tag.as_deref(),
+        data.role_id.as_deref(),
     )
     .await
 }
@@ -168,13 +186,18 @@ pub(super) fn profile_needs_sync(
     existing: Option<&crate::relay::AgentProfileInfo>,
     expected_name: &str,
     expected_avatar: Option<&str>,
+    expected_role: Option<&str>,
 ) -> bool {
     match existing {
         None => true,
         Some(info) => {
             let name_matches = info.display_name.as_deref() == Some(expected_name);
             let picture_matches = info.picture.as_deref() == expected_avatar;
-            !name_matches || !picture_matches
+            // A profile published before roles existed carries no role, so
+            // this is also the migration trigger: every agent republishes once
+            // to advertise the role its members' clients group it by.
+            let role_matches = info.role.as_deref() == expected_role;
+            !name_matches || !picture_matches || !role_matches
         }
     }
 }

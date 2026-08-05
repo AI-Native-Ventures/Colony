@@ -340,7 +340,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // ordinary message-shaped writes; the ask_broker enforces altitude,
         // dedupe, and resolver/withdrawer authorization past this gate.
         KIND_ASK | KIND_ASK_RESOLUTION | KIND_ASK_WITHDRAWAL => Ok(Scope::MessagesWrite),
-        // Colony delegation grant (30188): owner-authored NIP-33 head, same
+        // Colony delegation grant (30189): owner-authored NIP-33 head, same
         // ownership shape as KIND_PERSONA/KIND_TEAM/KIND_MANAGED_AGENT above.
         // The actual owner-authorship check runs past this gate, in
         // `interrupt_gate::enforce_grant_authorship`.
@@ -486,7 +486,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // keyed by (pubkey, kind, d_tag). A stray `h` tag must not channel-scope them.
             | KIND_TEAM
             | KIND_MANAGED_AGENT
-            // Colony delegation grant (30188): owner-authored NIP-33 head,
+            // Colony delegation grant (30189): owner-authored NIP-33 head,
             // keyed by (pubkey, kind, d_tag=grant_id). Same reasoning as
             // KIND_TEAM/KIND_MANAGED_AGENT above -- a stray `h` tag must not
             // channel-scope a company-wide policy record.

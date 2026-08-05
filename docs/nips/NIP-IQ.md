@@ -63,7 +63,7 @@ never even produced an Ask gets one filed on its behalf.
   Colony initiative id. The sentinel value `no-initiative` groups a
   stall Ask on a task with no `initiativeId` at all (see "Stall-detection
   sweep" below); it is not a real initiative and appears only there.
-- **Delegation grant**: a kind `30188` owner-authored record naming a
+- **Delegation grant**: a kind `30189` owner-authored record naming a
   category and scope a leader or executive agent may decide on its own,
   without asking, going forward.
 - **Decision log**: a kind `44303` record of a decision a leader or
@@ -77,9 +77,9 @@ never even produced an Ask gets one filed on its behalf.
 | `44301` | Ask resolution | no | audience, a current owner, or the relay |
 | `44302` | Ask withdrawal | no | the executive, or the relay |
 | `44303` | Decision log | no | a `leader` or `executive` agent |
-| `30188` | Delegation grant | yes (NIP-33, `d` = grant id) | a current community owner |
+| `30189` | Delegation grant | yes (NIP-33, `d` = grant id) | a current community owner |
 
-`44300`-`44303` sit in Buzz's Colony-interrupt kind block; `30188` sits in
+`44300`-`44303` sit in Buzz's Colony-interrupt kind block; `30189` sits in
 the NIP-33 parameterized-replaceable range (30000-39999) alongside
 `30177` (managed agent) and `30176` (team), whose owner-authored `tier`
 content field this NIP also reads. See `buzz-core/src/kind.rs` for the
@@ -330,11 +330,11 @@ carry no assignee field): any current leader or executive may cite any
 active grant. Binding a decision log to its grant's stated boundaries is a
 convention enforced by the filing agent, not by the relay.
 
-### Kind 30188: Delegation Grant
+### Kind 30189: Delegation Grant
 
 ```jsonc
 {
-  "kind": 30188,
+  "kind": 30189,
   "pubkey": "<current community owner>",
   "tags": [["d", "<grant_id>"]],
   "content": "{\"category\":\"...\",\"scope\":\"...\",\"active\":true,\"cap_nano_usd\":500000}"
@@ -720,7 +720,7 @@ original Ask's event id (what the caller is actually blocked on) is never
 flattened away.
 
 There is currently no `buzz-cli` surface for delegation grants (kind
-30188) or decision logs (kind 44303); those events must be constructed and
+30189) or decision logs (kind 44303); those events must be constructed and
 signed directly against the schemas above.
 
 ## Known Limitations
