@@ -260,14 +260,24 @@ async fn audience_altitude(
 /// yet another ask for the same need. Doing this in the broker rather than in
 /// `buzz-cli` means it holds for any client, not only ours.
 ///
-/// **The altitude comparison is the authorization, not a formality.** `prior`
-/// is an unauthenticated tag naming any event id in the community, and
-/// `check_altitude` only constrains signer-versus-audience, so without it a
-/// worker could point `prior` at the executive's ask sitting in front of the
-/// owner and close it simply by filing an ordinary worker-to-leader ask.
+/// **Three independent authorization checks, none of them a formality.**
+/// `prior` is an unauthenticated tag naming any event id in the community,
+/// and `check_altitude` only constrains signer-versus-audience, so closing
+/// whatever it names would hand every agent a withdrawal power the protocol
+/// reserves for the executive:
+///
+/// 1. **Standing.** The prior ask's audience must BE the successor's signer,
+///    which is what a legitimate escalation looks like. Without it, any
+///    leader could close any other agent's open leader-audience ask.
+/// 2. **Not a stall ask.** A `stall` ask is relay-filed about a silent task,
+///    and closing one suppresses the stall sweep's re-detection of that task.
+/// 3. **Strictly higher altitude.** Without it, a worker could close the
+///    executive's ask sitting in front of the owner by filing an ordinary
+///    worker-to-leader ask that points `prior` at it.
+///
 /// Anything this function cannot establish -- a prior row that is not open, a
-/// rank it cannot resolve on either side, a successor that is not strictly
-/// higher -- is left alone.
+/// signer without standing, a stall ask, a rank it cannot resolve on either
+/// side, a successor that is not strictly higher -- is left alone.
 ///
 /// Best-effort throughout: the successor is already durably filed by the time
 /// this runs, and failing to close its predecessor must not turn an accepted
@@ -311,6 +321,39 @@ async fn close_superseded_prior(
             return;
         }
     };
+
+    // Standing: the signer must be the party the prior ask was actually
+    // waiting on. Outranking an ask is not the same as having any business
+    // with it -- without this, any leader-tier agent could point `prior` at
+    // any OTHER agent's open leader-audience ask and close it silently,
+    // acquiring by side effect the authority `handle_withdrawal` reserves for
+    // the executive. Requiring `prior.audience == successor's signer` is
+    // exactly what a legitimate escalation looks like: the leader who
+    // received the raise is the one carrying it onward.
+    //
+    // Deliberately `successor.pubkey` and not `resolve_filer`: the relay's
+    // own auto-promotion never reaches here (it marks the original
+    // `promoted` before filing the successor, so the lookup above already
+    // returned `None`), so there is no relay-signed case to accommodate, and
+    // honouring a `filer` tag here would reintroduce the same hole under a
+    // different name.
+    if prior.audience_pubkey != successor.pubkey.to_bytes().to_vec() {
+        return;
+    }
+
+    // A `stall` ask is relay-filed about a task that stopped moving. Nobody
+    // escalated it to anyone, so the audience relationship above does not
+    // mean what it means for a raise -- and the stall sweep treats ANY
+    // closure of one as a decisive human act, suppressing re-detection of
+    // that exact task until fresh activity appears
+    // (`interrupt_runtime::process_stall_candidate`'s
+    // `find_latest_closed_ask_by_need` check). Closing one as a side effect
+    // of filing something else would therefore disarm the single thing the
+    // stall sweep exists to catch: an agent that died silently. A human can
+    // still close it deliberately through resolution or withdrawal.
+    if prior.ask_type == AskType::Stall.as_str() {
+        return;
+    }
 
     let prior_hex = hex::encode(&prior.audience_pubkey);
     let ranks = tokio::join!(

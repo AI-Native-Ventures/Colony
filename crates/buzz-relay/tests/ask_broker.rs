@@ -3073,3 +3073,162 @@ async fn a_lower_altitude_prior_reference_never_closes_the_higher_ask() {
         "the higher ask must still hold its dedupe slot"
     );
 }
+
+/// New-I5 (verification pass): the altitude comparison establishes that the
+/// successor outranks the prior, but nothing established that the agent
+/// filing it has any STANDING over the ask it closes. A leader-tier agent
+/// could point `prior` at any other agent's open leader-audience ask and
+/// close it silently, without the executive authority `handle_withdrawal`
+/// demands for an ordinary withdrawal.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn an_unrelated_agent_cannot_close_someone_elses_ask() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let other_leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &other_leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // A worker's ask, addressed to ITS OWN leader.
+    let original = sign_ask(
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-1", "not-yours"),
+        &ask_content("Need the vendor key", None),
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &original)
+            .await
+            .expect("no internal error"),
+        "worker -> its own leader ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &original, None)
+        .await
+        .expect("store original ask event");
+    assert!(inserted);
+
+    // A DIFFERENT leader, who is not that ask's audience and has no
+    // relationship to it at all, files its own perfectly legal
+    // leader -> executive ask pointing `prior` at the worker's ask. The
+    // altitude comparison alone would let this close it.
+    let hijack = sign_escalation(
+        &other_leader,
+        &executive.public_key(),
+        "not-yours-hijacked",
+        &original,
+        "Closing an ask that was never mine",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &hijack)
+            .await
+            .expect("no internal error"),
+        "unrelated leader's own ask",
+    );
+
+    let victim = fetch_ask_row(&pool, community, original.id.as_bytes()).await;
+    assert_eq!(
+        victim.status, "open",
+        "an agent with no standing over an ask must never close it"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "not-yours")
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "the victim ask must still hold its dedupe slot"
+    );
+}
+
+/// New-I5: a `stall` ask is relay-filed about a task that stopped moving. It
+/// has no filer standing behind it and no escalation relationship, and
+/// closing one suppresses re-detection of that exact task
+/// (`find_latest_closed_ask_by_need` in the stall sweep treats a closure as a
+/// decisive human act). Letting an agent close one through this path would
+/// disarm the single thing the stall sweep exists to catch: a genuinely dead
+/// agent.
+///
+/// The audience relationship alone does NOT save this case -- the stall ask
+/// here is addressed to the very leader that then escalates it, so the
+/// standing check passes and the altitude check passes. Only the explicit
+/// stall exclusion stops it.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_stall_ask_is_never_closed_by_a_superseding_escalation() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // The relay files a stall ask about a silent task, addressed to the
+    // leader accountable for it (relay-signed asks bypass the ladder).
+    let stall = sign_ask(
+        &relay_keys,
+        ask_tags(
+            "stall",
+            &leader.public_key(),
+            "init-1",
+            "stall-abcdef123456",
+        ),
+        &ask_content("\"Ship the thing\" has gone silent", None),
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &stall)
+            .await
+            .expect("no internal error"),
+        "relay-filed stall ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &stall, None)
+        .await
+        .expect("store stall ask event");
+    assert!(inserted);
+
+    // That same leader escalates onward, pointing `prior` at the stall ask.
+    // Standing holds (it IS the audience) and altitude holds (executive
+    // outranks leader), so nothing but the stall exclusion refuses this.
+    let escalation = sign_escalation(
+        &leader,
+        &executive.public_key(),
+        "stall-escalated",
+        &stall,
+        "Escalating the silent task",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "leader escalating a stall ask",
+    );
+
+    let stall_row = fetch_ask_row(&pool, community, stall.id.as_bytes()).await;
+    assert_eq!(
+        stall_row.status, "open",
+        "closing a stall ask this way would suppress re-detection of a dead agent"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "stall-abcdef123456")
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "the stall ask must still hold its dedupe slot so the sweep stays deduped"
+    );
+}
