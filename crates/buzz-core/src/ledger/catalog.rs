@@ -68,10 +68,18 @@ impl std::fmt::Display for CatalogError {
 
 impl std::error::Error for CatalogError {}
 
-/// Dollars per million tokens to nanoUSD per token, exactly.
+/// Dollars per million tokens to nanoUSD per million tokens, exactly.
 ///
-/// Parsed as text so 0.1 cannot arrive as 0.09999999999999999, and refused
-/// rather than rounded when finer than one nanoUSD per token.
+/// A pure scale by 10^9 with nothing to lose, because the stored unit is the
+/// same unit vendors quote. Parsed as text so 0.1 cannot arrive as
+/// 0.09999999999999999, and capped at nine decimal places of dollars, which
+/// is finer than any published rate.
+///
+/// This used to divide by a further 10^6 to reach nanoUSD per *token*, and
+/// refused anything with a remainder. That refusal was not theoretical: it
+/// kept DeepSeek V4 Flash and V4 Pro out of the catalog entirely, because
+/// their cache-hit rates ($0.0028 and $0.003625 per million tokens) are 2.8
+/// and 3.625 nanoUSD per token.
 fn per_mtok_to_nanousd(value: &str, model: &str, field: &str) -> Result<u64, CatalogError> {
     let trimmed = value.trim();
     let bad = || CatalogError(format!("{model}: {field} {value} is not a dollar amount"));
@@ -94,16 +102,10 @@ fn per_mtok_to_nanousd(value: &str, model: &str, field: &str) -> Result<u64, Cat
         padded.push('0');
     }
     let nanos: u64 = padded.parse().map_err(|_| bad())?;
-    let total = dollars
+    dollars
         .checked_mul(1_000_000_000)
         .and_then(|scaled| scaled.checked_add(nanos))
-        .ok_or_else(bad)?;
-    if total % 1_000_000 != 0 {
-        return Err(CatalogError(format!(
-            "{model}: {field} {value} is finer than one nanoUSD per token"
-        )));
-    }
-    Ok(total / 1_000_000)
+        .ok_or_else(bad)
 }
 
 fn parse_rfc3339(value: &str, model: &str) -> Result<u64, CatalogError> {
@@ -140,27 +142,27 @@ fn parse_catalog(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
         }
         entries.push(PriceEntry {
             rates: PriceRates {
-                input_nanousd_per_token: per_mtok_to_nanousd(
+                input_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.input_per_mtok,
                     &row.model,
                     "input",
                 )?,
-                cache_read_nanousd_per_token: per_mtok_to_nanousd(
+                cache_read_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.cache_read_per_mtok,
                     &row.model,
                     "cache read",
                 )?,
-                cache_write_5m_nanousd_per_token: per_mtok_to_nanousd(
+                cache_write_5m_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.cache_write_5m_per_mtok,
                     &row.model,
                     "5m cache write",
                 )?,
-                cache_write_1h_nanousd_per_token: per_mtok_to_nanousd(
+                cache_write_1h_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.cache_write_1h_per_mtok,
                     &row.model,
                     "1h cache write",
                 )?,
-                output_nanousd_per_token: per_mtok_to_nanousd(
+                output_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.output_per_mtok,
                     &row.model,
                     "output",
@@ -288,18 +290,52 @@ mod tests {
         }
     }
 
-    /// $3 per million tokens is 3000 nanoUSD per token.
+    /// $3 per million tokens is 3_000_000_000 nanoUSD per million tokens.
     #[test]
     fn dollars_per_million_tokens_convert_exactly() {
-        assert_eq!(per_mtok_to_nanousd("3", "m", "input").unwrap(), 3_000);
-        assert_eq!(per_mtok_to_nanousd("0.30", "m", "input").unwrap(), 300);
-        assert_eq!(per_mtok_to_nanousd("0.075", "m", "input").unwrap(), 75);
+        assert_eq!(
+            per_mtok_to_nanousd("3", "m", "input").unwrap(),
+            3_000_000_000
+        );
+        assert_eq!(
+            per_mtok_to_nanousd("0.30", "m", "input").unwrap(),
+            300_000_000
+        );
+        assert_eq!(
+            per_mtok_to_nanousd("0.075", "m", "input").unwrap(),
+            75_000_000
+        );
         assert_eq!(per_mtok_to_nanousd("0", "m", "input").unwrap(), 0);
     }
 
+    /// The rates that were refused before this unit existed, and the reason
+    /// it exists. Both are real published DeepSeek V4 cache-hit prices.
     #[test]
-    fn a_rate_finer_than_one_nanousd_per_token_is_refused() {
-        assert!(per_mtok_to_nanousd("0.0000001", "m", "input").is_err());
+    fn sub_nanousd_per_token_vendor_rates_are_now_exact() {
+        assert_eq!(
+            per_mtok_to_nanousd("0.0028", "deepseek-v4-flash", "cache read").unwrap(),
+            2_800_000,
+            "$0.0028/MTok is 2.8 nanoUSD per token, which had no integer form"
+        );
+        assert_eq!(
+            per_mtok_to_nanousd("0.003625", "deepseek-v4-pro", "cache read").unwrap(),
+            3_625_000
+        );
+    }
+
+    /// Nine decimal places of dollars is the floor, and it is finer than
+    /// anything a vendor publishes.
+    #[test]
+    fn a_rate_finer_than_the_stored_unit_is_still_refused() {
+        assert_eq!(
+            per_mtok_to_nanousd("0.000000001", "m", "input").unwrap(),
+            1,
+            "one nanoUSD per million tokens is representable"
+        );
+        assert!(
+            per_mtok_to_nanousd("0.0000000001", "m", "input").is_err(),
+            "ten decimal places is finer than the unit and must be refused, not rounded"
+        );
     }
 
     #[test]
@@ -337,11 +373,11 @@ mod tests {
             model: model.to_string(),
             effective_from,
             rates: PriceRates {
-                input_nanousd_per_token: input,
-                cache_read_nanousd_per_token: 0,
-                cache_write_5m_nanousd_per_token: 0,
-                cache_write_1h_nanousd_per_token: 0,
-                output_nanousd_per_token: 0,
+                input_nanousd_per_mtok: input,
+                cache_read_nanousd_per_mtok: 0,
+                cache_write_5m_nanousd_per_mtok: 0,
+                cache_write_1h_nanousd_per_mtok: 0,
+                output_nanousd_per_mtok: 0,
             },
             note: None,
             origin: PriceOrigin::Owner,
@@ -390,8 +426,7 @@ mod tests {
             entries: vec![owner_entry("m", 1_000, 42), catalog_row],
         };
         assert_eq!(
-            book.rates_for("m", 2_000)
-                .map(|r| r.input_nanousd_per_token),
+            book.rates_for("m", 2_000).map(|r| r.input_nanousd_per_mtok),
             Some(42),
             "the owner's negotiated rate must survive a catalog refresh"
         );
@@ -407,14 +442,12 @@ mod tests {
             entries: vec![owner_entry("m", 1_000, 42), newer],
         };
         assert_eq!(
-            book.rates_for("m", 3_000)
-                .map(|r| r.input_nanousd_per_token),
+            book.rates_for("m", 3_000).map(|r| r.input_nanousd_per_mtok),
             Some(7)
         );
         // And before it took effect, the older price still stands.
         assert_eq!(
-            book.rates_for("m", 1_500)
-                .map(|r| r.input_nanousd_per_token),
+            book.rates_for("m", 1_500).map(|r| r.input_nanousd_per_mtok),
             Some(42)
         );
     }
@@ -460,7 +493,7 @@ mod tests {
             vec![catalog_entry("m", 1_000, 9)],
         );
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].rates.input_nanousd_per_token, 9);
+        assert_eq!(merged[0].rates.input_nanousd_per_mtok, 9);
         assert_eq!(
             conflicts,
             vec![CatalogConflict {
@@ -504,12 +537,37 @@ mod tests {
             "gpt-4o-2024-08-06",
             "gpt-5.6-sol",
             "gpt-5.3-codex",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
         ] {
             assert!(
                 book.rates_for(observed, now).is_some(),
                 "{observed} is unpriced; the meter records this exact string"
             );
         }
+    }
+
+    /// The two models the old per-token unit could not hold at all. Their
+    /// cache-hit rates are 2.8 and 3.625 nanoUSD per token, so both entries
+    /// were refused outright and the models went unpriced.
+    #[test]
+    fn the_shipped_catalog_prices_deepseek_v4_cache_hits_exactly() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let now = 1_790_553_600;
+        assert_eq!(
+            book.rates_for("deepseek-v4-flash", now)
+                .map(|r| r.cache_read_nanousd_per_mtok),
+            Some(2_800_000),
+            "$0.0028 per million tokens"
+        );
+        assert_eq!(
+            book.rates_for("deepseek-v4-pro", now)
+                .map(|r| r.cache_read_nanousd_per_mtok),
+            Some(3_625_000),
+            "$0.003625 per million tokens"
+        );
     }
 
     /// Sonnet 5's introductory rate is the case effective dating exists for,
@@ -523,14 +581,14 @@ mod tests {
         let after_change = 1_790_553_600; // 2026-09-28
         assert_eq!(
             book.rates_for("claude-sonnet-5", during_intro)
-                .map(|r| r.input_nanousd_per_token),
-            Some(2_000),
+                .map(|r| r.input_nanousd_per_mtok),
+            Some(2_000_000_000),
             "introductory $2/MTok while it was in force"
         );
         assert_eq!(
             book.rates_for("claude-sonnet-5", after_change)
-                .map(|r| r.input_nanousd_per_token),
-            Some(3_000),
+                .map(|r| r.input_nanousd_per_mtok),
+            Some(3_000_000_000),
             "standard $3/MTok from 2026-09-01"
         );
     }
@@ -541,7 +599,7 @@ mod tests {
             "inputPerMtok":"3","cacheReadPerMtok":"0.30","cacheWrite5mPerMtok":"3.75",
             "cacheWrite1hPerMtok":"6","outputPerMtok":"15"}]}"#;
         let entries = parse_catalog_document(json).unwrap();
-        assert_eq!(entries[0].rates.input_nanousd_per_token, 3_000);
+        assert_eq!(entries[0].rates.input_nanousd_per_mtok, 3_000_000_000);
         assert_eq!(entries[0].origin, PriceOrigin::Catalog);
 
         assert!(parse_catalog_document(r#"{"version":2,"entries":[]}"#).is_err());

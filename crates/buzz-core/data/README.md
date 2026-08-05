@@ -41,7 +41,7 @@ the day the promotion ended.
 - Rates are dollars per million tokens, as vendors quote them.
 - Use `"0"` for a rate a provider does not charge for (OpenAI does not bill
   cache writes).
-- A rate finer than one nanoUSD per token is refused rather than rounded. See
+- A rate finer than the stored unit is refused rather than rounded. See
   [What cannot be priced yet](#what-cannot-be-priced-yet).
 - Two entries for one model at one instant are refused: there would be no
   defined winner.
@@ -62,79 +62,46 @@ what stops a `gpt-4` row from pricing `gpt-4o`, or a `claude-sonnet-4` row from
 pricing `claude-sonnet-4-5-20250929`. Charging one model at another's rate is
 worse than leaving it unpriced, because unpriced is visible.
 
-## What cannot be priced yet
+## Rates are per million tokens
 
-Rates are integer **nanoUSD per token**, which is $0.001 per million tokens.
-A vendor rate finer than that cannot be represented and is refused rather than
-rounded, so it stays out of the catalog.
+Stored rates are integer nanoUSD **per million tokens**, the unit vendors
+quote. `"0.0028"` in this file is stored as `2800000`, exactly.
 
-This is not hypothetical. DeepSeek V4 cache hits are **$0.0028 / MTok**, which
-is 2.8 nanoUSD per token:
+They used to be nanoUSD per *token*, which put a floor of $0.001 per million
+tokens under every rate and refused anything finer rather than rounding it.
+That was not theoretical: it kept `deepseek-v4-flash` and `deepseek-v4-pro`
+out of the catalog entirely, because their cache-hit rates are $0.0028 and
+$0.003625 per million tokens, or 2.8 and 3.625 nanoUSD per token.
 
-```
-$ buzz ledger feed-sign --catalog deepseek.json --key …
-deepseek-v4-flash: cache read 0.0028 is finer than one nanoUSD per token
-```
+Nine decimal places of dollars still survive without loss, and anything finer
+is refused rather than rounded. No vendor publishes anything close.
 
-`deepseek-v4-flash` and `deepseek-v4-pro` are therefore absent. Spend on them
-reports as **unpriced**, which is visible, rather than rounded, which would be
-silently wrong by 7% on every cache read. Pricing them needs sub-nanoUSD
-resolution across the ledger, the desktop app, and every stored price book:
-a units change, not a catalog edit.
+Cost is computed by summing every category first and dividing once at the end,
+so a record is rounded at most half a nanoUSD ($0.0000000005). Rates are never
+rounded. A rounded rate is wrong in the same direction on every call forever;
+a rounded total is off by less than a billionth of a dollar, once.
 
-## What this catalog must not contain
+Books published before this change hold per-token rates. They are read and
+scaled exactly (1 per token = 1,000,000 per million tokens) and price to the
+identical total, so nothing that was already reported is restated. Writing
+always uses the new unit, so a book converts the next time anything appends to
+it.
 
-Anything a company negotiated for itself. Those are published by the owner
-from the Spend screen or `buzz ledger prices-add`, and an owner's row beats a
-catalog row at the same instant precisely so a refresh cannot overwrite it.
+## What this book still cannot express
 
-## Publishing the signed feed
+**Time-of-day pricing.** DeepSeek has announced peak/off-peak rates: 2x during
+09:00-12:00 and 14:00-18:00 Beijing time, daily. Entries are effective-dated by
+instant, which models a step change and not a recurring daily pattern. The
+DeepSeek entries here carry off-peak list prices and say so. When that policy
+takes effect, peak-hour spend will be understated until the book learns
+recurrence.
 
-The feed is this same document, signed once and served as a static file. A
-relay fetches it at startup and on an interval, merges it over the file it
-shipped with, and applies it through the same seeding path, so a price change
-reaches running relays without a deploy.
-
-```bash
-# 1. Edit price-catalog.json as above, or keep a superset elsewhere.
-# 2. Sign it. COLONY_PRICE_FEED_KEY holds the publisher's secret key.
-buzz ledger feed-sign \
-  --catalog crates/buzz-core/data/price-catalog.json \
-  --out price-feed.json
-
-# 3. Serve price-feed.json over HTTPS as a static file.
-# 4. Point relays at it:
-#      BUZZ_LEDGER_PRICE_FEED_URL=https://…/price-feed.json
-#      BUZZ_LEDGER_PRICE_FEED_PUBKEY=<the pubkey feed-sign printed>
-```
-
-The catalog is parsed before it is signed, so a document relays cannot read is
-refused here rather than discovered by every relay in production.
-
-### The publisher key
-
-It decides what every Colony company is billed. It is a maintainer secret, not
-an agent identity, and `feed-sign` deliberately does not read
-`BUZZ_PRIVATE_KEY`, because an agent key that leaked must not also be able to set
-prices.
-
-### What a relay refuses
-
-- A document signed by any key other than the pinned one, even a valid
-  signature.
-- A document whose `id` does not cover its content. Signature alone is not
-  enough: a Nostr signature covers the event's *stated* id, so checking only
-  the signature would let whoever can edit the response body rewrite every
-  price in it.
-- A body over 1 MiB, refused while downloading rather than after buffering.
-- A document older than `BUZZ_LEDGER_PRICE_FEED_MAX_AGE_SECS` (30 days by
-  default). A publisher that stopped publishing otherwise looks exactly like a
-  market where no price ever changed.
-- A URL configured without a pinned pubkey. That is fatal at startup, not a
-  warning.
-
-An unreachable or refused feed is **not** fatal. The relay logs it and prices
-from the shipped file.
+**`deepseek-chat` is stale.** The row dated 2025-09-05 is the price that was in
+force then. DeepSeek no longer lists that model; V4 Flash is $0.14 against that
+row's $0.56. It is left in place because removing a published row restates
+history, and no corrected row is appended because it is not clear what, if
+anything, that name resolves to now. If usage ever appears under it, treat the
+cost as suspect.
 
 ## Staleness
 

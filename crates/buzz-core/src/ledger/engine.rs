@@ -512,11 +512,13 @@ mod tests {
                 model: "m".to_string(),
                 effective_from: 0,
                 rates: PriceRates {
-                    input_nanousd_per_token: 1_000,
-                    cache_read_nanousd_per_token: 100,
-                    cache_write_5m_nanousd_per_token: 0,
-                    cache_write_1h_nanousd_per_token: 0,
-                    output_nanousd_per_token: 5_000,
+                    // $1 / MTok input, $5 / MTok output, at the stored
+                    // per-million-token scale.
+                    input_nanousd_per_mtok: 1_000_000_000,
+                    cache_read_nanousd_per_mtok: 100_000_000,
+                    cache_write_5m_nanousd_per_mtok: 0,
+                    cache_write_1h_nanousd_per_mtok: 0,
+                    output_nanousd_per_mtok: 5_000_000_000,
                 },
                 note: None,
                 origin: PriceOrigin::Owner,

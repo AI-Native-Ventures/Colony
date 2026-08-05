@@ -393,11 +393,27 @@ mod tests {
     /// anything looking broken.
     #[test]
     fn dollars_per_million_tokens_convert_exactly() {
-        assert_eq!(per_mtok_to_nanousd("3", "Input").unwrap(), 3_000);
-        assert_eq!(per_mtok_to_nanousd("15", "Output").unwrap(), 15_000);
-        assert_eq!(per_mtok_to_nanousd("0.30", "Cache read").unwrap(), 300);
-        assert_eq!(per_mtok_to_nanousd("3.75", "Cache write").unwrap(), 3_750);
+        assert_eq!(per_mtok_to_nanousd("3", "Input").unwrap(), 3_000_000_000);
+        assert_eq!(per_mtok_to_nanousd("15", "Output").unwrap(), 15_000_000_000);
+        assert_eq!(
+            per_mtok_to_nanousd("0.30", "Cache read").unwrap(),
+            300_000_000
+        );
+        assert_eq!(
+            per_mtok_to_nanousd("3.75", "Cache write").unwrap(),
+            3_750_000_000
+        );
         assert_eq!(per_mtok_to_nanousd("0", "Input").unwrap(), 0);
+    }
+
+    /// An owner must be able to publish the rate their vendor charges. This
+    /// one was refused outright before the stored unit changed.
+    #[test]
+    fn a_sub_nanousd_per_token_vendor_rate_can_be_published() {
+        assert_eq!(
+            per_mtok_to_nanousd("0.0028", "Cache read").unwrap(),
+            2_800_000
+        );
     }
 
     /// Parsed as text, never through a float.
@@ -412,11 +428,12 @@ mod tests {
         );
     }
 
-    /// A rate finer than one nanoUSD per token is refused, not rounded.
+    /// Finer than the stored unit is still refused rather than rounded.
     #[test]
-    fn sub_nanousd_per_token_precision_is_refused() {
-        let error = per_mtok_to_nanousd("0.0000001", "Input").unwrap_err();
-        assert!(error.contains("will not round it"), "{error}");
+    fn precision_finer_than_the_stored_unit_is_refused() {
+        assert_eq!(per_mtok_to_nanousd("0.000000001", "Input").unwrap(), 1);
+        let error = per_mtok_to_nanousd("0.0000000001", "Input").unwrap_err();
+        assert!(error.contains("finer than one nanoUSD"), "{error}");
     }
 
     #[test]
@@ -728,15 +745,15 @@ fn usd_text_to_nanousd(value: &str, field: &str) -> Result<u64, String> {
         .ok_or_else(bad)
 }
 
-/// Dollars per million tokens to nanoUSD per token.
+/// Dollars per million tokens to nanoUSD per million tokens.
+///
+/// A pure scale by 10^9, because the stored unit is the unit vendors quote.
+/// It used to divide by a further 10^6 to reach nanoUSD per *token* and
+/// refuse any remainder, which meant an owner could not publish a rate their
+/// vendor actually charges: DeepSeek V4 Flash bills cache hits at $0.0028
+/// per million tokens, or 2.8 nanoUSD per token.
 fn per_mtok_to_nanousd(value: &str, field: &str) -> Result<u64, String> {
-    let nanos = usd_text_to_nanousd(value, field)?;
-    if nanos % 1_000_000 != 0 {
-        return Err(format!(
-            "{field} is finer than one nanoUSD per token; the ledger will not round it"
-        ));
-    }
-    Ok(nanos / 1_000_000)
+    usd_text_to_nanousd(value, field)
 }
 
 /// Publish a price row for one model.
@@ -754,20 +771,20 @@ pub async fn ledger_add_price(
         return Err("name the model this price applies to".to_string());
     }
     let rates = buzz_core_pkg::ledger::prices::PriceRates {
-        input_nanousd_per_token: per_mtok_to_nanousd(&request.input_per_mtok, "Input")?,
-        cache_read_nanousd_per_token: per_mtok_to_nanousd(
+        input_nanousd_per_mtok: per_mtok_to_nanousd(&request.input_per_mtok, "Input")?,
+        cache_read_nanousd_per_mtok: per_mtok_to_nanousd(
             &request.cache_read_per_mtok,
             "Cache read",
         )?,
-        cache_write_5m_nanousd_per_token: per_mtok_to_nanousd(
+        cache_write_5m_nanousd_per_mtok: per_mtok_to_nanousd(
             &request.cache_write_5m_per_mtok,
             "5-minute cache write",
         )?,
-        cache_write_1h_nanousd_per_token: per_mtok_to_nanousd(
+        cache_write_1h_nanousd_per_mtok: per_mtok_to_nanousd(
             &request.cache_write_1h_per_mtok,
             "1-hour cache write",
         )?,
-        output_nanousd_per_token: per_mtok_to_nanousd(&request.output_per_mtok, "Output")?,
+        output_nanousd_per_mtok: per_mtok_to_nanousd(&request.output_per_mtok, "Output")?,
     };
     let effective_from = match request.effective_from.as_deref() {
         Some(value) => chrono::DateTime::parse_from_rfc3339(value)

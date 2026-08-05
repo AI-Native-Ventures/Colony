@@ -489,7 +489,7 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].model, "feed-model");
-        assert_eq!(entries[0].rates.input_nanousd_per_token, 3_000);
+        assert_eq!(entries[0].rates.input_nanousd_per_mtok, 3_000_000_000);
         server.abort();
     }
 

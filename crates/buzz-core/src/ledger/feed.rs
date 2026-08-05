@@ -161,8 +161,8 @@ mod tests {
             verify_feed_document(&document, &keys.public_key().to_hex(), now, 86_400).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].model, "feed-model");
-        assert_eq!(entries[0].rates.input_nanousd_per_token, 3_000);
-        assert_eq!(entries[0].rates.output_nanousd_per_token, 15_000);
+        assert_eq!(entries[0].rates.input_nanousd_per_mtok, 3_000_000_000);
+        assert_eq!(entries[0].rates.output_nanousd_per_mtok, 15_000_000_000);
     }
 
     /// The catalog the relay ships must itself be publishable, or the

@@ -40,11 +40,11 @@ export const COST_CLASSIFICATIONS = ["cogs", "opex", "needsReview"] as const;
 export type CostClassification = (typeof COST_CLASSIFICATIONS)[number];
 
 export interface PriceRates {
-  inputNanousdPerToken: bigint;
-  cacheReadNanousdPerToken: bigint;
-  cacheWrite5mNanousdPerToken: bigint;
-  cacheWrite1hNanousdPerToken: bigint;
-  outputNanousdPerToken: bigint;
+  inputNanousdPerMtok: bigint;
+  cacheReadNanousdPerMtok: bigint;
+  cacheWrite5mNanousdPerMtok: bigint;
+  cacheWrite1hNanousdPerMtok: bigint;
+  outputNanousdPerMtok: bigint;
 }
 
 export interface PriceEntry {
@@ -238,34 +238,34 @@ function requireNanousd(
 }
 
 const RATE_KEYS = [
-  "inputNanousdPerToken",
-  "cacheReadNanousdPerToken",
-  "cacheWrite5mNanousdPerToken",
-  "cacheWrite1hNanousdPerToken",
-  "outputNanousdPerToken",
+  "inputNanousdPerMtok",
+  "cacheReadNanousdPerMtok",
+  "cacheWrite5mNanousdPerMtok",
+  "cacheWrite1hNanousdPerMtok",
+  "outputNanousdPerMtok",
 ] as const;
 
 function parseRates(value: unknown, label: string): PriceRates {
   const raw = asObject(value, label);
   requireExactKeys(raw, RATE_KEYS, label);
   return {
-    inputNanousdPerToken: requireNanousd(raw, "inputNanousdPerToken", label),
-    cacheReadNanousdPerToken: requireNanousd(
+    inputNanousdPerMtok: requireNanousd(raw, "inputNanousdPerMtok", label),
+    cacheReadNanousdPerMtok: requireNanousd(
       raw,
-      "cacheReadNanousdPerToken",
+      "cacheReadNanousdPerMtok",
       label,
     ),
-    cacheWrite5mNanousdPerToken: requireNanousd(
+    cacheWrite5mNanousdPerMtok: requireNanousd(
       raw,
-      "cacheWrite5mNanousdPerToken",
+      "cacheWrite5mNanousdPerMtok",
       label,
     ),
-    cacheWrite1hNanousdPerToken: requireNanousd(
+    cacheWrite1hNanousdPerMtok: requireNanousd(
       raw,
-      "cacheWrite1hNanousdPerToken",
+      "cacheWrite1hNanousdPerMtok",
       label,
     ),
-    outputNanousdPerToken: requireNanousd(raw, "outputNanousdPerToken", label),
+    outputNanousdPerMtok: requireNanousd(raw, "outputNanousdPerMtok", label),
   };
 }
 

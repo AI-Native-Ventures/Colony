@@ -103,11 +103,11 @@ async fn relay_self() -> String {
 
 fn rates(input: u64, output: u64) -> PriceRates {
     PriceRates {
-        input_nanousd_per_token: input,
-        cache_read_nanousd_per_token: 0,
-        cache_write_5m_nanousd_per_token: 0,
-        cache_write_1h_nanousd_per_token: 0,
-        output_nanousd_per_token: output,
+        input_nanousd_per_mtok: input,
+        cache_read_nanousd_per_mtok: 0,
+        cache_write_5m_nanousd_per_mtok: 0,
+        cache_write_1h_nanousd_per_mtok: 0,
+        output_nanousd_per_mtok: output,
     }
 }
 
@@ -429,20 +429,20 @@ async fn price_entries_append_and_never_rewrite_history() {
     let ours: Vec<&PriceEntry> = book.entries.iter().filter(|e| e.model == model).collect();
     assert_eq!(ours.len(), 2, "both entries must be present");
     assert_eq!(ours[0].effective_from, 1_000);
-    assert_eq!(ours[0].rates.input_nanousd_per_token, 5_000);
+    assert_eq!(ours[0].rates.input_nanousd_per_mtok, 5_000);
     assert_eq!(ours[1].effective_from, 2_000);
 
     // The launch price still prices a call made before the cut.
     assert_eq!(
         book.rates_for(&model, 1_500)
             .unwrap()
-            .input_nanousd_per_token,
+            .input_nanousd_per_mtok,
         5_000
     );
     assert_eq!(
         book.rates_for(&model, 9_999)
             .unwrap()
-            .input_nanousd_per_token,
+            .input_nanousd_per_mtok,
         1_000
     );
 
