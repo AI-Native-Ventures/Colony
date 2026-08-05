@@ -2064,6 +2064,21 @@ impl Db {
         event::get_latest_global_replaceable(&self.pool, community_id, kind, pubkey_bytes).await
     }
 
+    /// One newest owner-authored NIP-33 head per `d` tag for `kind`,
+    /// community scoped, global events only, non-deleted.
+    ///
+    /// See [`event::query_latest_owner_authored_heads`] for the SQL and why
+    /// it is safe against a non-owner's newer head shadowing the owner's.
+    /// `limit` bounds distinct `d` tags (agents), not revisions.
+    pub async fn query_latest_owner_authored_heads(
+        &self,
+        community_id: CommunityId,
+        kind: i32,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        event::query_latest_owner_authored_heads(&self.pool, community_id, kind, limit).await
+    }
+
     /// Fetches a single non-deleted event by its raw ID bytes.
     ///
     /// Returns `None` if the event does not exist or has been soft-deleted.

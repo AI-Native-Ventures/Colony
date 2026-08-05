@@ -110,11 +110,16 @@ pub struct InterruptTickStats {
     pub defaults_executed: u32,
 }
 
-/// Upper bound on managed-agent heads scanned when resolving the community's
-/// unique executive (see [`find_unique_executive`]). Generous enough for any
-/// real roster while still bounding the query; a flood of impostor heads at
-/// many different `d` tags is a write-volume/rate-limiting concern, not
-/// something this lookup can absorb on every promotion.
+/// Upper bound on distinct AGENTS (`d` tags) returned by
+/// [`fetch_owner_authored_managed_agent_roster`] when resolving the
+/// community's unique executive (see [`find_unique_executive`]). The bound
+/// is pushed into SQL (`Db::query_latest_owner_authored_heads`'s `DISTINCT
+/// ON (d_tag)`), so it caps agents, not head revisions: a community whose
+/// agents' heads are republished often can no longer push another agent's
+/// single head out of the window just by revision volume. Generous enough
+/// for any real roster while still bounding the query; a flood of impostor
+/// heads at many different `d` tags is a write-volume/rate-limiting
+/// concern, not something this lookup can absorb on every promotion.
 const MAX_ROSTER_HEADS: i64 = 500;
 
 /// Floor on a re-armed deadline's window, in seconds. Guards against a
@@ -825,11 +830,12 @@ type ManagedAgentRoster = Vec<(String, serde_json::Value)>;
 /// so sharing code with it directly would not be a clean factor.
 ///
 /// A NON-owner-authored head at a pubkey is never trusted, however new --
-/// rows arrive newest-first (`created_at DESC`), and the first
-/// owner-authored head found for a given `d` tag is authoritative for that
-/// agent; older heads at the same `d` tag (owner-authored or not) are
-/// ignored once settled, and a pubkey with no owner-authored head at all
-/// simply has no entry in the returned roster.
+/// this is now enforced in SQL (`Db::query_latest_owner_authored_heads`'s
+/// owner `JOIN`), not by scanning newest-first and skipping non-owner rows:
+/// a non-owner's head at a `d` tag is excluded from the candidate set before
+/// `DISTINCT ON` ever picks a newest row, so it can never shadow (or stand
+/// in for) the owner's authoritative head. A pubkey with no owner-authored
+/// head at all simply has no entry in the returned roster.
 async fn fetch_owner_authored_managed_agent_roster(
     tenant: &TenantContext,
     state: &AppState,
@@ -837,16 +843,10 @@ async fn fetch_owner_authored_managed_agent_roster(
 ) -> Result<ManagedAgentRoster, String> {
     let rows = state
         .db
-        .query_events(&buzz_db::event::EventQuery {
-            kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
-            global_only: true,
-            limit: Some(limit),
-            ..buzz_db::event::EventQuery::for_community(tenant.community())
-        })
+        .query_latest_owner_authored_heads(tenant.community(), KIND_MANAGED_AGENT as i32, limit)
         .await
         .map_err(|error| format!("database error scanning managed-agent roster: {error}"))?;
 
-    let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut roster = ManagedAgentRoster::new();
     for stored in rows {
         let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
@@ -855,31 +855,11 @@ async fn fetch_owner_authored_managed_agent_roster(
         }) else {
             continue;
         };
-        if settled.contains(&d_tag) {
-            // Already resolved (or deliberately given up on) this agent from
-            // a newer head.
-            continue;
-        }
-
-        let author_hex = stored.event.pubkey.to_hex();
-        let author_is_owner = state
-            .db
-            .get_relay_member(tenant.community(), &author_hex)
-            .await
-            .map_err(|error| format!("database error checking managed-agent head author: {error}"))?
-            .is_some_and(|member| member.role == "owner");
-        if !author_is_owner {
-            // Keep scanning older heads for this same `d` tag -- an
-            // impostor head must never shadow a legitimate one, and must
-            // never be treated as authoritative just because it is newest.
-            continue;
-        }
-        // This IS the authoritative head for this agent (NIP-33 latest-wins
-        // among the owner's own heads) -- settle it here even if its
-        // content turns out to be malformed, rather than falling through to
-        // an older head the owner has already superseded.
-        settled.insert(d_tag.clone());
-
+        // NIP-33 latest-wins among the owner's own heads: the query already
+        // returned exactly one newest owner-authored head per `d` tag, so a
+        // malformed content settles its agent (skipped, no fallback to an
+        // older superseded head) -- the same semantics the Rust-side scan
+        // this replaced enforced row by row.
         let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
             continue;
         };

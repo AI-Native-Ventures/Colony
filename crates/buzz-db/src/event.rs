@@ -791,6 +791,55 @@ pub(crate) fn row_to_stored_event(row: sqlx::postgres::PgRow) -> Result<Option<S
     )))
 }
 
+/// One newest owner-authored NIP-33 head per `d` tag for `kind`, community
+/// scoped, global events only (`channel_id IS NULL`), non-deleted.
+///
+/// "Owner-authored" is evaluated in SQL against `relay_members.role =
+/// 'owner'`, so a non-owner's newer head at the same `d` tag can never
+/// shadow the owner's: non-owner rows are excluded before `DISTINCT ON`
+/// picks the newest. Ties on `created_at` break toward the lowest event id
+/// (NIP-01). `limit` bounds distinct `d` tags (agents), not revisions.
+///
+/// `relay_members.pubkey` is lowercase hex text; `events.pubkey` is
+/// `BYTEA`, so the join encodes it (`encode(e.pubkey, 'hex')`) -- Postgres'
+/// `encode(..., 'hex')` is lowercase, matching every event pubkey this
+/// codebase ever stores or compares.
+pub async fn query_latest_owner_authored_heads(
+    pool: &PgPool,
+    community_id: CommunityId,
+    kind: i32,
+    limit: i64,
+) -> Result<Vec<StoredEvent>> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (e.d_tag) \
+             e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, \
+             e.sig, e.received_at, e.channel_id \
+         FROM events e \
+         JOIN relay_members m \
+             ON m.community_id = e.community_id \
+            AND m.pubkey = encode(e.pubkey, 'hex') \
+            AND m.role = 'owner' \
+         WHERE e.community_id = $1 AND e.kind = $2 \
+           AND e.channel_id IS NULL AND e.deleted_at IS NULL \
+           AND e.d_tag IS NOT NULL \
+         ORDER BY e.d_tag, e.created_at DESC, e.id ASC \
+         LIMIT $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(kind)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(ev) = row_to_stored_event(row)? {
+            out.push(ev);
+        }
+    }
+    Ok(out)
+}
+
 /// Count events matching the given query parameters (NIP-45 COUNT support).
 ///
 /// Uses the same filter logic as `query_events` but returns only the count.

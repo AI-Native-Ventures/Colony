@@ -536,6 +536,210 @@ async fn leader_audience_ask_past_deadline_promotes_to_the_executive() {
     }));
 }
 
+/// Task 4 regression: the roster window must bound distinct AGENTS, not
+/// head REVISIONS. Before the fix, `fetch_owner_authored_managed_agent_roster`
+/// fetched the 500 most recent `KIND_MANAGED_AGENT` events and deduped by
+/// `d` tag in Rust -- so 520 owner-authored revisions of a single OTHER
+/// agent's head (republished often, e.g. a busy leader whose head keeps
+/// changing) can fill the entire 500-row window and push the executive's
+/// own single head out of it entirely, even though the executive's head was
+/// never touched. The sweep would then see zero candidates for "unique
+/// executive" and re-deadline instead of promote.
+///
+/// Against the fixed query (`Db::query_latest_owner_authored_heads`), the
+/// window is `DISTINCT ON (d_tag)` before `LIMIT` -- the flood collapses to
+/// ONE row (the other agent's newest revision), so it can never crowd out a
+/// different agent's `d` tag no matter how many times it is republished.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn executive_resolution_survives_a_flood_of_other_head_revisions() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    // Seed the executive's (and the rest of the ladder's) owner-authored
+    // tier head ONCE, at "now".
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // Flood: 520 owner-authored revisions of a DIFFERENT agent's head, each
+    // strictly newer than the tier heads above (ascending `created_at`,
+    // mirroring how `set_tier` stores heads) -- under the old
+    // 500-newest-REVISIONS window, all 500 rows returned would be flood
+    // rows, and the executive's single (older) head would never be fetched
+    // at all.
+    let other_agent = Keys::generate();
+    let other_agent_hex = other_agent.public_key().to_hex();
+    let flood_base = chrono::Utc::now().timestamp() + 60;
+    for i in 0..520i64 {
+        let event = EventBuilder::new(
+            Kind::Custom(KIND_MANAGED_AGENT as u16),
+            format!(r#"{{"tier":"worker","rev":{i}}}"#),
+        )
+        .tags(vec![tag(&["d", &other_agent_hex])])
+        .custom_created_at(nostr::Timestamp::from((flood_base + i) as u64))
+        .sign_with_keys(&owner)
+        .expect("sign flood managed-agent head revision");
+        let (_, inserted) = db
+            .insert_event(community, &event, None)
+            .await
+            .expect("store flood managed-agent head revision");
+        assert!(inserted, "revision {i} must be a distinct stored event");
+    }
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-flood", "batch-size"),
+        &content_no_default("Choose batch size"),
+        None,
+    )
+    .await;
+
+    let now = ask.created_at.as_secs() as i64 + 100; // comfortably past the 1s window
+    quiesce_unrelated_due_asks(&pool, &[community], now).await;
+
+    let stats = run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+    assert!(
+        stats.promoted >= 1,
+        "this ask's promotion must be among those counted"
+    );
+
+    let original = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        original.status, "promoted",
+        "the executive's own head must still resolve despite 520 revisions of a \
+         different agent's head crowding the roster window"
+    );
+}
+
+/// Task 4 regression / roster-level impostor shadowing: the SQL rewrite's
+/// owner `JOIN` must reproduce the exact security property the Rust-side
+/// scan it replaced enforced by "skip non-owner rows, keep scanning older
+/// revisions of the same `d` tag" -- a non-owner's NEWER head at a `d` tag
+/// must never shadow the owner's older, authoritative head for that same
+/// `d` tag. `worker_self_published_tier_head_does_not_override_owner_authored_tier`
+/// (`interrupt_gate.rs`) proves this for `agent_tier`'s single-pubkey,
+/// `d_tag`-filtered query, a path this task does NOT change. This test
+/// proves the same property for the roster path this task DOES rewrite: the
+/// owner tiers an agent "worker", then that same agent self-publishes a
+/// STRICTLY NEWER head at the SAME `d` tag claiming "executive". If the
+/// owner filter were applied after (or not tied to) `DISTINCT ON` picking
+/// the newest row, the impostor's self-escalation would resolve it as the
+/// community's unique executive. It must not: the roster must still
+/// resolve this agent to the owner-authored "worker" head underneath it,
+/// so a leader-audience ask has no real executive to promote to and is
+/// re-deadlined -- never routed to the impostor.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn impostor_head_newer_than_owner_head_never_shadows_it_in_the_roster() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let impostor = Keys::generate(); // will attempt to self-escalate to executive
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    // Owner-authored ground truth for `impostor`: a real "worker" tier head.
+    set_tier(&db, community, &owner, &impostor, "worker").await;
+
+    // The impostor self-publishes a STRICTLY NEWER head at the SAME `d` tag,
+    // claiming "executive".
+    let impostor_hex = impostor.public_key().to_hex();
+    let escalation = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        r#"{"tier":"executive"}"#,
+    )
+    .tags(vec![tag(&["d", &impostor_hex])])
+    .custom_created_at(nostr::Timestamp::from(
+        (chrono::Utc::now().timestamp() + 60) as u64,
+    ))
+    .sign_with_keys(&impostor)
+    .expect("sign impostor self-escalation head");
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store impostor self-escalation head");
+    assert!(inserted);
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags(
+            "decision",
+            &leader.public_key(),
+            "init-impostor",
+            "batch-size",
+        ),
+        &content_no_default("Choose batch size"),
+        None,
+    )
+    .await;
+
+    let before = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    let old_deadline = before
+        .deadline_at
+        .expect("a filed ask always has a deadline");
+
+    let now = ask.created_at.as_secs() as i64 + 100;
+    quiesce_unrelated_due_asks(&pool, &[community], now).await;
+
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+
+    let row = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        row.status, "open",
+        "with no genuine owner-authored executive (the impostor's self-escalation must not \
+         count as one), the ask must stay open, never promoted to the impostor"
+    );
+    assert!(
+        row.deadline_at.expect("still has a deadline") > old_deadline,
+        "must still re-deadline so this row does not occupy a due-batch slot forever"
+    );
+
+    // No promotion occurred at all: the original ask is still the live open
+    // row for this need (a promotion would have replaced it with a NEW row
+    // and flipped this one to status "promoted").
+    let live = db
+        .find_open_ask_by_need(community, "init-impostor", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("the original ask remains the open ask for this need");
+    assert_eq!(
+        live.ask_event_id,
+        ask.id.as_bytes().to_vec(),
+        "no promotion occurred -- the original ask is still the live open row, not a new \
+         one addressed to the impostor"
+    );
+    assert_ne!(
+        live.audience_pubkey,
+        impostor.public_key().to_bytes().to_vec(),
+        "the impostor must never become the audience of any ask for this need"
+    );
+}
+
 /// Design point 3: zero executives configured must never be guessed at --
 /// the sweep never promotes or resolves this row without a confidently
 /// resolved target.
