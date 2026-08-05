@@ -306,7 +306,7 @@ applies.
     ["grant", "<delegation_grant_id>"],
     ["task", "<task_id>"]
   ],
-  "content": "{\"decision\":\"...\",\"undo_path\":\"...\"}"
+  "content": "{\"decision\":\"...\",\"undo_path\":\"...\",\"category\":\"...\",\"amount_nano_usd\":500000}"
 }
 ```
 
@@ -315,20 +315,24 @@ applies.
 | `grant` | exactly 1 | the `d` tag (grant id) of the delegation grant this decision was made under |
 | `task` | 1 or more | the task(s) this decision covers |
 
-| Content field | Type | Required |
-|---|---|---|
-| `decision` | string | yes, non-empty after trim |
-| `undo_path` | string | yes, non-empty after trim: no stateable undo path means no autonomy, so a decision log missing one is rejected outright, not merely flagged |
+| Content field | Type | Required | Notes |
+|---|---|---|---|
+| `decision` | string | yes, non-empty after trim | |
+| `undo_path` | string | yes, non-empty after trim | no stateable undo path means no autonomy, so a decision log missing one is rejected outright, not merely flagged |
+| `category` | string | yes, non-empty after trim | ASCII-lowercased on parse; rejected outright if it matches [the hard list](#hard-list) (case-insensitively, checked before lowercasing); the relay refuses a mismatch against the cited grant's `category` |
+| `amount_nano_usd` | integer | no | a non-negative integer nanoUSD when present; required whenever the cited grant carries `cap_nano_usd`, and refused above the cap |
 
 **Authority checked at ingest:** the signer's tier must resolve to `leader`
 or `executive` (`enforce_decision_log_authority`), and the cited `grant`
 must resolve, via the same owner-authorship trust rule tiers use, to a
-currently `active` grant. **The relay does not verify that `decision`'s
-content actually falls within the cited grant's `category`/`scope`**, nor
-that the signer is the specific agent the grant was "meant" for (grants
-carry no assignee field): any current leader or executive may cite any
-active grant. Binding a decision log to its grant's stated boundaries is a
-convention enforced by the filing agent, not by the relay.
+currently `active` grant. The relay also requires `category` to equal the
+cited grant's `category` exactly, and refuses a mismatch. **The relay does
+not verify that `decision`'s content actually falls within the cited
+grant's `scope`**, nor that the signer is the specific agent the grant was
+"meant" for (grants carry no assignee field): any current leader or
+executive may cite any active grant matching the claimed category. Binding
+a decision log to its grant's stated scope is a convention enforced by the
+filing agent, not by the relay.
 
 ### Kind 30189: Delegation Grant
 
@@ -349,7 +353,7 @@ latest event per address wins.
 | `category` | string | yes, non-empty | ASCII-lowercased on parse; rejected outright if it matches [the hard list](#hard-list) (case-insensitively) |
 | `scope` | string | yes, non-empty | ASCII-lowercased on parse; rejected if it is a wildcard (`*` or `all`, case-insensitively): a grant this vague is indistinguishable from no policy at all |
 | `active` | boolean | yes | `false` revokes the grant without deleting the record |
-| `cap_nano_usd` | integer | no | an optional spending cap, in integer nanoUSD |
+| `cap_nano_usd` | integer | no | an optional spending cap, in integer nanoUSD; when present, must be a non-negative integer |
 
 **Authorship enforced at ingest, not just schema.** `KIND_DELEGATION_GRANT`
 also carries only `Scope::UsersWrite`, so schema validity alone (which

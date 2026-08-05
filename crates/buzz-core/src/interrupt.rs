@@ -183,6 +183,15 @@ pub enum AskParseError {
     /// the failure mode a scoped grant exists to prevent.
     #[error("grant scope must be specific, not a wildcard: {0}")]
     VagueGrantScope(String),
+    /// A decision log claimed a category on [`HARD_LIST_CATEGORIES`]
+    /// (spec: hard-list decisions always go to the owner; no grant can cover
+    /// one, so no decision log may claim one).
+    #[error("category `{0}` is on the hard list; a decision log may never claim it")]
+    DecisionOnHardList(String),
+    /// `amount_nano_usd` (decision logs) or `cap_nano_usd` (grants) was
+    /// present but not a non-negative JSON integer.
+    #[error("{0} must be a non-negative integer")]
+    InvalidAmount(String),
 }
 
 /// A validated Ask event (kind [`crate::kind::KIND_ASK`]), ready for broker processing.
@@ -261,7 +270,7 @@ pub struct ParsedGrant {
     /// `"all"`) regardless of the as-typed casing.
     pub scope: String,
     /// The content `cap_nano_usd` field: an optional spending cap, in
-    /// integer nanoUSD.
+    /// integer nanoUSD. Guaranteed non-negative when `Some`.
     pub cap_nano_usd: Option<i64>,
     /// The content `active` field: whether this grant currently authorizes
     /// autonomous action. `false` revokes it without deleting the record.
@@ -284,6 +293,16 @@ pub struct ParsedDecisionLog {
     /// The content `undo_path` field: how to undo this decision. Required
     /// and non-empty -- spec: no stateable undo path means no autonomy.
     pub undo_path: String,
+    /// The content `category` field: what kind of decision this claims to
+    /// be. ASCII-lowercased by [`parse_decision_log`]; never a value on
+    /// [`HARD_LIST_CATEGORIES`]. Ingest separately enforces equality with
+    /// the cited grant's `category`; see
+    /// `buzz-relay::interrupt_gate::enforce_decision_log_authority`.
+    pub category: String,
+    /// The content `amount_nano_usd` field: the money this decision moves,
+    /// in integer nanoUSD, when it moves any. Ingest requires it whenever
+    /// the cited grant carries `cap_nano_usd`, and refuses it above the cap.
+    pub amount_nano_usd: Option<i64>,
 }
 
 /// Returns `true` if `s` is exactly 64 lowercase hex characters.
@@ -379,6 +398,22 @@ fn required_content_bool_field(
         .get(field)
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| AskParseError::EmptyField(field.to_owned()))
+}
+
+/// Read an optional non-negative integer money field from content JSON.
+/// A present-but-wrong-typed or negative value is an error, never a silent
+/// `None`: a silently dropped amount would dodge cap enforcement at ingest.
+fn parse_non_negative_amount(
+    content: &serde_json::Value,
+    field: &str,
+) -> Result<Option<i64>, AskParseError> {
+    match content.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => match value.as_i64() {
+            Some(amount) if amount >= 0 => Ok(Some(amount)),
+            _ => Err(AskParseError::InvalidAmount(field.to_owned())),
+        },
+    }
 }
 
 /// Parse Ask event JSON content into a `serde_json::Value`.
@@ -550,7 +585,8 @@ const VAGUE_GRANT_SCOPES: &[&str] = &["*", "all"];
 ///
 /// A NIP-33 parameterized-replaceable head; the `d` tag is the grant id.
 /// Content JSON carries `category` and `scope` (both required, non-empty),
-/// `active` (required boolean), and an optional `cap_nano_usd` spending cap.
+/// `active` (required boolean), and an optional `cap_nano_usd` spending cap
+/// (a non-negative integer nanoUSD when present).
 ///
 /// `category` must not be on [`HARD_LIST_CATEGORIES`] (spec: the hard list
 /// is absolute -- no configuration, no override). `scope` must not be a
@@ -584,9 +620,7 @@ pub fn parse_grant(event: &nostr::Event) -> Result<ParsedGrant, AskParseError> {
 
     let active = required_content_bool_field(&content, "active")?;
 
-    let cap_nano_usd = content
-        .get("cap_nano_usd")
-        .and_then(serde_json::Value::as_i64);
+    let cap_nano_usd = parse_non_negative_amount(&content, "cap_nano_usd")?;
 
     Ok(ParsedGrant {
         grant_id,
@@ -604,12 +638,16 @@ pub fn parse_grant(event: &nostr::Event) -> Result<ParsedGrant, AskParseError> {
 /// under) and one or more `task`. Content JSON carries `decision` and
 /// `undo_path` (both required, non-empty) -- spec: no stateable undo path
 /// means no autonomy, so a decision log missing one is rejected outright
-/// rather than accepted and merely flagged.
+/// rather than accepted and merely flagged. Also carries `category`
+/// (required, non-empty; must not be on [`HARD_LIST_CATEGORIES`] regardless
+/// of as-typed casing; ASCII-lowercased in the returned value) and an
+/// optional `amount_nano_usd` (a non-negative integer nanoUSD when present).
 ///
 /// This parser enforces schema only. That the signer is currently ranked
-/// `Leader` or `Executive`, and that the cited grant resolves to a
-/// currently active, owner-authored head, are ingest-time, database-backed
-/// checks; see `buzz-relay::interrupt_gate::enforce_decision_log_authority`.
+/// `Leader` or `Executive`, that the cited grant resolves to a currently
+/// active, owner-authored head, and that `category`/`amount_nano_usd` match
+/// that grant's terms, are ingest-time, database-backed checks; see
+/// `buzz-relay::interrupt_gate::enforce_decision_log_authority`.
 pub fn parse_decision_log(event: &nostr::Event) -> Result<ParsedDecisionLog, AskParseError> {
     let grant_id = single_tag_value(event, "grant")?;
 
@@ -622,11 +660,21 @@ pub fn parse_decision_log(event: &nostr::Event) -> Result<ParsedDecisionLog, Ask
     let decision = required_content_field(&content, "decision")?;
     let undo_path = required_content_field(&content, "undo_path")?;
 
+    let category = required_content_field(&content, "category")?;
+    if is_hard_list_category(&category) {
+        return Err(AskParseError::DecisionOnHardList(category));
+    }
+    let category = category.to_ascii_lowercase();
+
+    let amount_nano_usd = parse_non_negative_amount(&content, "amount_nano_usd")?;
+
     Ok(ParsedDecisionLog {
         grant_id,
         task_ids,
         decision,
         undo_path,
+        category,
+        amount_nano_usd,
     })
 }
 
@@ -1160,8 +1208,7 @@ mod tests {
             t(&["task", "task-9"]),
             t(&["task", "task-10"]),
         ];
-        let content =
-            r#"{"decision":"Used stock photo B instead of A","undo_path":"revert commit abc123"}"#;
+        let content = r#"{"decision":"Used stock photo B instead of A","undo_path":"revert commit abc123","category":"copy_change","amount_nano_usd":250000}"#;
         let event = sign_decision_log(tags, content);
 
         let log = parse_decision_log(&event).expect("parse");
@@ -1172,6 +1219,8 @@ mod tests {
         );
         assert_eq!(log.decision, "Used stock photo B instead of A");
         assert_eq!(log.undo_path, "revert commit abc123");
+        assert_eq!(log.category, "copy_change");
+        assert_eq!(log.amount_nano_usd, Some(250000));
     }
 
     #[test]
@@ -1226,6 +1275,104 @@ mod tests {
         assert!(matches!(
             parse_decision_log(&event),
             Err(AskParseError::TagCardinality(field)) if field == "grant"
+        ));
+    }
+
+    #[test]
+    fn decision_log_requires_a_category() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content =
+            r#"{"decision":"Used stock photo B instead of A","undo_path":"revert commit abc123"}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::EmptyField(field)) if field == "category"
+        ));
+    }
+
+    #[test]
+    fn decision_log_category_is_lowercased_and_round_trips() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"decision":"x","undo_path":"y","category":"Copy_Change"}"#;
+        let event = sign_decision_log(tags, content);
+        let log = parse_decision_log(&event).expect("parse");
+        assert_eq!(log.category, "copy_change");
+    }
+
+    /// The case-folded hard-list predicate must run BEFORE lowercasing --
+    /// the error carries the as-typed casing (`"Spend"`), matching how
+    /// `parse_grant`'s equivalent check reports `GrantOnHardList`.
+    #[test]
+    fn decision_log_claiming_a_hard_list_category_is_rejected() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"decision":"x","undo_path":"y","category":"Spend"}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::DecisionOnHardList(category)) if category == "Spend"
+        ));
+    }
+
+    #[test]
+    fn decision_log_amount_round_trips() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"decision":"x","undo_path":"y","category":"copy_change","amount_nano_usd":7500000000}"#;
+        let event = sign_decision_log(tags, content);
+        let log = parse_decision_log(&event).expect("parse");
+        assert_eq!(log.amount_nano_usd, Some(7_500_000_000));
+    }
+
+    #[test]
+    fn decision_log_without_amount_parses_as_none() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"decision":"x","undo_path":"y","category":"copy_change"}"#;
+        let event = sign_decision_log(tags, content);
+        let log = parse_decision_log(&event).expect("parse");
+        assert_eq!(log.amount_nano_usd, None);
+    }
+
+    #[test]
+    fn decision_log_negative_amount_is_rejected() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content =
+            r#"{"decision":"x","undo_path":"y","category":"copy_change","amount_nano_usd":-1}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::InvalidAmount(field)) if field == "amount_nano_usd"
+        ));
+    }
+
+    /// A silently ignored wrong type (string, float) would let a capped
+    /// grant's amount requirement be dodged in Task 2 -- both must be a
+    /// hard error, never a silent `None`.
+    #[test]
+    fn decision_log_non_integer_amount_is_rejected() {
+        let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];
+        let content = r#"{"decision":"x","undo_path":"y","category":"copy_change","amount_nano_usd":"7500000000"}"#;
+        let event = sign_decision_log(tags.clone(), content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::InvalidAmount(field)) if field == "amount_nano_usd"
+        ));
+
+        let content =
+            r#"{"decision":"x","undo_path":"y","category":"copy_change","amount_nano_usd":7.5}"#;
+        let event = sign_decision_log(tags, content);
+        assert!(matches!(
+            parse_decision_log(&event),
+            Err(AskParseError::InvalidAmount(field)) if field == "amount_nano_usd"
+        ));
+    }
+
+    #[test]
+    fn grant_with_negative_cap_is_rejected() {
+        let tags = vec![t(&["d", "grant-1"])];
+        let content = r#"{"category":"copy_change","scope":"blog_post_titles","active":true,"cap_nano_usd":-5}"#;
+        let event = sign_grant(tags, content);
+        assert!(matches!(
+            parse_grant(&event),
+            Err(AskParseError::InvalidAmount(field)) if field == "cap_nano_usd"
         ));
     }
 }

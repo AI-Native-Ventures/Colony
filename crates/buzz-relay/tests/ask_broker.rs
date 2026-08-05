@@ -323,6 +323,7 @@ fn decision_log_content(decision: &str, undo_path: &str) -> String {
     serde_json::json!({
         "decision": decision,
         "undo_path": undo_path,
+        "category": "copy_change",
     })
     .to_string()
 }
