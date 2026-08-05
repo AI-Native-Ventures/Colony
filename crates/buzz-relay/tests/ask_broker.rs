@@ -2776,3 +2776,84 @@ async fn a_decision_log_signed_by_a_leader_citing_an_active_grant_is_accepted_th
         .expect("the decision log event itself must be stored");
     assert_eq!(stored.event.id, event.id);
 }
+
+/// I3 (whole-branch review): every ask-protocol path except withdrawal was
+/// exercised through the real `ingest_event`. Withdrawal was only ever driven
+/// through `handle_ask_event` directly, so deleting `KIND_ASK_WITHDRAWAL`
+/// from `required_scope_for_kind` would make every withdrawal in production
+/// fail with `restricted: unknown event kind` while this suite stayed green
+/// -- the exact defect class this branch was already bitten by once.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_withdrawal_through_the_real_ingest_pipeline_closes_the_ask_and_is_stored() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let root = store_root(&db, community, channel_id, &leader, "kicking off").await;
+    let harness = Harness {
+        db: &db,
+        tenant: &tenant,
+        state: &state,
+    };
+    let ask_event = file_leader_ask_to_executive(
+        &harness,
+        &leader,
+        &executive,
+        &root,
+        "decision",
+        "batch-size-ingest-withdrawal",
+        "Choose batch size",
+    )
+    .await;
+
+    let withdrawal = sign_withdrawal(&executive, &ask_event.id.to_hex(), "no longer needed");
+    let auth = IngestAuth::Nip42 {
+        pubkey: executive.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, withdrawal.clone(), auth)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("a valid withdrawal must be accepted through the real pipeline: {error:?}")
+        });
+    assert!(
+        result.accepted,
+        "withdrawal must be accepted: {}",
+        result.message
+    );
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "batch-size-ingest-withdrawal")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "the withdrawal must have closed the row through the real pipeline"
+    );
+
+    // Like every other ask-protocol event, a withdrawal is never consumed by
+    // the broker: it falls through to ordinary storage.
+    let stored = db
+        .get_event_by_id(community, withdrawal.id.as_bytes())
+        .await
+        .expect("query stored withdrawal event")
+        .expect("the withdrawal event itself must be stored, not swallowed");
+    assert_eq!(stored.event.id, withdrawal.id);
+    assert_eq!(
+        stored.channel_id, None,
+        "withdrawals carry no `h` tag: they are global events"
+    );
+}
