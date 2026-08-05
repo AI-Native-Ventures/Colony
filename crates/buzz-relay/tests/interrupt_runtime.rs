@@ -1676,3 +1676,576 @@ async fn ambiguous_owner_authored_persona_claims_fall_back_to_the_executive() {
          candidates"
     );
 }
+
+/// C1 fix: a task that already carries an open stall ask must be excluded
+/// from `query_in_progress_task_heads`'s candidate set entirely, not merely
+/// re-encountered and skipped on every tick. A stalled task's head is never
+/// republished, so its `created_at` never moves -- without this exclusion,
+/// enough already-flagged tasks permanently fill the cross-tenant `LIMIT`
+/// (they sort first under `ORDER BY created_at ASC` since they are the
+/// oldest), and any task that stalls later is never examined again. Task
+/// 8's C2 lesson recurring in a place with no deadline to push a stuck row
+/// out of contention.
+///
+/// Proves the underlying exclusion predicate directly (a flagged task is
+/// absent from the result set at ANY limit) rather than racing a tiny
+/// `batch_limit` for a single slot: this database is shared across a live
+/// multi-agent session and is never truncated between test runs (see the
+/// report's note on cross-tenant assertions), so a `batch_limit`-scoped
+/// race can itself be won by unrelated leftover candidates. Exclusion from
+/// an effectively unbounded query is a strictly stronger, pollution-immune
+/// proof -- if a row can never appear in the result set at all, it cannot
+/// occupy a bounded slot either.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn already_flagged_tasks_are_excluded_from_the_candidate_query() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+
+    // A task that is already flagged (an open stall ask exists for it) --
+    // this must never appear as a candidate again while that ask stays
+    // open.
+    let flagged_task = default_task(
+        "task-already-flagged",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 10 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &flagged_task,
+        now - 10 * STALL_AFTER_SECS,
+    )
+    .await;
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    let flagged_need_key = stall_need_key(&flagged_task.id);
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &flagged_need_key)
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "setup: the task must already carry an open stall ask"
+    );
+
+    // A DIFFERENT task, also silent, NOT yet flagged.
+    let new_task = default_task(
+        "task-newly-stalled",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &new_task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    // Generous limit: this proves the exclusion predicate itself, not a
+    // slot race, so pollution elsewhere in the shared database cannot make
+    // this assertion flaky in either direction.
+    let candidates = db
+        .query_in_progress_task_heads(10_000)
+        .await
+        .expect("query candidates");
+    let candidate_ids: std::collections::HashSet<String> = candidates
+        .iter()
+        .filter_map(|c| {
+            serde_json::from_str::<buzz_core::company::CompanyTask>(&c.content)
+                .ok()
+                .map(|task| task.id)
+        })
+        .collect();
+    assert!(
+        !candidate_ids.contains(&flagged_task.id),
+        "a task that already carries an open stall ask must never occupy a candidate slot"
+    );
+    assert!(
+        candidate_ids.contains(&new_task.id),
+        "a genuinely unflagged silent task must still be a candidate"
+    );
+}
+
+/// I3 fix: a `promoted` row whose named successor does not exist as an
+/// `asks` row is NOT always a crash orphan. `promote_to`'s `Duplicate` arm
+/// deliberately leaves the original `promoted` toward a successor event
+/// that was built, signed, and then simply discarded -- never stored --
+/// because something else won the race for the same need in the instant
+/// between the claim and the filing attempt. In that case the need
+/// genuinely has a live ask (the racing winner, a DIFFERENT `ask_event_id`
+/// for the same need), and reopening the original would resurrect an ask
+/// that was correctly superseded, potentially even after the winner has
+/// itself already been resolved -- telling a founder a need is unanswered
+/// when it was already handled.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_duplicate_raced_promotion_is_not_reopened_as_an_orphan() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let content = serde_json::json!({
+        "headline": "Choose batch size",
+        "cost_of_delay": "work is blocked while this waits",
+        "default_window_secs": 999_999,
+    })
+    .to_string();
+    let original = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-1", "batch-size"),
+        &content,
+        None,
+    )
+    .await;
+
+    // Simulate `promote_to`'s claim: the original is marked promoted toward
+    // a successor event id that was BUILT but never actually stored --
+    // exactly what the `Duplicate` arm does.
+    let discarded_successor = [0x77_u8; 32];
+    let promoted = db
+        .mark_ask_promoted(community, original.id.as_bytes(), &discarded_successor)
+        .await
+        .expect("mark ask promoted");
+    assert!(promoted);
+
+    // The ACTUAL winner of the race: a different ask event, claiming the
+    // SAME need, which is what `promote_to`'s comment means by "the need
+    // still has a live open ask -- the racing one".
+    let winner_id = [0x88_u8; 32];
+    let winner_audience = leader.public_key().to_bytes();
+    let winner_filer = worker.public_key().to_bytes();
+    db.insert_ask(
+        community,
+        buzz_db::asks::NewAskRow {
+            ask_event_id: &winner_id,
+            ask_type: "decision",
+            initiative_id: "init-1",
+            need_key: "batch-size",
+            audience_pubkey: &winner_audience,
+            filer_pubkey: &winner_filer,
+            origin_thread: None,
+            prior_ask: None,
+            category: None,
+            default_option: None,
+            deadline_at: Some(chrono::Utc::now().timestamp() + 999_999),
+        },
+    )
+    .await
+    .expect("insert the racing winner's ask");
+
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("UPDATE asks SET updated_at = $1 WHERE community_id = $2 AND ask_event_id = $3")
+        .bind(now - 2 * STALL_AFTER_SECS)
+        .bind(community.as_uuid())
+        .bind(original.id.as_bytes())
+        .execute(&pool)
+        .await
+        .expect("backdate updated_at");
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+
+    let original_row = fetch_ask_row(&pool, community, original.id.as_bytes()).await;
+    assert_eq!(
+        original_row.status, "promoted",
+        "a promotion superseded by a racing winner must NOT be reopened"
+    );
+
+    let winner_row = fetch_ask_row(&pool, community, &winner_id).await;
+    assert_eq!(
+        winner_row.status, "open",
+        "the racing winner's ask must be untouched"
+    );
+
+    // The need still resolves to exactly the winner -- no phantom second
+    // open ask for the same need was created.
+    let live = db
+        .find_open_ask_by_need(community, "init-1", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("the need must still have exactly the winner as its open ask");
+    assert_eq!(live.ask_event_id, winner_id);
+}
+
+/// I3 fix, the scenario that actually corrupts data (not merely wastes a
+/// retry): once the racing winner from `a_duplicate_raced_promotion_is_not_reopened_as_an_orphan`
+/// has ITSELF been resolved, the `asks_open_need_uniq` partial unique index
+/// (`status = 'open'` only) no longer blocks reopening the original -- there
+/// is no other open row for the need to conflict with. A query that cannot
+/// tell "genuinely never created" apart from "created, discarded, but the
+/// need was properly closed some other way" would succeed at reopening the
+/// original here, resurrecting a need a founder already answered.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_duplicate_raced_promotion_is_not_reopened_even_after_the_winner_resolves() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let content = serde_json::json!({
+        "headline": "Choose batch size",
+        "cost_of_delay": "work is blocked while this waits",
+        "default_window_secs": 999_999,
+    })
+    .to_string();
+    let original = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-2", "batch-size-2"),
+        &content,
+        None,
+    )
+    .await;
+
+    let discarded_successor = [0x79_u8; 32];
+    let promoted = db
+        .mark_ask_promoted(community, original.id.as_bytes(), &discarded_successor)
+        .await
+        .expect("mark ask promoted");
+    assert!(promoted);
+
+    let winner_id = [0x8a_u8; 32];
+    let winner_audience = leader.public_key().to_bytes();
+    let winner_filer = worker.public_key().to_bytes();
+    db.insert_ask(
+        community,
+        buzz_db::asks::NewAskRow {
+            ask_event_id: &winner_id,
+            ask_type: "decision",
+            initiative_id: "init-2",
+            need_key: "batch-size-2",
+            audience_pubkey: &winner_audience,
+            filer_pubkey: &winner_filer,
+            origin_thread: None,
+            prior_ask: None,
+            category: None,
+            default_option: None,
+            deadline_at: Some(chrono::Utc::now().timestamp() + 999_999),
+        },
+    )
+    .await
+    .expect("insert the racing winner's ask");
+
+    // The winner is answered and closed -- the need IS properly handled,
+    // just not through the original's chain.
+    db.resolve_ask(
+        community,
+        &winner_id,
+        &[0x8b_u8; 32],
+        leader.public_key().to_bytes().as_slice(),
+        false,
+    )
+    .await
+    .expect("resolve the winner");
+
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("UPDATE asks SET updated_at = $1 WHERE community_id = $2 AND ask_event_id = $3")
+        .bind(now - 2 * STALL_AFTER_SECS)
+        .bind(community.as_uuid())
+        .bind(original.id.as_bytes())
+        .execute(&pool)
+        .await
+        .expect("backdate updated_at");
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+
+    let original_row = fetch_ask_row(&pool, community, original.id.as_bytes()).await;
+    assert_eq!(
+        original_row.status, "promoted",
+        "a promotion whose need was already properly closed via the racing winner must NOT \
+         be reopened, even though nothing would now block the UPDATE"
+    );
+
+    // No open ask exists for the need at all -- it was properly answered
+    // and must stay answered, not silently reopened.
+    assert!(
+        db.find_open_ask_by_need(community, "init-2", "batch-size-2")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "a properly resolved need must not have a phantom open ask resurrected for it"
+    );
+}
+
+/// I4 fix: a founder who resolves a stall ask ("the agent died, I'll deal
+/// with it Monday") must not be re-interrupted on the very next tick just
+/// because the task is still measuring as silent -- the partial unique
+/// index only enforces dedupe while `status = 'open'`, so a resolved ask's
+/// slot is free again, and without suppression the sweep re-files
+/// immediately and every tick after. This is the queue-spam failure the
+/// whole interrupt system exists to prevent.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn resolved_stall_ask_is_not_re_filed_without_fresh_activity() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-resolved-no-refile",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("first tick must not error");
+    let need_key = stall_need_key(&task.id);
+    let first_ask = db
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("setup: a stall ask must be open for this task");
+
+    // The founder answers it: "the agent died, I'll deal with it Monday."
+    db.resolve_ask(
+        community,
+        &first_ask.ask_event_id,
+        &[0x9a_u8; 32],
+        owner.public_key().to_bytes().as_slice(),
+        false,
+    )
+    .await
+    .expect("resolve the stall ask");
+
+    // Nothing about the task changed -- no new head, no new channel
+    // activity -- so it STILL measures as silent by the same signal. A
+    // later tick must not re-file just because the dedupe slot is free
+    // again.
+    run_stall_tick(&state, now + 100, STALL_AFTER_SECS)
+        .await
+        .expect("second tick must not error");
+
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "a resolved stall ask must not be re-filed while the task shows no fresh activity"
+    );
+}
+
+/// I4 fix, the other half: once the task shows GENUINE fresh activity after
+/// its stall ask was resolved, and then goes silent again long enough, a
+/// new stall ask must be filed -- suppression must not become permanent
+/// amnesia for a task that legitimately stalls a second time.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn resolved_stall_ask_is_re_filed_after_fresh_activity_and_renewed_silence() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-resolved-then-refile",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("first tick must not error");
+    let need_key = stall_need_key(&task.id);
+    let first_ask = db
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("setup: a stall ask must be open for this task");
+    db.resolve_ask(
+        community,
+        &first_ask.ask_event_id,
+        &[0x9b_u8; 32],
+        owner.public_key().to_bytes().as_slice(),
+        false,
+    )
+    .await
+    .expect("resolve the stall ask");
+
+    // Genuine fresh activity AFTER the resolution -- the agent came back
+    // briefly.
+    let resumed_at = now + 200;
+    post_message_at(
+        &db,
+        community,
+        channel_id,
+        &qa_agent,
+        "picking this back up",
+        resumed_at,
+    )
+    .await;
+
+    // ...then goes silent again for a full new `STALL_AFTER_SECS` window.
+    let later = resumed_at + STALL_AFTER_SECS + 100;
+    run_stall_tick(&state, later, STALL_AFTER_SECS)
+        .await
+        .expect("third tick must not error");
+
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "a task that resumed and then genuinely went silent again must be re-flagged"
+    );
+}
+
+/// I7: directly proves the reason `query_in_progress_task_heads` resolves
+/// NIP-33 latest-wins BEFORE filtering on `status = 'inProgress'`, rather
+/// than after. Two revisions of the SAME task at the SAME `d` tag: an OLD,
+/// silent `inProgress` revision, then a NEWER `completed` revision. If
+/// status were filtered first (matching only the stale `inProgress` row,
+/// then picking the latest AMONG survivors), the stale revision would win
+/// its group and get flagged. The true latest head -- `completed` -- must
+/// win instead, and the task must never be flagged.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_stale_in_progress_revision_does_not_win_over_a_newer_completed_one() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+
+    // The OLD revision: in-progress, silent long enough to be flagged if it
+    // (wrongly) won.
+    let stale_revision = default_task(
+        "task-two-revisions",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 10 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &stale_revision,
+        now - 10 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    // The TRUE latest revision, at the SAME `d` tag (same task id):
+    // completed, published later.
+    let latest_revision = default_task(
+        "task-two-revisions",
+        None,
+        TaskStatus::Completed,
+        "qa-persona-1",
+        channel_id,
+        now - 5 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &latest_revision,
+        now - 5 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+
+    let need_key = stall_need_key("task-two-revisions");
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "the true latest head (completed) must win NIP-33 resolution, not the stale \
+         in-progress revision -- this task must never be flagged"
+    );
+}

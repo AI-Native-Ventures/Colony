@@ -661,11 +661,18 @@ async fn redeadline(
     Ok(())
 }
 
-/// Scan every managed-agent head (kind [`KIND_MANAGED_AGENT`]) in `tenant`,
-/// resolving NIP-33 latest-wins PER PUBKEY (`d` tag) among heads authored by
-/// a CURRENT community owner, and invoke `on_owner_authored_head(d_tag,
-/// content)` once for the authoritative (newest owner-authored) head at
-/// each distinct pubkey.
+/// A managed-agent roster resolved once via
+/// [`fetch_owner_authored_managed_agent_roster`]: `(d_tag, content)` pairs,
+/// one per distinct pubkey that has a CURRENT-owner-authored head. Reused
+/// for both an executive lookup ([`unique_executive_in_roster`]) and any
+/// number of persona lookups ([`persona_pubkey_in_roster`]) without a
+/// second database round trip -- see [`run_stall_tick`]'s per-community
+/// memoisation (I5).
+type ManagedAgentRoster = Vec<(String, serde_json::Value)>;
+
+/// Fetch every managed-agent head (kind [`KIND_MANAGED_AGENT`]) in `tenant`,
+/// resolved to NIP-33 latest-wins PER PUBKEY (`d` tag) among heads authored
+/// by a CURRENT community owner.
 ///
 /// This is the trust rule `interrupt_gate::agent_tier` established for a
 /// single, already-known pubkey (Task 4's fix: `KIND_MANAGED_AGENT` carries
@@ -676,8 +683,8 @@ async fn redeadline(
 /// nothing, which is just as damaging as a false claim). Generalized here
 /// across every pubkey in one bounded scan rather than one lookup per
 /// candidate pubkey, for callers that do not already know which pubkey they
-/// are looking for -- [`find_unique_executive`] (which pubkey is the
-/// executive?) and [`resolve_persona_pubkey`] (which pubkey runs this
+/// are looking for -- [`unique_executive_in_roster`] (which pubkey is the
+/// executive?) and [`persona_pubkey_in_roster`] (which pubkey runs this
 /// persona?). `agent_tier` itself is untouched: it is scoped to one pubkey
 /// via a `d_tag`-filtered query, which is a genuinely different (and more
 /// efficient, for that narrower question) shape than this all-pubkeys scan,
@@ -687,14 +694,13 @@ async fn redeadline(
 /// rows arrive newest-first (`created_at DESC`), and the first
 /// owner-authored head found for a given `d` tag is authoritative for that
 /// agent; older heads at the same `d` tag (owner-authored or not) are
-/// ignored once settled, and a pubkey with no owner-authored head at all is
-/// simply never invoked for.
-async fn for_each_owner_authored_managed_agent_head(
+/// ignored once settled, and a pubkey with no owner-authored head at all
+/// simply has no entry in the returned roster.
+async fn fetch_owner_authored_managed_agent_roster(
     tenant: &TenantContext,
     state: &AppState,
     limit: i64,
-    mut on_owner_authored_head: impl FnMut(&str, &serde_json::Value),
-) -> Result<(), String> {
+) -> Result<ManagedAgentRoster, String> {
     let rows = state
         .db
         .query_events(&buzz_db::event::EventQuery {
@@ -707,6 +713,7 @@ async fn for_each_owner_authored_managed_agent_head(
         .map_err(|error| format!("database error scanning managed-agent roster: {error}"))?;
 
     let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut roster = ManagedAgentRoster::new();
     for stored in rows {
         let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
             let parts = tag.as_slice();
@@ -742,45 +749,37 @@ async fn for_each_owner_authored_managed_agent_head(
         let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
             continue;
         };
-        on_owner_authored_head(&d_tag, &content);
+        roster.push((d_tag, content));
     }
 
-    Ok(())
+    Ok(roster)
 }
 
-/// Resolve the community's unique executive: the one agent pubkey (`d` tag)
-/// whose latest owner-authored managed-agent head (kind [`KIND_MANAGED_AGENT`])
+/// Resolve the community's unique executive from an already-fetched
+/// [`ManagedAgentRoster`]: the one agent pubkey (`d` tag) whose head
 /// declares `tier: "executive"`.
 ///
 /// `Ok(None)` when zero or more than one distinct pubkey qualifies -- design
-/// point 3 (never guess). See [`for_each_owner_authored_managed_agent_head`]
-/// for the owner-authorship trust rule this relies on.
-async fn find_unique_executive(
-    tenant: &TenantContext,
-    state: &AppState,
-) -> Result<Option<PublicKey>, String> {
+/// point 3 (never guess). Pure (no I/O) so a caller looping over many
+/// candidates in the same community can call it repeatedly against ONE
+/// fetched roster instead of re-querying.
+fn unique_executive_in_roster(roster: &ManagedAgentRoster) -> Result<Option<PublicKey>, String> {
     let mut executives: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
-    for_each_owner_authored_managed_agent_head(
-        tenant,
-        state,
-        MAX_ROSTER_HEADS,
-        |d_tag, content| {
-            let tier = content
-                .get("tier")
-                .and_then(|value| value.as_str())
-                .and_then(AgentTier::parse);
-            if tier != Some(AgentTier::Executive) {
-                return;
-            }
-            let Ok(pubkey_bytes) = hex::decode(d_tag) else {
-                return;
-            };
-            if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
-                executives.insert(*pubkey.as_bytes());
-            }
-        },
-    )
-    .await?;
+    for (d_tag, content) in roster {
+        let tier = content
+            .get("tier")
+            .and_then(|value| value.as_str())
+            .and_then(AgentTier::parse);
+        if tier != Some(AgentTier::Executive) {
+            continue;
+        }
+        let Ok(pubkey_bytes) = hex::decode(d_tag) else {
+            continue;
+        };
+        if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
+            executives.insert(*pubkey.as_bytes());
+        }
+    }
 
     if executives.len() == 1 {
         let bytes = executives
@@ -793,6 +792,21 @@ async fn find_unique_executive(
     } else {
         Ok(None)
     }
+}
+
+/// Resolve the community's unique executive. Fetches a fresh
+/// [`ManagedAgentRoster`] every call -- used by [`promote_or_redeadline`],
+/// which processes one due ask at a time and has no batch to amortise a
+/// fetch across. [`run_stall_tick`] instead fetches the roster once per
+/// community and calls [`unique_executive_in_roster`] directly against the
+/// memoised copy (I5) -- both paths share the exact same trust rule via
+/// [`fetch_owner_authored_managed_agent_roster`].
+async fn find_unique_executive(
+    tenant: &TenantContext,
+    state: &AppState,
+) -> Result<Option<PublicKey>, String> {
+    let roster = fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
+    unique_executive_in_roster(&roster)
 }
 
 // ---------------------------------------------------------------------
@@ -840,11 +854,6 @@ const MAX_STALL_CANDIDATES: i64 = 500;
 /// since an orphan left over one tick is simply reconsidered on the next.
 const MAX_ORPHANED_PROMOTIONS: i64 = 100;
 
-/// Upper bound on managed-agent heads scanned when resolving a persona id to
-/// the pubkey of the managed agent currently running as it (see
-/// [`resolve_persona_pubkey`]). Same reasoning as [`MAX_ROSTER_HEADS`].
-const MAX_PERSONA_CANDIDATE_HEADS: i64 = 500;
-
 /// Run one stall-detection sweep pass (spec: dead agents).
 ///
 /// Finds every currently in-progress task whose most recent real event
@@ -885,9 +894,30 @@ pub async fn run_stall_tick(
         .await
         .map_err(|error| format!("database error scanning in-progress task heads: {error}"))?;
 
+    // I5: the managed-agent roster (owner-authorship-verified, per
+    // community) is memoised for the duration of this one pass rather than
+    // re-fetched per candidate task. Without this, N silent tasks in the
+    // same community each re-issue the SAME roster scan (one `query_events`
+    // plus one membership lookup per candidate head in it), so a community
+    // with 100 silent tasks and 50 agents costs up to 5,000 sequential
+    // queries on every tick instead of one roster fetch reused 100 times.
+    // The trust rule itself is untouched -- see
+    // `fetch_owner_authored_managed_agent_roster`'s doc comment -- this only
+    // avoids redundantly re-deriving the SAME answer within one pass.
+    let mut roster_cache: std::collections::HashMap<CommunityId, ManagedAgentRoster> =
+        std::collections::HashMap::new();
+
     let mut filed = 0u32;
     for candidate in &candidates {
-        match process_stall_candidate(state, candidate, now_secs, stall_after_secs).await {
+        match process_stall_candidate(
+            state,
+            candidate,
+            now_secs,
+            stall_after_secs,
+            &mut roster_cache,
+        )
+        .await
+        {
             Ok(true) => filed += 1,
             Ok(false) => {}
             Err(error) => {
@@ -911,11 +941,16 @@ pub async fn run_stall_tick(
 /// is not (yet) silent long enough, an open stall ask already exists for it
 /// (the dedupe index refused the insert as [`AskBrokerOutcome::Duplicate`]),
 /// or no safe audience could be resolved (design point 3: never guess).
+///
+/// `roster_cache` (I5) memoises each community's owner-authored
+/// managed-agent roster for the caller's entire [`run_stall_tick`] pass --
+/// see that function's doc comment.
 async fn process_stall_candidate(
     state: &Arc<AppState>,
     candidate: &buzz_db::event::StallCandidateTask,
     now_secs: i64,
     stall_after_secs: i64,
+    roster_cache: &mut std::collections::HashMap<CommunityId, ManagedAgentRoster>,
 ) -> Result<bool, String> {
     let task: CompanyTask = match serde_json::from_str(&candidate.content) {
         Ok(task) => task,
@@ -952,6 +987,23 @@ async fn process_stall_candidate(
     // a tick later) and (b) the last event of any kind in the task's own
     // `sourceChannelId` (real work happening where the task lives). Only
     // when BOTH are old does the sweep consider the task silent.
+    //
+    // KNOWN FALSE NEGATIVE, stated plainly here rather than only in a report:
+    // for an IMPLICIT, chat-derived task, `sourceChannelId` is not a
+    // dedicated work channel -- it IS the human conversation the task was
+    // inferred from. This sweep cannot tell "the agent is still posting
+    // progress here" apart from "two humans are chatting about something
+    // else in the same channel" -- either one resets `last_activity_secs`
+    // and suppresses stall detection for as long as the channel stays busy.
+    // This is exactly backwards from what ruling 3 (see `NO_INITIATIVE_SENTINEL`)
+    // establishes: implicit tasks are the ones nobody deliberately organized
+    // under an initiative, and so are the likeliest to be the kind that
+    // silently falls through the cracks -- yet they are also the ones this
+    // signal is weakest for, since a busy channel can mask a truly dead
+    // agent indefinitely. Accepted as the best signal available today given
+    // the current event model (no kind reliably ties an ordinary work
+    // message to the specific task it advances -- see `stall_need_key`'s
+    // sibling module docs), not silently worked around.
     let channel_last_activity = state
         .db
         .get_last_message_at(candidate.community_id, source_channel_id)
@@ -968,15 +1020,64 @@ async fn process_stall_candidate(
         return Ok(false);
     }
 
+    // `need_key` alone is already unique per task (it is a hash of `task.id`),
+    // but the dedupe index is keyed on `(initiative_id, need_key)` together
+    // (`buzz_db::asks`'s module docs), so if a task's `initiativeId` changes
+    // while a stall ask on it is still open, a later tick could in principle
+    // file a second open stall ask under the new initiative before the first
+    // is answered. Narrow (a task is unlikely to be reassigned mid-stall) and
+    // not solved here -- flagged as a known limitation rather than silently
+    // accepted.
+    let need_key = stall_need_key(&task.id);
+    let initiative_id = task
+        .initiative_id
+        .clone()
+        .unwrap_or_else(|| NO_INITIATIVE_SENTINEL.to_string());
+
+    // I4 fix: a human closing a stall ask (resolving or withdrawing it) is a
+    // decisive act -- "the agent died, I'll deal with it Monday" -- and must
+    // not be silently overridden a tick later just because the dedupe index
+    // is only partial on `status = 'open'` (closing the ask frees the slot
+    // for a fresh filing) and this task still measures as silent from
+    // BEFORE that closure. Re-filing here would be the exact queue-spam
+    // failure this whole system exists to prevent. Only re-file if genuine
+    // NEW activity (a later head revision or channel message) has occurred
+    // since the closure; otherwise the "silence" being measured right now
+    // is the SAME silence a human already acted on.
+    if let Some(closed) = state
+        .db
+        .find_latest_closed_ask_by_need(candidate.community_id, &initiative_id, &need_key)
+        .await
+        .map_err(|error| format!("database error checking prior stall ask closure: {error}"))?
+    {
+        if closed.updated_at >= last_activity_secs {
+            return Ok(false);
+        }
+    }
+
     // `candidate.host` already comes from `query_in_progress_task_heads`'s
     // own `communities` join, which the same query filters to
     // `archived_at IS NULL` -- no separate host lookup needed here (unlike
     // `process_due_ask`, which resolves a row's community after the fact).
     let tenant = TenantContext::resolved(candidate.community_id, candidate.host.clone());
 
-    let audience = match resolve_persona_pubkey(&tenant, state, &task.qa_persona_id).await? {
+    // I5: fetch this community's owner-authored managed-agent roster once
+    // per `run_stall_tick` pass and reuse it for every candidate task in
+    // that community, rather than re-querying per candidate.
+    if let std::collections::hash_map::Entry::Vacant(entry) =
+        roster_cache.entry(candidate.community_id)
+    {
+        let roster =
+            fetch_owner_authored_managed_agent_roster(&tenant, state, MAX_ROSTER_HEADS).await?;
+        entry.insert(roster);
+    }
+    let roster = roster_cache
+        .get(&candidate.community_id)
+        .expect("just inserted or already present");
+
+    let audience = match persona_pubkey_in_roster(roster, &task.qa_persona_id)? {
         Some(pubkey) => pubkey,
-        None => match find_unique_executive(&tenant, state).await? {
+        None => match unique_executive_in_roster(roster)? {
             Some(pubkey) => pubkey,
             None => {
                 // Design point 2/3: a brand-new community (no appointed
@@ -995,20 +1096,6 @@ async fn process_stall_candidate(
             }
         },
     };
-
-    // `need_key` alone is already unique per task (it is a hash of `task.id`),
-    // but the dedupe index is keyed on `(initiative_id, need_key)` together
-    // (`buzz_db::asks`'s module docs), so if a task's `initiativeId` changes
-    // while a stall ask on it is still open, a later tick could in principle
-    // file a second open stall ask under the new initiative before the first
-    // is answered. Narrow (a task is unlikely to be reassigned mid-stall) and
-    // not solved here -- flagged as a known limitation rather than silently
-    // accepted.
-    let need_key = stall_need_key(&task.id);
-    let initiative_id = task
-        .initiative_id
-        .clone()
-        .unwrap_or_else(|| NO_INITIATIVE_SENTINEL.to_string());
 
     let content = serde_json::json!({
         "headline": format!("\"{}\" has gone silent", task.title),
@@ -1093,58 +1180,51 @@ pub fn stall_need_key(task_id: &str) -> String {
 }
 
 /// Resolve `persona_id` (e.g. a task's `qaPersonaId`) to the pubkey of the
-/// managed agent currently running as that persona.
+/// managed agent currently running as that persona, from an already-fetched
+/// [`ManagedAgentRoster`].
 ///
-/// Scans owner-authored managed-agent heads (kind [`KIND_MANAGED_AGENT`])
-/// for one whose content names this persona in its `persona_id` field --
-/// the same field `desktop/src-tauri/src/managed_agents/agent_events.rs`'s
-/// `ManagedAgentEventContent` already publishes today. Parsed here as
-/// untyped JSON rather than through that desktop-only type (this crate does
-/// not depend on the desktop crate), exactly like [`agent_tier`] reads the
+/// The roster's content is scanned for one entry whose `persona_id` field
+/// matches -- the same field `desktop/src-tauri/src/managed_agents/agent_events.rs`'s
+/// `ManagedAgentEventContent` already publishes today. Parsed as untyped
+/// JSON rather than through that desktop-only type (this crate does not
+/// depend on the desktop crate), exactly like [`agent_tier`] reads the
 /// sibling `tier` field.
 ///
 /// Security: `KIND_MANAGED_AGENT` is client-writable (Task 4's finding, see
-/// [`for_each_owner_authored_managed_agent_head`]'s doc comment) -- any
-/// agent could otherwise publish a head claiming `persona_id: "cto"` and
-/// make itself the recipient of every stall ask about the CTO's work, an
+/// [`fetch_owner_authored_managed_agent_roster`]'s doc comment) -- any agent
+/// could otherwise publish a head claiming `persona_id: "cto"` and make
+/// itself the recipient of every stall ask about the CTO's work, an
 /// information leak that also keeps the real accountable party in the dark.
-/// This function inherits [`for_each_owner_authored_managed_agent_head`]'s
-/// owner-authorship trust rule rather than re-implementing (and risking
-/// weakening) it: only heads authored by a CURRENT community owner are ever
-/// considered.
+/// The roster this reads already carries that owner-authorship trust rule
+/// (this function does no additional filtering, and does no I/O of its
+/// own): only heads authored by a CURRENT community owner were ever
+/// included in it.
 ///
 /// `Ok(None)` -- never guessed, design point 3 -- when zero, or more than
 /// one, distinct currently-owner-claimed pubkey names this persona (the
 /// latter is ambiguous authority: two owner-authored heads disagreeing on
 /// who runs a persona is not this function's call to arbitrate). The
 /// caller falls back to the community's executive in that case.
-async fn resolve_persona_pubkey(
-    tenant: &TenantContext,
-    state: &AppState,
+fn persona_pubkey_in_roster(
+    roster: &ManagedAgentRoster,
     persona_id: &str,
 ) -> Result<Option<PublicKey>, String> {
     let mut matches: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
-    for_each_owner_authored_managed_agent_head(
-        tenant,
-        state,
-        MAX_PERSONA_CANDIDATE_HEADS,
-        |d_tag, content| {
-            if content
-                .get("persona_id")
-                .and_then(serde_json::Value::as_str)
-                != Some(persona_id)
-            {
-                return;
-            }
-            let Ok(pubkey_bytes) = hex::decode(d_tag) else {
-                return;
-            };
-            if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
-                matches.insert(*pubkey.as_bytes());
-            }
-        },
-    )
-    .await?;
+    for (d_tag, content) in roster {
+        if content
+            .get("persona_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(persona_id)
+        {
+            continue;
+        }
+        let Ok(pubkey_bytes) = hex::decode(d_tag) else {
+            continue;
+        };
+        if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
+            matches.insert(*pubkey.as_bytes());
+        }
+    }
 
     if matches.len() == 1 {
         let bytes = matches
@@ -1159,14 +1239,20 @@ async fn resolve_persona_pubkey(
     }
 }
 
-/// Reopen every `promoted` ask whose named successor was never actually
-/// created -- the Task 8 crash residual [`promote_to`]'s doc comment
-/// describes: a genuine process crash in the narrow window between
-/// [`buzz_db::Db::mark_ask_promoted`] committing and the successor ask being
-/// filed leaves the original permanently `promoted` toward an event that
-/// does not exist, and the need then has no open ask at any tier. No
-/// in-process compensation survives that crash; this is the out-of-process
-/// backstop.
+/// Reopen every `promoted` ask that is a genuine orphan -- the Task 8 crash
+/// residual [`promote_to`]'s doc comment describes: a genuine process
+/// crash in the narrow window between [`buzz_db::Db::mark_ask_promoted`]
+/// committing and the successor ask being filed leaves the original
+/// permanently `promoted` toward an event that does not exist, and the
+/// need then has no open ask at any tier. No in-process compensation
+/// survives that crash; this is the out-of-process backstop.
+///
+/// [`buzz_db::asks::query_orphaned_promoted_asks`] specifically excludes
+/// `promote_to`'s `Duplicate` arm (a discarded successor that lost a race
+/// against a DIFFERENT ask claiming the same need) from this -- see that
+/// function's doc comment for why a weaker "does the exact named successor
+/// exist" check would wrongly resurrect a need that was correctly
+/// superseded, potentially well after the winner has itself resolved.
 ///
 /// Best-effort at every level: a failure to even scan for orphans, or to
 /// reopen one particular orphan, is logged and swallowed rather than
