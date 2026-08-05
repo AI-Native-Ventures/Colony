@@ -339,6 +339,13 @@ pub fn compute_ledger(
         let day = utc_day(at_unix);
 
         let (cost_nanousd, price_basis) = match (&payload.tokens, payload.amount_nanousd) {
+            // The provider stated what it charged. Nothing the book can work
+            // out beats the charge itself, so the book is not consulted and an
+            // unpriced model is not an exception: the money is already known.
+            (Some(_), _) if payload.observed_cost_nanousd.is_some() => (
+                payload.observed_cost_nanousd.map(u128::from),
+                Some(PriceBasis::Observed),
+            ),
             (Some(tokens), _) => {
                 let model = payload.model.as_deref().unwrap_or_default();
                 // The provider is on the record because the meter captured it
@@ -604,6 +611,7 @@ mod tests {
                 payment_mode: PaymentMode::Metered,
                 tokens: Some(breakdown),
                 amount_nanousd: None,
+                observed_cost_nanousd: None,
                 harness: Some("buzz-acp".to_string()),
                 session_id: None,
                 turn_id: None,
@@ -688,6 +696,98 @@ mod tests {
             Some(PriceBasis::ListRow),
             "priced from list, and says so"
         );
+    }
+
+    /// A cost the provider stated beats any rate we could look up, including a
+    /// rate we hold for that exact provider.
+    ///
+    /// The book models a charge. This is the charge, already carrying the
+    /// margin, promotion and routing decision the book cannot see.
+    #[test]
+    fn a_cost_the_provider_stated_wins_over_every_row_in_the_book() {
+        let (records, prices, rules, corrections) = fixture_set();
+        let mut records = records;
+        // A figure that matches no rate in the book, so a passing assertion
+        // cannot be the book agreeing by coincidence.
+        records[0].payload.observed_cost_nanousd = Some(7_777_777);
+
+        let report = compute_ledger(records, &prices, &rules, &corrections, &[]);
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.event_id == "aa")
+            .expect("entry");
+        assert_eq!(entry.cost_nanousd, Some(7_777_777));
+        assert_eq!(entry.price_basis, Some(PriceBasis::Observed));
+    }
+
+    /// The whole point: a provider we have never priced still yields money.
+    ///
+    /// Without this the model lands in Needs Review and the spend reads as
+    /// unknown, which is the state production is in today for every model
+    /// missing from the catalog.
+    #[test]
+    fn a_stated_cost_prices_a_model_the_book_has_never_heard_of() {
+        let (records, prices, rules, corrections) = fixture_set();
+        let mut records = records;
+        records[0].payload.model = Some("some-model-nobody-priced".to_string());
+        records[0].payload.observed_cost_nanousd = Some(4_200_000);
+
+        let report = compute_ledger(records, &prices, &rules, &corrections, &[]);
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.event_id == "aa")
+            .expect("entry");
+        assert_eq!(entry.cost_nanousd, Some(4_200_000));
+        assert_eq!(entry.price_basis, Some(PriceBasis::Observed));
+        assert!(
+            !report.exceptions.iter().any(|exception| matches!(
+                exception,
+                LedgerException::UnpricedModel { event_id, .. } if event_id == "aa"
+            )),
+            "the money is known, so nothing is unpriced"
+        );
+    }
+
+    /// Negative control for the two tests above: with the stated cost removed
+    /// and nothing else changed, an unknown model is unpriced again.
+    #[test]
+    fn without_a_stated_cost_an_unknown_model_is_still_unpriced() {
+        let (records, prices, rules, corrections) = fixture_set();
+        let mut records = records;
+        records[0].payload.model = Some("some-model-nobody-priced".to_string());
+
+        let report = compute_ledger(records, &prices, &rules, &corrections, &[]);
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.event_id == "aa")
+            .expect("entry");
+        assert_eq!(entry.cost_nanousd, None);
+        assert_eq!(entry.price_basis, None);
+        assert!(report.exceptions.iter().any(|exception| matches!(
+            exception,
+            LedgerException::UnpricedModel { event_id, .. } if event_id == "aa"
+        )));
+    }
+
+    /// A provider stating zero is a fact about a free call, and must survive
+    /// as zero rather than being taken for "no figure" and sent to the book.
+    #[test]
+    fn a_stated_zero_is_a_free_call_not_a_missing_figure() {
+        let (records, prices, rules, corrections) = fixture_set();
+        let mut records = records;
+        records[0].payload.observed_cost_nanousd = Some(0);
+
+        let report = compute_ledger(records, &prices, &rules, &corrections, &[]);
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.event_id == "aa")
+            .expect("entry");
+        assert_eq!(entry.cost_nanousd, Some(0));
+        assert_eq!(entry.price_basis, Some(PriceBasis::Observed));
     }
 
     /// A flat-amount record never consults the book, so it must not claim a

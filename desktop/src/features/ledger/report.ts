@@ -30,13 +30,17 @@ export type PaymentMode = "metered" | "imputed";
 export type EntryClassification = "cogs" | "opex" | "needsReview";
 
 /**
- * Which kind of price row priced a call.
+ * Where a call's cost came from.
  *
  * The same model costs different amounts from the lab that trained it, from a
  * cloud reselling it, and from a router. `listRow` means the book had no row
  * for this call's provider and the vendor's list price was used instead.
+ *
+ * `observed` is not a row at all: the provider stated what it charged, on the
+ * call itself. That beats every rate we hold, because it is the charge rather
+ * than a model of the charge.
  */
-export type PriceBasis = "providerRow" | "listRow";
+export type PriceBasis = "observed" | "providerRow" | "listRow";
 
 /** One priced, attributed usage record. */
 export interface LedgerEntry {
@@ -227,7 +231,7 @@ function requireClassification(
   return value as EntryClassification;
 }
 
-const PRICE_BASES = new Set(["providerRow", "listRow"]);
+const PRICE_BASES = new Set(["observed", "providerRow", "listRow"]);
 
 /**
  * Absent is the normal case for an unpriced or flat-amount record, and also

@@ -8,6 +8,7 @@
 use buzz_core::usage_record::UsageBreakdown;
 use serde_json::{Map, Value};
 
+use crate::cost::observed_cost_nanousd;
 use crate::sse::data_payloads;
 use crate::ParsedUsage;
 
@@ -84,6 +85,7 @@ fn read_document(document: &Value) -> Option<ParsedUsage> {
             tokens: Some(tokens),
             model: string_field(scope, "model"),
             request_id: string_field(scope, "id"),
+            observed_cost_nanousd: observed_cost_nanousd(usage),
         });
     }
     None
@@ -110,6 +112,7 @@ pub fn parse_json_response(body: &[u8]) -> ParsedUsage {
         tokens: None,
         model: string_field(&root, "model"),
         request_id: string_field(&root, "id"),
+        observed_cost_nanousd: None,
     })
 }
 
@@ -140,6 +143,10 @@ pub fn parse_sse_response(body: &[u8]) -> ParsedUsage {
                 tokens: from_chunk.tokens,
                 model: from_chunk.model.or(parsed.model),
                 request_id: from_chunk.request_id.or(parsed.request_id),
+                // The terminal chunk carries the whole usage block, cost
+                // included, so this replaces rather than merges: a later
+                // chunk's silence on cost is not an earlier chunk's figure.
+                observed_cost_nanousd: from_chunk.observed_cost_nanousd,
             };
         }
     }
@@ -297,6 +304,56 @@ mod tests {
         );
         assert_eq!(parsed.model.as_deref(), Some("gpt-4o-2024-08-06"));
         assert_eq!(parsed.request_id.as_deref(), Some("chatcmpl-Stream1"));
+    }
+
+    /// An OpenRouter response, which is the OpenAI dialect plus a stated cost.
+    ///
+    /// This is the shape that makes the price book unnecessary for a routed
+    /// call: the router says what it charged, so no rate has to be on file for
+    /// whichever of its providers actually served the request.
+    #[test]
+    fn a_router_stating_its_charge_has_that_cost_read_off_the_body() {
+        let body = br#"{
+            "id": "gen-1",
+            "model": "deepseek/deepseek-v4-flash",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "cost": 0.00042,
+                "is_byok": false
+            }
+        }"#;
+        let parsed = parse_json_response(body);
+        assert_eq!(parsed.observed_cost_nanousd, Some(420_000));
+        assert_eq!(
+            parsed.tokens.map(|tokens| tokens.output_tokens),
+            Some(200),
+            "the counts still land: they are the unit economics"
+        );
+    }
+
+    /// The counts must survive a provider that reports no cost, because that
+    /// is every direct vendor.
+    #[test]
+    fn a_provider_stating_no_charge_yields_counts_and_no_cost() {
+        let body = br#"{"id":"chatcmpl-1","model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":2}}"#;
+        let parsed = parse_json_response(body);
+        assert_eq!(parsed.observed_cost_nanousd, None);
+        assert!(parsed.tokens.is_some());
+    }
+
+    /// A stream reports its cost in the terminal chunk, alongside the counts.
+    #[test]
+    fn a_streamed_charge_is_read_from_the_terminal_chunk() {
+        let sse = concat!(
+            r#"data: {"id":"gen-2","model":"m","choices":[],"usage":null}"#,
+            "\n\n",
+            r#"data: {"id":"gen-2","model":"m","usage":{"prompt_tokens":5,"completion_tokens":1,"cost":0.001}}"#,
+            "\n\n",
+            "data: [DONE]\n\n",
+        );
+        let parsed = parse_sse_response(sse.as_bytes());
+        assert_eq!(parsed.observed_cost_nanousd, Some(1_000_000));
     }
 
     #[test]
