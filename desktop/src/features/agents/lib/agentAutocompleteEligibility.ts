@@ -105,6 +105,8 @@ type AgentAutocompleteCandidate = {
   isManagedAgent?: boolean;
   isMember?: boolean;
   personaId?: string | null;
+  /** Workspace role, from the agent's published kind-0 profile. */
+  roleId?: string | null;
 };
 
 function normalizeLabel(label: string | null | undefined) {
@@ -118,6 +120,15 @@ function agentIdentityKey<T extends AgentAutocompleteCandidate>(
 ) {
   if (candidate.isAgent !== true) {
     return null;
+  }
+
+  // Role first, and deliberately above persona and owner. Each member runs
+  // their own instance of a workspace role, with its own key, owner and
+  // persona id — the role is the only thing they share, so it is the only key
+  // that collapses them into the one colleague the workspace should see
+  // (docs/design/role-agents.html).
+  if (candidate.roleId) {
+    return `role:${candidate.roleId.trim().toLowerCase()}`;
   }
 
   if (candidate.personaId) {
@@ -156,11 +167,13 @@ function agentCandidateRank<T extends AgentAutocompleteCandidate>(
     : null;
 
   return [
+    // Own instance first: a merged role must resolve to the agent that will
+    // actually answer this member, which is the one they own.
+    ownerPubkey && ownerPubkey === normalizedCurrentPubkey ? 0 : 1,
+    candidate.isManagedAgent === true ? 0 : 1,
     candidate.isMember === true ? 0 : 1,
     pubkey && preferredPubkeys.has(pubkey) ? 0 : 1,
-    candidate.isManagedAgent === true ? 0 : 1,
     candidate.personaId ? 0 : 1,
-    ownerPubkey && ownerPubkey === normalizedCurrentPubkey ? 0 : 1,
   ];
 }
 

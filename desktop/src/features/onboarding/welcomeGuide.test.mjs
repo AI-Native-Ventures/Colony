@@ -206,8 +206,9 @@ test("all Welcome starters use the onboarding runtime preference", async () => {
     assert.equal(input.relayUrl, RELAY_A);
     assert.equal(input.spawnAfterCreate, false);
     assert.equal(input.startOnAppLaunch, false);
-    // Role-agents phase 1: workspace starters answer any community member.
-    assert.equal(input.respondTo, "anyone");
+    // Role-agents phase 2: each member owns their own instance, so an agent
+    // only ever answers its owner.
+    assert.equal(input.respondTo, "owner-only");
   }
 });
 

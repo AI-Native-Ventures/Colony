@@ -778,6 +778,7 @@ pub async fn confirm_team_snapshot_import(
             &m.display_name,
             m.effective_avatar.as_deref(),
             m.auth_tag.as_deref(),
+            m.record.role_id.as_deref(),
         )
         .await
         .err();
