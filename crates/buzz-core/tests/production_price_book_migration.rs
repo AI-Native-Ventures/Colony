@@ -180,3 +180,73 @@ fn nothing_but_the_rate_unit_changes() {
         assert!(entry.conditions.is_unconditional());
     }
 }
+
+/// What production is actually spending on, priced at the moment it spent it.
+///
+/// Every usage record in the production relay on 2026-08-05 was a
+/// `claude-opus-5` call, and the book those companies hold does not contain
+/// that model: it is the five-model catalog from before Opus 5 existed. So
+/// every one of them reports as unpriced today.
+///
+/// The relay reconciles its book against the shipped catalog on every
+/// startup, which is what fixes it. This runs that reconciliation on the
+/// real book and prices a call at a real timestamp from that window.
+///
+/// The effective date is the part that could silently fail. A catalog row
+/// dated later than the spend it is meant to price adds a model and still
+/// leaves the calls unpriced, and the Spend screen looks exactly the same
+/// either way.
+#[test]
+fn the_reconciled_production_book_prices_the_model_production_is_using() {
+    use buzz_core::ledger::catalog::{missing_from, shipped_catalog};
+
+    let mut book = book();
+    assert!(
+        book.rates_for("claude-opus-5", 1_785_910_717).is_none(),
+        "the model must be absent before reconciliation, or this proves nothing"
+    );
+
+    // Exactly what `ensure_catalog_prices` does at relay startup.
+    let catalog = shipped_catalog().expect("shipped catalog");
+    book.entries.extend(missing_from(&catalog, &book.entries));
+
+    // The oldest and newest usage records in production on 2026-08-05.
+    for (label, at) in [
+        // 2026-08-04T20:14:22Z and 2026-08-05T06:18:37Z.
+        ("oldest record", 1_785_874_462),
+        ("newest record", 1_785_910_717),
+    ] {
+        let rates = book
+            .rates_for("claude-opus-5", at)
+            .unwrap_or_else(|| panic!("{label} is still unpriced after reconciliation"));
+        assert_eq!(
+            rates.input_nanousd_per_mtok, 5_000_000_000,
+            "$5 / MTok input"
+        );
+        assert_eq!(
+            rates.output_nanousd_per_mtok, 25_000_000_000,
+            "$25 / MTok output"
+        );
+    }
+
+    // Anthropic's API id for this model is undated, but the alias rule has to
+    // cover a dated snapshot too, or a future `claude-opus-5-20260801` would
+    // silently go unpriced again.
+    assert!(book
+        .rates_for("claude-opus-5-20260801", 1_785_910_717)
+        .is_some());
+
+    // And a concrete turn, priced end to end.
+    let turn = UsageBreakdown {
+        input_uncached_tokens: 12_000,
+        cache_read_tokens: 180_000,
+        cache_write_5m_tokens: 8_000,
+        cache_write_1h_tokens: 0,
+        output_tokens: 2_400,
+    };
+    assert_eq!(
+        book.price_tokens("claude-opus-5", &turn, 1_785_910_717)
+            .expect("priced"),
+        12_000 * 5_000 + 180_000 * 500 + 8_000 * 6_250 + 2_400 * 25_000
+    );
+}
