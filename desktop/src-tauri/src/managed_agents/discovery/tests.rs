@@ -772,12 +772,77 @@ fn probe_codex_acp_version_parses_full_semver_output() {
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod script");
 
     let version = probe_codex_acp_version(&bin);
+    // The probe answers Option, so every way it can fail looks identical here.
+    // When it says None, re-run the stub directly and report what the OS said,
+    // so a failure names its cause instead of printing `left: None`.
+    let diagnosis = match version {
+        Some(_) => String::new(),
+        None => match std::process::Command::new(&bin).arg("--version").output() {
+            Ok(out) => format!(
+                " (direct re-run: status {:?}, stdout {:?}, stderr {:?})",
+                out.status,
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+            Err(err) => format!(
+                " (direct re-run could not spawn: {err}, kind {:?})",
+                err.kind()
+            ),
+        },
+    };
     let _ = std::fs::remove_dir_all(dir);
 
     assert_eq!(
         version,
         Some((1, 1, 7)),
-        "adapter output must parse to its full semantic version"
+        "adapter output must parse to its full semantic version{diagnosis}"
+    );
+}
+
+/// A binary that is still open for writing is exec-able moments later, and the
+/// probe must wait rather than call the adapter missing.
+///
+/// This reproduces the CI flake directly. Linux refuses to exec a file held
+/// open for writing (ETXTBSY), which is what a concurrent fork does to the stub
+/// this suite writes, and glibc's `posix_spawn` delivers that failure as a
+/// child exiting 127 with no output rather than as a spawn error. macOS does
+/// not enforce the rule, so there the first attempt simply succeeds and this
+/// test passes without exercising the retry: it is a Linux test that is
+/// harmless everywhere else.
+#[cfg(unix)]
+#[test]
+fn probe_codex_acp_version_waits_out_a_binary_held_open_for_writing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("buzz-probe-busy-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let bin = dir.join("codex-acp");
+    std::fs::write(
+        &bin,
+        "#!/bin/sh\necho '@agentclientprotocol/codex-acp 1.1.7'\nexit 0\n",
+    )
+    .expect("write script");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod script");
+
+    // Hold the file open for writing, exactly as an installer or an inherited
+    // descriptor would, and release it while the probe is still retrying.
+    let held = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&bin)
+        .expect("hold the binary open for writing");
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        drop(held);
+    });
+
+    let version = probe_codex_acp_version(&bin);
+    releaser.join().expect("releaser thread finishes");
+    let _ = std::fs::remove_dir_all(dir);
+
+    assert_eq!(
+        version,
+        Some((1, 1, 7)),
+        "a binary briefly held open for writing must be probed, not written off"
     );
 }
 
