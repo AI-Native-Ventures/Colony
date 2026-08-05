@@ -878,6 +878,13 @@ async fn main() -> anyhow::Result<()> {
     // above: a spawned interval loop over a cross-tenant due-query, logging
     // and continuing past a tick failure rather than dying, so one bad tick
     // never takes the sweep down for every community.
+    //
+    // The SAME loop also runs the stall-detection sweep
+    // (`interrupt_runtime::run_stall_tick`): a task can go silent (a crashed
+    // or hung agent) with no ask ever filed, so there is nothing for the
+    // due-ask sweep above to find. Sharing one interval keeps both sweeps on
+    // the same cadence and the same "log and continue past a tick failure"
+    // discipline, rather than a second spawned task duplicating the loop.
     {
         let interrupt_state = Arc::clone(&state);
         let interrupt_sweep_interval_secs: u64 = std::env::var("BUZZ_INTERRUPT_SWEEP_SECS")
@@ -888,10 +895,16 @@ async fn main() -> anyhow::Result<()> {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(100);
+        let stall_after_secs: i64 =
+            std::env::var(buzz_relay::interrupt_runtime::STALL_AFTER_SECS_ENV)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(buzz_relay::interrupt_runtime::DEFAULT_STALL_AFTER_SECS);
         tokio::spawn(async move {
             info!(
                 interval_secs = interrupt_sweep_interval_secs,
                 batch_limit = interrupt_sweep_batch_limit,
+                stall_after_secs,
                 "Colony interrupt sweep started"
             );
             loop {
@@ -919,6 +932,23 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => {
                         error!("Interrupt sweep tick failed: {e}");
+                    }
+                }
+
+                match buzz_relay::interrupt_runtime::run_stall_tick(
+                    &interrupt_state,
+                    now_secs,
+                    stall_after_secs,
+                )
+                .await
+                {
+                    Ok(filed) => {
+                        if filed > 0 {
+                            info!(filed, "Stall sweep: silent tasks flagged");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Stall sweep tick failed: {e}");
                     }
                 }
             }

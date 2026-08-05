@@ -3,12 +3,17 @@
 
 use std::sync::Arc;
 
-use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_STREAM_MESSAGE};
+use buzz_core::company::{CommercialPurpose, CompanyTask, TaskStatus};
+use buzz_core::kind::{
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE, KIND_TASK,
+};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::Db;
 use buzz_relay::ask_broker::{handle_ask_event, AskBrokerOutcome};
-use buzz_relay::interrupt_runtime::{run_interrupt_tick, InterruptTickStats};
+use buzz_relay::interrupt_runtime::{
+    run_interrupt_tick, run_stall_tick, stall_need_key, InterruptTickStats,
+};
 use buzz_relay::state::AppState;
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
 use sqlx::{PgPool, Row as _};
@@ -162,6 +167,125 @@ async fn store_root(
         .insert_event(community, &event, Some(channel_id))
         .await
         .expect("store root event");
+    assert!(inserted);
+    event
+}
+
+/// Store a plain channel message at an explicit `created_at`, so a test can
+/// control exactly how "recent" a channel's last activity is relative to
+/// `now_secs` without depending on wall-clock timing.
+async fn post_message_at(
+    db: &Db,
+    community: CommunityId,
+    channel_id: Uuid,
+    author: &Keys,
+    content: &str,
+    created_at_secs: i64,
+) -> Event {
+    let event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), content)
+        .tags(vec![tag(&["h", &channel_id.to_string()])])
+        .custom_created_at(nostr::Timestamp::from(created_at_secs as u64))
+        .sign_with_keys(author)
+        .expect("sign message");
+    let (_, inserted) = db
+        .insert_event(community, &event, Some(channel_id))
+        .await
+        .expect("store message");
+    assert!(inserted);
+    event
+}
+
+/// Publish a kind:30177 managed-agent head for `agent`, authored by
+/// `author`, declaring which persona it runs (`persona_id`) -- the same
+/// content field `desktop/src-tauri/src/managed_agents/agent_events.rs`'s
+/// `ManagedAgentEventContent` publishes today, and the field
+/// `resolve_persona_pubkey` reads to resolve a task's `qaPersonaId`.
+async fn set_persona(
+    db: &Db,
+    community: CommunityId,
+    author: &Keys,
+    agent: &Keys,
+    persona_id: &str,
+) {
+    let agent_hex = agent.public_key().to_hex();
+    let event = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        format!(r#"{{"persona_id":"{persona_id}"}}"#),
+    )
+    .tags(vec![tag(&["d", &agent_hex])])
+    .sign_with_keys(author)
+    .expect("sign managed-agent head");
+    let (_, inserted) = db
+        .insert_event(community, &event, None)
+        .await
+        .expect("store managed-agent head");
+    assert!(inserted);
+}
+
+/// A `CompanyTask` with every field filled in with a plausible default,
+/// overridable via the struct-update syntax at each call site (e.g.
+/// `CompanyTask { status: TaskStatus::Completed, ..default_task(...) }`).
+fn default_task(
+    id: &str,
+    initiative_id: Option<&str>,
+    status: TaskStatus,
+    qa_persona_id: &str,
+    source_channel_id: Uuid,
+    created_at_secs: i64,
+) -> CompanyTask {
+    CompanyTask {
+        schema: "colony.task/v1".to_string(),
+        id: id.to_string(),
+        company_id: "acme".to_string(),
+        initiative_id: initiative_id.map(str::to_string),
+        title: format!("Task {id}"),
+        status,
+        owning_team_id: "web-team".to_string(),
+        assignee_persona_ids: vec!["builtin:content".to_string()],
+        qa_persona_id: qa_persona_id.to_string(),
+        cost_centre_id: "cc-1".to_string(),
+        commercial_purpose: CommercialPurpose::Uncertain,
+        client_organization_id: None,
+        source_channel_id: source_channel_id.to_string(),
+        source_event_id: None,
+        implicit: false,
+        created_at: created_at_secs,
+        updated_at: created_at_secs,
+    }
+}
+
+/// Publish `task` as a kind:30181 (`KIND_TASK`) head at an explicit
+/// `created_at`, signed by the relay (task heads are relay-only-authored --
+/// see `buzz_core::kind::is_relay_only_kind`) and stored globally
+/// (`channel_id = None`), matching how `company_broker::build_head` shapes a
+/// real task head.
+async fn store_task_head_at(
+    db: &Db,
+    community: CommunityId,
+    relay_keys: &Keys,
+    task: &CompanyTask,
+    created_at_secs: i64,
+) -> Event {
+    let content = serde_json::to_string(task).expect("serialize task head content");
+    let mut tags = vec![
+        tag(&["d", &task.id]),
+        tag(&["c", &task.company_id]),
+        tag(&["company", &task.company_id]),
+        tag(&["team", &task.owning_team_id]),
+        tag(&["cost-centre", &task.cost_centre_id]),
+    ];
+    if let Some(initiative_id) = &task.initiative_id {
+        tags.push(tag(&["initiative", initiative_id]));
+    }
+    let event = EventBuilder::new(Kind::Custom(KIND_TASK as u16), content)
+        .tags(tags)
+        .custom_created_at(nostr::Timestamp::from(created_at_secs as u64))
+        .sign_with_keys(relay_keys)
+        .expect("sign task head");
+    let (_, inserted) = db
+        .insert_event(community, &event, None)
+        .await
+        .expect("store task head");
     assert!(inserted);
     event
 }
@@ -826,6 +950,456 @@ async fn tick_without_a_durable_relay_key_refuses_outright() {
     let error = run_interrupt_tick(&state, chrono::Utc::now().timestamp(), 100)
         .await
         .expect_err("a sweep with no durable relay key must refuse, not silently no-op");
+    assert!(
+        error.contains("durable relay signing key"),
+        "unexpected error message: {error}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Stall detection (spec: dead agents)
+// ---------------------------------------------------------------------
+
+const STALL_AFTER_SECS: i64 = 3600;
+
+/// Basic case: an in-progress task whose channel has no activity at all, and
+/// whose own head is older than `stall_after_secs`, produces exactly one
+/// open `stall` ask addressed to the resolved QA persona's agent pubkey --
+/// and running the tick again does not produce a second one (dedupe via
+/// `stall_need_key`, proving the brief's core requirement).
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn stall_ask_filed_for_a_silent_in_progress_task_and_deduped_on_rerun() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-1",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert_eq!(filed, 1, "exactly one stall ask must be filed");
+
+    let need_key = stall_need_key(&task.id);
+    let row = db
+        .find_open_ask_by_need(community, &task.id, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("a stall ask must be open for this task");
+    assert_eq!(row.ask_type, "stall");
+    assert_eq!(
+        row.audience_pubkey,
+        qa_agent.public_key().to_bytes().to_vec()
+    );
+
+    // Re-run at the SAME now: the dedupe index must suppress a repeat.
+    let filed_again = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("second tick must not error");
+    assert_eq!(
+        filed_again, 0,
+        "a task already carrying an open stall ask must not be re-filed"
+    );
+
+    let still_one = db
+        .find_open_ask_by_need(community, &task.id, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("the SAME stall ask must still be open");
+    assert_eq!(
+        still_one.ask_event_id, row.ask_event_id,
+        "dedupe must keep the SAME row, not replace it"
+    );
+}
+
+/// Design point 4: a task head that JUST changed (e.g. moved to
+/// `inProgress` moments ago) must not be flagged a tick later, even if the
+/// channel it lives in happens to be old -- the head's own `created_at` is
+/// itself activity.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn recent_status_change_is_not_flagged_as_stalled_even_with_an_old_channel() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    post_message_at(
+        &db,
+        community,
+        channel_id,
+        &owner,
+        "old chatter",
+        now - 10 * STALL_AFTER_SECS,
+    )
+    .await;
+    let task = default_task(
+        "task-2",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 10,
+    );
+    store_task_head_at(&db, community, &relay_keys, &task, now - 10).await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert_eq!(
+        filed, 0,
+        "a task whose head just changed must not be flagged, regardless of channel age"
+    );
+
+    let need_key = stall_need_key(&task.id);
+    assert!(db
+        .find_open_ask_by_need(community, &task.id, &need_key)
+        .await
+        .expect("query asks projection")
+        .is_none());
+}
+
+/// Design point 4, the core proof: "silence means no event activity, not
+/// merely an old head." A task whose head has sat unchanged for a long
+/// time must NOT be flagged as long as its channel shows real recent
+/// activity -- an old head alone is normal for a long-running task, not
+/// evidence of a stall.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn recent_channel_activity_prevents_a_stall_flag_despite_an_old_task_head() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-3",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 10 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 10 * STALL_AFTER_SECS,
+    )
+    .await;
+    post_message_at(
+        &db,
+        community,
+        channel_id,
+        &owner,
+        "still working on it",
+        now - 60,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert_eq!(
+        filed, 0,
+        "silence means no event activity, not merely an old head -- an active channel must \
+         not be flagged"
+    );
+}
+
+/// When the task's `qaPersonaId` does not resolve to a currently-owner-
+/// claimed managed agent, the sweep falls back to the community's unique
+/// executive rather than leaving the task unflagged.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn stall_ask_falls_back_to_the_executive_when_the_qa_persona_is_unresolvable() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+    // Deliberately: no managed-agent head claims "qa-persona-nobody".
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-5",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-nobody",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert_eq!(filed, 1);
+
+    let need_key = stall_need_key(&task.id);
+    let row = db
+        .find_open_ask_by_need(community, &task.id, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("stall ask must exist");
+    assert_eq!(
+        row.audience_pubkey,
+        executive.public_key().to_bytes().to_vec(),
+        "must fall back to the executive"
+    );
+}
+
+/// Design points 2 and 3: a company with a silent task but nobody appointed
+/// yet (no resolvable QA persona AND no unique executive) must never be
+/// guessed at -- the sweep skips rather than spamming a founder who has not
+/// even set up the org chart.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn stall_sweep_skips_when_neither_the_qa_persona_nor_a_unique_executive_can_be_resolved() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    // Deliberately: no owner added, no managed-agent heads at all -- a
+    // brand-new community with a task head and nobody appointed yet.
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-6",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-nobody",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error, even with nowhere safe to route");
+    assert_eq!(
+        filed, 0,
+        "must never guess an audience; a company with nobody appointed yet must not be spammed"
+    );
+
+    let need_key = stall_need_key(&task.id);
+    assert!(db
+        .find_open_ask_by_need(community, &task.id, &need_key)
+        .await
+        .expect("query asks projection")
+        .is_none());
+}
+
+/// Only `inProgress` counts as "should be moving" for this sweep:
+/// `completed`, `cancelled`, and `blocked` tasks are excluded in SQL before
+/// any silence measurement happens, and must never be flagged regardless of
+/// how old or silent they are.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn non_in_progress_tasks_are_never_flagged_as_stalled() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    for (idx, status) in [
+        TaskStatus::Completed,
+        TaskStatus::Cancelled,
+        TaskStatus::Blocked,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("task-7-{idx}");
+        let task = default_task(
+            &id,
+            None,
+            status,
+            "qa-persona-1",
+            channel_id,
+            now - 10 * STALL_AFTER_SECS,
+        );
+        store_task_head_at(
+            &db,
+            community,
+            &relay_keys,
+            &task,
+            now - 10 * STALL_AFTER_SECS,
+        )
+        .await;
+    }
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert_eq!(
+        filed, 0,
+        "completed, cancelled, and blocked tasks must never be treated as should-be-moving"
+    );
+}
+
+/// Task 8 crash residual: a `promoted` ask whose successor was never
+/// actually created (a genuine process crash between the claim committing
+/// and the successor being filed) has no open ask at any tier. The stall
+/// sweep is the out-of-process backstop that finds and reopens it.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn orphaned_promoted_ask_is_reopened_by_the_stall_sweep() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    // A large window keeps this ask's deadline far in the future once
+    // reopened, so it does not resurface as "due" for any OTHER test's
+    // `run_interrupt_tick` sweep in this same file.
+    let content = serde_json::json!({
+        "headline": "Choose batch size",
+        "cost_of_delay": "work is blocked while this waits",
+        "default_window_secs": 999_999,
+    })
+    .to_string();
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-1", "batch-size"),
+        &content,
+        None,
+    )
+    .await;
+
+    // Simulate the crash window: the claim committed, but the successor ask
+    // was never actually created.
+    let bogus_successor = [0x77_u8; 32];
+    let promoted = db
+        .mark_ask_promoted(community, ask.id.as_bytes(), &bogus_successor)
+        .await
+        .expect("mark ask promoted");
+    assert!(promoted);
+
+    let now = chrono::Utc::now().timestamp();
+    // Backdate `updated_at` past the cutoff so this orphan is not mistaken
+    // for a promotion that is merely mid-flight.
+    sqlx::query("UPDATE asks SET updated_at = $1 WHERE community_id = $2 AND ask_event_id = $3")
+        .bind(now - 2 * STALL_AFTER_SECS)
+        .bind(community.as_uuid())
+        .bind(ask.id.as_bytes())
+        .execute(&pool)
+        .await
+        .expect("backdate updated_at");
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+
+    let row = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        row.status, "open",
+        "the orphaned promotion must be reopened"
+    );
+    assert!(
+        row.resolution_event.is_none(),
+        "the promotion pointer must be cleared"
+    );
+
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "batch-size")
+            .await
+            .expect("query asks projection")
+            .is_some_and(|row| row.ask_event_id == ask.id.as_bytes()),
+        "the reopened row itself must be the open ask for its need again"
+    );
+}
+
+/// Same guard as `run_interrupt_tick`'s: a stall ask is a relay-authored
+/// event that bypasses the altitude ladder, so it must not be forgeable via
+/// the shared fallback dev key.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn stall_tick_without_a_durable_relay_key_refuses_outright() {
+    let (db, pool) = setup().await;
+    let relay_keys = Keys::generate();
+    let state = state_without_durable_key(db.clone(), &pool, relay_keys).await;
+
+    let error = run_stall_tick(&state, chrono::Utc::now().timestamp(), STALL_AFTER_SECS)
+        .await
+        .expect_err("a stall sweep with no durable relay key must refuse, not silently no-op");
     assert!(
         error.contains("durable relay signing key"),
         "unexpected error message: {error}"

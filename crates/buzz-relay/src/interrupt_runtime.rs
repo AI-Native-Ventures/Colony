@@ -56,15 +56,36 @@
 //! table: `SELECT audience_pubkey, category, COUNT(*) FROM asks WHERE
 //! status = 'promoted' GROUP BY audience_pubkey, category` -- no separate
 //! metrics table is needed; the empty hop is the row itself.
+//!
+//! ## Stall detection (spec: dead agents)
+//!
+//! Everything above assumes an ask exists: some agent noticed it was blocked
+//! and raised one. [`run_stall_tick`] covers the other failure mode -- an
+//! agent that crashes, hangs, or is simply killed mid-task raises nothing at
+//! all. The task it was working just stops moving, silently, and nothing is
+//! blocked on a human, so no ask exists for the sweep above to promote or
+//! default-execute. [`run_stall_tick`] finds a task that should be moving
+//! (its head content `status` is `inProgress`) and has shown no real event
+//! activity for at least `stall_after_secs`, and files exactly one
+//! relay-signed `stall` ask about it, addressed to whoever is accountable.
+//!
+//! It also closes a residual from [`promote_to`]'s crash window: a
+//! `promoted` ask whose successor was never actually created (a true process
+//! crash between the claim committing and the successor being filed) has no
+//! open ask at any tier and would otherwise wait forever. No in-process
+//! compensation survives that crash; this sweep is the out-of-process
+//! backstop that finds and reopens it.
 
 use std::sync::Arc;
 
-use buzz_core::interrupt::{parse_ask, AgentTier};
+use buzz_core::company::CompanyTask;
+use buzz_core::interrupt::{parse_ask, AgentTier, AskType};
 use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_MANAGED_AGENT};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::asks::AskRow;
 use nostr::{EventBuilder, Kind, PublicKey, Tag};
+use sha2::{Digest, Sha256};
 
 use crate::ask_broker::{emit_ask_receipt, handle_ask_event, AskBrokerOutcome};
 use crate::interrupt_gate::agent_tier;
@@ -726,5 +747,448 @@ async fn find_unique_executive(
             .map_err(|error| format!("resolved executive pubkey is invalid: {error}"))
     } else {
         Ok(None)
+    }
+}
+
+// ---------------------------------------------------------------------
+// Stall detection (spec: dead agents)
+// ---------------------------------------------------------------------
+
+/// Environment variable naming how long (seconds) a task may sit `inProgress`
+/// with no real event activity before [`run_stall_tick`] files a `stall` ask
+/// about it. See [`DEFAULT_STALL_AFTER_SECS`] for the default.
+pub const STALL_AFTER_SECS_ENV: &str = "BUZZ_STALL_AFTER_SECS";
+
+/// Default value of [`STALL_AFTER_SECS_ENV`]: six hours.
+pub const DEFAULT_STALL_AFTER_SECS: i64 = 6 * 60 * 60;
+
+/// Upper bound on in-progress task heads scanned per [`run_stall_tick`] pass.
+/// Status filtering already happens in SQL before this cap is applied (see
+/// [`buzz_db::event::query_in_progress_task_heads`]), so this only bounds a
+/// single community with an implausibly large number of simultaneously
+/// in-progress tasks -- a write-volume concern, not something this sweep
+/// needs to absorb in one pass; the next tick picks up whatever did not fit.
+const MAX_STALL_CANDIDATES: i64 = 500;
+
+/// Upper bound on orphaned `promoted` ask rows reopened per [`run_stall_tick`]
+/// pass (see [`reopen_orphaned_promotions`]). A true process crash in the
+/// narrow window `promote_to` describes should be rare; this bounds a single
+/// pass without needing to claim/re-arm the way the ask-deadline sweep does,
+/// since an orphan left over one tick is simply reconsidered on the next.
+const MAX_ORPHANED_PROMOTIONS: i64 = 100;
+
+/// Upper bound on managed-agent heads scanned when resolving a persona id to
+/// the pubkey of the managed agent currently running as it (see
+/// [`resolve_persona_pubkey`]). Same reasoning as [`MAX_ROSTER_HEADS`].
+const MAX_PERSONA_CANDIDATE_HEADS: i64 = 500;
+
+/// Run one stall-detection sweep pass (spec: dead agents).
+///
+/// Finds every currently in-progress task whose most recent real event
+/// activity -- not merely its head's own `created_at` -- is at least
+/// `stall_after_secs` old, and files one relay-signed [`AskType::Stall`] ask
+/// per silent task, addressed to whoever is accountable for it. Also reopens
+/// any `promoted` ask left orphaned by a genuine process crash in
+/// [`promote_to`]'s narrow claim-then-file window (see
+/// [`reopen_orphaned_promotions`]).
+///
+/// `now_secs` is an explicit parameter for the same reason as
+/// [`run_interrupt_tick`]'s: tests drive it deterministically. Requires a
+/// durable relay signing key ([`run_interrupt_tick`]'s module docs explain
+/// why); refuses the whole tick outright rather than attempting a partial,
+/// unsigned-equivalent sweep.
+///
+/// Returns the number of NEW stall asks filed. A task that is silent but
+/// already has an open stall ask (dedupe via [`stall_need_key`]) does not
+/// count again; neither does the orphaned-promotion cleanup, which is
+/// logged separately.
+pub async fn run_stall_tick(
+    state: &Arc<AppState>,
+    now_secs: i64,
+    stall_after_secs: i64,
+) -> Result<u32, String> {
+    if state.config.relay_private_key.is_none() {
+        return Err(
+            "stall sweep requires a durable relay signing key (set BUZZ_RELAY_PRIVATE_KEY)"
+                .to_string(),
+        );
+    }
+
+    reopen_orphaned_promotions(state, now_secs, stall_after_secs).await;
+
+    let candidates = state
+        .db
+        .query_in_progress_task_heads(MAX_STALL_CANDIDATES)
+        .await
+        .map_err(|error| format!("database error scanning in-progress task heads: {error}"))?;
+
+    let mut filed = 0u32;
+    for candidate in &candidates {
+        match process_stall_candidate(state, candidate, now_secs, stall_after_secs).await {
+            Ok(true) => filed += 1,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(
+                    task_head_event_id = %hex::encode(&candidate.task_head_id),
+                    community_id = %candidate.community_id,
+                    %error,
+                    "stall sweep: failed to process one candidate task, continuing with any siblings"
+                );
+            }
+        }
+    }
+    Ok(filed)
+}
+
+/// Process one in-progress task head candidate: measure whether it has shown
+/// real event activity within `stall_after_secs`, and if not, resolve a
+/// safe audience and file a relay-signed `stall` ask.
+///
+/// Returns `Ok(true)` if a new stall ask was filed; `Ok(false)` if the task
+/// is not (yet) silent long enough, an open stall ask already exists for it
+/// (the dedupe index refused the insert as [`AskBrokerOutcome::Duplicate`]),
+/// or no safe audience could be resolved (design point 3: never guess).
+async fn process_stall_candidate(
+    state: &Arc<AppState>,
+    candidate: &buzz_db::event::StallCandidateTask,
+    now_secs: i64,
+    stall_after_secs: i64,
+) -> Result<bool, String> {
+    let task: CompanyTask = match serde_json::from_str(&candidate.content) {
+        Ok(task) => task,
+        Err(error) => {
+            // An unparseable task head content is an invariant violation for
+            // a relay-authored canonical head (every write goes through
+            // `buzz_core::company::validate_task` first), not something this
+            // sweep can repair. Log and move on to the next candidate.
+            tracing::warn!(
+                task_head_event_id = %hex::encode(&candidate.task_head_id),
+                community_id = %candidate.community_id,
+                %error,
+                "stall sweep: task head content failed to parse, skipping"
+            );
+            return Ok(false);
+        }
+    };
+
+    let Ok(source_channel_id) = uuid::Uuid::parse_str(&task.source_channel_id) else {
+        tracing::warn!(
+            task_id = %task.id,
+            community_id = %candidate.community_id,
+            "stall sweep: task head's sourceChannelId is not a valid UUID, skipping"
+        );
+        return Ok(false);
+    };
+
+    // Silence means no real event activity, not merely an old head: a task
+    // can sit `inProgress` with an untouched head for a long time simply
+    // because nobody re-published a status revision, and that alone is not
+    // evidence of a stall. The signal here is the more recent of (a) the
+    // task head's own `created_at` (a status/field change is itself
+    // activity -- a task that JUST moved to `inProgress` must not be flagged
+    // a tick later) and (b) the last event of any kind in the task's own
+    // `sourceChannelId` (real work happening where the task lives). Only
+    // when BOTH are old does the sweep consider the task silent.
+    let channel_last_activity = state
+        .db
+        .get_last_message_at(candidate.community_id, source_channel_id)
+        .await
+        .map_err(|error| format!("database error loading channel activity: {error}"))?;
+    let last_activity_secs = channel_last_activity
+        .map(|at| at.timestamp())
+        .into_iter()
+        .chain(std::iter::once(candidate.task_head_created_at.timestamp()))
+        .max()
+        .expect("chain always yields at least the head's own created_at");
+    let silent_for_secs = now_secs.saturating_sub(last_activity_secs);
+    if silent_for_secs < stall_after_secs {
+        return Ok(false);
+    }
+
+    // `candidate.host` already comes from `query_in_progress_task_heads`'s
+    // own `communities` join, which the same query filters to
+    // `archived_at IS NULL` -- no separate host lookup needed here (unlike
+    // `process_due_ask`, which resolves a row's community after the fact).
+    let tenant = TenantContext::resolved(candidate.community_id, candidate.host.clone());
+
+    let audience = match resolve_persona_pubkey(&tenant, state, &task.qa_persona_id).await? {
+        Some(pubkey) => pubkey,
+        None => match find_unique_executive(&tenant, state).await? {
+            Some(pubkey) => pubkey,
+            None => {
+                // Design point 2/3: a brand-new community (no appointed
+                // executive yet) or a QA persona this sweep cannot uniquely
+                // resolve to a running agent must never be guessed at --
+                // there is nowhere safe to route this stall ask. Skip
+                // rather than spam, mirroring `promote_or_redeadline`'s
+                // identical "nowhere safe to go" reasoning.
+                tracing::warn!(
+                    task_id = %task.id,
+                    community_id = %candidate.community_id,
+                    "stall sweep: cannot resolve a QA persona or a unique executive for a \
+                     silent task; never guessing an audience, skipping"
+                );
+                return Ok(false);
+            }
+        },
+    };
+
+    // `need_key` alone is already unique per task (it is a hash of `task.id`),
+    // but the dedupe index is keyed on `(initiative_id, need_key)` together
+    // (`buzz_db::asks`'s module docs), so if a task's `initiativeId` changes
+    // while a stall ask on it is still open, a later tick could in principle
+    // file a second open stall ask under the new initiative before the first
+    // is answered. Narrow (a task is unlikely to be reassigned mid-stall) and
+    // not solved here -- flagged as a known limitation rather than silently
+    // accepted.
+    let need_key = stall_need_key(&task.id);
+    let initiative_id = task
+        .initiative_id
+        .clone()
+        .unwrap_or_else(|| task.id.clone());
+
+    let content = serde_json::json!({
+        "headline": format!("\"{}\" has gone silent", task.title),
+        "cost_of_delay": format!(
+            "no activity on this task for {silent_for_secs}s -- the agent working it may have \
+             crashed, hung, or stopped"
+        ),
+    })
+    .to_string();
+
+    let tags = vec![
+        Tag::parse(["ask-type", AskType::Stall.as_str()])
+            .map_err(|error| format!("failed to build `ask-type` tag: {error}"))?,
+        Tag::public_key(audience),
+        Tag::parse(["initiative", &initiative_id])
+            .map_err(|error| format!("failed to build `initiative` tag: {error}"))?,
+        Tag::parse(["need", &need_key])
+            .map_err(|error| format!("failed to build `need` tag: {error}"))?,
+        Tag::parse(["task", &task.id])
+            .map_err(|error| format!("failed to build `task` tag: {error}"))?,
+    ];
+
+    let event = EventBuilder::new(Kind::Custom(KIND_ASK as u16), content)
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|error| format!("failed to sign stall ask: {error}"))?;
+
+    let outcome = handle_ask_event(&tenant, state, &event)
+        .await
+        .map_err(|error| format!("failed to file stall ask: {error}"))?;
+    match outcome {
+        AskBrokerOutcome::Applied => {}
+        AskBrokerOutcome::Duplicate { .. } => {
+            // An open stall ask already exists for this exact task -- the
+            // dedupe index did its job; nothing more to do.
+            return Ok(false);
+        }
+        AskBrokerOutcome::Refused { message } => {
+            return Err(format!(
+                "internal error: relay-signed stall ask was refused: {message}"
+            ));
+        }
+    }
+
+    // Store and fan out the raw event, mirroring `promote_to`/`execute_default`:
+    // ask-protocol events are never consumed by the broker (see
+    // `ask_broker`'s module docs), so the sweep takes on ordinary storage's
+    // responsibility here. Best-effort: the ask is already durably open via
+    // the `asks` projection row above, so a storage/fan-out failure here
+    // only costs realtime visibility, not correctness.
+    if let Err(error) = state
+        .db
+        .insert_event(tenant.community(), &event, None)
+        .await
+    {
+        tracing::warn!(%error, "stall sweep: failed to store the stall ask event");
+    } else if let Err(error) = state
+        .pubsub
+        .publish_event(&tenant, buzz_pubsub::EventTopic::Global, &event)
+        .await
+    {
+        tracing::warn!(%error, "stall sweep: failed to fan out the stall ask event");
+    }
+
+    Ok(true)
+}
+
+/// Build the Ask `need` dedupe key for a stall on `task_id`.
+///
+/// A Colony task id (see `buzz_core::company`'s `validate_id`) may contain
+/// `.`, `_`, and `:`, and run up to 128 bytes -- none of which fits the Ask
+/// `need` slug format `[a-z0-9-]{1,64}` that
+/// `buzz_core::interrupt::parse_ask`'s `is_valid_need_slug` enforces.
+/// Hashing the task id, rather than embedding it directly, keeps every legal
+/// task id valid, produces a key that is stable across ticks (so the SAME
+/// task always dedupes against itself), and needs no assumption about the
+/// id's actual character set. 128 bits of SHA-256 (32 hex characters) is
+/// collision-resistant enough for an internal dedupe key.
+pub fn stall_need_key(task_id: &str) -> String {
+    let digest = Sha256::digest(task_id.as_bytes());
+    format!("stall-{}", hex::encode(&digest[..16]))
+}
+
+/// Resolve `persona_id` (e.g. a task's `qaPersonaId`) to the pubkey of the
+/// managed agent currently running as that persona.
+///
+/// Scans owner-authored managed-agent heads (kind [`KIND_MANAGED_AGENT`])
+/// for one whose content names this persona in its `persona_id` field --
+/// the same field `desktop/src-tauri/src/managed_agents/agent_events.rs`'s
+/// `ManagedAgentEventContent` already publishes today. Parsed here as
+/// untyped JSON rather than through that desktop-only type (this crate does
+/// not depend on the desktop crate), exactly like [`agent_tier`] reads the
+/// sibling `tier` field.
+///
+/// `Ok(None)` -- never guessed, design point 3 -- when zero, or more than
+/// one, distinct currently-owner-claimed pubkey names this persona. The
+/// caller falls back to the community's executive in that case.
+async fn resolve_persona_pubkey(
+    tenant: &TenantContext,
+    state: &AppState,
+    persona_id: &str,
+) -> Result<Option<PublicKey>, String> {
+    let rows = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
+            global_only: true,
+            limit: Some(MAX_PERSONA_CANDIDATE_HEADS),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| format!("database error scanning managed-agent roster: {error}"))?;
+
+    let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut matches: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    for stored in rows {
+        let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.len() >= 2 && parts[0] == "d").then(|| parts[1].clone())
+        }) else {
+            continue;
+        };
+        if settled.contains(&d_tag) {
+            // Already resolved (or given up on) this agent from a newer
+            // head -- same NIP-33 latest-wins reasoning as
+            // `find_unique_executive`.
+            continue;
+        }
+
+        let author_hex = stored.event.pubkey.to_hex();
+        let author_is_owner = state
+            .db
+            .get_relay_member(tenant.community(), &author_hex)
+            .await
+            .map_err(|error| format!("database error checking managed-agent head author: {error}"))?
+            .is_some_and(|member| member.role == "owner");
+        if !author_is_owner {
+            continue;
+        }
+        settled.insert(d_tag.clone());
+
+        let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
+            continue;
+        };
+        if content
+            .get("persona_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(persona_id)
+        {
+            continue;
+        }
+        let Ok(pubkey_bytes) = hex::decode(&d_tag) else {
+            continue;
+        };
+        if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
+            matches.insert(*pubkey.as_bytes());
+        }
+    }
+
+    if matches.len() == 1 {
+        let bytes = matches
+            .into_iter()
+            .next()
+            .expect("checked matches.len() == 1 above");
+        PublicKey::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| format!("resolved persona pubkey is invalid: {error}"))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Reopen every `promoted` ask whose named successor was never actually
+/// created -- the Task 8 crash residual [`promote_to`]'s doc comment
+/// describes: a genuine process crash in the narrow window between
+/// [`buzz_db::Db::mark_ask_promoted`] committing and the successor ask being
+/// filed leaves the original permanently `promoted` toward an event that
+/// does not exist, and the need then has no open ask at any tier. No
+/// in-process compensation survives that crash; this is the out-of-process
+/// backstop.
+///
+/// Best-effort at every level: a failure to even scan for orphans, or to
+/// reopen one particular orphan, is logged and swallowed rather than
+/// propagated. Nothing about the primary job of [`run_stall_tick`] --
+/// filing stall asks for silent tasks -- depends on this cleanup succeeding,
+/// and an orphan left over one tick is simply reconsidered on the next.
+async fn reopen_orphaned_promotions(state: &Arc<AppState>, now_secs: i64, stall_after_secs: i64) {
+    // Reuses `stall_after_secs` as the grace period before a mid-flight
+    // promotion (claim committed a moment ago, successor not yet filed --
+    // normally milliseconds) could be mistaken for a true orphan, rather
+    // than introducing a second env var for what is already a generous
+    // multi-hour default.
+    let cutoff = now_secs.saturating_sub(stall_after_secs);
+    let orphans = match state
+        .db
+        .query_orphaned_promoted_asks(cutoff, MAX_ORPHANED_PROMOTIONS)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "stall sweep: failed to scan for orphaned promoted asks, skipping this pass"
+            );
+            return;
+        }
+    };
+
+    for row in &orphans {
+        let Some(expected_successor) = row.resolution_event.as_deref() else {
+            // Invariant: a `promoted` row always names its successor
+            // (`mark_ask_promoted` always sets `resolution_event`) --
+            // `query_orphaned_promoted_asks` should never actually produce
+            // one without it, but this sweep does not act on a shape it
+            // cannot explain.
+            continue;
+        };
+        match state
+            .db
+            .reopen_promoted_ask(row.community_id, &row.ask_event_id, expected_successor)
+            .await
+        {
+            Ok(true) => {
+                tracing::info!(
+                    ask_event_id = %hex::encode(&row.ask_event_id),
+                    community_id = %row.community_id,
+                    "stall sweep: reopened a promoted ask whose successor was never created \
+                     (Task 8 crash residual)"
+                );
+            }
+            Ok(false) => {
+                // Already reverted or closed some other way in the
+                // meantime -- not this pass's problem either way.
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ask_event_id = %hex::encode(&row.ask_event_id),
+                    community_id = %row.community_id,
+                    %error,
+                    "stall sweep: failed to reopen an orphaned promoted ask, continuing with \
+                     any siblings"
+                );
+            }
+        }
     }
 }

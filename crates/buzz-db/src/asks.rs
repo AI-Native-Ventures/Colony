@@ -353,6 +353,52 @@ pub async fn query_due_asks(pool: &PgPool, now_secs: i64, limit: i64) -> Result<
     rows.into_iter().map(row_to_ask_row).collect()
 }
 
+/// Returns `promoted` asks whose named successor (`resolution_event`) does
+/// not exist as an `asks` row at all, across every community, capped at
+/// `limit` rows -- the Task 8 crash residual `interrupt_runtime::promote_to`'s
+/// doc comment describes: a process crash in the narrow window between
+/// [`mark_ask_promoted`] committing and the successor being filed leaves the
+/// original permanently `promoted` toward an event that was never created,
+/// and the need then has no open ask at any tier. Only Task 8's IN-PROCESS
+/// compensation (`reopen_after_promotion_failure`, for an ordinary `Err` or
+/// `Refused` in that same window) exists at filing time; this out-of-process
+/// backstop is what a stall sweep can find later, since no in-process
+/// compensation survives a genuine crash.
+///
+/// `updated_at <= cutoff_secs` guards against mistaking a promotion that is
+/// merely mid-flight (the claim committed a moment ago and the successor's
+/// `insert_ask` has not landed yet -- normally milliseconds) for a true
+/// orphan; the caller picks `cutoff_secs` generously past that window.
+///
+/// Rows are ordered oldest-`updated_at`-first, matching [`query_due_asks`]'s
+/// batching discipline.
+pub async fn query_orphaned_promoted_asks(
+    pool: &PgPool,
+    cutoff_secs: i64,
+    limit: i64,
+) -> Result<Vec<AskRow>> {
+    let rows = sqlx::query(
+        "SELECT a.community_id, a.ask_event_id, a.ask_type, a.initiative_id, a.need_key, \
+                a.audience_pubkey, a.filer_pubkey, a.origin_thread, a.prior_ask, a.category, \
+                a.default_option, a.deadline_at, a.status, a.resolution_event, a.resolved_by, \
+                a.default_executed, a.created_at, a.updated_at \
+         FROM asks AS a \
+         WHERE a.status = 'promoted' \
+           AND a.updated_at <= $1 \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM asks AS s \
+             WHERE s.community_id = a.community_id AND s.ask_event_id = a.resolution_event \
+           ) \
+         ORDER BY a.updated_at ASC, a.ask_event_id ASC LIMIT $2",
+    )
+    .bind(cutoff_secs)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_ask_row).collect()
+}
+
 /// Returns every OPEN ask rooted at `thread_root` (its `origin_thread`
 /// column), in `community`. Backs owner thread-reply auto-resolution: an
 /// owner posting into the thread an ask was raised from can close it

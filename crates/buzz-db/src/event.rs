@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use buzz_core::kind::{
     event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH, KIND_EVENT_REMINDER,
-    KIND_HUDDLE_STARTED,
+    KIND_HUDDLE_STARTED, KIND_TASK,
 };
 use buzz_core::{CommunityId, StoredEvent};
 
@@ -1676,6 +1676,87 @@ pub async fn query_due_reminders(
         .collect();
 
     Ok(results)
+}
+
+/// A candidate task for the Colony stall-detection sweep
+/// (`buzz-relay`'s `interrupt_runtime::run_stall_tick`): the latest
+/// kind:30181 (`KIND_TASK`) head at some `(community_id, d_tag)` coordinate,
+/// across every non-archived community, whose content `status` field is
+/// currently `"inProgress"`.
+#[derive(Debug)]
+pub struct StallCandidateTask {
+    /// Community this task head belongs to.
+    pub community_id: CommunityId,
+    /// Normalized host mapped to that community.
+    pub host: String,
+    /// The task head event's raw ID bytes.
+    pub task_head_id: Vec<u8>,
+    /// The task head event's `created_at` timestamp.
+    pub task_head_created_at: DateTime<Utc>,
+    /// The task head event's JSON content (a `buzz_core::company::CompanyTask`).
+    pub content: String,
+}
+
+/// Query the latest in-progress task heads across every non-archived
+/// community, for the stall-detection sweep.
+///
+/// NIP-33 latest-wins resolution happens FIRST (the `latest_task_heads` CTE),
+/// and the `status = 'inProgress'` filter is applied only to that already-
+/// resolved latest head, never to raw historical revisions. Filtering before
+/// resolving latest-wins would let a stale `inProgress` revision win the
+/// group for a task whose true latest head has since moved to `completed` or
+/// `cancelled` -- exactly the false positive this ordering avoids.
+///
+/// Filtering status BEFORE `LIMIT` (rather than fetching everything and
+/// filtering in Rust) mirrors the C2 lesson from Task 8's fix round
+/// (`buzz-relay`'s `interrupt_runtime` module docs): a company with many
+/// completed/cancelled tasks must never be able to crowd its few genuinely
+/// in-progress tasks out of a capped batch.
+///
+/// Ordered oldest-revision-first so a systematic sweep naturally rotates
+/// toward whichever in-progress tasks have sat longest without a status
+/// change, rather than always re-inspecting the same newest tasks first when
+/// the true candidate count exceeds `batch_limit`.
+pub async fn query_in_progress_task_heads(
+    pool: &PgPool,
+    batch_limit: i64,
+) -> Result<Vec<StallCandidateTask>> {
+    let kind_i32 = KIND_TASK as i32;
+    let rows = sqlx::query(
+        r#"
+        WITH latest_task_heads AS (
+            SELECT DISTINCT ON (e.community_id, e.d_tag)
+                e.community_id, c.host, e.id, e.created_at, e.content
+            FROM events AS e
+            JOIN communities AS c ON c.id = e.community_id
+            WHERE e.kind = $1
+              AND e.deleted_at IS NULL
+              AND e.d_tag IS NOT NULL
+              AND c.archived_at IS NULL
+            ORDER BY e.community_id, e.d_tag, e.created_at DESC, e.id ASC
+        )
+        SELECT community_id, host, id, created_at, content
+        FROM latest_task_heads
+        WHERE content::jsonb ->> 'status' = 'inProgress'
+        ORDER BY created_at ASC
+        LIMIT $2
+        "#,
+    )
+    .bind(kind_i32)
+    .bind(batch_limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| StallCandidateTask {
+            community_id: CommunityId::from_uuid(row.get("community_id")),
+            host: row.get("host"),
+            task_head_id: row.get("id"),
+            task_head_created_at: row.get("created_at"),
+            content: row.get("content"),
+        })
+        .collect())
 }
 
 /// Atomically claim a due reminder for delivery. Returns `Some(id)` if this

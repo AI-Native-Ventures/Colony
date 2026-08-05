@@ -3904,6 +3904,16 @@ impl Db {
         event::query_due_reminders(&self.pool, now_secs, batch_limit).await
     }
 
+    /// Query the latest in-progress task heads across every non-archived
+    /// community, for the Colony stall-detection sweep. See
+    /// [`event::query_in_progress_task_heads`].
+    pub async fn query_in_progress_task_heads(
+        &self,
+        batch_limit: i64,
+    ) -> Result<Vec<event::StallCandidateTask>> {
+        event::query_in_progress_task_heads(&self.pool, batch_limit).await
+    }
+
     /// Atomically claim a due reminder for delivery (cross-pod dedup).
     pub async fn claim_due_reminder(
         &self,
@@ -5682,6 +5692,18 @@ impl Db {
     /// capped at `limit` rows. Mirrors [`Db::query_due_reminders`].
     pub async fn query_due_asks(&self, now_secs: i64, limit: i64) -> Result<Vec<asks::AskRow>> {
         asks::query_due_asks(&self.pool, now_secs, limit).await
+    }
+
+    /// Returns `promoted` asks whose named successor was never actually
+    /// created (a process crash between the claim and the successor being
+    /// filed), across every community, capped at `limit` rows. See
+    /// [`asks::query_orphaned_promoted_asks`].
+    pub async fn query_orphaned_promoted_asks(
+        &self,
+        cutoff_secs: i64,
+        limit: i64,
+    ) -> Result<Vec<asks::AskRow>> {
+        asks::query_orphaned_promoted_asks(&self.pool, cutoff_secs, limit).await
     }
 
     /// Pushes an open ask's deadline forward without otherwise touching it.
