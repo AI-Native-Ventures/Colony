@@ -455,15 +455,18 @@ async fn leader_audience_ask_past_deadline_promotes_to_the_executive() {
     .await;
 
     let now = ask.created_at.as_secs() as i64 + 100; // comfortably past the 1s window
+                                                     // `run_interrupt_tick`'s stats are a cross-tenant count (like
+                                                     // `run_stall_tick`'s `filed`): unrelated due asks left over by other
+                                                     // test runs against this shared database can also legitimately be
+                                                     // promoted in the same tick, so "at least mine" is the assertion this
+                                                     // can safely make -- the precise, pollution-immune claim is the
+                                                     // row-level verification of THIS ask right below.
     let stats = run_interrupt_tick(&state, now, 100)
         .await
         .expect("tick must not error");
-    assert_eq!(
-        stats,
-        InterruptTickStats {
-            promoted: 1,
-            defaults_executed: 0
-        }
+    assert!(
+        stats.promoted >= 1,
+        "this ask's promotion must be among those counted"
     );
 
     let original = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
@@ -2247,5 +2250,232 @@ async fn a_stale_in_progress_revision_does_not_win_over_a_newer_completed_one() 
             .is_none(),
         "the true latest head (completed) must win NIP-33 resolution, not the stale \
          in-progress revision -- this task must never be flagged"
+    );
+}
+
+/// NB1 fix: "no OTHER row has ever existed for this need" is too strong --
+/// it makes a genuine crash orphan permanently invisible whenever the need
+/// has ANY closed history, which is normal (I4 deliberately re-enables
+/// filing the SAME need after it is closed and shows fresh activity).
+/// Reachable path: a need is filed and resolved; later the SAME need is
+/// filed again, promoted, and the process crashes in the claim-then-file
+/// window. The second ask is a true orphan, but the FIRST, already-closed
+/// row satisfies "another row exists" under the old predicate, so nothing
+/// ever reopens it. The sharper predicate only counts another row as
+/// masking an orphan when that row's `created_at` is at or after the
+/// claim's `updated_at` -- exactly what a genuine racing successor's
+/// `created_at` would be, and exactly what an OLD, already-closed ask from
+/// before this promotion even existed would NOT be.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn an_orphan_is_reopened_even_when_the_need_has_older_closed_history() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    // Distinct content per filing: identical content + tags + signer, filed
+    // within the same second, would sign to the exact SAME nostr event
+    // (Schnorr signing is deterministic), making `first` and `second`
+    // literally the same event rather than two genuinely separate filings
+    // of the same need.
+    let first_content = serde_json::json!({
+        "headline": "Choose batch size",
+        "cost_of_delay": "work is blocked while this waits",
+        "default_window_secs": 999_999,
+    })
+    .to_string();
+    let second_content = serde_json::json!({
+        "headline": "Choose batch size (retry)",
+        "cost_of_delay": "work is blocked while this waits",
+        "default_window_secs": 999_999,
+    })
+    .to_string();
+
+    // An OLDER, already-CLOSED ask for this exact need -- ordinary history,
+    // not an active race.
+    let first = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-3", "batch-size-3"),
+        &first_content,
+        None,
+    )
+    .await;
+    db.resolve_ask(
+        community,
+        first.id.as_bytes(),
+        &[0x9c_u8; 32],
+        leader.public_key().to_bytes().as_slice(),
+        false,
+    )
+    .await
+    .expect("resolve the first ask");
+
+    // A real clock gap: the `asks` table's `created_at`/`updated_at` are
+    // both stamped from `Utc::now().timestamp()` at write time (second
+    // granularity), so without a gap `first`'s `created_at` and `second`'s
+    // later claim `updated_at` could tie within the same second, and the
+    // fixed predicate's `>=` would then (correctly, per its own rule, but
+    // uselessly for this test) treat the tie as "at or after" -- masking
+    // the very orphan this test exists to prove gets found. Mirrors
+    // `declined_rows_are_redeadlined_so_they_do_not_starve_the_batch`'s
+    // identical reasoning.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // A SECOND filing for the SAME need (the dedupe slot is free again once
+    // the first closed -- ordinary, and exactly what I4 relies on).
+    let second = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-3", "batch-size-3"),
+        &second_content,
+        None,
+    )
+    .await;
+
+    // The second is promoted, and the process crashes before its successor
+    // is ever created -- a TRUE orphan.
+    let discarded_successor = [0x9d_u8; 32];
+    let promoted = db
+        .mark_ask_promoted(community, second.id.as_bytes(), &discarded_successor)
+        .await
+        .expect("mark second ask promoted");
+    assert!(promoted);
+
+    // Deliberately NOT backdating `second`'s `updated_at` via raw SQL here:
+    // the fixed predicate compares OTHER rows' `created_at` against this
+    // exact claim timestamp, so corrupting it would also corrupt that
+    // comparison -- `first` (real "now", filed before the claim) would
+    // wrongly look like it landed AT OR AFTER an artificially-backdated
+    // claim, defeating the very thing this test proves. Instead, drive
+    // `run_stall_tick`'s `now_secs` far enough into the future that the
+    // real claim timestamp still clears the cutoff.
+    let now = chrono::Utc::now().timestamp() + 2 * STALL_AFTER_SECS;
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+
+    let second_row = fetch_ask_row(&pool, community, second.id.as_bytes()).await;
+    assert_eq!(
+        second_row.status, "open",
+        "the genuine orphan must be reopened even though the need has older closed history"
+    );
+    assert!(second_row.resolution_event.is_none());
+}
+
+/// NB2 fix: I4's suppression (`process_stall_candidate`'s check against
+/// `find_latest_closed_ask_by_need`) runs in Rust AFTER a candidate is
+/// already pulled from `query_in_progress_task_heads`, so a suppressed
+/// task -- resolved, no fresh activity since -- still occupies a candidate
+/// slot on every tick, forever (its head's `created_at` never moves, same
+/// starvation shape as C1). This directly proves the SQL exclusion: a
+/// suppressed task must be ABSENT from the query's result set entirely,
+/// the same pollution-immune way C1's fix is proven
+/// (`already_flagged_tasks_are_excluded_from_the_candidate_query`).
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn suppressed_tasks_are_excluded_from_the_candidate_query() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+
+    // A task that stalls, gets flagged, and whose stall ask is then
+    // resolved with no fresh activity since -- I4's suppressed class.
+    let suppressed_task = default_task(
+        "task-suppressed",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &suppressed_task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("first tick must not error");
+    let need_key = stall_need_key(&suppressed_task.id);
+    let flagged = db
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("setup: a stall ask must be open for this task");
+    db.resolve_ask(
+        community,
+        &flagged.ask_event_id,
+        &[0x9e_u8; 32],
+        owner.public_key().to_bytes().as_slice(),
+        false,
+    )
+    .await
+    .expect("resolve the stall ask");
+
+    // A DIFFERENT task, also silent, NOT yet flagged.
+    let new_task = default_task(
+        "task-genuinely-new",
+        None,
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &new_task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let candidates = db
+        .query_in_progress_task_heads(10_000)
+        .await
+        .expect("query candidates");
+    let candidate_ids: std::collections::HashSet<String> = candidates
+        .iter()
+        .filter_map(|c| {
+            serde_json::from_str::<buzz_core::company::CompanyTask>(&c.content)
+                .ok()
+                .map(|task| task.id)
+        })
+        .collect();
+    assert!(
+        !candidate_ids.contains(&suppressed_task.id),
+        "a task suppressed by I4 (resolved, no fresh activity) must never occupy a candidate \
+         slot -- it would starve later stalls exactly like C1"
+    );
+    assert!(
+        candidate_ids.contains(&new_task.id),
+        "a genuinely unflagged silent task must still be a candidate"
     );
 }
