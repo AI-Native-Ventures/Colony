@@ -1755,6 +1755,14 @@ pub struct StallCandidateTask {
 /// unguarded `::uuid` cast on a malformed value would fail the WHOLE query
 /// for every community's candidates, not just the one bad row.
 ///
+/// The channel-activity lookup filters on `ev.community_id = t.community_id`
+/// even though `channel_id` is already globally unique and the predicate
+/// cannot change which row wins the `MAX` -- `idx_events_community_channel_created`
+/// (migration 0001) leads with `community_id`, so without it here Postgres
+/// has no index that covers a `channel_id`-only lookup and falls back to a
+/// sequential scan of `events`, the largest table in the system, once per
+/// candidate row on every tick. Correctness-neutral, index-servability-only.
+///
 /// Ordered oldest-revision-first so a systematic sweep naturally rotates
 /// toward whichever in-progress tasks have sat longest without a status
 /// change, rather than always re-inspecting the same newest tasks first when
@@ -1806,7 +1814,8 @@ pub async fn query_in_progress_task_heads(
                     t.created_at,
                     COALESCE(
                       (SELECT MAX(ev.created_at) FROM events AS ev
-                       WHERE ev.deleted_at IS NULL
+                       WHERE ev.community_id = t.community_id
+                         AND ev.deleted_at IS NULL
                          AND ev.channel_id = CASE
                                WHEN t.content::jsonb ->> 'sourceChannelId'
                                     ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
