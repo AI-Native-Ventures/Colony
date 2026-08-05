@@ -14,7 +14,7 @@ use nostr::{EventBuilder, Kind, Tag};
 use buzz_core::interrupt::parse_decision_log;
 use buzz_core::kind::KIND_DECISION_LOG;
 
-use crate::client::{normalize_write_response, BuzzClient};
+use crate::client::{normalize_write_response, write_conflict_reason, BuzzClient};
 use crate::error::CliError;
 
 /// Build a two-element string tag, e.g. `["grant", "grant-copy"]`.
@@ -94,42 +94,19 @@ async fn cmd_list(client: &BuzzClient) -> Result<(), CliError> {
 }
 
 /// Submit a signed decision log event and report the relay's write result.
-/// Same shape as `commands::asks::submit_ask_write`: any `accepted: false`
-/// response is surfaced as a write conflict (exit code 5), after printing
-/// the full response so nothing is flattened away.
+/// Same shape as `commands::asks::submit_ask_write`: any response the relay
+/// did not durably store is surfaced as a write conflict (exit code 5),
+/// after printing the full response so nothing is flattened away.
+/// Classification is [`write_conflict_reason`]'s; see its doc comment for
+/// why `accepted` alone is not the test.
 async fn submit_decision_write(client: &BuzzClient, event: nostr::Event) -> Result<(), CliError> {
     let raw = client.submit_event(event).await?;
     println!("{}", normalize_write_response(&raw));
 
-    if response_accepted(&raw) {
-        return Ok(());
+    match write_conflict_reason(&raw) {
+        Some(reason) => Err(CliError::Conflict(reason)),
+        None => Ok(()),
     }
-    let message = response_message(&raw);
-    let reason = message
-        .strip_prefix("duplicate: ")
-        .or_else(|| message.strip_prefix("conflict: "))
-        .unwrap_or(&message)
-        .to_owned();
-    Err(CliError::Conflict(reason))
-}
-
-fn response_accepted(response: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(response)
-        .ok()
-        .and_then(|value| value.get("accepted").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
-}
-
-fn response_message(response: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(response)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| response.to_owned())
 }
 
 /// Dispatch a `buzz decisions` subcommand.
