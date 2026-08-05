@@ -661,34 +661,52 @@ async fn redeadline(
     Ok(())
 }
 
-/// Resolve the community's unique executive: the one agent pubkey (`d` tag)
-/// whose latest owner-authored managed-agent head (kind [`KIND_MANAGED_AGENT`])
-/// declares `tier: "executive"`.
+/// Scan every managed-agent head (kind [`KIND_MANAGED_AGENT`]) in `tenant`,
+/// resolving NIP-33 latest-wins PER PUBKEY (`d` tag) among heads authored by
+/// a CURRENT community owner, and invoke `on_owner_authored_head(d_tag,
+/// content)` once for the authoritative (newest owner-authored) head at
+/// each distinct pubkey.
 ///
-/// `Ok(None)` when zero or more than one distinct pubkey qualifies -- design
-/// point 3 (never guess). Mirrors `interrupt_gate::agent_tier`'s
-/// per-candidate owner-authorship scan, generalized across every `d` tag in
-/// one pass: rows arrive newest-first (`created_at DESC`), and the first
+/// This is the trust rule `interrupt_gate::agent_tier` established for a
+/// single, already-known pubkey (Task 4's fix: `KIND_MANAGED_AGENT` carries
+/// only `Scope::UsersWrite` at ingest, so ANY authenticated member --
+/// including the very agent a head describes -- can publish one; without
+/// restricting to owner-authored heads, an impostor could self-declare a
+/// tier, or shadow a legitimate head and make the lookup fall back to
+/// nothing, which is just as damaging as a false claim). Generalized here
+/// across every pubkey in one bounded scan rather than one lookup per
+/// candidate pubkey, for callers that do not already know which pubkey they
+/// are looking for -- [`find_unique_executive`] (which pubkey is the
+/// executive?) and [`resolve_persona_pubkey`] (which pubkey runs this
+/// persona?). `agent_tier` itself is untouched: it is scoped to one pubkey
+/// via a `d_tag`-filtered query, which is a genuinely different (and more
+/// efficient, for that narrower question) shape than this all-pubkeys scan,
+/// so sharing code with it directly would not be a clean factor.
+///
+/// A NON-owner-authored head at a pubkey is never trusted, however new --
+/// rows arrive newest-first (`created_at DESC`), and the first
 /// owner-authored head found for a given `d` tag is authoritative for that
-/// agent -- older heads at the same `d` tag are ignored once settled,
-/// exactly like a single-pubkey lookup would ignore them.
-async fn find_unique_executive(
+/// agent; older heads at the same `d` tag (owner-authored or not) are
+/// ignored once settled, and a pubkey with no owner-authored head at all is
+/// simply never invoked for.
+async fn for_each_owner_authored_managed_agent_head(
     tenant: &TenantContext,
     state: &AppState,
-) -> Result<Option<PublicKey>, String> {
+    limit: i64,
+    mut on_owner_authored_head: impl FnMut(&str, &serde_json::Value),
+) -> Result<(), String> {
     let rows = state
         .db
         .query_events(&buzz_db::event::EventQuery {
             kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
             global_only: true,
-            limit: Some(MAX_ROSTER_HEADS),
+            limit: Some(limit),
             ..buzz_db::event::EventQuery::for_community(tenant.community())
         })
         .await
         .map_err(|error| format!("database error scanning managed-agent roster: {error}"))?;
 
     let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut executives: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for stored in rows {
         let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
             let parts = tag.as_slice();
@@ -710,7 +728,9 @@ async fn find_unique_executive(
             .map_err(|error| format!("database error checking managed-agent head author: {error}"))?
             .is_some_and(|member| member.role == "owner");
         if !author_is_owner {
-            // Keep scanning older heads for this same `d` tag.
+            // Keep scanning older heads for this same `d` tag -- an
+            // impostor head must never shadow a legitimate one, and must
+            // never be treated as authoritative just because it is newest.
             continue;
         }
         // This IS the authoritative head for this agent (NIP-33 latest-wins
@@ -722,20 +742,45 @@ async fn find_unique_executive(
         let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
             continue;
         };
-        let tier = content
-            .get("tier")
-            .and_then(|value| value.as_str())
-            .and_then(AgentTier::parse);
-        if tier != Some(AgentTier::Executive) {
-            continue;
-        }
-        let Ok(pubkey_bytes) = hex::decode(&d_tag) else {
-            continue;
-        };
-        if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
-            executives.insert(*pubkey.as_bytes());
-        }
+        on_owner_authored_head(&d_tag, &content);
     }
+
+    Ok(())
+}
+
+/// Resolve the community's unique executive: the one agent pubkey (`d` tag)
+/// whose latest owner-authored managed-agent head (kind [`KIND_MANAGED_AGENT`])
+/// declares `tier: "executive"`.
+///
+/// `Ok(None)` when zero or more than one distinct pubkey qualifies -- design
+/// point 3 (never guess). See [`for_each_owner_authored_managed_agent_head`]
+/// for the owner-authorship trust rule this relies on.
+async fn find_unique_executive(
+    tenant: &TenantContext,
+    state: &AppState,
+) -> Result<Option<PublicKey>, String> {
+    let mut executives: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    for_each_owner_authored_managed_agent_head(
+        tenant,
+        state,
+        MAX_ROSTER_HEADS,
+        |d_tag, content| {
+            let tier = content
+                .get("tier")
+                .and_then(|value| value.as_str())
+                .and_then(AgentTier::parse);
+            if tier != Some(AgentTier::Executive) {
+                return;
+            }
+            let Ok(pubkey_bytes) = hex::decode(d_tag) else {
+                return;
+            };
+            if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
+                executives.insert(*pubkey.as_bytes());
+            }
+        },
+    )
+    .await?;
 
     if executives.len() == 1 {
         let bytes = executives
@@ -761,6 +806,24 @@ pub const STALL_AFTER_SECS_ENV: &str = "BUZZ_STALL_AFTER_SECS";
 
 /// Default value of [`STALL_AFTER_SECS_ENV`]: six hours.
 pub const DEFAULT_STALL_AFTER_SECS: i64 = 6 * 60 * 60;
+
+/// Synthetic `initiative` grouping value for a stall ask on a task whose
+/// head carries no `initiativeId` at all -- a legitimate state (e.g. an
+/// implicit, chat-derived task), and precisely the kind of task most likely
+/// to go silently stalled since nobody deliberately organized it under an
+/// initiative. Skipping these would carve a hole in the stall guarantee.
+///
+/// The Ask schema requires exactly one `initiative` tag
+/// (`buzz_core::interrupt::parse_ask`) and the `asks` projection's
+/// `initiative_id` column is `NOT NULL`, so a genuine `None` cannot flow
+/// through as-is without a schema change. This is NOT a real initiative id
+/// -- it is a reserved sentinel that only ever appears as the `initiative`
+/// tag on a stall ask filed under this exact condition. Dedupe stays exact
+/// even though every no-initiative task shares this same grouping value,
+/// because [`stall_need_key`] is already unique per task on its own; the
+/// composite `(initiative_id, need_key)` uniqueness the dedupe index
+/// enforces still lands on one open row per task.
+pub const NO_INITIATIVE_SENTINEL: &str = "no-initiative";
 
 /// Upper bound on in-progress task heads scanned per [`run_stall_tick`] pass.
 /// Status filtering already happens in SQL before this cap is applied (see
@@ -945,7 +1008,7 @@ async fn process_stall_candidate(
     let initiative_id = task
         .initiative_id
         .clone()
-        .unwrap_or_else(|| task.id.clone());
+        .unwrap_or_else(|| NO_INITIATIVE_SENTINEL.to_string());
 
     let content = serde_json::json!({
         "headline": format!("\"{}\" has gone silent", task.title),
@@ -1040,70 +1103,48 @@ pub fn stall_need_key(task_id: &str) -> String {
 /// not depend on the desktop crate), exactly like [`agent_tier`] reads the
 /// sibling `tier` field.
 ///
+/// Security: `KIND_MANAGED_AGENT` is client-writable (Task 4's finding, see
+/// [`for_each_owner_authored_managed_agent_head`]'s doc comment) -- any
+/// agent could otherwise publish a head claiming `persona_id: "cto"` and
+/// make itself the recipient of every stall ask about the CTO's work, an
+/// information leak that also keeps the real accountable party in the dark.
+/// This function inherits [`for_each_owner_authored_managed_agent_head`]'s
+/// owner-authorship trust rule rather than re-implementing (and risking
+/// weakening) it: only heads authored by a CURRENT community owner are ever
+/// considered.
+///
 /// `Ok(None)` -- never guessed, design point 3 -- when zero, or more than
-/// one, distinct currently-owner-claimed pubkey names this persona. The
+/// one, distinct currently-owner-claimed pubkey names this persona (the
+/// latter is ambiguous authority: two owner-authored heads disagreeing on
+/// who runs a persona is not this function's call to arbitrate). The
 /// caller falls back to the community's executive in that case.
 async fn resolve_persona_pubkey(
     tenant: &TenantContext,
     state: &AppState,
     persona_id: &str,
 ) -> Result<Option<PublicKey>, String> {
-    let rows = state
-        .db
-        .query_events(&buzz_db::event::EventQuery {
-            kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
-            global_only: true,
-            limit: Some(MAX_PERSONA_CANDIDATE_HEADS),
-            ..buzz_db::event::EventQuery::for_community(tenant.community())
-        })
-        .await
-        .map_err(|error| format!("database error scanning managed-agent roster: {error}"))?;
-
-    let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut matches: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
-    for stored in rows {
-        let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
-            let parts = tag.as_slice();
-            (parts.len() >= 2 && parts[0] == "d").then(|| parts[1].clone())
-        }) else {
-            continue;
-        };
-        if settled.contains(&d_tag) {
-            // Already resolved (or given up on) this agent from a newer
-            // head -- same NIP-33 latest-wins reasoning as
-            // `find_unique_executive`.
-            continue;
-        }
-
-        let author_hex = stored.event.pubkey.to_hex();
-        let author_is_owner = state
-            .db
-            .get_relay_member(tenant.community(), &author_hex)
-            .await
-            .map_err(|error| format!("database error checking managed-agent head author: {error}"))?
-            .is_some_and(|member| member.role == "owner");
-        if !author_is_owner {
-            continue;
-        }
-        settled.insert(d_tag.clone());
-
-        let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
-            continue;
-        };
-        if content
-            .get("persona_id")
-            .and_then(serde_json::Value::as_str)
-            != Some(persona_id)
-        {
-            continue;
-        }
-        let Ok(pubkey_bytes) = hex::decode(&d_tag) else {
-            continue;
-        };
-        if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
-            matches.insert(*pubkey.as_bytes());
-        }
-    }
+    for_each_owner_authored_managed_agent_head(
+        tenant,
+        state,
+        MAX_PERSONA_CANDIDATE_HEADS,
+        |d_tag, content| {
+            if content
+                .get("persona_id")
+                .and_then(serde_json::Value::as_str)
+                != Some(persona_id)
+            {
+                return;
+            }
+            let Ok(pubkey_bytes) = hex::decode(d_tag) else {
+                return;
+            };
+            if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
+                matches.insert(*pubkey.as_bytes());
+            }
+        },
+    )
+    .await?;
 
     if matches.len() == 1 {
         let bytes = matches

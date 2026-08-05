@@ -12,7 +12,7 @@ use buzz_core::CommunityId;
 use buzz_db::Db;
 use buzz_relay::ask_broker::{handle_ask_event, AskBrokerOutcome};
 use buzz_relay::interrupt_runtime::{
-    run_interrupt_tick, run_stall_tick, stall_need_key, InterruptTickStats,
+    run_interrupt_tick, run_stall_tick, stall_need_key, InterruptTickStats, NO_INITIATIVE_SENTINEL,
 };
 use buzz_relay::state::AppState;
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
@@ -999,14 +999,23 @@ async fn stall_ask_filed_for_a_silent_in_progress_task_and_deduped_on_rerun() {
     )
     .await;
 
+    // `filed` is a CROSS-TENANT count (see `query_in_progress_task_heads`):
+    // unrelated in-progress tasks left over by other test runs against this
+    // shared database can also legitimately get flagged in the same tick,
+    // so the assertion here is "at least mine", not "exactly one" -- the
+    // precise, pollution-immune claim is the community/need-scoped row
+    // lookup right after.
     let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
         .await
         .expect("tick must not error");
-    assert_eq!(filed, 1, "exactly one stall ask must be filed");
+    assert!(
+        filed >= 1,
+        "this task's stall ask must be among those filed"
+    );
 
     let need_key = stall_need_key(&task.id);
     let row = db
-        .find_open_ask_by_need(community, &task.id, &need_key)
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
         .await
         .expect("query asks projection")
         .expect("a stall ask must be open for this task");
@@ -1016,7 +1025,11 @@ async fn stall_ask_filed_for_a_silent_in_progress_task_and_deduped_on_rerun() {
         qa_agent.public_key().to_bytes().to_vec()
     );
 
-    // Re-run at the SAME now: the dedupe index must suppress a repeat.
+    // Re-run at the SAME now: the dedupe index must suppress a repeat. This
+    // one CAN be an exact count -- nothing about the DB changes between the
+    // two calls (same `now`, no new heads published) other than this test's
+    // own first call, so no cross-tenant candidate can newly qualify here
+    // that was not already reflected in `filed` above.
     let filed_again = run_stall_tick(&state, now, STALL_AFTER_SECS)
         .await
         .expect("second tick must not error");
@@ -1026,7 +1039,7 @@ async fn stall_ask_filed_for_a_silent_in_progress_task_and_deduped_on_rerun() {
     );
 
     let still_one = db
-        .find_open_ask_by_need(community, &task.id, &need_key)
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
         .await
         .expect("query asks projection")
         .expect("the SAME stall ask must still be open");
@@ -1034,6 +1047,62 @@ async fn stall_ask_filed_for_a_silent_in_progress_task_and_deduped_on_rerun() {
         still_one.ask_event_id, row.ask_event_id,
         "dedupe must keep the SAME row, not replace it"
     );
+}
+
+/// Ruling: a task with `initiativeId: null` (legitimate -- e.g. an
+/// implicit, chat-derived task, which is precisely the kind most likely to
+/// go silently stalled since nobody deliberately organized it under an
+/// initiative) must still get a stall ask, filed under the reserved
+/// `NO_INITIATIVE_SENTINEL` value rather than skipped. The Ask schema
+/// requires exactly one `initiative` tag, and the `asks` projection column
+/// is `NOT NULL`, so a genuine null cannot flow through as-is.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn stalled_task_with_no_initiative_uses_the_no_initiative_sentinel() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-no-initiative",
+        None, // no initiative -- legitimate, e.g. an implicit task
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert!(
+        filed >= 1,
+        "a stall on a task with no initiative must still be flagged"
+    );
+
+    let need_key = stall_need_key(&task.id);
+    let row = db
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("the stall ask must be filed under the no-initiative sentinel");
+    assert_eq!(row.initiative_id, NO_INITIATIVE_SENTINEL);
 }
 
 /// Design point 4: a task head that JUST changed (e.g. moved to
@@ -1074,20 +1143,23 @@ async fn recent_status_change_is_not_flagged_as_stalled_even_with_an_old_channel
     );
     store_task_head_at(&db, community, &relay_keys, &task, now - 10).await;
 
-    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+    // `filed` is a cross-tenant count and cannot be asserted exactly here
+    // (unrelated leftover tasks from other test runs against this shared
+    // database can legitimately be flagged in the same tick); the precise,
+    // pollution-immune claim is that THIS task's need never gets an open
+    // ask, checked below.
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
         .await
         .expect("tick must not error");
-    assert_eq!(
-        filed, 0,
-        "a task whose head just changed must not be flagged, regardless of channel age"
-    );
 
     let need_key = stall_need_key(&task.id);
-    assert!(db
-        .find_open_ask_by_need(community, &task.id, &need_key)
-        .await
-        .expect("query asks projection")
-        .is_none());
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "a task whose head just changed must not be flagged, regardless of channel age"
+    );
 }
 
 /// Design point 4, the core proof: "silence means no event activity, not
@@ -1136,11 +1208,19 @@ async fn recent_channel_activity_prevents_a_stall_flag_despite_an_old_task_head(
     )
     .await;
 
-    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+    // `filed` is a cross-tenant count and cannot be asserted exactly here;
+    // see the identical note in
+    // `recent_status_change_is_not_flagged_as_stalled_even_with_an_old_channel`.
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
         .await
         .expect("tick must not error");
-    assert_eq!(
-        filed, 0,
+
+    let need_key = stall_need_key(&task.id);
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_none(),
         "silence means no event activity, not merely an old head -- an active channel must \
          not be flagged"
     );
@@ -1185,11 +1265,11 @@ async fn stall_ask_falls_back_to_the_executive_when_the_qa_persona_is_unresolvab
     let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
         .await
         .expect("tick must not error");
-    assert_eq!(filed, 1);
+    assert!(filed >= 1);
 
     let need_key = stall_need_key(&task.id);
     let row = db
-        .find_open_ask_by_need(community, &task.id, &need_key)
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
         .await
         .expect("query asks projection")
         .expect("stall ask must exist");
@@ -1233,20 +1313,20 @@ async fn stall_sweep_skips_when_neither_the_qa_persona_nor_a_unique_executive_ca
     )
     .await;
 
-    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+    // `filed` is a cross-tenant count and cannot be asserted exactly here;
+    // see the identical note elsewhere in this file.
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
         .await
         .expect("tick must not error, even with nowhere safe to route");
-    assert_eq!(
-        filed, 0,
-        "must never guess an audience; a company with nobody appointed yet must not be spammed"
-    );
 
     let need_key = stall_need_key(&task.id);
-    assert!(db
-        .find_open_ask_by_need(community, &task.id, &need_key)
-        .await
-        .expect("query asks projection")
-        .is_none());
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "must never guess an audience; a company with nobody appointed yet must not be spammed"
+    );
 }
 
 /// Only `inProgress` counts as "should be moving" for this sweep:
@@ -1268,6 +1348,7 @@ async fn non_in_progress_tasks_are_never_flagged_as_stalled() {
     set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
 
     let now = chrono::Utc::now().timestamp();
+    let mut need_keys = Vec::new();
     for (idx, status) in [
         TaskStatus::Completed,
         TaskStatus::Cancelled,
@@ -1293,15 +1374,26 @@ async fn non_in_progress_tasks_are_never_flagged_as_stalled() {
             now - 10 * STALL_AFTER_SECS,
         )
         .await;
+        need_keys.push(stall_need_key(&task.id));
     }
 
-    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+    // `filed` is a cross-tenant count and cannot be asserted exactly here;
+    // see the identical note elsewhere in this file. The precise,
+    // pollution-immune claim is that NONE of these three specific tasks
+    // ever gets an open ask.
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
         .await
         .expect("tick must not error");
-    assert_eq!(
-        filed, 0,
-        "completed, cancelled, and blocked tasks must never be treated as should-be-moving"
-    );
+
+    for need_key in &need_keys {
+        assert!(
+            db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, need_key)
+                .await
+                .expect("query asks projection")
+                .is_none(),
+            "completed, cancelled, and blocked tasks must never be treated as should-be-moving"
+        );
+    }
 }
 
 /// Task 8 crash residual: a `promoted` ask whose successor was never
@@ -1403,5 +1495,184 @@ async fn stall_tick_without_a_durable_relay_key_refuses_outright() {
     assert!(
         error.contains("durable relay signing key"),
         "unexpected error message: {error}"
+    );
+}
+
+/// Ruling: `stall_need_key` must produce a valid Ask `need` slug for a
+/// task id that carries characters the slug format forbids and that runs up
+/// to the length a real Colony task id can reach
+/// (`buzz_core::company::validate_id` permits `.`, `_`, `:`, up to 128
+/// bytes). Round-tripped through the REAL `buzz_core::interrupt::parse_ask`
+/// validator -- not a reimplementation of its rules -- so this proves the
+/// actual production contract, not just this test's understanding of it. No
+/// Postgres needed: `stall_need_key` and `parse_ask` are both pure
+/// functions.
+#[test]
+fn stall_need_key_produces_a_slug_that_parse_ask_accepts_for_hostile_task_ids() {
+    // Distinct signer/audience keys, matching every other test's shape --
+    // signing an ask addressed to yourself is not a real scenario this
+    // codebase produces, and (empirically) the `p` tag does not survive
+    // event construction when it equals the signer's own pubkey.
+    let filer = Keys::generate();
+    let audience = Keys::generate();
+    let hostile_task_ids = [
+        "horizonlabs:chat:9999",
+        // A realistic-shaped id at the very edge of the 128-byte limit
+        // `validate_id` allows, still colon-bearing.
+        &format!("{}:9999", "a".repeat(122)),
+    ];
+
+    for task_id in hostile_task_ids {
+        let need_key = stall_need_key(task_id);
+        let tags = ask_tags("stall", &audience.public_key(), "init-1", &need_key);
+        let event = sign_ask(&filer, tags, &content_no_default("Task went silent"));
+        let parsed = buzz_core::interrupt::parse_ask(&event).unwrap_or_else(|error| {
+            panic!(
+                "need key `{need_key}` derived from task id `{task_id}` must be a valid slug, \
+                 got: {error:?}"
+            )
+        });
+        assert_eq!(parsed.need_key, need_key);
+    }
+
+    // Deterministic: the SAME task id always maps to the SAME need key --
+    // this is what lets the partial unique index dedupe across ticks.
+    assert_eq!(
+        stall_need_key("horizonlabs:chat:9999"),
+        stall_need_key("horizonlabs:chat:9999")
+    );
+    // Different task ids must not collide.
+    assert_ne!(stall_need_key("task-a"), stall_need_key("task-b"));
+}
+
+/// Security: `KIND_MANAGED_AGENT` is client-writable (Task 4's finding --
+/// see `interrupt_gate::agent_tier`'s doc comment). An agent-authored (NOT
+/// owner-authored) head claiming a task's `qaPersonaId` must NEVER become
+/// the audience of a stall ask: trusting it would let an impostor redirect
+/// every stall notification about the real QA persona's work to itself,
+/// both an information leak and a way to keep the real accountable party in
+/// the dark. The sweep must fall back to the executive instead, exactly as
+/// if no head claimed the persona at all.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn agent_authored_managed_agent_head_cannot_claim_a_persona_as_stall_audience() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // An impostor: the agent claims its OWN pubkey runs the QA persona by
+    // self-publishing its own managed-agent head. Never trusted -- it is
+    // not owner-authored.
+    let impostor = Keys::generate();
+    set_persona(&db, community, &impostor, &impostor, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-impostor",
+        Some("init-imp"),
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert!(filed >= 1);
+
+    let need_key = stall_need_key(&task.id);
+    let row = db
+        .find_open_ask_by_need(community, "init-imp", &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("stall ask must exist");
+    assert_eq!(
+        row.audience_pubkey,
+        executive.public_key().to_bytes().to_vec(),
+        "the impostor's self-published claim must never become the audience"
+    );
+    assert_ne!(
+        row.audience_pubkey,
+        impostor.public_key().to_bytes().to_vec(),
+        "an agent describing itself must never become the stall audience"
+    );
+}
+
+/// Security: if MORE THAN ONE owner-authored head claims the same
+/// `personaId`, that is ambiguous authority -- two owner-authored records
+/// disagreeing about who runs a persona is not a discrepancy this sweep may
+/// arbitrate. It must decline (never guess) and fall back to the executive,
+/// exactly like the zero-match case.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn ambiguous_owner_authored_persona_claims_fall_back_to_the_executive() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // TWO different agents, both with an owner-authored head, both claiming
+    // the SAME persona -- ambiguous, must not be guessed at.
+    let agent_a = Keys::generate();
+    let agent_b = Keys::generate();
+    set_persona(&db, community, &owner, &agent_a, "qa-persona-1").await;
+    set_persona(&db, community, &owner, &agent_b, "qa-persona-1").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = default_task(
+        "task-ambiguous",
+        Some("init-amb"),
+        TaskStatus::InProgress,
+        "qa-persona-1",
+        channel_id,
+        now - 2 * STALL_AFTER_SECS,
+    );
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert!(filed >= 1);
+
+    let need_key = stall_need_key(&task.id);
+    let row = db
+        .find_open_ask_by_need(community, "init-amb", &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("stall ask must exist");
+    assert_eq!(
+        row.audience_pubkey,
+        executive.public_key().to_bytes().to_vec(),
+        "ambiguous persona ownership must fall back to the executive, not guess between \
+         candidates"
     );
 }
