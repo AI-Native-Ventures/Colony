@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.9
+
+- test(ledger): prove the reconciled production book prices Opus 5 ([`022711dcb`](https://github.com/AI-Native-Ventures/Colony/commit/022711dcb8170d782c61781486214eac16ac22cb))
+- test(ledger): prove the rate-unit migration against the production price book ([`938cfe027`](https://github.com/AI-Native-Ventures/Colony/commit/938cfe02772aa1e28ceacb6c4f38511c257bee29))
+
+
 ## Unreleased
 
 - Rebrand: the app is now Colony. New ant mark, landing, loading animations, icons, and marketing site. Internal names (crates, env vars, protocol) are unchanged.
