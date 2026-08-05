@@ -31,6 +31,8 @@ pub mod event;
 pub mod filter;
 /// Git permission types — ref patterns, protection rules, policy evaluation.
 pub mod git_perms;
+/// Colony interrupt primitives: typed Asks, agent tiers, delegation policy.
+pub mod interrupt;
 /// Shared invite-link contract constants.
 pub mod invite;
 /// Buzz kind number registry — custom event type constants.

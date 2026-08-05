@@ -258,6 +258,9 @@ enum Cmd {
     /// Community moderation — reports queue, bans, timeouts, audit trail
     #[command(subcommand)]
     Moderation(ModerationCmd),
+    /// File, escalate, list, answer, and withdraw Colony interrupt Asks
+    #[command(subcommand)]
+    Asks(AsksCmd),
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -2407,6 +2410,126 @@ pub enum ModerationCmd {
     },
 }
 
+/// Fields shared by `asks raise` and `asks escalate` (kind 44300). Escalate
+/// is exactly this plus `--prior`, addressed to a new (higher) audience.
+#[derive(clap::Args)]
+pub struct AskFileArgs {
+    /// Ask type: decision, question, credential, or blocker ('stall' is
+    /// relay-generated and cannot be filed here)
+    #[arg(long = "type", value_parser = ["decision", "question", "credential", "blocker"])]
+    pub ask_type: String,
+    /// Audience pubkey (64-char hex): must be exactly one tier above the
+    /// filer (worker -> leader, leader -> executive, executive -> a
+    /// community owner)
+    #[arg(long)]
+    pub to: String,
+    /// Initiative id this ask belongs to
+    #[arg(long)]
+    pub initiative: String,
+    /// Task id this ask blocks on, can be specified multiple times, at
+    /// least one is required
+    #[arg(long = "task")]
+    pub task: Vec<String>,
+    /// Dedupe key, matching [a-z0-9-]{1,64}. Concurrent asks that share an
+    /// (initiative, need) converge on one: the second filer gets back
+    /// the first one's event id instead of a new ask.
+    #[arg(long)]
+    pub need: String,
+    /// Short summary of the ask. Use '-' to read from stdin.
+    #[arg(long)]
+    pub headline: String,
+    /// What waiting costs. Use '-' to read from stdin.
+    #[arg(long = "cost-of-delay")]
+    pub cost_of_delay: String,
+    /// Origin thread root event id (64-char hex)
+    #[arg(long)]
+    pub thread: Option<String>,
+    /// Category slug. Hard-list categories (spend, external_send, hiring,
+    /// legal, pricing, deletion, vendor) may never carry --default.
+    #[arg(long)]
+    pub category: Option<String>,
+    /// An option as label=consequence, can be specified multiple times
+    #[arg(long = "option")]
+    pub option: Vec<String>,
+    /// Default-on-timeout option label, must match an --option label
+    #[arg(long = "default")]
+    pub default: Option<String>,
+    /// Seconds until the default-on-timeout answer applies (max 30 days)
+    #[arg(long = "window-secs")]
+    pub window_secs: Option<u64>,
+    /// Channel UUID this ask concerns
+    #[arg(long)]
+    pub channel: Option<String>,
+}
+
+/// Subcommands for `buzz asks`, the agent-facing surface of Colony's
+/// interrupt protocol (kinds 44300-44302). A worker raises to its own
+/// leader, a leader escalates to the executive, and only the executive
+/// files to a community owner; the relay enforces that altitude ladder.
+#[derive(Subcommand)]
+pub enum AsksCmd {
+    /// File a new Ask, addressed one tier up (kind 44300)
+    Raise {
+        #[command(flatten)]
+        fields: AskFileArgs,
+    },
+    /// Re-file an ask upward under a new audience, carrying `prior` (kind
+    /// 44300). Once the relay accepts this, it closes the `prior` ask as
+    /// superseded, provided the new audience really is higher on the ladder.
+    /// Use a DIFFERENT --need than the ask being escalated: the dedupe index
+    /// is keyed on (initiative, need), so reusing it is refused as a
+    /// duplicate of the very ask you are escalating.
+    Escalate {
+        /// The ask event id (64-char hex) this escalation supersedes. The
+        /// relay closes it once this escalation is accepted.
+        #[arg(long)]
+        prior: String,
+        #[command(flatten)]
+        fields: AskFileArgs,
+    },
+    /// List asks (kind 44300)
+    List {
+        /// Filter to asks addressed to me (only "me" is currently supported)
+        #[arg(long, value_parser = ["me"])]
+        audience: Option<String>,
+        /// Filter to asks filed by me (only "me" is currently supported)
+        #[arg(long = "filed-by", value_parser = ["me"])]
+        filed_by: Option<String>,
+        /// Filter to asks with no resolution or withdrawal yet
+        #[arg(long, value_parser = ["open"])]
+        status: Option<String>,
+    },
+    /// Answer an open ask (kind 44301). Requires a token authorized to
+    /// write global events: resolutions carry no channel (`h`) tag.
+    ///
+    /// NEVER put a secret in the answer. A resolution is an ordinary global
+    /// event: stored unencrypted, fanned out like any other event, and
+    /// scoped to nobody. For a `credential` ask the secret travels out of
+    /// band (a vault, a DM, or similar) and this answer is only the
+    /// acknowledgement that it was delivered that way.
+    Answer {
+        /// The ask event id (64-char hex) being answered
+        #[arg(long)]
+        ask: String,
+        /// Answer payload as JSON. Use '-' to read from stdin. NEVER an API
+        /// key, password, or token: this is stored as an ordinary
+        /// unencrypted global event that anyone on the relay can read.
+        #[arg(long = "answer-json")]
+        answer_json: String,
+    },
+    /// Withdraw an open ask (kind 44302); only the executive or the relay
+    /// may do this. Requires a token authorized to write global events:
+    /// withdrawals carry no channel (`h`) tag.
+    Withdraw {
+        /// The ask event id (64-char hex) being withdrawn
+        #[arg(long)]
+        ask: String,
+        /// Why this ask is being withdrawn. Use '-' to read from stdin.
+        #[arg(long)]
+        reason: String,
+    },
+}
+
 async fn run(cli: Cli) -> Result<(), CliError> {
     let relay_url = client::normalize_relay_url(&cli.relay);
 
@@ -2493,6 +2616,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Upload(sub) => commands::upload::dispatch(sub, &client).await,
         Cmd::Mem(sub) => commands::mem::dispatch(sub, &client).await,
         Cmd::Moderation(sub) => commands::moderation::dispatch(sub, &client, &cli.format).await,
+        Cmd::Asks(sub) => commands::asks::dispatch(sub, &client).await,
         Cmd::Pack(_) => unreachable!("handled above"),
     }
 }
@@ -2886,6 +3010,7 @@ mod tests {
     fn command_inventory_is_stable() {
         let expected_groups: Vec<&str> = vec![
             "agents",
+            "asks",
             "blocks",
             "canvas",
             "channels",
@@ -3097,6 +3222,10 @@ mod tests {
                 "unban",
                 "untimeout"
             ]
+        );
+        assert_eq!(
+            names(&cmd, "asks"),
+            vec!["answer", "escalate", "list", "raise", "withdraw"]
         );
     }
 

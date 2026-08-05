@@ -265,6 +265,19 @@ pub const KIND_LEDGER_BUDGET: u32 = 30187;
 /// the whole attack: prices decide what every company is billed.
 pub const KIND_PRICE_FEED: u32 = 30188;
 
+/// Colony interrupt delegation grant (parameterized replaceable, owner-authored).
+///
+/// The founder granting an agent autonomy over one named category of decision,
+/// as a signed and revocable object rather than accumulated trust. Addressed by
+/// `(pubkey, kind, d_tag)` where `d_tag` is the grant id, so revoking is
+/// republishing the same `d_tag` with `active: false` rather than a tombstone.
+/// Content carries the category, the scope that bounds it, an optional spending
+/// cap, and the active flag. A category on the hard list may never be granted.
+///
+/// Ingest accepts this kind only from a pubkey that currently holds the owner
+/// role: an agent must not be able to grant itself autonomy. See docs/nips/NIP-IQ.md.
+pub const KIND_DELEGATION_GRANT: u32 = 30189;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -623,6 +636,31 @@ pub const KIND_AGENT_TURN_METRIC: u32 = 44200;
 /// reads them from the provider's own response.
 pub const KIND_USAGE_RECORD: u32 = 44210;
 
+// Colony interrupt protocol (44300–44303)
+/// Colony interrupt Ask (stored, non-replaceable, agent-signed or relay-signed).
+/// An escalation event requesting human judgment on a decision, question, credential,
+/// blocker, or stall. Tags: exactly one `ask-type`, one `p` (audience pubkey), one
+/// `initiative`, one or more `task`, one `need` (dedupe key); optional `e` (origin
+/// thread root), `prior` (escalation chain), `category`, `h` (channel, present on
+/// raises). Content JSON carries `headline` and `cost_of_delay` (both required,
+/// non-empty), `options`, and optional `default_option` / `default_window_secs`.
+/// See [`crate::interrupt::parse_ask`].
+pub const KIND_ASK: u32 = 44300;
+
+/// Colony interrupt Ask resolution (stored, non-replaceable, audience-signed or relay-signed).
+/// An Answer to a pending Ask event (tag `e` references the Ask). Ends the Ask lifecycle
+/// without further relay processing.
+pub const KIND_ASK_RESOLUTION: u32 = 44301;
+
+/// Colony interrupt Ask withdrawal (stored, non-replaceable, executive-signed).
+/// An agent-initiated cancellation of a pending Ask event (tag `e` references the Ask).
+pub const KIND_ASK_WITHDRAWAL: u32 = 44302;
+
+/// Colony interrupt decision log (stored, non-replaceable, leader/executive-signed).
+/// Record of a decision made autonomously under a delegation grant: the ask filed,
+/// the decision made, and the undo path. Enables auditing and policy tuning.
+pub const KIND_DECISION_LOG: u32 = 44303;
+
 // Forum / social (45000–45999)
 // V1 used addressable range (30001–30003) — wrong.
 /// A forum post (thread root).
@@ -746,6 +784,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_ATTRIBUTION_RULEBOOK,
     KIND_CORRECTION_BOOK,
     KIND_LEDGER_BUDGET,
+    KIND_DELEGATION_GRANT,
     KIND_LEDGER_ACTION,
     KIND_LEDGER_RECEIPT,
     KIND_TEAM,
@@ -819,6 +858,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_AGENT_TURN_METRIC,
     KIND_USAGE_RECORD,
+    KIND_ASK,
+    KIND_ASK_RESOLUTION,
+    KIND_ASK_WITHDRAWAL,
+    KIND_DECISION_LOG,
     KIND_WORKFLOW_DEF,
     KIND_LONG_FORM,
     KIND_USER_STATUS,
@@ -1015,9 +1058,14 @@ const _: () = assert!(!is_ephemeral(KIND_AGENT_TURN_METRIC));
 const _: () = assert!(!is_replaceable(KIND_AGENT_TURN_METRIC));
 const _: () = assert!(!is_parameterized_replaceable(KIND_AGENT_TURN_METRIC));
 const _: () = assert!(KIND_AGENT_TURN_METRIC <= u16::MAX as u32);
-// Moderation kinds fit u16 and are neither replaceable nor ephemeral:
-// 1984 is a regular event (persisted to the queue, never fanned out);
-// 9040–9044 are direct commands (executed, never stored).
+// Compile-time: interrupt kinds are regular stored, non-replaceable.
+const _: () = assert!(!is_ephemeral(KIND_ASK));
+const _: () = assert!(!is_replaceable(KIND_ASK));
+const _: () = assert!(KIND_ASK <= u16::MAX as u32);
+const _: () = assert!(is_parameterized_replaceable(KIND_DELEGATION_GRANT)); // 30189 in 30000-39999
+                                                                            // Moderation kinds fit u16 and are neither replaceable nor ephemeral:
+                                                                            // 1984 is a regular event (persisted to the queue, never fanned out);
+                                                                            // 9040–9044 are direct commands (executed, never stored).
 const _: () = assert!(KIND_REPORT <= u16::MAX as u32);
 const _: () = assert!(KIND_MODERATION_RESOLVE_REPORT <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_REPORT));

@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use buzz_core::kind::{
     event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH, KIND_EVENT_REMINDER,
-    KIND_HUDDLE_STARTED,
+    KIND_HUDDLE_STARTED, KIND_TASK,
 };
 use buzz_core::{CommunityId, StoredEvent};
 
@@ -1676,6 +1676,175 @@ pub async fn query_due_reminders(
         .collect();
 
     Ok(results)
+}
+
+/// A candidate task for the Colony stall-detection sweep
+/// (`buzz-relay`'s `interrupt_runtime::run_stall_tick`): the latest
+/// kind:30181 (`KIND_TASK`) head at some `(community_id, d_tag)` coordinate,
+/// across every non-archived community, whose content `status` field is
+/// currently `"inProgress"`.
+#[derive(Debug)]
+pub struct StallCandidateTask {
+    /// Community this task head belongs to.
+    pub community_id: CommunityId,
+    /// Normalized host mapped to that community.
+    pub host: String,
+    /// The task head event's raw ID bytes.
+    pub task_head_id: Vec<u8>,
+    /// The task head event's `created_at` timestamp.
+    pub task_head_created_at: DateTime<Utc>,
+    /// The task head event's JSON content (a `buzz_core::company::CompanyTask`).
+    pub content: String,
+}
+
+/// Query the latest in-progress task heads across every non-archived
+/// community, for the stall-detection sweep, EXCLUDING any task that
+/// already carries an open `stall` ask, and EXCLUDING any task I4's
+/// re-filing suppression would decline anyway (a closed stall ask that
+/// postdates the task's own last measured activity).
+///
+/// NIP-33 latest-wins resolution happens FIRST (the `latest_task_heads` CTE),
+/// and the `status = 'inProgress'` filter is applied only to that already-
+/// resolved latest head, never to raw historical revisions. Filtering before
+/// resolving latest-wins would let a stale `inProgress` revision win the
+/// group for a task whose true latest head has since moved to `completed` or
+/// `cancelled` -- exactly the false positive this ordering avoids.
+///
+/// Filtering status BEFORE `LIMIT` (rather than fetching everything and
+/// filtering in Rust) mirrors the C2 lesson from Task 8's fix round
+/// (`buzz-relay`'s `interrupt_runtime` module docs): a company with many
+/// completed/cancelled tasks must never be able to crowd its few genuinely
+/// in-progress tasks out of a capped batch.
+///
+/// Two `NOT EXISTS` clauses against `asks` apply the SAME lesson to two
+/// starvation shapes the status filter alone does not close, both rooted in
+/// the same underlying fact: a task head's `created_at` never moves once it
+/// stalls (nothing republishes it), so under `ORDER BY created_at ASC` a
+/// candidate this query declines to act on sorts at the very front of every
+/// future batch, permanently -- there is no `deadline_at` here to re-arm
+/// the way the ask-deadline sweep does.
+///
+/// - **C1**: a task that already has a live open stall ask. Re-selecting it
+///   every tick just to hit the dedupe index and file nothing wastes the
+///   slot forever.
+/// - **NB2**: a task I4's suppression (`interrupt_runtime::process_stall_candidate`)
+///   would decline anyway -- a closed (`resolved`/`withdrawn`) stall ask
+///   whose `updated_at` is at or after this task's own last measured
+///   activity (the later of its head's `created_at` and the last event in
+///   its `sourceChannelId`, computed here with the same `GREATEST`/
+///   `COALESCE` shape the Rust check uses). Filtering ONLY C1 in SQL left
+///   NB2's converged set filtering in Rust, AFTER the candidate already
+///   consumed a slot -- exactly the C1 shape one class smaller, and reached
+///   in completely ordinary use (I4 is designed to let a need be filed,
+///   closed, and refiled, so a closed-with-no-fresh-activity task is not a
+///   pathological state).
+///
+/// Once enough tasks in either class accumulate across a deployment, they
+/// alone can fill `batch_limit` on every tick, and a task that stalls later
+/// is never examined -- silently, with no human ever told. Both `need_key`
+/// derivations use the exact same SHA-256-of-task-id construction as
+/// `interrupt_runtime::stall_need_key` (`'stall-' || first 32 hex chars of
+/// sha256(task id)`, via pgcrypto's `digest()`, already required by
+/// migration 0001) -- the two MUST stay in lockstep, since this is what
+/// lets the exclusion recognize a task's own prior stall asks by need
+/// alone, without a second round trip per candidate.
+///
+/// The `sourceChannelId` cast is guarded by a `CASE` (which Postgres always
+/// short-circuits, unlike a bare `AND` chain) rather than cast directly,
+/// since it is filer-controlled JSON content, not a validated column: an
+/// unguarded `::uuid` cast on a malformed value would fail the WHOLE query
+/// for every community's candidates, not just the one bad row.
+///
+/// The channel-activity lookup filters on `ev.community_id = t.community_id`
+/// even though `channel_id` is already globally unique and the predicate
+/// cannot change which row wins the `MAX` -- `idx_events_community_channel_created`
+/// (migration 0001) leads with `community_id`, so without it here Postgres
+/// has no index that covers a `channel_id`-only lookup and falls back to a
+/// sequential scan of `events`, the largest table in the system, once per
+/// candidate row on every tick. Correctness-neutral, index-servability-only.
+///
+/// Ordered oldest-revision-first so a systematic sweep naturally rotates
+/// toward whichever in-progress tasks have sat longest without a status
+/// change, rather than always re-inspecting the same newest tasks first when
+/// the true candidate count exceeds `batch_limit`.
+pub async fn query_in_progress_task_heads(
+    pool: &PgPool,
+    batch_limit: i64,
+) -> Result<Vec<StallCandidateTask>> {
+    let kind_i32 = KIND_TASK as i32;
+    let rows = sqlx::query(
+        r#"
+        WITH latest_task_heads AS (
+            SELECT DISTINCT ON (e.community_id, e.d_tag)
+                e.community_id, c.host, e.id, e.created_at, e.content
+            FROM events AS e
+            JOIN communities AS c ON c.id = e.community_id
+            WHERE e.kind = $1
+              AND e.deleted_at IS NULL
+              AND e.d_tag IS NOT NULL
+              AND c.archived_at IS NULL
+            ORDER BY e.community_id, e.d_tag, e.created_at DESC, e.id ASC
+        )
+        SELECT t.community_id, t.host, t.id, t.created_at, t.content
+        FROM latest_task_heads AS t
+        WHERE t.content::jsonb ->> 'status' = 'inProgress'
+          AND NOT EXISTS (
+            -- C1: already carries a live open stall ask.
+            SELECT 1 FROM asks AS a
+            WHERE a.community_id = t.community_id
+              AND a.ask_type = 'stall'
+              AND a.status = 'open'
+              AND a.need_key = 'stall-' || substring(
+                    encode(digest(t.content::jsonb ->> 'id', 'sha256'), 'hex')
+                    from 1 for 32
+                  )
+          )
+          AND NOT EXISTS (
+            -- NB2: I4 would suppress re-filing anyway -- a closed stall ask
+            -- postdates this task's own last measured activity.
+            SELECT 1 FROM asks AS a2
+            WHERE a2.community_id = t.community_id
+              AND a2.ask_type = 'stall'
+              AND a2.status IN ('resolved', 'withdrawn')
+              AND a2.need_key = 'stall-' || substring(
+                    encode(digest(t.content::jsonb ->> 'id', 'sha256'), 'hex')
+                    from 1 for 32
+                  )
+              AND a2.updated_at >= EXTRACT(EPOCH FROM GREATEST(
+                    t.created_at,
+                    COALESCE(
+                      (SELECT MAX(ev.created_at) FROM events AS ev
+                       WHERE ev.community_id = t.community_id
+                         AND ev.deleted_at IS NULL
+                         AND ev.channel_id = CASE
+                               WHEN t.content::jsonb ->> 'sourceChannelId'
+                                    ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                               THEN (t.content::jsonb ->> 'sourceChannelId')::uuid
+                               ELSE NULL
+                             END),
+                      t.created_at
+                    )
+                  ))::bigint
+          )
+        ORDER BY t.created_at ASC
+        LIMIT $2
+        "#,
+    )
+    .bind(kind_i32)
+    .bind(batch_limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| StallCandidateTask {
+            community_id: CommunityId::from_uuid(row.get("community_id")),
+            host: row.get("host"),
+            task_head_id: row.get("id"),
+            task_head_created_at: row.get("created_at"),
+            content: row.get("content"),
+        })
+        .collect())
 }
 
 /// Atomically claim a due reminder for delivery. Returns `Some(id)` if this
