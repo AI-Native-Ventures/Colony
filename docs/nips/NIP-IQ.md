@@ -774,9 +774,30 @@ conflict, exit code 5, printing the relay's full response first so the
 original Ask's event id (what the caller is actually blocked on) is never
 flattened away.
 
-There is currently no `buzz-cli` surface for delegation grants (kind
-30189) or decision logs (kind 44303); those events must be constructed and
-signed directly against the schemas above.
+## Client Behavior (`buzz grants` / `buzz decisions`)
+
+`buzz-cli` also surfaces delegation grants (kind 30189, see
+`crates/buzz-cli/src/commands/grants.rs`) and decision logs (kind 44303, see
+`crates/buzz-cli/src/commands/decisions.rs`), mirroring `asks.rs`'s
+self-validate-before-submit structure:
+
+| Subcommand | Kind | Notes |
+|---|---|---|
+| `buzz grants create --id <id> --category <cat> --scope <scope> [--cap-nano-usd <n>]` | 30189 | publishes or updates a grant head; owner key required, the relay refuses a signer who is not a current community owner |
+| `buzz grants revoke --id <id>` | 30189 | reads the newest head with this `d` tag, then republishes the same category/scope/cap with `active: false`; the record stays, only the flag flips |
+| `buzz grants list [--active]` | reads 30189 | keeps only the newest head per `d` tag, newest first; `--active` filters to grants whose newest head is active |
+| `buzz decisions log --grant <id> --task <id>... --category <cat> --decision <text> --undo-path <text> [--amount-nano-usd <n>]` | 44303 | `--task` is repeatable and required at least once; the relay refuses a category that does not match the cited grant's, and enforces the grant's cap per decision |
+| `buzz decisions list` | reads 44303 | newest first |
+
+`grants create`/`revoke` and `decisions log` self-validate the exact event
+they just signed against `parse_grant`/`parse_decision_log` (the same
+parser the relay runs) before submitting, so a CLI-side rejection is
+guaranteed to also be a relay-side rejection: a hard-list `--category`, a
+wildcard `--scope`, or a negative `--cap-nano-usd`/`--amount-nano-usd` is
+caught before any network call. Write submission uses the same
+accepted/conflict handling as `buzz asks`: any `accepted: false` response
+(including a NIP-33 LWW `"duplicate: ..."` dominance report on `grants`) is
+a write conflict, exit code 5, after the full response is printed.
 
 ## Known Limitations
 
