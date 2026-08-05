@@ -2545,11 +2545,14 @@ async fn ingest_event_inner(
 
     // Colony interrupt-core: a decision log is only as trustworthy as the
     // grant it cites. Schema (non-empty `undo_path` -- spec: no stateable
-    // undo path means no autonomy) is `parse_decision_log`'s job; authority
-    // (signer tier is Leader/Executive, cited grant currently exists and is
-    // active) is `enforce_decision_log_authority`'s. A decision log citing a
-    // revoked or absent grant must be rejected: an audit trail that accepts
-    // unfounded claims of authority is worse than none.
+    // undo path means no autonomy, and a category that is not on the hard
+    // list) is `parse_decision_log`'s job; authority (signer tier is
+    // Leader/Executive, the cited grant currently exists and is active, the
+    // log's category equals that grant's category, and a capped grant's
+    // decision declares an amount at or under the cap) is
+    // `enforce_decision_log_authority`'s. A decision log citing a revoked or
+    // absent grant must be rejected: an audit trail that accepts unfounded
+    // claims of authority is worse than none.
     if kind_u32 == KIND_DECISION_LOG {
         let parsed = buzz_core::interrupt::parse_decision_log(&event)
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;

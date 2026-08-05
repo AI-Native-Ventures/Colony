@@ -116,10 +116,18 @@ pub struct InterruptTickStats {
 /// is pushed into SQL (`Db::query_latest_owner_authored_heads`'s `DISTINCT
 /// ON (d_tag)`), so it caps agents, not head revisions: a community whose
 /// agents' heads are republished often can no longer push another agent's
-/// single head out of the window just by revision volume. Generous enough
-/// for any real roster while still bounding the query; a flood of impostor
-/// heads at many different `d` tags is a write-volume/rate-limiting
-/// concern, not something this lookup can absorb on every promotion.
+/// single head out of the window just by revision volume. Impostor heads
+/// cost nothing either, at any number of `d` tags: the query's
+/// `JOIN relay_members ... AND m.role = 'owner'` excludes them before
+/// `DISTINCT ON` runs, so they occupy no slot.
+///
+/// Generous enough for any real roster, but not silently so: the query
+/// orders by `d_tag`, and a managed agent's `d` tag is its pubkey hex, so a
+/// community with more than 500 owner-authored agents permanently hides the
+/// ones whose pubkey sorts highest rather than rotating which are visible.
+/// An invisible executive breaks promotion for that community with no
+/// signal. Only a community owner can author that many agent heads, so this
+/// is a scale limit rather than an attack surface.
 const MAX_ROSTER_HEADS: i64 = 500;
 
 /// Floor on a re-armed deadline's window, in seconds. Guards against a

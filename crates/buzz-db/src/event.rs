@@ -1125,6 +1125,25 @@ pub async fn get_last_message_at(
 /// by `pubkey` anywhere in the community -- any kind, channel or global.
 /// The interrupt stall sweep uses this as its per-agent liveness signal;
 /// see `buzz-relay`'s `interrupt_runtime::process_stall_candidate`.
+///
+/// **No index covers this query today, and its cost grows with community
+/// history.** There is no index on `(community_id, pubkey, created_at)`.
+/// The closest, `idx_events_community_pubkey_kind_created`, interleaves
+/// `kind` between `pubkey` and `created_at`, so it cannot serve a
+/// top-1-by-time for one pubkey across kinds without a sort. Postgres
+/// instead walks the community's events newest-first with `pubkey` as a
+/// filter and discards rows until it finds one, across every partition,
+/// since the query carries no time predicate.
+///
+/// The cost is worst exactly when the agent is silent, which is the only
+/// case the stall sweep cares about: the longer an agent has been dead, the
+/// more history this reads before answering. It also runs before the sweep's
+/// `silent_for_secs < stall_after_secs` early return, because it is what
+/// computes the silence, so every in-progress task pays it on every tick.
+/// Compare `get_last_message_at` above, which is fully index-served.
+///
+/// Landing the covering index needs a migration; until then, treat this as
+/// an expensive call and do not add new callers on a hot path.
 pub async fn get_last_authored_event_at(
     pool: &PgPool,
     community_id: CommunityId,

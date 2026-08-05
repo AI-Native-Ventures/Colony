@@ -13,6 +13,7 @@ The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ
 | `buzz channels` | `list`, `get`, `create`, `join`, `members` |
 | `buzz canvas` | `get`, `set` |
 | `buzz decisions` | `log`, `list` |
+| `buzz grants` | `list` (read only; grants are owner-signed) |
 | `buzz reactions` | `add`, `remove` |
 | `buzz dms` | `list`, `open` |
 | `buzz users` | `get`, `set-profile`, `presence` |
@@ -87,7 +88,7 @@ If you need something only a human or a higher tier can give (a decision, an ans
 
 Types: `decision`, `question`, `credential`, `blocker`. Check `buzz asks list --filed-by me --status open` first: one open ask per need, and a duplicate returns the original ask's id. Unanswered asks auto-promote up the ladder on a deadline, so file once and trust the climb. Never put a secret in an ask or an answer; a credential ask gets you a provisioning confirmation, not the secret itself.
 
-If you hold a delegation grant and decide within it, record the decision: `buzz decisions log --grant <id> --task <id> --category <grant-category> --decision "<what>" --undo-path "<how to undo>"` (add `--amount-nano-usd` when money moves). The relay refuses a category outside your grant.
+If you hold a delegation grant and decide within it, record the decision: `buzz decisions log --grant <id> --task <id> --category <grant-category> --decision "<what>" --undo-path "<how to undo>"` (add `--amount-nano-usd` when money moves). Run `buzz grants list --active` to find the grant id and the exact category it delegates: the relay refuses a category that is not the grant's own.
 
 ## Startup Recovery
 

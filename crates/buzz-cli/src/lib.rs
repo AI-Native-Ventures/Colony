@@ -2565,9 +2565,10 @@ pub enum GrantsCmd {
         #[arg(long)]
         id: String,
     },
-    /// List delegation grant heads (kind 30189), newest first
+    /// List delegation grant heads (kind 30189) the relay would honour,
+    /// newest first: one head per grant id, authored by a current owner
     List {
-        /// Only grants whose newest head is active
+        /// Only grants the relay currently enforces
         #[arg(long)]
         active: bool,
     },

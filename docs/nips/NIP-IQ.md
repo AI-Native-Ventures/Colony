@@ -205,19 +205,36 @@ rather than the one actually in front of the owner, and the due-ask sweep
 would independently auto-promote that stale row, manufacturing a fourth Ask
 for the same need.
 
-Three conditions, all required:
+Five conditions, all required. Three of them are authorization rather than
+bookkeeping, because `prior` is an unauthenticated tag naming any event id
+in the community and the altitude ladder only constrains
+signer-versus-audience:
 
 - The `prior` Ask must still be `open`. A resolved, withdrawn or already
   promoted row is left exactly as it is.
+- **Standing.** The `prior` Ask's `audience` must BE the successor's signer,
+  which is what a legitimate escalation looks like: the agent that received
+  the raise is the one carrying it onward. Without this, any leader-tier
+  agent could point `prior` at any OTHER agent's open leader-audience Ask
+  and close it silently, acquiring by side effect the withdrawal authority
+  this protocol reserves for the executive. Outranking an Ask is not the
+  same as having any business with it.
+- **The `prior` Ask must not be a `stall` Ask.** A `stall` is relay-filed
+  about a task that stopped moving; nobody escalated it to anyone, so the
+  audience relationship does not mean for it what it means for a raise. The
+  stall sweep treats any closure of one as a decisive human act and
+  suppresses re-detection of that exact task, so closing one as a side
+  effect of filing something else would disarm the single thing the sweep
+  exists to catch. A human can still close it deliberately through
+  resolution or withdrawal.
 - The successor's audience must sit **strictly higher** on the altitude
   ladder than the `prior` Ask's audience (worker < leader < executive <
-  owner). This is authorization, not bookkeeping: `prior` is an
-  unauthenticated tag naming any event id in the community, and the altitude
-  ladder only constrains signer-versus-audience, so without this check a
-  worker could close the executive's Ask sitting in front of the owner
-  simply by filing an ordinary worker-to-leader Ask that points `prior` at
-  it. A rank the relay cannot resolve on either side is treated the same as
-  a failed comparison: the `prior` Ask is left open.
+  owner). Without this check a worker could close the executive's Ask
+  sitting in front of the owner simply by filing an ordinary
+  worker-to-leader Ask that points `prior` at it. A rank the relay cannot
+  resolve on either side is treated the same as a failed comparison: the
+  `prior` Ask is left open. Note this makes an Ask addressed to a community
+  owner unsupersedable, since nothing outranks rank 3.
 - A durable relay key must be configured, the same requirement resolution
   and withdrawal already carry.
 
@@ -382,7 +399,7 @@ the [44303](#kind-44303-decision-log) section above.
 
 `HARD_LIST_CATEGORIES` (`buzz-core/src/interrupt.rs`) is immutable, no
 configuration and no override: `spend`, `external_send`, `hiring`, `legal`,
-`pricing`, `deletion`, `vendor`. It governs two independent checks, both
+`pricing`, `deletion`, `vendor`. It governs three independent checks, all
 ASCII case-folded so `"Spend"` or `"SPEND"` cannot slip past a
 lowercase-only comparison:
 
@@ -392,6 +409,12 @@ lowercase-only comparison:
 - A delegation grant's `category` is rejected outright when it is on the
   hard list: none of these categories can ever be delegated away from
   asking a human.
+- A decision log's `category` is rejected outright when it is on the hard
+  list. This closes the same door from the other side: no grant can carry a
+  hard-list category, so no decision log could legitimately match one
+  anyway, and rejecting it at parse time means the refusal names the hard
+  list rather than reporting a category mismatch against whatever grant was
+  cited.
 
 ## Relay Behavior
 
@@ -565,6 +588,15 @@ content prefixed `Ask resolved upstream: `. This fires from the resolution
 path alone, independent of whether the successor Ask itself carries an
 origin thread.
 
+**The `prior` Ask must actually be closed.** The wake requires the `prior`
+row to be `withdrawn`, the state the supersede-close leaves an Ask it
+closed. Without that requirement the wake reaches priors nothing ever
+superseded, which manufactures the false "you are unblocked" this protocol
+exists to prevent. Two shapes make that reachable without any hostile
+actor: a `promoted` prior, whose need is already climbing under the sweep's
+own successor, and an `open` prior addressed to a community owner, which no
+successor can strictly outrank so the supersede-close never closes it.
+
 The standing rule is the same one that gates the supersede-close itself:
 the prior Ask's `audience` must BE the resolved (successor) Ask's signer.
 Since `prior` is an unauthenticated tag naming any event id in the
@@ -575,6 +607,23 @@ Ask is never closed by a superseding escalation: it has no filer standing
 behind it. If the prior Ask's own wake-up would land on the same pubkey the
 successor's audience receipt above already reached, the upstream wake is
 skipped, since one wake is enough.
+
+Two limits are worth stating, since both are easy to over-estimate:
+
+- **The receipt carries the successor Ask's headline, not the answer.** The
+  original filer learns *that* the need resolved, not *what* was decided.
+  The resolver's answer went to the agent that escalated, which may be
+  entitled to detail the original filer is not. This matches the primary
+  resolution receipt, which also carries the headline.
+- **The `prior` chain is walked exactly one hop, and auto-promotion ends
+  it.** The sweep signs its promoted successor with the relay's own key and
+  rewrites `prior` to point at the Ask it promoted, so the standing rule
+  above (prior audience == successor signer) never holds for a promoted
+  successor. Worker A filing to leader B, B escalating manually to
+  executive C, and C's Ask then being auto-promoted, wakes B when the
+  promoted Ask resolves but never wakes A. The guarantee covers a manual
+  escalation resolved directly, not one that is itself auto-promoted first.
+  This is a missing courtesy wake rather than a false one.
 
 ### Owner thread-reply auto-resolution
 
@@ -835,14 +884,31 @@ not a suggestion.** Both fail closed on any database error resolving tier,
 membership, or the reply exemption; a lookup failure rejects the write
 rather than allowing it through.
 
-**Trust in owner-authored heads, not merely present heads.** Tier
-resolution, grant resolution, and the community's unique-executive/QA-persona
-lookups all scan a bounded number of candidate NIP-33 heads and use only
-the first one authored by a *current* community owner. Any authenticated
-member can publish a `KIND_MANAGED_AGENT` or `KIND_DELEGATION_GRANT` event
-at ingest time; it is this owner-authorship filter at *read* time, not
-ingest-time restriction, that prevents an agent from self-declaring its own
-tier or granting itself autonomy.
+**Trust in owner-authored heads, not merely present heads.** Every read
+that turns a NIP-33 head into authority honours only heads authored by a
+*current* community owner, so demoting an owner retroactively withdraws the
+authority its heads conferred. Two shapes implement the same rule:
+
+- Tier resolution and grant resolution scan a bounded number of candidate
+  heads newest-first and use the first one whose author currently holds the
+  `owner` role, skipping the rest.
+- The community's managed-agent roster, which backs the unique-executive
+  and QA-persona lookups, applies the owner filter in SQL *before*
+  selecting one head per agent, so a head by a non-owner never occupies a
+  slot at all. Its bound (`MAX_ROSTER_HEADS`, 500) is therefore on distinct
+  **agents**, not on candidate head revisions: republishing one agent's
+  head cannot push another agent out of the window. A community with more
+  than 500 owner-authored agents truncates on `d` tag order, so the excess
+  is a fixed set rather than a rotating one.
+
+Any authenticated member can publish a `KIND_MANAGED_AGENT` event at ingest
+time, so for tiers it is this owner-authorship filter at *read* time that
+prevents an agent from self-declaring its own tier. `KIND_DELEGATION_GRANT`
+is restricted at ingest as well (see [Kind
+30189](#kind-30189-delegation-grant)): a signer who does not currently hold
+the `owner` role cannot store one at all. The read-time filter still
+matters there, because it is what makes a demoted owner's already-stored
+grant heads stop counting.
 
 **Relay-signing is a privilege boundary, not just a convenience.** The
 altitude-ladder bypass, the `filer`-tag override, and default-execution/
@@ -856,12 +922,22 @@ resolution, or a stall Ask in a production community. Every one of these
 codepaths refuses outright rather than proceeding with the shared fallback
 key.
 
-**A decision log's authority is checked, but not its content.** A decision
-log's authorization is "is the signer a leader or executive, and is the
-cited grant currently active", not "does this decision actually fall
-within the grant's stated category and scope". The latter is left to the
-filing agent's own discipline; a leader or executive can cite any active
-grant regardless of subject matter.
+**A decision log's declared category is checked; its prose is not.** A
+decision log's authorization is: the signer resolves to leader or executive
+tier, the cited grant resolves to a currently `active` owner-authored head,
+the log's `category` equals that grant's `category` exactly, and, when the
+grant carries a `cap_nano_usd`, the log declares an `amount_nano_usd` at or
+under the cap. A leader or executive cannot cite an active grant for a
+decision in some other category, and cannot record a capped decision
+without a machine-readable amount.
+
+What the relay does **not** check is whether the decision's prose actually
+falls inside the grant's stated `scope`, which remains descriptive only, or
+whether this particular agent was the one the grant was "meant" for (grants
+carry no assignee field). Any current leader or executive may cite any
+active grant whose category matches what it claims. Binding a decision to
+its grant's scope is a convention the filing agent keeps, not one the relay
+enforces.
 
 ## Relationship to Other NIPs
 
