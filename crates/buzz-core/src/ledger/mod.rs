@@ -9,6 +9,7 @@
 
 pub mod attribution;
 pub mod catalog;
+pub mod conditions;
 pub mod crosscheck;
 pub mod engine;
 pub mod feed;
@@ -18,6 +19,7 @@ pub mod reconcile;
 pub use attribution::{
     AttributionRule, Budget, Correction, CorrectionBook, RuleAssignment, Rulebook,
 };
+pub use conditions::{CallFacts, DailyWindow, PriceConditions};
 pub use crosscheck::{
     cross_check, CrossCheckFinding, CrossCheckReport, CrossCheckRow, SelfReportedTurn,
 };

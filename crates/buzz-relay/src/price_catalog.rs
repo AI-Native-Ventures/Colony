@@ -243,6 +243,7 @@ mod tests {
                 output_nanousd_per_mtok: 1,
             },
             note: None,
+            conditions: Default::default(),
             origin: PriceOrigin::Owner,
         }
     }

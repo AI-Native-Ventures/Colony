@@ -320,6 +320,83 @@
       "cacheWrite1hPerMtok": "0",
       "outputPerMtok": "14",
       "note": "OpenAI list price for the Codex model, verified 2026-08-05. Date is a floor."
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "10",
+      "cacheReadPerMtok": "1",
+      "cacheWrite5mPerMtok": "12.50",
+      "cacheWrite1hPerMtok": "12.50",
+      "outputPerMtok": "45",
+      "note": "OpenAI long-context rate: prompts over 272K input tokens are billed at 2x input and 1.5x output. Verified 2026-08-05; date is a floor.",
+      "minInputTokens": 272001
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "4",
+      "cacheReadPerMtok": "0.40",
+      "cacheWrite5mPerMtok": "5",
+      "cacheWrite1hPerMtok": "5",
+      "outputPerMtok": "18",
+      "note": "OpenAI long-context rate: prompts over 272K input tokens are billed at 2x input and 1.5x output. Verified 2026-08-05; date is a floor.",
+      "minInputTokens": 272001
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "0.40",
+      "cacheReadPerMtok": "0.04",
+      "cacheWrite5mPerMtok": "0.50",
+      "cacheWrite1hPerMtok": "0.50",
+      "outputPerMtok": "1.80",
+      "note": "OpenAI long-context rate: prompts over 272K input tokens are billed at 2x input and 1.5x output. Verified 2026-08-05; date is a floor.",
+      "minInputTokens": 272001
+    },
+    {
+      "model": "gpt-5.5",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "10",
+      "cacheReadPerMtok": "1",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "45",
+      "note": "OpenAI long-context rate: prompts over 272K input tokens are billed at 2x input and 1.5x output. Verified 2026-08-05; date is a floor.",
+      "minInputTokens": 272001
+    },
+    {
+      "model": "gpt-5.5-pro",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "60",
+      "cacheReadPerMtok": "0",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "270",
+      "note": "OpenAI long-context rate: prompts over 272K input tokens are billed at 2x input and 1.5x output. Verified 2026-08-05; date is a floor.",
+      "minInputTokens": 272001
+    },
+    {
+      "model": "gpt-5.4",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "22.50",
+      "note": "OpenAI long-context rate: prompts over 272K input tokens are billed at 2x input and 1.5x output. Verified 2026-08-05; date is a floor.",
+      "minInputTokens": 272001
+    },
+    {
+      "model": "gpt-5.4-pro",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "60",
+      "cacheReadPerMtok": "0",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "270",
+      "note": "OpenAI long-context rate: prompts over 272K input tokens are billed at 2x input and 1.5x output. Verified 2026-08-05; date is a floor.",
+      "minInputTokens": 272001
     }
   ]
 }

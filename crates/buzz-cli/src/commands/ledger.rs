@@ -64,6 +64,11 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
                 model,
                 effective_from: parse_effective_from(effective_from.as_deref())?,
                 rates,
+                // `prices-add` publishes an unconditional rate. Conditional
+                // rows (a batch tier, a long-context tier, peak hours) come
+                // from the catalog; an owner writing one by hand is not a
+                // flag this command should grow before anyone asks for it.
+                conditions: Default::default(),
                 note,
                 origin: buzz_core::ledger::prices::PriceOrigin::Owner,
             };

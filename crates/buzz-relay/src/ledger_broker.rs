@@ -406,6 +406,7 @@ mod tests {
             model: model.to_string(),
             effective_from,
             rates: rates(input),
+            conditions: Default::default(),
             note: None,
             origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         })

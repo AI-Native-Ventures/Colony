@@ -87,14 +87,79 @@ identical total, so nothing that was already reported is restated. Writing
 always uses the new unit, so a book converts the next time anything appends to
 it.
 
+## Conditional rates
+
+Vendors do not charge one rate per model. Reading their published pages in
+August 2026:
+
+| Vendor | Variation | Size |
+|---|---|---|
+| OpenAI | prompts over 272K input tokens | 2x input, 1.5x output |
+| OpenAI | Batch / Flex service tiers | 0.5x |
+| OpenAI | Fast mode (was Priority) | 2.5x |
+| Anthropic | Batch API | 0.5x |
+| Anthropic | Fast mode on Opus 5 / 4.8 | 2x |
+| Anthropic | US-only inference (`inference_geo`) | 1.1x |
+| DeepSeek | peak hours, announced, no start date yet | 2x |
+
+Each is a silent mispricing if the book cannot express it, so a row can carry
+conditions. Optional, and absent means "always", which is what every row
+written before this means.
+
+```json
+{
+  "model": "gpt-5.6-sol",
+  "effectiveFrom": "2026-08-05T00:00:00Z",
+  "inputPerMtok": "10",
+  "outputPerMtok": "45",
+  "minInputTokens": 272001
+}
+```
+
+- `minInputTokens` / `maxInputTokens`: a context tier. `min` is inclusive,
+  `max` exclusive, so two rows meet without overlapping. Counted over the
+  **whole prompt**, cached tokens included, because that is what the vendor
+  charges the premium on.
+- `tier`: `batch`, `flex`, `fast`, matched case-insensitively against what the
+  meter recorded.
+- `hours`: recurring local-time windows, e.g.
+  `[{"start": "09:00", "end": "12:00", "utcOffsetMinutes": 480}]`. The offset
+  is part of the window because vendors publish in their own timezone. An end
+  earlier than its start wraps midnight.
+
+**The most specific matching row wins**, then the later effective date, then
+the owner over the catalog. Specificity outranks the date on purpose: a vendor
+introducing a long-context tier publishes it after the base rate, and a newer
+unconditional row must not start pricing long calls at the short rate. The
+date decides which generation of a rate applies; conditions decide which rate
+within it.
+
+You do not need to bound the base row. An unconditional row matches
+everything, and a conditional row outranks it whenever it applies.
+
+A row nothing could satisfy (`minInputTokens` at or above `maxInputTokens`, an
+empty tier, a window that starts and ends at the same minute) is refused at
+parse time. It would otherwise look like the price was covered while every
+call fell through to something else.
+
 ## What this book still cannot express
 
-**Time-of-day pricing.** DeepSeek has announced peak/off-peak rates: 2x during
-09:00-12:00 and 14:00-18:00 Beijing time, daily. Entries are effective-dated by
-instant, which models a step change and not a recurring daily pattern. The
-DeepSeek entries here carry off-peak list prices and say so. When that policy
-takes effect, peak-hour spend will be understated until the book learns
-recurrence.
+**Service tiers are not yet observed.** `tier` rows parse and match, but the
+meter does not record which tier a call used, and a row conditioned on a tier
+never matches a call whose tier is unknown. That is deliberate: matching an
+unknown tier would hand every call a 50% batch discount on no evidence. Batch
+and Flex rates are therefore not in this file yet. Capturing `service_tier` at
+the checkpoint is what unblocks them.
+
+**Anthropic's long-context premium** is not here either. Sonnet 4.5's row is
+the list price for prompts up to 200K tokens, and the rate above that has not
+been verified. Models from Claude 4.6 on include the full 1M window at
+standard pricing, so this only affects the older rows.
+
+**Multipliers are not a concept.** Anthropic's 1.1x US-only inference and the
+10% regional-endpoint premium would each need their own row rather than a
+factor applied to an existing one, and the request-side facts they depend on
+are not recorded.
 
 **`deepseek-chat` is stale.** The row dated 2025-09-05 is the price that was in
 force then. DeepSeek no longer lists that model; V4 Flash is $0.14 against that

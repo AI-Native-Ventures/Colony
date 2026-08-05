@@ -618,6 +618,7 @@ mod tests {
             model: "claude-sonnet-4-5".to_string(),
             effective_from: 1_785_628_800,
             rates: rates(),
+            conditions: Default::default(),
             note: None,
             origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         })
@@ -739,6 +740,7 @@ mod tests {
             model: "  ".to_string(),
             effective_from: 0,
             rates: rates(),
+            conditions: Default::default(),
             note: None,
             origin: buzz_core::ledger::prices::PriceOrigin::Owner,
         });
