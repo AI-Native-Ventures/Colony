@@ -457,6 +457,7 @@ mod tests {
                 model: Some("claude-sonnet-4-5".to_string()),
                 payment_mode: PaymentMode::Metered,
                 cost_nanousd: Some(amount),
+                price_basis: None,
                 original_classification: CostClassification::Opex,
                 effective_classification: CostClassification::Opex,
                 effective_assignment: None,

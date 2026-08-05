@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provider-aware pricing: real-time facts, correctable rates</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --panel2: #1d2130; --line: #2a2f42;
+    --text: #d7dae3; --dim: #8b90a0; --accent: #6ea8fe; --good: #4cc38a;
+    --warn: #e5b567; --bad: #e5726a; --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.65 -apple-system, "Segoe UI", sans-serif; padding: 3rem 1.5rem; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.7rem; line-height: 1.3; margin-bottom: .4rem; }
+  .sub { color: var(--dim); margin-bottom: 2.5rem; font-size: 1.02rem; }
+  h2 { font-size: 1.22rem; margin: 2.8rem 0 .9rem; color: #fff; }
+  h3 { font-size: 1rem; margin: 1.6rem 0 .5rem; color: var(--accent); }
+  p { margin-bottom: .9rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1.1rem 1.3rem; margin: 1.1rem 0; }
+  .verdict { border-left: 4px solid var(--accent); }
+  .danger { border-left: 4px solid var(--bad); }
+  .ok { border-left: 4px solid var(--good); }
+  code { font-family: var(--mono); font-size: .85em; background: var(--panel2); padding: .12em .4em; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: .82rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 1rem 0; line-height: 1.55; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .92rem; }
+  th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+  .tag { display: inline-block; font-family: var(--mono); font-size: .72rem; padding: .1em .5em; border-radius: 99px; border: 1px solid var(--line); }
+  .t-good { color: var(--good); border-color: var(--good); }
+  .t-warn { color: var(--warn); border-color: var(--warn); }
+  .t-bad { color: var(--bad); border-color: var(--bad); }
+  .t-dim { color: var(--dim); }
+  .dim { color: var(--dim); }
+  ul, ol { margin: 0 0 1rem 1.3rem; }
+  li { margin-bottom: .45rem; }
+  .diagram { overflow-x: auto; margin: 1.4rem 0; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1.2rem 0; }
+  .num { font-family: var(--mono); color: var(--accent); font-size: .8rem; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Getting the price right per provider, in real time</h1>
+<p class="sub">Design note, 2026-08-05. Why the ledger should never chase live prices, and what it does instead. Grounded in what the meter already records and what was verified against OpenRouter and vendor pricing pages this week.</p>
+
+<h2>The problem, stated precisely</h2>
+<p>The same model is served by many providers: the lab itself, Google Vertex, AWS Bedrock, Alibaba, DigitalOcean, aggregators like OpenRouter, and local runtimes that cost nothing. Prices differ per provider and change, sometimes permanently, sometimes for a window. Verified this week: <code>deepseek-v4-flash</code> is sold by <strong>21 providers at $0.084 to $0.14 per MTok</strong>, a 67% spread on one model string.</p>
+<p>Today the price book keys on model name alone. A call served by DigitalOcean gets priced at DeepSeek's direct rate. The usage record already knows who served the call, the pricing function just never looks.</p>
+
+<div class="panel danger">
+<strong>The trap in the question.</strong> "How do we get the price in real time" assumes the price must be right at the moment of the call. It does not. The ledger prices records at <em>read</em> time (<code>engine.rs</code>, <code>price_tokens(model, tokens, at_unix)</code>), not at capture time. What must be right in real time is the <strong>facts</strong>: who served it, which model string, how many tokens of each kind, when, at what tier. Facts are immutable. Prices are a lookup that can be corrected after the fact, and the correction retroactively fixes every affected record. Telecom has billed this way for fifty years: capture the call detail record at the switch, rate it against a tariff table, re-rate when the tariff was wrong.</div>
+
+<h2>Three layers of price truth</h2>
+<p>Ordered strongest first. Each layer covers the failure of the one below it.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 800 330" width="100%" style="min-width:680px" font-family="-apple-system,sans-serif" font-size="13">
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#8b90a0" stroke-width="1.5"/></marker></defs>
+  <rect x="10" y="20" width="180" height="70" rx="8" fill="#1d2130" stroke="#2a2f42"/>
+  <text x="100" y="48" fill="#d7dae3" text-anchor="middle" font-weight="600">Agent call</text>
+  <text x="100" y="68" fill="#8b90a0" text-anchor="middle" font-size="11">any provider, any model</text>
+  <rect x="250" y="20" width="220" height="70" rx="8" fill="#1d2130" stroke="#6ea8fe"/>
+  <text x="360" y="44" fill="#d7dae3" text-anchor="middle" font-weight="600">Wire checkpoint</text>
+  <text x="360" y="62" fill="#8b90a0" text-anchor="middle" font-size="11">provider slug + model + tokens</text>
+  <text x="360" y="78" fill="#8b90a0" text-anchor="middle" font-size="11">+ observed cost when reported</text>
+  <rect x="530" y="20" width="180" height="70" rx="8" fill="#1d2130" stroke="#2a2f42"/>
+  <text x="620" y="48" fill="#d7dae3" text-anchor="middle" font-weight="600">Usage record</text>
+  <text x="620" y="68" fill="#8b90a0" text-anchor="middle" font-size="11">immutable facts</text>
+  <line x1="190" y1="55" x2="245" y2="55" stroke="#8b90a0" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="470" y1="55" x2="525" y2="55" stroke="#8b90a0" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="620" y1="90" x2="620" y2="130" stroke="#8b90a0" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="400" y="135" width="390" height="80" rx="8" fill="#171a23" stroke="#4cc38a"/>
+  <text x="595" y="160" fill="#4cc38a" text-anchor="middle" font-weight="600">Pricing at read time, in order</text>
+  <text x="595" y="182" fill="#d7dae3" text-anchor="middle" font-size="12">1. observed cost on the record</text>
+  <text x="595" y="200" fill="#d7dae3" text-anchor="middle" font-size="12">2. signed book row for (model, provider, conditions)</text>
+  <rect x="10" y="135" width="330" height="80" rx="8" fill="#171a23" stroke="#e5b567"/>
+  <text x="175" y="160" fill="#e5b567" text-anchor="middle" font-weight="600">Signed price feed (kind 30188)</text>
+  <text x="175" y="182" fill="#d7dae3" text-anchor="middle" font-size="12">human signs, relay refreshes every 6h</text>
+  <text x="175" y="200" fill="#8b90a0" text-anchor="middle" font-size="12">no deploy, effective-dated, windowed</text>
+  <line x1="340" y1="175" x2="395" y2="175" stroke="#8b90a0" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="595" y1="215" x2="595" y2="255" stroke="#8b90a0" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="400" y="260" width="390" height="55" rx="8" fill="#171a23" stroke="#2a2f42"/>
+  <text x="595" y="283" fill="#d7dae3" text-anchor="middle" font-weight="600">Reconciliation per provider-day</text>
+  <text x="595" y="301" fill="#8b90a0" text-anchor="middle" font-size="12">vendor billing APIs, corrections via kind 30186</text>
+</svg>
+</div>
+
+<h3><span class="num">Layer 1</span> Observed cost: the provider states the invoice line itself</h3>
+<p>Some routes report the exact cost of the call in the response. OpenRouter returns <code>usage.cost</code> when asked, and its generation endpoint exposes the native cost per request. When the wire carries a cost, the meter records it as a fact: <code>observedCostNanousd</code> on the usage record. The engine uses it over any book row, because no table lookup beats the seller's own line item.</p>
+<p><strong>This dissolves the aggregator problem.</strong> The 21-provider spread on <code>deepseek-v4-flash</code> lives almost entirely inside routers like OpenRouter, which dynamically pick the upstream per call. No book can key on a choice made per request, but the router invoices per call, so we take its number. Reconciliation still checks the aggregate against the router's billing, so a lying router is caught at layer 3.</p>
+
+<h3><span class="num">Layer 2</span> The signed book, with provider as a first-class dimension</h3>
+<p>For direct calls (Anthropic, OpenAI, DeepSeek, Vertex, Bedrock, Alibaba) no per-call cost comes over the wire, so the book prices them. One addition: <code>provider</code> joins the conditions system that already handles tier, token bounds, and daily windows.</p>
+<ul>
+  <li><code>CallFacts</code> gains <code>provider</code>, read straight off the record.</li>
+  <li><code>PriceConditions</code> gains <code>provider: Option&lt;String&gt;</code>. Most-specific-wins already exists: a <code>(deepseek-v4-flash, provider: alibaba)</code> row beats the bare <code>deepseek-v4-flash</code> row for Alibaba calls and touches nothing else. Provider gets the largest specificity weight, above tier: it is an identity dimension, not a discount dimension.</li>
+  <li>Bare rows keep their current meaning, the vendor-direct list price, so every existing book and all 433 production records price identically after the change. That invariant gets its own test, same discipline as the per-MTok migration.</li>
+  <li>Catalog merge and dedupe keys already serialize conditions, so provider rows flow through <code>merge_catalogs</code> and the signed feed unchanged.</li>
+</ul>
+
+<h3><span class="num">Layer 3</span> Reconciliation: aggregate ground truth</h3>
+<p>The engine already sums metered spend per provider-day, which is exactly the shape a vendor invoice has. Anthropic and OpenAI admin APIs report actual billed cost; a mismatch beyond tolerance flags the provider-day and a correction event (kind 30186) restates it. This is the backstop that catches whatever layers 1 and 2 got wrong, including a price change nobody noticed. Blocked today on the two admin keys.</p>
+
+<h2>Who is the provider? One rule</h2>
+<div class="panel verdict"><strong>The provider is whoever invoices you, not whoever made the model.</strong> Claude served through Vertex is <code>vertex</code>, because Google bills it and Google's price applies. A model served through OpenRouter is <code>openrouter</code>, whichever of its 21 upstreams did the work, because OpenRouter's charge is the cost. This one rule decides every ambiguous case, and it is the only definition under which reconciliation against invoices can ever balance.</div>
+<p>The meter normalizes the wire's base URL to a canonical slug at capture time: <code>anthropic</code>, <code>openai</code>, <code>deepseek</code>, <code>openrouter</code>, <code>vertex</code>, <code>bedrock</code>, <code>alibaba</code>, <code>local</code>. Slugs are part of the record contract, documented next to the catalog.</p>
+
+<h2>Local models: priced at zero, never defaulted to zero</h2>
+<p>Local runtimes (Ollama, LM Studio) get explicit all-zero catalog rows for <code>provider: local</code>. The distinction matters:</p>
+<table>
+<tr><th>State</th><th>Meaning</th><th>Spend screen</th></tr>
+<tr><td><span class="tag t-good">priced $0</span></td><td>We know this call was free</td><td>Counts, costs nothing</td></tr>
+<tr><td><span class="tag t-warn">unpriced</span></td><td>We do not know what it cost</td><td>Flagged for review</td></tr>
+</table>
+<p>Nothing is ever assumed free. An unknown provider is unpriced and visible, not zero and invisible.</p>
+
+<h2>Why not a live price API at call time</h2>
+<table>
+<tr><th>Reason</th><th>Detail</th></tr>
+<tr><td><strong>Auditability</strong></td><td>A ledger must reproduce any charge later. "We asked an API at that moment" is not reproducible. A signed, effective-dated book is: the same facts against the same book give the same nanoUSD forever.</td></tr>
+<tr><td><strong>The APIs are wrong</strong></td><td>Verified this week: OpenRouter's catalog lists deepseek-v4-flash cache read at $0.028/MTok; DeepSeek's own page says $0.0028. Ten times off. Auto-ingesting that feed would have silently poisoned the book. A human signs every change; automation only proposes.</td></tr>
+<tr><td><strong>Coupling</strong></td><td>Pricing must not die when a third-party API does, and most providers offer no per-call quote endpoint anyway.</td></tr>
+</table>
+
+<h2>How prices change without a deploy</h2>
+<p>All the machinery already shipped. The feed is the delivery channel; this design only widens what a row can say.</p>
+<table>
+<tr><th>Change</th><th>Mechanism</th><th>Latency</th></tr>
+<tr><td>Permanent change</td><td>New row, <code>effectiveFrom</code> the vendor's date. History repriced correctly by dating alone.</td><td rowspan="4">Sign, host, relay refreshes within 6h. No deploy, no release.</td></tr>
+<tr><td>Temporary promo</td><td>Promo row at start date, restoring row at end date. Sonnet 5 intro pricing already ships this way.</td></tr>
+<tr><td>Recurring window</td><td><code>hours</code> conditions, built for DeepSeek off-peak.</td></tr>
+<tr><td>Provider variance</td><td>Provider rows, this design.</td></tr>
+<tr><td>Change nobody announced</td><td>Watchdog diffs OpenRouter's catalog daily and opens a flag-only PR; layer 3 catches what even that misses.</td></tr>
+</table>
+
+<h2>Visible basis, the last honesty guarantee</h2>
+<p>Every priced line records which layer and which row priced it: <code>observed</code>, <code>book row (model, provider)</code>, or <code>book row (model) fallback</code>. A fallback-priced line on a model the watchdog knows has provider spread is a visible prompt to add the row. Wrong prices hide; a stated basis cannot.</p>
+
+<h2>What changes where</h2>
+<table>
+<tr><th>Piece</th><th>Change</th><th>Risk</th></tr>
+<tr><td><code>buzz-core</code> conditions/prices</td><td><code>provider</code> on <code>CallFacts</code> and <code>PriceConditions</code>, top specificity weight</td><td><span class="tag t-dim">low, additive</span></td></tr>
+<tr><td>Usage record</td><td><code>observedCostNanousd</code> optional field; old records untouched</td><td><span class="tag t-dim">low, additive</span></td></tr>
+<tr><td>Meter (desktop wire checkpoint)</td><td>Base URL to canonical slug; capture observed cost when present</td><td><span class="tag t-warn">medium, touches capture path</span></td></tr>
+<tr><td>Engine</td><td>Observed over book; priced line carries basis</td><td><span class="tag t-dim">low</span></td></tr>
+<tr><td>Catalog + feed + README</td><td>Provider rows, local zero rows, slug registry</td><td><span class="tag t-dim">low</span></td></tr>
+<tr><td>Desktop TS contracts</td><td>Accept the new optional fields. The PR #90 lesson: desktop parses raw relay events, both sides must accept both shapes before the relay ships.</td><td><span class="tag t-warn">medium, deploy coupling</span></td></tr>
+</table>
+
+<div class="panel ok">
+<strong>Order of work.</strong> 1) Book dimension plus engine basis, pure and testable, invariant test that existing books price identically. 2) Meter slug normalization and observed-cost capture. 3) Desktop contracts and Spend basis display. Then the paused release resumes: desktop first, relay last, same coupling rule as before. Watchdog and reconciliation follow as separate lanes.
+</div>
+
+</main>
+</body>
+</html>
