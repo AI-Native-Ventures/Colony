@@ -261,6 +261,9 @@ enum Cmd {
     /// File, escalate, list, answer, and withdraw Colony interrupt Asks
     #[command(subcommand)]
     Asks(AsksCmd),
+    /// Hire and list the workspace's employees (kinds 9045/30190)
+    #[command(subcommand)]
+    Employees(EmployeesCmd),
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -2462,6 +2465,30 @@ pub struct AskFileArgs {
     pub channel: Option<String>,
 }
 
+/// Subcommands for `buzz employees`: the workspace's payroll (kinds
+/// 9045/30190). An employee is a role the company employs, with a keypair the
+/// relay mints and holds, so every member can reach one colleague rather than
+/// each running their own copy. See `docs/design/company-employees.html`.
+#[derive(Subcommand)]
+pub enum EmployeesCmd {
+    /// Hire an employee for a role. Owner-only: the relay refuses a request
+    /// from anyone else. The relay mints and holds the employee's keypair, so
+    /// the new identity appears asynchronously — run `employees list` after.
+    Hire {
+        /// Stable role slug, e.g. `chief-of-staff`
+        #[arg(long)]
+        role: String,
+        /// The name this employee goes by, e.g. `Sift`
+        #[arg(long)]
+        name: String,
+        /// Where the employee sits on the interrupt ladder
+        #[arg(long, default_value = "worker")]
+        rank: String,
+    },
+    /// List the workspace's employees
+    List,
+}
+
 /// Subcommands for `buzz asks`, the agent-facing surface of Colony's
 /// interrupt protocol (kinds 44300-44302). A worker raises to its own
 /// leader, a leader escalates to the executive, and only the executive
@@ -2617,6 +2644,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Mem(sub) => commands::mem::dispatch(sub, &client).await,
         Cmd::Moderation(sub) => commands::moderation::dispatch(sub, &client, &cli.format).await,
         Cmd::Asks(sub) => commands::asks::dispatch(sub, &client).await,
+        Cmd::Employees(sub) => commands::employees::dispatch(sub, &client).await,
         Cmd::Pack(_) => unreachable!("handled above"),
     }
 }
@@ -3018,6 +3046,7 @@ mod tests {
             "discovery",
             "dms",
             "emoji",
+            "employees",
             "feed",
             "initiatives",
             "issues",
