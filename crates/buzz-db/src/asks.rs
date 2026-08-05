@@ -203,6 +203,30 @@ pub async fn find_open_ask_by_event_id(
     row.map(row_to_ask_row).transpose()
 }
 
+/// Load an ask row by its filing event id regardless of status. The
+/// resolution path uses this to find a superseded (already-withdrawn)
+/// prior so its filer can be woken too; see `buzz-relay`'s `ask_broker`.
+pub async fn find_ask_by_event_id(
+    pool: &PgPool,
+    community: CommunityId,
+    ask_event_id: &[u8],
+) -> Result<Option<AskRow>> {
+    let row = sqlx::query(
+        "SELECT community_id, ask_event_id, ask_type, initiative_id, need_key, \
+                audience_pubkey, filer_pubkey, origin_thread, prior_ask, category, \
+                default_option, deadline_at, status, resolution_event, resolved_by, \
+                default_executed, created_at, updated_at \
+         FROM asks \
+         WHERE community_id = $1 AND ask_event_id = $2",
+    )
+    .bind(community.as_uuid())
+    .bind(ask_event_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_ask_row).transpose()
+}
+
 /// Returns the most recently FILED `resolved` or `withdrawn` ask for
 /// `(community, initiative_id, need_key)`, or `None` if no such closed ask
 /// exists. Ignores `open` and `promoted` rows -- this exists specifically
