@@ -871,18 +871,23 @@ async fn create_session_and_apply_model(
     agent_core: Option<&str>,
     agent_canvas: Option<&str>,
     channel_name: Option<&str>,
+    onboarding_section: Option<&str>,
 ) -> Result<String, AcpError> {
-    // Build base_prompt + system_prompt + agent core + canvas metadata into a
-    // single prompt. Standard protocol-v2 agents receive it in `session/new`;
-    // Goose receives it through the custom request below. Legacy agents receive
-    // the same content as user-message sections via `format_prompt`. Core carries
-    // its own `[Agent Memory — core]` header, and canvas carries its own
-    // `[Channel Canvas]` header; both are appended with a blank-line separator.
+    // Build base_prompt + system_prompt + onboarding protocol + agent core +
+    // canvas metadata into a single prompt. Standard protocol-v2 agents
+    // receive it in `session/new`; Goose receives it through the custom
+    // request below. Legacy agents receive the same content as user-message
+    // sections via `format_prompt`. Onboarding, core, and canvas each carry
+    // their own header (`[Company Onboarding]`, the core memory header,
+    // `[Channel Canvas]`); all are appended with a blank-line separator.
     let is_goose = agent.agent_name == "goose";
     let combined_system_prompt = with_canvas(
         with_core(
             with_team(
-                framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
+                with_company_onboarding(
+                    framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
+                    onboarding_section,
+                ),
                 ctx.team_instructions.as_deref(),
             ),
             agent_core,
@@ -1247,6 +1252,26 @@ fn workspace_section(cwd: &str) -> Option<String> {
     }
 }
 
+/// Append the company onboarding protocol as its own labelled section.
+///
+/// Kept separate from `[Base]`/`[System]` rather than folded into either, so
+/// it survives both `--no-base-prompt` and any `--base-prompt-file`
+/// override: `should_inject_company_onboarding` gates on company status, a
+/// concern that has nothing to do with which base prompt variant the
+/// operator chose. `onboarding` is always the full static
+/// `COMPANY_ONBOARDING_PROMPT` when `Some` (the caller already applied the
+/// gate), so unlike `with_team` there is no blank-content case to filter.
+fn with_company_onboarding(prompt: Option<String>, onboarding: Option<&str>) -> Option<String> {
+    match (prompt, onboarding) {
+        (Some(prompt), Some(onboarding)) => {
+            Some(format!("{prompt}\n\n[Company Onboarding]\n{onboarding}"))
+        }
+        (None, Some(onboarding)) => Some(format!("[Company Onboarding]\n{onboarding}")),
+        (Some(prompt), None) => Some(prompt),
+        (None, None) => None,
+    }
+}
+
 /// Append the team-owned instruction section after `[System]` and before core memory.
 fn with_team(prompt: Option<String>, instructions: Option<&str>) -> Option<String> {
     let instructions = instructions
@@ -1501,6 +1526,17 @@ pub async fn run_prompt_task(
     // Channel name for the session title, from the same single resolve the
     // canvas DM check uses — see `resolve_new_session_channel_context`.
     let mut title_channel: Option<String> = None;
+    // Company onboarding protocol -- resolved once per NEW channel session,
+    // never per turn. `should_inject_company_onboarding`'s own doc comment
+    // frames this as a per-session question ("whether a session should
+    // receive..."), and re-checking on every turn would add a relay round
+    // trip to the hot path for a status that changes on the order of an
+    // onboarding conversation, not a message. If the company is approved
+    // mid-session, this session keeps the protocol until it next rotates
+    // (`max_turns_per_session`) or a new channel session is created -- an
+    // acceptable staleness window against a synchronous per-turn lookup on
+    // every agent's every turn, forever, in every workspace.
+    let mut onboarding_section: Option<&'static str> = None;
     if let PromptSource::Channel(cid) = &source {
         let is_new_channel_session = !agent.state.sessions.contains_key(cid);
         let needs_canvas = is_new_channel_session && !agent.state.canvas_sections.contains_key(cid);
@@ -1516,6 +1552,39 @@ pub async fn run_prompt_task(
                     pending_canvas = Some((*cid, section));
                 }
             }
+        }
+        if is_new_channel_session {
+            // Bounded -- same shape as the core fetch above: a stalled relay
+            // withholds the protocol for this one session rather than
+            // blocking session creation on it. A lookup failure or timeout
+            // is treated as Approved (withhold), not as "no company" (inject):
+            // telling an agent the company "does not exist yet" when that is
+            // merely unknown would be actively wrong, where silently omitting
+            // a reminder for one session is only a soft degradation.
+            const ONBOARDING_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
+            let fetch = crate::work_context::fetch_company_onboarding_status(&ctx.rest_client);
+            let status = match tokio::time::timeout(ONBOARDING_FETCH_TIMEOUT, fetch).await {
+                Ok(Ok(status)) => status,
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        target: "pool::session",
+                        channel = %cid,
+                        "could not resolve company onboarding status, withholding the protocol: {error}"
+                    );
+                    Some(buzz_core::company::CompanyOnboardingStatus::Approved)
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        target: "pool::session",
+                        channel = %cid,
+                        timeout_ms = ONBOARDING_FETCH_TIMEOUT.as_millis() as u64,
+                        "company onboarding status fetch timed out, withholding the protocol"
+                    );
+                    Some(buzz_core::company::CompanyOnboardingStatus::Approved)
+                }
+            };
+            onboarding_section = crate::should_inject_company_onboarding(status)
+                .then_some(crate::COMPANY_ONBOARDING_PROMPT);
         }
     }
 
@@ -1553,6 +1622,7 @@ pub async fn run_prompt_task(
                     agent_core.as_deref(),
                     agent_canvas.as_deref(),
                     title_channel.as_deref(),
+                    onboarding_section,
                 )
                 .await
                 {
@@ -1600,7 +1670,8 @@ pub async fn run_prompt_task(
             if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
-                match create_session_and_apply_model(&mut agent, &ctx, None, None, None).await {
+                match create_session_and_apply_model(&mut agent, &ctx, None, None, None, None).await
+                {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
@@ -4056,6 +4127,102 @@ mod tests {
     #[test]
     fn test_with_core_neither_is_none() {
         assert!(with_core(None, None).is_none());
+    }
+
+    #[test]
+    fn test_with_company_onboarding_appends_labelled_section() {
+        let framed = with_company_onboarding(
+            Some("[System]\npersona".to_string()),
+            Some("you are the Chief of Staff"),
+        )
+        .expect("both present yields Some");
+        assert_eq!(
+            framed,
+            "[System]\npersona\n\n[Company Onboarding]\nyou are the Chief of Staff"
+        );
+    }
+
+    #[test]
+    fn test_with_company_onboarding_framed_only_passes_through() {
+        let framed = with_company_onboarding(Some("[System]\npersona".to_string()), None)
+            .expect("framed-only yields Some");
+        assert_eq!(framed, "[System]\npersona");
+    }
+
+    #[test]
+    fn test_with_company_onboarding_survives_no_base_prompt() {
+        // --no-base-prompt leaves `framed_system_prompt` at None; the
+        // onboarding section must still stand on its own, exactly like
+        // `with_team` does for team instructions.
+        let framed = with_company_onboarding(None, Some("you are the Chief of Staff"))
+            .expect("onboarding-only yields Some");
+        assert_eq!(framed, "[Company Onboarding]\nyou are the Chief of Staff");
+    }
+
+    #[test]
+    fn test_with_company_onboarding_neither_is_none() {
+        assert!(with_company_onboarding(None, None).is_none());
+    }
+
+    /// The regression this issue closes: composing the ACTUAL system prompt
+    /// an agent receives, through the SAME pipeline `create_session_and_apply_model`
+    /// calls, and asserting the protocol both appears under the gate's true
+    /// condition and is absent under its false condition. A test that only
+    /// checks the `COMPANY_ONBOARDING_PROMPT` constant (as the pre-fix tests
+    /// did) passes whether or not anything ever injects it -- this does not.
+    #[test]
+    fn composed_system_prompt_carries_onboarding_protocol_exactly_when_the_gate_says_so() {
+        let compose = |status: Option<buzz_core::company::CompanyOnboardingStatus>| {
+            let onboarding_section = crate::should_inject_company_onboarding(status)
+                .then_some(crate::COMPANY_ONBOARDING_PROMPT);
+            with_canvas(
+                with_core(
+                    with_team(
+                        with_company_onboarding(
+                            framed_system_prompt("/workspace", Some("base text"), None),
+                            onboarding_section,
+                        ),
+                        Some("stay in #engineering"),
+                    ),
+                    Some("[Agent Memory]\nremembers the client's timezone"),
+                ),
+                Some("[Channel Canvas]\npinned: none"),
+            )
+            .expect("some section is always present")
+        };
+
+        // No company yet: the gate is true, so the composed prompt an agent
+        // actually receives must carry the protocol.
+        let no_company = compose(None);
+        assert!(
+            no_company.contains("[Company Onboarding]"),
+            "must carry the onboarding section when no company exists: {no_company}"
+        );
+        assert!(
+            no_company.contains(crate::COMPANY_ONBOARDING_PROMPT),
+            "must carry the full protocol text, not a placeholder"
+        );
+
+        // Draft: still true, same as above.
+        let draft = compose(Some(buzz_core::company::CompanyOnboardingStatus::Draft));
+        assert!(draft.contains("[Company Onboarding]"));
+
+        // Approved: the gate is false, so the composed prompt must NOT carry it.
+        let approved = compose(Some(buzz_core::company::CompanyOnboardingStatus::Approved));
+        assert!(
+            !approved.contains("[Company Onboarding]"),
+            "an approved company must not receive the onboarding protocol: {approved}"
+        );
+        assert!(!approved.contains(crate::COMPANY_ONBOARDING_PROMPT));
+
+        // The rest of the composition is unaffected either way -- the gate
+        // controls only its own section.
+        for composed in [&no_company, &draft, &approved] {
+            assert!(composed.contains("[Base]\nbase text"));
+            assert!(composed.contains("[Team Instructions]\nstay in #engineering"));
+            assert!(composed.contains("[Agent Memory]"));
+            assert!(composed.contains("[Channel Canvas]"));
+        }
     }
 
     #[test]
