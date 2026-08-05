@@ -1698,7 +1698,8 @@ pub struct StallCandidateTask {
 }
 
 /// Query the latest in-progress task heads across every non-archived
-/// community, for the stall-detection sweep.
+/// community, for the stall-detection sweep, EXCLUDING any task that
+/// already carries an open `stall` ask.
 ///
 /// NIP-33 latest-wins resolution happens FIRST (the `latest_task_heads` CTE),
 /// and the `status = 'inProgress'` filter is applied only to that already-
@@ -1712,6 +1713,25 @@ pub struct StallCandidateTask {
 /// (`buzz-relay`'s `interrupt_runtime` module docs): a company with many
 /// completed/cancelled tasks must never be able to crowd its few genuinely
 /// in-progress tasks out of a capped batch.
+///
+/// The `NOT EXISTS` clause against `asks` is the SAME lesson applied to a
+/// second, sharper starvation the status filter alone does not close: a
+/// task head's `created_at` never moves once it stalls (nothing
+/// republishes it), so under `ORDER BY created_at ASC` an already-flagged
+/// task sorts at the very front of every future batch, permanently, since
+/// nothing ever pushes its deadline forward the way an ask row's
+/// `deadline_at` can be re-armed. Once enough already-flagged tasks
+/// accumulate across a deployment, they alone can fill `batch_limit` on
+/// every tick, and a task that stalls later is never examined -- silently,
+/// with no human ever told. Excluding rows that already have a live stall
+/// ask removes them from contention entirely rather than re-selecting and
+/// re-skipping them every pass. The `need_key` this excludes on is derived
+/// with the exact same SHA-256-of-task-id construction as
+/// `interrupt_runtime::stall_need_key` (`'stall-' || first 32 hex chars of
+/// sha256(task id)`, via pgcrypto's `digest()`, already required by
+/// migration 0001) -- the two MUST stay in lockstep, since this is what
+/// lets the exclusion recognize a task's own prior stall ask by need alone,
+/// without a second round trip per candidate.
 ///
 /// Ordered oldest-revision-first so a systematic sweep naturally rotates
 /// toward whichever in-progress tasks have sat longest without a status
@@ -1735,10 +1755,20 @@ pub async fn query_in_progress_task_heads(
               AND c.archived_at IS NULL
             ORDER BY e.community_id, e.d_tag, e.created_at DESC, e.id ASC
         )
-        SELECT community_id, host, id, created_at, content
-        FROM latest_task_heads
-        WHERE content::jsonb ->> 'status' = 'inProgress'
-        ORDER BY created_at ASC
+        SELECT t.community_id, t.host, t.id, t.created_at, t.content
+        FROM latest_task_heads AS t
+        WHERE t.content::jsonb ->> 'status' = 'inProgress'
+          AND NOT EXISTS (
+            SELECT 1 FROM asks AS a
+            WHERE a.community_id = t.community_id
+              AND a.ask_type = 'stall'
+              AND a.status = 'open'
+              AND a.need_key = 'stall-' || substring(
+                    encode(digest(t.content::jsonb ->> 'id', 'sha256'), 'hex')
+                    from 1 for 32
+                  )
+          )
+        ORDER BY t.created_at ASC
         LIMIT $2
         "#,
     )

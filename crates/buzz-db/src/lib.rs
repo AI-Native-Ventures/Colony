@@ -5631,6 +5631,18 @@ impl Db {
         asks::find_open_ask_by_need(&self.pool, community, initiative_id, need_key).await
     }
 
+    /// Returns the most recently filed `resolved` or `withdrawn` ask for
+    /// `(community, initiative_id, need_key)`, or `None`. See
+    /// [`asks::find_latest_closed_ask_by_need`].
+    pub async fn find_latest_closed_ask_by_need(
+        &self,
+        community: CommunityId,
+        initiative_id: &str,
+        need_key: &str,
+    ) -> Result<Option<asks::AskRow>> {
+        asks::find_latest_closed_ask_by_need(&self.pool, community, initiative_id, need_key).await
+    }
+
     /// Marks an open ask resolved. Returns `false` if no open ask with this
     /// `ask_event_id` existed in `community`.
     pub async fn resolve_ask(

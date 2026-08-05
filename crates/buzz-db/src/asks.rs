@@ -172,6 +172,47 @@ pub async fn find_open_ask_by_need(
     row.map(row_to_ask_row).transpose()
 }
 
+/// Returns the most recently FILED `resolved` or `withdrawn` ask for
+/// `(community, initiative_id, need_key)`, or `None` if no such closed ask
+/// exists. Ignores `open` and `promoted` rows -- this exists specifically
+/// to answer "did a human already decisively close this exact need", not
+/// "is anything currently in flight for it" (`find_open_ask_by_need`
+/// already answers that).
+///
+/// Backs the stall sweep's re-filing suppression
+/// (`interrupt_runtime::process_stall_candidate`): a task whose stall ask
+/// was resolved or withdrawn, and that has shown no fresh activity since
+/// (`updated_at` on the returned row IS the closure timestamp -- both
+/// `resolve_ask` and `withdraw_ask` stamp it at close time), must not be
+/// re-flagged on the very next tick just because it is still measuring as
+/// silent from before that closure. `created_at DESC` picks the LATEST
+/// closed ask when a need has been stalled, closed, and stalled again more
+/// than once.
+pub async fn find_latest_closed_ask_by_need(
+    pool: &PgPool,
+    community: CommunityId,
+    initiative_id: &str,
+    need_key: &str,
+) -> Result<Option<AskRow>> {
+    let row = sqlx::query(
+        "SELECT community_id, ask_event_id, ask_type, initiative_id, need_key, \
+                audience_pubkey, filer_pubkey, origin_thread, prior_ask, category, \
+                default_option, deadline_at, status, resolution_event, resolved_by, \
+                default_executed, created_at, updated_at \
+         FROM asks \
+         WHERE community_id = $1 AND initiative_id = $2 AND need_key = $3 \
+           AND status IN ('resolved', 'withdrawn') \
+         ORDER BY created_at DESC, ask_event_id DESC LIMIT 1",
+    )
+    .bind(community.as_uuid())
+    .bind(initiative_id)
+    .bind(need_key)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_ask_row).transpose()
+}
+
 /// Marks an open ask resolved: records the resolution event, who resolved
 /// it, and whether the stated default option was executed on timeout.
 ///
@@ -353,13 +394,33 @@ pub async fn query_due_asks(pool: &PgPool, now_secs: i64, limit: i64) -> Result<
     rows.into_iter().map(row_to_ask_row).collect()
 }
 
-/// Returns `promoted` asks whose named successor (`resolution_event`) does
-/// not exist as an `asks` row at all, across every community, capped at
-/// `limit` rows -- the Task 8 crash residual `interrupt_runtime::promote_to`'s
-/// doc comment describes: a process crash in the narrow window between
-/// [`mark_ask_promoted`] committing and the successor being filed leaves the
-/// original permanently `promoted` toward an event that was never created,
-/// and the need then has no open ask at any tier. Only Task 8's IN-PROCESS
+/// Returns `promoted` asks that are genuine orphans -- rows for which NO
+/// OTHER `asks` row (any status) has EVER existed for the same
+/// `(community_id, initiative_id, need_key)` -- across every community,
+/// capped at `limit` rows.
+///
+/// This is deliberately NOT "the named successor (`resolution_event`) does
+/// not exist as a row": that weaker check also matches
+/// `interrupt_runtime::promote_to`'s `Duplicate` arm, which leaves the
+/// original `promoted` toward a successor event that was built, signed,
+/// and then simply discarded -- never stored -- because a DIFFERENT ask
+/// (a different `ask_event_id`, same need) won the race in the instant
+/// between the claim and the filing attempt. In that case the need is not
+/// orphaned at all; it has (or, later, had and properly closed) a live ask
+/// under the winner's event id, and reopening the original would resurrect
+/// a need that was correctly superseded -- worse, this can succeed outright
+/// once the winner itself resolves and no longer holds the
+/// `asks_open_need_uniq` slot, silently telling a founder an already-
+/// answered need needs answering again. Checking for the presence of ANY
+/// other row for the same need (open, resolved, withdrawn, or promoted
+/// further) rather than one specific event id closes both the false-orphan
+/// case and this resurrection case at once.
+///
+/// The genuine crash residual `interrupt_runtime::promote_to`'s doc comment
+/// describes -- a process crash in the narrow window between
+/// [`mark_ask_promoted`] committing and the successor being filed at all --
+/// leaves the original as the ONLY row that has ever existed for its need,
+/// which this correctly still matches. Only Task 8's IN-PROCESS
 /// compensation (`reopen_after_promotion_failure`, for an ordinary `Err` or
 /// `Refused` in that same window) exists at filing time; this out-of-process
 /// backstop is what a stall sweep can find later, since no in-process
@@ -387,7 +448,10 @@ pub async fn query_orphaned_promoted_asks(
            AND a.updated_at <= $1 \
            AND NOT EXISTS ( \
              SELECT 1 FROM asks AS s \
-             WHERE s.community_id = a.community_id AND s.ask_event_id = a.resolution_event \
+             WHERE s.community_id = a.community_id \
+               AND s.initiative_id = a.initiative_id \
+               AND s.need_key = a.need_key \
+               AND s.ask_event_id != a.ask_event_id \
            ) \
          ORDER BY a.updated_at ASC, a.ask_event_id ASC LIMIT $2",
     )
