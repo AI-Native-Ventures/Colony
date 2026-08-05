@@ -1,0 +1,69 @@
+{
+    "entries": [
+        {
+            "effectiveFrom": 1759104000,
+            "model": "claude-sonnet-4-5",
+            "note": "Anthropic list price, prompts up to 200K tokens",
+            "origin": "catalog",
+            "rates": {
+                "cacheReadNanousdPerToken": 300,
+                "cacheWrite1hNanousdPerToken": 6000,
+                "cacheWrite5mNanousdPerToken": 3750,
+                "inputNanousdPerToken": 3000,
+                "outputNanousdPerToken": 15000
+            }
+        },
+        {
+            "effectiveFrom": 1759276800,
+            "model": "claude-haiku-4-5-20251001",
+            "note": "Anthropic list price",
+            "origin": "catalog",
+            "rates": {
+                "cacheReadNanousdPerToken": 100,
+                "cacheWrite1hNanousdPerToken": 2000,
+                "cacheWrite5mNanousdPerToken": 1250,
+                "inputNanousdPerToken": 1000,
+                "outputNanousdPerToken": 5000
+            }
+        },
+        {
+            "effectiveFrom": 1722902400,
+            "model": "gpt-4o",
+            "note": "OpenAI list price. OpenAI does not bill for cache writes.",
+            "origin": "catalog",
+            "rates": {
+                "cacheReadNanousdPerToken": 1250,
+                "cacheWrite1hNanousdPerToken": 0,
+                "cacheWrite5mNanousdPerToken": 0,
+                "inputNanousdPerToken": 2500,
+                "outputNanousdPerToken": 10000
+            }
+        },
+        {
+            "effectiveFrom": 1721260800,
+            "model": "gpt-4o-mini",
+            "note": "OpenAI list price",
+            "origin": "catalog",
+            "rates": {
+                "cacheReadNanousdPerToken": 75,
+                "cacheWrite1hNanousdPerToken": 0,
+                "cacheWrite5mNanousdPerToken": 0,
+                "inputNanousdPerToken": 150,
+                "outputNanousdPerToken": 600
+            }
+        },
+        {
+            "effectiveFrom": 1757030400,
+            "model": "deepseek-chat",
+            "note": "DeepSeek list price, cache miss input",
+            "origin": "catalog",
+            "rates": {
+                "cacheReadNanousdPerToken": 70,
+                "cacheWrite1hNanousdPerToken": 0,
+                "cacheWrite5mNanousdPerToken": 0,
+                "inputNanousdPerToken": 560,
+                "outputNanousdPerToken": 1680
+            }
+        }
+    ]
+}
