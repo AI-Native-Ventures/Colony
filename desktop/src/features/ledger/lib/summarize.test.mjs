@@ -61,6 +61,13 @@ test("the basis says whether a provider's own rate or the list rate was used", (
   assert.equal(list.entries[0].priceBasis, "listRow");
 });
 
+test("a cost the provider stated reads as observed, not as a row", () => {
+  // No rate was consulted at all, so this must not be mistaken for a list
+  // price and marked as an estimate.
+  const observed = report({ entries: [entry({ priceBasis: "observed" })] });
+  assert.equal(observed.entries[0].priceBasis, "observed");
+});
+
 test("an unrecognised basis is refused rather than dropped", () => {
   // Dropping it would silently show a cost as unqualified when the app simply
   // did not understand what qualified it. A rate wrong by a reseller's margin

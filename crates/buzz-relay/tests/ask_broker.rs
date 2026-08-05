@@ -306,6 +306,16 @@ fn grant_content(category: &str, scope: &str, active: bool) -> String {
     .to_string()
 }
 
+fn grant_content_capped(category: &str, scope: &str, active: bool, cap_nano_usd: i64) -> String {
+    serde_json::json!({
+        "category": category,
+        "scope": scope,
+        "active": active,
+        "cap_nano_usd": cap_nano_usd,
+    })
+    .to_string()
+}
+
 fn sign_grant(author: &Keys, tags: Vec<Tag>, content: &str) -> Event {
     EventBuilder::new(Kind::Custom(KIND_DELEGATION_GRANT as u16), content)
         .tags(tags)
@@ -323,8 +333,26 @@ fn decision_log_content(decision: &str, undo_path: &str) -> String {
     serde_json::json!({
         "decision": decision,
         "undo_path": undo_path,
+        "category": "copy_change",
     })
     .to_string()
+}
+
+fn decision_log_content_with(
+    decision: &str,
+    undo_path: &str,
+    category: &str,
+    amount_nano_usd: Option<i64>,
+) -> String {
+    let mut content = serde_json::json!({
+        "decision": decision,
+        "undo_path": undo_path,
+        "category": category,
+    });
+    if let Some(amount) = amount_nano_usd {
+        content["amount_nano_usd"] = serde_json::json!(amount);
+    }
+    content.to_string()
 }
 
 fn sign_decision_log(author: &Keys, tags: Vec<Tag>, content: &str) -> Event {
@@ -1381,6 +1409,886 @@ async fn resolution_by_the_audience_resolves_and_wakes_the_filer() {
             parts.len() == 2 && parts[0] == "p" && parts[1] == leader_hex
         }),
         "receipt must p-tag the blocked filer so it wakes"
+    );
+}
+
+// -- Task 5: resolving an escalated ask wakes the superseded prior's filer --
+
+/// I5's `close_superseded_prior` closes a manually-escalated prior with no
+/// wake-up receipt (the work is continuing one rung up, not resolved). But
+/// when the SUCCESSOR is later resolved, the original filer -- the agent
+/// that was actually blocked -- learns nothing unless the resolution also
+/// wakes it in its own origin thread, not just the agent that carried the
+/// ask upward.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn resolving_an_escalated_ask_wakes_the_original_filer_in_its_own_thread() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let worker_channel = channel(&pool, community, "worker-thread").await;
+    let leader_channel = channel(&pool, community, "leader-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // Worker files A1 to the leader, with T1 (in the worker's own channel)
+    // as its origin thread.
+    let t1 = store_root(
+        &db,
+        community,
+        worker_channel,
+        &worker,
+        "worker kicking off",
+    )
+    .await;
+    let mut a1_tags = ask_tags("decision", &leader.public_key(), "init-1", "vendor-key");
+    a1_tags.push(tag(&["e", &t1.id.to_hex()]));
+    let a1 = sign_ask(&worker, a1_tags, &ask_content("Need the vendor key", None));
+    assert_applied(
+        handle_ask_event(&tenant, &state, &a1)
+            .await
+            .expect("no internal error"),
+        "worker -> leader ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &a1, Some(worker_channel))
+        .await
+        .expect("store A1");
+    assert!(inserted);
+
+    // The leader manually escalates to the executive, with T2 (in the
+    // leader's own channel) as ITS origin thread, pointing `prior` at A1.
+    let t2 = store_root(&db, community, leader_channel, &leader, "leader escalating").await;
+    let mut a2_tags = ask_tags(
+        "decision",
+        &executive.public_key(),
+        "init-1",
+        "vendor-key-escalated",
+    );
+    a2_tags.push(tag(&["e", &t2.id.to_hex()]));
+    a2_tags.push(tag(&["prior", &a1.id.to_hex()]));
+    let a2 = sign_ask(&leader, a2_tags, &ask_content("Need the vendor key", None));
+    assert_applied(
+        handle_ask_event(&tenant, &state, &a2)
+            .await
+            .expect("no internal error"),
+        "leader -> executive escalation",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &a2, Some(leader_channel))
+        .await
+        .expect("store A2");
+    assert!(inserted);
+
+    // Existing (I5) behavior: escalating superseded and closed A1.
+    let a1_row = fetch_ask_row(&pool, community, a1.id.as_bytes()).await;
+    assert_eq!(
+        a1_row.status, "withdrawn",
+        "the escalation must have superseded A1"
+    );
+
+    // The executive resolves A2.
+    let resolution = sign_resolution(
+        &executive,
+        &a2.id.to_hex(),
+        serde_json::json!({"choice": "vendor key X"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution of A2 by its audience");
+
+    // Existing behavior: a receipt in T2 (the leader's own thread) p-tagging
+    // the leader.
+    let leader_receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(leader_channel),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query leader receipts");
+    assert_eq!(
+        leader_receipts.len(),
+        1,
+        "expected exactly one receipt in the leader's own thread"
+    );
+    let leader_receipt = &leader_receipts[0].event;
+    assert!(
+        leader_receipt.content.starts_with("Ask resolved: "),
+        "got: {}",
+        leader_receipt.content
+    );
+    let leader_hex = leader.public_key().to_hex();
+    assert!(
+        leader_receipt.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == leader_hex
+        }),
+        "receipt must p-tag the leader who carried the ask upward"
+    );
+
+    // NEW: a second, additive receipt in T1 (the original filer's own
+    // thread) p-tagging the worker, whose content starts with "Ask resolved
+    // upstream:". Fails pre-change: no T1 receipt exists at all.
+    let worker_receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(worker_channel),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query worker receipts");
+    assert_eq!(
+        worker_receipts.len(),
+        1,
+        "expected exactly one upstream-wake receipt in the original filer's thread"
+    );
+    let worker_receipt = &worker_receipts[0].event;
+    assert!(
+        worker_receipt.content.starts_with("Ask resolved upstream:"),
+        "got: {}",
+        worker_receipt.content
+    );
+    let worker_hex = worker.public_key().to_hex();
+    assert!(
+        worker_receipt.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == worker_hex
+        }),
+        "upstream-wake receipt must p-tag the original filer so it wakes"
+    );
+}
+
+/// `prior` is an unauthenticated tag naming any event id in the community.
+/// The standing rule that gates the wake is the same one
+/// `close_superseded_prior` already enforces for the supersede-close itself:
+/// the prior ask's audience must BE the resolved ask's signer. Agent X's ask
+/// carries its own origin thread here specifically so that, if the standing
+/// guard in `wake_superseded_prior_filer` were removed, the wake WOULD fire
+/// (nothing else stops it) -- proving the guard is load-bearing, not
+/// incidental. The hijack ask deliberately carries no origin thread of its
+/// own, to also prove the wake is reached from a call site that does not
+/// depend on the SUCCESSOR having one.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_prior_pointing_at_a_foreign_ask_never_wakes_its_filer() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let x_channel = channel(&pool, community, "agent-x-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let agent_x = Keys::generate();
+    let l1 = Keys::generate();
+    let l2 = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &agent_x, "worker").await;
+    set_tier(&db, community, &owner, &l1, "leader").await;
+    set_tier(&db, community, &owner, &l2, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // Agent X's own open ask, addressed to leader L2, with an origin thread.
+    let tx = store_root(&db, community, x_channel, &agent_x, "agent x kicking off").await;
+    let mut ax_tags = ask_tags("decision", &l2.public_key(), "init-1", "foreign-need");
+    ax_tags.push(tag(&["e", &tx.id.to_hex()]));
+    let ax = sign_ask(&agent_x, ax_tags, &ask_content("Agent X's own need", None));
+    assert_applied(
+        handle_ask_event(&tenant, &state, &ax)
+            .await
+            .expect("no internal error"),
+        "agent X -> L2 ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &ax, Some(x_channel))
+        .await
+        .expect("store AX");
+    assert!(inserted);
+
+    // A DIFFERENT leader L1 -- not AX's audience -- files its own legal
+    // leader -> executive ask, pointing `prior` at AX. The broker accepts
+    // the filing (it stands on its own); the supersede close already
+    // refuses to close AX for lack of standing, so AX stays open.
+    let hijack = sign_escalation(
+        &l1,
+        &executive.public_key(),
+        "not-yours-hijacked",
+        &ax,
+        "Closing an ask that was never mine",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &hijack)
+            .await
+            .expect("no internal error"),
+        "unrelated leader's own ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &hijack, None)
+        .await
+        .expect("store hijack ask");
+    assert!(inserted);
+
+    let ax_row = fetch_ask_row(&pool, community, ax.id.as_bytes()).await;
+    assert_eq!(
+        ax_row.status, "open",
+        "AX has no relationship to the hijack ask and must stay open"
+    );
+
+    // The executive resolves L1's ask.
+    let resolution = sign_resolution(
+        &executive,
+        &hijack.id.to_hex(),
+        serde_json::json!({"choice": "done"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution of the hijack ask by its audience");
+
+    // No receipt anywhere in the community may p-tag agent X.
+    let all_receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query all receipts");
+    let agent_x_hex = agent_x.public_key().to_hex();
+    assert!(
+        all_receipts.iter().all(|stored| {
+            !stored.event.tags.iter().any(|t| {
+                let parts = t.as_slice();
+                parts.len() == 2 && parts[0] == "p" && parts[1] == agent_x_hex
+            })
+        }),
+        "resolving an ask with a foreign `prior` must never wake that ask's filer"
+    );
+}
+
+/// A `stall` ask has no filer standing behind it and no escalation
+/// relationship (New-I5's reasoning for why `close_superseded_prior` never
+/// closes one applies identically here to the upstream wake). S carries an
+/// origin thread and E genuinely IS its audience, so the standing check
+/// alone would let the wake through -- proving the stall exclusion, not the
+/// standing check, is what stops it.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_stall_prior_is_never_woken_upstream() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let s_channel = channel(&pool, community, "stall-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // A relay-filed stall ask S about a silent task, addressed to the
+    // executive, with an origin thread.
+    let ts = store_root(&db, community, s_channel, &relay_keys, "task went silent").await;
+    let mut s_tags = ask_tags("stall", &executive.public_key(), "init-1", "stall-abc123");
+    s_tags.push(tag(&["e", &ts.id.to_hex()]));
+    let s = sign_ask(
+        &relay_keys,
+        s_tags,
+        &ask_content("\"Ship the thing\" has gone silent", None),
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &s)
+            .await
+            .expect("no internal error"),
+        "relay-filed stall ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &s, Some(s_channel))
+        .await
+        .expect("store stall ask");
+    assert!(inserted);
+
+    // The executive -- S's audience -- escalates it onward to the owner,
+    // pointing `prior` at S. Standing holds (E IS S's audience) and altitude
+    // holds (owner outranks executive), so only the stall exclusion refuses
+    // the wake.
+    let escalation = sign_escalation(
+        &executive,
+        &owner.public_key(),
+        "stall-abc123-escalated",
+        &s,
+        "Escalating the silent task",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "executive -> owner escalation of a stall",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store escalation");
+    assert!(inserted);
+
+    // The owner resolves the escalation.
+    let resolution = sign_resolution(
+        &owner,
+        &escalation.id.to_hex(),
+        serde_json::json!({"choice": "acknowledged"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution by the owner");
+
+    // S's filer is the relay's own key here (no `filer` tag on a relay-signed
+    // ask), so a wake-up receipt to it is a relay message p-tagging the
+    // relay's own pubkey. `nostr::EventBuilder` silently drops any `p` tag
+    // that matches the event's own author unless `allow_self_tagging()` is
+    // called (see `nostr-0.44.7`'s `build_with_ctx`), so a p-tag assertion
+    // here would pass whether or not the wake actually fired -- it is the
+    // CONTENT of the wake-up receipt, not its (suppressed) `p` tag, that
+    // proves whether the stall exclusion held.
+    let all_receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query all receipts");
+    assert!(
+        all_receipts
+            .iter()
+            .all(|stored| !stored.event.content.starts_with("Ask resolved upstream:")),
+        "resolving an ask escalated from a stall prior must never wake the stall's filer"
+    );
+}
+
+/// File a self-addressed ask for `x`, whose `p` tag names its own signer.
+///
+/// `check_altitude`'s executive branch only checks that the audience holds
+/// the community's `owner` role, never that the audience differs from the
+/// signer, so a pubkey that is simultaneously an executive-tier agent AND a
+/// community owner can address an ask to itself. `EventBuilder` strips a
+/// `p` tag matching its own signer unless `allow_self_tagging()` is called
+/// (the same behavior that made the stall test's original assertion
+/// vacuous), which `sign_ask` does not expose, hence the inline builder.
+fn sign_self_addressed_ask(x: &Keys, origin_thread: &Event, need: &str, headline: &str) -> Event {
+    let mut tags = ask_tags("decision", &x.public_key(), "init-1", need);
+    tags.push(tag(&["e", &origin_thread.id.to_hex()]));
+    EventBuilder::new(Kind::Custom(KIND_ASK as u16), ask_content(headline, None))
+        .tags(tags)
+        .allow_self_tagging()
+        .sign_with_keys(x)
+        .expect("sign self-addressed ask")
+}
+
+/// Whole-branch review (Important 1), second reachable path: the wake fired
+/// for a prior that stayed **open** because nothing can outrank its
+/// audience.
+///
+/// `audience_altitude` checks the owner role first and returns rank 3 for an
+/// owner, before consulting `agent_tier`. So for a pubkey that is both an
+/// executive-tier agent and a community owner, any ask addressed to it has
+/// `prior_rank = 3` and no successor audience is strictly higher.
+/// `close_superseded_prior` declines and leaves the prior open;
+/// `wake_superseded_prior_filer` had no rank comparison at all and woke its
+/// filer anyway, telling an agent its ask resolved while the row was still
+/// in flight.
+///
+/// This fixture previously asserted the opposite (that the wake fires),
+/// which is how the defect survived Task 5's own review: the test was
+/// written to prove the dedupe gate and happened to use the one shape where
+/// the prior is never superseded. The dedupe gate keeps its own coverage in
+/// `a_deliberately_withdrawn_self_addressed_prior_still_wakes_its_filer`
+/// below, which reaches the wake through a prior that really is closed.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_prior_left_open_because_nothing_outranks_it_is_never_woken() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let p_channel = channel(&pool, community, "self-addressed-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    // A second owner authors tier declarations, matching the pattern every
+    // other test in this file uses (an owner must author a managed-agent
+    // head for `agent_tier` to trust it).
+    let owner2 = Keys::generate();
+    add_owner(&pool, community, &owner2.public_key().to_hex()).await;
+
+    // X is simultaneously a community owner AND an executive-tier agent.
+    let x = Keys::generate();
+    add_owner(&pool, community, &x.public_key().to_hex()).await;
+    set_tier(&db, community, &owner2, &x, "executive").await;
+
+    // P: X's own self-addressed ask (filer == audience == X), with a real
+    // origin thread so a wake would be observable if it fired.
+    let px = store_root(&db, community, p_channel, &x, "x kicking off its own ask").await;
+    let p = sign_self_addressed_ask(&x, &px, "self-need", "X's own need");
+    assert_applied(
+        handle_ask_event(&tenant, &state, &p)
+            .await
+            .expect("no internal error"),
+        "executive-owner X files its own self-addressed ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &p, Some(p_channel))
+        .await
+        .expect("store P");
+    assert!(inserted);
+
+    // X escalates its own ask onward to a DIFFERENT owner. Standing holds
+    // (X IS P's audience), so only the altitude comparison stops the
+    // supersede-close -- and owner2 ranks 3, exactly like X.
+    let escalation = sign_escalation(
+        &x,
+        &owner2.public_key(),
+        "self-need-escalated",
+        &p,
+        "Escalating my own need",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "X escalates its own ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store escalation");
+    assert!(inserted);
+
+    // The load-bearing precondition: P was never superseded, so X's original
+    // need is still in flight.
+    let p_row = fetch_ask_row(&pool, community, p.id.as_bytes()).await;
+    assert_eq!(
+        p_row.status, "open",
+        "no successor can strictly outrank an owner-audience prior, so P must still be open"
+    );
+
+    // owner2 resolves the escalation.
+    let resolution = sign_resolution(
+        &owner2,
+        &escalation.id.to_hex(),
+        serde_json::json!({"choice": "acknowledged"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution by owner2");
+
+    // Nothing may tell X that P resolved: it did not.
+    let all_receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query all receipts");
+    assert!(
+        all_receipts
+            .iter()
+            .all(|stored| !stored.event.content.starts_with("Ask resolved upstream:")),
+        "a prior this successor never superseded, and which is still open, must never be woken"
+    );
+}
+
+/// Whole-branch review (Important 1), first reachable path: the wake fired
+/// for a prior in **`promoted`** status.
+///
+/// `close_superseded_prior` loads the prior with `find_open_ask_by_event_id`
+/// and so leaves a promoted row alone; the wake loaded it with
+/// `find_ask_by_event_id`, which matches any status. A promoted prior means
+/// the deadline sweep already carried that need one tier up under a
+/// different, still-open ask, so waking its filer says "you are unblocked"
+/// about an ask that is still in flight.
+///
+/// Reachable without any hostile actor: a leader that picks up a worker's
+/// ask after the sweep already promoted it, and files its own ask citing the
+/// one it was handed.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_promoted_prior_is_never_woken_upstream() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let worker_channel = channel(&pool, community, "worker-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // Worker files A1 to the leader, with T1 as its origin thread so a wake
+    // would be observable if it fired.
+    let t1 = store_root(
+        &db,
+        community,
+        worker_channel,
+        &worker,
+        "worker kicking off",
+    )
+    .await;
+    let mut a1_tags = ask_tags("decision", &leader.public_key(), "init-1", "vendor-key");
+    a1_tags.push(tag(&["e", &t1.id.to_hex()]));
+    let a1 = sign_ask(&worker, a1_tags, &ask_content("Need the vendor key", None));
+    assert_applied(
+        handle_ask_event(&tenant, &state, &a1)
+            .await
+            .expect("no internal error"),
+        "worker -> leader ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &a1, Some(worker_channel))
+        .await
+        .expect("store A1");
+    assert!(inserted);
+
+    // The deadline sweep auto-promotes A1, exactly as `promote_to` does it:
+    // `mark_ask_promoted` before the successor is filed. Only A1's resulting
+    // status matters here, so the promotion target is a stand-in id rather
+    // than a second full ask.
+    let promoted_to = [0xAB_u8; 32];
+    assert!(
+        db.mark_ask_promoted(community, a1.id.as_bytes(), &promoted_to)
+            .await
+            .expect("mark A1 promoted"),
+        "A1 must have been open for the sweep to promote it"
+    );
+
+    // The leader files its own ask to the executive citing A1.
+    let escalation = sign_escalation(
+        &leader,
+        &executive.public_key(),
+        "vendor-key-escalated",
+        &a1,
+        "Need the vendor key",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "leader -> executive ask citing an already-promoted prior",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store escalation");
+    assert!(inserted);
+
+    // The load-bearing precondition: the supersede-close correctly did
+    // nothing, so A1 is still climbing under the sweep's own successor.
+    let a1_row = fetch_ask_row(&pool, community, a1.id.as_bytes()).await;
+    assert_eq!(
+        a1_row.status, "promoted",
+        "a promoted prior must not be superseded by a later manual escalation"
+    );
+
+    // The executive resolves the leader's ask.
+    let resolution = sign_resolution(
+        &executive,
+        &escalation.id.to_hex(),
+        serde_json::json!({"choice": "vendor key X"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution of the leader's ask by its audience");
+
+    // The worker's need is still in flight one tier up, so nothing may tell
+    // it otherwise.
+    let all_receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query all receipts");
+    assert!(
+        all_receipts
+            .iter()
+            .all(|stored| !stored.event.content.starts_with("Ask resolved upstream:")),
+        "a prior that is still climbing under its own successor must never be woken"
+    );
+}
+
+/// Review fix (Important): the dedupe check inside
+/// `wake_superseded_prior_filer` compares the would-be PRIMARY recipient
+/// against the prior's filer, but the primary receipt only actually fires
+/// when the SUCCESSOR itself carries an origin thread
+/// (`handle_resolution`'s own `if let Some(origin_thread_hex)` gate).
+/// Without also requiring that here, a prior whose filer IS its audience,
+/// cited by a successor with no origin thread of its own, would be skipped
+/// believing the primary path already delivered, when in fact nothing did --
+/// the agent would get zero receipts.
+///
+/// Reaching that branch needs a prior that is both self-addressed and
+/// genuinely closed. The supersede-close can never close a self-addressed
+/// prior (its audience is an owner, so nothing outranks it -- see
+/// `a_prior_left_open_because_nothing_outranks_it_is_never_woken`), so the
+/// executive withdraws its own ask deliberately first, which
+/// `handle_withdrawal` permits for any executive.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_deliberately_withdrawn_self_addressed_prior_still_wakes_its_filer() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let p_channel = channel(&pool, community, "self-addressed-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner2 = Keys::generate();
+    add_owner(&pool, community, &owner2.public_key().to_hex()).await;
+    let x = Keys::generate();
+    add_owner(&pool, community, &x.public_key().to_hex()).await;
+    set_tier(&db, community, &owner2, &x, "executive").await;
+
+    let px = store_root(&db, community, p_channel, &x, "x kicking off its own ask").await;
+    let p = sign_self_addressed_ask(&x, &px, "self-need", "X's own need");
+    assert_applied(
+        handle_ask_event(&tenant, &state, &p)
+            .await
+            .expect("no internal error"),
+        "executive-owner X files its own self-addressed ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &p, Some(p_channel))
+        .await
+        .expect("store P");
+    assert!(inserted);
+
+    // X withdraws its own ask, so P is genuinely closed before anything
+    // cites it.
+    let withdrawal = sign_withdrawal(&x, &p.id.to_hex(), "handling this differently");
+    assert_applied(
+        handle_ask_event(&tenant, &state, &withdrawal)
+            .await
+            .expect("no internal error"),
+        "executive X withdraws its own ask",
+    );
+    let p_row = fetch_ask_row(&pool, community, p.id.as_bytes()).await;
+    assert_eq!(
+        p_row.status, "withdrawn",
+        "P must be closed before it is cited"
+    );
+
+    // X then files a successor to owner2 citing P, with NO origin thread of
+    // its own -- the exact combination that makes the dedupe gate matter.
+    let successor = sign_escalation(
+        &x,
+        &owner2.public_key(),
+        "self-need-escalated",
+        &p,
+        "Carrying my own need onward",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &successor)
+            .await
+            .expect("no internal error"),
+        "X files a successor citing its own withdrawn ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &successor, None)
+        .await
+        .expect("store successor");
+    assert!(inserted);
+
+    let resolution = sign_resolution(
+        &owner2,
+        &successor.id.to_hex(),
+        serde_json::json!({"choice": "acknowledged"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution by owner2");
+
+    // The successor had no origin thread, so the primary receipt path never
+    // fired. X must still get the upstream wake in P's own thread; without
+    // the `origin_thread_hex.is_some()` condition on the dedupe, it gets
+    // nothing at all.
+    let upstream: Vec<_> = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(p_channel),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipts in P's thread")
+        .into_iter()
+        .filter(|stored| stored.event.content.starts_with("Ask resolved upstream:"))
+        .collect();
+    assert_eq!(
+        upstream.len(),
+        1,
+        "X must be woken in its own original thread even though the successor had no origin \
+         thread of its own"
+    );
+    let x_hex = x.public_key().to_hex();
+    assert!(
+        upstream[0].event.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == x_hex
+        }),
+        "receipt must p-tag X"
+    );
+}
+
+/// Review fix (Important): the upstream wake used to hardcode
+/// `ask_channel_id: None`, forgoing the "trivially legitimate" fast path
+/// (`ask_channel_id == Some(channel_id)`) the other three `emit_ask_receipt`
+/// call sites in this file take by passing the ask's own stored channel.
+/// Falling back to `check_channel_membership` alone means the courtesy wake
+/// silently drops whenever the prior's filer is not a CURRENT member of the
+/// origin thread's channel. This is unobservable with `channel()`'s
+/// open-visibility helper (its membership fallback masks the difference),
+/// so this test deliberately uses `private_channel` instead.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn upstream_wake_uses_the_priors_own_channel_not_membership_alone() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let p_channel = private_channel(&pool, community, "worker-private-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // The worker's own prior ask: its origin thread AND the ask event
+    // itself are both scoped to a PRIVATE channel the worker is never
+    // explicitly added to as a member. Without the ask's own stored channel
+    // as a fast path, `check_channel_membership` alone refuses this channel
+    // for the worker.
+    let p_root = store_root(
+        &db,
+        community,
+        p_channel,
+        &worker,
+        "worker's private thread",
+    )
+    .await;
+    let mut p_tags = ask_tags(
+        "decision",
+        &leader.public_key(),
+        "init-1",
+        "vendor-key-private",
+    );
+    p_tags.push(tag(&["e", &p_root.id.to_hex()]));
+    p_tags.push(tag(&["h", &p_channel.to_string()]));
+    let p = sign_ask(&worker, p_tags, &ask_content("Need the vendor key", None));
+    assert_applied(
+        handle_ask_event(&tenant, &state, &p)
+            .await
+            .expect("no internal error"),
+        "worker -> leader ask in a private channel",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &p, Some(p_channel))
+        .await
+        .expect("store P");
+    assert!(inserted);
+
+    // The leader escalates it to the executive.
+    let escalation = sign_escalation(
+        &leader,
+        &executive.public_key(),
+        "vendor-key-private-escalated",
+        &p,
+        "Need the vendor key",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "leader -> executive escalation",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store escalation");
+    assert!(inserted);
+
+    // The executive resolves it.
+    let resolution = sign_resolution(
+        &executive,
+        &escalation.id.to_hex(),
+        serde_json::json!({"choice": "vendor key X"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution by the executive");
+
+    // The upstream wake must still reach the worker in P's private channel,
+    // because P's own stored channel makes it trivially legitimate --
+    // without that fast path, `check_channel_membership` alone would refuse
+    // (the worker is not an explicit member of a private channel) and the
+    // wake would be silently dropped.
+    let receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(p_channel),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipts in P's private channel");
+    assert_eq!(
+        receipts.len(),
+        1,
+        "the worker must still be woken in its own private-channel thread"
+    );
+    let receipt = &receipts[0].event;
+    assert!(
+        receipt.content.starts_with("Ask resolved upstream:"),
+        "got: {}",
+        receipt.content
+    );
+    let worker_hex = worker.public_key().to_hex();
+    assert!(
+        receipt.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == worker_hex
+        }),
+        "receipt must p-tag the worker"
     );
 }
 
@@ -2761,6 +3669,329 @@ async fn a_decision_log_signed_by_a_leader_citing_an_active_grant_is_accepted_th
         .unwrap_or_else(|error| {
             panic!(
                 "a leader-signed decision log citing an active grant must be accepted: {error:?}"
+            )
+        });
+    assert!(
+        result.accepted,
+        "decision log must be accepted: {}",
+        result.message
+    );
+
+    let stored = db
+        .get_event_by_id(community, event.id.as_bytes())
+        .await
+        .expect("query stored decision log")
+        .expect("the decision log event itself must be stored");
+    assert_eq!(stored.event.id, event.id);
+}
+
+/// A grant delegates exactly one category. A decision log citing a real,
+/// active grant but claiming a *different* category is citing authority it
+/// does not hold -- without this check, one active grant would authorize
+/// every decision an agent cares to record, regardless of what the grant
+/// actually names.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_with_a_mismatched_category_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "channel_strategy",
+            None,
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log claiming a category the grant does not delegate",
+    );
+    assert!(
+        message.contains("claims category"),
+        "expected a category-mismatch refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected decision log must not be stored"
+    );
+}
+
+/// A capped grant binds every decision under it to a declared,
+/// machine-readable amount. A missing amount fails closed: no declared
+/// amount means no way to check the cap.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_under_a_capped_grant_without_an_amount_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content_capped("copy_change", "blog_post_titles", true, 10_000_000_000),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store capped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            None,
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log under a capped grant with no declared amount",
+    );
+    assert!(
+        message.contains("must declare amount_nano_usd"),
+        "expected a missing-amount refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected decision log must not be stored"
+    );
+}
+
+/// A declared amount above the grant's cap is refused, regardless of how
+/// small the overage.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_over_the_cap_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content_capped("copy_change", "blog_post_titles", true, 10_000_000_000),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store capped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            Some(10_000_000_001),
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let message = expect_ingest_rejected(
+        ingest_event(&state, &tenant, event.clone(), auth).await,
+        "a decision log declaring an amount over the grant's cap",
+    );
+    assert!(
+        message.contains("exceeds"),
+        "expected an over-cap refusal, got: {message}"
+    );
+
+    assert!(
+        db.get_event_by_id(community, event.id.as_bytes())
+            .await
+            .expect("query stored event")
+            .is_none(),
+        "a rejected decision log must not be stored"
+    );
+}
+
+/// The cap is inclusive: a decision declaring an amount exactly equal to the
+/// cap is within the delegated authority, not over it.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_at_exactly_the_cap_is_accepted() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content_capped("copy_change", "blog_post_titles", true, 10_000_000_000),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store capped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            Some(10_000_000_000),
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, event.clone(), auth)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("a decision log declaring exactly the cap must be accepted: {error:?}")
+        });
+    assert!(
+        result.accepted,
+        "decision log must be accepted: {}",
+        result.message
+    );
+
+    let stored = db
+        .get_event_by_id(community, event.id.as_bytes())
+        .await
+        .expect("query stored decision log")
+        .expect("the decision log event itself must be stored");
+    assert_eq!(stored.event.id, event.id);
+}
+
+/// An uncapped grant places no ceiling on a declared amount -- declaring
+/// more information than required is never an offence.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_decision_log_with_an_amount_under_an_uncapped_grant_is_accepted() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+
+    let grant_event = sign_grant(
+        &owner,
+        grant_tags("grant-1"),
+        &grant_content("copy_change", "blog_post_titles", true),
+    );
+    let (_, inserted) = db
+        .insert_event(community, &grant_event, None)
+        .await
+        .expect("store uncapped active grant head");
+    assert!(inserted);
+
+    let event = sign_decision_log(
+        &leader,
+        decision_log_tags("grant-1", &["task-1"]),
+        &decision_log_content_with(
+            "Used stock photo B instead of A",
+            "revert commit abc123",
+            "copy_change",
+            Some(1_000_000),
+        ),
+    );
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: leader.public_key(),
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+
+    let result = ingest_event(&state, &tenant, event.clone(), auth)
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "a decision log declaring an amount under an uncapped grant must be accepted: {error:?}"
             )
         });
     assert!(

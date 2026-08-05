@@ -791,6 +791,55 @@ pub(crate) fn row_to_stored_event(row: sqlx::postgres::PgRow) -> Result<Option<S
     )))
 }
 
+/// One newest owner-authored NIP-33 head per `d` tag for `kind`, community
+/// scoped, global events only (`channel_id IS NULL`), non-deleted.
+///
+/// "Owner-authored" is evaluated in SQL against `relay_members.role =
+/// 'owner'`, so a non-owner's newer head at the same `d` tag can never
+/// shadow the owner's: non-owner rows are excluded before `DISTINCT ON`
+/// picks the newest. Ties on `created_at` break toward the lowest event id
+/// (NIP-01). `limit` bounds distinct `d` tags (agents), not revisions.
+///
+/// `relay_members.pubkey` is lowercase hex text; `events.pubkey` is
+/// `BYTEA`, so the join encodes it (`encode(e.pubkey, 'hex')`) -- Postgres'
+/// `encode(..., 'hex')` is lowercase, matching every event pubkey this
+/// codebase ever stores or compares.
+pub async fn query_latest_owner_authored_heads(
+    pool: &PgPool,
+    community_id: CommunityId,
+    kind: i32,
+    limit: i64,
+) -> Result<Vec<StoredEvent>> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (e.d_tag) \
+             e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, \
+             e.sig, e.received_at, e.channel_id \
+         FROM events e \
+         JOIN relay_members m \
+             ON m.community_id = e.community_id \
+            AND m.pubkey = encode(e.pubkey, 'hex') \
+            AND m.role = 'owner' \
+         WHERE e.community_id = $1 AND e.kind = $2 \
+           AND e.channel_id IS NULL AND e.deleted_at IS NULL \
+           AND e.d_tag IS NOT NULL \
+         ORDER BY e.d_tag, e.created_at DESC, e.id ASC \
+         LIMIT $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(kind)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(ev) = row_to_stored_event(row)? {
+            out.push(ev);
+        }
+    }
+    Ok(out)
+}
+
 /// Count events matching the given query parameters (NIP-45 COUNT support).
 ///
 /// Uses the same filter logic as `query_events` but returns only the count.
@@ -1068,6 +1117,50 @@ pub async fn get_last_message_at(
 
     match row {
         Some(r) => Ok(Some(r.try_get("created_at")?)),
+        None => Ok(None),
+    }
+}
+
+/// Returns the `created_at` of the most recent non-deleted event authored
+/// by `pubkey` anywhere in the community -- any kind, channel or global.
+/// The interrupt stall sweep uses this as its per-agent liveness signal;
+/// see `buzz-relay`'s `interrupt_runtime::process_stall_candidate`.
+///
+/// **No index covers this query today, and its cost grows with community
+/// history.** There is no index on `(community_id, pubkey, created_at)`.
+/// The closest, `idx_events_community_pubkey_kind_created`, interleaves
+/// `kind` between `pubkey` and `created_at`, so it cannot serve a
+/// top-1-by-time for one pubkey across kinds without a sort. Postgres
+/// instead walks the community's events newest-first with `pubkey` as a
+/// filter and discards rows until it finds one, across every partition,
+/// since the query carries no time predicate.
+///
+/// The cost is worst exactly when the agent is silent, which is the only
+/// case the stall sweep cares about: the longer an agent has been dead, the
+/// more history this reads before answering. It also runs before the sweep's
+/// `silent_for_secs < stall_after_secs` early return, because it is what
+/// computes the silence, so every in-progress task pays it on every tick.
+/// Compare `get_last_message_at` above, which is fully index-served.
+///
+/// Landing the covering index needs a migration; until then, treat this as
+/// an expensive call and do not add new callers on a hot path.
+pub async fn get_last_authored_event_at(
+    pool: &PgPool,
+    community_id: CommunityId,
+    pubkey: &[u8],
+) -> Result<Option<DateTime<Utc>>> {
+    let row = sqlx::query(
+        "SELECT created_at FROM events \
+         WHERE community_id = $1 AND pubkey = $2 AND deleted_at IS NULL \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(community_id.as_uuid())
+    .bind(pubkey)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(row) => Ok(Some(row.try_get("created_at")?)),
         None => Ok(None),
     }
 }

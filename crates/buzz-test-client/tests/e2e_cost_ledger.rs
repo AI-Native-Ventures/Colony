@@ -297,6 +297,7 @@ fn wire_record(
         payment_mode: PaymentMode::Metered,
         tokens: Some(tokens),
         amount_nanousd: None,
+        observed_cost_nanousd: None,
         harness: Some("buzz-acp".to_string()),
         session_id: None,
         turn_id: None,

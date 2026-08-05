@@ -110,11 +110,24 @@ pub struct InterruptTickStats {
     pub defaults_executed: u32,
 }
 
-/// Upper bound on managed-agent heads scanned when resolving the community's
-/// unique executive (see [`find_unique_executive`]). Generous enough for any
-/// real roster while still bounding the query; a flood of impostor heads at
-/// many different `d` tags is a write-volume/rate-limiting concern, not
-/// something this lookup can absorb on every promotion.
+/// Upper bound on distinct AGENTS (`d` tags) returned by
+/// [`fetch_owner_authored_managed_agent_roster`] when resolving the
+/// community's unique executive (see [`find_unique_executive`]). The bound
+/// is pushed into SQL (`Db::query_latest_owner_authored_heads`'s `DISTINCT
+/// ON (d_tag)`), so it caps agents, not head revisions: a community whose
+/// agents' heads are republished often can no longer push another agent's
+/// single head out of the window just by revision volume. Impostor heads
+/// cost nothing either, at any number of `d` tags: the query's
+/// `JOIN relay_members ... AND m.role = 'owner'` excludes them before
+/// `DISTINCT ON` runs, so they occupy no slot.
+///
+/// Generous enough for any real roster, but not silently so: the query
+/// orders by `d_tag`, and a managed agent's `d` tag is its pubkey hex, so a
+/// community with more than 500 owner-authored agents permanently hides the
+/// ones whose pubkey sorts highest rather than rotating which are visible.
+/// An invisible executive breaks promotion for that community with no
+/// signal. Only a community owner can author that many agent heads, so this
+/// is a scale limit rather than an attack surface.
 const MAX_ROSTER_HEADS: i64 = 500;
 
 /// Floor on a re-armed deadline's window, in seconds. Guards against a
@@ -825,11 +838,12 @@ type ManagedAgentRoster = Vec<(String, serde_json::Value)>;
 /// so sharing code with it directly would not be a clean factor.
 ///
 /// A NON-owner-authored head at a pubkey is never trusted, however new --
-/// rows arrive newest-first (`created_at DESC`), and the first
-/// owner-authored head found for a given `d` tag is authoritative for that
-/// agent; older heads at the same `d` tag (owner-authored or not) are
-/// ignored once settled, and a pubkey with no owner-authored head at all
-/// simply has no entry in the returned roster.
+/// this is now enforced in SQL (`Db::query_latest_owner_authored_heads`'s
+/// owner `JOIN`), not by scanning newest-first and skipping non-owner rows:
+/// a non-owner's head at a `d` tag is excluded from the candidate set before
+/// `DISTINCT ON` ever picks a newest row, so it can never shadow (or stand
+/// in for) the owner's authoritative head. A pubkey with no owner-authored
+/// head at all simply has no entry in the returned roster.
 async fn fetch_owner_authored_managed_agent_roster(
     tenant: &TenantContext,
     state: &AppState,
@@ -837,16 +851,10 @@ async fn fetch_owner_authored_managed_agent_roster(
 ) -> Result<ManagedAgentRoster, String> {
     let rows = state
         .db
-        .query_events(&buzz_db::event::EventQuery {
-            kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
-            global_only: true,
-            limit: Some(limit),
-            ..buzz_db::event::EventQuery::for_community(tenant.community())
-        })
+        .query_latest_owner_authored_heads(tenant.community(), KIND_MANAGED_AGENT as i32, limit)
         .await
         .map_err(|error| format!("database error scanning managed-agent roster: {error}"))?;
 
-    let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut roster = ManagedAgentRoster::new();
     for stored in rows {
         let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
@@ -855,31 +863,11 @@ async fn fetch_owner_authored_managed_agent_roster(
         }) else {
             continue;
         };
-        if settled.contains(&d_tag) {
-            // Already resolved (or deliberately given up on) this agent from
-            // a newer head.
-            continue;
-        }
-
-        let author_hex = stored.event.pubkey.to_hex();
-        let author_is_owner = state
-            .db
-            .get_relay_member(tenant.community(), &author_hex)
-            .await
-            .map_err(|error| format!("database error checking managed-agent head author: {error}"))?
-            .is_some_and(|member| member.role == "owner");
-        if !author_is_owner {
-            // Keep scanning older heads for this same `d` tag -- an
-            // impostor head must never shadow a legitimate one, and must
-            // never be treated as authoritative just because it is newest.
-            continue;
-        }
-        // This IS the authoritative head for this agent (NIP-33 latest-wins
-        // among the owner's own heads) -- settle it here even if its
-        // content turns out to be malformed, rather than falling through to
-        // an older head the owner has already superseded.
-        settled.insert(d_tag.clone());
-
+        // NIP-33 latest-wins among the owner's own heads: the query already
+        // returned exactly one newest owner-authored head per `d` tag, so a
+        // malformed content settles its agent (skipped, no fallback to an
+        // older superseded head) -- the same semantics the Rust-side scan
+        // this replaced enforced row by row.
         let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
             continue;
         };
@@ -1143,50 +1131,79 @@ async fn process_stall_candidate(
         return Ok(false);
     };
 
-    // Silence means no real event activity, not merely an old head: a task
-    // can sit `inProgress` with an untouched head for a long time simply
-    // because nobody re-published a status revision, and that alone is not
-    // evidence of a stall. The signal here is the more recent of (a) the
-    // task head's own `created_at` (a status/field change is itself
-    // activity -- a task that JUST moved to `inProgress` must not be flagged
-    // a tick later) and (b) the last event of any kind in the task's own
-    // `sourceChannelId` (real work happening where the task lives). Only
-    // when BOTH are old does the sweep consider the task silent.
+    // `candidate.host` already comes from `query_in_progress_task_heads`'s
+    // own `communities` join, which the same query filters to
+    // `archived_at IS NULL` -- no separate host lookup needed here (unlike
+    // `process_due_ask`, which resolves a row's community after the fact).
+    let tenant = TenantContext::resolved(candidate.community_id, candidate.host.clone());
+
+    // I5: fetch this community's owner-authored managed-agent roster once
+    // per `run_stall_tick` pass and reuse it for every candidate task in
+    // that community, rather than re-querying per candidate. Moved ahead of
+    // the silence measurement below: resolving the task's assignees to
+    // agent pubkeys needs the roster before the signal can be computed.
+    if let std::collections::hash_map::Entry::Vacant(entry) =
+        roster_cache.entry(candidate.community_id)
+    {
+        let roster =
+            fetch_owner_authored_managed_agent_roster(&tenant, state, MAX_ROSTER_HEADS).await?;
+        entry.insert(roster);
+    }
+    let roster = roster_cache
+        .get(&candidate.community_id)
+        .expect("just inserted or already present");
+
+    // Silence means the ASSIGNED AGENTS have gone event-silent, not merely
+    // that the head is old: the signal is the most recent of (a) the task
+    // head's own `created_at` (a status change is itself activity) and (b)
+    // the newest event AUTHORED BY any of the task's resolvable assignee
+    // agents, anywhere in the community. An agent that is alive keeps
+    // producing events (messages, task updates, asks); a busy channel no
+    // longer vouches for a dead one.
     //
-    // KNOWN FALSE NEGATIVE, stated plainly here rather than only in a report,
-    // and stated at its real width: the signal below is CHANNEL activity, and
-    // the computation applies to EVERY in-progress task regardless of origin.
-    // Any task whose `sourceChannelId` is a busy channel is undetectable --
-    // this sweep cannot tell "the agent is still posting progress here" apart
-    // from "two people are chatting about something else in the same
-    // channel", and either one resets `last_activity_secs` and suppresses
-    // stall detection for as long as the channel stays busy. A dead agent
-    // working an ORDINARY, explicit task in a team channel where anyone else
-    // is talking is therefore just as invisible as one working an implicit
-    // task. (An earlier version of this comment scoped the limitation to
-    // implicit tasks only; the code never did.)
-    //
-    // It is worst for an IMPLICIT, chat-derived task, where `sourceChannelId`
-    // is not a dedicated work channel at all -- it IS the human conversation
-    // the task was inferred from -- so the noise is guaranteed rather than
-    // incidental. That is exactly backwards from what ruling 3 (see
-    // `NO_INITIATIVE_SENTINEL`) establishes: implicit tasks are the ones
-    // nobody deliberately organized under an initiative, and so are the
-    // likeliest to silently fall through the cracks. Accepted as the best
-    // signal available today given the current event model (no kind reliably
-    // ties an ordinary work message to the specific task it advances -- see
-    // `stall_need_key`'s sibling module docs), not silently worked around.
-    let channel_last_activity = state
-        .db
-        .get_last_message_at(candidate.community_id, source_channel_id)
-        .await
-        .map_err(|error| format!("database error loading channel activity: {error}"))?;
-    let last_activity_secs = channel_last_activity
-        .map(|at| at.timestamp())
+    // KNOWN FALSE NEGATIVE, now confined to the fallback: a task none of
+    // whose `assignee_persona_ids` resolve to a running agent in the
+    // owner-authored roster cannot be measured per-agent, so it falls back
+    // to the old channel-activity signal, where any chatter in
+    // `source_channel_id` suppresses detection. Accepted: for an
+    // unattributable task the channel is still the best signal available,
+    // and filing stall asks on every quiet-headed task with an active
+    // channel would be the queue-spam failure this system exists to prevent.
+    let mut assignee_pubkeys: Vec<PublicKey> = Vec::new();
+    for persona_id in &task.assignee_persona_ids {
+        if let Some(pubkey) = persona_pubkey_in_roster(roster, persona_id)? {
+            assignee_pubkeys.push(pubkey);
+        }
+    }
+
+    let mut activity: Vec<i64> = Vec::new();
+    if assignee_pubkeys.is_empty() {
+        let channel_last_activity = state
+            .db
+            .get_last_message_at(candidate.community_id, source_channel_id)
+            .await
+            .map_err(|error| format!("database error loading channel activity: {error}"))?;
+        if let Some(at) = channel_last_activity {
+            activity.push(at.timestamp());
+        }
+    } else {
+        for pubkey in &assignee_pubkeys {
+            let last = state
+                .db
+                .get_last_authored_event_at(candidate.community_id, pubkey.as_bytes())
+                .await
+                .map_err(|error| format!("database error loading agent activity: {error}"))?;
+            if let Some(at) = last {
+                activity.push(at.timestamp());
+            }
+        }
+    }
+    let head_created_at = candidate.task_head_created_at.timestamp();
+    let last_activity_secs = activity
         .into_iter()
-        .chain(std::iter::once(candidate.task_head_created_at.timestamp()))
+        .chain(std::iter::once(head_created_at))
         .max()
-        .expect("chain always yields at least the head's own created_at");
+        .unwrap_or(head_created_at);
     let silent_for_secs = now_secs.saturating_sub(last_activity_secs);
     if silent_for_secs < stall_after_secs {
         return Ok(false);
@@ -1226,26 +1243,6 @@ async fn process_stall_candidate(
             return Ok(false);
         }
     }
-
-    // `candidate.host` already comes from `query_in_progress_task_heads`'s
-    // own `communities` join, which the same query filters to
-    // `archived_at IS NULL` -- no separate host lookup needed here (unlike
-    // `process_due_ask`, which resolves a row's community after the fact).
-    let tenant = TenantContext::resolved(candidate.community_id, candidate.host.clone());
-
-    // I5: fetch this community's owner-authored managed-agent roster once
-    // per `run_stall_tick` pass and reuse it for every candidate task in
-    // that community, rather than re-querying per candidate.
-    if let std::collections::hash_map::Entry::Vacant(entry) =
-        roster_cache.entry(candidate.community_id)
-    {
-        let roster =
-            fetch_owner_authored_managed_agent_roster(&tenant, state, MAX_ROSTER_HEADS).await?;
-        entry.insert(roster);
-    }
-    let roster = roster_cache
-        .get(&candidate.community_id)
-        .expect("just inserted or already present");
 
     let audience = match persona_pubkey_in_roster(roster, &task.qa_persona_id)? {
         Some(pubkey) => pubkey,

@@ -2065,6 +2065,21 @@ impl Db {
         event::get_latest_global_replaceable(&self.pool, community_id, kind, pubkey_bytes).await
     }
 
+    /// One newest owner-authored NIP-33 head per `d` tag for `kind`,
+    /// community scoped, global events only, non-deleted.
+    ///
+    /// See [`event::query_latest_owner_authored_heads`] for the SQL and why
+    /// it is safe against a non-owner's newer head shadowing the owner's.
+    /// `limit` bounds distinct `d` tags (agents), not revisions.
+    pub async fn query_latest_owner_authored_heads(
+        &self,
+        community_id: CommunityId,
+        kind: i32,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        event::query_latest_owner_authored_heads(&self.pool, community_id, kind, limit).await
+    }
+
     /// Fetches a single non-deleted event by its raw ID bytes.
     ///
     /// Returns `None` if the event does not exist or has been soft-deleted.
@@ -2131,6 +2146,16 @@ impl Db {
         channel_id: Uuid,
     ) -> Result<Option<DateTime<Utc>>> {
         event::get_last_message_at(&self.pool, community_id, channel_id).await
+    }
+
+    /// Returns the `created_at` of the most recent non-deleted event authored
+    /// by `pubkey` anywhere in the community -- any kind, channel or global.
+    pub async fn get_last_authored_event_at(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<DateTime<Utc>>> {
+        event::get_last_authored_event_at(&self.pool, community_id, pubkey).await
     }
 
     /// Bulk-fetch the most recent `created_at` for a set of channel IDs.
@@ -5681,6 +5706,16 @@ impl Db {
         ask_event_id: &[u8],
     ) -> Result<Option<asks::AskRow>> {
         asks::find_open_ask_by_event_id(&self.pool, community, ask_event_id).await
+    }
+
+    /// Returns the ask whose filing event is `ask_event_id`, regardless of
+    /// status, or `None`. See [`asks::find_ask_by_event_id`].
+    pub async fn find_ask_by_event_id(
+        &self,
+        community: CommunityId,
+        ask_event_id: &[u8],
+    ) -> Result<Option<asks::AskRow>> {
+        asks::find_ask_by_event_id(&self.pool, community, ask_event_id).await
     }
 
     /// Returns the currently open ask for `(community, initiative_id,

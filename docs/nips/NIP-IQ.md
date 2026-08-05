@@ -205,19 +205,36 @@ rather than the one actually in front of the owner, and the due-ask sweep
 would independently auto-promote that stale row, manufacturing a fourth Ask
 for the same need.
 
-Three conditions, all required:
+Five conditions, all required. Three of them are authorization rather than
+bookkeeping, because `prior` is an unauthenticated tag naming any event id
+in the community and the altitude ladder only constrains
+signer-versus-audience:
 
 - The `prior` Ask must still be `open`. A resolved, withdrawn or already
   promoted row is left exactly as it is.
+- **Standing.** The `prior` Ask's `audience` must BE the successor's signer,
+  which is what a legitimate escalation looks like: the agent that received
+  the raise is the one carrying it onward. Without this, any leader-tier
+  agent could point `prior` at any OTHER agent's open leader-audience Ask
+  and close it silently, acquiring by side effect the withdrawal authority
+  this protocol reserves for the executive. Outranking an Ask is not the
+  same as having any business with it.
+- **The `prior` Ask must not be a `stall` Ask.** A `stall` is relay-filed
+  about a task that stopped moving; nobody escalated it to anyone, so the
+  audience relationship does not mean for it what it means for a raise. The
+  stall sweep treats any closure of one as a decisive human act and
+  suppresses re-detection of that exact task, so closing one as a side
+  effect of filing something else would disarm the single thing the sweep
+  exists to catch. A human can still close it deliberately through
+  resolution or withdrawal.
 - The successor's audience must sit **strictly higher** on the altitude
   ladder than the `prior` Ask's audience (worker < leader < executive <
-  owner). This is authorization, not bookkeeping: `prior` is an
-  unauthenticated tag naming any event id in the community, and the altitude
-  ladder only constrains signer-versus-audience, so without this check a
-  worker could close the executive's Ask sitting in front of the owner
-  simply by filing an ordinary worker-to-leader Ask that points `prior` at
-  it. A rank the relay cannot resolve on either side is treated the same as
-  a failed comparison: the `prior` Ask is left open.
+  owner). Without this check a worker could close the executive's Ask
+  sitting in front of the owner simply by filing an ordinary
+  worker-to-leader Ask that points `prior` at it. A rank the relay cannot
+  resolve on either side is treated the same as a failed comparison: the
+  `prior` Ask is left open. Note this makes an Ask addressed to a community
+  owner unsupersedable, since nothing outranks rank 3.
 - A durable relay key must be configured, the same requirement resolution
   and withdrawal already carry.
 
@@ -306,7 +323,7 @@ applies.
     ["grant", "<delegation_grant_id>"],
     ["task", "<task_id>"]
   ],
-  "content": "{\"decision\":\"...\",\"undo_path\":\"...\"}"
+  "content": "{\"decision\":\"...\",\"undo_path\":\"...\",\"category\":\"...\",\"amount_nano_usd\":500000}"
 }
 ```
 
@@ -315,20 +332,28 @@ applies.
 | `grant` | exactly 1 | the `d` tag (grant id) of the delegation grant this decision was made under |
 | `task` | 1 or more | the task(s) this decision covers |
 
-| Content field | Type | Required |
-|---|---|---|
-| `decision` | string | yes, non-empty after trim |
-| `undo_path` | string | yes, non-empty after trim: no stateable undo path means no autonomy, so a decision log missing one is rejected outright, not merely flagged |
+| Content field | Type | Required | Notes |
+|---|---|---|---|
+| `decision` | string | yes, non-empty after trim | |
+| `undo_path` | string | yes, non-empty after trim | no stateable undo path means no autonomy, so a decision log missing one is rejected outright, not merely flagged |
+| `category` | string | yes, non-empty after trim | ASCII-lowercased on parse; rejected outright if it matches [the hard list](#hard-list) (case-insensitively, checked before lowercasing); the relay refuses a mismatch against the cited grant's `category` |
+| `amount_nano_usd` | integer | no | a non-negative integer nanoUSD when present; required whenever the cited grant carries `cap_nano_usd`, and refused above the cap |
 
 **Authority checked at ingest:** the signer's tier must resolve to `leader`
 or `executive` (`enforce_decision_log_authority`), and the cited `grant`
 must resolve, via the same owner-authorship trust rule tiers use, to a
-currently `active` grant. **The relay does not verify that `decision`'s
-content actually falls within the cited grant's `category`/`scope`**, nor
-that the signer is the specific agent the grant was "meant" for (grants
-carry no assignee field): any current leader or executive may cite any
-active grant. Binding a decision log to its grant's stated boundaries is a
-convention enforced by the filing agent, not by the relay.
+currently `active` grant. Two refusals are normative from there: the relay
+requires `category` to equal the cited grant's `category` exactly, refusing
+a mismatch; and when the cited grant carries a `cap_nano_usd`, the relay
+requires `amount_nano_usd` to be present and refuses both a missing amount
+and one that exceeds the cap (see [Kind 30189](#kind-30189-delegation-grant)
+for the cap's per-decision, non-cumulative scope). **The relay does not
+verify that `decision`'s content actually falls within the cited grant's
+`scope`**, nor that the signer is the specific agent the grant was "meant"
+for (grants carry no assignee field): any current leader or executive may
+cite any active grant matching the claimed category. Binding a decision log
+to its grant's stated scope is a convention enforced by the filing agent,
+not by the relay.
 
 ### Kind 30189: Delegation Grant
 
@@ -349,7 +374,7 @@ latest event per address wins.
 | `category` | string | yes, non-empty | ASCII-lowercased on parse; rejected outright if it matches [the hard list](#hard-list) (case-insensitively) |
 | `scope` | string | yes, non-empty | ASCII-lowercased on parse; rejected if it is a wildcard (`*` or `all`, case-insensitively): a grant this vague is indistinguishable from no policy at all |
 | `active` | boolean | yes | `false` revokes the grant without deleting the record |
-| `cap_nano_usd` | integer | no | an optional spending cap, in integer nanoUSD |
+| `cap_nano_usd` | integer | no | an optional spending cap, in integer nanoUSD; when present, must be a non-negative integer |
 
 **Authorship enforced at ingest, not just schema.** `KIND_DELEGATION_GRANT`
 also carries only `Scope::UsersWrite`, so schema validity alone (which
@@ -358,16 +383,23 @@ additionally requires the event's signer to currently hold the community's
 `owner` role, rejecting otherwise with `restricted: delegation grants may
 only be signed by a current community owner`.
 
-**`cap_nano_usd` is descriptive, not binding.** It is parsed and carried on
-`ParsedGrant`, but nothing in this codebase checks a decision log (or
-anything else) against it. A grant's spending cap is a record of intent,
-not an enforced limit.
+**`cap_nano_usd` is binding per decision, not cumulative.**
+`enforce_decision_log_authority` checks it at decision-log ingest: a capped
+grant requires every decision log citing it to declare `amount_nano_usd`,
+and refuses one that exceeds the cap. The check is per decision only -- the
+relay does not sum amounts already logged under the same grant, so a series
+of individually-under-cap decisions can still add up to far more than the
+cap over time. Tracking cumulative spend across decisions is cost
+imputation, a later plan, not this one. `scope` remains descriptive only:
+the relay does not verify that a decision log's content, or its cited
+grant's `category`, actually falls within the grant's stated `scope` -- see
+the [44303](#kind-44303-decision-log) section above.
 
 #### Hard list
 
 `HARD_LIST_CATEGORIES` (`buzz-core/src/interrupt.rs`) is immutable, no
 configuration and no override: `spend`, `external_send`, `hiring`, `legal`,
-`pricing`, `deletion`, `vendor`. It governs two independent checks, both
+`pricing`, `deletion`, `vendor`. It governs three independent checks, all
 ASCII case-folded so `"Spend"` or `"SPEND"` cannot slip past a
 lowercase-only comparison:
 
@@ -377,6 +409,12 @@ lowercase-only comparison:
 - A delegation grant's `category` is rejected outright when it is on the
   hard list: none of these categories can ever be delegated away from
   asking a human.
+- A decision log's `category` is rejected outright when it is on the hard
+  list. This closes the same door from the other side: no grant can carry a
+  hard-list category, so no decision log could legitimately match one
+  anyway, and rejecting it at parse time means the refusal names the hard
+  list rather than reporting a category mismatch against whatever grant was
+  cited.
 
 ## Relay Behavior
 
@@ -538,6 +576,55 @@ legitimately post in (a member, or an open channel), preventing the relay
 from being tricked into delivering attacker-chosen text into a channel the
 filer cannot write to.
 
+**Resolving an escalated Ask also wakes the superseded prior's filer.**
+When a manual escalation's `prior` tag closed an earlier Ask (see
+"`prior` names the Ask this one supersedes" above), that closure posts no
+receipt of its own: the work is continuing one tier up, not resolved. But
+when the *successor* Ask is later resolved, the agent that carried the Ask
+upward is not the only one waiting on the outcome; the original filer is.
+So resolving a successor Ask also posts a second, additive wake-up receipt
+into the *prior* Ask's own origin thread, p-tagging its original filer, with
+content prefixed `Ask resolved upstream: `. This fires from the resolution
+path alone, independent of whether the successor Ask itself carries an
+origin thread.
+
+**The `prior` Ask must actually be closed.** The wake requires the `prior`
+row to be `withdrawn`, the state the supersede-close leaves an Ask it
+closed. Without that requirement the wake reaches priors nothing ever
+superseded, which manufactures the false "you are unblocked" this protocol
+exists to prevent. Two shapes make that reachable without any hostile
+actor: a `promoted` prior, whose need is already climbing under the sweep's
+own successor, and an `open` prior addressed to a community owner, which no
+successor can strictly outrank so the supersede-close never closes it.
+
+The standing rule is the same one that gates the supersede-close itself:
+the prior Ask's `audience` must BE the resolved (successor) Ask's signer.
+Since `prior` is an unauthenticated tag naming any event id in the
+community, without this check an agent could point `prior` at any other
+Ask and have the relay deliver a "resolved" wake-up to its filer. A `stall`
+Ask's filer is never woken this way either, for the same reason a `stall`
+Ask is never closed by a superseding escalation: it has no filer standing
+behind it. If the prior Ask's own wake-up would land on the same pubkey the
+successor's audience receipt above already reached, the upstream wake is
+skipped, since one wake is enough.
+
+Two limits are worth stating, since both are easy to over-estimate:
+
+- **The receipt carries the successor Ask's headline, not the answer.** The
+  original filer learns *that* the need resolved, not *what* was decided.
+  The resolver's answer went to the agent that escalated, which may be
+  entitled to detail the original filer is not. This matches the primary
+  resolution receipt, which also carries the headline.
+- **The `prior` chain is walked exactly one hop, and auto-promotion ends
+  it.** The sweep signs its promoted successor with the relay's own key and
+  rewrites `prior` to point at the Ask it promoted, so the standing rule
+  above (prior audience == successor signer) never holds for a promoted
+  successor. Worker A filing to leader B, B escalating manually to
+  executive C, and C's Ask then being auto-promoted, wakes B when the
+  promoted Ask resolves but never wakes A. The guarantee covers a manual
+  escalation resolved directly, not one that is itself auto-promoted first.
+  This is a missing courtesy wake rather than a false one.
+
 ### Owner thread-reply auto-resolution
 
 An owner does not have to answer an Ask through its card. Replying inside
@@ -649,9 +736,14 @@ act on.
    crash window the due-ask sweep cannot close on its own.
 2. **Scan in-progress task heads** (status `inProgress`, up to 500 per
    tick).
-3. For each candidate, measure silence as `now - max(task head's own
-   created_at, last event of any kind in the task's own sourceChannelId)`.
-   If under `stall_after_secs`, skip.
+3. For each candidate, resolve `task.assignee_persona_ids` against the
+   community's owner-authored managed-agent roster
+   (`persona_pubkey_in_roster`). Measure silence as `now - max(task head's
+   own created_at, last event AUTHORED BY any resolved assignee agent
+   anywhere in the community)`. If no assignee resolves to a running agent,
+   fall back to the pre-existing channel signal instead: `now - max(task
+   head's own created_at, last event of any kind in the task's own
+   sourceChannelId)`. If under `stall_after_secs`, skip.
 4. Derive `need_key = stall_need_key(task_id)` (see "The `need` dedupe key"
    above) and `initiative_id = task.initiative_id`, or the sentinel
    `no-initiative` when the task carries none.
@@ -667,26 +759,38 @@ act on.
    gone silent"`, no `options`, no `default_option`) through the ordinary
    ask broker, so it dedupes exactly like any other filing.
 
-**Known false negative, stated plainly.** The silence signal is *channel*
-activity, and it applies to **every** in-progress task regardless of origin,
-not only to implicit chat-derived ones. Any task whose `sourceChannelId` is
-a busy channel is equally undetectable: this sweep cannot distinguish "the
-agent is still posting progress here" from "two people are chatting about
-something unrelated in the same channel", and either resets the silence
-measurement and suppresses stall detection for as long as the channel stays
-busy. A dead agent working an explicit task in a team channel where anyone
-else is talking is therefore invisible to this sweep for as long as that
-conversation continues.
+**The primary signal is per-agent, not per-channel.** Silence means the
+task's *assigned agents* have gone event-silent, not merely that the head is
+old or that the channel is quiet: the sweep resolves each of
+`task.assignee_persona_ids` to a pubkey via the owner-authored managed-agent
+roster, and measures the newest event authored by any of them, anywhere in
+the community, of any kind. An agent that is alive keeps producing events
+(messages, task updates, Asks) somewhere; a busy channel no longer vouches
+for a dead one, and a live agent working quietly in a different channel is
+no longer falsely flagged.
+
+**Known false negative, now confined to the fallback.** A task none of whose
+`assignee_persona_ids` resolve to a running agent in the owner-authored
+roster cannot be measured per-agent, so it falls back to the old
+channel-activity signal: `now - max(task head's own created_at, last event
+of any kind in the task's own sourceChannelId)`. For that narrower class of
+task, the original limitation still applies verbatim: any chatter in
+`sourceChannelId` by anyone, agent or human, suppresses detection for as
+long as the channel stays busy, since this sweep still cannot distinguish
+"the agent is still posting progress here" from "two people are chatting
+about something unrelated in the same channel."
 
 It is worst for an *implicit*, chat-derived task, where `sourceChannelId` is
 not a dedicated work channel at all, it **is** the human conversation the
-task was inferred from, so the noise is guaranteed rather than incidental.
-That is backwards from what it should be: implicit tasks are exactly the
-ones nobody deliberately organized under an initiative, and so are the
-likeliest to silently fall through the cracks. Accepted as the best signal
-available given the current event model (no kind reliably ties an ordinary
-work message to the specific task it advances), not silently worked
-around.
+task was inferred from, so the noise is guaranteed rather than incidental --
+and an implicit task is exactly the kind most likely to carry assignees that
+were never formally appointed through a managed-agent head, so it is also
+disproportionately likely to land in the fallback branch. Accepted as the
+best signal available for an unattributable task given the current event
+model (no kind reliably ties an ordinary work message to the specific task
+it advances), not silently worked around: filing a stall Ask on every
+quiet-headed task with an active channel, with no agent to blame it on,
+would be the queue-spam failure this whole system exists to prevent.
 
 ## Client Behavior (`buzz asks`)
 
@@ -719,21 +823,51 @@ conflict, exit code 5, printing the relay's full response first so the
 original Ask's event id (what the caller is actually blocked on) is never
 flattened away.
 
-There is currently no `buzz-cli` surface for delegation grants (kind
-30189) or decision logs (kind 44303); those events must be constructed and
-signed directly against the schemas above.
+## Client Behavior (`buzz grants` / `buzz decisions`)
+
+`buzz-cli` also surfaces delegation grants (kind 30189, see
+`crates/buzz-cli/src/commands/grants.rs`) and decision logs (kind 44303, see
+`crates/buzz-cli/src/commands/decisions.rs`), mirroring `asks.rs`'s
+self-validate-before-submit structure:
+
+| Subcommand | Kind | Notes |
+|---|---|---|
+| `buzz grants create --id <id> --category <cat> --scope <scope> [--cap-nano-usd <n>]` | 30189 | publishes or updates a grant head; owner key required, the relay refuses a signer who is not a current community owner |
+| `buzz grants revoke --id <id>` | 30189 | reads the newest head with this `d` tag, then republishes the same category/scope/cap with `active: false`; the record stays, only the flag flips |
+| `buzz grants list [--active]` | reads 30189 | keeps only the newest head per `d` tag, newest first; `--active` filters to grants whose newest head is active |
+| `buzz decisions log --grant <id> --task <id>... --category <cat> --decision <text> --undo-path <text> [--amount-nano-usd <n>]` | 44303 | `--task` is repeatable and required at least once; the relay refuses a category that does not match the cited grant's, and enforces the grant's cap per decision |
+| `buzz decisions list` | reads 44303 | newest first |
+
+`grants create`/`revoke` and `decisions log` self-validate the exact event
+they just signed against `parse_grant`/`parse_decision_log` (the same
+parser the relay runs) before submitting, so a CLI-side rejection is
+guaranteed to also be a relay-side rejection: a hard-list `--category`, a
+wildcard `--scope`, or a negative `--cap-nano-usd`/`--amount-nano-usd` is
+caught before any network call. Write submission uses the same
+accepted/conflict handling as `buzz asks`: any `accepted: false` response
+(including a NIP-33 LWW `"duplicate: ..."` dominance report on `grants`) is
+a write conflict, exit code 5, after the full response is printed.
 
 ## Known Limitations
 
-- **Stall detection can be suppressed indefinitely for ANY task in a busy
-  channel.** See "Known false negative" under "Stall-detection sweep" above:
-  ordinary conversation in a task's own source channel resets the silence
-  signal, for every task regardless of origin. It is guaranteed rather than
-  incidental for implicit, chat-derived tasks, which are also the ones most
-  likely to actually stall.
-- **A delegation grant's `cap_nano_usd` spending cap is parsed and stored,
-  but enforced nowhere.** It documents intent; nothing in this codebase
-  checks a decision log, or anything else, against it.
+- **Stall detection can be suppressed indefinitely for a task whose
+  assignees cannot be resolved to a running agent, if its channel is busy.**
+  See "Known false negative, now confined to the fallback" under
+  "Stall-detection sweep" above: for a task where none of
+  `assignee_persona_ids` resolve through the owner-authored managed-agent
+  roster, ordinary conversation in the task's own source channel still
+  resets the silence signal. Tasks with a resolvable assignee are no longer
+  affected: their signal follows the agent, not the channel. The fallback is
+  guaranteed rather than incidental for implicit, chat-derived tasks (whose
+  assignees are also the least likely to have been formally appointed
+  through a managed-agent head), which are also the ones most likely to
+  actually stall.
+- **A delegation grant's `cap_nano_usd` spending cap is enforced per
+  decision, not cumulatively.** Each decision log's declared
+  `amount_nano_usd` is checked against the cap in isolation; the relay does
+  not sum amounts already logged under the same grant, so several
+  individually-under-cap decisions can still exceed the cap in aggregate.
+  Cumulative spend tracking is cost imputation, a later plan.
 - **A crash in the instant between a promotion's claim committing and its
   successor being filed is not repaired by the promotion path itself.**
   `interrupt_runtime::promote_to`'s in-process compensation
@@ -750,14 +884,31 @@ not a suggestion.** Both fail closed on any database error resolving tier,
 membership, or the reply exemption; a lookup failure rejects the write
 rather than allowing it through.
 
-**Trust in owner-authored heads, not merely present heads.** Tier
-resolution, grant resolution, and the community's unique-executive/QA-persona
-lookups all scan a bounded number of candidate NIP-33 heads and use only
-the first one authored by a *current* community owner. Any authenticated
-member can publish a `KIND_MANAGED_AGENT` or `KIND_DELEGATION_GRANT` event
-at ingest time; it is this owner-authorship filter at *read* time, not
-ingest-time restriction, that prevents an agent from self-declaring its own
-tier or granting itself autonomy.
+**Trust in owner-authored heads, not merely present heads.** Every read
+that turns a NIP-33 head into authority honours only heads authored by a
+*current* community owner, so demoting an owner retroactively withdraws the
+authority its heads conferred. Two shapes implement the same rule:
+
+- Tier resolution and grant resolution scan a bounded number of candidate
+  heads newest-first and use the first one whose author currently holds the
+  `owner` role, skipping the rest.
+- The community's managed-agent roster, which backs the unique-executive
+  and QA-persona lookups, applies the owner filter in SQL *before*
+  selecting one head per agent, so a head by a non-owner never occupies a
+  slot at all. Its bound (`MAX_ROSTER_HEADS`, 500) is therefore on distinct
+  **agents**, not on candidate head revisions: republishing one agent's
+  head cannot push another agent out of the window. A community with more
+  than 500 owner-authored agents truncates on `d` tag order, so the excess
+  is a fixed set rather than a rotating one.
+
+Any authenticated member can publish a `KIND_MANAGED_AGENT` event at ingest
+time, so for tiers it is this owner-authorship filter at *read* time that
+prevents an agent from self-declaring its own tier. `KIND_DELEGATION_GRANT`
+is restricted at ingest as well (see [Kind
+30189](#kind-30189-delegation-grant)): a signer who does not currently hold
+the `owner` role cannot store one at all. The read-time filter still
+matters there, because it is what makes a demoted owner's already-stored
+grant heads stop counting.
 
 **Relay-signing is a privilege boundary, not just a convenience.** The
 altitude-ladder bypass, the `filer`-tag override, and default-execution/
@@ -771,12 +922,22 @@ resolution, or a stall Ask in a production community. Every one of these
 codepaths refuses outright rather than proceeding with the shared fallback
 key.
 
-**A decision log's authority is checked, but not its content.** A decision
-log's authorization is "is the signer a leader or executive, and is the
-cited grant currently active", not "does this decision actually fall
-within the grant's stated category and scope". The latter is left to the
-filing agent's own discipline; a leader or executive can cite any active
-grant regardless of subject matter.
+**A decision log's declared category is checked; its prose is not.** A
+decision log's authorization is: the signer resolves to leader or executive
+tier, the cited grant resolves to a currently `active` owner-authored head,
+the log's `category` equals that grant's `category` exactly, and, when the
+grant carries a `cap_nano_usd`, the log declares an `amount_nano_usd` at or
+under the cap. A leader or executive cannot cite an active grant for a
+decision in some other category, and cannot record a capped decision
+without a machine-readable amount.
+
+What the relay does **not** check is whether the decision's prose actually
+falls inside the grant's stated `scope`, which remains descriptive only, or
+whether this particular agent was the one the grant was "meant" for (grants
+carry no assignee field). Any current leader or executive may cite any
+active grant whose category matches what it claims. Binding a decision to
+its grant's scope is a convention the filing agent keeps, not one the relay
+enforces.
 
 ## Relationship to Other NIPs
 

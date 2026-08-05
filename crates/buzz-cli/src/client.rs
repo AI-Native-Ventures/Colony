@@ -1431,6 +1431,136 @@ pub fn normalize_write_response(raw: &str) -> String {
     raw.to_string()
 }
 
+/// Why a relay write did not durably store the event, or `None` when it did.
+///
+/// A write is a success only when the relay actually stored something. Two
+/// different responses report a write that was NOT stored, and only one of
+/// them says `accepted: false`:
+///
+/// - `accepted: false` is the ordinary refusal (a bad altitude, a broker
+///   duplicate, a rejected event).
+/// - `accepted: true` with a `message` beginning `duplicate:` is how
+///   `ingest_event` reports a write it discarded: either the exact event was
+///   already stored, or a NIP-33 head at the same `(kind, pubkey, d)` address
+///   dominated it on the last-write-wins tiebreak. Nostr `created_at` is
+///   whole seconds, so two heads written inside one second collide and the
+///   loser is decided by a byte comparison of event ids.
+///
+/// Testing only `accepted` therefore reports a discarded write as a success.
+/// For `buzz grants revoke` that meant printing success and exiting 0 while
+/// the grant stayed active, with no stored event to audit afterwards.
+///
+/// The returned reason has any `duplicate:`/`conflict:` prefix stripped
+/// (with or without the trailing space the relay is inconsistent about);
+/// callers surface it as [`CliError::Conflict`], exit code 5.
+pub fn write_conflict_reason(raw: &str) -> Option<String> {
+    let response = serde_json::from_str::<serde_json::Value>(raw).ok();
+    let accepted = response
+        .as_ref()
+        .and_then(|value| value.get("accepted").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    let message = response
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| raw.to_owned());
+
+    let discarded = message == "duplicate" || message.starts_with("duplicate:");
+    if accepted && !discarded {
+        return None;
+    }
+    Some(strip_write_conflict_prefix(&message))
+}
+
+/// Strip the relay's `duplicate:`/`conflict:` prefix from a write-response
+/// message, tolerating the presence or absence of a following space.
+///
+/// The bare `"duplicate:"` the NIP-33 dominance path emits carries no reason
+/// of its own, so it is replaced with one that says what happened.
+fn strip_write_conflict_prefix(message: &str) -> String {
+    let stripped = message
+        .strip_prefix("duplicate:")
+        .or_else(|| message.strip_prefix("conflict:"))
+        .map(str::trim_start);
+    match stripped {
+        None => message.to_owned(),
+        Some("") => "the relay discarded this write and stored no new event (the event was \
+                     already present, or a head at this address already dominates it); nothing \
+                     changed"
+            .to_owned(),
+        Some(reason) => reason.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod write_response_tests {
+    use super::write_conflict_reason;
+
+    /// The shape `ingest_event` returns for a write it discarded: `accepted`
+    /// is `true` and the message is a bare `"duplicate:"` with no trailing
+    /// space. Reading only `accepted` reports this as a success, which is how
+    /// `buzz grants revoke` printed success while the grant stayed active.
+    #[test]
+    fn nip33_dominance_response_is_a_conflict_despite_accepted_true() {
+        let reason =
+            write_conflict_reason(r#"{"event_id":"abc","accepted":true,"message":"duplicate:"}"#)
+                .expect("a discarded write must not report success");
+
+        assert!(
+            reason.contains("stored no new event"),
+            "the bare `duplicate:` carries no reason of its own, so one is supplied; got: {reason}"
+        );
+    }
+
+    /// The broker's own duplicate report keeps its reason, and the prefix is
+    /// stripped whether or not a space follows the colon.
+    #[test]
+    fn duplicate_prefix_is_stripped_with_or_without_a_space() {
+        assert_eq!(
+            write_conflict_reason(r#"{"accepted":false,"message":"duplicate: original ask abc"}"#)
+                .as_deref(),
+            Some("original ask abc")
+        );
+        assert_eq!(
+            write_conflict_reason(r#"{"accepted":true,"message":"duplicate:superseded"}"#)
+                .as_deref(),
+            Some("superseded")
+        );
+        assert_eq!(
+            write_conflict_reason(r#"{"accepted":false,"message":"conflict: bad altitude"}"#)
+                .as_deref(),
+            Some("bad altitude")
+        );
+    }
+
+    /// A genuinely stored write is not a conflict.
+    #[test]
+    fn an_accepted_write_is_not_a_conflict() {
+        assert_eq!(
+            write_conflict_reason(r#"{"event_id":"abc","accepted":true,"message":"saved"}"#),
+            None
+        );
+        assert_eq!(
+            write_conflict_reason(r#"{"event_id":"abc","accepted":true,"message":""}"#),
+            None
+        );
+    }
+
+    /// A response that is not JSON, or carries no `message`, falls back to
+    /// the raw body rather than swallowing it.
+    #[test]
+    fn a_non_json_response_is_a_conflict_carrying_the_raw_body() {
+        assert_eq!(
+            write_conflict_reason("upstream exploded").as_deref(),
+            Some("upstream exploded")
+        );
+    }
+}
+
 #[cfg(test)]
 mod retry_tests {
     use std::time::Duration;

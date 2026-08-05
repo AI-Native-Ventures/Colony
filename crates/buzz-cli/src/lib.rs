@@ -261,6 +261,12 @@ enum Cmd {
     /// File, escalate, list, answer, and withdraw Colony interrupt Asks
     #[command(subcommand)]
     Asks(AsksCmd),
+    /// Create, revoke, and list delegation grants (kind 30189; owner-signed)
+    #[command(subcommand)]
+    Grants(GrantsCmd),
+    /// Record and list decision logs made under a delegation grant (kind 44303)
+    #[command(subcommand)]
+    Decisions(DecisionsCmd),
     /// Hire and list the workspace's employees (kinds 9045/30190)
     #[command(subcommand)]
     Employees(EmployeesCmd),
@@ -2557,6 +2563,75 @@ pub enum AsksCmd {
     },
 }
 
+/// Subcommands for `buzz grants`: delegation grants, the owner-signed heads
+/// that let a leader or executive decide a bounded category autonomously.
+#[derive(Subcommand)]
+pub enum GrantsCmd {
+    /// Publish (or update) a delegation grant head. Owner key required: the
+    /// relay refuses a grant signed by anyone but a current community owner.
+    Create {
+        /// Stable grant id (the NIP-33 `d` tag); re-using an id updates that grant
+        #[arg(long)]
+        id: String,
+        /// Decision category this grant delegates. Hard-list categories
+        /// (spend, external_send, hiring, legal, pricing, deletion, vendor)
+        /// are refused: those always go to the owner
+        #[arg(long)]
+        category: String,
+        /// Precise scope of the delegation; wildcards ("*", "all") are refused
+        #[arg(long)]
+        scope: String,
+        /// Optional spending cap in integer nanoUSD. Decisions under a capped
+        /// grant must declare --amount-nano-usd at or under the cap
+        #[arg(long)]
+        cap_nano_usd: Option<i64>,
+    },
+    /// Revoke a grant: republish its head with active=false (the record stays)
+    Revoke {
+        /// The grant id to revoke
+        #[arg(long)]
+        id: String,
+    },
+    /// List delegation grant heads (kind 30189) the relay would honour,
+    /// newest first: one head per grant id, authored by a current owner
+    List {
+        /// Only grants the relay currently enforces
+        #[arg(long)]
+        active: bool,
+    },
+}
+
+/// Subcommands for `buzz decisions`: the audit trail a leader or executive
+/// writes when it decides something under a delegation grant.
+#[derive(Subcommand)]
+pub enum DecisionsCmd {
+    /// Record a decision made under a grant. The relay refuses a category
+    /// that does not match the grant, and enforces the grant's cap
+    Log {
+        /// The delegation grant id this decision was made under
+        #[arg(long)]
+        grant: String,
+        /// Task id(s) this decision covers (repeatable, at least one)
+        #[arg(long, required = true)]
+        task: Vec<String>,
+        /// The decision's category; must equal the cited grant's category
+        #[arg(long)]
+        category: String,
+        /// What was decided
+        #[arg(long)]
+        decision: String,
+        /// How to undo this decision. Required: no undo path, no autonomy
+        #[arg(long)]
+        undo_path: String,
+        /// Money this decision moves, in integer nanoUSD. Required when the
+        /// grant carries a cap
+        #[arg(long)]
+        amount_nano_usd: Option<i64>,
+    },
+    /// List decision logs (kind 44303), newest first
+    List {},
+}
+
 async fn run(cli: Cli) -> Result<(), CliError> {
     let relay_url = client::normalize_relay_url(&cli.relay);
 
@@ -2644,6 +2719,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Mem(sub) => commands::mem::dispatch(sub, &client).await,
         Cmd::Moderation(sub) => commands::moderation::dispatch(sub, &client, &cli.format).await,
         Cmd::Asks(sub) => commands::asks::dispatch(sub, &client).await,
+        Cmd::Grants(sub) => commands::grants::dispatch(sub, &client).await,
+        Cmd::Decisions(sub) => commands::decisions::dispatch(sub, &client).await,
         Cmd::Employees(sub) => commands::employees::dispatch(sub, &client).await,
         Cmd::Pack(_) => unreachable!("handled above"),
     }
@@ -2977,6 +3054,49 @@ mod tests {
     }
 
     #[test]
+    fn grants_and_decisions_command_surface_parses() {
+        let cases = vec![
+            vec![
+                "buzz",
+                "grants",
+                "create",
+                "--id",
+                "grant-copy",
+                "--category",
+                "copy_change",
+                "--scope",
+                "blog post titles",
+            ],
+            vec!["buzz", "grants", "revoke", "--id", "grant-copy"],
+            vec!["buzz", "grants", "list", "--active"],
+            vec![
+                "buzz",
+                "decisions",
+                "log",
+                "--grant",
+                "grant-copy",
+                "--task",
+                "task-1",
+                "--category",
+                "copy_change",
+                "--decision",
+                "shortened the title",
+                "--undo-path",
+                "revert commit abc",
+            ],
+            vec!["buzz", "decisions", "list"],
+        ];
+
+        for args in cases {
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "failed to parse {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
     fn agent_draft_commands_accept_optional_reply_anchor() {
         let event_id = "a".repeat(64);
         let channel = "7c07e659-3610-42f4-9a5e-1e9973c09da9";
@@ -3043,11 +3163,13 @@ mod tests {
             "canvas",
             "channels",
             "company",
+            "decisions",
             "discovery",
             "dms",
             "emoji",
             "employees",
             "feed",
+            "grants",
             "initiatives",
             "issues",
             "ledger",
@@ -3256,6 +3378,8 @@ mod tests {
             names(&cmd, "asks"),
             vec!["answer", "escalate", "list", "raise", "withdraw"]
         );
+        assert_eq!(names(&cmd, "grants"), vec!["create", "list", "revoke"]);
+        assert_eq!(names(&cmd, "decisions"), vec!["list", "log"]);
     }
 
     #[test]

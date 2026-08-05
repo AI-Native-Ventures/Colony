@@ -182,7 +182,9 @@ with them (41010), adding them to one (41011), and a NIP-17 gift wrap
 addressed to them (1059). The one exemption is thread-scoped (replying inside
 a thread the owner started, or one they pulled the agent into). Agents raise
 typed asks via `buzz asks raise` instead (see docs/nips/NIP-IQ.md). Tiers live
-in the managed-agent head `tier` field.
+in the managed-agent head `tier` field. Decisions made under an owner-signed
+delegation grant (`buzz grants create`) are recorded with `buzz decisions log`,
+and the relay enforces the grant's category and cap at ingest.
 
 ---
 

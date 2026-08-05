@@ -536,6 +536,210 @@ async fn leader_audience_ask_past_deadline_promotes_to_the_executive() {
     }));
 }
 
+/// Task 4 regression: the roster window must bound distinct AGENTS, not
+/// head REVISIONS. Before the fix, `fetch_owner_authored_managed_agent_roster`
+/// fetched the 500 most recent `KIND_MANAGED_AGENT` events and deduped by
+/// `d` tag in Rust -- so 520 owner-authored revisions of a single OTHER
+/// agent's head (republished often, e.g. a busy leader whose head keeps
+/// changing) can fill the entire 500-row window and push the executive's
+/// own single head out of it entirely, even though the executive's head was
+/// never touched. The sweep would then see zero candidates for "unique
+/// executive" and re-deadline instead of promote.
+///
+/// Against the fixed query (`Db::query_latest_owner_authored_heads`), the
+/// window is `DISTINCT ON (d_tag)` before `LIMIT` -- the flood collapses to
+/// ONE row (the other agent's newest revision), so it can never crowd out a
+/// different agent's `d` tag no matter how many times it is republished.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn executive_resolution_survives_a_flood_of_other_head_revisions() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    // Seed the executive's (and the rest of the ladder's) owner-authored
+    // tier head ONCE, at "now".
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // Flood: 520 owner-authored revisions of a DIFFERENT agent's head, each
+    // strictly newer than the tier heads above (ascending `created_at`,
+    // mirroring how `set_tier` stores heads) -- under the old
+    // 500-newest-REVISIONS window, all 500 rows returned would be flood
+    // rows, and the executive's single (older) head would never be fetched
+    // at all.
+    let other_agent = Keys::generate();
+    let other_agent_hex = other_agent.public_key().to_hex();
+    let flood_base = chrono::Utc::now().timestamp() + 60;
+    for i in 0..520i64 {
+        let event = EventBuilder::new(
+            Kind::Custom(KIND_MANAGED_AGENT as u16),
+            format!(r#"{{"tier":"worker","rev":{i}}}"#),
+        )
+        .tags(vec![tag(&["d", &other_agent_hex])])
+        .custom_created_at(nostr::Timestamp::from((flood_base + i) as u64))
+        .sign_with_keys(&owner)
+        .expect("sign flood managed-agent head revision");
+        let (_, inserted) = db
+            .insert_event(community, &event, None)
+            .await
+            .expect("store flood managed-agent head revision");
+        assert!(inserted, "revision {i} must be a distinct stored event");
+    }
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-flood", "batch-size"),
+        &content_no_default("Choose batch size"),
+        None,
+    )
+    .await;
+
+    let now = ask.created_at.as_secs() as i64 + 100; // comfortably past the 1s window
+    quiesce_unrelated_due_asks(&pool, &[community], now).await;
+
+    let stats = run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+    assert!(
+        stats.promoted >= 1,
+        "this ask's promotion must be among those counted"
+    );
+
+    let original = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        original.status, "promoted",
+        "the executive's own head must still resolve despite 520 revisions of a \
+         different agent's head crowding the roster window"
+    );
+}
+
+/// Task 4 regression / roster-level impostor shadowing: the SQL rewrite's
+/// owner `JOIN` must reproduce the exact security property the Rust-side
+/// scan it replaced enforced by "skip non-owner rows, keep scanning older
+/// revisions of the same `d` tag" -- a non-owner's NEWER head at a `d` tag
+/// must never shadow the owner's older, authoritative head for that same
+/// `d` tag. `worker_self_published_tier_head_does_not_override_owner_authored_tier`
+/// (`interrupt_gate.rs`) proves this for `agent_tier`'s single-pubkey,
+/// `d_tag`-filtered query, a path this task does NOT change. This test
+/// proves the same property for the roster path this task DOES rewrite: the
+/// owner tiers an agent "worker", then that same agent self-publishes a
+/// STRICTLY NEWER head at the SAME `d` tag claiming "executive". If the
+/// owner filter were applied after (or not tied to) `DISTINCT ON` picking
+/// the newest row, the impostor's self-escalation would resolve it as the
+/// community's unique executive. It must not: the roster must still
+/// resolve this agent to the owner-authored "worker" head underneath it,
+/// so a leader-audience ask has no real executive to promote to and is
+/// re-deadlined -- never routed to the impostor.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn impostor_head_newer_than_owner_head_never_shadows_it_in_the_roster() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let impostor = Keys::generate(); // will attempt to self-escalate to executive
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    // Owner-authored ground truth for `impostor`: a real "worker" tier head.
+    set_tier(&db, community, &owner, &impostor, "worker").await;
+
+    // The impostor self-publishes a STRICTLY NEWER head at the SAME `d` tag,
+    // claiming "executive".
+    let impostor_hex = impostor.public_key().to_hex();
+    let escalation = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        r#"{"tier":"executive"}"#,
+    )
+    .tags(vec![tag(&["d", &impostor_hex])])
+    .custom_created_at(nostr::Timestamp::from(
+        (chrono::Utc::now().timestamp() + 60) as u64,
+    ))
+    .sign_with_keys(&impostor)
+    .expect("sign impostor self-escalation head");
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store impostor self-escalation head");
+    assert!(inserted);
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags(
+            "decision",
+            &leader.public_key(),
+            "init-impostor",
+            "batch-size",
+        ),
+        &content_no_default("Choose batch size"),
+        None,
+    )
+    .await;
+
+    let before = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    let old_deadline = before
+        .deadline_at
+        .expect("a filed ask always has a deadline");
+
+    let now = ask.created_at.as_secs() as i64 + 100;
+    quiesce_unrelated_due_asks(&pool, &[community], now).await;
+
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+
+    let row = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        row.status, "open",
+        "with no genuine owner-authored executive (the impostor's self-escalation must not \
+         count as one), the ask must stay open, never promoted to the impostor"
+    );
+    assert!(
+        row.deadline_at.expect("still has a deadline") > old_deadline,
+        "must still re-deadline so this row does not occupy a due-batch slot forever"
+    );
+
+    // No promotion occurred at all: the original ask is still the live open
+    // row for this need (a promotion would have replaced it with a NEW row
+    // and flipped this one to status "promoted").
+    let live = db
+        .find_open_ask_by_need(community, "init-impostor", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("the original ask remains the open ask for this need");
+    assert_eq!(
+        live.ask_event_id,
+        ask.id.as_bytes().to_vec(),
+        "no promotion occurred -- the original ask is still the live open row, not a new \
+         one addressed to the impostor"
+    );
+    assert_ne!(
+        live.audience_pubkey,
+        impostor.public_key().to_bytes().to_vec(),
+        "the impostor must never become the audience of any ask for this need"
+    );
+}
+
 /// Design point 3: zero executives configured must never be guessed at --
 /// the sweep never promotes or resolves this row without a confidently
 /// resolved target.
@@ -1521,7 +1725,12 @@ async fn stalled_task_with_no_initiative_uses_the_no_initiative_sentinel() {
 /// Design point 4: a task head that JUST changed (e.g. moved to
 /// `inProgress` moments ago) must not be flagged a tick later, even if the
 /// channel it lives in happens to be old -- the head's own `created_at` is
-/// itself activity.
+/// itself activity. Branch-agnostic: `default_task`'s `assignee_persona_ids`
+/// (`builtin:content`) is never registered in a roster here, so this
+/// exercises the channel-fallback branch, but the property under test (the
+/// head's own `created_at` is unconditionally folded into the signal) holds
+/// identically on the per-agent branch -- see `process_stall_candidate`'s
+/// `last_activity_secs` computation.
 #[tokio::test]
 #[ignore = "requires Postgres"]
 async fn recent_status_change_is_not_flagged_as_stalled_even_with_an_old_channel() {
@@ -1575,14 +1784,26 @@ async fn recent_status_change_is_not_flagged_as_stalled_even_with_an_old_channel
     );
 }
 
-/// Design point 4, the core proof: "silence means no event activity, not
-/// merely an old head." A task whose head has sat unchanged for a long
-/// time must NOT be flagged as long as its channel shows real recent
-/// activity -- an old head alone is normal for a long-running task, not
-/// evidence of a stall.
+/// Design point 4, the core proof, NARROWED by this task's per-agent
+/// re-keying to the fallback branch: "silence means no event activity, not
+/// merely an old head" is still true for a task whose assignees cannot be
+/// resolved to a running agent, where the channel remains the only signal
+/// available. A task whose head has sat unchanged for a long time, with an
+/// unresolvable assignee, must NOT be flagged as long as its channel shows
+/// real recent activity.
+///
+/// Audited under Task 3 (see `busy_channel_does_not_mask_a_silent_assigned_agent`
+/// for the opposite case -- a RESOLVABLE assignee's own silence is no longer
+/// masked by the same channel chatter). This test's fixture already used
+/// `default_task`'s default `assignee_persona_ids` (`builtin:content`),
+/// which no roster entry here ever claims, so it was already exercising the
+/// fallback branch before this change and needed no behavioral fix -- only
+/// this rename, doc update, and an explicit unresolvable persona id (in
+/// place of the incidental default) so the fixture's intent is not left
+/// implicit.
 #[tokio::test]
 #[ignore = "requires Postgres"]
-async fn recent_channel_activity_prevents_a_stall_flag_despite_an_old_task_head() {
+async fn recent_channel_activity_prevents_a_stall_for_an_unresolvable_assignee() {
     let (db, pool) = setup().await;
     let community = community(&pool).await;
     let channel_id = channel(&pool, community, "general").await;
@@ -1593,16 +1814,22 @@ async fn recent_channel_activity_prevents_a_stall_flag_despite_an_old_task_head(
     add_owner(&pool, community, &owner.public_key().to_hex()).await;
     let qa_agent = Keys::generate();
     set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+    // Deliberately: no managed-agent head claims "assignee-persona-nobody",
+    // so this task's assignee cannot be resolved to a running agent and the
+    // sweep must fall back to the channel signal.
 
     let now = chrono::Utc::now().timestamp();
-    let task = default_task(
-        "task-3",
-        None,
-        TaskStatus::InProgress,
-        "qa-persona-1",
-        channel_id,
-        now - 10 * STALL_AFTER_SECS,
-    );
+    let task = CompanyTask {
+        assignee_persona_ids: vec!["assignee-persona-nobody".to_string()],
+        ..default_task(
+            "task-3",
+            None,
+            TaskStatus::InProgress,
+            "qa-persona-1",
+            channel_id,
+            now - 10 * STALL_AFTER_SECS,
+        )
+    };
     store_task_head_at(
         &db,
         community,
@@ -1634,8 +1861,238 @@ async fn recent_channel_activity_prevents_a_stall_flag_despite_an_old_task_head(
             .await
             .expect("query asks projection")
             .is_none(),
-        "silence means no event activity, not merely an old head -- an active channel must \
+        "an unresolvable assignee falls back to the channel signal -- an active channel must \
          not be flagged"
+    );
+}
+
+/// THE REGRESSION TEST for Task 3. Pre-change code measured silence from
+/// the task's `sourceChannelId` alone, so a task worked by a genuinely dead
+/// agent was invisible to the sweep as long as SOMEONE ELSE kept talking in
+/// the same channel. Against the code as it stood before this change, this
+/// test fails: zero stall asks are filed because the recent channel message
+/// makes the channel look active.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn busy_channel_does_not_mask_a_silent_assigned_agent() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+    let assignee_agent = Keys::generate();
+    set_persona(
+        &db,
+        community,
+        &owner,
+        &assignee_agent,
+        "assignee-persona-1",
+    )
+    .await;
+
+    let now = chrono::Utc::now().timestamp();
+    // The assigned agent's own last authored event is well past the stall
+    // threshold: it did some work once, then went silent.
+    post_message_at(
+        &db,
+        community,
+        channel_id,
+        &assignee_agent,
+        "starting work",
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    let task = CompanyTask {
+        assignee_persona_ids: vec!["assignee-persona-1".to_string()],
+        ..default_task(
+            "task-busy-channel",
+            None,
+            TaskStatus::InProgress,
+            "qa-persona-1",
+            channel_id,
+            now - 2 * STALL_AFTER_SECS,
+        )
+    };
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    // A DIFFERENT author keeps the channel looking busy, one second ago.
+    let bystander = Keys::generate();
+    post_message_at(
+        &db,
+        community,
+        channel_id,
+        &bystander,
+        "anyone seen the deploy?",
+        now - 1,
+    )
+    .await;
+
+    let filed = run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+    assert!(
+        filed >= 1,
+        "the assigned agent's own silence must be detected despite channel chatter"
+    );
+
+    let need_key = stall_need_key(&task.id);
+    let row = db
+        .find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+        .await
+        .expect("query asks projection")
+        .expect("a stall ask must be open for this task despite the busy channel");
+    assert_eq!(row.ask_type, "stall");
+}
+
+/// The mirror image of the regression test: the signal follows the AGENT,
+/// not the channel. The assignee is alive and active -- just not in the
+/// task's own channel -- so no stall ask must be filed even though
+/// `source_channel_id` itself is silent.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn assignee_activity_in_another_channel_prevents_a_stall() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let other_channel_id = channel(&pool, community, "elsewhere").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+    let assignee_agent = Keys::generate();
+    set_persona(
+        &db,
+        community,
+        &owner,
+        &assignee_agent,
+        "assignee-persona-1",
+    )
+    .await;
+
+    let now = chrono::Utc::now().timestamp();
+    let task = CompanyTask {
+        assignee_persona_ids: vec!["assignee-persona-1".to_string()],
+        ..default_task(
+            "task-other-channel",
+            None,
+            TaskStatus::InProgress,
+            "qa-persona-1",
+            channel_id,
+            now - 2 * STALL_AFTER_SECS,
+        )
+    };
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 2 * STALL_AFTER_SECS,
+    )
+    .await;
+
+    // The task's OWN channel stays silent; the assignee is active elsewhere,
+    // one second ago.
+    post_message_at(
+        &db,
+        community,
+        other_channel_id,
+        &assignee_agent,
+        "working in a different channel",
+        now - 1,
+    )
+    .await;
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+
+    let need_key = stall_need_key(&task.id);
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "the signal follows the agent, not the channel: recent activity anywhere must suppress \
+         a stall"
+    );
+}
+
+/// Complements `recent_channel_activity_prevents_a_stall_for_an_unresolvable_assignee`:
+/// same fallback contract, restated directly against Task 3's new per-agent
+/// branch logic rather than inherited from a pre-existing fixture.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn unresolvable_assignees_fall_back_to_the_channel_signal() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let qa_agent = Keys::generate();
+    set_persona(&db, community, &owner, &qa_agent, "qa-persona-1").await;
+    // Deliberately: no managed-agent head claims "assignee-persona-nobody".
+
+    let now = chrono::Utc::now().timestamp();
+    let task = CompanyTask {
+        assignee_persona_ids: vec!["assignee-persona-nobody".to_string()],
+        ..default_task(
+            "task-unresolvable-assignee",
+            None,
+            TaskStatus::InProgress,
+            "qa-persona-1",
+            channel_id,
+            now - 10 * STALL_AFTER_SECS,
+        )
+    };
+    store_task_head_at(
+        &db,
+        community,
+        &relay_keys,
+        &task,
+        now - 10 * STALL_AFTER_SECS,
+    )
+    .await;
+    post_message_at(
+        &db,
+        community,
+        channel_id,
+        &owner,
+        "still chatting here",
+        now - 60,
+    )
+    .await;
+
+    run_stall_tick(&state, now, STALL_AFTER_SECS)
+        .await
+        .expect("tick must not error");
+
+    let need_key = stall_need_key(&task.id);
+    assert!(
+        db.find_open_ask_by_need(community, NO_INITIATIVE_SENTINEL, &need_key)
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "a task whose assignees cannot be resolved to a running agent must still fall back to \
+         the channel signal"
     );
 }
 

@@ -463,9 +463,11 @@ pub async fn enforce_grant_authorship(
 }
 
 /// Enforce that a decision log (kind [`buzz_core::kind::KIND_DECISION_LOG`])
-/// is signed by a `Leader` or `Executive` agent, and that the grant it cites
-/// resolves to a currently ACTIVE, owner-authored delegation grant head
-/// (spec: decision logs).
+/// is signed by a `Leader` or `Executive` agent, that the grant it cites
+/// resolves to a currently ACTIVE, owner-authored delegation grant head, that
+/// the decision's category matches the category the grant delegates, and
+/// that a capped grant's declared amount is present and does not exceed the
+/// cap (spec: decision logs).
 ///
 /// A decision log citing a revoked or absent grant is worse than no audit
 /// trail at all -- it would let an agent's own record claim delegated
@@ -486,12 +488,48 @@ pub async fn enforce_decision_log_authority(
         );
     }
 
-    let grant = active_grant(tenant, state, &parsed.grant_id).await?;
-    if !grant.is_some_and(|grant| grant.active) {
+    let Some(grant) = active_grant(tenant, state, &parsed.grant_id)
+        .await?
+        .filter(|grant| grant.active)
+    else {
         return Err(format!(
             "restricted: decision log cites a grant that is not currently active: {}",
             parsed.grant_id
         ));
+    };
+
+    // Scope: a grant delegates ONE category of decision. A decision log
+    // claiming any other category is citing authority it does not hold, no
+    // matter how real the grant is -- without this check, one active grant
+    // authorizes every decision an agent cares to record.
+    if parsed.category != grant.category {
+        return Err(format!(
+            "restricted: decision log claims category `{}` but grant `{}` delegates only `{}`",
+            parsed.category, parsed.grant_id, grant.category
+        ));
+    }
+
+    // Cap: a capped grant binds every decision under it to a declared,
+    // machine-readable amount at or under the cap. A missing amount fails
+    // closed: no declared amount means no way to check the cap.
+    if let Some(cap) = grant.cap_nano_usd {
+        match parsed.amount_nano_usd {
+            None => {
+                return Err(format!(
+                    "restricted: grant `{}` carries a spending cap; the decision log \
+                     must declare amount_nano_usd",
+                    parsed.grant_id
+                ))
+            }
+            Some(amount) if amount > cap => {
+                return Err(format!(
+                    "restricted: decision amount {amount} nanoUSD exceeds grant `{}` \
+                     cap of {cap}",
+                    parsed.grant_id
+                ))
+            }
+            Some(_) => {}
+        }
     }
 
     Ok(())

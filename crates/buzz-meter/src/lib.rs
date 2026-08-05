@@ -20,6 +20,8 @@
 
 /// Anthropic response parsing: non-streaming JSON and streaming SSE.
 pub mod anthropic;
+/// Reading a cost the provider states it charged.
+pub mod cost;
 /// OpenAI response parsing plus the streaming request rewrite.
 pub mod openai;
 
@@ -43,4 +45,10 @@ pub struct ParsedUsage {
     pub model: Option<String>,
     /// Provider request id read out of the response body.
     pub request_id: Option<String>,
+    /// What the provider said this call cost, in nanoUSD, when it said.
+    ///
+    /// Beats anything the price book can work out, because it is the charge
+    /// rather than a model of the charge. `None` means the provider reported
+    /// no usable cost and the book has to answer instead.
+    pub observed_cost_nanousd: Option<u64>,
 }

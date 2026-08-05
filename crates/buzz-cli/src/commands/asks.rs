@@ -16,7 +16,9 @@ use nostr::{EventBuilder, Kind, PublicKey, Tag};
 use buzz_core::interrupt::{parse_ask, parse_resolution, parse_withdrawal, AskType};
 use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL};
 
-use crate::client::{extract_tag_value, normalize_write_response, BuzzClient};
+use crate::client::{
+    extract_tag_value, normalize_write_response, write_conflict_reason, BuzzClient,
+};
 use crate::error::CliError;
 use crate::validate::{read_or_stdin, validate_hex64, validate_uuid};
 use crate::AskFileArgs;
@@ -364,39 +366,18 @@ async fn cmd_withdraw_ask(client: &BuzzClient, ask: &str, reason: &str) -> Resul
 /// response (including, for a duplicate, the ORIGINAL ask's `event_id`,
 /// what the caller is actually blocked on) is printed before the write is
 /// reported as a conflict (exit code 5), so nothing is flattened away.
+///
+/// Classification is [`write_conflict_reason`]'s, so a write the relay
+/// discarded rather than stored is a conflict even when it comes back
+/// `accepted: true`; see its doc comment.
 async fn submit_ask_write(client: &BuzzClient, event: nostr::Event) -> Result<(), CliError> {
     let raw = client.submit_event(event).await?;
     println!("{}", normalize_write_response(&raw));
 
-    if response_accepted(&raw) {
-        return Ok(());
+    match write_conflict_reason(&raw) {
+        Some(reason) => Err(CliError::Conflict(reason)),
+        None => Ok(()),
     }
-    let message = response_message(&raw);
-    let reason = message
-        .strip_prefix("duplicate: ")
-        .or_else(|| message.strip_prefix("conflict: "))
-        .unwrap_or(&message)
-        .to_owned();
-    Err(CliError::Conflict(reason))
-}
-
-fn response_accepted(response: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(response)
-        .ok()
-        .and_then(|value| value.get("accepted").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
-}
-
-fn response_message(response: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(response)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| response.to_owned())
 }
 
 /// Dispatch a `buzz asks` subcommand.
@@ -591,20 +572,34 @@ mod tests {
         assert!(matches!(error, CliError::Usage(_)));
     }
 
+    /// The broker's own duplicate (`accepted: false`) is a conflict and
+    /// keeps the original ask id the caller is actually blocked on.
     #[test]
-    fn response_accepted_reads_the_accepted_field() {
-        assert!(response_accepted(r#"{"accepted":true}"#));
-        assert!(!response_accepted(r#"{"accepted":false}"#));
-        assert!(!response_accepted("not json"));
+    fn a_broker_duplicate_is_a_conflict_naming_the_original_ask() {
+        assert_eq!(
+            write_conflict_reason(r#"{"accepted":false,"message":"duplicate: original ask abc"}"#)
+                .as_deref(),
+            Some("original ask abc")
+        );
+        assert_eq!(
+            write_conflict_reason("not json").as_deref(),
+            Some("not json")
+        );
     }
 
+    /// A write the relay discarded rather than stored comes back
+    /// `accepted: true` with a bare `"duplicate:"`. It is a conflict here
+    /// too: nothing was written, so reporting success would be a lie.
     #[test]
-    fn response_message_strips_to_the_message_field() {
-        assert_eq!(
-            response_message(r#"{"message":"duplicate: original ask abc"}"#),
-            "duplicate: original ask abc"
+    fn a_discarded_write_is_a_conflict_despite_accepted_true() {
+        assert!(
+            write_conflict_reason(r#"{"accepted":true,"message":"duplicate:"}"#).is_some(),
+            "a write the relay stored nothing for must not report success"
         );
-        assert_eq!(response_message("not json"), "not json");
+        assert_eq!(
+            write_conflict_reason(r#"{"accepted":true,"message":"stored"}"#),
+            None
+        );
     }
 
     fn sample_file_args(to: String) -> AskFileArgs {
