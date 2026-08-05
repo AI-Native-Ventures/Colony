@@ -1,5 +1,18 @@
 # Changelog
 
+## relay-v0.7.0
+
+- feat(ledger): price a call by what the provider said it charged ([`eb9761798`](https://github.com/AI-Native-Ventures/Colony/commit/eb97617987a2ed0d735701671382654c07475a5c))
+- docs(nip-iq): reconcile the spec with what the relay now enforces ([`8404bf3ca`](https://github.com/AI-Native-Ventures/Colony/commit/8404bf3ca1cd100c1f174c99b58ca35dff6dcd0a))
+- fix(relay): only wake a prior's filer when that prior was actually closed ([`e2ea9ec10`](https://github.com/AI-Native-Ventures/Colony/commit/e2ea9ec10b3576dac607982d1042964e0475a5f6))
+- fix(relay): gate the upstream wake's dedupe on the primary path having run, use the prior's own channel ([`303ef0abd`](https://github.com/AI-Native-Ventures/Colony/commit/303ef0abdb15c0e67ed609ce99322f308c1d718c))
+- feat(relay): wake the superseded prior's filer when an escalated ask resolves ([`b4768d18c`](https://github.com/AI-Native-Ventures/Colony/commit/b4768d18c91a2cc4a17afbf0a454c735b42bdf4f))
+- fix(relay): bound the managed-agent roster by agents, not head revisions ([`489ee294b`](https://github.com/AI-Native-Ventures/Colony/commit/489ee294bf2a12fc70bbdcf2155188c4f5363f94))
+- feat(relay): key stall detection to assignee agent activity, not channel chatter ([`d6d5c2ead`](https://github.com/AI-Native-Ventures/Colony/commit/d6d5c2ead5fdeb9e031cc235b504b48c0d151ca5))
+- feat(relay): enforce delegation grant category and cap on decision logs ([`8894b18d3`](https://github.com/AI-Native-Ventures/Colony/commit/8894b18d3e34316e69f209d41a627e990d7d6384))
+- feat(core): decision logs declare category and amount_nano_usd ([`730135699`](https://github.com/AI-Native-Ventures/Colony/commit/730135699bf438714ea6e9d716bc5e7207f7e77e))
+
+
 ## relay-v0.4.1
 
 Public signup for community creation
