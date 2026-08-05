@@ -13,6 +13,19 @@
 //! BUZZ_METER_LIVE_MODEL=deepseek-chat \
 //!   cargo test -p buzz-meter --test live_provider -- --ignored --nocapture
 //! ```
+//!
+//! Against a router, which also states what it charged:
+//!
+//! ```text
+//! BUZZ_METER_LIVE_KEY=sk-or-... \
+//! BUZZ_METER_LIVE_UPSTREAM=https://openrouter.ai/api \
+//! BUZZ_METER_LIVE_MODEL=deepseek/deepseek-chat \
+//! BUZZ_METER_LIVE_EXPECT_COST=1 \
+//!   cargo test -p buzz-meter --test live_provider -- --ignored --nocapture
+//! ```
+//!
+//! Run on 2026-08-05, that recorded provider `openrouter`, a request served
+//! by StreamLake, and a stated cost of 5660 nanoUSD.
 
 use buzz_meter::{start_meter, MeterConfig};
 
@@ -126,6 +139,20 @@ async fn a_real_provider_call_is_metered_end_to_end() {
         !call.timestamp.is_empty(),
         "a timestamp is needed to price and bucket the call"
     );
+
+    // Routers state what they charged, and that figure is what the ledger
+    // uses instead of any rate we hold. Direct vendors say nothing about
+    // money, so this is only demanded when the operator says to expect it.
+    if std::env::var("BUZZ_METER_LIVE_EXPECT_COST").as_deref() == Ok("1") {
+        let cost = call
+            .observed_cost_nanousd
+            .expect("this provider was expected to state its charge, and did not");
+        assert!(
+            cost > 0,
+            "a real charge must never be recorded as free: {cost} nanoUSD"
+        );
+        println!("provider stated cost: {cost} nanoUSD");
+    }
 
     handle.shutdown();
 }

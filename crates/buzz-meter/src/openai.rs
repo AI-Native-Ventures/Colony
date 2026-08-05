@@ -306,30 +306,51 @@ mod tests {
         assert_eq!(parsed.request_id.as_deref(), Some("chatcmpl-Stream1"));
     }
 
-    /// An OpenRouter response, which is the OpenAI dialect plus a stated cost.
+    /// A real OpenRouter response, captured verbatim on 2026-08-05.
     ///
     /// This is the shape that makes the price book unnecessary for a routed
     /// call: the router says what it charged, so no rate has to be on file for
-    /// whichever of its providers actually served the request.
+    /// whichever of its providers actually served the request. That request
+    /// was routed to StreamLake, which no catalog of ours lists.
+    ///
+    /// Held as a fixture rather than written by hand so the parser is pinned
+    /// to a response that actually happened, and so a change in OpenRouter's
+    /// shape is caught by re-capturing rather than by reasoning about docs.
     #[test]
-    fn a_router_stating_its_charge_has_that_cost_read_off_the_body() {
-        let body = br#"{
-            "id": "gen-1",
-            "model": "deepseek/deepseek-v4-flash",
-            "usage": {
-                "prompt_tokens": 1000,
-                "completion_tokens": 200,
-                "cost": 0.00042,
-                "is_byok": false
-            }
-        }"#;
-        let parsed = parse_json_response(body);
-        assert_eq!(parsed.observed_cost_nanousd, Some(420_000));
+    fn a_router_stating_its_charge_has_that_cost_read_off_a_real_body() {
+        let body = include_str!("../tests/fixtures/openrouter-chat-completion-2026-08-05.json");
+        let parsed = parse_json_response(body.as_bytes());
+
+        // "cost": 4.8888e-06 dollars.
+        assert_eq!(parsed.observed_cost_nanousd, Some(4_889));
         assert_eq!(
-            parsed.tokens.map(|tokens| tokens.output_tokens),
-            Some(200),
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 11,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 2,
+            }),
             "the counts still land: they are the unit economics"
         );
+        assert_eq!(
+            parsed.request_id.as_deref(),
+            Some("gen-1785937685-oXkc2ftOELkoToVUrLpM")
+        );
+    }
+
+    /// A charge of a few thousand nanodollars must not round to nothing.
+    ///
+    /// Real routed calls cost fractions of a cent. If the conversion lost
+    /// them, the ledger would read as free precisely where it is busiest.
+    #[test]
+    fn a_fraction_of_a_cent_survives_the_conversion() {
+        let body = include_str!("../tests/fixtures/openrouter-chat-completion-2026-08-05.json");
+        let cost = parse_json_response(body.as_bytes())
+            .observed_cost_nanousd
+            .expect("cost");
+        assert!(cost > 0, "a real charge must never record as free");
     }
 
     /// The counts must survive a provider that reports no cost, because that
