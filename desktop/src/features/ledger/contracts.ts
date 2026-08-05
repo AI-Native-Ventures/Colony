@@ -245,8 +245,52 @@ const RATE_KEYS = [
   "outputNanousdPerMtok",
 ] as const;
 
+/**
+ * The same fields as they were named before rates moved from nanoUSD per
+ * token to nanoUSD per million tokens.
+ */
+const LEGACY_RATE_KEYS = [
+  "inputNanousdPerToken",
+  "cacheReadNanousdPerToken",
+  "cacheWrite5mNanousdPerToken",
+  "cacheWrite1hNanousdPerToken",
+  "outputNanousdPerToken",
+] as const;
+
+/** Tokens per unit of a stored rate. */
+const TOKENS_PER_RATE_UNIT = 1_000_000n;
+
+/**
+ * Read a rate row in either unit.
+ *
+ * This app reads the price book event straight off the relay rather than
+ * through the Rust ledger, so it meets whatever shape the relay last wrote.
+ * Every book published before the unit changed is in nanoUSD per token, and
+ * those books are what companies were actually charged against, so they are
+ * read and scaled exactly: one per token is 1,000,000 per million tokens.
+ *
+ * Without this the app would reject the book that is on the production relay
+ * right now, and the Spend screen would show a parse failure rather than
+ * anyone's costs.
+ *
+ * A row is read in one unit or the other, never mixed: a half-converted row
+ * means something upstream is writing both, and guessing which half is
+ * authoritative is how a rate ends up a million times off.
+ */
 function parseRates(value: unknown, label: string): PriceRates {
   const raw = asObject(value, label);
+  if (LEGACY_RATE_KEYS.every((key) => key in raw)) {
+    requireExactKeys(raw, LEGACY_RATE_KEYS, label);
+    const scaled = (key: (typeof LEGACY_RATE_KEYS)[number]) =>
+      requireNanousd(raw, key, label) * TOKENS_PER_RATE_UNIT;
+    return {
+      inputNanousdPerMtok: scaled("inputNanousdPerToken"),
+      cacheReadNanousdPerMtok: scaled("cacheReadNanousdPerToken"),
+      cacheWrite5mNanousdPerMtok: scaled("cacheWrite5mNanousdPerToken"),
+      cacheWrite1hNanousdPerMtok: scaled("cacheWrite1hNanousdPerToken"),
+      outputNanousdPerMtok: scaled("outputNanousdPerToken"),
+    };
+  }
   requireExactKeys(raw, RATE_KEYS, label);
   return {
     inputNanousdPerMtok: requireNanousd(raw, "inputNanousdPerMtok", label),
@@ -359,9 +403,14 @@ export function parsePriceBook(
     entries: entries.map((entry, index) => {
       const entryLabel = `${label}.entries[${index}]`;
       const raw = asObject(entry, entryLabel);
+      // `conditions` is present on rows the relay writes for a tier, a
+      // context bound, or recurring hours. It is not read here: this screen
+      // shows what a company published, and pricing a call against those
+      // conditions is the ledger's job, not the list's. Rejecting the key
+      // would refuse the whole book over a field this view does not use.
       requireExactKeys(
         raw,
-        ["model", "effectiveFrom", "rates", "note", "origin"],
+        ["model", "effectiveFrom", "rates", "note", "origin", "conditions"],
         entryLabel,
       );
       return {

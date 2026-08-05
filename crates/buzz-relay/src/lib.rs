@@ -3,6 +3,9 @@
 //! NIP-01 WebSocket relay for Buzz private team communication.
 
 mod admission;
+/// Colony interrupt-core: the Ask broker (filing, altitude rules, dedupe,
+/// resolution/withdrawal receipts).
+pub mod ask_broker;
 mod block_broker;
 /// Validation for chat-native Block event envelopes.
 pub mod blocks;
@@ -34,6 +37,11 @@ pub mod core_blocks;
 pub mod error;
 /// WebSocket message handlers for NIP-01 client commands.
 pub mod handlers;
+/// Colony interrupt-core: tier lookup and the owner-contact gate.
+pub mod interrupt_gate;
+/// Colony interrupt-core: the escalation-timer sweep (auto-promotion and
+/// default execution for asks whose deadline has passed).
+pub mod interrupt_runtime;
 /// Stateless HMAC-signed relay invite tokens (mint/verify).
 pub mod invite_token;
 /// Inter-relay mesh startup wiring (`BUZZ_MESH` seam).

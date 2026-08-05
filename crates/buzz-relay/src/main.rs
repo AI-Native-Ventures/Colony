@@ -925,6 +925,89 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Colony interrupt sweep -- polls for open asks whose deadline has
+    // passed and either default-executes a stated safe answer or promotes
+    // the ask to the next altitude. Mirrors the NIP-ER reminder scheduler
+    // above: a spawned interval loop over a cross-tenant due-query, logging
+    // and continuing past a tick failure rather than dying, so one bad tick
+    // never takes the sweep down for every community.
+    //
+    // The SAME loop also runs the stall-detection sweep
+    // (`interrupt_runtime::run_stall_tick`): a task can go silent (a crashed
+    // or hung agent) with no ask ever filed, so there is nothing for the
+    // due-ask sweep above to find. Sharing one interval keeps both sweeps on
+    // the same cadence and the same "log and continue past a tick failure"
+    // discipline, rather than a second spawned task duplicating the loop.
+    {
+        let interrupt_state = Arc::clone(&state);
+        let interrupt_sweep_interval_secs: u64 = std::env::var("BUZZ_INTERRUPT_SWEEP_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+        let interrupt_sweep_batch_limit: i64 = std::env::var("BUZZ_INTERRUPT_SWEEP_BATCH_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100);
+        let stall_after_secs: i64 =
+            std::env::var(buzz_relay::interrupt_runtime::STALL_AFTER_SECS_ENV)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(buzz_relay::interrupt_runtime::DEFAULT_STALL_AFTER_SECS);
+        tokio::spawn(async move {
+            info!(
+                interval_secs = interrupt_sweep_interval_secs,
+                batch_limit = interrupt_sweep_batch_limit,
+                stall_after_secs,
+                "Colony interrupt sweep started"
+            );
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    interrupt_sweep_interval_secs,
+                ))
+                .await;
+
+                let now_secs = chrono::Utc::now().timestamp();
+                match buzz_relay::interrupt_runtime::run_interrupt_tick(
+                    &interrupt_state,
+                    now_secs,
+                    interrupt_sweep_batch_limit,
+                )
+                .await
+                {
+                    Ok(stats) => {
+                        if stats.promoted > 0 || stats.defaults_executed > 0 {
+                            info!(
+                                promoted = stats.promoted,
+                                defaults_executed = stats.defaults_executed,
+                                "Interrupt sweep: due asks processed"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Interrupt sweep tick failed: {e}");
+                    }
+                }
+
+                match buzz_relay::interrupt_runtime::run_stall_tick(
+                    &interrupt_state,
+                    now_secs,
+                    stall_after_secs,
+                )
+                .await
+                {
+                    Ok(filed) => {
+                        if filed > 0 {
+                            info!(filed, "Stall sweep: silent tasks flagged");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Stall sweep tick failed: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     // Multi-node fan-out consumer: receive events from Redis pub/sub
     // (published by other relay instances) and fan out to local WS subscribers.
     {

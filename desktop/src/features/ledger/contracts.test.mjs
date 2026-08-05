@@ -273,3 +273,46 @@ test("an unknown origin is refused rather than assumed", () => {
     /origin is unknown/,
   );
 });
+
+test("a price book written before the rate unit changed still parses", () => {
+  // The shape on the production relay right now: nanoUSD per token.
+  const legacyRates = {
+    inputNanousdPerToken: 3000,
+    cacheReadNanousdPerToken: 300,
+    cacheWrite5mNanousdPerToken: 3750,
+    cacheWrite1hNanousdPerToken: 6000,
+    outputNanousdPerToken: 15000,
+  };
+  const book = parsePriceBook(
+    priceBookEvent([{ ...ENTRY, rates: legacyRates }]),
+    RELAY_PUBKEY,
+  );
+  const rates = book.entries[0].rates;
+  // Scaled exactly: one per token is a million per million tokens.
+  assert.equal(rates.inputNanousdPerMtok, 3_000_000_000n);
+  assert.equal(rates.outputNanousdPerMtok, 15_000_000_000n);
+  assert.equal(typeof rates.cacheReadNanousdPerMtok, "bigint");
+});
+
+test("a rate row mixing the two units is refused", () => {
+  assert.throws(() =>
+    parsePriceBook(
+      priceBookEvent([
+        {
+          ...ENTRY,
+          rates: { ...RATES, cacheReadNanousdPerToken: 300 },
+        },
+      ]),
+      RELAY_PUBKEY,
+    ),
+  );
+});
+
+test("an entry carrying conditions is accepted, not rejected as unknown", () => {
+  const book = parsePriceBook(
+    priceBookEvent([{ ...ENTRY, conditions: { minInputTokens: 272001 } }]),
+    RELAY_PUBKEY,
+  );
+  assert.equal(book.entries.length, 1);
+  assert.equal(book.entries[0].model, ENTRY.model);
+});

@@ -13,9 +13,10 @@ use buzz_auth::Scope;
 use buzz_core::kind::{
     event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
     is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_AGENT_PROFILE, KIND_AGENT_TURN_METRIC,
-    KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BLOCK_ACTION,
-    KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST, KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST,
-    KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION, KIND_CONTACT_LIST, KIND_DELETION,
+    KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL,
+    KIND_AUTH, KIND_BLOCK_ACTION, KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST,
+    KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION,
+    KIND_CONTACT_LIST, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
     KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
     KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
     KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
@@ -335,6 +336,19 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         KIND_DM_OPEN | KIND_DM_ADD_MEMBER | KIND_DM_HIDE => Ok(Scope::MessagesWrite),
         KIND_WORKFLOW_DEF | KIND_WORKFLOW_TRIGGER => Ok(Scope::MessagesWrite),
         KIND_APPROVAL_GRANT | KIND_APPROVAL_DENY => Ok(Scope::MessagesWrite),
+        // Colony interrupt Ask, resolution, and withdrawal (44300-44302) are
+        // ordinary message-shaped writes; the ask_broker enforces altitude,
+        // dedupe, and resolver/withdrawer authorization past this gate.
+        KIND_ASK | KIND_ASK_RESOLUTION | KIND_ASK_WITHDRAWAL => Ok(Scope::MessagesWrite),
+        // Colony delegation grant (30189): owner-authored NIP-33 head, same
+        // ownership shape as KIND_PERSONA/KIND_TEAM/KIND_MANAGED_AGENT above.
+        // The actual owner-authorship check runs past this gate, in
+        // `interrupt_gate::enforce_grant_authorship`.
+        KIND_DELEGATION_GRANT => Ok(Scope::UsersWrite),
+        // Colony decision log (44303): leader/executive-authored audit
+        // record. The tier and cited-grant checks run past this gate, in
+        // `interrupt_gate::enforce_decision_log_authority`.
+        KIND_DECISION_LOG => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -406,6 +420,15 @@ pub(crate) async fn derive_reaction_channel(
 /// this branch returns BEFORE the ban/timeout write-block, so routing them here
 /// would let a banned or timed-out owner mutate company or party state. They are
 /// brokered further down, past that gate.
+///
+/// DM open and DM add-member are excluded for the same shape of reason, plus
+/// one more: both must reach the Colony interrupt-core owner-contact gate
+/// (`interrupt_gate::enforce_owner_contact`), which also sits past the
+/// ban/timeout block, so a Worker or Leader agent cannot open a DM straight
+/// to a community owner, nor reach the same end state by opening a permitted
+/// DM and then adding the owner to it (`handle_dm_add_member` calls the very
+/// same `open_dm` with the expanded participant set). Both are re-dispatched
+/// to `handle_command` explicitly, after both gates.
 pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
     buzz_core::kind::is_command_kind(kind)
         && kind != KIND_COMPANY_ACTION
@@ -414,6 +437,8 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
         && kind != KIND_DISCOVERY_ACTION
         && kind != KIND_DISCOVERY_WORKER_ACTION
         && kind != KIND_DISCOVERY_WORKSPACE_ACTION
+        && kind != KIND_DM_OPEN
+        && kind != KIND_DM_ADD_MEMBER
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -461,6 +486,11 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // keyed by (pubkey, kind, d_tag). A stray `h` tag must not channel-scope them.
             | KIND_TEAM
             | KIND_MANAGED_AGENT
+            // Colony delegation grant (30189): owner-authored NIP-33 head,
+            // keyed by (pubkey, kind, d_tag=grant_id). Same reasoning as
+            // KIND_TEAM/KIND_MANAGED_AGENT above -- a stray `h` tag must not
+            // channel-scope a company-wide policy record.
+            | KIND_DELEGATION_GRANT
             // Block manifests and relay-authored catalog heads are immutable or
             // addressable global definitions. Instances remain kind:9 messages.
             | KIND_BLOCK_MANIFEST
@@ -1748,6 +1778,28 @@ async fn ingest_event_inner(
         }
     }
 
+    // Colony interrupt-core: a Worker or Leader agent may never address a
+    // community owner directly (spec: tiers), with one thread-scoped reply
+    // exemption. Checked here, after the ban/timeout write-block and before
+    // any handler runs, so the rule holds regardless of which path below
+    // would otherwise store or route the event.
+    // `auth.pubkey()` rather than `event.pubkey`: a NIP-17 gift wrap is
+    // signed by an ephemeral key and the identity check above deliberately
+    // exempts it, so the acting identity is the authenticated one. For every
+    // other gated kind the two are already equal or the write was rejected.
+    crate::interrupt_gate::enforce_owner_contact(tenant, state, &event, auth.pubkey())
+        .await
+        .map_err(IngestError::AuthFailed)?;
+
+    // DM open and DM add-member are command kinds (`is_command_kind`) but are
+    // deliberately excluded from the generic command branch above (see
+    // `takes_generic_command_branch`) so they reach the ban/timeout
+    // write-block and the owner-contact gate just checked. Past both gates,
+    // they re-enter the same dispatch the generic branch would have used.
+    if kind_u32 == KIND_DM_OPEN || kind_u32 == KIND_DM_ADD_MEMBER {
+        return super::command_executor::handle_command(tenant, state, event, auth).await;
+    }
+
     // Company mutations are community-global governance requests authorized by
     // the owner's signature. Routed here, after the ban/timeout write-block, so
     // a restricted owner cannot change company state.
@@ -2475,6 +2527,37 @@ async fn ingest_event_inner(
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
 
+    // Colony interrupt-core: a delegation grant is the founder's promise
+    // that a category of decision no longer needs asking -- it is only as
+    // good as the pubkey that signed it. Schema (hard-list category, vague
+    // scope, required `active`) is `parse_grant`'s job; authorship (must be
+    // a CURRENT community owner, not merely whoever happened to sign it) is
+    // `enforce_grant_authorship`'s. See design doc: "the whole point is that
+    // autonomy is granted deliberately and can be withdrawn in one action,
+    // rather than accumulating as vague trust."
+    if kind_u32 == KIND_DELEGATION_GRANT {
+        buzz_core::interrupt::parse_grant(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        crate::interrupt_gate::enforce_grant_authorship(tenant, state, &event)
+            .await
+            .map_err(IngestError::AuthFailed)?;
+    }
+
+    // Colony interrupt-core: a decision log is only as trustworthy as the
+    // grant it cites. Schema (non-empty `undo_path` -- spec: no stateable
+    // undo path means no autonomy) is `parse_decision_log`'s job; authority
+    // (signer tier is Leader/Executive, cited grant currently exists and is
+    // active) is `enforce_decision_log_authority`'s. A decision log citing a
+    // revoked or absent grant must be rejected: an audit trail that accepts
+    // unfounded claims of authority is worse than none.
+    if kind_u32 == KIND_DECISION_LOG {
+        let parsed = buzz_core::interrupt::parse_decision_log(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        crate::interrupt_gate::enforce_decision_log_authority(tenant, state, &event, &parsed)
+            .await
+            .map_err(IngestError::AuthFailed)?;
+    }
+
     // Track pre-created channel UUID for compensation on insert failure.
     let mut pre_created_channel: Option<Uuid> = None;
 
@@ -2876,6 +2959,51 @@ async fn ingest_event_inner(
         });
     }
 
+    // Colony interrupt Ask, resolution, and withdrawal (44300-44302) are,
+    // unlike the actions brokered above, never consumed: an Applied outcome
+    // falls through to the ordinary storage path immediately below rather
+    // than returning early, so ask-protocol events are stored like any
+    // other event and channels/future UI can subscribe to them. Only a
+    // Duplicate or Refused outcome short-circuits here, since those must
+    // not be stored at all.
+    //
+    // Placed as late as possible -- immediately before the storage decision
+    // below, after every remaining rejection path (channel-scoped-token/
+    // global-event, membership, archived-channel, per-kind validators) --
+    // so `Applied` really is the last word. An earlier placement let the
+    // broker's `insert_ask` commit before a later rejection (e.g. an ask
+    // naming an archived channel) discarded the event: the `asks` row
+    // stayed `open` pointing at an event that was never actually stored,
+    // wedging the need permanently (every retry read back as `Duplicate`
+    // against a ghost, and resolution/withdrawal refused with "the
+    // referenced ask does not exist"). Dedupe still runs before the event
+    // lands, which is all it needs.
+    if crate::ask_broker::is_ask_candidate(&event) {
+        match crate::ask_broker::handle_ask_event(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
+        {
+            crate::ask_broker::AskBrokerOutcome::Applied => {}
+            crate::ask_broker::AskBrokerOutcome::Duplicate {
+                original_ask_event_id,
+            } => {
+                let original_event_id_hex = hex::encode(original_ask_event_id);
+                return Ok(IngestResult {
+                    event_id: original_event_id_hex.clone(),
+                    accepted: false,
+                    message: format!("duplicate: original ask {original_event_id_hex}"),
+                });
+            }
+            crate::ask_broker::AskBrokerOutcome::Refused { message } => {
+                return Ok(IngestResult {
+                    event_id: event_id_hex,
+                    accepted: false,
+                    message: format!("conflict: {message}"),
+                });
+            }
+        }
+    }
+
     let (stored_event, was_inserted) = if buzz_core::kind::is_replaceable(kind_u32) {
         // NIP-16 replaceable event — atomic replace with stale-write protection.
         // channel_id is None for global kinds (0, 1, 3) due to step 5b above.
@@ -3010,6 +3138,39 @@ async fn ingest_event_inner(
         threaded_visibility.clone(),
     )
     .await;
+
+    // Colony interrupt-core: an owner replying inside the origin thread of
+    // one of their own open asks closes it exactly like tapping the Ask
+    // card would (spec: "You can still just answer in the thread") --
+    // otherwise the open queue keeps showing an ask the owner believes
+    // they already answered, and the whole point of asking instead of
+    // reading every thread is lost.
+    //
+    // Scoped to plain message kinds (9, 40002);
+    // `ask_broker::try_auto_resolve_from_reply` itself early-returns for
+    // every non-owner signer, so this is a cheap no-op on the overwhelming
+    // majority of writes. Placed AFTER storage and dispatch above rather
+    // than alongside the ask-broker's pre-storage branch near line 2929:
+    // that branch had to move immediately before storage because an
+    // earlier placement let it commit an `asks` row before a later
+    // rejection (an ask naming an archived channel) discarded the event,
+    // wedging the dedupe slot on a row that pointed at nothing. Nothing
+    // downstream of storage in THIS function can still reject the write --
+    // side effects and dispatch above are already best-effort and
+    // log-only on failure -- so there is no equivalent hazard here, only
+    // the mirror-image one: a failure below must never turn an
+    // already-accepted owner message into an error response. Log and
+    // continue.
+    if matches!(kind_u32, KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2) {
+        if let Err(error) =
+            crate::ask_broker::try_auto_resolve_from_reply(tenant, state, &stored_event.event).await
+        {
+            warn!(
+                event_id = %event_id_hex,
+                "auto-resolve from owner thread reply failed: {error}"
+            );
+        }
+    }
 
     info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
 
@@ -3436,7 +3597,11 @@ mod tests {
     /// NOT take the
     /// generic command branch: that branch returns before the ban/timeout
     /// write-block, so routing them there would let a banned owner mutate
-    /// company or party state.
+    /// company or party state. DM open and DM add-member join them for the
+    /// same reason, plus the Colony interrupt-core owner-contact gate, which
+    /// also sits past that write-block: without the exclusion an agent could
+    /// open a permitted DM with its leader and then add a community owner to
+    /// it, reaching the owner's inbox without the gate ever running.
     #[test]
     fn brokered_actions_are_excluded_from_the_generic_command_branch() {
         let brokered = [
@@ -3446,6 +3611,8 @@ mod tests {
             KIND_DISCOVERY_WORKER_ACTION,
             KIND_DISCOVERY_WORKSPACE_ACTION,
             buzz_core::kind::KIND_LEDGER_ACTION,
+            KIND_DM_OPEN,
+            KIND_DM_ADD_MEMBER,
         ];
         for kind in brokered {
             assert!(
