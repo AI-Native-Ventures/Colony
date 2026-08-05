@@ -421,12 +421,14 @@ pub(crate) async fn derive_reaction_channel(
 /// would let a banned or timed-out owner mutate company or party state. They are
 /// brokered further down, past that gate.
 ///
-/// DM open is excluded for the same shape of reason, plus one more: it must
-/// reach the Colony interrupt-core owner-contact gate
+/// DM open and DM add-member are excluded for the same shape of reason, plus
+/// one more: both must reach the Colony interrupt-core owner-contact gate
 /// (`interrupt_gate::enforce_owner_contact`), which also sits past the
 /// ban/timeout block, so a Worker or Leader agent cannot open a DM straight
-/// to a community owner. It is re-dispatched to `handle_command` explicitly,
-/// after both gates.
+/// to a community owner, nor reach the same end state by opening a permitted
+/// DM and then adding the owner to it (`handle_dm_add_member` calls the very
+/// same `open_dm` with the expanded participant set). Both are re-dispatched
+/// to `handle_command` explicitly, after both gates.
 pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
     buzz_core::kind::is_command_kind(kind)
         && kind != KIND_COMPANY_ACTION
@@ -436,6 +438,7 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
         && kind != KIND_DISCOVERY_WORKER_ACTION
         && kind != KIND_DISCOVERY_WORKSPACE_ACTION
         && kind != KIND_DM_OPEN
+        && kind != KIND_DM_ADD_MEMBER
 }
 
 /// Kinds that are always global (`channel_id = NULL`).
@@ -1780,16 +1783,20 @@ async fn ingest_event_inner(
     // exemption. Checked here, after the ban/timeout write-block and before
     // any handler runs, so the rule holds regardless of which path below
     // would otherwise store or route the event.
-    crate::interrupt_gate::enforce_owner_contact(tenant, state, &event)
+    // `auth.pubkey()` rather than `event.pubkey`: a NIP-17 gift wrap is
+    // signed by an ephemeral key and the identity check above deliberately
+    // exempts it, so the acting identity is the authenticated one. For every
+    // other gated kind the two are already equal or the write was rejected.
+    crate::interrupt_gate::enforce_owner_contact(tenant, state, &event, auth.pubkey())
         .await
         .map_err(IngestError::AuthFailed)?;
 
-    // DM open is a command kind (`is_command_kind`) but is deliberately
-    // excluded from the generic command branch above (see
-    // `takes_generic_command_branch`) so it reaches the ban/timeout
+    // DM open and DM add-member are command kinds (`is_command_kind`) but are
+    // deliberately excluded from the generic command branch above (see
+    // `takes_generic_command_branch`) so they reach the ban/timeout
     // write-block and the owner-contact gate just checked. Past both gates,
-    // it re-enters the same dispatch the generic branch would have used.
-    if kind_u32 == KIND_DM_OPEN {
+    // they re-enter the same dispatch the generic branch would have used.
+    if kind_u32 == KIND_DM_OPEN || kind_u32 == KIND_DM_ADD_MEMBER {
         return super::command_executor::handle_command(tenant, state, event, auth).await;
     }
 

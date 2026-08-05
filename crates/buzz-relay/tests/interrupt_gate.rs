@@ -3,7 +3,9 @@
 //! `block_attention_feed.rs`.
 
 use buzz_auth::Scope;
-use buzz_core::kind::{KIND_DM_OPEN, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE};
+use buzz_core::kind::{
+    KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_GIFT_WRAP, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE,
+};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::event::ThreadMetadataParams;
@@ -253,7 +255,7 @@ async fn worker_p_tagging_owner_in_fresh_thread_is_rejected() {
 
     let msg = stream_message(&worker, vec![tag(&["p", &owner_hex])], "hey, got a sec?");
 
-    let result = enforce_owner_contact(&tenant, &state, &msg).await;
+    let result = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey).await;
     let error = result.expect_err("worker addressing owner in a fresh thread must be rejected");
     assert!(
         error.starts_with("restricted:"),
@@ -300,7 +302,7 @@ async fn worker_replying_in_owner_authored_thread_is_accepted() {
         "on it, done",
     );
 
-    enforce_owner_contact(&tenant, &state, &reply)
+    enforce_owner_contact(&tenant, &state, &reply, &reply.pubkey)
         .await
         .expect("worker replying in owner-authored thread must be accepted");
 }
@@ -343,7 +345,7 @@ async fn worker_replying_in_thread_owner_never_touched_is_rejected() {
         "@owner can you weigh in?",
     );
 
-    let result = enforce_owner_contact(&tenant, &state, &reply).await;
+    let result = enforce_owner_contact(&tenant, &state, &reply, &reply.pubkey).await;
     let error = result.expect_err("owner never touched this thread; must be rejected");
     assert!(
         error.starts_with("restricted:"),
@@ -400,7 +402,7 @@ async fn worker_replying_where_owner_pulled_them_in_is_accepted() {
         "sure, on it",
     );
 
-    enforce_owner_contact(&tenant, &state, &reply)
+    enforce_owner_contact(&tenant, &state, &reply, &reply.pubkey)
         .await
         .expect("worker pulled into the thread by the owner must be accepted");
 }
@@ -426,7 +428,7 @@ async fn worker_opening_dm_with_owner_is_rejected() {
         vec![tag(&["p", &owner_hex]), tag(&["p", &worker_hex])],
     );
 
-    let result = enforce_owner_contact(&tenant, &state, &open).await;
+    let result = enforce_owner_contact(&tenant, &state, &open, &open.pubkey).await;
     let error = result.expect_err("worker opening a DM with the owner must be rejected");
     assert!(
         error.contains("cannot open a DM with an owner"),
@@ -451,7 +453,7 @@ async fn leader_p_tagging_owner_is_rejected() {
 
     let msg = stream_message(&leader, vec![tag(&["p", &owner_hex])], "quick question");
 
-    let result = enforce_owner_contact(&tenant, &state, &msg).await;
+    let result = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey).await;
     let error = result.expect_err("leader addressing owner must be rejected");
     assert!(
         error.starts_with("restricted:"),
@@ -476,7 +478,7 @@ async fn executive_p_tagging_owner_is_accepted() {
 
     let msg = stream_message(&executive, vec![tag(&["p", &owner_hex])], "status update");
 
-    enforce_owner_contact(&tenant, &state, &msg)
+    enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
         .await
         .expect("executive addressing owner must be accepted");
 }
@@ -499,7 +501,7 @@ async fn human_member_p_tagging_owner_is_accepted() {
 
     let msg = stream_message(&human, vec![tag(&["p", &owner_hex])], "hey!");
 
-    enforce_owner_contact(&tenant, &state, &msg)
+    enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
         .await
         .expect("a pubkey with no managed-agent head must be unrestricted");
 }
@@ -537,7 +539,7 @@ async fn worker_self_published_tier_head_does_not_override_owner_authored_tier()
         "self-promoted, technically",
     );
 
-    let result = enforce_owner_contact(&tenant, &state, &msg).await;
+    let result = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey).await;
     let error = result
         .expect_err("a self-published impostor head must not shadow the real, owner-authored tier");
     assert!(
@@ -560,7 +562,7 @@ async fn ordinary_message_with_no_p_tags_is_never_gated() {
     let author = Keys::generate();
     let msg = stream_message(&author, vec![], "just chatting");
 
-    enforce_owner_contact(&tenant, &state, &msg)
+    enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
         .await
         .expect("a message with no p tags must never be gated");
 }
@@ -664,6 +666,271 @@ async fn legitimate_dm_open_through_real_ingest_pipeline_reaches_handle_dm_open(
     assert!(
         result.message.starts_with("response:") && result.message.contains("\"created\":true"),
         "expected handle_dm_open's response shape, got: {}",
+        result.message
+    );
+}
+
+// -- C1: the other two doors into the owner-contact wall ---------------------
+//
+// The gate above closes kind 41010 (DM open), but a whole-branch review found
+// two more routes to the same end state, both of which reached an owner
+// without ever passing through `enforce_owner_contact`:
+//
+// - kind 41011 (DM add member): also an `is_command_kind` kind, so it returned
+//   from ingest at the generic command branch, BEFORE the ban/timeout block
+//   and this gate. `handle_dm_add_member` calls `open_dm` with the expanded
+//   participant set, so a worker could open a permitted DM with its leader and
+//   then simply add the owner to it: the exact operation 41010's arm refuses.
+// - kind 1059 (NIP-17 gift wrap): accepted over WebSocket and not in the
+//   gate's kind list at all. Gift wraps are signed by an EPHEMERAL key, so
+//   `ingest_event_inner` deliberately allows the pubkey mismatch -- resolving
+//   the tier of `event.pubkey` would find `None` (unrestricted) every time.
+//   The gate therefore resolves the AUTHENTICATED pubkey instead.
+//
+// Every test below drives the real `ingest_event` entry point, because the
+// point of each is where the check sits in the pipeline, not what the check
+// says in isolation.
+
+/// Extract `handle_dm_open`'s response `channel_id`, so a follow-up 41011 can
+/// name a DM that genuinely exists and genuinely has the actor as a member.
+fn response_channel_id(message: &str) -> Uuid {
+    let json = message
+        .strip_prefix("response:")
+        .expect("a DM command response is prefixed `response:`");
+    let value: serde_json::Value = serde_json::from_str(json).expect("response body is JSON");
+    Uuid::parse_str(
+        value
+            .get("channel_id")
+            .and_then(serde_json::Value::as_str)
+            .expect("response carries a channel_id"),
+    )
+    .expect("channel_id is a UUID")
+}
+
+fn dm_add_member(author: &Keys, tags: Vec<Tag>) -> Event {
+    EventBuilder::new(Kind::Custom(KIND_DM_ADD_MEMBER as u16), "")
+        .tags(tags)
+        .sign_with_keys(author)
+        .expect("sign dm add member")
+}
+
+fn message_write_auth(pubkey: nostr::PublicKey) -> IngestAuth {
+    IngestAuth::Nip42 {
+        pubkey,
+        scopes: vec![Scope::MessagesWrite],
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    }
+}
+
+/// Open a DM between `author` and `other` through the real pipeline and
+/// return the resulting channel id.
+async fn open_dm_through_ingest(
+    state: &Arc<AppState>,
+    tenant: &TenantContext,
+    author: &Keys,
+    other: &Keys,
+) -> Uuid {
+    let open = dm_open(author, vec![tag(&["p", &other.public_key().to_hex()])]);
+    let result = ingest_event(state, tenant, open, message_write_auth(author.public_key()))
+        .await
+        .unwrap_or_else(|error| panic!("opening a permitted DM must succeed: {error:?}"));
+    assert!(
+        result.accepted,
+        "opening a permitted DM must be accepted: {}",
+        result.message
+    );
+    response_channel_id(&result.message)
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn worker_dm_add_member_of_an_owner_through_real_ingest_pipeline_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    let worker = Keys::generate();
+    set_tier(&db, community, &owner_keys, &worker, "worker").await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner_keys, &leader, "leader").await;
+
+    // Step 1, entirely permitted: the worker opens a DM with its own leader.
+    let dm_channel = open_dm_through_ingest(&state, &tenant, &worker, &leader).await;
+
+    // Step 2, the door: add the owner to that existing DM. `open_dm` with the
+    // expanded set creates a NEW dm channel containing the owner -- same end
+    // state as the 41010 the gate already refuses.
+    let add = dm_add_member(
+        &worker,
+        vec![
+            tag(&["h", &dm_channel.to_string()]),
+            tag(&["p", &owner_hex]),
+        ],
+    );
+
+    let result = ingest_event(
+        &state,
+        &tenant,
+        add,
+        message_write_auth(worker.public_key()),
+    )
+    .await;
+    match result {
+        Err(IngestError::AuthFailed(message)) => {
+            assert!(
+                message.contains("cannot add an owner to a DM"),
+                "unexpected message: {message}"
+            );
+        }
+        Err(other) => panic!(
+            "expected AuthFailed rejection through the real pipeline, got a different IngestError: {other:?}"
+        ),
+        Ok(accepted) => panic!(
+            "expected rejection through the real pipeline, got accepted={} message={}",
+            accepted.accepted, accepted.message
+        ),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn legitimate_dm_add_member_through_real_ingest_pipeline_reaches_its_handler() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    // Three ordinary humans: no managed-agent head, no owner anywhere. The
+    // gate must let this straight through, and the post-gate re-dispatch must
+    // still deliver the event to `handle_dm_add_member` rather than silently
+    // dropping it.
+    let alice = Keys::generate();
+    let bob = Keys::generate();
+    let carol = Keys::generate();
+
+    let dm_channel = open_dm_through_ingest(&state, &tenant, &alice, &bob).await;
+
+    let add = dm_add_member(
+        &alice,
+        vec![
+            tag(&["h", &dm_channel.to_string()]),
+            tag(&["p", &carol.public_key().to_hex()]),
+        ],
+    );
+    let result = ingest_event(&state, &tenant, add, message_write_auth(alice.public_key()))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("a legitimate DM add-member must succeed through the real pipeline: {error:?}")
+        });
+    assert!(
+        result.accepted,
+        "DM add-member must be accepted, message: {}",
+        result.message
+    );
+    // `handle_dm_add_member`'s response carries a `channel_id` and -- unlike
+    // `handle_dm_open`'s -- no `created` field, so this proves the re-dispatch
+    // reached that handler specifically, not merely that ingest returned `Ok`
+    // through some other path.
+    assert!(
+        result.message.starts_with("response:") && !result.message.contains("\"created\""),
+        "expected handle_dm_add_member's response shape, got: {}",
+        result.message
+    );
+    assert_ne!(
+        response_channel_id(&result.message),
+        dm_channel,
+        "adding a member creates a NEW dm channel (DM participant sets are immutable)"
+    );
+}
+
+fn gift_wrap(ephemeral: &Keys, tags: Vec<Tag>) -> Event {
+    EventBuilder::new(Kind::Custom(KIND_GIFT_WRAP as u16), "sealed-ciphertext")
+        .tags(tags)
+        .sign_with_keys(ephemeral)
+        .expect("sign gift wrap")
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn worker_gift_wrap_to_an_owner_through_real_ingest_pipeline_is_rejected() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    let worker = Keys::generate();
+    set_tier(&db, community, &owner_keys, &worker, "worker").await;
+
+    // NIP-17: the wrap is signed by a throwaway key, never by the sender's
+    // own. The gate must resolve the tier of the AUTHENTICATED pubkey (the
+    // worker), not of this ephemeral signer -- resolving the signer would
+    // find no managed-agent head and wave it through.
+    let ephemeral = Keys::generate();
+    let wrap = gift_wrap(&ephemeral, vec![tag(&["p", &owner_hex])]);
+
+    let result = ingest_event(
+        &state,
+        &tenant,
+        wrap,
+        message_write_auth(worker.public_key()),
+    )
+    .await;
+    match result {
+        Err(IngestError::AuthFailed(message)) => {
+            assert!(
+                message.contains("cannot send a private message to an owner"),
+                "unexpected message: {message}"
+            );
+        }
+        Err(other) => panic!(
+            "expected AuthFailed rejection through the real pipeline, got a different IngestError: {other:?}"
+        ),
+        Ok(accepted) => panic!(
+            "expected rejection through the real pipeline, got accepted={} message={}",
+            accepted.accepted, accepted.message
+        ),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn gift_wrap_from_an_untiered_sender_to_an_owner_is_still_accepted() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    // An ordinary human with no managed-agent head: NIP-17 must keep working
+    // exactly as before this gate learned about kind 1059.
+    let human = Keys::generate();
+    let ephemeral = Keys::generate();
+    let wrap = gift_wrap(&ephemeral, vec![tag(&["p", &owner_hex])]);
+
+    let result = ingest_event(
+        &state,
+        &tenant,
+        wrap,
+        message_write_auth(human.public_key()),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("an untiered sender's gift wrap must succeed: {error:?}"));
+    assert!(
+        result.accepted,
+        "gift wrap must be accepted: {}",
         result.message
     );
 }

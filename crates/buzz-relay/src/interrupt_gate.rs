@@ -2,31 +2,59 @@
 //! (spec: tiers).
 //!
 //! Workers and leaders may never address a community owner directly; only
-//! the executive (Chief of Staff) may. The one exemption is thread-scoped:
-//! an agent may reply inside a thread the owner started, or a thread where
-//! the owner has already p-tagged that agent, so a specialist the owner
-//! deliberately pulled in can still answer them. Enforced here, at ingest,
-//! rather than in a client or a prompt, because a relay write-rule cannot be
-//! skipped on a bad day the way a prompt can. See `docs/nips/NIP-IQ.md`.
+//! the executive (Chief of Staff) may. That covers every route an ordinary
+//! agent has to a human's inbox: a stream message or edit p-tagging them
+//! (kinds 9, 40002, 40003), opening a DM with them (41010), adding them to
+//! an existing DM (41011), and a NIP-17 gift wrap addressed to them (1059).
+//! The one exemption is thread-scoped: an agent may reply inside a thread
+//! the owner started, or a thread where the owner has already p-tagged that
+//! agent, so a specialist the owner deliberately pulled in can still answer
+//! them. Enforced here, at ingest, rather than in a client or a prompt,
+//! because a relay write-rule cannot be skipped on a bad day the way a
+//! prompt can. See `docs/nips/NIP-IQ.md`.
 
 use buzz_core::interrupt::{parse_grant, AgentTier, ParsedDecisionLog, ParsedGrant};
 use buzz_core::kind::{
-    KIND_DELEGATION_GRANT, KIND_DM_OPEN, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE,
-    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_V2,
+    KIND_DELEGATION_GRANT, KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_GIFT_WRAP, KIND_MANAGED_AGENT,
+    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_V2,
 };
 use buzz_core::tenant::TenantContext;
 use nostr::{Event, PublicKey};
 
 use crate::state::AppState;
 
-/// Kinds this gate inspects: stream messages (v1/v2), message edits, and DM
-/// open. Every other kind returns `Ok(())` from [`enforce_owner_contact`]
-/// before it reads the database.
+/// Kinds this gate inspects: stream messages (v1/v2), message edits, DM open,
+/// DM add-member, and NIP-17 gift wraps. Every other kind returns `Ok(())`
+/// from [`enforce_owner_contact`] before it reads the database.
 fn is_gated_kind(kind: u32) -> bool {
     matches!(
         kind,
-        KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2 | KIND_STREAM_MESSAGE_EDIT | KIND_DM_OPEN
+        KIND_STREAM_MESSAGE
+            | KIND_STREAM_MESSAGE_V2
+            | KIND_STREAM_MESSAGE_EDIT
+            | KIND_DM_OPEN
+            | KIND_DM_ADD_MEMBER
+            | KIND_GIFT_WRAP
     )
+}
+
+/// Whether `kind` reaches an owner DIRECTLY rather than by replying near
+/// them: opening a DM (41010), adding a participant to one (41011), or
+/// sending a NIP-17 gift wrap (1059). None of these has a thread to carry
+/// the reply exemption, so an owner among the `p` tags is refused outright.
+fn is_direct_contact_kind(kind: u32) -> bool {
+    matches!(kind, KIND_DM_OPEN | KIND_DM_ADD_MEMBER | KIND_GIFT_WRAP)
+}
+
+/// The refusal for a direct-contact kind, named per kind so an agent author
+/// reading a rejected write can tell which door they walked into.
+fn direct_contact_denied(kind: u32, tier: AgentTier) -> String {
+    let what = match kind {
+        KIND_DM_OPEN => "open a DM with an owner",
+        KIND_DM_ADD_MEMBER => "add an owner to a DM",
+        _ => "send a private message to an owner",
+    };
+    format!("restricted: {} agents cannot {what}", tier.as_str())
 }
 
 /// Upper bound on how many of the most recent managed-agent heads at a
@@ -116,17 +144,34 @@ pub async fn agent_tier(
 /// pubkeys with no managed-agent head (humans, unmanaged clients) are
 /// unrestricted.
 ///
-/// Scope: kinds 9, 40002, 40003 (stream messages) and 41010 (DM open). Any
-/// other kind, or an in-scope event carrying no `p` tags, returns `Ok(())`
-/// before any database read, so ordinary traffic pays nothing for this gate.
+/// Scope: kinds 9, 40002, 40003 (stream messages), 41010 (DM open), 41011
+/// (DM add member) and 1059 (NIP-17 gift wrap). Any other kind, or an
+/// in-scope event carrying no `p` tags, returns `Ok(())` before any database
+/// read, so ordinary traffic pays nothing for this gate.
 ///
-/// For DM open, an owner among the participant `p` tags is always rejected;
-/// opening a new DM has no reply exemption. For message kinds, an owner
-/// among the `p` tags is allowed only under the reply exemption: the event's
-/// `e` tags must name a thread root that either the owner authored, or that
-/// the owner has posted into while p-tagging the acting agent (see
-/// [`owner_thread_permits`]). The exemption must hold for every owner
-/// p-tagged on the event, not just one of them.
+/// `auth_pubkey` is the AUTHENTICATED writer, which is not always the event's
+/// own signer: a gift wrap is signed by a throwaway ephemeral key and
+/// `handlers::ingest` deliberately allows that mismatch (NIP-17). Resolving
+/// the tier of `event.pubkey` there would find no managed-agent head and
+/// treat every wrap as unrestricted, so the acting identity this gate
+/// resolves is always the authenticated one. For every other gated kind
+/// ingest has already rejected the write unless the two are equal, so this
+/// is the same pubkey either way.
+///
+/// For the direct-contact kinds (DM open, DM add member, gift wrap) an owner
+/// among the `p` tags is always rejected; there is no thread to carry a
+/// reply exemption. For message kinds, an owner among the `p` tags is
+/// allowed only under the reply exemption: the event's `e` tags must name a
+/// thread root that either the owner authored, or that the owner has posted
+/// into while p-tagging the acting agent (see [`owner_thread_permits`]). The
+/// exemption must hold for every owner p-tagged on the event, not just one
+/// of them.
+///
+/// Note on 41011: the `p` tags of a DM add-member name the participants
+/// being ADDED, which is exactly the escalation this refuses (a worker opens
+/// a permitted DM with its leader, then adds the owner to it). It does not
+/// restrict a DM that already contained the owner before the add, since that
+/// DM was necessarily opened by someone this gate already let through.
 ///
 /// Fails closed: a database error resolving tier, membership, or the
 /// exemption rejects the write rather than allowing it.
@@ -134,6 +179,7 @@ pub async fn enforce_owner_contact(
     tenant: &TenantContext,
     state: &AppState,
     event: &Event,
+    auth_pubkey: &PublicKey,
 ) -> Result<(), String> {
     let kind = event.kind.as_u16() as u32;
     if !is_gated_kind(kind) {
@@ -145,7 +191,7 @@ pub async fn enforce_owner_contact(
         return Ok(());
     }
 
-    let Some(tier) = agent_tier(tenant, state, &event.pubkey).await? else {
+    let Some(tier) = agent_tier(tenant, state, auth_pubkey).await? else {
         return Ok(());
     };
     if tier == AgentTier::Executive {
@@ -173,18 +219,15 @@ pub async fn enforce_owner_contact(
         return Ok(());
     }
 
-    if kind == KIND_DM_OPEN {
-        return Err(format!(
-            "restricted: {} agents cannot open a DM with an owner",
-            tier.as_str()
-        ));
+    if is_direct_contact_kind(kind) {
+        return Err(direct_contact_denied(kind, tier));
     }
 
     let Some(thread_root) = extract_thread_root(event) else {
         return Err(owner_contact_denied(tier));
     };
 
-    let agent_bytes = event.pubkey.to_bytes().to_vec();
+    let agent_bytes = auth_pubkey.to_bytes().to_vec();
     for owner_bytes in &owner_targets {
         let permitted =
             owner_thread_permits(tenant, state, &thread_root, owner_bytes, &agent_bytes).await?;
