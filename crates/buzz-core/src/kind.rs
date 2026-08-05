@@ -287,6 +287,16 @@ pub const KIND_DELEGATION_GRANT: u32 = 30189;
 /// minting a key and claiming employment.
 pub const KIND_EMPLOYEE: u32 = 30190;
 
+/// Colony: the job head (parameterized replaceable, `d` = the filing event
+/// id), signed by the relay-held key of the employee that owes the work.
+///
+/// The relay's account of one job: who it belongs to, what state it is in,
+/// which seat holds the lease and until when. Every transition republishes
+/// the head, so a worker watching this kind learns whether its claim won
+/// without a second request. Only the relay can sign it, because only the
+/// relay can open an employee's sealed key.
+pub const KIND_JOB_HEAD: u32 = 30191;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -627,6 +637,28 @@ pub const KIND_JOB_CANCEL: u32 = 43005;
 /// An agent job failed with an error.
 pub const KIND_JOB_ERROR: u32 = 43006;
 
+// Colony job queue (43010–43013). The kinds above (43001–43006) are the
+// older announcement-only protocol: they narrate an agent job in the feed
+// but nothing arbitrates them, so two machines can answer the same request.
+// The kinds below are the queue proper — every one of them is a request to
+// the relay to move a row, and the relay's reply is the job head
+// (`KIND_JOB_HEAD`). See docs/design/company-employees.html.
+/// A job filed against an employee: content is the instruction, `p` names
+/// the employee, and the event id becomes the job id.
+pub const KIND_JOB_FILING: u32 = 43010;
+
+/// A worker asking for the lease on a job. Exactly one claimant wins; the
+/// republished head tells every claimant which.
+pub const KIND_JOB_CLAIM: u32 = 43011;
+
+/// The lease holder reporting it is still working, which extends the lease.
+/// Silence is the signal: a lease nobody renews expires and the job returns
+/// to the queue.
+pub const KIND_JOB_HEARTBEAT: u32 = 43012;
+
+/// The lease holder reporting the job done or failed.
+pub const KIND_JOB_OUTCOME: u32 = 43013;
+
 /// Relay-signed notification: the target pubkey was added to a channel.
 /// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
 pub const KIND_MEMBER_ADDED_NOTIFICATION: u32 = 44100;
@@ -803,6 +835,11 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_DELEGATION_GRANT,
     KIND_HIRE_REQUEST,
     KIND_EMPLOYEE,
+    KIND_JOB_HEAD,
+    KIND_JOB_FILING,
+    KIND_JOB_CLAIM,
+    KIND_JOB_HEARTBEAT,
+    KIND_JOB_OUTCOME,
     KIND_LEDGER_ACTION,
     KIND_LEDGER_RECEIPT,
     KIND_TEAM,

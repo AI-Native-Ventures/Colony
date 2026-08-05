@@ -47,6 +47,7 @@
   ol.phases li { margin-bottom: 12px; }
   .pill { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
   .pill.dead { background: var(--warn-soft); color: var(--warn); }
+  .pill.built { background: var(--accent-soft); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -145,8 +146,8 @@
 
 <h2>Build phases</h2>
 <ol class="phases">
-  <li><strong>Employee registry and relay-held identity.</strong> Hire mints the keypair relay-side; owner signs the ownership tag; employee record published to the workspace. Gate: a hired employee visible to both members, its events relay-signed.</li>
-  <li><strong>Job queue.</strong> Kinds and relay logic: file, lease, heartbeat, complete, fail, stall-to-ask. Gate: a job filed by one member, claimed and completed by a worker, survives a mid-job worker kill by re-leasing.</li>
+  <li><strong>Employee registry and relay-held identity.</strong> <span class="pill built">built</span> Hire mints the keypair relay-side; owner signs the ownership tag; employee record published to the workspace. Gate: a hired employee visible to both members, its events relay-signed. <em>Passed against production: Chief of Staff hired on horizon, sealed key in the relay's database, the owner's request the only thing that authorised it.</em></li>
+  <li><strong>Job queue.</strong> <span class="pill built">built</span> Kinds and relay logic: file, lease, heartbeat, complete, fail, stall-to-ask. Gate: a job filed by one member, claimed and completed by a worker, survives a mid-job worker kill by re-leasing. <em>Passed against a live relay (<code>crates/buzz-test-client/tests/e2e_jobs.rs</code>). Three things only running it revealed: two heads written in the same second tie under NIP-33 and readers keep the stale one, two claims in the same second are one event and the retry vanishes, and a worker's pubkey does not identify its lease because one founder's laptop and desktop share a key. The queue carries a monotonic head stamp, a claim nonce, and an attempt fencing token because of those three.</em></li>
   <li><strong>Worker mode and seat bindings.</strong> Harness claims own-human jobs, executes through the member's binding with fallback chain, posts stamped results. Gate: the same employee completes jobs for both founders on different bindings, stamps and ledger correct.</li>
   <li><strong>Workspace briefs.</strong> Claim-time context: members, roles, requester identity, employee memory. Gate: the employee correctly addresses each founder and cites who filed the task, unprompted.</li>
   <li><strong>Handoff asks and credential pinning.</strong> Exhausted-seat and pinned-role paths as typed asks. Gate: a job on an exhausted seat lands as an approvable ask on the other seat and runs only after the tap.</li>
