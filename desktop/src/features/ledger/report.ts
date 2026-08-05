@@ -29,6 +29,15 @@ export type PaymentMode = "metered" | "imputed";
 /** Accounting classification in force for an entry. */
 export type EntryClassification = "cogs" | "opex" | "needsReview";
 
+/**
+ * Which kind of price row priced a call.
+ *
+ * The same model costs different amounts from the lab that trained it, from a
+ * cloud reselling it, and from a router. `listRow` means the book had no row
+ * for this call's provider and the vendor's list price was used instead.
+ */
+export type PriceBasis = "providerRow" | "listRow";
+
 /** One priced, attributed usage record. */
 export interface LedgerEntry {
   /** Hex event id of the underlying usage record. */
@@ -48,6 +57,17 @@ export interface LedgerEntry {
    * cost is not yet knowable, which is why it also forces review.
    */
   costNanousd: bigint | null;
+  /**
+   * Which kind of price row supplied the rate.
+   *
+   * `providerRow` means a row named the provider that served this call, so
+   * the rate is what that provider charges. `listRow` means the vendor's list
+   * price was used, which is right for a call the vendor served itself and
+   * wrong by the reseller's margin otherwise.
+   *
+   * `null` for unpriced and flat-amount records, which consulted no book.
+   */
+  priceBasis: PriceBasis | null;
   /** Classification before any correction. Never changes. */
   originalClassification: EntryClassification;
   /** Classification in force now, after corrections. */
@@ -207,6 +227,23 @@ function requireClassification(
   return value as EntryClassification;
 }
 
+const PRICE_BASES = new Set(["providerRow", "listRow"]);
+
+/**
+ * Absent is the normal case for an unpriced or flat-amount record, and also
+ * for any report produced before the basis existed, so it reads as "not
+ * stated" rather than failing. An unrecognised value does fail: silently
+ * dropping a basis the app does not understand would show a rate as
+ * provider-specific when it may not be.
+ */
+function parsePriceBasis(value: unknown): PriceBasis | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || !PRICE_BASES.has(value)) {
+    return fail(`priceBasis is unknown: ${String(value)}`);
+  }
+  return value as PriceBasis;
+}
+
 function parseAttributedBy(value: unknown): AttributionMethod {
   const raw = asObject(value, "attributedBy");
   const kind = requireString(raw, "kind");
@@ -262,6 +299,7 @@ function parseEntry(value: unknown): LedgerEntry {
       "originalClassification",
     ),
     paymentMode,
+    priceBasis: parsePriceBasis(raw.priceBasis),
     provider: requireString(raw, "provider"),
   };
 }

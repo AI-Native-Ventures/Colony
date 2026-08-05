@@ -1,11 +1,17 @@
 //! Effective-dated model price book.
 //!
-//! Money is integer nanoUSD per token: $3.00 per million tokens is 3000
-//! nanoUSD per token. Floating point never touches a ledger amount.
+//! Money is integer nanoUSD per **million** tokens: $3.00 per million tokens
+//! is 3_000_000_000. Floating point never touches a ledger amount. See
+//! [`PriceRates`] for why the unit is per million rather than per token.
 //!
 //! The table is append-only and effective-dated. A price cut, a promotional
 //! rate, and the end of that promotion are three appended entries, not edits,
 //! so a call made last month still prices at what it actually cost.
+//!
+//! A row also states *when else* it applies ([`super::conditions`]) and, above
+//! all of that, *whose price it is*: the same model costs different amounts
+//! from the lab that trained it, from a cloud reselling it, and from a router.
+//! See [`PriceBook::entry_for_call`].
 
 use serde::{Deserialize, Serialize};
 
@@ -256,6 +262,7 @@ impl PriceBook {
             &CallFacts {
                 input_tokens: 0,
                 at_unix,
+                provider: None,
                 tier: None,
             },
         )
@@ -274,13 +281,47 @@ impl PriceBook {
     /// but a newer unconditional row must not start pricing long calls at
     /// the short rate. Date decides which generation of a rate applies;
     /// conditions decide which rate within it.
+    ///
+    /// All of that is settled *within* one provider's rows. Which provider
+    /// served the call is decided first and outranks everything here; see
+    /// [`Self::entry_for_call`].
     pub fn rates_for_call(&self, model: &str, facts: &CallFacts) -> Option<&PriceRates> {
-        self.rates_matching(facts, |candidate| candidate == model)
+        self.entry_for_call(model, facts).map(|entry| &entry.rates)
+    }
+
+    /// The row that prices this call, rather than only its rates.
+    ///
+    /// Callers that need to report *how* a call was priced use this and read
+    /// [`PriceEntry::conditions`]; see [`PriceBasis`].
+    pub fn entry_for_call(&self, model: &str, facts: &CallFacts) -> Option<&PriceEntry> {
+        // Rows naming this call's provider are considered first, and only if
+        // none of them fits does the search fall back to list rows.
+        //
+        // Provider is settled before model matching rather than alongside it,
+        // because model matching is a hard gate: an exact row is chosen
+        // without the alias rows ever being looked at. Ranked the other way
+        // round, an exact *list* row would beat an alias row naming the
+        // provider, and a Bedrock call would silently price at Anthropic's
+        // list rate with a Bedrock rate sitting in the book.
+        self.best_in_scope(model, facts, |entry| entry.conditions.provider.is_some())
+            .or_else(|| {
+                self.best_in_scope(model, facts, |entry| entry.conditions.provider.is_none())
+            })
+    }
+
+    /// The best row for this call among those the scope admits.
+    fn best_in_scope(
+        &self,
+        model: &str,
+        facts: &CallFacts,
+        scope: impl Fn(&PriceEntry) -> bool + Copy,
+    ) -> Option<&PriceEntry> {
+        self.rates_matching(facts, |candidate| candidate == model, scope)
             .or_else(|| {
                 // Only when nothing matched exactly. An exact row always wins,
                 // so adding an alias row can never change what an existing
                 // dated row prices.
-                self.rates_matching(facts, |candidate| alias_matches(candidate, model))
+                self.rates_matching(facts, |candidate| alias_matches(candidate, model), scope)
             })
     }
 
@@ -288,10 +329,14 @@ impl PriceBook {
         &self,
         facts: &CallFacts,
         is_match: impl Fn(&str) -> bool,
-    ) -> Option<&PriceRates> {
+        scope: impl Fn(&PriceEntry) -> bool,
+    ) -> Option<&PriceEntry> {
         let mut best: Option<&PriceEntry> = None;
         for entry in self.entries.iter().filter(|e| {
-            is_match(&e.model) && e.effective_from <= facts.at_unix && e.conditions.matches(facts)
+            scope(e)
+                && is_match(&e.model)
+                && e.effective_from <= facts.at_unix
+                && e.conditions.matches(facts)
         }) {
             let wins = match best {
                 None => true,
@@ -324,7 +369,7 @@ impl PriceBook {
                 best = Some(entry);
             }
         }
-        best.map(|entry| &entry.rates)
+        best
     }
 
     /// Exact cost in nanoUSD of a token breakdown at `at_unix`.
@@ -349,34 +394,105 @@ impl PriceBook {
         tier: Option<&str>,
     ) -> Option<u128> {
         let facts = CallFacts {
-            // Every input category, because the context a vendor charges a
-            // long-context premium on is the whole prompt, cached or not.
-            input_tokens: tokens
-                .input_uncached_tokens
-                .saturating_add(tokens.cache_read_tokens)
-                .saturating_add(tokens.cache_write_5m_tokens)
-                .saturating_add(tokens.cache_write_1h_tokens),
+            input_tokens: total_input_tokens(tokens),
             at_unix,
+            provider: None,
             tier: tier.map(str::to_owned),
         };
-        let rates = self.rates_for_call(model, &facts)?;
-
-        // Summed first, divided once. Dividing each category separately
-        // would discard a sub-unit remainder five times over instead of
-        // once, and those remainders are the whole reason rates are held per
-        // million tokens.
-        let scaled = u128::from(tokens.input_uncached_tokens)
-            * u128::from(rates.input_nanousd_per_mtok)
-            + u128::from(tokens.cache_read_tokens) * u128::from(rates.cache_read_nanousd_per_mtok)
-            + u128::from(tokens.cache_write_5m_tokens)
-                * u128::from(rates.cache_write_5m_nanousd_per_mtok)
-            + u128::from(tokens.cache_write_1h_tokens)
-                * u128::from(rates.cache_write_1h_nanousd_per_mtok)
-            + u128::from(tokens.output_tokens) * u128::from(rates.output_nanousd_per_mtok);
-
-        Some(div_round_half_up(scaled, TOKENS_PER_RATE_UNIT))
+        self.price_facts(model, tokens, &facts)
+            .map(|priced| priced.cost_nanousd)
     }
 
+    /// Exact cost in nanoUSD for a call, with the basis it was priced on.
+    ///
+    /// This is the entry point the ledger engine uses, because it is the only
+    /// one that can see the provider, and because a cost with no stated basis
+    /// cannot be checked by the person reading it.
+    pub fn price_facts(
+        &self,
+        model: &str,
+        tokens: &UsageBreakdown,
+        facts: &CallFacts,
+    ) -> Option<PricedCall> {
+        let entry = self.entry_for_call(model, facts)?;
+        let basis = if entry.conditions.provider.is_some() {
+            PriceBasis::ProviderRow
+        } else {
+            PriceBasis::ListRow
+        };
+        Some(PricedCall {
+            cost_nanousd: apply_rates(&entry.rates, tokens),
+            basis,
+        })
+    }
+}
+
+/// Every input category summed, for [`CallFacts::input_tokens`].
+///
+/// The context a vendor charges a long-context premium on is the whole
+/// prompt, cached or not. Shared rather than restated at each call site: two
+/// definitions of "how big was this prompt" would put calls either side of a
+/// context threshold onto different rates depending on which one ran.
+pub fn total_input_tokens(tokens: &UsageBreakdown) -> u64 {
+    tokens
+        .input_uncached_tokens
+        .saturating_add(tokens.cache_read_tokens)
+        .saturating_add(tokens.cache_write_5m_tokens)
+        .saturating_add(tokens.cache_write_1h_tokens)
+}
+
+/// A priced call and the kind of row that priced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PricedCall {
+    /// Cost in nanoUSD.
+    pub cost_nanousd: u128,
+    /// Which kind of row supplied the rate.
+    pub basis: PriceBasis,
+}
+
+/// Which kind of row priced a call.
+///
+/// Recorded on the priced line and carried to the Spend screen, because the
+/// difference between the two is real money and is invisible in the number
+/// itself. A wrong price looks exactly like a right one; a stated basis is
+/// what lets someone notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PriceBasis {
+    /// A row naming this call's provider. The rate is what that provider
+    /// charges.
+    ProviderRow,
+    /// A row naming no provider: the vendor's list price.
+    ///
+    /// Right when the call went to the vendor directly or to a provider
+    /// charging list, and wrong by the reseller's margin otherwise. Read on
+    /// 2026-08-05, that margin reached 67% across the 21 providers serving
+    /// `deepseek-v4-flash`. A line priced this way for a provider known to
+    /// resell is the prompt to add the row.
+    ListRow,
+}
+
+/// Cost in nanoUSD of a token breakdown at one set of rates.
+///
+/// Every category is multiplied by its own rate; nothing is inferred from a
+/// total.
+fn apply_rates(rates: &PriceRates, tokens: &UsageBreakdown) -> u128 {
+    // Summed first, divided once. Dividing each category separately would
+    // discard a sub-unit remainder five times over instead of once, and those
+    // remainders are the whole reason rates are held per million tokens.
+    let scaled = u128::from(tokens.input_uncached_tokens)
+        * u128::from(rates.input_nanousd_per_mtok)
+        + u128::from(tokens.cache_read_tokens) * u128::from(rates.cache_read_nanousd_per_mtok)
+        + u128::from(tokens.cache_write_5m_tokens)
+            * u128::from(rates.cache_write_5m_nanousd_per_mtok)
+        + u128::from(tokens.cache_write_1h_tokens)
+            * u128::from(rates.cache_write_1h_nanousd_per_mtok)
+        + u128::from(tokens.output_tokens) * u128::from(rates.output_nanousd_per_mtok);
+
+    div_round_half_up(scaled, TOKENS_PER_RATE_UNIT)
+}
+
+impl PriceBook {
     /// Append-only check: `new` must begin with exactly `old`'s entries.
     ///
     /// Rewriting or dropping a published price would restate what past work
@@ -420,6 +536,213 @@ mod tests {
             conditions: Default::default(),
             origin: PriceOrigin::Owner,
         }
+    }
+
+    fn served_by(model_provider: &str, entry: PriceEntry) -> PriceEntry {
+        PriceEntry {
+            conditions: PriceConditions {
+                provider: Some(model_provider.to_string()),
+                ..entry.conditions
+            },
+            ..entry
+        }
+    }
+
+    fn call_from(provider: Option<&str>, at_unix: u64) -> CallFacts {
+        CallFacts {
+            input_tokens: 0,
+            at_unix,
+            provider: provider.map(str::to_owned),
+            tier: None,
+        }
+    }
+
+    /// The defect this whole dimension exists for. Read on 2026-08-05,
+    /// `deepseek-v4-flash` was served by 21 providers between $0.084 and
+    /// $0.14 per million input tokens. Keyed on the model alone, a call
+    /// DigitalOcean served and invoiced was charged at DeepSeek's own rate.
+    #[test]
+    fn a_row_naming_the_provider_prices_that_providers_calls() {
+        // The provider row is appended *first* on purpose. Among rows that
+        // tie on every other term the later append wins, so listing it second
+        // would let it be selected by append order and the test would pass
+        // even with provider matching removed entirely.
+        let book = PriceBook {
+            entries: vec![
+                served_by(
+                    "digitalocean",
+                    entry("deepseek-v4-flash", 1_000, rates(84, 2, 0, 0, 168)),
+                ),
+                entry("deepseek-v4-flash", 1_000, rates(140, 3, 0, 0, 280)),
+            ],
+        };
+
+        let priced = |provider| {
+            book.entry_for_call("deepseek-v4-flash", &call_from(provider, 2_000))
+                .expect("priced")
+        };
+
+        let resold = priced(Some("digitalocean"));
+        assert_eq!(input(&resold.rates), 84, "DigitalOcean's own rate");
+        assert_eq!(resold.conditions.provider.as_deref(), Some("digitalocean"));
+
+        let direct = priced(Some("deepseek"));
+        assert_eq!(
+            input(&direct.rates),
+            140,
+            "a provider with no row of its own falls to the list rate"
+        );
+        assert_eq!(
+            input(&priced(None).rates),
+            140,
+            "and so does a call whose provider was never captured"
+        );
+    }
+
+    /// Model matching is a hard gate: an exact row is chosen without the alias
+    /// rows ever being looked at. So the provider has to be settled *before*
+    /// it, or an exact list row beats an alias row naming the provider and a
+    /// Bedrock call prices at Anthropic's list rate with a Bedrock rate
+    /// sitting right there in the book.
+    ///
+    /// This is the shape the shipped catalog actually has: its Anthropic and
+    /// OpenAI rows are undated aliases, while the meter records the dated
+    /// snapshot the provider resolved to.
+    #[test]
+    fn a_provider_row_outranks_an_exact_model_match_that_names_no_provider() {
+        let book = PriceBook {
+            entries: vec![
+                entry(
+                    "claude-sonnet-4-5-20250929",
+                    1_000,
+                    rates(3000, 300, 0, 0, 15000),
+                ),
+                served_by(
+                    "bedrock",
+                    entry("claude-sonnet-4-5", 1_000, rates(3300, 330, 0, 0, 16500)),
+                ),
+            ],
+        };
+
+        let facts = call_from(Some("bedrock"), 2_000);
+        let chosen = book
+            .rates_for_call("claude-sonnet-4-5-20250929", &facts)
+            .expect("priced");
+        assert_eq!(
+            input(chosen),
+            3300,
+            "the Bedrock rate, reached through the alias, beats the exact list row"
+        );
+
+        // The exact row still wins for everyone else, so adding the Bedrock
+        // row changed nothing about what it already priced.
+        assert_eq!(
+            input(
+                book.rates_for_call(
+                    "claude-sonnet-4-5-20250929",
+                    &call_from(Some("anthropic"), 2_000)
+                )
+                .expect("priced")
+            ),
+            3000
+        );
+    }
+
+    /// Within one provider's list, the ordinary rules still apply: the later
+    /// effective date wins, and the vendor's own price changes do not leak
+    /// across into a reseller's rate.
+    #[test]
+    fn a_price_change_applies_only_to_the_list_it_was_published_for() {
+        let book = PriceBook {
+            entries: vec![
+                entry("m", 1_000, rates(140, 0, 0, 0, 0)),
+                served_by("alibaba", entry("m", 1_000, rates(100, 0, 0, 0, 0))),
+                // The vendor cuts its own price. Alibaba did not.
+                entry("m", 3_000, rates(120, 0, 0, 0, 0)),
+            ],
+        };
+
+        let at = |t| call_from(Some("alibaba"), t);
+        assert_eq!(input(book.rates_for_call("m", &at(2_000)).unwrap()), 100);
+        assert_eq!(
+            input(book.rates_for_call("m", &at(4_000)).unwrap()),
+            100,
+            "the vendor's cut is not Alibaba's cut"
+        );
+        assert_eq!(
+            input(
+                book.rates_for_call("m", &call_from(Some("deepseek"), 4_000))
+                    .unwrap()
+            ),
+            120,
+            "while the vendor's own calls do take the cut"
+        );
+    }
+
+    /// How a call was priced has to reach the person reading the number,
+    /// because a rate that is wrong by a reseller's margin looks exactly like
+    /// one that is right.
+    #[test]
+    fn pricing_reports_whether_a_provider_row_or_the_list_supplied_the_rate() {
+        let book = PriceBook {
+            entries: vec![
+                entry("m", 1_000, rates(140, 0, 0, 0, 0)),
+                served_by("alibaba", entry("m", 1_000, rates(100, 0, 0, 0, 0))),
+            ],
+        };
+        let tokens = UsageBreakdown {
+            input_uncached_tokens: 1_000_000,
+            cache_read_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            output_tokens: 0,
+        };
+
+        let resold = book
+            .price_facts("m", &tokens, &call_from(Some("alibaba"), 2_000))
+            .expect("priced");
+        assert_eq!(resold.basis, PriceBasis::ProviderRow);
+        assert_eq!(resold.cost_nanousd, 100 * TOKENS_PER_RATE_UNIT);
+
+        let listed = book
+            .price_facts("m", &tokens, &call_from(Some("bedrock"), 2_000))
+            .expect("priced");
+        assert_eq!(
+            listed.basis,
+            PriceBasis::ListRow,
+            "priced, and flagged as list rather than Bedrock's own"
+        );
+        assert_eq!(listed.cost_nanousd, 140 * TOKENS_PER_RATE_UNIT);
+    }
+
+    /// A provider-only row carries no other condition, and rows reading as
+    /// unconditional are published without their `conditions` at all. If those
+    /// two ever agree, the book goes out with the provider erased and that row
+    /// starts pricing everyone's calls at one provider's rate.
+    #[test]
+    fn a_provider_row_survives_being_published_and_read_back() {
+        let original = served_by("alibaba", entry("m", 1_000, rates(100, 0, 0, 0, 0)));
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert!(
+            json.contains("alibaba"),
+            "the provider must reach the published book: {json}"
+        );
+
+        let restored: PriceEntry = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, original);
+
+        // And it still only prices Alibaba's calls after the round trip.
+        let book = PriceBook {
+            entries: vec![restored],
+        };
+        assert!(book
+            .rates_for_call("m", &call_from(Some("alibaba"), 2_000))
+            .is_some());
+        assert!(
+            book.rates_for_call("m", &call_from(Some("deepseek"), 2_000))
+                .is_none(),
+            "a book of only provider rows leaves everyone else unpriced, never at that provider's rate"
+        );
     }
 
     // The real scenario this was designed against: a base price, an 80% cut,

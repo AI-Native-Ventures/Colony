@@ -55,7 +55,7 @@
 <main>
 
 <h1>Role Agents</h1>
-<p class="subtitle">A workspace role is one colleague in the UI and one owned instance per member underneath. Revised 2026-08-05.</p>
+<p class="subtitle">Superseded 2026-08-05 by <a href="company-employees.html">company-employees.html</a> (the agent is not its runtime). Kept for the migration-period UI merging it describes, which remains shipped and useful.</p>
 
 <div class="card note">
 <p style="margin:0"><strong>Revision.</strong> The first version of this design shared one agent keypair across member devices. That is superseded: sharing a private key across machines created the worst risk in the document (distribution, and rotation whenever a member leaves) to buy an illusion the presentation layer can provide for free. The model below keeps per-member owned instances - which is what Buzz already does safely - and merges them into one entity where it matters: in the UI.</p>

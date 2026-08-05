@@ -640,7 +640,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 42);
+        assert_eq!(migrations.len(), 43);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1003,6 +1003,24 @@ mod tests {
             .to_lowercase()
             .contains("for update"));
         assert!(ttl_shared.contains("NEW.kind <> 9007"));
+
+        // Company employees: the one table holding private key material, so
+        // the column is a sealed blob and never a bare secret key. Both
+        // uniques lead with community_id (tenant isolation), and the partial
+        // active-role index is what makes a workspace employ one Chief of
+        // Staff rather than one per member who asked.
+        assert_eq!(migrations[42].version, 43);
+        let employees = migrations[42].sql.as_str();
+        assert!(employees.contains("CREATE TABLE IF NOT EXISTS employees"));
+        assert!(employees.contains("sealed_key    BYTEA NOT NULL"));
+        assert!(employees.contains("PRIMARY KEY (community_id, pubkey)"));
+        assert!(employees.contains("ON employees (community_id, hire_event)"));
+        assert!(employees.contains("ON employees (community_id, role_id) WHERE status = 'active'"));
+        assert!(employees.contains(
+            "rank          TEXT NOT NULL CHECK (rank IN ('worker','leader','executive'))"
+        ));
+        // Community-scoped, so it must never be registered as operator-global.
+        assert!(!employees.contains("_operator_global_tables"));
 
         // Use-limited invite links: durable relay_invites table stores only
         // the SHA-256 of an opaque v2 code, scoped by community_id. Never

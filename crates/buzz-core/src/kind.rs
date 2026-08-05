@@ -278,6 +278,15 @@ pub const KIND_PRICE_FEED: u32 = 30188;
 /// role: an agent must not be able to grant itself autonomy. See docs/nips/NIP-IQ.md.
 pub const KIND_DELEGATION_GRANT: u32 = 30189;
 
+/// Colony: the employee head (parameterized replaceable, `d` = employee
+/// pubkey), signed by the relay-held employee key.
+///
+/// Carries the role, display name, rank, hiring owner, and the hire request
+/// it answers. The relay refuses this kind from any pubkey that is not a
+/// registered employee of the community, so the head cannot be forged by
+/// minting a key and claiming employment.
+pub const KIND_EMPLOYEE: u32 = 30190;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -486,6 +495,13 @@ pub const KIND_NIP43_MEMBER_ADDED: u32 = 8000;
 pub const KIND_NIP43_MEMBER_REMOVED: u32 = 8001;
 /// NIP-43: User leave request (user-signed, ephemeral).
 pub const KIND_NIP43_LEAVE_REQUEST: u32 = 28936;
+
+/// Colony: a community owner's request to employ a role (regular, stored).
+///
+/// The request cannot name a pubkey: the relay mints the employee's keypair
+/// and holds it, so identity is the relay's answer rather than the caller's
+/// assertion. See `docs/design/company-employees.html`.
+pub const KIND_HIRE_REQUEST: u32 = 9045;
 
 // NIP-IA identity archival requests (user/agent/owner-signed)
 /// NIP-IA: Request that the relay archive a target identity.
@@ -785,6 +801,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_CORRECTION_BOOK,
     KIND_LEDGER_BUDGET,
     KIND_DELEGATION_GRANT,
+    KIND_HIRE_REQUEST,
+    KIND_EMPLOYEE,
     KIND_LEDGER_ACTION,
     KIND_LEDGER_RECEIPT,
     KIND_TEAM,

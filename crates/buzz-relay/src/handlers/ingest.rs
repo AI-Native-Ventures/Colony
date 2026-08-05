@@ -18,26 +18,26 @@ use buzz_core::kind::{
     KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION,
     KIND_CONTACT_LIST, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
     KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
-    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EMPLOYEE,
     KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
     KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
-    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
-    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED,
-    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LEDGER_ACTION, KIND_LONG_FORM,
-    KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
-    KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT,
-    KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP,
-    KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA,
-    KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
-    KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PARTY_ACTION, KIND_PERSONA,
-    KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION,
-    KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM,
-    KIND_TEXT_NOTE, KIND_USAGE_RECORD, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
-    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
-    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HIRE_REQUEST, KIND_HUDDLE_ENDED,
+    KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT,
+    KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LEDGER_ACTION,
+    KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT,
+    KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST,
+    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
+    KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
+    KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
+    KIND_NIP65_RELAY_LIST_METADATA, KIND_PARTY_ACTION, KIND_PERSONA, KIND_PIN_LIST,
+    KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
+    KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
+    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USAGE_RECORD,
+    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER,
+    RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -349,6 +349,15 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // record. The tier and cited-grant checks run past this gate, in
         // `interrupt_gate::enforce_decision_log_authority`.
         KIND_DECISION_LOG => Ok(Scope::MessagesWrite),
+        // Colony hire request (9045): an owner asking the workspace to employ
+        // a role. Owner authority is checked past this gate, in
+        // `employee_broker::handle_hire_request`, against the membership
+        // table rather than anything the event asserts.
+        KIND_HIRE_REQUEST => Ok(Scope::UsersWrite),
+        // Colony employee head (30190): signed by the relay-held employee
+        // key. Only a registered employee may author one; that check runs
+        // past this gate, in the employee-head arm of `validate_event`.
+        KIND_EMPLOYEE => Ok(Scope::UsersWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -2543,6 +2552,37 @@ async fn ingest_event_inner(
             .map_err(IngestError::AuthFailed)?;
     }
 
+    // Colony employees: an employee head is the workspace's statement of who
+    // it employs and at what rank, and rank decides who may interrupt a human.
+    // The relay mints and holds every employee key, so a legitimate head can
+    // only ever be signed by the relay on an employee's behalf. Anyone else
+    // can mint a keypair and claim employment, so authorship is checked
+    // against the employees table rather than taken on the event's word. See
+    // `docs/design/company-employees.html`.
+    if kind_u32 == KIND_EMPLOYEE {
+        let parsed = buzz_core::employee::parse_employee_head(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        if !parsed
+            .pubkey_hex
+            .eq_ignore_ascii_case(&event.pubkey.to_hex())
+        {
+            return Err(IngestError::Rejected(
+                "invalid: employee head must be keyed by its own author".to_string(),
+            ));
+        }
+        let is_employee = state
+            .db
+            .find_employee(tenant.community(), &event.pubkey.to_bytes())
+            .await
+            .map_err(|e| IngestError::Internal(format!("database error: {e}")))?
+            .is_some();
+        if !is_employee {
+            return Err(IngestError::AuthFailed(
+                "not an employee of this community".to_string(),
+            ));
+        }
+    }
+
     // Colony interrupt-core: a decision log is only as trustworthy as the
     // grant it cites. Schema (non-empty `undo_path` -- spec: no stateable
     // undo path means no autonomy, and a category that is not on the hard
@@ -3196,6 +3236,52 @@ mod tests {
         KIND_STREAM_MESSAGE_DIFF, KIND_TEAM, KIND_USER_STATUS,
     };
     use nostr::{EventBuilder, Kind};
+
+    /// A kind a client is meant to write must have an ingest scope.
+    ///
+    /// `buzz_core::kind::ALL_KINDS`, the side-effect dispatcher, and this
+    /// scope map are three separate lists. A kind added to the first two but
+    /// missing from this one is refused at the door with "restricted: unknown
+    /// event kind": the feature is unreachable over the wire while every unit
+    /// test stays green, because none of them cross this boundary. That is
+    /// exactly how the employee kinds shipped dead
+    /// (`docs/design/company-employees.html`).
+    ///
+    /// This pins the client-written kinds this guard was built for rather
+    /// than sweeping `ALL_KINDS`: most kinds there are relay-authored
+    /// (group metadata, archival deltas) or ephemeral (NIP-98 auth, observer
+    /// frames) and correctly have no client-write scope. Classifying all of
+    /// them is worth doing separately; asserting they all need scopes would
+    /// encode a claim that is simply false.
+    #[test]
+    fn client_written_kinds_have_an_ingest_scope() {
+        let keys = nostr::Keys::generate();
+        let unmapped: Vec<u32> = [
+            buzz_core::kind::KIND_HIRE_REQUEST,
+            buzz_core::kind::KIND_EMPLOYEE,
+            buzz_core::kind::KIND_ASK,
+            buzz_core::kind::KIND_ASK_RESOLUTION,
+            buzz_core::kind::KIND_ASK_WITHDRAWAL,
+            buzz_core::kind::KIND_DECISION_LOG,
+            buzz_core::kind::KIND_DELEGATION_GRANT,
+        ]
+        .into_iter()
+        .filter(|kind| {
+            let event = EventBuilder::new(Kind::Custom(*kind as u16), "")
+                .sign_with_keys(&keys)
+                .expect("sign probe event");
+            matches!(
+                required_scope_for_kind(*kind, &event),
+                Err("restricted: unknown event kind")
+            )
+        })
+        .collect();
+
+        assert!(
+            unmapped.is_empty(),
+            "these client-written kinds have no ingest scope and are unreachable over the wire: {unmapped:?}"
+        );
+    }
 
     /// A banned relay admin must be refused with the same wire prefix and
     /// transport status as every other durable-restriction refusal:

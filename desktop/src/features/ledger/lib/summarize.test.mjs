@@ -45,6 +45,37 @@ function report(overrides = {}) {
   });
 }
 
+test("a report written before the price basis existed still reads", () => {
+  // The fixture carries no priceBasis at all, which is every report the
+  // installed app produced before this field. Failing here would break the
+  // Spend screen for anyone whose relay is a version behind.
+  const parsed = report({ entries: [entry()] });
+  assert.equal(parsed.entries[0].priceBasis, null);
+});
+
+test("the basis says whether a provider's own rate or the list rate was used", () => {
+  const provider = report({ entries: [entry({ priceBasis: "providerRow" })] });
+  assert.equal(provider.entries[0].priceBasis, "providerRow");
+
+  const list = report({ entries: [entry({ priceBasis: "listRow" })] });
+  assert.equal(list.entries[0].priceBasis, "listRow");
+});
+
+test("an unrecognised basis is refused rather than dropped", () => {
+  // Dropping it would silently show a cost as unqualified when the app simply
+  // did not understand what qualified it. A rate wrong by a reseller's margin
+  // looks exactly like a right one.
+  assert.throws(
+    () => report({ entries: [entry({ priceBasis: "wholesale" })] }),
+    {
+      message: /priceBasis is unknown: wholesale/,
+    },
+  );
+  assert.throws(() => report({ entries: [entry({ priceBasis: 7 })] }), {
+    message: /priceBasis is unknown: 7/,
+  });
+});
+
 test("a percentage stays exact past Number.MAX_SAFE_INTEGER", () => {
   // Both sides are larger than 2^53. Converting to number first would lose
   // the ratio; scaling in bigint keeps it.
