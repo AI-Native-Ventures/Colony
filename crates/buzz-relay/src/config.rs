@@ -140,6 +140,11 @@ pub struct Config {
     /// Optional hex-encoded private key for the relay's signing keypair.
     /// If absent, a fresh keypair is generated at startup.
     pub relay_private_key: Option<String>,
+    /// Key-encryption key (64 hex chars) sealing relay-held employee secret
+    /// keys at rest. Absent means employees cannot be hired: a plaintext
+    /// fallback is deliberately not offered
+    /// (`crates/buzz-relay/src/employee_key.rs`).
+    pub employee_kek: Option<String>,
     /// Private Discovery worker configuration. The fake executor is opt-in.
     pub discovery: DiscoveryConfig,
     /// Optional Unix Domain Socket path. When set, the relay also listens on this
@@ -815,6 +820,7 @@ impl Config {
             .collect();
 
         let relay_private_key = std::env::var("BUZZ_RELAY_PRIVATE_KEY").ok();
+        let employee_kek = std::env::var("BUZZ_EMPLOYEE_KEK").ok();
         let discovery = DiscoveryConfig {
             fake_executor_enabled: parse_bool("BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED", false)?,
             external_worker_enabled: parse_bool("BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED", false)?,
@@ -1137,6 +1143,7 @@ impl Config {
             require_auth_token,
             cors_origins,
             relay_private_key,
+            employee_kek,
             discovery,
             uds_path,
             health_port,

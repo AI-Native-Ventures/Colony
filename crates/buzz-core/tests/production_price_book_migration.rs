@@ -152,6 +152,74 @@ fn every_production_model_prices_a_call_to_the_identical_total() {
     assert_eq!(compared, 35, "5 production models times 7 token shapes");
 }
 
+/// Adding the provider dimension must not move a single number.
+///
+/// Every row in the production book names no provider, which now means "the
+/// vendor's list price, whoever served the call". If that default had been
+/// read as "matches only calls with no provider", all 433 production records
+/// would have gone unpriced the moment the relay deployed, because every one
+/// of them carries a provider. This asserts the opposite: the same call costs
+/// the same whether the provider is unknown, the vendor itself, or a reseller
+/// nothing in the book mentions.
+#[test]
+fn a_book_with_no_provider_rows_prices_every_provider_identically() {
+    use buzz_core::ledger::conditions::CallFacts;
+    use buzz_core::ledger::prices::PriceBasis;
+
+    let book = book();
+    let turn = UsageBreakdown {
+        input_uncached_tokens: 12_000,
+        cache_read_tokens: 180_000,
+        cache_write_5m_tokens: 8_000,
+        cache_write_1h_tokens: 1_000,
+        output_tokens: 2_400,
+    };
+
+    for entry in &book.entries {
+        let at = entry.effective_from + 1;
+        let baseline = book
+            .price_tokens(&entry.model, &turn, at)
+            .expect("the production book prices its own models");
+
+        for provider in [
+            None,
+            // The vendor itself.
+            Some("anthropic"),
+            Some("openai"),
+            Some("deepseek"),
+            // Resellers and routers the book says nothing about. Pricing at
+            // list is wrong by their margin, but silently dropping the spend
+            // is worse, so they price and say how.
+            Some("bedrock"),
+            Some("vertex"),
+            Some("openrouter"),
+            Some("some-provider-nobody-has-heard-of"),
+        ] {
+            let facts = CallFacts {
+                input_tokens: 201_000,
+                at_unix: at,
+                provider: provider.map(str::to_owned),
+                tier: None,
+            };
+            let priced = book
+                .price_facts(&entry.model, &turn, &facts)
+                .unwrap_or_else(|| {
+                    panic!("{} went unpriced for provider {provider:?}", entry.model)
+                });
+            assert_eq!(
+                priced.cost_nanousd, baseline,
+                "{} priced differently for provider {provider:?}",
+                entry.model
+            );
+            assert_eq!(
+                priced.basis,
+                PriceBasis::ListRow,
+                "a book with no provider rows can only price from list"
+            );
+        }
+    }
+}
+
 /// Reading a production book does not rewrite it into something a company's
 /// history would no longer recognise: the models, dates, notes and origins
 /// all survive the unit change untouched.

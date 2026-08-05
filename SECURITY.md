@@ -92,6 +92,37 @@ example), keys fall back to a `0o600` owner-only file. The `BUZZ_PRIVATE_KEY`
 environment variable, when set, always takes precedence over both stores — this
 is how harnessed agents and CI receive their identity.
 
+### Relay-Held Employee Keys
+
+A company employee is a workspace-owned agent identity: one role, one keypair,
+reachable by every member (`docs/design/company-employees.html`). Its key is
+minted by the relay and never leaves it, which is what lets any member's
+machine produce work as that one colleague without a private key being copied
+between laptops or rotated when somebody leaves the company.
+
+This makes the `employees` table the only place the relay stores private key
+material, so it is sealed rather than stored:
+
+- **AES-256-GCM** under a key-encryption key supplied as `BUZZ_EMPLOYEE_KEK`
+  (64 hex characters), held only in the process environment.
+- The **community id and the employee's own pubkey are bound in as associated
+  data**, so a sealed key lifted from one row cannot be replayed into another
+  employee's row or another tenant's: the authentication tag will not verify.
+- **No plaintext fallback.** With no KEK configured, hiring refuses; the relay
+  never writes an unsealed key.
+- The sealer's `Debug` rendering is redacted, so an accidental `{:?}` of
+  application state cannot put the KEK in a log line.
+
+The honest bound: this is confidentiality at rest. An attacker holding both a
+database dump and the running process's environment has the employee keys.
+What it buys is that **losing a backup is not the same as losing the company**.
+
+Two further properties limit the blast radius. Employee keys are Nostr identity
+keys scoped to this deployment; they are not credentials to any AI vendor, and
+no member's subscription token is ever stored server-side. And an employee head
+(kind `30190`) is refused at ingest unless its author is a registered employee
+of that community, so minting a keypair and claiming employment does not work.
+
 ### Input Validation
 
 - All UUIDs (channel IDs, workflow IDs) are validated at API boundaries before

@@ -101,6 +101,7 @@ August 2026:
 | Anthropic | Fast mode on Opus 5 / 4.8 | 2x |
 | Anthropic | US-only inference (`inference_geo`) | 1.1x |
 | DeepSeek | peak hours, announced, no start date yet | 2x |
+| Any model | which provider served it | up to 1.7x |
 
 Each is a silent mispricing if the book cannot express it, so a row can carry
 conditions. Optional, and absent means "always", which is what every row
@@ -120,6 +121,7 @@ written before this means.
   `max` exclusive, so two rows meet without overlapping. Counted over the
   **whole prompt**, cached tokens included, because that is what the vendor
   charges the premium on.
+- `provider`: the slug of whoever served the call. See below.
 - `tier`: `batch`, `flex`, `fast`, matched case-insensitively against what the
   meter recorded.
 - `hours`: recurring local-time windows, e.g.
@@ -142,6 +144,59 @@ empty tier, a window that starts and ends at the same minute) is refused at
 parse time. It would otherwise look like the price was covered while every
 call fell through to something else.
 
+## Which provider served the call
+
+The same model is sold by the lab that trained it and by everyone reselling or
+rehosting it, each at their own price. Read on 2026-08-05,
+`deepseek-v4-flash` was served by **21 providers between $0.084 and $0.14 per
+million input tokens**: a 67% spread on one model string. Keyed on the model
+alone, a call DigitalOcean served and invoiced was charged at DeepSeek's rate.
+
+A row without a `provider` is the **vendor's list price**, and it prices calls
+from everyone. That is what every row in this file is today, and what every row
+published before this field existed continues to mean, so no stored book
+changes value. Add a `provider` only to state what a specific provider charges:
+
+```json
+{
+  "model": "deepseek-v4-flash",
+  "provider": "digitalocean",
+  "effectiveFrom": "2026-08-05T00:00:00Z",
+  "inputPerMtok": "0.084",
+  "outputPerMtok": "0.168"
+}
+```
+
+**The provider is whoever invoices you, not whoever trained the model.** Claude
+served through Vertex is `vertex`, because Google issues the invoice and
+Google's price applies. A call through a router is the router, whichever
+upstream it happened to pick, because the router's charge is the cost. This is
+the only definition under which reconciliation against a provider's invoice can
+balance.
+
+Provider outranks every other condition, and is settled before model matching
+rather than alongside it. Model matching is a hard gate (an exact row is chosen
+without the alias rows being looked at), so ranked the other way round an exact
+list row would beat an alias row naming the provider, and a Bedrock call would
+price at Anthropic's list rate with a Bedrock rate sitting in the book. The
+order is: rows naming the call's provider, then list rows; within each, exact
+model before alias, then most specific, then later effective date, then owner
+over catalog.
+
+The other conditions describe variations *within one seller's list*: a batch
+discount, a long-context premium, an off-peak window. The provider decides whose
+list is read at all. Applying DeepSeek's peak-hour multiplier to a call Alibaba
+served is not a more precise answer, it is the wrong list.
+
+A row naming a provider **never** matches a call whose provider is unknown, on
+the same reasoning as `tier`: a call we cannot place must not collect whichever
+reseller's rate happens to be cheapest.
+
+Every priced line records which kind of row supplied its rate, list or
+provider, and that reaches the Spend screen. A rate wrong by a reseller's margin
+looks exactly like a right one, so the basis is what lets anyone notice. A line
+priced from list for a provider known to resell is the prompt to add a row.
+
 ## What this book still cannot express
 
 **Service tiers are not yet observed.** `tier` rows parse and match, but the
@@ -150,6 +205,18 @@ never matches a call whose tier is unknown. That is deliberate: matching an
 unknown tier would hand every call a 50% batch discount on no evidence. Batch
 and Flex rates are therefore not in this file yet. Capturing `service_tier` at
 the checkpoint is what unblocks them.
+
+**No provider rows are in this file yet.** The dimension exists and is tested,
+but every row here is still a list price. Adding rows for Bedrock, Vertex,
+Alibaba and the rest means reading each provider's own page, and until that
+happens a resold call prices at list and says so on the line.
+
+**Local models are not priced at zero yet.** They cost nothing, and a `local`
+row with all-zero rates is the right way to say so, but a zero row is the most
+dangerous row in the book: if the slug matches more calls than intended, real
+spend reads as free. It waits until the meter emits canonical provider slugs,
+so the row and the thing it matches are written together. Until then local
+calls report as unpriced, which is visible, rather than free, which is not.
 
 **Anthropic's long-context premium** is not here either. Sonnet 4.5's row is
 the list price for prompts up to 200K tokens, and the rate above that has not

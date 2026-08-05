@@ -76,6 +76,14 @@ pub struct LedgerEntryView {
     /// Cost in nanoUSD, or `null` when the model is unpriced. An unpriced
     /// model is an open question, never a zero.
     pub cost_nanousd: Option<String>,
+    /// Which kind of price row supplied the rate: `providerRow` when a row
+    /// named this call's provider, `listRow` when it was the vendor's list
+    /// price. `null` for unpriced and flat-amount records, which consulted no
+    /// book.
+    ///
+    /// A rate wrong by a reseller's margin looks exactly like a right one, so
+    /// the basis travels with the number rather than being inferred from it.
+    pub price_basis: Option<serde_json::Value>,
     /// Classification before any correction. Never changes.
     pub original_classification: serde_json::Value,
     /// Classification in force now, after corrections.
@@ -181,6 +189,9 @@ impl LedgerReportView {
                     payment_mode: serde_json::to_value(entry.payment_mode)
                         .unwrap_or(serde_json::Value::Null),
                     cost_nanousd: entry.cost_nanousd.map(|cost| cost.to_string()),
+                    price_basis: entry
+                        .price_basis
+                        .and_then(|basis| serde_json::to_value(basis).ok()),
                     original_classification: serde_json::to_value(entry.original_classification)
                         .unwrap_or(serde_json::Value::Null),
                     effective_classification: serde_json::to_value(entry.effective_classification)
@@ -457,6 +468,7 @@ mod tests {
                 model: Some("claude-sonnet-4-5".to_string()),
                 payment_mode: PaymentMode::Metered,
                 cost_nanousd: Some(amount),
+                price_basis: None,
                 original_classification: CostClassification::Opex,
                 effective_classification: CostClassification::Opex,
                 effective_assignment: None,

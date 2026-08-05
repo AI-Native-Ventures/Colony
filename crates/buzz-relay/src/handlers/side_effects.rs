@@ -8,10 +8,10 @@ use uuid::Uuid;
 
 use buzz_core::kind::{
     event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_DM_VISIBILITY,
-    KIND_GIT_REPO_ANNOUNCEMENT, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED,
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS,
-    KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
-    KIND_THREAD_SUMMARY,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_HIRE_REQUEST, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST,
+    KIND_IA_UNARCHIVED, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA,
+    KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION, KIND_THREAD_SUMMARY,
 };
 use buzz_core::StoredEvent;
 use buzz_db::channel::{MemberRecord, MemberRole};
@@ -33,7 +33,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 /// handled in `ingest_event()` before storage so we can short-circuit on
 /// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | KIND_HIRE_REQUEST | 41001..=41003 | 40099)
 }
 
 async fn evict_live_channel_subscriptions(
@@ -749,6 +749,20 @@ pub async fn validate_admin_event(
                     }
                 }
                 _ => {}
+            }
+            Ok(())
+        }
+        KIND_HIRE_REQUEST => {
+            // Hiring is best effort like every side effect: the owner already
+            // has their OK. A failure is logged and the request stays on the
+            // relay, so a later run can still mint from it.
+            match crate::employee_broker::handle_hire_request(tenant, state, event).await {
+                Ok(outcome) => {
+                    info!(?outcome, "hire request handled");
+                }
+                Err(error) => {
+                    warn!(error = %error, "hire request refused");
+                }
             }
             Ok(())
         }

@@ -7,6 +7,7 @@ pub mod company;
 pub mod discovery;
 pub mod dms;
 pub mod emoji;
+pub mod employees;
 pub mod feed;
 pub mod issues;
 pub mod ledger;

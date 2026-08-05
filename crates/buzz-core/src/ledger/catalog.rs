@@ -49,6 +49,9 @@ struct CatalogRow {
     cache_write_1h_per_mtok: String,
     output_per_mtok: String,
     note: Option<String>,
+    /// Provider slug this rate is for, when it is not the vendor's own list
+    /// price. Absent means list, which prices a call from any provider.
+    provider: Option<String>,
     /// Service tier this rate is for: `batch`, `flex`, `fast`. Absent means
     /// the rate applies whatever tier the call used.
     tier: Option<String>,
@@ -101,6 +104,7 @@ fn parse_conditions(row: &CatalogRow) -> Result<PriceConditions, CatalogError> {
         });
     }
     let conditions = PriceConditions {
+        provider: row.provider.clone(),
         tier: row.tier.clone(),
         min_input_tokens: row.min_input_tokens,
         max_input_tokens: row.max_input_tokens,
@@ -667,6 +671,7 @@ mod tests {
         let facts = |input_tokens| super::super::conditions::CallFacts {
             input_tokens,
             at_unix: now,
+            provider: None,
             tier: None,
         };
 
