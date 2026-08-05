@@ -472,17 +472,70 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Apply Colony's maintained model price catalog. Same shape as the Block
-    // catalog above and for the same reason: a vendor's price change should
-    // reach every community when the relay deploys, not when each owner
-    // notices and retypes it. Idempotent, so this is a no-op once applied.
-    // Non-fatal: an unpriced community reports its spend as unpriced rather
-    // than as zero, which is visible rather than silently wrong.
+    // Colony's maintained model price catalog, in two halves.
+    //
+    // The file shipped in this build is the offline floor: no network, always
+    // present, and what the relay prices from when nothing else is available.
+    // The signed feed is the maintained source, and it exists because vendor
+    // prices do not wait for our release train — a promotion that starts on a
+    // Tuesday should reach a running relay that Tuesday.
+    //
+    // A misconfigured feed is fatal *here*, before anything is applied: an
+    // operator who points the relay at a URL for billing data without pinning
+    // a publisher key has asked for something that only looks like it works.
+    // An unreachable feed is not fatal — that is the shipped file's job.
+    let price_feed = match buzz_relay::price_feed::config_from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            error!(%error, "price feed configuration is unusable");
+            std::process::exit(1);
+        }
+    };
+    let price_feed_http = match price_feed.as_ref() {
+        None => None,
+        Some(config) => match buzz_relay::price_feed::build_client() {
+            Ok(http) => {
+                let entries = buzz_relay::price_feed::entries_or_warn(
+                    &http,
+                    config,
+                    buzz_relay::price_feed::now_unix(),
+                )
+                .await;
+                if !entries.is_empty() {
+                    buzz_relay::price_feed::remember_feed(entries);
+                }
+                Some(http)
+            }
+            Err(error) => {
+                warn!(%error, "price feed client unavailable; using the shipped catalog");
+                None
+            }
+        },
+    };
+
+    // Apply the catalog now in force. Same shape as the Block catalog above:
+    // idempotent, so this is a no-op once applied, and non-fatal, because an
+    // unpriced community reports its spend as unpriced rather than as zero,
+    // which is visible rather than silently wrong.
     match buzz_relay::price_catalog::ensure_catalog_prices_for_all_communities(&state).await {
         Ok(count) => info!(count, "model price catalog reconciled on startup"),
         Err(error) => {
             warn!(%error, "price catalog startup reconciliation failed; spend may show as unpriced")
         }
+    }
+
+    // Keep fetching. Without this the feed would only be as fresh as the last
+    // restart, which is the deploy-shaped staleness it exists to remove.
+    if let (Some(config), Some(http)) = (price_feed, price_feed_http) {
+        let feed_state = state.clone();
+        info!(
+            url = %config.url,
+            interval_secs = config.interval.as_secs(),
+            "signed price feed refresh scheduled"
+        );
+        tokio::spawn(async move {
+            buzz_relay::price_feed::run_refresh_loop(feed_state, config, http).await;
+        });
     }
 
     // Inter-relay mesh (BUZZ_MESH seam). `boot_mesh` returns None when the

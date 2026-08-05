@@ -161,6 +161,12 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
             tolerance_bps,
             floor_tokens,
         } => cross_check_report(client, tolerance_bps, floor_tokens).await,
+        // Handled before the relay client is built, since signing the feed
+        // touches no relay and uses the publisher's key rather than this
+        // process's identity. See `run` in lib.rs.
+        LedgerCmd::FeedSign { catalog, key, out } => {
+            crate::commands::price_feed::sign_feed(&catalog, key, out)
+        }
     }
 }
 

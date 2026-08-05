@@ -252,6 +252,19 @@ pub const KIND_CORRECTION_BOOK: u32 = 30186;
 /// `d={cost_centre_id}:{period}` where period is `YYYY-MM`).
 pub const KIND_LEDGER_BUDGET: u32 = 30187;
 
+/// Colony cost ledger: signed model price feed (`d=pricefeed`).
+///
+/// The out-of-band form of the price catalog. Content is the same document
+/// the relay ships in `buzz-core/data/price-catalog.json`, signed by
+/// Colony's price publisher and fetched over HTTPS, so a vendor's price
+/// change reaches running relays without a deploy.
+///
+/// **Deliberately absent from [`KINDS`].** It is fetched, verified against a
+/// pinned publisher key, and applied, never accepted over the relay wire.
+/// Registering it would let any authenticated client publish one, which is
+/// the whole attack: prices decide what every company is billed.
+pub const KIND_PRICE_FEED: u32 = 30188;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
