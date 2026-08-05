@@ -175,6 +175,10 @@ simple and testable.
 thread root events. Any code that inserts replies must update these counters —
 check existing reply handlers for the pattern.
 
+**Agent asks**: agents never message owners directly; they raise typed asks via
+`buzz asks raise` (see docs/nips/NIP-IQ.md). Tiers live in the managed-agent head
+`tier` field.
+
 ---
 
 ## Agent CLI (`buzz-cli`)
