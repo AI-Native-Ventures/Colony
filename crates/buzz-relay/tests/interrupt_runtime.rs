@@ -554,10 +554,18 @@ async fn leader_audience_ask_with_no_executive_stays_open_but_is_redeadlined() {
         .expect("a filed ask always has a deadline");
 
     let now = ask.created_at.as_secs() as i64 + 100;
-    let stats = run_interrupt_tick(&state, now, 100)
+    // `run_interrupt_tick`'s stats are a CROSS-TENANT count. Asserting
+    // `promoted == 0` here was only ever true by accident: it held while no
+    // other test in this shared database happened to leave a promotable due
+    // row behind, and stopped holding the moment the executive-audience last
+    // hop (I1) made every other test's leftover executive-audience ask
+    // promotable. The pollution-immune claim is the row-level verification of
+    // THIS ask right below -- the same reasoning
+    // `leader_audience_ask_past_deadline_promotes_to_the_executive` already
+    // spells out for its own "at least mine" assertion.
+    run_interrupt_tick(&state, now, 100)
         .await
         .expect("tick must not error");
-    assert_eq!(stats, InterruptTickStats::default());
 
     let row = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
     assert_eq!(
@@ -933,6 +941,155 @@ async fn owner_audience_ask_without_default_is_redeadlined_not_promoted() {
             .is_some(),
         "the SAME ask must still be the open one for its need -- no promotion happened"
     );
+}
+
+// ---------------------------------------------------------------------
+// (c2) I1: the last hop -- an executive-audience ask reaches a human
+// ---------------------------------------------------------------------
+
+/// I1 (whole-branch review): before this, EVERY relay-driven path terminated
+/// at an agent. An executive-audience ask whose deadline passed was
+/// re-deadlined forever, default execution was gated on the audience being an
+/// owner, and stall asks are addressed to agents -- so if the executive was
+/// dead, hung, or simply not running, asks piled up against it and the
+/// founder learned nothing. That is the exact failure the sweep exists to
+/// prevent, and it contradicts the spec ("an escalation unhandled by the
+/// executive past the window is filed to owners").
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn executive_audience_ask_past_deadline_promotes_to_the_unique_owner() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &leader,
+        ask_tags("decision", &executive.public_key(), "init-1", "batch-size"),
+        &content_no_default("Choose batch size"),
+        None,
+    )
+    .await;
+
+    let now = ask.created_at.as_secs() as i64 + 100;
+    let stats = run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+    assert!(
+        stats.promoted >= 1,
+        "this ask's promotion to the owner must be among those counted"
+    );
+
+    let original = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        original.status, "promoted",
+        "the executive's unanswered ask must be promoted, not re-deadlined forever"
+    );
+    let promoted_to_id = original
+        .resolution_event
+        .expect("a promoted row must point at the ask it was promoted to");
+
+    let new_row = db
+        .find_open_ask_by_need(community, "init-1", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("the promotion must be a new open ask for the same need");
+    assert_eq!(new_row.ask_event_id, promoted_to_id);
+    assert_eq!(
+        new_row.audience_pubkey,
+        owner.public_key().to_bytes().to_vec(),
+        "the last hop must be addressed to the human owner"
+    );
+    assert_eq!(
+        new_row.filer_pubkey,
+        leader.public_key().to_bytes().to_vec(),
+        "the original filer must be carried forward across this hop too"
+    );
+    assert_eq!(new_row.prior_ask, Some(ask.id.as_bytes().to_vec()));
+
+    let stored_promotion = db
+        .get_event_by_id(community, &promoted_to_id)
+        .await
+        .expect("query stored promotion event")
+        .expect("the promoted ask event must be stored, not just projected");
+    assert_eq!(stored_promotion.event.pubkey, relay_keys.public_key());
+    let owner_hex = owner.public_key().to_hex();
+    assert!(stored_promotion.event.tags.iter().any(|t| {
+        let parts = t.as_slice();
+        parts.len() == 2 && parts[0] == "p" && parts[1] == owner_hex
+    }));
+}
+
+/// The same never-guess discipline `find_unique_executive` already applies:
+/// an ambiguous target is never picked. Two co-owners means the sweep cannot
+/// say WHICH human this belongs in front of, so it declines and re-deadlines
+/// (the pre-I1 behaviour) rather than routing a founder's decision to
+/// whichever owner happens to sort first.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn executive_audience_ask_with_ambiguous_owners_is_redeadlined_not_promoted() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let co_owner = Keys::generate();
+    add_owner(&pool, community, &co_owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &leader,
+        ask_tags("decision", &executive.public_key(), "init-1", "batch-size"),
+        &content_no_default("Choose batch size"),
+        None,
+    )
+    .await;
+
+    let before = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    let old_deadline = before
+        .deadline_at
+        .expect("a filed ask always has a deadline");
+
+    let now = ask.created_at.as_secs() as i64 + 100;
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+
+    let after = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        after.status, "open",
+        "an ambiguous owner must never be guessed at -- the row stays open"
+    );
+    assert!(
+        after.deadline_at.expect("still has a deadline") > old_deadline,
+        "the declined row must still yield its slot in the cross-tenant due batch"
+    );
+    let still_open = db
+        .find_open_ask_by_need(community, "init-1", "batch-size")
+        .await
+        .expect("query asks projection")
+        .expect("the SAME ask must still be the open one for its need");
+    assert_eq!(still_open.ask_event_id, ask.id.as_bytes().to_vec());
 }
 
 // ---------------------------------------------------------------------

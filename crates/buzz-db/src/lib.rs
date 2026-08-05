@@ -5510,6 +5510,16 @@ impl Db {
         relay_members::list_relay_members(&self.pool, community).await
     }
 
+    /// Returns up to `limit` hex pubkeys currently holding the `owner` role in
+    /// `community`, oldest first. See [`relay_members::list_relay_owners`].
+    pub async fn list_relay_owners(
+        &self,
+        community: CommunityId,
+        limit: i64,
+    ) -> Result<Vec<String>> {
+        relay_members::list_relay_owners(&self.pool, community, limit).await
+    }
+
     /// Adds a new relay member to `community`.
     ///
     /// Returns `true` if the row was actually inserted, `false` if the pubkey

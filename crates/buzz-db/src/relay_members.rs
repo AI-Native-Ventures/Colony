@@ -65,6 +65,31 @@ pub async fn get_relay_member(
     .map_err(crate::error::DbError::from)
 }
 
+/// Returns the hex pubkeys of members currently holding the `owner` role in
+/// `community`, oldest first, capped at `limit` rows.
+///
+/// Split out from [`list_relay_members`] because the caller that needs this
+/// (the relay's interrupt sweep, resolving where an ask unanswered by the
+/// executive should go next) only ever asks "is there exactly one owner", and
+/// must not pay a full member scan on a community with thousands of members
+/// to find out. Passing `limit = 2` is enough to answer it.
+pub async fn list_relay_owners(
+    pool: &PgPool,
+    community: CommunityId,
+    limit: i64,
+) -> Result<Vec<String>> {
+    let owners = sqlx::query_scalar(
+        "SELECT pubkey FROM relay_members \
+         WHERE community_id = $1 AND role = 'owner' \
+         ORDER BY created_at ASC LIMIT $2",
+    )
+    .bind(community.as_uuid())
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(owners)
+}
+
 /// Returns all relay members of `community` ordered by `created_at` ascending.
 pub async fn list_relay_members(pool: &PgPool, community: CommunityId) -> Result<Vec<RelayMember>> {
     let rows = sqlx::query(

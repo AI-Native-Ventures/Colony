@@ -25,10 +25,15 @@
 //!   clamp in `ask_broker` for the other half of that safety story (a filer
 //!   cannot choose an already-past deadline to force an instant default).
 //! - **Auto-promotion**: an ask addressed to a leader climbs to the unique
-//!   community executive; an ask already addressed to the executive (or to
-//!   an owner, with no default to fall back on) has nowhere higher to go, so
-//!   it is simply re-armed with a fresh deadline instead of spinning through
-//!   this sweep on every tick forever.
+//!   community executive, and an ask addressed to that executive climbs one
+//!   further, to the community's unique human owner -- the last hop, and the
+//!   only relay-driven path that ever reaches a person. Without it an
+//!   executive that is dead, hung, or simply not running would silently
+//!   accumulate asks against it forever while the founder learned nothing.
+//!   An ask already addressed to an owner (with no default to fall back on),
+//!   or whose next rung cannot be resolved unambiguously, has nowhere to go,
+//!   so it is simply re-armed with a fresh deadline instead of spinning
+//!   through this sweep on every tick forever.
 //!
 //! ## Durable relay key
 //!
@@ -328,15 +333,28 @@ async fn execute_default(
 }
 
 /// Resolve where a due, non-owner-audience ask should go next and act on it:
-/// promote a leader-audience ask to the community's unique executive, or
-/// re-deadline an ask that is already addressed to the executive (nowhere
-/// higher to go), or whose target cannot be confidently resolved at all.
+/// promote a leader-audience ask to the community's unique executive, promote
+/// an executive-audience ask to the community's unique OWNER, or re-deadline
+/// an ask whose next target cannot be confidently resolved at all.
 /// Never guesses a target -- design point 3: silently choosing an executive
 /// nobody appointed would route a founder's decisions through the wrong
-/// agent -- but every branch still re-deadlines rather than leaving the row
-/// untouched (C2 fix): a due ask this function declines to act on must not
-/// permanently occupy a slot in the cross-tenant due batch and starve every
-/// other community's due asks behind it.
+/// agent, and silently choosing one of several co-owners would put a decision
+/// in front of the wrong human -- but every branch still re-deadlines rather
+/// than leaving the row untouched (C2 fix): a due ask this function declines
+/// to act on must not permanently occupy a slot in the cross-tenant due batch
+/// and starve every other community's due asks behind it.
+///
+/// The executive arm is the last hop, and the reason this whole module
+/// exists (I1, whole-branch review). Before it, every relay-driven path
+/// terminated at an agent: an executive-audience ask was re-deadlined
+/// forever, default execution required an owner audience, and stall asks are
+/// addressed to agents. An executive that is dead, hung, or simply not
+/// running therefore accumulated asks against it silently, and the founder
+/// learned nothing -- the precise failure this module's own doc comment says
+/// the timers exist to prevent. Once promoted to an owner, the ask is at the
+/// genuine top of the ladder: the next deadline either default-executes it
+/// (if it carries a stated default) or re-deadlines it, which is the
+/// pre-existing owner-audience behaviour.
 async fn promote_or_redeadline(
     state: &Arc<AppState>,
     tenant: &TenantContext,
@@ -362,7 +380,19 @@ async fn promote_or_redeadline(
             };
             promote_to(state, tenant, row, executive, now_secs, stats).await
         }
-        Some(AgentTier::Executive) => redeadline(state, tenant.community(), row, now_secs).await,
+        Some(AgentTier::Executive) => {
+            let Some(owner) = find_unique_owner(tenant, state).await? else {
+                tracing::warn!(
+                    ask_event_id = %hex::encode(&row.ask_event_id),
+                    community_id = %tenant.community(),
+                    "interrupt sweep: cannot file to a human, community has zero or multiple \
+                     owners; never guessing which one to route to -- re-deadlining so this row \
+                     does not starve the rest of the batch"
+                );
+                return redeadline(state, tenant.community(), row, now_secs).await;
+            };
+            promote_to(state, tenant, row, owner, now_secs, stats).await
+        }
         Some(AgentTier::Worker) | None => {
             // A worker is never a legitimate ask audience (workers only
             // raise asks, never receive them), and `None` here means the
@@ -385,10 +415,12 @@ async fn promote_or_redeadline(
     }
 }
 
-/// Promote a due, leader-audience ask to `target` (the community's unique
-/// executive): build a relay-signed copy of the original ask, addressed to
-/// `target` and carrying a `prior` tag back to the original, mark the
-/// original `promoted`, then create and dispatch the new ask.
+/// Promote a due ask to `target`, the next rung up the ladder (the
+/// community's unique executive for a leader-audience ask, its unique owner
+/// for an executive-audience one): build a relay-signed copy of the original
+/// ask, addressed to `target` and carrying a `prior` tag back to the
+/// original, mark the original `promoted`, then create and dispatch the new
+/// ask.
 ///
 /// Idempotency / crash analysis: the original and its promotion share the
 /// exact same `(initiative_id, need_key)` dedupe slot (`buzz_db::asks`'s
@@ -807,6 +839,37 @@ async fn find_unique_executive(
 ) -> Result<Option<PublicKey>, String> {
     let roster = fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
     unique_executive_in_roster(&roster)
+}
+
+/// Resolve the community's unique human owner: the single pubkey currently
+/// holding the `owner` relay-membership role (I1's last hop).
+///
+/// `Ok(None)` when zero or more than one qualifies -- the same never-guess
+/// discipline [`unique_executive_in_roster`] applies one rung lower. Two
+/// co-owners is not an error state; it just means the relay cannot say which
+/// human a decision belongs in front of, and putting it in front of whichever
+/// one sorts first is exactly the "route a founder's decision through the
+/// wrong party" failure design point 3 forbids. The caller re-deadlines
+/// instead, which is the behaviour this whole arm had before the last hop
+/// existed.
+///
+/// Queries at most two rows: "is there exactly one" is answerable from two,
+/// and a community can have thousands of members.
+async fn find_unique_owner(
+    tenant: &TenantContext,
+    state: &AppState,
+) -> Result<Option<PublicKey>, String> {
+    let owners = state
+        .db
+        .list_relay_owners(tenant.community(), 2)
+        .await
+        .map_err(|error| format!("database error resolving the community owner: {error}"))?;
+    let [owner_hex] = owners.as_slice() else {
+        return Ok(None);
+    };
+    PublicKey::from_hex(owner_hex)
+        .map(Some)
+        .map_err(|error| format!("stored owner pubkey is not valid hex: {error}"))
 }
 
 // ---------------------------------------------------------------------
