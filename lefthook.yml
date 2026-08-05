@@ -61,6 +61,15 @@ pre-push:
       glob: ["desktop/**", "pnpm-lock.yaml"]
       exclude: ["desktop/src-tauri/**"]
       run: just desktop-test
+    desktop-file-sizes:
+      # The ratchet covers `desktop/src-tauri/src` as well as the frontend,
+      # but the `desktop-check` hook above excludes `desktop/src-tauri/**`, so
+      # a Rust-only change to the Tauri crate never reached it. Two oversized
+      # files grew past their limits and landed on develop unchecked, and only
+      # a later full `just ci` on develop found it. This entry is the missing
+      # half: the same guard, on the paths the other hook skips.
+      glob: ["desktop/src-tauri/**"]
+      run: just desktop-file-sizes
     desktop-tauri-checks:
       # Keep local lint parity with Desktop Core CI for every path that can
       # affect the Tauri crate or its path dependencies. Run clippy and tests
