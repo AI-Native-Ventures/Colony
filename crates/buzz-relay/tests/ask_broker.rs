@@ -1781,6 +1781,267 @@ async fn a_stall_prior_is_never_woken_upstream() {
     );
 }
 
+/// Review fix (Important): the dedupe check inside `wake_superseded_prior_filer`
+/// compared the would-be PRIMARY recipient against the prior's filer, but the
+/// primary receipt only actually fires when the SUCCESSOR itself carries an
+/// origin thread (`handle_resolution`'s own `if let Some(origin_thread_hex)`
+/// gate). Without also requiring that here, a self-addressed prior ask
+/// (filer == audience) escalated by that same agent with no origin thread on
+/// the escalation would be skipped believing the primary path already
+/// delivered, when in fact nothing did -- the agent would get zero receipts.
+///
+/// A self-addressed ask is reachable: `check_altitude`'s executive branch
+/// only checks that the audience holds the community's `owner` role, never
+/// that the audience differs from the signer, so a pubkey that is
+/// simultaneously an executive-tier agent AND a community owner can file an
+/// ask addressed to itself.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn escalating_a_self_addressed_ask_with_no_origin_thread_still_wakes_its_filer() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let p_channel = channel(&pool, community, "self-addressed-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    // A second owner authors tier declarations, matching the pattern every
+    // other test in this file uses (an owner must author a managed-agent
+    // head for `agent_tier` to trust it).
+    let owner2 = Keys::generate();
+    add_owner(&pool, community, &owner2.public_key().to_hex()).await;
+
+    // X is simultaneously a community owner AND an executive-tier agent --
+    // nothing in `check_altitude`'s executive branch excludes the signer's
+    // own pubkey from qualifying as its own audience.
+    let x = Keys::generate();
+    add_owner(&pool, community, &x.public_key().to_hex()).await;
+    set_tier(&db, community, &owner2, &x, "executive").await;
+
+    // P: X's own self-addressed ask (filer == audience == X), with a real
+    // origin thread so a wake would be observable. `EventBuilder` strips a
+    // `p` tag matching its own signer by default (the same behavior that
+    // made the stall test's original assertion vacuous), so building this
+    // needs `allow_self_tagging()` explicitly -- `sign_ask` doesn't expose
+    // that, hence the inline builder here instead of the shared helper.
+    let px = store_root(&db, community, p_channel, &x, "x kicking off its own ask").await;
+    let mut p_tags = ask_tags("decision", &x.public_key(), "init-1", "self-need");
+    p_tags.push(tag(&["e", &px.id.to_hex()]));
+    let p = EventBuilder::new(
+        Kind::Custom(KIND_ASK as u16),
+        ask_content("X's own need", None),
+    )
+    .tags(p_tags)
+    .allow_self_tagging()
+    .sign_with_keys(&x)
+    .expect("sign self-addressed ask");
+    assert_applied(
+        handle_ask_event(&tenant, &state, &p)
+            .await
+            .expect("no internal error"),
+        "executive-owner X files its own self-addressed ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &p, Some(p_channel))
+        .await
+        .expect("store P");
+    assert!(inserted);
+
+    // X escalates its own ask onward to a DIFFERENT owner, with NO origin
+    // thread on the escalation itself -- the exact combination the review
+    // flagged.
+    let escalation = sign_escalation(
+        &x,
+        &owner2.public_key(),
+        "self-need-escalated",
+        &p,
+        "Escalating my own need",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "X escalates its own ask, no origin thread",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store escalation");
+    assert!(inserted);
+
+    // owner2 resolves the escalation.
+    let resolution = sign_resolution(
+        &owner2,
+        &escalation.id.to_hex(),
+        serde_json::json!({"choice": "acknowledged"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution by owner2");
+
+    // The escalation had no origin thread, so the PRIMARY receipt path
+    // never fired at all. X must still get the upstream wake in P's own
+    // thread -- otherwise X gets zero receipts despite being the one who
+    // filed the original ask.
+    let receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(p_channel),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipts in P's thread");
+    assert_eq!(
+        receipts.len(),
+        1,
+        "X must be woken in its own original thread even though the escalation had no origin thread of its own"
+    );
+    let receipt = &receipts[0].event;
+    assert!(
+        receipt.content.starts_with("Ask resolved upstream:"),
+        "got: {}",
+        receipt.content
+    );
+    let x_hex = x.public_key().to_hex();
+    assert!(
+        receipt.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == x_hex
+        }),
+        "receipt must p-tag X"
+    );
+}
+
+/// Review fix (Important): the upstream wake used to hardcode
+/// `ask_channel_id: None`, forgoing the "trivially legitimate" fast path
+/// (`ask_channel_id == Some(channel_id)`) the other three `emit_ask_receipt`
+/// call sites in this file take by passing the ask's own stored channel.
+/// Falling back to `check_channel_membership` alone means the courtesy wake
+/// silently drops whenever the prior's filer is not a CURRENT member of the
+/// origin thread's channel. This is unobservable with `channel()`'s
+/// open-visibility helper (its membership fallback masks the difference),
+/// so this test deliberately uses `private_channel` instead.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn upstream_wake_uses_the_priors_own_channel_not_membership_alone() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let p_channel = private_channel(&pool, community, "worker-private-thread").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // The worker's own prior ask: its origin thread AND the ask event
+    // itself are both scoped to a PRIVATE channel the worker is never
+    // explicitly added to as a member. Without the ask's own stored channel
+    // as a fast path, `check_channel_membership` alone refuses this channel
+    // for the worker.
+    let p_root = store_root(
+        &db,
+        community,
+        p_channel,
+        &worker,
+        "worker's private thread",
+    )
+    .await;
+    let mut p_tags = ask_tags(
+        "decision",
+        &leader.public_key(),
+        "init-1",
+        "vendor-key-private",
+    );
+    p_tags.push(tag(&["e", &p_root.id.to_hex()]));
+    p_tags.push(tag(&["h", &p_channel.to_string()]));
+    let p = sign_ask(&worker, p_tags, &ask_content("Need the vendor key", None));
+    assert_applied(
+        handle_ask_event(&tenant, &state, &p)
+            .await
+            .expect("no internal error"),
+        "worker -> leader ask in a private channel",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &p, Some(p_channel))
+        .await
+        .expect("store P");
+    assert!(inserted);
+
+    // The leader escalates it to the executive.
+    let escalation = sign_escalation(
+        &leader,
+        &executive.public_key(),
+        "vendor-key-private-escalated",
+        &p,
+        "Need the vendor key",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "leader -> executive escalation",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &escalation, None)
+        .await
+        .expect("store escalation");
+    assert!(inserted);
+
+    // The executive resolves it.
+    let resolution = sign_resolution(
+        &executive,
+        &escalation.id.to_hex(),
+        serde_json::json!({"choice": "vendor key X"}),
+    );
+    let outcome = handle_ask_event(&tenant, &state, &resolution)
+        .await
+        .expect("no internal error");
+    assert_applied(outcome, "resolution by the executive");
+
+    // The upstream wake must still reach the worker in P's private channel,
+    // because P's own stored channel makes it trivially legitimate --
+    // without that fast path, `check_channel_membership` alone would refuse
+    // (the worker is not an explicit member of a private channel) and the
+    // wake would be silently dropped.
+    let receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(p_channel),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipts in P's private channel");
+    assert_eq!(
+        receipts.len(),
+        1,
+        "the worker must still be woken in its own private-channel thread"
+    );
+    let receipt = &receipts[0].event;
+    assert!(
+        receipt.content.starts_with("Ask resolved upstream:"),
+        "got: {}",
+        receipt.content
+    );
+    let worker_hex = worker.public_key().to_hex();
+    assert!(
+        receipt.tags.iter().any(|t| {
+            let parts = t.as_slice();
+            parts.len() == 2 && parts[0] == "p" && parts[1] == worker_hex
+        }),
+        "receipt must p-tag the worker"
+    );
+}
+
 /// C3 regression: `emit_ask_receipt` must not deliver a relay-signed
 /// message into whatever channel a client-supplied `origin_thread` happens
 /// to resolve to. A tiered agent could otherwise name any event id in the

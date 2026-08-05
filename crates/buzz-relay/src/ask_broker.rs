@@ -482,19 +482,46 @@ async fn wake_superseded_prior_filer(
     };
     // The audience receipt may already have reached this same agent (a
     // self-escalation, or resolve_filer landing on the same key); one wake
-    // is enough.
-    if let Ok(primary) = resolve_filer(state, successor_event, successor_ask) {
-        if primary == filer {
-            return;
+    // is enough. But that receipt only fires when the SUCCESSOR itself
+    // carries an origin thread (handle_resolution's own gate); without
+    // requiring that here too, a self-addressed prior (filer == audience,
+    // reachable when the same pubkey is both an executive-tier agent and a
+    // community owner -- check_altitude's executive branch only checks that
+    // the audience holds the owner role, never that it differs from the
+    // signer) escalated with no origin thread on the escalation would be
+    // skipped believing the primary path already delivered, when in fact
+    // nothing did.
+    if successor_ask.origin_thread_hex.is_some() {
+        if let Ok(primary) = resolve_filer(state, successor_event, successor_ask) {
+            if primary == filer {
+                return;
+            }
         }
     }
+    // The origin thread's channel is filer-controlled, so `emit_ask_receipt`
+    // re-derives legitimacy itself; passing the prior ask's own stored
+    // channel lets it take the same fast "trivially legitimate" path the
+    // other three call sites in this file use, rather than falling back to
+    // requiring the filer to still be a live member of that channel.
+    let ask_channel_id = match state
+        .db
+        .get_event_by_id(tenant.community(), &prior.ask_event_id)
+        .await
+    {
+        Ok(Some(stored)) => stored.channel_id,
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(%error, "upstream wake: failed to load the prior ask's own event");
+            None
+        }
+    };
     emit_ask_receipt(
         tenant,
         state,
         &hex::encode(origin_thread),
         &format!("Ask resolved upstream: {}", successor_ask.headline),
         filer,
-        None,
+        ask_channel_id,
     )
     .await;
 }
