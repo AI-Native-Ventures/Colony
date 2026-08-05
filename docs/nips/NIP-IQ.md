@@ -187,16 +187,42 @@ a `need` from a task id (the stall sweep, notably) hashes it instead of
 embedding it directly: `format!("stall-{}", hex::encode(&Sha256::digest(task_id)[..16]))`,
 i.e. `stall-` followed by 32 hex characters (128 bits of SHA-256).
 
-**`prior` is a provenance pointer only.** Filing an Ask with a `prior` tag
-(via `buzz asks escalate`) does **not** automatically resolve, withdraw, or
-otherwise close the Ask it points at. That earlier Ask stays open in the
-`asks` table unless something else closes it. Because the dedupe unique
-index is keyed on `(initiative, need)` and does not include `prior` or
-`audience`, an agent escalating manually must use a *different* `need` for
-each hop (or first withdraw the prior Ask), or the escalation is refused as
-a duplicate of the still-open original. Contrast this with the relay's own
-automatic promotion (below), which reuses the *same* `need` and atomically
-transfers the dedupe slot.
+**`prior` names the Ask this one supersedes, and the relay closes it.**
+Because the dedupe unique index is keyed on `(initiative, need)` and does
+not include `prior` or `audience`, an agent escalating manually must use a
+*different* `need` for each hop, or the escalation is refused as a duplicate
+of the still-open original. Contrast this with the relay's own automatic
+promotion (below), which reuses the *same* `need` and atomically transfers
+the dedupe slot.
+
+Once the escalation is accepted, the broker closes the Ask its `prior` tag
+points at, as `withdrawn`, with a relay-signed kind 44302 whose `reason`
+names the successor. Without this, a full worker to leader to executive to
+owner chain would leave three open rows for one underlying need: a second
+agent blocked on the same thing would dedupe onto the lowest, stalest Ask
+rather than the one actually in front of the owner, and the due-ask sweep
+would independently auto-promote that stale row, manufacturing a fourth Ask
+for the same need.
+
+Three conditions, all required:
+
+- The `prior` Ask must still be `open`. A resolved, withdrawn or already
+  promoted row is left exactly as it is.
+- The successor's audience must sit **strictly higher** on the altitude
+  ladder than the `prior` Ask's audience (worker < leader < executive <
+  owner). This is authorization, not bookkeeping: `prior` is an
+  unauthenticated tag naming any event id in the community, and the altitude
+  ladder only constrains signer-versus-audience, so without this check a
+  worker could close the executive's Ask sitting in front of the owner
+  simply by filing an ordinary worker-to-leader Ask that points `prior` at
+  it. A rank the relay cannot resolve on either side is treated the same as
+  a failed comparison: the `prior` Ask is left open.
+- A durable relay key must be configured, the same requirement resolution
+  and withdrawal already carry.
+
+**No wake-up receipt is posted for this closure.** A receipt tells a blocked
+agent its Ask was answered; here the work is continuing one tier up rather
+than being resolved.
 
 **Fast-path exemption in the owner-contact wall.** An agent may reply
 inside a thread the owner started, or a thread the owner has posted into
@@ -618,7 +644,7 @@ worked around.
 | Subcommand | Kind | Notes |
 |---|---|---|
 | `buzz asks raise` | 44300 | files a new Ask one tier up |
-| `buzz asks escalate --prior <id>` | 44300 | identical to `raise`, plus a `prior` tag; does **not** auto-close the Ask it escalates from (see "prior is a provenance pointer only" above) |
+| `buzz asks escalate --prior <id>` | 44300 | identical to `raise`, plus a `prior` tag; the relay closes the Ask it escalates from once this one is accepted, provided the new audience is strictly higher on the ladder (see "`prior` names the Ask this one supersedes" above). Use a **different** `need` than the Ask being escalated, or the filing is refused as a duplicate of it |
 | `buzz asks list` | reads 44300 (+ 44301/44302 for `--status open`) | `--audience me`, `--filed-by me`, `--status open`; open/closed status is computed client-side from the public event stream, the relay's internal `asks` table has no HTTP read surface |
 | `buzz asks answer --ask <id> --answer-json <json>` | 44301 | requires a token authorized for global writes |
 | `buzz asks withdraw --ask <id> --reason <text>` | 44302 | executive-only; requires a token authorized for global writes |

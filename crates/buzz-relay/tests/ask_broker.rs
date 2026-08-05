@@ -2857,3 +2857,219 @@ async fn a_withdrawal_through_the_real_ingest_pipeline_closes_the_ask_and_is_sto
         "withdrawals carry no `h` tag: they are global events"
     );
 }
+
+// -- I5: a manual escalation closes the ask it escalates from ---------------
+
+/// Sign an ask carrying a `prior` tag, the shape `buzz asks escalate` builds.
+fn sign_escalation(
+    author: &Keys,
+    audience: &PublicKey,
+    need: &str,
+    prior: &Event,
+    headline: &str,
+) -> Event {
+    let mut tags = ask_tags("decision", audience, "init-1", need);
+    tags.push(tag(&["prior", &prior.id.to_hex()]));
+    sign_ask(author, tags, &ask_content(headline, None))
+}
+
+/// I5 (whole-branch review): `prior` was a provenance pointer only, so
+/// `buzz asks escalate` left the ask it escalated from wide open. After a
+/// full worker -> leader -> executive -> owner chain that meant three open
+/// rows for one underlying need, with two concrete consequences: a second
+/// worker blocked on the same thing deduped onto the LOWEST, stalest ask
+/// rather than the one actually in front of the owner, and the interrupt
+/// sweep would independently auto-promote that stale row, manufacturing a
+/// fourth ask for the same need.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn escalating_closes_the_prior_ask_leaving_only_the_successor_open() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // The worker's original ask, with an origin thread so a stray wake-up
+    // receipt would be visible if one were posted.
+    let root = store_root(&db, community, channel_id, &worker, "kicking off").await;
+    let mut tags = ask_tags("decision", &leader.public_key(), "init-1", "vendor-key");
+    tags.push(tag(&["e", &root.id.to_hex()]));
+    tags.push(tag(&["h", &channel_id.to_string()]));
+    let original = sign_ask(&worker, tags, &ask_content("Need the vendor key", None));
+    assert_applied(
+        handle_ask_event(&tenant, &state, &original)
+            .await
+            .expect("no internal error"),
+        "worker -> leader ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &original, Some(channel_id))
+        .await
+        .expect("store original ask event");
+    assert!(inserted);
+
+    // The leader escalates it to the executive. A different `need` is
+    // mandatory: the dedupe index would otherwise refuse this as a duplicate
+    // of the still-open original.
+    let escalation = sign_escalation(
+        &leader,
+        &executive.public_key(),
+        "vendor-key-escalated",
+        &original,
+        "Need the vendor key",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &escalation)
+            .await
+            .expect("no internal error"),
+        "leader -> executive escalation",
+    );
+
+    let prior_row = fetch_ask_row(&pool, community, original.id.as_bytes()).await;
+    assert_eq!(
+        prior_row.status, "withdrawn",
+        "the ask a higher-altitude escalation supersedes must not stay open"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "vendor-key")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "a second worker blocked on the same thing must not dedupe onto the stale lower ask"
+    );
+    let successor = db
+        .find_open_ask_by_need(community, "init-1", "vendor-key-escalated")
+        .await
+        .expect("query asks projection")
+        .expect("the successor must be the one open ask for this need");
+    assert_eq!(successor.ask_event_id, escalation.id.as_bytes().to_vec());
+
+    // The closure is a real, readable, relay-signed withdrawal naming the
+    // successor -- `buzz asks list --status open` computes open/closed from
+    // the public event stream, so a silent status flip would leave every
+    // client still showing the superseded ask as open.
+    let closing_id = prior_row
+        .resolution_event
+        .expect("a closed row must point at the event that closed it");
+    let stored = db
+        .get_event_by_id(community, &closing_id)
+        .await
+        .expect("query stored withdrawal")
+        .expect("the supersede withdrawal must itself be stored");
+    assert_eq!(stored.event.pubkey, relay_keys.public_key());
+    assert_eq!(
+        stored.event.kind.as_u16() as u32,
+        buzz_core::kind::KIND_ASK_WITHDRAWAL
+    );
+    let parsed = buzz_core::interrupt::parse_withdrawal(&stored.event)
+        .expect("the supersede withdrawal must satisfy the real parser");
+    assert!(
+        parsed.reason.contains(&escalation.id.to_hex()),
+        "the reason must name the successor, got: {}",
+        parsed.reason
+    );
+
+    // No wake-up receipt: the work is continuing one rung up, not resolved,
+    // so waking the worker back into its stalled thread would be a lie.
+    let receipts = db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+            pubkey: Some(relay_keys.public_key().to_bytes().to_vec()),
+            channel_id: Some(channel_id),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query receipt messages");
+    assert!(
+        receipts.is_empty(),
+        "superseding a prior ask must post no wake-up receipt, got {} message(s)",
+        receipts.len()
+    );
+}
+
+/// The altitude comparison is load-bearing, not decorative: `prior` is an
+/// unauthenticated tag naming any event id in the community, so without it a
+/// worker could point `prior` at the executive's ask in front of the owner
+/// and close it by filing an ordinary worker -> leader ask.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_lower_altitude_prior_reference_never_closes_the_higher_ask() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    // The executive's ask, already in front of the human owner.
+    let in_front_of_owner = sign_ask(
+        &executive,
+        ask_tags(
+            "decision",
+            &owner.public_key(),
+            "init-1",
+            "vendor-key-filed",
+        ),
+        &ask_content("Need the vendor key", None),
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &in_front_of_owner)
+            .await
+            .expect("no internal error"),
+        "executive -> owner ask",
+    );
+    let (_, inserted) = db
+        .insert_event(community, &in_front_of_owner, None)
+        .await
+        .expect("store executive ask event");
+    assert!(inserted);
+
+    // A worker files an ordinary ask to its own leader, pointing `prior` at
+    // the executive's ask. Perfectly legal at the altitude ladder -- signer
+    // is a worker, audience is its leader -- and it must NOT close anything.
+    let downgrade = sign_escalation(
+        &worker,
+        &leader.public_key(),
+        "vendor-key",
+        &in_front_of_owner,
+        "Need the vendor key",
+    );
+    assert_applied(
+        handle_ask_event(&tenant, &state, &downgrade)
+            .await
+            .expect("no internal error"),
+        "worker -> leader ask with a higher-altitude prior",
+    );
+
+    let higher = fetch_ask_row(&pool, community, in_front_of_owner.id.as_bytes()).await;
+    assert_eq!(
+        higher.status, "open",
+        "a lower-altitude filing must never close the ask in front of the owner"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "vendor-key-filed")
+            .await
+            .expect("query asks projection")
+            .is_some(),
+        "the higher ask must still hold its dedupe slot"
+    );
+}

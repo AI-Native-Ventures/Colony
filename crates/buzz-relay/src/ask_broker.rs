@@ -186,7 +186,12 @@ async fn handle_ask(
         )
         .await
     {
-        Ok(()) => Ok(AskBrokerOutcome::Applied),
+        Ok(()) => {
+            if let Some(prior) = prior_ask_bytes.as_deref() {
+                close_superseded_prior(tenant, state, prior, event, &parsed).await;
+            }
+            Ok(AskBrokerOutcome::Applied)
+        }
         Err(error) if is_unique_violation(&error) => {
             let winner = state
                 .db
@@ -204,6 +209,183 @@ async fn handle_ask(
             })
         }
         Err(error) => Err(format!("database error filing ask: {error}")),
+    }
+}
+
+/// Where a pubkey sits on the altitude ladder, as a comparable rank:
+/// worker 0, leader 1, executive 2, community owner 3.
+///
+/// Owner is checked first and independently of any managed-agent head: a
+/// human owner is the top of the ladder whether or not anyone ever published
+/// a head about them. `Ok(None)` means the pubkey sits nowhere on the ladder
+/// this relay can currently establish, and the caller must decline rather
+/// than assume.
+async fn audience_altitude(
+    tenant: &TenantContext,
+    state: &AppState,
+    audience_hex: &str,
+) -> Result<Option<u8>, String> {
+    let is_owner = state
+        .db
+        .get_relay_member(tenant.community(), audience_hex)
+        .await
+        .map_err(|error| format!("database error checking ask audience role: {error}"))?
+        .is_some_and(|member| member.role == "owner");
+    if is_owner {
+        return Ok(Some(3));
+    }
+    let audience = PublicKey::from_hex(audience_hex)
+        .map_err(|_| "internal error: audience hex is not a valid pubkey".to_string())?;
+    Ok(agent_tier(tenant, state, &audience)
+        .await?
+        .map(|tier| match tier {
+            AgentTier::Worker => 0,
+            AgentTier::Leader => 1,
+            AgentTier::Executive => 2,
+        }))
+}
+
+/// Close the still-open ask that a just-accepted manual escalation's `prior`
+/// tag points at, when the successor genuinely sits HIGHER on the altitude
+/// ladder than it does (I5).
+///
+/// `prior` used to be a provenance pointer only: `buzz asks escalate` left
+/// the ask it escalated from wide open, and nothing else closed it. After a
+/// worker -> leader -> executive -> owner chain that left three open rows for
+/// one underlying need, with two consequences the protocol is explicitly sold
+/// against. A second agent blocked on the same thing deduped onto the LOWEST,
+/// stalest ask instead of the one actually in front of the owner, which is
+/// the opposite of the convergence property the `need` key exists for. And
+/// the interrupt sweep independently auto-promoted that stale row, generating
+/// yet another ask for the same need. Doing this in the broker rather than in
+/// `buzz-cli` means it holds for any client, not only ours.
+///
+/// **The altitude comparison is the authorization, not a formality.** `prior`
+/// is an unauthenticated tag naming any event id in the community, and
+/// `check_altitude` only constrains signer-versus-audience, so without it a
+/// worker could point `prior` at the executive's ask sitting in front of the
+/// owner and close it simply by filing an ordinary worker-to-leader ask.
+/// Anything this function cannot establish -- a prior row that is not open, a
+/// rank it cannot resolve on either side, a successor that is not strictly
+/// higher -- is left alone.
+///
+/// Best-effort throughout: the successor is already durably filed by the time
+/// this runs, and failing to close its predecessor must not turn an accepted
+/// escalation into a rejection. The worst case is the pre-I5 behaviour.
+///
+/// Requires a durable relay signing key, the same guard
+/// [`handle_resolution`] and [`handle_withdrawal`] enforce and for the same
+/// reason: this signs a canonical "stand down" record. Without one those two
+/// paths already refuse outright, so the whole closing half of the protocol
+/// is inoperative anyway and declining here changes nothing a dev install
+/// could otherwise do.
+///
+/// No wake-up receipt is posted. A receipt tells a blocked agent its ask was
+/// answered; here the work is continuing one rung up rather than being
+/// resolved, and waking the filer back into its stalled thread would say the
+/// opposite of what happened.
+async fn close_superseded_prior(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    prior_ask_event_id: &[u8],
+    successor: &Event,
+    parsed: &ParsedAsk,
+) {
+    if state.config.relay_private_key.is_none() {
+        return;
+    }
+
+    let prior = match state
+        .db
+        .find_open_ask_by_event_id(tenant.community(), prior_ask_event_id)
+        .await
+    {
+        // No row, or no longer open (already resolved, withdrawn, or
+        // promoted -- the relay's own auto-promotion always marks the
+        // original `promoted` BEFORE filing its successor, so it never
+        // reaches this branch). Nothing to supersede.
+        Ok(None) => return,
+        Ok(Some(prior)) => prior,
+        Err(error) => {
+            tracing::warn!(%error, "supersede: failed to load the prior ask row");
+            return;
+        }
+    };
+
+    let prior_hex = hex::encode(&prior.audience_pubkey);
+    let ranks = tokio::join!(
+        audience_altitude(tenant, state, &prior_hex),
+        audience_altitude(tenant, state, &parsed.audience_hex),
+    );
+    let (Ok(Some(prior_rank)), Ok(Some(successor_rank))) = ranks else {
+        tracing::warn!(
+            prior_ask_event_id = %hex::encode(prior_ask_event_id),
+            "supersede: could not place both asks on the altitude ladder; leaving the prior open"
+        );
+        return;
+    };
+    if successor_rank <= prior_rank {
+        return;
+    }
+
+    let reason = format!(
+        "superseded by ask {}, filed one tier higher; this ask is no longer waiting on anyone",
+        successor.id.to_hex()
+    );
+    let content = serde_json::json!({ "reason": reason }).to_string();
+    let withdrawal = match EventBuilder::new(Kind::Custom(KIND_ASK_WITHDRAWAL as u16), content)
+        .tags(vec![
+            match Tag::parse(["e", &hex::encode(prior_ask_event_id)]) {
+                Ok(tag) => tag,
+                Err(error) => {
+                    tracing::warn!(%error, "supersede: failed to build withdrawal `e` tag");
+                    return;
+                }
+            },
+        ])
+        .sign_with_keys(&state.relay_keypair)
+    {
+        Ok(withdrawal) => withdrawal,
+        Err(error) => {
+            tracing::warn!(%error, "supersede: failed to sign the supersede withdrawal");
+            return;
+        }
+    };
+
+    // Claim before side effect, matching every other transition here: the
+    // conditional `UPDATE ... WHERE status = 'open'` runs before the
+    // withdrawal event is stored or fanned out.
+    match state
+        .db
+        .withdraw_ask(
+            tenant.community(),
+            prior_ask_event_id,
+            withdrawal.id.as_bytes(),
+        )
+        .await
+    {
+        Ok(true) => {}
+        // Lost a race against something that closed the prior a moment
+        // earlier; the signed withdrawal is simply discarded.
+        Ok(false) => return,
+        Err(error) => {
+            tracing::warn!(%error, "supersede: failed to close the prior ask");
+            return;
+        }
+    }
+
+    if let Err(error) = state
+        .db
+        .insert_event(tenant.community(), &withdrawal, None)
+        .await
+    {
+        tracing::warn!(%error, "supersede: failed to store the supersede withdrawal");
+    } else if let Err(error) = state
+        .pubsub
+        .publish_event(tenant, buzz_pubsub::EventTopic::Global, &withdrawal)
+        .await
+    {
+        tracing::warn!(%error, "supersede: failed to fan out the supersede withdrawal");
     }
 }
 

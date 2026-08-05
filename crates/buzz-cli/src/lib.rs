@@ -2457,9 +2457,15 @@ pub enum AsksCmd {
         #[command(flatten)]
         fields: AskFileArgs,
     },
-    /// Re-file an ask upward under a new audience, carrying `prior` (kind 44300)
+    /// Re-file an ask upward under a new audience, carrying `prior` (kind
+    /// 44300). Once the relay accepts this, it closes the `prior` ask as
+    /// superseded, provided the new audience really is higher on the ladder.
+    /// Use a DIFFERENT --need than the ask being escalated: the dedupe index
+    /// is keyed on (initiative, need), so reusing it is refused as a
+    /// duplicate of the very ask you are escalating.
     Escalate {
-        /// The ask event id (64-char hex) this escalation supersedes
+        /// The ask event id (64-char hex) this escalation supersedes. The
+        /// relay closes it once this escalation is accepted.
         #[arg(long)]
         prior: String,
         #[command(flatten)]

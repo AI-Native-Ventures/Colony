@@ -172,6 +172,37 @@ pub async fn find_open_ask_by_need(
     row.map(row_to_ask_row).transpose()
 }
 
+/// Returns the currently OPEN ask whose own filing event is `ask_event_id`,
+/// or `None` when there is no row at all for that id or the row is no longer
+/// open.
+///
+/// Addressed by event id rather than by need, because the caller
+/// (`ask_broker`, closing the ask a manual escalation's `prior` tag points
+/// at) knows the predecessor's event id and specifically nothing about its
+/// need: a manual escalation must use a DIFFERENT need for each hop, since
+/// the dedupe index would otherwise refuse it as a duplicate of the very ask
+/// it is escalating.
+pub async fn find_open_ask_by_event_id(
+    pool: &PgPool,
+    community: CommunityId,
+    ask_event_id: &[u8],
+) -> Result<Option<AskRow>> {
+    let row = sqlx::query(
+        "SELECT community_id, ask_event_id, ask_type, initiative_id, need_key, \
+                audience_pubkey, filer_pubkey, origin_thread, prior_ask, category, \
+                default_option, deadline_at, status, resolution_event, resolved_by, \
+                default_executed, created_at, updated_at \
+         FROM asks \
+         WHERE community_id = $1 AND ask_event_id = $2 AND status = 'open'",
+    )
+    .bind(community.as_uuid())
+    .bind(ask_event_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_ask_row).transpose()
+}
+
 /// Returns the most recently FILED `resolved` or `withdrawn` ask for
 /// `(community, initiative_id, need_key)`, or `None` if no such closed ask
 /// exists. Ignores `open` and `promoted` rows -- this exists specifically
