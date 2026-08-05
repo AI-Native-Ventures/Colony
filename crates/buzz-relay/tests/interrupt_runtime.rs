@@ -404,6 +404,31 @@ async fn fetch_ask_row(pool: &PgPool, community: CommunityId, ask_event_id: &[u8
     }
 }
 
+/// Push every OPEN ask row that does NOT belong to `mine` far past `now`,
+/// so a test whose claim is about `run_interrupt_tick`'s CROSS-TENANT batch
+/// ordering measures only its own seeded rows.
+///
+/// `query_due_asks` is deliberately cross-tenant, capped and ordered by
+/// `deadline_at`, so any due row another test (or an earlier run against
+/// this shared database) left behind competes for the same batch slots. That
+/// was already latent suite-load flakiness; it became deterministic once
+/// executive-audience asks started promoting to the owner (I1), because
+/// almost every other test in this file leaves one of those behind. Pushing
+/// the deadlines out rather than deleting the rows keeps the isolation to
+/// "not due right now", which is exactly the property these tests need.
+async fn quiesce_unrelated_due_asks(pool: &PgPool, mine: &[CommunityId], now: i64) {
+    let mine: Vec<Uuid> = mine.iter().map(|c| *c.as_uuid()).collect();
+    sqlx::query(
+        "UPDATE asks SET deadline_at = $1 \
+         WHERE status = 'open' AND NOT (community_id = ANY($2))",
+    )
+    .bind(now + 1_000_000)
+    .bind(&mine)
+    .execute(pool)
+    .await
+    .expect("quiesce unrelated due asks");
+}
+
 // ---------------------------------------------------------------------
 // (d) nothing due -> zero stats
 // ---------------------------------------------------------------------
@@ -415,7 +440,10 @@ async fn tick_with_nothing_due_returns_zero_stats() {
     let relay_keys = Keys::generate();
     let state = state(db.clone(), &pool, relay_keys).await;
 
-    let stats = run_interrupt_tick(&state, chrono::Utc::now().timestamp(), 100)
+    let now = chrono::Utc::now().timestamp();
+    quiesce_unrelated_due_asks(&pool, &[], now).await;
+
+    let stats = run_interrupt_tick(&state, now, 100)
         .await
         .expect("tick must not error with nothing due");
     assert_eq!(stats, InterruptTickStats::default());
@@ -605,8 +633,10 @@ async fn declined_rows_are_redeadlined_so_they_do_not_starve_the_batch() {
     let relay_keys = Keys::generate();
     let state = state(db.clone(), &pool, relay_keys.clone()).await;
 
+    let mut mine: Vec<CommunityId> = Vec::new();
     for _ in 0..3 {
         let stuck_community = community(&pool).await;
+        mine.push(stuck_community);
         let tenant = TenantContext::resolved(stuck_community, "test-host");
         let stuck_owner = Keys::generate();
         add_owner(&pool, stuck_community, &stuck_owner.public_key().to_hex()).await;
@@ -642,6 +672,7 @@ async fn declined_rows_are_redeadlined_so_they_do_not_starve_the_batch() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let community = community(&pool).await;
+    mine.push(community);
     let tenant = TenantContext::resolved(community, "test-host");
     let owner = Keys::generate();
     add_owner(&pool, community, &owner.public_key().to_hex()).await;
@@ -663,6 +694,9 @@ async fn declined_rows_are_redeadlined_so_they_do_not_starve_the_batch() {
     .await;
 
     let now = legit_ask.created_at.as_secs() as i64 + 100;
+    // This test's whole claim is about which rows a batch of THREE reaches,
+    // so any unrelated due row would silently take one of those slots.
+    quiesce_unrelated_due_asks(&pool, &mine, now).await;
 
     let stats1 = run_interrupt_tick(&state, now, 3)
         .await
@@ -1090,6 +1124,172 @@ async fn executive_audience_ask_with_ambiguous_owners_is_redeadlined_not_promote
         .expect("query asks projection")
         .expect("the SAME ask must still be the open one for its need");
     assert_eq!(still_open.ask_event_id, ask.id.as_bytes().to_vec());
+}
+
+// ---------------------------------------------------------------------
+// (c3) I2: an `asks` row that outlived its event self-heals
+// ---------------------------------------------------------------------
+
+/// File an `asks` row directly against the projection table, with an
+/// `ask_event_id` no stored event will ever match.
+///
+/// This reproduces the I2 residual exactly: the broker commits the row at
+/// ingest step 18 and ordinary storage runs at step 19, so a storage failure
+/// after a successful broker leaves an `open` row pointing at an event that
+/// was never stored. Every retry of that `(initiative, need)` then returns
+/// `Duplicate` naming a ghost, resolution and withdrawal both refuse with
+/// "the referenced ask does not exist", and before this fix the sweep
+/// re-deadlined the row every window forever -- so the need was permanently
+/// unfileable and only a DBA could clear it.
+async fn file_ghost_ask_row(
+    db: &Db,
+    community: CommunityId,
+    audience: &Keys,
+    filer: &Keys,
+    need: &str,
+    default_option: Option<&str>,
+    deadline_at: i64,
+) -> Vec<u8> {
+    let ghost_event_id = uuid::Uuid::new_v4().as_bytes().repeat(2);
+    db.insert_ask(
+        community,
+        buzz_db::asks::NewAskRow {
+            ask_event_id: &ghost_event_id,
+            ask_type: "decision",
+            initiative_id: "init-1",
+            need_key: need,
+            audience_pubkey: &audience.public_key().to_bytes(),
+            filer_pubkey: &filer.public_key().to_bytes(),
+            origin_thread: None,
+            prior_ask: None,
+            category: None,
+            default_option,
+            deadline_at: Some(deadline_at),
+        },
+    )
+    .await
+    .expect("insert a projection row with no backing event");
+    ghost_event_id
+}
+
+/// The `execute_default` half of the I2 guard: an owner-audience row with a
+/// stated default whose event is missing.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn owner_audience_ask_with_no_backing_event_is_closed_not_redeadlined() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let ghost = file_ghost_ask_row(
+        &db,
+        community,
+        &owner,
+        &executive,
+        "ghost-owner-need",
+        Some("ship it"),
+        now - 10,
+    )
+    .await;
+
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("one bad row must never fail the whole tick");
+
+    let row = fetch_ask_row(&pool, community, &ghost).await;
+    assert_eq!(
+        row.status, "withdrawn",
+        "a row whose event was never stored must be closed so the need becomes filable again,          not re-deadlined forever"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "ghost-owner-need")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "closing the row must release the dedupe slot"
+    );
+
+    // The closure is a real, stored, relay-signed withdrawal naming the
+    // cause, not a silent status flip: an operator reading `resolution_event`
+    // can find out why the row went away.
+    let withdrawal_id = row
+        .resolution_event
+        .expect("a closed row must point at the event that closed it");
+    let stored = db
+        .get_event_by_id(community, &withdrawal_id)
+        .await
+        .expect("query stored withdrawal")
+        .expect("the synthetic withdrawal must itself be stored");
+    assert_eq!(stored.event.pubkey, relay_keys.public_key());
+    assert_eq!(
+        stored.event.kind.as_u16() as u32,
+        buzz_core::kind::KIND_ASK_WITHDRAWAL
+    );
+    let parsed = buzz_core::interrupt::parse_withdrawal(&stored.event)
+        .expect("the synthetic withdrawal must satisfy the real parser");
+    assert!(
+        parsed.reason.contains("never stored"),
+        "the reason must name the cause, got: {}",
+        parsed.reason
+    );
+}
+
+/// The `promote_to` half of the same guard: a leader-audience row whose
+/// event is missing, in a community that HAS a unique executive (so the
+/// sweep genuinely reaches the promotion path and fails there, rather than
+/// declining earlier for want of a target).
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn leader_audience_ask_with_no_backing_event_is_closed_not_redeadlined() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &leader, "leader").await;
+    let executive = Keys::generate();
+    set_tier(&db, community, &owner, &executive, "executive").await;
+    let worker = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let ghost = file_ghost_ask_row(
+        &db,
+        community,
+        &leader,
+        &worker,
+        "ghost-leader-need",
+        None,
+        now - 10,
+    )
+    .await;
+
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("one bad row must never fail the whole tick");
+
+    let row = fetch_ask_row(&pool, community, &ghost).await;
+    assert_eq!(
+        row.status, "withdrawn",
+        "a row whose event was never stored must be closed, not re-deadlined forever"
+    );
+    assert!(
+        db.find_open_ask_by_need(community, "init-1", "ghost-leader-need")
+            .await
+            .expect("query asks projection")
+            .is_none(),
+        "closing the row must release the dedupe slot"
+    );
 }
 
 // ---------------------------------------------------------------------

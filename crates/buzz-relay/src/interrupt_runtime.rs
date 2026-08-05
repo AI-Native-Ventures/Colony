@@ -85,7 +85,7 @@ use std::sync::Arc;
 
 use buzz_core::company::CompanyTask;
 use buzz_core::interrupt::{parse_ask, AgentTier, AskType};
-use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_MANAGED_AGENT};
+use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::asks::AskRow;
@@ -211,7 +211,7 @@ async fn process_due_ask(
 
     if audience_is_owner {
         if let Some(default_option) = row.default_option.as_deref() {
-            return execute_default(state, &tenant, row, default_option, now_secs, stats).await;
+            return execute_default(state, &tenant, row, default_option, stats).await;
         }
         // Owner-audience ask with no default: already at the very top of the
         // ladder, nowhere higher to escalate. Re-deadline rather than spin.
@@ -243,7 +243,6 @@ async fn execute_default(
     tenant: &TenantContext,
     row: &AskRow,
     default_option: &str,
-    now_secs: i64,
     stats: &mut InterruptTickStats,
 ) -> Result<(), String> {
     let Some(stored_ask) = state
@@ -253,12 +252,13 @@ async fn execute_default(
         .map_err(|error| format!("database error loading ask event: {error}"))?
     else {
         // Invariant violation -- an `asks` row should never outlive its
-        // backing event -- but must still yield its batch slot (C2 fix)
-        // rather than camp at the head of the due queue forever.
-        if let Err(redeadline_error) = redeadline(state, tenant.community(), row, now_secs).await {
+        // backing event -- and re-deadlining it (the original C2 fix) only
+        // yielded the batch slot, leaving the need permanently unfileable.
+        // Close it instead; see [`close_ask_with_no_backing_event`].
+        if let Err(close_error) = close_ask_with_no_backing_event(state, tenant, row).await {
             tracing::warn!(
-                %redeadline_error,
-                "interrupt sweep: failed to re-deadline an ask with no backing event"
+                %close_error,
+                "interrupt sweep: failed to close an ask with no backing event"
             );
         }
         return Err("ask row exists with no backing event".to_string());
@@ -378,7 +378,7 @@ async fn promote_or_redeadline(
                 );
                 return redeadline(state, tenant.community(), row, now_secs).await;
             };
-            promote_to(state, tenant, row, executive, now_secs, stats).await
+            promote_to(state, tenant, row, executive, stats).await
         }
         Some(AgentTier::Executive) => {
             let Some(owner) = find_unique_owner(tenant, state).await? else {
@@ -391,7 +391,7 @@ async fn promote_or_redeadline(
                 );
                 return redeadline(state, tenant.community(), row, now_secs).await;
             };
-            promote_to(state, tenant, row, owner, now_secs, stats).await
+            promote_to(state, tenant, row, owner, stats).await
         }
         Some(AgentTier::Worker) | None => {
             // A worker is never a legitimate ask audience (workers only
@@ -460,7 +460,6 @@ async fn promote_to(
     tenant: &TenantContext,
     row: &AskRow,
     target: PublicKey,
-    now_secs: i64,
     stats: &mut InterruptTickStats,
 ) -> Result<(), String> {
     let Some(stored_ask) = state
@@ -469,14 +468,14 @@ async fn promote_to(
         .await
         .map_err(|error| format!("database error loading ask event to promote: {error}"))?
     else {
-        // Invariant violation, same reasoning as `execute_default`'s
-        // identical guard -- still must yield its batch slot (C2 fix). The
-        // original row is still `open` here (nothing has been claimed yet),
-        // so a plain re-deadline is the right compensation.
-        if let Err(redeadline_error) = redeadline(state, tenant.community(), row, now_secs).await {
+        // Invariant violation, same reasoning and same remedy as
+        // `execute_default`'s identical guard. The original row is still
+        // `open` here (nothing has been claimed yet), so
+        // `close_ask_with_no_backing_event`'s conditional `UPDATE` will win.
+        if let Err(close_error) = close_ask_with_no_backing_event(state, tenant, row).await {
             tracing::warn!(
-                %redeadline_error,
-                "interrupt sweep: failed to re-deadline an ask with no backing event to promote"
+                %close_error,
+                "interrupt sweep: failed to close an ask with no backing event to promote"
             );
         }
         return Err("ask row exists with no backing event to promote".to_string());
@@ -640,6 +639,108 @@ async fn reopen_after_promotion_failure(
             );
         }
     }
+}
+
+/// Close an `asks` row whose backing Ask event was never stored (I2), with a
+/// relay-signed synthetic withdrawal naming the cause.
+///
+/// The broker commits the `asks` row at ingest immediately BEFORE ordinary
+/// storage, and storage can still fail after it. The resulting state is an
+/// `open` row pointing at an event that does not exist, and every in-protocol
+/// remedy is closed off by that same absence: a retry of the need returns
+/// `Duplicate` naming a ghost, and both `handle_resolution` and
+/// `handle_withdrawal` refuse with "the referenced ask does not exist"
+/// because they load the referenced event first. Re-deadlining the row (the
+/// original C2 fix here) correctly stopped it starving the cross-tenant
+/// batch, but left the need permanently unfileable, clearable only by a DBA.
+///
+/// Closing it converts that permanent wedge into a self-healing one: the
+/// dedupe slot is released within one sweep window and the blocked agent can
+/// simply file again. The row is closed as `withdrawn` rather than under a
+/// new status because "this need is no longer waiting on anyone" is exactly
+/// what `withdrawn` already means, and a new status value would need a
+/// migration to widen the `asks.status` CHECK constraint.
+///
+/// The withdrawal event is signed and STORED rather than the status being
+/// flipped silently, for two reasons: an operator following the row's
+/// `resolution_event` finds a readable reason instead of a dangling id, and
+/// `buzz asks list --status open` computes open/closed from the public event
+/// stream (the `asks` table has no HTTP read surface), so without the event
+/// the ghost ask would keep showing as open to every client. Only the
+/// interrupt sweep calls this, and [`run_interrupt_tick`] has already
+/// refused the whole tick without a durable relay key, so the signature here
+/// is never the shared fallback dev key.
+///
+/// Claim before side effect, matching [`execute_default`]: the conditional
+/// `withdraw_ask` runs before the event is stored. A crash between them
+/// leaves the row correctly closed pointing at an unstored withdrawal, which
+/// is strictly better than the wedge it replaces. No wake-up receipt is
+/// posted: there is nothing to tell the filer beyond "file again", and the
+/// origin thread is on the very event that is missing.
+async fn close_ask_with_no_backing_event(
+    state: &Arc<AppState>,
+    tenant: &TenantContext,
+    row: &AskRow,
+) -> Result<(), String> {
+    let reason = format!(
+        "closed by the relay: this ask's own event (id {}) was never stored, so the ask could \
+         not be answered, withdrawn, or re-filed. Releasing the need so it can be raised again.",
+        hex::encode(&row.ask_event_id)
+    );
+    let content = serde_json::json!({ "reason": reason }).to_string();
+    let withdrawal = EventBuilder::new(Kind::Custom(KIND_ASK_WITHDRAWAL as u16), content)
+        .tags(vec![Tag::parse(["e", &hex::encode(&row.ask_event_id)])
+            .map_err(|error| {
+                format!("failed to build withdrawal `e` tag: {error}")
+            })?])
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|error| format!("failed to sign synthetic withdrawal: {error}"))?;
+
+    // Claim before side effect.
+    let withdrawn = state
+        .db
+        .withdraw_ask(
+            tenant.community(),
+            &row.ask_event_id,
+            withdrawal.id.as_bytes(),
+        )
+        .await
+        .map_err(|error| format!("database error closing an ask with no backing event: {error}"))?;
+    if !withdrawn {
+        // Something else closed this exact row a moment earlier -- nothing
+        // left to release, and the signed withdrawal is simply discarded.
+        return Ok(());
+    }
+
+    if let Err(error) = state
+        .db
+        .insert_event(tenant.community(), &withdrawal, None)
+        .await
+    {
+        tracing::warn!(
+            %error,
+            "interrupt sweep: failed to store the synthetic withdrawal for an ask with no \
+             backing event"
+        );
+    } else if let Err(error) = state
+        .pubsub
+        .publish_event(tenant, buzz_pubsub::EventTopic::Global, &withdrawal)
+        .await
+    {
+        tracing::warn!(
+            %error,
+            "interrupt sweep: failed to fan out the synthetic withdrawal for an ask with no \
+             backing event"
+        );
+    }
+
+    tracing::warn!(
+        ask_event_id = %hex::encode(&row.ask_event_id),
+        community_id = %tenant.community(),
+        "interrupt sweep: closed an ask row whose backing event was never stored, releasing \
+         its need for re-filing"
+    );
+    Ok(())
 }
 
 /// Re-arm a due ask's deadline to `now_secs` plus its own original window,
