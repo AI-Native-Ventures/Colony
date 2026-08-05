@@ -36,14 +36,51 @@ Dating it by publication silently misprices every day in between.
 The end of a promotion is its own entry, at the vendor's list price, effective
 the day the promotion ended.
 
-- `model` must match exactly what the provider reports in its responses, since
-  that string is what recorded calls are matched against.
+- `model` should be the **undated alias** (`claude-sonnet-4-5`, not
+  `claude-sonnet-4-5-20250929`). See [Aliases and snapshots](#aliases-and-snapshots).
 - Rates are dollars per million tokens, as vendors quote them.
 - Use `"0"` for a rate a provider does not charge for (OpenAI does not bill
   cache writes).
-- A rate finer than one nanoUSD per token is refused rather than rounded.
+- A rate finer than one nanoUSD per token is refused rather than rounded. See
+  [What cannot be priced yet](#what-cannot-be-priced-yet).
 - Two entries for one model at one instant are refused: there would be no
   defined winner.
+
+## Aliases and snapshots
+
+The meter records the `model` string from the **provider's response body**,
+and providers resolve an undated alias to a dated snapshot: a call to
+`claude-sonnet-4-5` is recorded as `claude-sonnet-4-5-20250929`, and `gpt-4o`
+as `gpt-4o-2024-08-06`.
+
+So a row is matched exactly, or by its alias with a date suffix stripped. Write
+the **alias**: it prices both the alias and every dated snapshot of it. A dated
+row prices only that snapshot.
+
+The suffix has to be entirely a date (`-20250929` or `-2024-08-06`). That is
+what stops a `gpt-4` row from pricing `gpt-4o`, or a `claude-sonnet-4` row from
+pricing `claude-sonnet-4-5-20250929`. Charging one model at another's rate is
+worse than leaving it unpriced, because unpriced is visible.
+
+## What cannot be priced yet
+
+Rates are integer **nanoUSD per token**, which is $0.001 per million tokens.
+A vendor rate finer than that cannot be represented and is refused rather than
+rounded, so it stays out of the catalog.
+
+This is not hypothetical. DeepSeek V4 cache hits are **$0.0028 / MTok**, which
+is 2.8 nanoUSD per token:
+
+```
+$ buzz ledger feed-sign --catalog deepseek.json --key …
+deepseek-v4-flash: cache read 0.0028 is finer than one nanoUSD per token
+```
+
+`deepseek-v4-flash` and `deepseek-v4-pro` are therefore absent. Spend on them
+reports as **unpriced**, which is visible, rather than rounded, which would be
+silently wrong by 7% on every cache read. Pricing them needs sub-nanoUSD
+resolution across the ledger, the desktop app, and every stored price book:
+a units change, not a catalog edit.
 
 ## What this catalog must not contain
 

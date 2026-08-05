@@ -50,6 +50,256 @@
       "cacheWrite1hPerMtok": "0",
       "outputPerMtok": "1.68",
       "note": "DeepSeek list price, cache miss input"
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "effectiveFrom": "2025-10-01T00:00:00Z",
+      "inputPerMtok": "1",
+      "cacheReadPerMtok": "0.10",
+      "cacheWrite5mPerMtok": "1.25",
+      "cacheWrite1hPerMtok": "2",
+      "outputPerMtok": "5",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "claude-opus-4",
+      "effectiveFrom": "2025-05-14T00:00:00Z",
+      "inputPerMtok": "15",
+      "cacheReadPerMtok": "1.50",
+      "cacheWrite5mPerMtok": "18.75",
+      "cacheWrite1hPerMtok": "30",
+      "outputPerMtok": "75",
+      "note": "Anthropic list price. Retired except on Google Cloud."
+    },
+    {
+      "model": "claude-sonnet-4",
+      "effectiveFrom": "2025-05-14T00:00:00Z",
+      "inputPerMtok": "3",
+      "cacheReadPerMtok": "0.30",
+      "cacheWrite5mPerMtok": "3.75",
+      "cacheWrite1hPerMtok": "6",
+      "outputPerMtok": "15",
+      "note": "Anthropic list price. Retired except on Bedrock and Google Cloud."
+    },
+    {
+      "model": "claude-opus-4-1",
+      "effectiveFrom": "2025-08-05T00:00:00Z",
+      "inputPerMtok": "15",
+      "cacheReadPerMtok": "1.50",
+      "cacheWrite5mPerMtok": "18.75",
+      "cacheWrite1hPerMtok": "30",
+      "outputPerMtok": "75",
+      "note": "Anthropic list price. Deprecated."
+    },
+    {
+      "model": "claude-opus-4-5",
+      "effectiveFrom": "2025-11-01T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "6.25",
+      "cacheWrite1hPerMtok": "10",
+      "outputPerMtok": "25",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "claude-opus-4-6",
+      "effectiveFrom": "2026-02-05T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "6.25",
+      "cacheWrite1hPerMtok": "10",
+      "outputPerMtok": "25",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effectiveFrom": "2026-04-16T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "6.25",
+      "cacheWrite1hPerMtok": "10",
+      "outputPerMtok": "25",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "effectiveFrom": "2026-04-20T00:00:00Z",
+      "inputPerMtok": "3",
+      "cacheReadPerMtok": "0.30",
+      "cacheWrite5mPerMtok": "3.75",
+      "cacheWrite1hPerMtok": "6",
+      "outputPerMtok": "15",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "effectiveFrom": "2026-05-28T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "6.25",
+      "cacheWrite1hPerMtok": "10",
+      "outputPerMtok": "25",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "claude-fable-5",
+      "effectiveFrom": "2026-06-09T00:00:00Z",
+      "inputPerMtok": "10",
+      "cacheReadPerMtok": "1",
+      "cacheWrite5mPerMtok": "12.50",
+      "cacheWrite1hPerMtok": "20",
+      "outputPerMtok": "50",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "claude-mythos-5",
+      "effectiveFrom": "2026-06-09T00:00:00Z",
+      "inputPerMtok": "10",
+      "cacheReadPerMtok": "1",
+      "cacheWrite5mPerMtok": "12.50",
+      "cacheWrite1hPerMtok": "20",
+      "outputPerMtok": "50",
+      "note": "Anthropic list price. Limited availability."
+    },
+    {
+      "model": "claude-mythos-preview",
+      "effectiveFrom": "2026-06-09T00:00:00Z",
+      "inputPerMtok": "10",
+      "cacheReadPerMtok": "1",
+      "cacheWrite5mPerMtok": "12.50",
+      "cacheWrite1hPerMtok": "20",
+      "outputPerMtok": "50",
+      "note": "Anthropic list price, same as Mythos 5"
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effectiveFrom": "2026-07-01T00:00:00Z",
+      "inputPerMtok": "2",
+      "cacheReadPerMtok": "0.20",
+      "cacheWrite5mPerMtok": "2.50",
+      "cacheWrite1hPerMtok": "4",
+      "outputPerMtok": "10",
+      "note": "Anthropic introductory price, in force through 2026-08-31"
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effectiveFrom": "2026-09-01T00:00:00Z",
+      "inputPerMtok": "3",
+      "cacheReadPerMtok": "0.30",
+      "cacheWrite5mPerMtok": "3.75",
+      "cacheWrite1hPerMtok": "6",
+      "outputPerMtok": "15",
+      "note": "Anthropic standard price, replacing the introductory rate"
+    },
+    {
+      "model": "claude-opus-5",
+      "effectiveFrom": "2026-08-01T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "6.25",
+      "cacheWrite1hPerMtok": "10",
+      "outputPerMtok": "25",
+      "note": "Anthropic list price"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "6.25",
+      "cacheWrite1hPerMtok": "6.25",
+      "outputPerMtok": "30",
+      "note": "OpenAI standard short-context list price, verified 2026-08-05. Date is a floor, not a vendor change date."
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "2",
+      "cacheReadPerMtok": "0.20",
+      "cacheWrite5mPerMtok": "2.50",
+      "cacheWrite1hPerMtok": "2.50",
+      "outputPerMtok": "12",
+      "note": "OpenAI standard short-context list price, verified 2026-08-05. Date is a floor, not a vendor change date."
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "0.20",
+      "cacheReadPerMtok": "0.02",
+      "cacheWrite5mPerMtok": "0.25",
+      "cacheWrite1hPerMtok": "0.25",
+      "outputPerMtok": "1.20",
+      "note": "OpenAI standard short-context list price, verified 2026-08-05. Date is a floor, not a vendor change date."
+    },
+    {
+      "model": "gpt-5.5",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "5",
+      "cacheReadPerMtok": "0.50",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "30",
+      "note": "OpenAI list price, verified 2026-08-05. No cache-write charge. Date is a floor."
+    },
+    {
+      "model": "gpt-5.5-pro",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "30",
+      "cacheReadPerMtok": "0",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "180",
+      "note": "OpenAI list price, verified 2026-08-05. No caching offered. Date is a floor."
+    },
+    {
+      "model": "gpt-5.4",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "2.50",
+      "cacheReadPerMtok": "0.25",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "15",
+      "note": "OpenAI list price, verified 2026-08-05. No cache-write charge. Date is a floor."
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "0.75",
+      "cacheReadPerMtok": "0.075",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "4.50",
+      "note": "OpenAI list price, verified 2026-08-05. No cache-write charge. Date is a floor."
+    },
+    {
+      "model": "gpt-5.4-nano",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "0.20",
+      "cacheReadPerMtok": "0.02",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "1.25",
+      "note": "OpenAI list price, verified 2026-08-05. No cache-write charge. Date is a floor."
+    },
+    {
+      "model": "gpt-5.4-pro",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "30",
+      "cacheReadPerMtok": "0",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "180",
+      "note": "OpenAI list price, verified 2026-08-05. No caching offered. Date is a floor."
+    },
+    {
+      "model": "gpt-5.3-codex",
+      "effectiveFrom": "2026-08-05T00:00:00Z",
+      "inputPerMtok": "1.75",
+      "cacheReadPerMtok": "0.175",
+      "cacheWrite5mPerMtok": "0",
+      "cacheWrite1hPerMtok": "0",
+      "outputPerMtok": "14",
+      "note": "OpenAI list price for the Codex model, verified 2026-08-05. Date is a floor."
     }
   ]
 }
