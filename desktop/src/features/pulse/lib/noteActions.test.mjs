@@ -52,6 +52,29 @@ test("isDuplicateReactionError detects relay duplicate responses", () => {
   );
 });
 
+test("isDuplicateReactionError covers both post-contract relay messages", () => {
+  // Re-sending the very kind:7 event that already holds the slot.
+  assert.equal(
+    isDuplicateReactionError(
+      new Error(
+        "relay rejected event: duplicate: identical reaction already applied",
+      ),
+    ),
+    true,
+  );
+  // A different kind:7 event holds it, the usual case when the user already
+  // liked the note. The emoji is on the note either way, so this is not an
+  // error to show.
+  assert.equal(
+    isDuplicateReactionError(
+      new Error(
+        "relay rejected event: conflict: superseded by original reaction abc123",
+      ),
+    ),
+    true,
+  );
+});
+
 test("isDuplicateReactionError rejects unrelated errors and non-errors", () => {
   assert.equal(isDuplicateReactionError(new Error("network failed")), false);
   assert.equal(

@@ -1038,7 +1038,7 @@ async fn emit_addressable_discovery_event(
         .db
         .replace_addressable_event(tenant.community(), &event, Some(channel_id))
         .await?;
-    if was_inserted {
+    if was_inserted.was_inserted() {
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(tenant, state, &stored, kind_u32, relay_pubkey_hex, None).await;
     }
@@ -3139,7 +3139,7 @@ pub async fn publish_nipia_archival_list(
         .db
         .replace_addressable_event(tenant.community(), &event, None)
         .await?;
-    if was_inserted {
+    if was_inserted.was_inserted() {
         dispatch_persistent_event(
             tenant,
             state,
@@ -3226,7 +3226,7 @@ pub async fn publish_dm_visibility_snapshot(
         .db
         .replace_parameterized_event(tenant.community(), &event, &viewer_hex, None)
         .await?;
-    if was_inserted {
+    if was_inserted.was_inserted() {
         dispatch_persistent_event(
             tenant,
             state,

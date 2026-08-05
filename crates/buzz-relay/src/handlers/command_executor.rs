@@ -348,11 +348,10 @@ async fn handle_dm_open(
     // Persist the command event (idempotency) — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
         PersistResult::Duplicate => {
-            return Ok(IngestResult {
-                event_id: event.id.to_hex(),
-                accepted: true,
-                message: "duplicate: already processed".into(),
-            });
+            return Ok(IngestResult::already_stored(
+                event.id.to_hex(),
+                "duplicate: identical event already stored",
+            ));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -427,17 +426,16 @@ async fn handle_dm_open(
     }
 
     // 6. Return response
-    Ok(IngestResult {
-        event_id: event.id.to_hex(),
-        accepted: true,
-        message: format!(
+    Ok(IngestResult::stored_with_message(
+        event.id.to_hex(),
+        format!(
             "response:{}",
             serde_json::json!({
                 "channel_id": channel.id.to_string(),
                 "created": was_created,
             })
         ),
-    })
+    ))
 }
 
 async fn handle_dm_add_member(
@@ -509,11 +507,10 @@ async fn handle_dm_add_member(
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
         PersistResult::Duplicate => {
-            return Ok(IngestResult {
-                event_id: event.id.to_hex(),
-                accepted: true,
-                message: "duplicate: already processed".into(),
-            });
+            return Ok(IngestResult::already_stored(
+                event.id.to_hex(),
+                "duplicate: identical event already stored",
+            ));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -565,16 +562,15 @@ async fn handle_dm_add_member(
     }
 
     // 8. Return response
-    Ok(IngestResult {
-        event_id: event.id.to_hex(),
-        accepted: true,
-        message: format!(
+    Ok(IngestResult::stored_with_message(
+        event.id.to_hex(),
+        format!(
             "response:{}",
             serde_json::json!({
                 "channel_id": new_channel.id.to_string(),
             })
         ),
-    })
+    ))
 }
 
 async fn handle_dm_hide(
@@ -615,11 +611,10 @@ async fn handle_dm_hide(
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
         PersistResult::Duplicate => {
-            return Ok(IngestResult {
-                event_id: event.id.to_hex(),
-                accepted: true,
-                message: "duplicate: already processed".into(),
-            });
+            return Ok(IngestResult::already_stored(
+                event.id.to_hex(),
+                "duplicate: identical event already stored",
+            ));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -643,11 +638,7 @@ async fn handle_dm_hide(
     }
 
     // 6. Return response
-    Ok(IngestResult {
-        event_id: event.id.to_hex(),
-        accepted: true,
-        message: "{}".into(),
-    })
+    Ok(IngestResult::stored_with_message(event.id.to_hex(), "{}"))
 }
 
 async fn handle_workflow_def(
@@ -752,11 +743,10 @@ async fn handle_workflow_def(
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
         PersistResult::Duplicate => {
-            return Ok(IngestResult {
-                event_id: event.id.to_hex(),
-                accepted: true,
-                message: "duplicate: already processed".into(),
-            });
+            return Ok(IngestResult::already_stored(
+                event.id.to_hex(),
+                "duplicate: identical event already stored",
+            ));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -817,11 +807,10 @@ async fn handle_workflow_def(
         resp["webhook_secret"] = serde_json::Value::String(secret);
     }
 
-    Ok(IngestResult {
-        event_id: event.id.to_hex(),
-        accepted: true,
-        message: format!("response:{}", resp),
-    })
+    Ok(IngestResult::stored_with_message(
+        event.id.to_hex(),
+        format!("response:{}", resp),
+    ))
 }
 
 async fn handle_workflow_trigger(
@@ -891,11 +880,10 @@ async fn handle_workflow_trigger(
     // triggers as global events leaks workflow IDs to unrelated relay members.
     let tx = match persist_command_event(state, tenant, event, workflow.channel_id).await? {
         PersistResult::Duplicate => {
-            return Ok(IngestResult {
-                event_id: event.id.to_hex(),
-                accepted: true,
-                message: "duplicate: already processed".into(),
-            });
+            return Ok(IngestResult::already_stored(
+                event.id.to_hex(),
+                "duplicate: identical event already stored",
+            ));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -982,16 +970,15 @@ async fn handle_workflow_trigger(
     });
 
     // 6. Return response
-    Ok(IngestResult {
-        event_id: event.id.to_hex(),
-        accepted: true,
-        message: format!(
+    Ok(IngestResult::stored_with_message(
+        event.id.to_hex(),
+        format!(
             "response:{}",
             serde_json::json!({
                 "run_id": run_id.to_string(),
             })
         ),
-    })
+    ))
 }
 
 /// Enforce the approver_spec field against the requesting pubkey.
@@ -1072,11 +1059,10 @@ async fn handle_approval_grant(
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
         PersistResult::Duplicate => {
-            return Ok(IngestResult {
-                event_id: event.id.to_hex(),
-                accepted: true,
-                message: "duplicate: already processed".into(),
-            });
+            return Ok(IngestResult::already_stored(
+                event.id.to_hex(),
+                "duplicate: identical event already stored",
+            ));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -1125,17 +1111,16 @@ async fn handle_approval_grant(
     });
 
     // 7. Return response
-    Ok(IngestResult {
-        event_id: event.id.to_hex(),
-        accepted: true,
-        message: format!(
+    Ok(IngestResult::stored_with_message(
+        event.id.to_hex(),
+        format!(
             "response:{}",
             serde_json::json!({
                 "status": "granted",
                 "run_id": run_id.to_string(),
             })
         ),
-    })
+    ))
 }
 
 async fn handle_approval_deny(
@@ -1183,11 +1168,10 @@ async fn handle_approval_deny(
     // Persist the command event — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
         PersistResult::Duplicate => {
-            return Ok(IngestResult {
-                event_id: event.id.to_hex(),
-                accepted: true,
-                message: "duplicate: already processed".into(),
-            });
+            return Ok(IngestResult::already_stored(
+                event.id.to_hex(),
+                "duplicate: identical event already stored",
+            ));
         }
         PersistResult::Inserted(tx) => tx,
     };
@@ -1262,17 +1246,16 @@ async fn handle_approval_deny(
     });
 
     // 7. Return response
-    Ok(IngestResult {
-        event_id: event.id.to_hex(),
-        accepted: true,
-        message: format!(
+    Ok(IngestResult::stored_with_message(
+        event.id.to_hex(),
+        format!(
             "response:{}",
             serde_json::json!({
                 "status": "denied",
                 "run_id": run_id.to_string(),
             })
         ),
-    })
+    ))
 }
 
 /// Resume a suspended workflow run after an approval gate has been granted.

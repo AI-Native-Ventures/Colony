@@ -619,7 +619,7 @@ async fn worker_dm_open_through_real_ingest_pipeline_is_rejected() {
         ),
         Ok(accepted) => panic!(
             "expected rejection through the real pipeline, got accepted={} message={}",
-            accepted.accepted, accepted.message
+            accepted.accepted(), accepted.message
         ),
     }
 }
@@ -655,7 +655,7 @@ async fn legitimate_dm_open_through_real_ingest_pipeline_reaches_handle_dm_open(
             panic!("a legitimate DM open must succeed through the real pipeline: {error:?}")
         });
     assert!(
-        result.accepted,
+        result.accepted(),
         "DM open must be accepted, message: {}",
         result.message
     );
@@ -736,7 +736,7 @@ async fn open_dm_through_ingest(
         .await
         .unwrap_or_else(|error| panic!("opening a permitted DM must succeed: {error:?}"));
     assert!(
-        result.accepted,
+        result.accepted(),
         "opening a permitted DM must be accepted: {}",
         result.message
     );
@@ -793,7 +793,7 @@ async fn worker_dm_add_member_of_an_owner_through_real_ingest_pipeline_is_reject
         ),
         Ok(accepted) => panic!(
             "expected rejection through the real pipeline, got accepted={} message={}",
-            accepted.accepted, accepted.message
+            accepted.accepted(), accepted.message
         ),
     }
 }
@@ -829,7 +829,7 @@ async fn legitimate_dm_add_member_through_real_ingest_pipeline_reaches_its_handl
             panic!("a legitimate DM add-member must succeed through the real pipeline: {error:?}")
         });
     assert!(
-        result.accepted,
+        result.accepted(),
         "DM add-member must be accepted, message: {}",
         result.message
     );
@@ -897,7 +897,7 @@ async fn worker_gift_wrap_to_an_owner_through_real_ingest_pipeline_is_rejected()
         ),
         Ok(accepted) => panic!(
             "expected rejection through the real pipeline, got accepted={} message={}",
-            accepted.accepted, accepted.message
+            accepted.accepted(), accepted.message
         ),
     }
 }
@@ -929,7 +929,7 @@ async fn gift_wrap_from_an_untiered_sender_to_an_owner_is_still_accepted() {
     .await
     .unwrap_or_else(|error| panic!("an untiered sender's gift wrap must succeed: {error:?}"));
     assert!(
-        result.accepted,
+        result.accepted(),
         "gift wrap must be accepted: {}",
         result.message
     );

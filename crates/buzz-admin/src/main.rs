@@ -363,7 +363,7 @@ async fn publish_membership_list_with_bump(
     let (stored, was_inserted) = db
         .replace_addressable_event(tenant.community(), &event, None)
         .await?;
-    if was_inserted {
+    if was_inserted.was_inserted() {
         // Publish to Redis so live clients receive the updated roster.
         // Community-global scope (EventTopic::Global) matches the relay's own
         // membership-list publish path; the tenant fixes the community.

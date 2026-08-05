@@ -653,6 +653,52 @@ mod tests {
         );
     }
 
+    /// The same Critical against a relay that carries the `outcome`
+    /// discriminator: a revoke whose head lost the tiebreak now says so in a
+    /// field rather than only in a message prefix, and it must still exit 5.
+    #[tokio::test]
+    async fn a_superseded_grant_write_is_a_conflict_naming_the_winner() {
+        let url = events_server(
+            r#"{"event_id":"mine","accepted":false,"outcome":"superseded",
+                "winner_event_id":"theirs",
+                "message":"conflict: superseded by event theirs"}"#,
+        )
+        .await;
+        let client = client_for(&url);
+        let event = signed_grant("grant-copy", "copy_change", "blog post titles", None, false);
+
+        let error = submit_grant_write(&client, event)
+            .await
+            .expect_err("a write the relay discarded must not report success");
+
+        match error {
+            CliError::Conflict(reason) => assert!(
+                reason.contains("theirs"),
+                "the conflict must name the winning event; got: {reason}"
+            ),
+            other => panic!("a superseded write must exit 5 (conflict), got: {other:?}"),
+        }
+    }
+
+    /// A retried write that the relay had already committed is a success, not
+    /// a conflict. `post_events` re-posts the same serialized bytes when a
+    /// response is lost, and an agent told this was a conflict would re-file a
+    /// grant it had already filed.
+    #[tokio::test]
+    async fn a_retried_grant_write_that_already_landed_succeeds() {
+        let url = events_server(
+            r#"{"event_id":"mine","accepted":true,"outcome":"already_stored",
+                "message":"duplicate: identical event already stored"}"#,
+        )
+        .await;
+        let client = client_for(&url);
+        let event = signed_grant("grant-copy", "copy_change", "blog post titles", None, true);
+
+        submit_grant_write(&client, event)
+            .await
+            .expect("a write that already landed is a success, not a conflict");
+    }
+
     /// The other half of the same test: a write the relay actually stored
     /// still succeeds, so the fix above did not turn every write into a
     /// conflict.

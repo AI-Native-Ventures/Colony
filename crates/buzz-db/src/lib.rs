@@ -65,7 +65,7 @@ pub use error::{DbError, Result};
 pub use event::{
     BlockActionInsert, BlockCatalogActionApply, CompanyActionApply, CompanyActionClaim, EventQuery,
     LedgerActionApply, LedgerActionClaim, PartyActionApply, PartyActionClaim,
-    ReactionEventInsertOutcome,
+    ReactionEventInsertOutcome, ReplaceOutcome,
 };
 
 use chrono::{DateTime, Utc};
@@ -106,16 +106,18 @@ fn event_replacement_lock_key(
 /// Apply one NIP-33 replacement inside a caller-owned transaction.
 ///
 /// This is the single ordering implementation used by both the ordinary
-/// replacement API and atomic relay-brokered catalog actions. A `false`
-/// insertion result means the proposed event was stale or its event ID was
-/// already stored; the caller must roll back the surrounding transaction.
+/// replacement API and atomic relay-brokered catalog actions. Any outcome
+/// other than [`ReplaceOutcome::Inserted`] means nothing was written; the
+/// caller must roll back the surrounding transaction. The outcome distinguishes
+/// "this exact event is already stored" from "a different head dominates it",
+/// which the relay reports differently -- see [`ReplaceOutcome`].
 async fn replace_parameterized_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
     event: &nostr::Event,
     d_tag: &str,
     channel_id: Option<Uuid>,
-) -> Result<(StoredEvent, bool)> {
+) -> Result<(StoredEvent, ReplaceOutcome)> {
     let kind_i32 = buzz_core::kind::event_kind_i32(event);
     let pubkey_bytes = event.pubkey.to_bytes();
     let created_at_secs = event.created_at.as_secs() as i64;
@@ -195,18 +197,34 @@ async fn replace_parameterized_event_tx(
     };
 
     let incoming_id = event.id.as_bytes().as_slice();
-    let dominated = existing
+    // Every head that beats this write under last-write-wins. Cloning is free
+    // here: there are at most two candidates, the live row and the watermark.
+    let dominating: Vec<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = existing
         .iter()
         .chain(watermark.iter())
-        .any(|(accepted_ts, accepted_id)| {
+        .filter(|(accepted_ts, accepted_id)| {
             created_at < *accepted_ts
                 || (created_at == *accepted_ts && incoming_id >= accepted_id.as_slice())
-        });
+        })
+        .cloned()
+        .collect();
     let received_at = chrono::Utc::now();
-    if dominated {
+    if let Some((_, winner_id)) = lww_winner(&dominating) {
+        // A winner that IS the incoming event means this exact write already
+        // landed -- an idempotent repeat, which is what an HTTP retry of the
+        // same serialized bytes looks like. Any other winner means the
+        // submitted event was discarded and a client re-reading the address
+        // will not find it.
+        let outcome = if winner_id.as_slice() == incoming_id {
+            ReplaceOutcome::AlreadyStored
+        } else {
+            ReplaceOutcome::Superseded {
+                winner_event_id: winner_id.clone(),
+            }
+        };
         return Ok((
             StoredEvent::with_received_at(event.clone(), received_at, channel_id, false),
-            false,
+            outcome,
         ));
     }
 
@@ -266,9 +284,13 @@ async fn replace_parameterized_event_tx(
 
     let was_inserted = insert_result.rows_affected() > 0;
     if !was_inserted {
+        // ON CONFLICT fired on the events primary key, so a row with this exact
+        // event id is already present even though the head lookup above did not
+        // return it (a soft-deleted or differently-coordinated row). The
+        // submitted event is stored either way.
         return Ok((
             StoredEvent::with_received_at(event.clone(), received_at, channel_id, false),
-            false,
+            ReplaceOutcome::AlreadyStored,
         ));
     }
 
@@ -292,8 +314,25 @@ async fn replace_parameterized_event_tx(
 
     Ok((
         StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
-        true,
+        ReplaceOutcome::Inserted,
     ))
+}
+
+/// The last-write-wins head among candidate `(created_at, event_id)` rows.
+///
+/// Newest `created_at` wins; a same-second tie goes to the lowest event id.
+/// That is exactly the ordering the dominance test applies, so the head named
+/// here is the one a client re-reading the address will actually see.
+fn lww_winner(
+    candidates: &[(chrono::DateTime<chrono::Utc>, Vec<u8>)],
+) -> Option<&(chrono::DateTime<chrono::Utc>, Vec<u8>)> {
+    candidates.iter().reduce(|best, next| {
+        if next.0 > best.0 || (next.0 == best.0 && next.1 < best.1) {
+            next
+        } else {
+            best
+        }
+    })
 }
 
 /// Extract p-tag mentions from an event and insert into the `event_mentions` table.
@@ -2541,7 +2580,7 @@ impl Db {
         let (head, head_inserted) =
             replace_parameterized_event_tx(&mut tx, community, head_event, head_d_tag, None)
                 .await?;
-        if !head_inserted {
+        if !head_inserted.was_inserted() {
             tx.rollback().await?;
             return Err(DbError::InvalidData(
                 "catalog head lost NIP-33 replacement ordering".to_owned(),
@@ -2805,7 +2844,7 @@ impl Db {
         let (head, head_inserted) =
             replace_parameterized_event_tx(&mut tx, community, head_event, head_d_tag, None)
                 .await?;
-        if !head_inserted {
+        if !head_inserted.was_inserted() {
             tx.rollback().await?;
             return Err(DbError::InvalidData(
                 "company head lost NIP-33 replacement ordering".to_owned(),
@@ -3066,7 +3105,7 @@ impl Db {
         let (head, head_inserted) =
             replace_parameterized_event_tx(&mut tx, community, head_event, head_d_tag, None)
                 .await?;
-        if !head_inserted {
+        if !head_inserted.was_inserted() {
             tx.rollback().await?;
             return Err(DbError::InvalidData(
                 "ledger book head lost NIP-33 replacement ordering".to_owned(),
@@ -3341,7 +3380,7 @@ impl Db {
         let (head, head_inserted) =
             replace_parameterized_event_tx(&mut tx, community, head_event, head_d_tag, None)
                 .await?;
-        if !head_inserted {
+        if !head_inserted.was_inserted() {
             tx.rollback().await?;
             return Err(DbError::InvalidData(
                 "party head lost NIP-33 replacement ordering".to_owned(),
@@ -3353,7 +3392,7 @@ impl Db {
             let (stored, inserted) =
                 replace_parameterized_event_tx(&mut tx, community, alias_event, alias_d_tag, None)
                     .await?;
-            if !inserted {
+            if !inserted.was_inserted() {
                 tx.rollback().await?;
                 return Err(DbError::InvalidData(
                     "party alias lost NIP-33 replacement ordering".to_owned(),
@@ -3375,7 +3414,7 @@ impl Db {
                 None,
             )
             .await?;
-            if !inserted {
+            if !inserted.was_inserted() {
                 tx.rollback().await?;
                 return Err(DbError::InvalidData(
                     "party relationship head lost NIP-33 replacement ordering".to_owned(),
@@ -6156,14 +6195,16 @@ impl Db {
     ///
     /// Keeps only the event with the highest `created_at` per (kind, pubkey, channel_id).
     /// Same-second ties are broken by lowest event `id` (NIP-16 deterministic ordering).
-    /// Returns `(event, false)` for stale writes and duplicate IDs — callers should
-    /// skip fan-out/dispatch when `was_inserted` is false.
+    /// Callers should skip fan-out/dispatch unless the returned
+    /// [`ReplaceOutcome`] is `Inserted`; the other two variants say whether the
+    /// submitted event is nonetheless already stored, which the relay reports
+    /// differently to the client.
     pub async fn replace_addressable_event(
         &self,
         community_id: CommunityId,
         event: &nostr::Event,
         channel_id: Option<Uuid>,
-    ) -> Result<(StoredEvent, bool)> {
+    ) -> Result<(StoredEvent, ReplaceOutcome)> {
         let kind_i32 = buzz_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
         let created_at_secs = event.created_at.as_secs() as i64;
@@ -6213,9 +6254,18 @@ impl Db {
             if dominated {
                 tx.rollback().await?;
                 let received_at = chrono::Utc::now();
+                // The head that beat us being this very event means the write
+                // already landed; any other head means it was discarded.
+                let outcome = if existing_id.as_slice() == incoming_id {
+                    ReplaceOutcome::AlreadyStored
+                } else {
+                    ReplaceOutcome::Superseded {
+                        winner_event_id: existing_id,
+                    }
+                };
                 return Ok((
                     StoredEvent::with_received_at(event.clone(), received_at, channel_id, false),
-                    false,
+                    outcome,
                 ));
             }
         }
@@ -6266,7 +6316,7 @@ impl Db {
             tx.rollback().await?;
             return Ok((
                 StoredEvent::with_received_at(event.clone(), received_at, channel_id, false),
-                false,
+                ReplaceOutcome::AlreadyStored,
             ));
         }
 
@@ -6280,7 +6330,7 @@ impl Db {
 
         Ok((
             StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
-            true,
+            ReplaceOutcome::Inserted,
         ))
     }
 
@@ -6486,13 +6536,13 @@ impl Db {
         event: &nostr::Event,
         d_tag: &str,
         channel_id: Option<Uuid>,
-    ) -> Result<(StoredEvent, bool)> {
+    ) -> Result<(StoredEvent, ReplaceOutcome)> {
         let mut tx = self.pool.begin().await?;
-        let (stored, was_inserted) =
+        let (stored, outcome) =
             replace_parameterized_event_tx(&mut tx, community_id, event, d_tag, channel_id).await?;
-        if !was_inserted {
+        if !outcome.was_inserted() {
             tx.rollback().await?;
-            return Ok((stored, false));
+            return Ok((stored, outcome));
         }
         tx.commit().await?;
 
@@ -6501,7 +6551,7 @@ impl Db {
             tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
         }
 
-        Ok((stored, true))
+        Ok((stored, ReplaceOutcome::Inserted))
     }
 }
 
@@ -7448,12 +7498,12 @@ mod tests {
         let head_key = Uuid::new_v4();
         let head_handle = format!("catalog-head-failure-{}", Uuid::new_v4().simple());
         let dominating = catalog_batch(&relay_keys, &head_handle, base + 10, "dominating");
-        assert!(
-            db.replace_parameterized_event(community, &dominating.head, &dominating.d_tag, None,)
-                .await
-                .expect("store dominating head")
-                .1
-        );
+        assert!(db
+            .replace_parameterized_event(community, &dominating.head, &dominating.d_tag, None,)
+            .await
+            .expect("store dominating head")
+            .1
+            .was_inserted());
         let head_failure = catalog_batch(&relay_keys, &head_handle, base + 9, "stale");
         assert!(apply_catalog_batch(&db, community, &head_failure, head_key)
             .await
@@ -7525,18 +7575,18 @@ mod tests {
             .sign_with_keys(&keys)
             .expect("sign new");
 
-        assert!(
-            db.replace_parameterized_event(community, &old, &d_tag, None)
-                .await
-                .expect("insert old")
-                .1
-        );
-        assert!(
-            db.replace_parameterized_event(community, &new, &d_tag, None)
-                .await
-                .expect("replace with new")
-                .1
-        );
+        assert!(db
+            .replace_parameterized_event(community, &old, &d_tag, None)
+            .await
+            .expect("insert old")
+            .1
+            .was_inserted());
+        assert!(db
+            .replace_parameterized_event(community, &new, &d_tag, None)
+            .await
+            .expect("replace with new")
+            .1
+            .was_inserted());
 
         let rows: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM events WHERE community_id=$1 AND kind=30078 AND pubkey=$2 AND d_tag=$3",
@@ -7559,12 +7609,12 @@ mod tests {
         .await
         .expect("simulate NIP-09 coordinate deletion");
 
-        assert!(
-            !db.replace_parameterized_event(community, &old, &d_tag, None)
-                .await
-                .expect("replay old")
-                .1
-        );
+        assert!(!db
+            .replace_parameterized_event(community, &old, &d_tag, None)
+            .await
+            .expect("replay old")
+            .1
+            .was_inserted());
         let live: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM events WHERE community_id=$1 AND kind=30078 AND pubkey=$2 AND d_tag=$3 AND deleted_at IS NULL",
         )
@@ -7600,12 +7650,12 @@ mod tests {
             .custom_created_at(Timestamp::from(base + offset))
             .sign_with_keys(&keys)
             .expect("sign mesh status");
-            assert!(
-                db.replace_parameterized_event(community, &event, d_tag, None)
-                    .await
-                    .expect("replace mesh status")
-                    .1
-            );
+            assert!(db
+                .replace_parameterized_event(community, &event, d_tag, None)
+                .await
+                .expect("replace mesh status")
+                .1
+                .was_inserted());
         }
 
         let (rows, live): (i64, i64) = sqlx::query_as(
@@ -7701,18 +7751,18 @@ mod tests {
             .sign_with_keys(&keys)
             .expect("sign new event");
 
-            assert!(
-                db.replace_parameterized_event(community, &old, &d_tag, None)
-                    .await
-                    .expect("insert old event")
-                    .1
-            );
-            assert!(
-                db.replace_parameterized_event(community, &new, &d_tag, None)
-                    .await
-                    .expect("replace with new event")
-                    .1
-            );
+            assert!(db
+                .replace_parameterized_event(community, &old, &d_tag, None)
+                .await
+                .expect("insert old event")
+                .1
+                .was_inserted());
+            assert!(db
+                .replace_parameterized_event(community, &new, &d_tag, None)
+                .await
+                .expect("replace with new event")
+                .1
+                .was_inserted());
 
             let (rows, live): (i64, i64) = sqlx::query_as(
                 "SELECT count(*), count(*) FILTER (WHERE deleted_at IS NULL) FROM events \
@@ -7761,12 +7811,12 @@ mod tests {
         .custom_created_at(Timestamp::from(base))
         .sign_with_keys(&keys)
         .expect("sign conforming event");
-        assert!(
-            db.replace_parameterized_event(community, &conforming, &conforming_d, None)
-                .await
-                .expect("insert conforming event")
-                .1
-        );
+        assert!(db
+            .replace_parameterized_event(community, &conforming, &conforming_d, None)
+            .await
+            .expect("insert conforming event")
+            .1
+            .was_inserted());
         sqlx::query(
             "INSERT INTO event_mentions \
              (community_id, pubkey_hex, event_id, event_created_at, event_kind) \
@@ -7818,12 +7868,12 @@ mod tests {
         .custom_created_at(Timestamp::from(base + 1))
         .sign_with_keys(&keys)
         .expect("sign nonconforming event");
-        assert!(
-            db.replace_parameterized_event(community, &nonconforming, &nonconforming_d, None,)
-                .await
-                .expect("insert nonconforming event")
-                .1
-        );
+        assert!(db
+            .replace_parameterized_event(community, &nonconforming, &nonconforming_d, None,)
+            .await
+            .expect("insert nonconforming event")
+            .1
+            .was_inserted());
         let rejected_nonconforming = sqlx::query(
             "DELETE FROM events WHERE community_id=$1 AND id=$2 AND created_at=to_timestamp($3)",
         )
@@ -7843,12 +7893,12 @@ mod tests {
             .custom_created_at(Timestamp::from(base + 2))
             .sign_with_keys(&keys)
             .expect("sign unrelated event");
-        assert!(
-            db.replace_parameterized_event(community, &unrelated, &unrelated_d, None)
-                .await
-                .expect("insert unrelated event")
-                .1
-        );
+        assert!(db
+            .replace_parameterized_event(community, &unrelated, &unrelated_d, None)
+            .await
+            .expect("insert unrelated event")
+            .1
+            .was_inserted());
         let unrelated_delete = sqlx::query(
             "DELETE FROM events WHERE community_id=$1 AND id=$2 AND created_at=to_timestamp($3)",
         )
@@ -8065,7 +8115,7 @@ mod tests {
             .expect("Rust hard delete deadlocked with mention insert")
             .expect("replacement task panicked")
             .expect("replace B with C");
-        assert!(replaced.1, "C must replace B");
+        assert!(replaced.1.was_inserted(), "C must replace B");
         let b_mentions: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM event_mentions WHERE community_id=$1 AND event_id=$2",
         )

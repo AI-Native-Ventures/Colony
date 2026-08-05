@@ -166,14 +166,184 @@ pub fn reject_with_transport(transport: &'static str, reason: &'static str) {
     .increment(1);
 }
 
+/// What the relay did with the event a client submitted.
+///
+/// This is the machine-readable discriminator clients branch on, so nothing has
+/// to parse a human-readable message prefix to tell an idempotent repeat from a
+/// discarded write. The two used to be indistinguishable, which is how `buzz
+/// grants revoke` reported success for a revocation the relay had thrown away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteOutcome {
+    /// The submitted event is durably stored as a result of this call.
+    Stored,
+    /// The submitted event was already stored, so this call changed nothing.
+    ///
+    /// An idempotent repeat: the client's write DID land, just on an earlier
+    /// call. This is what a retry of the same serialized bytes looks like after
+    /// a dropped response, so it counts as accepted.
+    AlreadyStored,
+    /// A different event won, so the submitted event was discarded and is not
+    /// stored. Never accepted.
+    Superseded {
+        /// Hex id of the event that won.
+        winner_event_id: String,
+    },
+    /// The relay refused the write on a durable rule. Nothing was stored, and
+    /// no other event is named as the reason.
+    Refused,
+}
+
+impl WriteOutcome {
+    /// Stable wire token for this outcome.
+    ///
+    /// Both transports render the discriminator through this one function so
+    /// the HTTP `outcome` field and the WebSocket message can never disagree.
+    pub fn as_wire_token(&self) -> &'static str {
+        match self {
+            Self::Stored => "stored",
+            Self::AlreadyStored => "already_stored",
+            Self::Superseded { .. } => "superseded",
+            Self::Refused => "refused",
+        }
+    }
+
+    /// Whether the submitted event is durably stored at the end of the call.
+    ///
+    /// This is the whole meaning of `accepted` on the wire: true when the
+    /// client's write is present, false when it was discarded.
+    pub fn is_accepted(&self) -> bool {
+        matches!(self, Self::Stored | Self::AlreadyStored)
+    }
+
+    /// Hex id of the event that won, when a different event did.
+    pub fn winner_event_id(&self) -> Option<&str> {
+        match self {
+            Self::Superseded { winner_event_id } => Some(winner_event_id),
+            _ => None,
+        }
+    }
+}
+
 /// Successful ingestion result.
+///
+/// `accepted` is not a field: it is derived from [`Self::outcome`] by
+/// [`Self::accepted`], so no construction site can report a discarded write as
+/// accepted. `event_id` is likewise always the id the client SUBMITTED, so a
+/// client correlating a NIP-01 `OK` frame by the id it sent always matches; a
+/// winning event's id belongs in `outcome` and in the message, never here.
 pub struct IngestResult {
-    /// Hex-encoded event ID.
+    /// Hex-encoded id of the event the client submitted.
     pub event_id: String,
-    /// Whether the event was accepted.
-    pub accepted: bool,
-    /// Optional message (e.g. "duplicate:" for dedup).
+    /// What the relay did with the submitted event.
+    pub outcome: WriteOutcome,
+    /// Human-readable detail. Machine logic belongs on `outcome`.
+    ///
+    /// By convention: empty or a `response:`/JSON payload when stored,
+    /// `duplicate: …` for an idempotent repeat, and `conflict: …` when the
+    /// write was discarded.
     pub message: String,
+}
+
+impl IngestResult {
+    /// Whether the submitted event is durably stored at the end of the call.
+    pub fn accepted(&self) -> bool {
+        self.outcome.is_accepted()
+    }
+
+    /// The submitted event was newly stored, with no message.
+    pub fn stored(event_id: impl Into<String>) -> Self {
+        Self {
+            event_id: event_id.into(),
+            outcome: WriteOutcome::Stored,
+            message: String::new(),
+        }
+    }
+
+    /// The submitted event was newly stored, with a payload for the caller
+    /// (a command `response:{…}` body, or a broker's receipt JSON).
+    pub fn stored_with_message(event_id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            event_id: event_id.into(),
+            outcome: WriteOutcome::Stored,
+            message: message.into(),
+        }
+    }
+
+    /// The identical event was already stored -- an idempotent repeat.
+    pub fn already_stored(event_id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            event_id: event_id.into(),
+            outcome: WriteOutcome::AlreadyStored,
+            message: message.into(),
+        }
+    }
+
+    /// A different event won the address, so the submitted event was discarded.
+    ///
+    /// `submitted_event_id` is the client's own id and stays in the id slot;
+    /// `winner_event_id` names the event that beat it.
+    pub fn superseded(
+        submitted_event_id: impl Into<String>,
+        winner_event_id: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_id: submitted_event_id.into(),
+            outcome: WriteOutcome::Superseded {
+                winner_event_id: winner_event_id.into(),
+            },
+            message: message.into(),
+        }
+    }
+
+    /// The relay refused the write, and no other event is named as the reason.
+    pub fn refused(event_id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            event_id: event_id.into(),
+            outcome: WriteOutcome::Refused,
+            message: message.into(),
+        }
+    }
+}
+
+/// Classify a broker's duplicate outcome against the event the client sent.
+///
+/// Brokers dedupe on an idempotency claim, so a duplicate is an idempotent
+/// repeat exactly when the claim's original event IS this event, which is what
+/// a retried HTTP request produces. Any other original means a different signed
+/// action owns the claim and this submission was discarded.
+fn broker_duplicate_outcome(submitted_event_id: &str, original_event_id: &str) -> WriteOutcome {
+    if submitted_event_id == original_event_id {
+        WriteOutcome::AlreadyStored
+    } else {
+        WriteOutcome::Superseded {
+            winner_event_id: original_event_id.to_owned(),
+        }
+    }
+}
+
+/// Build the response for a broker's duplicate outcome.
+///
+/// The client's own id stays in the id slot; the claim's original event is
+/// named in the outcome and in the message. `noun` is what the idempotency
+/// claim is over ("action", "ask"), so each broker's message still reads the
+/// way its own report did.
+fn broker_duplicate_result(
+    submitted_event_id: String,
+    original_event_id: String,
+    noun: &str,
+) -> IngestResult {
+    let outcome = broker_duplicate_outcome(&submitted_event_id, &original_event_id);
+    let message = if outcome.is_accepted() {
+        format!("duplicate: identical {noun} already applied")
+    } else {
+        format!("conflict: superseded by original {noun} {original_event_id}")
+    };
+    IngestResult {
+        event_id: submitted_event_id,
+        outcome,
+        message,
+    }
 }
 
 /// Ingestion error — the caller maps this to their transport's error format.
@@ -1523,7 +1693,7 @@ pub async fn ingest_event(
     // author_type is a 2-value label so it merely doubles the kind series).
     // Emitted here rather than per-transport so HTTP bridge ingests count too.
     if let Ok(r) = &result {
-        if r.accepted {
+        if r.accepted() {
             let author_type = author_type_label(state, tenant, author_pubkey_bytes).await;
             metrics::counter!(
                 "buzz_events_stored_total",
@@ -1688,11 +1858,7 @@ async fn ingest_event_inner(
         // private to operator tooling rather than ordinary event reads, this is
         // the matching modeled success action at the ingest isolation seam.
         emit_product_feedback_success(tracer, tenant, &event, &auth);
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     // NIP-56 reports are persisted only to the mod queue. They are not stored in
@@ -1705,11 +1871,7 @@ async fn ingest_event_inner(
         super::report::handle_report_event(tenant, &event, state)
             .await
             .map_err(IngestError::Rejected)?;
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     // Community moderation commands (9040–9044) are direct, community-global
@@ -1723,11 +1885,7 @@ async fn ingest_event_inner(
         super::moderation_commands::handle_moderation_command(tenant, state, &event)
             .await
             .map_err(IngestError::Rejected)?;
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     // Community ban / timeout write-block (COMMUNITY_MODERATION_PLAN.md §0
@@ -1822,28 +1980,21 @@ async fn ingest_event_inner(
             .await
             .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
         {
-            crate::company_broker::CompanyBrokerOutcome::Applied => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: true,
-                message: String::new(),
-            }),
+            crate::company_broker::CompanyBrokerOutcome::Applied => {
+                Ok(IngestResult::stored(event_id_hex))
+            }
             crate::company_broker::CompanyBrokerOutcome::Duplicate {
                 original_action_event_id,
-            } => {
-                let original_event_id_hex = hex::encode(original_action_event_id);
-                Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: format!("duplicate: original action {original_event_id_hex}"),
-                })
-            }
+            } => Ok(broker_duplicate_result(
+                event_id_hex,
+                hex::encode(original_action_event_id),
+                "action",
+            )),
             // The owner's request lost, but a durable receipt says so. Report
             // it as not accepted rather than as a protocol error.
-            crate::company_broker::CompanyBrokerOutcome::Refused { message } => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: false,
-                message: format!("conflict: {message}"),
-            }),
+            crate::company_broker::CompanyBrokerOutcome::Refused { message } => Ok(
+                IngestResult::refused(event_id_hex, format!("conflict: {message}")),
+            ),
         };
     }
 
@@ -1861,28 +2012,21 @@ async fn ingest_event_inner(
             .await
             .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
         {
-            crate::party_broker::PartyBrokerOutcome::Applied => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: true,
-                message: String::new(),
-            }),
+            crate::party_broker::PartyBrokerOutcome::Applied => {
+                Ok(IngestResult::stored(event_id_hex))
+            }
             crate::party_broker::PartyBrokerOutcome::Duplicate {
                 original_action_event_id,
-            } => {
-                let original_event_id_hex = hex::encode(original_action_event_id);
-                Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: format!("duplicate: original action {original_event_id_hex}"),
-                })
-            }
+            } => Ok(broker_duplicate_result(
+                event_id_hex,
+                hex::encode(original_action_event_id),
+                "action",
+            )),
             // The owner's request lost, but a durable receipt says so. Report
             // it as not accepted rather than as a protocol error.
-            crate::party_broker::PartyBrokerOutcome::Refused { message } => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: false,
-                message: format!("conflict: {message}"),
-            }),
+            crate::party_broker::PartyBrokerOutcome::Refused { message } => Ok(
+                IngestResult::refused(event_id_hex, format!("conflict: {message}")),
+            ),
         };
     }
 
@@ -1899,26 +2043,19 @@ async fn ingest_event_inner(
             .await
             .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
         {
-            crate::ledger_broker::LedgerBrokerOutcome::Applied => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: true,
-                message: String::new(),
-            }),
+            crate::ledger_broker::LedgerBrokerOutcome::Applied => {
+                Ok(IngestResult::stored(event_id_hex))
+            }
             crate::ledger_broker::LedgerBrokerOutcome::Duplicate {
                 original_action_event_id,
-            } => {
-                let original_event_id_hex = hex::encode(original_action_event_id);
-                Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: format!("duplicate: original action {original_event_id_hex}"),
-                })
-            }
-            crate::ledger_broker::LedgerBrokerOutcome::Refused { message } => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: false,
-                message: format!("conflict: {message}"),
-            }),
+            } => Ok(broker_duplicate_result(
+                event_id_hex,
+                hex::encode(original_action_event_id),
+                "action",
+            )),
+            crate::ledger_broker::LedgerBrokerOutcome::Refused { message } => Ok(
+                IngestResult::refused(event_id_hex, format!("conflict: {message}")),
+            ),
         };
     }
 
@@ -1959,29 +2096,31 @@ async fn ingest_event_inner(
             crate::discovery_worker_broker::DiscoveryWorkerBrokerOutcome::Applied {
                 receipt_event_id,
                 outcome,
-            } => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: true,
-                message: serde_json::json!({
+            } => Ok(IngestResult::stored_with_message(
+                event_id_hex,
+                serde_json::json!({
                     "receipt_event_id": hex::encode(receipt_event_id),
                     "outcome": outcome,
                 })
                 .to_string(),
-            }),
+            )),
             crate::discovery_worker_broker::DiscoveryWorkerBrokerOutcome::Duplicate {
                 original_action_event_id,
                 receipt_event_id,
             } => {
                 let original_event_id_hex = hex::encode(original_action_event_id);
+                let outcome = broker_duplicate_outcome(&event_id_hex, &original_event_id_hex);
+                let message = serde_json::json!({
+                    "duplicate": true,
+                    "outcome": outcome.as_wire_token(),
+                    "original_action_event_id": original_event_id_hex,
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                })
+                .to_string();
                 Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: serde_json::json!({
-                        "duplicate": true,
-                        "original_action_event_id": original_event_id_hex,
-                        "receipt_event_id": hex::encode(receipt_event_id),
-                    })
-                    .to_string(),
+                    event_id: event_id_hex,
+                    outcome,
+                    message,
                 })
             }
         };
@@ -2023,29 +2162,31 @@ async fn ingest_event_inner(
             crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerOutcome::Applied {
                 receipt_event_id,
                 result,
-            } => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: true,
-                message: serde_json::json!({
+            } => Ok(IngestResult::stored_with_message(
+                event_id_hex,
+                serde_json::json!({
                     "receipt_event_id": hex::encode(receipt_event_id),
                     "result": result,
                 })
                 .to_string(),
-            }),
+            )),
             crate::discovery_workspace_broker::DiscoveryWorkspaceBrokerOutcome::Duplicate {
                 original_action_event_id,
                 receipt_event_id,
             } => {
                 let original_event_id_hex = hex::encode(original_action_event_id);
+                let outcome = broker_duplicate_outcome(&event_id_hex, &original_event_id_hex);
+                let message = serde_json::json!({
+                    "duplicate": true,
+                    "outcome": outcome.as_wire_token(),
+                    "original_action_event_id": original_event_id_hex,
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                })
+                .to_string();
                 Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: serde_json::json!({
-                        "duplicate": true,
-                        "original_action_event_id": original_event_id_hex,
-                        "receipt_event_id": hex::encode(receipt_event_id),
-                    })
-                    .to_string(),
+                    event_id: event_id_hex,
+                    outcome,
+                    message,
                 })
             }
         };
@@ -2083,31 +2224,33 @@ async fn ingest_event_inner(
             crate::discovery_broker::DiscoveryBrokerOutcome::Applied {
                 receipt_event_id,
                 run,
-            } => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: true,
-                message: serde_json::json!({
+            } => Ok(IngestResult::stored_with_message(
+                event_id_hex,
+                serde_json::json!({
                     "receipt_event_id": hex::encode(receipt_event_id),
                     "run": run,
                 })
                 .to_string(),
-            }),
+            )),
             crate::discovery_broker::DiscoveryBrokerOutcome::Duplicate {
                 original_action_event_id,
                 receipt_event_id,
                 run,
             } => {
                 let original_event_id_hex = hex::encode(original_action_event_id);
+                let outcome = broker_duplicate_outcome(&event_id_hex, &original_event_id_hex);
+                let message = serde_json::json!({
+                    "duplicate": true,
+                    "outcome": outcome.as_wire_token(),
+                    "original_action_event_id": original_event_id_hex,
+                    "receipt_event_id": hex::encode(receipt_event_id),
+                    "run": run,
+                })
+                .to_string();
                 Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: serde_json::json!({
-                        "duplicate": true,
-                        "original_action_event_id": original_event_id_hex,
-                        "receipt_event_id": hex::encode(receipt_event_id),
-                        "run": run,
-                    })
-                    .to_string(),
+                    event_id: event_id_hex,
+                    outcome,
+                    message,
                 })
             }
         };
@@ -2127,21 +2270,16 @@ async fn ingest_event_inner(
             .await
             .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?
         {
-            crate::block_broker::CatalogBrokerOutcome::Applied => Ok(IngestResult {
-                event_id: event_id_hex,
-                accepted: true,
-                message: String::new(),
-            }),
+            crate::block_broker::CatalogBrokerOutcome::Applied => {
+                Ok(IngestResult::stored(event_id_hex))
+            }
             crate::block_broker::CatalogBrokerOutcome::Duplicate {
                 original_action_event_id,
-            } => {
-                let original_event_id_hex = hex::encode(original_action_event_id);
-                Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: format!("duplicate: original action {original_event_id_hex}"),
-                })
-            }
+            } => Ok(broker_duplicate_result(
+                event_id_hex,
+                hex::encode(original_action_event_id),
+                "action",
+            )),
         };
     }
 
@@ -2320,11 +2458,7 @@ async fn ingest_event_inner(
         crate::handlers::relay_admin::handle_relay_admin_event(tenant, state, &event)
             .await
             .map_err(map_relay_admin_error)?;
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     // Handled directly — removes the sender from relay_members. NOT stored.
@@ -2406,11 +2540,10 @@ async fn ingest_event_inner(
 
         info!(pubkey = %sender_hex, "relay member left via NIP-43 leave request");
 
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: "info: you have left this relay".into(),
-        });
+        return Ok(IngestResult::stored_with_message(
+            event_id_hex,
+            "info: you have left this relay",
+        ));
     }
 
     if crate::handlers::side_effects::is_admin_kind(kind_u32) {
@@ -2691,11 +2824,13 @@ async fn ingest_event_inner(
                 .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
 
             if !was_created {
-                return Ok(IngestResult {
-                    event_id: event_id_hex,
-                    accepted: false,
-                    message: "duplicate: channel already exists".into(),
-                });
+                // Not a duplicate event: a different channel already owns this
+                // client-chosen UUID, and no event id can be named as the
+                // winner, so this is a plain refusal.
+                return Ok(IngestResult::refused(
+                    event_id_hex,
+                    "conflict: channel already exists",
+                ));
             }
             pre_created_channel = Some(client_uuid);
             metrics::counter!(
@@ -2770,11 +2905,7 @@ async fn ingest_event_inner(
             },
             state_for_request(tenant, auth.pubkey()),
         );
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     let imeta_tags: Vec<Vec<String>> = event
@@ -2888,11 +3019,20 @@ async fn ingest_event_inner(
                     "invalid: reaction target event not found".into(),
                 ));
             }
-            buzz_db::ReactionEventInsertOutcome::Duplicate => {
-                return Ok(IngestResult {
-                    event_id: event_id_hex,
-                    accepted: false,
-                    message: "duplicate: reaction already exists".into(),
+            buzz_db::ReactionEventInsertOutcome::Duplicate {
+                active_reaction_event_id,
+            } => {
+                // Re-sending the very kind:7 event that already holds the slot
+                // is an idempotent repeat, which is what a retried request
+                // looks like. A different event holding it means this one lost.
+                return Ok(match active_reaction_event_id {
+                    Some(holder) => {
+                        broker_duplicate_result(event_id_hex, hex::encode(holder), "reaction")
+                    }
+                    None => IngestResult::refused(
+                        event_id_hex,
+                        "conflict: an active reaction already exists for this emoji",
+                    ),
                 });
             }
             buzz_db::ReactionEventInsertOutcome::Inserted {
@@ -2933,11 +3073,7 @@ async fn ingest_event_inner(
         .await;
 
         info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     if let Some(crate::blocks::ValidatedBlockEvent::Action(action)) = validated_block_event.as_ref()
@@ -2966,11 +3102,11 @@ async fn ingest_event_inner(
                     },
                     state_for_request(tenant, auth.pubkey()),
                 );
-                return Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: format!("duplicate: original action {original_event_id_hex}"),
-                });
+                return Ok(broker_duplicate_result(
+                    event_id_hex,
+                    original_event_id_hex,
+                    "action",
+                ));
             }
         };
 
@@ -2995,11 +3131,7 @@ async fn ingest_event_inner(
         .await;
 
         info!(event_id = %event_id_hex, kind = kind_u32, "Block action ingested");
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: String::new(),
-        });
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     // Colony interrupt Ask, resolution, and withdrawal (44300-44302) are,
@@ -3030,24 +3162,22 @@ async fn ingest_event_inner(
             crate::ask_broker::AskBrokerOutcome::Duplicate {
                 original_ask_event_id,
             } => {
-                let original_event_id_hex = hex::encode(original_ask_event_id);
-                return Ok(IngestResult {
-                    event_id: original_event_id_hex.clone(),
-                    accepted: false,
-                    message: format!("duplicate: original ask {original_event_id_hex}"),
-                });
+                return Ok(broker_duplicate_result(
+                    event_id_hex,
+                    hex::encode(original_ask_event_id),
+                    "ask",
+                ));
             }
             crate::ask_broker::AskBrokerOutcome::Refused { message } => {
-                return Ok(IngestResult {
-                    event_id: event_id_hex,
-                    accepted: false,
-                    message: format!("conflict: {message}"),
-                });
+                return Ok(IngestResult::refused(
+                    event_id_hex,
+                    format!("conflict: {message}"),
+                ));
             }
         }
     }
 
-    let (stored_event, was_inserted) = if buzz_core::kind::is_replaceable(kind_u32) {
+    let (stored_event, replace_outcome) = if buzz_core::kind::is_replaceable(kind_u32) {
         // NIP-16 replaceable event — atomic replace with stale-write protection.
         // channel_id is None for global kinds (0, 1, 3) due to step 5b above.
         state
@@ -3082,7 +3212,17 @@ async fn ingest_event_inner(
             )
             .await
         {
-            Ok(result) => result,
+            // A plain insert can only fail to insert by conflicting on the
+            // events primary key, so "not inserted" here always means this
+            // exact event is already stored, never that something else beat it.
+            Ok((stored, inserted)) => (
+                stored,
+                if inserted {
+                    buzz_db::ReplaceOutcome::Inserted
+                } else {
+                    buzz_db::ReplaceOutcome::AlreadyStored
+                },
+            ),
             Err(e) => {
                 // Compensate: if we pre-created a channel for kind:9007,
                 // soft-delete it so no orphaned channel row remains.
@@ -3106,11 +3246,27 @@ async fn ingest_event_inner(
         }
     };
 
+    let was_inserted = replace_outcome.was_inserted();
+
     if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event_id_hex,
-            accepted: true,
-            message: "duplicate:".into(),
+        // The write stored nothing. Which of the two reasons it was decides
+        // whether the client's event is nonetheless present: an identical
+        // repeat landed earlier, a dominated write never landed at all. These
+        // used to collapse into one `accepted: true, "duplicate:"` reply, so a
+        // revocation the relay threw away read as a success (issue #100).
+        return Ok(match replace_outcome {
+            buzz_db::ReplaceOutcome::Superseded { winner_event_id } => {
+                let winner_hex = hex::encode(winner_event_id);
+                IngestResult::superseded(
+                    event_id_hex,
+                    &winner_hex,
+                    format!("conflict: superseded by event {winner_hex}"),
+                )
+            }
+            _ => IngestResult::already_stored(
+                event_id_hex,
+                "duplicate: identical event already stored",
+            ),
         });
     }
 
@@ -3217,11 +3373,7 @@ async fn ingest_event_inner(
 
     info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
 
-    Ok(IngestResult {
-        event_id: event_id_hex,
-        accepted: true,
-        message: String::new(),
-    })
+    Ok(IngestResult::stored(event_id_hex))
 }
 
 #[cfg(test)]

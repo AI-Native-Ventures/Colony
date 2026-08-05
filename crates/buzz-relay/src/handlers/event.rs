@@ -727,7 +727,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
 
     match super::ingest::ingest_event(&state, &conn.tenant, event, ingest_auth).await {
         Ok(result) => {
-            if result.accepted {
+            if result.accepted() {
                 // buzz_events_stored_total is emitted inside ingest_event()
                 // (shared WS/HTTP seam), not here.
                 info!(
@@ -739,9 +739,13 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             }
             metrics::histogram!("buzz_event_processing_seconds")
                 .record(start.elapsed().as_secs_f64());
+            // `result.event_id` is the id the client SUBMITTED, never a
+            // winning event's id, so a NIP-01 client correlating its pending
+            // publish by that id always resolves (issue #88). When another
+            // event won, the message names it.
             conn.send(RelayMessage::ok(
                 &result.event_id,
-                result.accepted,
+                result.accepted(),
                 &result.message,
             ));
         }

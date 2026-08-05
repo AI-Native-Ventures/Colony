@@ -543,24 +543,14 @@ pub async fn cmd_set(
     let event_id = event.id;
     let me = event.pubkey;
     let raw = client.submit_event(event).await?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw)
+    serde_json::from_str::<serde_json::Value>(&raw)
         .map_err(|e| CliError::Other(format!("relay response is not JSON: {e} ({raw})")))?;
-    let accepted = parsed
-        .get("accepted")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let message = parsed.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    if !accepted {
-        return Err(CliError::Other(format!("relay rejected event: {message}")));
-    }
-    // NIP-33 LWW: the relay accepts but reports `duplicate:` when this write was
-    // dominated by a newer (or same-second) head and did NOT become the live
-    // note. Surface a Conflict so we don't print success for a write that
-    // didn't take. (Mirrors `mem`'s engram submit.)
-    if message.starts_with("duplicate:") || message == "duplicate" {
-        return Err(CliError::Conflict(
-            "relay reported event as duplicate / dominated by a newer head".into(),
-        ));
+    // NIP-33 LWW: a write dominated by a newer (or same-second) head did NOT
+    // become the live note, so it must not print success. The shared helper
+    // reads the relay's `outcome` discriminator, which also keeps an identical
+    // re-submission (what a retried request produces) out of the conflict path.
+    if let Some(reason) = crate::client::write_conflict_reason(&raw) {
+        return Err(CliError::Conflict(reason));
     }
 
     // Print the durable references the user can paste into memory.

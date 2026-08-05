@@ -836,14 +836,25 @@ async fn submit_event_authed(
 
     match crate::handlers::ingest::ingest_event(state, tenant, event, auth).await {
         Ok(result) => {
-            let response = Json(serde_json::json!({
+            // `event_id` is always the id the caller submitted, and `accepted`
+            // is true only when that event is durably stored. `outcome` is the
+            // machine-readable discriminator: clients branch on it instead of
+            // parsing `message`, and `winner_event_id` names the event that
+            // beat this one when `outcome` is "superseded". Both fields are
+            // additive -- the three original fields are unchanged in name and
+            // meaning.
+            let mut body = serde_json::json!({
                 "event_id": result.event_id,
-                "accepted": result.accepted,
+                "accepted": result.accepted(),
                 "message": result.message,
-            }));
+                "outcome": result.outcome.as_wire_token(),
+            });
+            if let Some(winner) = result.outcome.winner_event_id() {
+                body["winner_event_id"] = serde_json::Value::String(winner.to_owned());
+            }
             SubmitOutcome::Ok {
-                accepted: result.accepted,
-                response,
+                accepted: result.accepted(),
+                response: Json(body),
             }
         }
         Err(IngestError::Rejected(msg)) => {

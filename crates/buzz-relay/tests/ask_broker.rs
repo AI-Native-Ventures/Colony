@@ -386,7 +386,8 @@ fn expect_ingest_rejected(
         Err(error) => format!("{error:?}"),
         Ok(accepted) => panic!(
             "{what}: expected rejection, got accepted={} message={}",
-            accepted.accepted, accepted.message
+            accepted.accepted(),
+            accepted.message
         ),
     }
 }
@@ -1200,7 +1201,11 @@ async fn a_valid_ask_through_the_real_ingest_pipeline_is_stored_and_queryable() 
         .unwrap_or_else(|error| {
             panic!("a valid ask must be accepted through the real pipeline: {error:?}")
         });
-    assert!(result.accepted, "ask must be accepted: {}", result.message);
+    assert!(
+        result.accepted(),
+        "ask must be accepted: {}",
+        result.message
+    );
 
     // Proof it was NOT swallowed the way a Company Action would be: the raw
     // event is queryable like any other stored event.
@@ -1260,7 +1265,8 @@ async fn ask_filed_into_an_archived_channel_leaves_no_asks_row() {
         Err(_) => {}
         Ok(accepted) => panic!(
             "filing into an archived channel must be rejected, got accepted={} message={}",
-            accepted.accepted, accepted.message
+            accepted.accepted(),
+            accepted.message
         ),
     }
 
@@ -2952,7 +2958,7 @@ async fn ingest_reply(
         .await
         .unwrap_or_else(|error| panic!("thread reply must be accepted: {error:?}"));
     assert!(
-        result.accepted,
+        result.accepted(),
         "thread reply must be accepted: {}",
         result.message
     );
@@ -3423,7 +3429,7 @@ async fn a_grant_signed_by_a_current_owner_is_accepted_through_ingest() {
         .await
         .unwrap_or_else(|error| panic!("an owner-signed grant must be accepted: {error:?}"));
     assert!(
-        result.accepted,
+        result.accepted(),
         "grant must be accepted: {}",
         result.message
     );
@@ -3672,7 +3678,7 @@ async fn a_decision_log_signed_by_a_leader_citing_an_active_grant_is_accepted_th
             )
         });
     assert!(
-        result.accepted,
+        result.accepted(),
         "decision log must be accepted: {}",
         result.message
     );
@@ -3929,7 +3935,7 @@ async fn a_decision_log_at_exactly_the_cap_is_accepted() {
             panic!("a decision log declaring exactly the cap must be accepted: {error:?}")
         });
     assert!(
-        result.accepted,
+        result.accepted(),
         "decision log must be accepted: {}",
         result.message
     );
@@ -3995,7 +4001,7 @@ async fn a_decision_log_with_an_amount_under_an_uncapped_grant_is_accepted() {
             )
         });
     assert!(
-        result.accepted,
+        result.accepted(),
         "decision log must be accepted: {}",
         result.message
     );
@@ -4062,7 +4068,7 @@ async fn a_withdrawal_through_the_real_ingest_pipeline_closes_the_ask_and_is_sto
             panic!("a valid withdrawal must be accepted through the real pipeline: {error:?}")
         });
     assert!(
-        result.accepted,
+        result.accepted(),
         "withdrawal must be accepted: {}",
         result.message
     );
