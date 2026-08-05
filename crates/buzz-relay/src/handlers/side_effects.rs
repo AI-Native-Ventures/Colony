@@ -209,6 +209,17 @@ pub async fn handle_side_effects(
         }
         9021 => handle_join_request(tenant, event, state).await,
         9022 => handle_leave_request(tenant, event, state).await,
+        // Colony hiring: mint and record the employee this owner asked for.
+        // Best effort like every side effect, and idempotent on the request
+        // event, so a re-run republishes rather than minting a second
+        // identity (`docs/design/company-employees.html`).
+        KIND_HIRE_REQUEST => {
+            match crate::employee_broker::handle_hire_request(tenant, state, event).await {
+                Ok(outcome) => info!(?outcome, "hire request handled"),
+                Err(error) => warn!(error = %error, "hire request refused"),
+            }
+            Ok(())
+        }
         // NIP-34: Git repo announcement → reserve name + seed manifest pointer.
         KIND_GIT_REPO_ANNOUNCEMENT => handle_git_repo_announcement(tenant, event, state).await,
         KIND_AGENT_PROFILE => handle_agent_profile(tenant, event, state).await,
@@ -749,20 +760,6 @@ pub async fn validate_admin_event(
                     }
                 }
                 _ => {}
-            }
-            Ok(())
-        }
-        KIND_HIRE_REQUEST => {
-            // Hiring is best effort like every side effect: the owner already
-            // has their OK. A failure is logged and the request stays on the
-            // relay, so a later run can still mint from it.
-            match crate::employee_broker::handle_hire_request(tenant, state, event).await {
-                Ok(outcome) => {
-                    info!(?outcome, "hire request handled");
-                }
-                Err(error) => {
-                    warn!(error = %error, "hire request refused");
-                }
             }
             Ok(())
         }
