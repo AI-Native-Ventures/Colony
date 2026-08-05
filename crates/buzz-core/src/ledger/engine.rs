@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::company::{classify_cost, CostClassification};
 use crate::ledger::attribution::{Budget, CorrectionBook, RuleAssignment, Rulebook};
-use crate::ledger::prices::PriceBook;
+use crate::ledger::conditions::CallFacts;
+use crate::ledger::prices::{total_input_tokens, PriceBasis, PriceBook};
 use crate::usage_record::{PaymentMode, UsageRecordPayload, UsageSource};
 
 /// A usage record as it was stored: the payload plus its event identity.
@@ -121,6 +122,14 @@ pub struct LedgerEntry {
     pub payment_mode: PaymentMode,
     /// Cost in nanoUSD, or `None` when the model is unpriced.
     pub cost_nanousd: Option<u128>,
+    /// Which kind of price row supplied the rate, when the entry was
+    /// token-priced.
+    ///
+    /// `None` for an unpriced model and for a flat-amount record, neither of
+    /// which consulted the book. A wrong price is invisible in the number, so
+    /// the basis travels with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_basis: Option<PriceBasis>,
     /// Classification before any correction. Never changes.
     pub original_classification: CostClassification,
     /// Classification in force now, after corrections.
@@ -329,22 +338,39 @@ pub fn compute_ledger(
         };
         let day = utc_day(at_unix);
 
-        let cost_nanousd = match (&payload.tokens, payload.amount_nanousd) {
+        let (cost_nanousd, price_basis) = match (&payload.tokens, payload.amount_nanousd) {
             (Some(tokens), _) => {
                 let model = payload.model.as_deref().unwrap_or_default();
-                let priced = prices.price_tokens(model, tokens, at_unix);
-                if priced.is_none() {
-                    exceptions.push(LedgerException::UnpricedModel {
-                        event_id: record.event_id.clone(),
-                        model: model.to_string(),
-                    });
+                // The provider is on the record because the meter captured it
+                // at the wire, and it decides whose price list applies: the
+                // same model costs a different amount from the lab that
+                // trained it, from a cloud reselling it, and from a router.
+                let facts = CallFacts {
+                    input_tokens: total_input_tokens(tokens),
+                    at_unix,
+                    provider: Some(payload.provider.clone()),
+                    // The meter does not capture the service tier yet, so
+                    // tier-conditioned rows never match and Batch and Flex
+                    // calls price at the standard rate. Overstating spend is
+                    // the safe direction, and it stays wrong until the meter
+                    // records what the provider reported.
+                    tier: None,
+                };
+                match prices.price_facts(model, tokens, &facts) {
+                    Some(priced) => (Some(priced.cost_nanousd), Some(priced.basis)),
+                    None => {
+                        exceptions.push(LedgerException::UnpricedModel {
+                            event_id: record.event_id.clone(),
+                            model: model.to_string(),
+                        });
+                        (None, None)
+                    }
                 }
-                priced
             }
-            (None, Some(amount)) => Some(u128::from(amount)),
+            (None, Some(amount)) => (Some(u128::from(amount)), None),
             // validate() forbids this shape; treat it as unpriced rather than
             // inventing a number.
-            (None, None) => None,
+            (None, None) => (None, None),
         };
 
         // 4. Attribute.
@@ -405,6 +431,7 @@ pub fn compute_ledger(
             model: payload.model.clone(),
             payment_mode: payload.payment_mode,
             cost_nanousd,
+            price_basis,
             original_classification,
             effective_classification: classification,
             effective_assignment: assignment,
@@ -607,6 +634,80 @@ mod tests {
             Rulebook::default(),
             CorrectionBook::default(),
         )
+    }
+
+    /// End to end: the provider on the record has to actually reach the price
+    /// book, and what it was priced from has to reach the report.
+    ///
+    /// The meter has always recorded the provider, and pricing ignored it, so
+    /// a call a reseller served and invoiced was charged at the vendor's own
+    /// rate. Read on 2026-08-05, that gap was up to 67% on `deepseek-v4-flash`.
+    #[test]
+    fn a_records_provider_selects_the_price_and_is_reported_on_the_entry() {
+        let (records, _, rules, corrections) = fixture_set();
+
+        let mut prices = book();
+        // The same model at a reseller's own rate: half the list price.
+        let mut resold = prices.entries[0].clone();
+        resold.rates.input_nanousd_per_mtok /= 2;
+        resold.rates.output_nanousd_per_mtok /= 2;
+        resold.conditions = crate::ledger::conditions::PriceConditions {
+            provider: Some("bedrock".to_string()),
+            ..Default::default()
+        };
+        prices.entries.push(resold);
+
+        // The fixture records are all `anthropic`; move one to Bedrock.
+        let mut records = records;
+        records[0].payload.provider = "bedrock".to_string();
+
+        let report = compute_ledger(records, &prices, &rules, &corrections, &[]);
+        let entry = |id: &str| {
+            report
+                .entries
+                .iter()
+                .find(|e| e.event_id == id)
+                .unwrap_or_else(|| panic!("entry {id}"))
+        };
+
+        // 1_000 input at $0.50 / MTok and 100 output at $2.50 / MTok.
+        let bedrock = entry("aa");
+        assert_eq!(bedrock.cost_nanousd, Some(1_000 * 500 + 100 * 2_500));
+        assert_eq!(
+            bedrock.price_basis,
+            Some(PriceBasis::ProviderRow),
+            "priced from Bedrock's own row"
+        );
+
+        // 2_000 input at $1 / MTok and 200 output at $5 / MTok: unchanged,
+        // because adding a Bedrock row must not touch anyone else's price.
+        let direct = entry("bb");
+        assert_eq!(direct.cost_nanousd, Some(2_000 * 1_000 + 200 * 5_000));
+        assert_eq!(
+            direct.price_basis,
+            Some(PriceBasis::ListRow),
+            "priced from list, and says so"
+        );
+    }
+
+    /// A flat-amount record never consults the book, so it must not claim a
+    /// basis it did not use.
+    #[test]
+    fn an_amount_record_reports_no_price_basis() {
+        let (records, prices, rules, corrections) = fixture_set();
+        let mut records = records;
+        records[0].payload.tokens = None;
+        records[0].payload.model = None;
+        records[0].payload.amount_nanousd = Some(12_345);
+
+        let report = compute_ledger(records, &prices, &rules, &corrections, &[]);
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.event_id == "aa")
+            .expect("entry");
+        assert_eq!(entry.cost_nanousd, Some(12_345));
+        assert_eq!(entry.price_basis, None);
     }
 
     #[test]
