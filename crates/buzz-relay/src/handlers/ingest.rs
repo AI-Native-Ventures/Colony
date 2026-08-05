@@ -3597,9 +3597,11 @@ mod tests {
     /// NOT take the
     /// generic command branch: that branch returns before the ban/timeout
     /// write-block, so routing them there would let a banned owner mutate
-    /// company or party state. DM open joins them for the same reason, plus
-    /// the Colony interrupt-core owner-contact gate, which also sits past
-    /// that write-block.
+    /// company or party state. DM open and DM add-member join them for the
+    /// same reason, plus the Colony interrupt-core owner-contact gate, which
+    /// also sits past that write-block: without the exclusion an agent could
+    /// open a permitted DM with its leader and then add a community owner to
+    /// it, reaching the owner's inbox without the gate ever running.
     #[test]
     fn brokered_actions_are_excluded_from_the_generic_command_branch() {
         let brokered = [
@@ -3610,6 +3612,7 @@ mod tests {
             KIND_DISCOVERY_WORKSPACE_ACTION,
             buzz_core::kind::KIND_LEDGER_ACTION,
             KIND_DM_OPEN,
+            KIND_DM_ADD_MEMBER,
         ];
         for kind in brokered {
             assert!(

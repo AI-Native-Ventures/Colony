@@ -30,7 +30,9 @@ use buzz_test_client::{BuzzTestClient, RelayMessage, TestClientError};
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
 use uuid::Uuid;
 
-use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE};
+use buzz_core::kind::{
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE,
+};
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
@@ -270,6 +272,36 @@ async fn fetch_ask_event(pubkey_hex: &str, event_id_hex: &str) -> serde_json::Va
         .unwrap_or_else(|| panic!("ask event {event_id_hex} not found via /query"))
 }
 
+/// Fetch every kind-44302 withdrawal event that `e`-tags `ask_event_id_hex`,
+/// the same way `buzz asks list --status open` decides an Ask is closed:
+/// from the public event stream, since the relay's internal `asks` table has
+/// no HTTP read surface.
+async fn fetch_withdrawals_naming(
+    pubkey_hex: &str,
+    ask_event_id_hex: &str,
+) -> Vec<serde_json::Value> {
+    let client = reqwest::Client::new();
+    let filters = serde_json::json!([{
+        "kinds": [KIND_ASK_WITHDRAWAL],
+        "#e": [ask_event_id_hex],
+        "limit": 10,
+    }]);
+    let resp = client
+        .post(format!("{}/query", relay_http_url()))
+        .header("X-Pubkey", pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&filters).unwrap())
+        .send()
+        .await
+        .expect("POST /query for withdrawals");
+    assert!(
+        resp.status().is_success(),
+        "query for withdrawals naming {ask_event_id_hex} failed: {}",
+        resp.status()
+    );
+    resp.json().await.expect("parse /query response")
+}
+
 /// Extract the single value of a two-element tag named `name` from a raw
 /// query-result event's `tags` array.
 fn tag_value(event: &serde_json::Value, name: &str) -> Option<String> {
@@ -425,6 +457,60 @@ async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
         raise_ok.message
     );
 
+    // ---- Step 3a: a sibling raise for the same need dedupes to the first
+    // A second worker, blocked on the exact same (initiative, need) as the
+    // original raise, must get back the FIRST ask's event id rather than a
+    // second open ask -- "five agents blocked on one missing credential
+    // produce one ask, not five".
+    //
+    // This runs HERE, while the original is still the live ask for its
+    // need, and not later in the chain: the leader's escalation below
+    // closes the ask it supersedes (I5), which releases that need's dedupe
+    // slot. Deduping onto a superseded ask is exactly the behaviour I5
+    // removed -- a second blocked worker must converge on the ask actually
+    // in flight, or get a fresh one, never on a stale closed row.
+    let duplicate_event = build_ask(&AskFields {
+        ask_type: "credential",
+        audience_hex: &leader_hex,
+        initiative: &initiative,
+        need: "vendor-key",
+        thread_hex: &root_id,
+        prior_hex: None,
+        channel: &channel_id,
+        // Content must differ from the first raise: an identical
+        // (content, tags, signer) triple would be a different-signer event
+        // anyway here, but vary it regardless so this can't be mistaken for
+        // exact-event dedupe rather than need-based dedupe.
+        headline: "Also blocked: need the vendor API key",
+    })
+    .sign_with_keys(&worker2)
+    .expect("sign duplicate raise");
+    // `send_event`'s OK-matching (by the SUBMITTED event's id) cannot
+    // observe this outcome: the relay's OK frame for a duplicate carries
+    // the WINNING ask's id, not the submitted one (see
+    // `send_raw_and_wait_ok`'s doc comment). Drive the raw frame instead.
+    let duplicate_ok = send_raw_and_wait_ok(&mut worker2_ws, &duplicate_event)
+        .await
+        .expect("send duplicate raise");
+    assert!(
+        !duplicate_ok.accepted,
+        "a second raise for the same (initiative, need) must not be accepted as a new ask"
+    );
+    assert!(
+        duplicate_ok.message.starts_with("duplicate:"),
+        "unexpected duplicate response message: {}",
+        duplicate_ok.message
+    );
+    assert!(
+        duplicate_ok.message.contains(&raise_id),
+        "duplicate response must name the FIRST ask's event id ({raise_id}), got: {}",
+        duplicate_ok.message
+    );
+    assert_eq!(
+        duplicate_ok.event_id, raise_id,
+        "duplicate OK frame's event_id must be the original ask's id"
+    );
+
     let escalate_event = build_ask(&AskFields {
         ask_type: "credential",
         audience_hex: &executive_hex,
@@ -446,6 +532,30 @@ async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
         escalate_ok.accepted,
         "leader escalating to the executive must be accepted: {}",
         escalate_ok.message
+    );
+
+    // I5, over the wire: accepting the escalation must close the ask it
+    // escalates from. Left open, one need would carry three live rows after
+    // a full chain, a later blocked worker would dedupe onto the stalest of
+    // them rather than the one in front of the owner, and the due-ask sweep
+    // would independently promote that stale row. The closure is a
+    // relay-signed 44302 naming the successor, so every client computing
+    // open/closed from the public event stream sees it too.
+    let supersede = fetch_withdrawals_naming(&owner_hex, &raise_id).await;
+    assert_eq!(
+        supersede.len(),
+        1,
+        "escalating must close the prior ask with exactly one withdrawal, got {supersede:#?}"
+    );
+    let reason = supersede[0]
+        .get("content")
+        .and_then(|c| c.as_str())
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
+        .and_then(|c| c.get("reason").and_then(|r| r.as_str()).map(str::to_owned))
+        .expect("the supersede withdrawal carries a reason");
+    assert!(
+        reason.contains(&escalate_id),
+        "the supersede reason must name the successor ({escalate_id}), got: {reason}"
     );
 
     let filed_event = build_ask(&AskFields {
@@ -508,53 +618,6 @@ async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
         ladder_skip_ok.message.contains("leader"),
         "expected an altitude-ladder refusal naming the missing hop, got: {}",
         ladder_skip_ok.message
-    );
-
-    // ---- Step 4: a sibling raise for the same need dedupes to the first -
-    // A second worker, blocked on the exact same (initiative, need) as the
-    // original raise, must get back the FIRST ask's event id rather than a
-    // second open ask -- "five agents blocked on one missing credential
-    // produce one ask, not five".
-    let duplicate_event = build_ask(&AskFields {
-        ask_type: "credential",
-        audience_hex: &leader_hex,
-        initiative: &initiative,
-        need: "vendor-key",
-        thread_hex: &root_id,
-        prior_hex: None,
-        channel: &channel_id,
-        // Content must differ from the first raise: an identical
-        // (content, tags, signer) triple would be a different-signer event
-        // anyway here, but vary it regardless so this can't be mistaken for
-        // exact-event dedupe rather than need-based dedupe.
-        headline: "Also blocked: need the vendor API key",
-    })
-    .sign_with_keys(&worker2)
-    .expect("sign duplicate raise");
-    // `send_event`'s OK-matching (by the SUBMITTED event's id) cannot
-    // observe this outcome: the relay's OK frame for a duplicate carries
-    // the WINNING ask's id, not the submitted one (see
-    // `send_raw_and_wait_ok`'s doc comment). Drive the raw frame instead.
-    let duplicate_ok = send_raw_and_wait_ok(&mut worker2_ws, &duplicate_event)
-        .await
-        .expect("send duplicate raise");
-    assert!(
-        !duplicate_ok.accepted,
-        "a second raise for the same (initiative, need) must not be accepted as a new ask"
-    );
-    assert!(
-        duplicate_ok.message.starts_with("duplicate:"),
-        "unexpected duplicate response message: {}",
-        duplicate_ok.message
-    );
-    assert!(
-        duplicate_ok.message.contains(&raise_id),
-        "duplicate response must name the FIRST ask's event id ({raise_id}), got: {}",
-        duplicate_ok.message
-    );
-    assert_eq!(
-        duplicate_ok.event_id, raise_id,
-        "duplicate OK frame's event_id must be the original ask's id"
     );
 
     // ---- Step 5: the owner answers; the wake-up lands where work stalled
