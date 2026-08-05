@@ -2132,6 +2132,16 @@ impl Db {
         event::get_last_message_at(&self.pool, community_id, channel_id).await
     }
 
+    /// Returns the `created_at` of the most recent non-deleted event authored
+    /// by `pubkey` anywhere in the community -- any kind, channel or global.
+    pub async fn get_last_authored_event_at(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<DateTime<Utc>>> {
+        event::get_last_authored_event_at(&self.pool, community_id, pubkey).await
+    }
+
     /// Bulk-fetch the most recent `created_at` for a set of channel IDs.
     pub async fn get_last_message_at_bulk(
         &self,

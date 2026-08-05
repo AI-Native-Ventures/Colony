@@ -664,9 +664,14 @@ act on.
    crash window the due-ask sweep cannot close on its own.
 2. **Scan in-progress task heads** (status `inProgress`, up to 500 per
    tick).
-3. For each candidate, measure silence as `now - max(task head's own
-   created_at, last event of any kind in the task's own sourceChannelId)`.
-   If under `stall_after_secs`, skip.
+3. For each candidate, resolve `task.assignee_persona_ids` against the
+   community's owner-authored managed-agent roster
+   (`persona_pubkey_in_roster`). Measure silence as `now - max(task head's
+   own created_at, last event AUTHORED BY any resolved assignee agent
+   anywhere in the community)`. If no assignee resolves to a running agent,
+   fall back to the pre-existing channel signal instead: `now - max(task
+   head's own created_at, last event of any kind in the task's own
+   sourceChannelId)`. If under `stall_after_secs`, skip.
 4. Derive `need_key = stall_need_key(task_id)` (see "The `need` dedupe key"
    above) and `initiative_id = task.initiative_id`, or the sentinel
    `no-initiative` when the task carries none.
@@ -682,26 +687,38 @@ act on.
    gone silent"`, no `options`, no `default_option`) through the ordinary
    ask broker, so it dedupes exactly like any other filing.
 
-**Known false negative, stated plainly.** The silence signal is *channel*
-activity, and it applies to **every** in-progress task regardless of origin,
-not only to implicit chat-derived ones. Any task whose `sourceChannelId` is
-a busy channel is equally undetectable: this sweep cannot distinguish "the
-agent is still posting progress here" from "two people are chatting about
-something unrelated in the same channel", and either resets the silence
-measurement and suppresses stall detection for as long as the channel stays
-busy. A dead agent working an explicit task in a team channel where anyone
-else is talking is therefore invisible to this sweep for as long as that
-conversation continues.
+**The primary signal is per-agent, not per-channel.** Silence means the
+task's *assigned agents* have gone event-silent, not merely that the head is
+old or that the channel is quiet: the sweep resolves each of
+`task.assignee_persona_ids` to a pubkey via the owner-authored managed-agent
+roster, and measures the newest event authored by any of them, anywhere in
+the community, of any kind. An agent that is alive keeps producing events
+(messages, task updates, Asks) somewhere; a busy channel no longer vouches
+for a dead one, and a live agent working quietly in a different channel is
+no longer falsely flagged.
+
+**Known false negative, now confined to the fallback.** A task none of whose
+`assignee_persona_ids` resolve to a running agent in the owner-authored
+roster cannot be measured per-agent, so it falls back to the old
+channel-activity signal: `now - max(task head's own created_at, last event
+of any kind in the task's own sourceChannelId)`. For that narrower class of
+task, the original limitation still applies verbatim: any chatter in
+`sourceChannelId` by anyone, agent or human, suppresses detection for as
+long as the channel stays busy, since this sweep still cannot distinguish
+"the agent is still posting progress here" from "two people are chatting
+about something unrelated in the same channel."
 
 It is worst for an *implicit*, chat-derived task, where `sourceChannelId` is
 not a dedicated work channel at all, it **is** the human conversation the
-task was inferred from, so the noise is guaranteed rather than incidental.
-That is backwards from what it should be: implicit tasks are exactly the
-ones nobody deliberately organized under an initiative, and so are the
-likeliest to silently fall through the cracks. Accepted as the best signal
-available given the current event model (no kind reliably ties an ordinary
-work message to the specific task it advances), not silently worked
-around.
+task was inferred from, so the noise is guaranteed rather than incidental --
+and an implicit task is exactly the kind most likely to carry assignees that
+were never formally appointed through a managed-agent head, so it is also
+disproportionately likely to land in the fallback branch. Accepted as the
+best signal available for an unattributable task given the current event
+model (no kind reliably ties an ordinary work message to the specific task
+it advances), not silently worked around: filing a stall Ask on every
+quiet-headed task with an active channel, with no agent to blame it on,
+would be the queue-spam failure this whole system exists to prevent.
 
 ## Client Behavior (`buzz asks`)
 
@@ -740,12 +757,18 @@ signed directly against the schemas above.
 
 ## Known Limitations
 
-- **Stall detection can be suppressed indefinitely for ANY task in a busy
-  channel.** See "Known false negative" under "Stall-detection sweep" above:
-  ordinary conversation in a task's own source channel resets the silence
-  signal, for every task regardless of origin. It is guaranteed rather than
-  incidental for implicit, chat-derived tasks, which are also the ones most
-  likely to actually stall.
+- **Stall detection can be suppressed indefinitely for a task whose
+  assignees cannot be resolved to a running agent, if its channel is busy.**
+  See "Known false negative, now confined to the fallback" under
+  "Stall-detection sweep" above: for a task where none of
+  `assignee_persona_ids` resolve through the owner-authored managed-agent
+  roster, ordinary conversation in the task's own source channel still
+  resets the silence signal. Tasks with a resolvable assignee are no longer
+  affected: their signal follows the agent, not the channel. The fallback is
+  guaranteed rather than incidental for implicit, chat-derived tasks (whose
+  assignees are also the least likely to have been formally appointed
+  through a managed-agent head), which are also the ones most likely to
+  actually stall.
 - **A delegation grant's `cap_nano_usd` spending cap is enforced per
   decision, not cumulatively.** Each decision log's declared
   `amount_nano_usd` is checked against the cap in isolation; the relay does

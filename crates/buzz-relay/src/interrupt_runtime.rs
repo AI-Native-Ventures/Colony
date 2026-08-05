@@ -1143,50 +1143,79 @@ async fn process_stall_candidate(
         return Ok(false);
     };
 
-    // Silence means no real event activity, not merely an old head: a task
-    // can sit `inProgress` with an untouched head for a long time simply
-    // because nobody re-published a status revision, and that alone is not
-    // evidence of a stall. The signal here is the more recent of (a) the
-    // task head's own `created_at` (a status/field change is itself
-    // activity -- a task that JUST moved to `inProgress` must not be flagged
-    // a tick later) and (b) the last event of any kind in the task's own
-    // `sourceChannelId` (real work happening where the task lives). Only
-    // when BOTH are old does the sweep consider the task silent.
+    // `candidate.host` already comes from `query_in_progress_task_heads`'s
+    // own `communities` join, which the same query filters to
+    // `archived_at IS NULL` -- no separate host lookup needed here (unlike
+    // `process_due_ask`, which resolves a row's community after the fact).
+    let tenant = TenantContext::resolved(candidate.community_id, candidate.host.clone());
+
+    // I5: fetch this community's owner-authored managed-agent roster once
+    // per `run_stall_tick` pass and reuse it for every candidate task in
+    // that community, rather than re-querying per candidate. Moved ahead of
+    // the silence measurement below: resolving the task's assignees to
+    // agent pubkeys needs the roster before the signal can be computed.
+    if let std::collections::hash_map::Entry::Vacant(entry) =
+        roster_cache.entry(candidate.community_id)
+    {
+        let roster =
+            fetch_owner_authored_managed_agent_roster(&tenant, state, MAX_ROSTER_HEADS).await?;
+        entry.insert(roster);
+    }
+    let roster = roster_cache
+        .get(&candidate.community_id)
+        .expect("just inserted or already present");
+
+    // Silence means the ASSIGNED AGENTS have gone event-silent, not merely
+    // that the head is old: the signal is the most recent of (a) the task
+    // head's own `created_at` (a status change is itself activity) and (b)
+    // the newest event AUTHORED BY any of the task's resolvable assignee
+    // agents, anywhere in the community. An agent that is alive keeps
+    // producing events (messages, task updates, asks); a busy channel no
+    // longer vouches for a dead one.
     //
-    // KNOWN FALSE NEGATIVE, stated plainly here rather than only in a report,
-    // and stated at its real width: the signal below is CHANNEL activity, and
-    // the computation applies to EVERY in-progress task regardless of origin.
-    // Any task whose `sourceChannelId` is a busy channel is undetectable --
-    // this sweep cannot tell "the agent is still posting progress here" apart
-    // from "two people are chatting about something else in the same
-    // channel", and either one resets `last_activity_secs` and suppresses
-    // stall detection for as long as the channel stays busy. A dead agent
-    // working an ORDINARY, explicit task in a team channel where anyone else
-    // is talking is therefore just as invisible as one working an implicit
-    // task. (An earlier version of this comment scoped the limitation to
-    // implicit tasks only; the code never did.)
-    //
-    // It is worst for an IMPLICIT, chat-derived task, where `sourceChannelId`
-    // is not a dedicated work channel at all -- it IS the human conversation
-    // the task was inferred from -- so the noise is guaranteed rather than
-    // incidental. That is exactly backwards from what ruling 3 (see
-    // `NO_INITIATIVE_SENTINEL`) establishes: implicit tasks are the ones
-    // nobody deliberately organized under an initiative, and so are the
-    // likeliest to silently fall through the cracks. Accepted as the best
-    // signal available today given the current event model (no kind reliably
-    // ties an ordinary work message to the specific task it advances -- see
-    // `stall_need_key`'s sibling module docs), not silently worked around.
-    let channel_last_activity = state
-        .db
-        .get_last_message_at(candidate.community_id, source_channel_id)
-        .await
-        .map_err(|error| format!("database error loading channel activity: {error}"))?;
-    let last_activity_secs = channel_last_activity
-        .map(|at| at.timestamp())
+    // KNOWN FALSE NEGATIVE, now confined to the fallback: a task none of
+    // whose `assignee_persona_ids` resolve to a running agent in the
+    // owner-authored roster cannot be measured per-agent, so it falls back
+    // to the old channel-activity signal, where any chatter in
+    // `source_channel_id` suppresses detection. Accepted: for an
+    // unattributable task the channel is still the best signal available,
+    // and filing stall asks on every quiet-headed task with an active
+    // channel would be the queue-spam failure this system exists to prevent.
+    let mut assignee_pubkeys: Vec<PublicKey> = Vec::new();
+    for persona_id in &task.assignee_persona_ids {
+        if let Some(pubkey) = persona_pubkey_in_roster(roster, persona_id)? {
+            assignee_pubkeys.push(pubkey);
+        }
+    }
+
+    let mut activity: Vec<i64> = Vec::new();
+    if assignee_pubkeys.is_empty() {
+        let channel_last_activity = state
+            .db
+            .get_last_message_at(candidate.community_id, source_channel_id)
+            .await
+            .map_err(|error| format!("database error loading channel activity: {error}"))?;
+        if let Some(at) = channel_last_activity {
+            activity.push(at.timestamp());
+        }
+    } else {
+        for pubkey in &assignee_pubkeys {
+            let last = state
+                .db
+                .get_last_authored_event_at(candidate.community_id, pubkey.as_bytes())
+                .await
+                .map_err(|error| format!("database error loading agent activity: {error}"))?;
+            if let Some(at) = last {
+                activity.push(at.timestamp());
+            }
+        }
+    }
+    let head_created_at = candidate.task_head_created_at.timestamp();
+    let last_activity_secs = activity
         .into_iter()
-        .chain(std::iter::once(candidate.task_head_created_at.timestamp()))
+        .chain(std::iter::once(head_created_at))
         .max()
-        .expect("chain always yields at least the head's own created_at");
+        .unwrap_or(head_created_at);
     let silent_for_secs = now_secs.saturating_sub(last_activity_secs);
     if silent_for_secs < stall_after_secs {
         return Ok(false);
@@ -1226,26 +1255,6 @@ async fn process_stall_candidate(
             return Ok(false);
         }
     }
-
-    // `candidate.host` already comes from `query_in_progress_task_heads`'s
-    // own `communities` join, which the same query filters to
-    // `archived_at IS NULL` -- no separate host lookup needed here (unlike
-    // `process_due_ask`, which resolves a row's community after the fact).
-    let tenant = TenantContext::resolved(candidate.community_id, candidate.host.clone());
-
-    // I5: fetch this community's owner-authored managed-agent roster once
-    // per `run_stall_tick` pass and reuse it for every candidate task in
-    // that community, rather than re-querying per candidate.
-    if let std::collections::hash_map::Entry::Vacant(entry) =
-        roster_cache.entry(candidate.community_id)
-    {
-        let roster =
-            fetch_owner_authored_managed_agent_roster(&tenant, state, MAX_ROSTER_HEADS).await?;
-        entry.insert(roster);
-    }
-    let roster = roster_cache
-        .get(&candidate.community_id)
-        .expect("just inserted or already present");
 
     let audience = match persona_pubkey_in_roster(roster, &task.qa_persona_id)? {
         Some(pubkey) => pubkey,

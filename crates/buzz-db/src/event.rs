@@ -1072,6 +1072,31 @@ pub async fn get_last_message_at(
     }
 }
 
+/// Returns the `created_at` of the most recent non-deleted event authored
+/// by `pubkey` anywhere in the community -- any kind, channel or global.
+/// The interrupt stall sweep uses this as its per-agent liveness signal;
+/// see `buzz-relay`'s `interrupt_runtime::process_stall_candidate`.
+pub async fn get_last_authored_event_at(
+    pool: &PgPool,
+    community_id: CommunityId,
+    pubkey: &[u8],
+) -> Result<Option<DateTime<Utc>>> {
+    let row = sqlx::query(
+        "SELECT created_at FROM events \
+         WHERE community_id = $1 AND pubkey = $2 AND deleted_at IS NULL \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(community_id.as_uuid())
+    .bind(pubkey)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(row) => Ok(Some(row.try_get("created_at")?)),
+        None => Ok(None),
+    }
+}
+
 /// Bulk-fetch the most recent `created_at` for a set of channel IDs.
 ///
 /// Returns a map of `channel_id → last_message_at`. Channels with no events are omitted.
