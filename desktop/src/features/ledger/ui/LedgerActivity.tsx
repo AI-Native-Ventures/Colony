@@ -16,6 +16,30 @@ import type { LedgerEntry, LedgerReport } from "../report";
 
 const ACTIVITY_LIMIT = 25;
 
+/**
+ * Whether this cost came from the vendor's list price rather than a rate for
+ * the provider that actually served the call.
+ *
+ * The same model is sold by the lab that trained it and by everyone reselling
+ * it, at their own prices, so a list rate applied to a resold call is wrong by
+ * the reseller's margin. That is invisible in the number itself, which is the
+ * whole reason it is marked.
+ */
+function atListPrice(entry: LedgerEntry): boolean {
+  return entry.priceBasis === "listRow";
+}
+
+function describePriceBasis(entry: LedgerEntry): string | undefined {
+  switch (entry.priceBasis) {
+    case "providerRow":
+      return `Priced at ${entry.provider}'s own rate.`;
+    case "listRow":
+      return `Priced at the vendor's list rate. No rate is on file for ${entry.provider}, so this is only correct if ${entry.provider} charges list.`;
+    default:
+      return undefined;
+  }
+}
+
 function Row({
   entry,
   onAttribute,
@@ -65,7 +89,17 @@ function Row({
           {entry.costNanousd === null ? (
             <span title="No price is on file for this model.">not priced</span>
           ) : (
-            formatNanousd(entry.costNanousd)
+            <span title={describePriceBasis(entry)}>
+              {formatNanousd(entry.costNanousd)}
+              {atListPrice(entry) ? (
+                <span
+                  className="ml-1 text-muted-foreground"
+                  data-testid={`ledger-list-price-${entry.eventId.slice(0, 8)}`}
+                >
+                  *
+                </span>
+              ) : null}
+            </span>
           )}
         </p>
       </div>
@@ -107,6 +141,16 @@ export function LedgerActivity({
           ))}
         </ul>
       )}
+      {entries.some(atListPrice) ? (
+        <p
+          className="mt-3 text-xs text-muted-foreground"
+          data-testid="ledger-list-price-legend"
+        >
+          * Priced at the vendor&apos;s list rate. No rate is on file for the
+          provider that served the call, so the cost is only right if they
+          charge list.
+        </p>
+      ) : null}
     </section>
   );
 }
