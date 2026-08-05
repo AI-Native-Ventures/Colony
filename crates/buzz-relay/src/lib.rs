@@ -17,6 +17,7 @@ mod discovery_worker_broker;
 mod discovery_workspace_broker;
 mod employee_broker;
 pub mod employee_key;
+mod job_broker;
 mod ledger_broker;
 mod party_broker;
 
@@ -46,6 +47,9 @@ pub mod interrupt_gate;
 pub mod interrupt_runtime;
 /// Stateless HMAC-signed relay invite tokens (mint/verify).
 pub mod invite_token;
+/// Colony job queue: reclaiming lapsed leases and escalating jobs that are
+/// going nowhere.
+pub mod job_runtime;
 /// Inter-relay mesh startup wiring (`BUZZ_MESH` seam).
 pub mod mesh_boot;
 /// Prometheus metrics: recorder, upkeep, HTTP middleware.

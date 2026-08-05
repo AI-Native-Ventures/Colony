@@ -118,6 +118,12 @@ desktop-install-ci:
 desktop-check:
     cd {{desktop_dir}} && pnpm check
 
+# Desktop file-size ratchet only. Split out because the guard covers
+# `src-tauri/src` too, while `desktop-check` runs biome and tsc over the
+# frontend and is not worth invoking for a Rust-only change.
+desktop-file-sizes:
+    cd {{desktop_dir}} && pnpm check:file-sizes
+
 # Fix desktop lint and format issues
 desktop-fix:
     cd {{desktop_dir}} && pnpm exec biome check --write . && pnpm check:file-sizes

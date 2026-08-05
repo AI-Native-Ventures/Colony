@@ -12,6 +12,7 @@ pub mod employees;
 pub mod feed;
 pub mod grants;
 pub mod issues;
+pub mod jobs;
 pub mod ledger;
 pub mod mem;
 pub mod messages;

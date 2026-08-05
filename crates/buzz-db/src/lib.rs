@@ -34,6 +34,8 @@ pub mod event;
 pub mod feed;
 /// Git repository name registry (NIP-34 kind:30617).
 pub mod git_repo;
+/// The job queue: work employees owe, and the leases that arbitrate it.
+pub mod jobs;
 /// Embedded database migrations.
 pub mod migration;
 /// Community moderation: reports, bans/timeouts, audit actions.
@@ -5728,6 +5730,129 @@ impl Db {
     /// Retire an employee, freeing its role (see [`employees::retire_employee`]).
     pub async fn retire_employee(&self, community: CommunityId, pubkey: &[u8]) -> Result<bool> {
         employees::retire_employee(&self.pool, community, pubkey).await
+    }
+
+    /// File a job. `None` when this filing already produced one
+    /// (see [`jobs::insert_job`]).
+    pub async fn insert_job(
+        &self,
+        community: CommunityId,
+        job: jobs::NewJob<'_>,
+    ) -> Result<Option<jobs::JobRow>> {
+        jobs::insert_job(&self.pool, community, job).await
+    }
+
+    /// Look a job up by id (see [`jobs::find_job`]).
+    pub async fn find_job(
+        &self,
+        community: CommunityId,
+        job_id: &[u8],
+    ) -> Result<Option<jobs::JobRow>> {
+        jobs::find_job(&self.pool, community, job_id).await
+    }
+
+    /// Take the lease on a job. `None` when somebody else holds it
+    /// (see [`jobs::claim_job`]).
+    pub async fn claim_job(
+        &self,
+        community: CommunityId,
+        job_id: &[u8],
+        holder: &[u8],
+        max_attempts: i32,
+        now: i64,
+        lease_expires_at: i64,
+    ) -> Result<Option<jobs::JobRow>> {
+        jobs::claim_job(
+            &self.pool,
+            community,
+            job_id,
+            holder,
+            max_attempts,
+            now,
+            lease_expires_at,
+        )
+        .await
+    }
+
+    /// Push a lease's deadline out. `None` when no longer the holder
+    /// (see [`jobs::heartbeat_job`]).
+    pub async fn heartbeat_job(
+        &self,
+        community: CommunityId,
+        job_id: &[u8],
+        holder: &[u8],
+        attempt: i32,
+        now: i64,
+        lease_expires_at: i64,
+    ) -> Result<Option<jobs::JobRow>> {
+        jobs::heartbeat_job(
+            &self.pool,
+            community,
+            job_id,
+            holder,
+            attempt,
+            now,
+            lease_expires_at,
+        )
+        .await
+    }
+
+    /// Record how a job ended (see [`jobs::finish_job`]).
+    pub async fn finish_job(
+        &self,
+        community: CommunityId,
+        outcome: jobs::FinishedJob<'_>,
+    ) -> Result<Option<jobs::JobRow>> {
+        jobs::finish_job(&self.pool, community, outcome).await
+    }
+
+    /// Take every lapsed lease away, across every community
+    /// (see [`jobs::expire_due_leases`]).
+    pub async fn expire_due_leases(
+        &self,
+        now: i64,
+        max_attempts: i32,
+        limit: i64,
+    ) -> Result<Vec<jobs::TenantJobRow>> {
+        jobs::expire_due_leases(&self.pool, now, max_attempts, limit).await
+    }
+
+    /// Jobs that need a human told about them, across every community
+    /// (see [`jobs::list_jobs_needing_escalation`]).
+    pub async fn list_jobs_needing_escalation(
+        &self,
+        unclaimed_before: i64,
+        limit: i64,
+    ) -> Result<Vec<jobs::TenantJobRow>> {
+        jobs::list_jobs_needing_escalation(&self.pool, unclaimed_before, limit).await
+    }
+
+    /// Stamp this job's next head and read the job in one statement
+    /// (see [`jobs::stamp_head`]).
+    pub async fn stamp_job_head(
+        &self,
+        community: CommunityId,
+        job_id: &[u8],
+        now: i64,
+    ) -> Result<Option<(i64, jobs::JobRow)>> {
+        jobs::stamp_head(&self.pool, community, job_id, now).await
+    }
+
+    /// Remember that a human has been asked about this job
+    /// (see [`jobs::record_escalation`]).
+    pub async fn record_escalation(
+        &self,
+        community: CommunityId,
+        job_id: &[u8],
+        ask_event: &[u8],
+    ) -> Result<bool> {
+        jobs::record_escalation(&self.pool, community, job_id, ask_event).await
+    }
+
+    /// Give back an escalation slot whose ask never got filed
+    /// (see [`jobs::clear_escalation`]).
+    pub async fn clear_escalation(&self, community: CommunityId, job_id: &[u8]) -> Result<()> {
+        jobs::clear_escalation(&self.pool, community, job_id).await
     }
 
     /// Files a new open ask. See [`asks::insert_ask`] for the dedupe

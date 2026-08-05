@@ -24,7 +24,8 @@ use buzz_core::kind::{
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
     KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HIRE_REQUEST, KIND_HUDDLE_ENDED,
     KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT,
-    KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LEDGER_ACTION,
+    KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_JOB_CLAIM,
+    KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_LEDGER_ACTION,
     KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT,
     KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST,
@@ -575,6 +576,17 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // key. Only a registered employee may author one; that check runs
         // past this gate, in the employee-head arm of `validate_event`.
         KIND_EMPLOYEE => Ok(Scope::UsersWrite),
+        // Colony job queue (43010-43013): a member asking an employee for
+        // work, and a worker moving a job it holds. All message-shaped
+        // writes; who may claim, heartbeat, and finish is decided past this
+        // gate, in `job_broker`, against the queue rather than the event.
+        KIND_JOB_FILING | KIND_JOB_CLAIM | KIND_JOB_HEARTBEAT | KIND_JOB_OUTCOME => {
+            Ok(Scope::MessagesWrite)
+        }
+        // Colony job head (30191): the relay's account of a job, signed by
+        // the employee that owes it. Same forgery gate as the employee head,
+        // in the job-head arm of `validate_event`.
+        KIND_JOB_HEAD => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -2751,6 +2763,31 @@ async fn ingest_event_inner(
         }
     }
 
+    // Colony job queue: a job head is the relay's account of who is working
+    // what, and a worker decides whether to keep going by reading it. A
+    // forged head could tell a worker its lease was taken and stop it dead,
+    // or tell a founder work was done that nobody did. Only the relay can
+    // open an employee's sealed key, so a legitimate head is always
+    // relay-authored and arrives through `job_broker`, never through ingest.
+    // A client sending one is refused on the same ground as a forged employee
+    // head: authorship is checked against the employees table, not taken on
+    // the event's word.
+    if kind_u32 == KIND_JOB_HEAD {
+        buzz_core::job::parse_job_head(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        let is_employee = state
+            .db
+            .find_employee(tenant.community(), &event.pubkey.to_bytes())
+            .await
+            .map_err(|e| IngestError::Internal(format!("database error: {e}")))?
+            .is_some();
+        if !is_employee {
+            return Err(IngestError::AuthFailed(
+                "not an employee of this community".to_string(),
+            ));
+        }
+    }
+
     // Colony interrupt-core: a decision log is only as trustworthy as the
     // grant it cites. Schema (non-empty `undo_path` -- spec: no stateable
     // undo path means no autonomy, and a category that is not on the hard
@@ -3447,6 +3484,11 @@ mod tests {
             buzz_core::kind::KIND_ASK_WITHDRAWAL,
             buzz_core::kind::KIND_DECISION_LOG,
             buzz_core::kind::KIND_DELEGATION_GRANT,
+            buzz_core::kind::KIND_JOB_FILING,
+            buzz_core::kind::KIND_JOB_CLAIM,
+            buzz_core::kind::KIND_JOB_HEARTBEAT,
+            buzz_core::kind::KIND_JOB_OUTCOME,
+            buzz_core::kind::KIND_JOB_HEAD,
         ]
         .into_iter()
         .filter(|kind| {

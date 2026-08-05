@@ -20,15 +20,18 @@ pub mod discovery;
 pub mod discovery_worker;
 /// Private workspace records that connect Discovery campaigns and Leads.
 pub mod discovery_workspace;
-/// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
-/// body parse/serialize, envelope build/validate, head selection.
+/// Colony company employees — hire requests and employee heads.
 pub mod employee;
 
+/// NIP-AE Agent Engrams — slug grammar, conversation key, d-tag derivation,
+/// body parse/serialize, envelope build/validate, head selection.
 pub mod engram;
 /// Relay-side error types.
 pub mod error;
 /// Relay-side event wrapper with verification tracking.
 pub mod event;
+/// Reading single-valued tags off an event.
+pub mod event_tags;
 /// NIP-01 subscription filter matching.
 pub mod filter;
 /// Git permission types — ref patterns, protection rules, policy evaluation.
@@ -37,6 +40,8 @@ pub mod git_perms;
 pub mod interrupt;
 /// Shared invite-link contract constants.
 pub mod invite;
+/// Colony job queue — filings, claims, heartbeats, outcomes, and job heads.
+pub mod job;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
 
