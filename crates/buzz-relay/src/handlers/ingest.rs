@@ -3234,6 +3234,52 @@ mod tests {
     };
     use nostr::{EventBuilder, Kind};
 
+    /// A kind a client is meant to write must have an ingest scope.
+    ///
+    /// `buzz_core::kind::ALL_KINDS`, the side-effect dispatcher, and this
+    /// scope map are three separate lists. A kind added to the first two but
+    /// missing from this one is refused at the door with "restricted: unknown
+    /// event kind": the feature is unreachable over the wire while every unit
+    /// test stays green, because none of them cross this boundary. That is
+    /// exactly how the employee kinds shipped dead
+    /// (`docs/design/company-employees.html`).
+    ///
+    /// This pins the client-written kinds this guard was built for rather
+    /// than sweeping `ALL_KINDS`: most kinds there are relay-authored
+    /// (group metadata, archival deltas) or ephemeral (NIP-98 auth, observer
+    /// frames) and correctly have no client-write scope. Classifying all of
+    /// them is worth doing separately; asserting they all need scopes would
+    /// encode a claim that is simply false.
+    #[test]
+    fn client_written_kinds_have_an_ingest_scope() {
+        let keys = nostr::Keys::generate();
+        let unmapped: Vec<u32> = [
+            buzz_core::kind::KIND_HIRE_REQUEST,
+            buzz_core::kind::KIND_EMPLOYEE,
+            buzz_core::kind::KIND_ASK,
+            buzz_core::kind::KIND_ASK_RESOLUTION,
+            buzz_core::kind::KIND_ASK_WITHDRAWAL,
+            buzz_core::kind::KIND_DECISION_LOG,
+            buzz_core::kind::KIND_DELEGATION_GRANT,
+        ]
+        .into_iter()
+        .filter(|kind| {
+            let event = EventBuilder::new(Kind::Custom(*kind as u16), "")
+                .sign_with_keys(&keys)
+                .expect("sign probe event");
+            matches!(
+                required_scope_for_kind(*kind, &event),
+                Err("restricted: unknown event kind")
+            )
+        })
+        .collect();
+
+        assert!(
+            unmapped.is_empty(),
+            "these client-written kinds have no ingest scope and are unreachable over the wire: {unmapped:?}"
+        );
+    }
+
     /// A banned relay admin must be refused with the same wire prefix and
     /// transport status as every other durable-restriction refusal:
     /// `blocked:` and (via `bridge.rs`'s `AuthFailed` arm) HTTP 403 — never
