@@ -8,6 +8,7 @@
 use buzz_core::usage_record::UsageBreakdown;
 use serde_json::{Map, Value};
 
+use crate::cost::observed_cost_nanousd;
 use crate::sse::data_payloads;
 use crate::ParsedUsage;
 
@@ -84,6 +85,7 @@ fn read_document(document: &Value) -> Option<ParsedUsage> {
             tokens: Some(tokens),
             model: string_field(scope, "model"),
             request_id: string_field(scope, "id"),
+            observed_cost_nanousd: observed_cost_nanousd(usage),
         });
     }
     None
@@ -110,6 +112,7 @@ pub fn parse_json_response(body: &[u8]) -> ParsedUsage {
         tokens: None,
         model: string_field(&root, "model"),
         request_id: string_field(&root, "id"),
+        observed_cost_nanousd: None,
     })
 }
 
@@ -140,6 +143,10 @@ pub fn parse_sse_response(body: &[u8]) -> ParsedUsage {
                 tokens: from_chunk.tokens,
                 model: from_chunk.model.or(parsed.model),
                 request_id: from_chunk.request_id.or(parsed.request_id),
+                // The terminal chunk carries the whole usage block, cost
+                // included, so this replaces rather than merges: a later
+                // chunk's silence on cost is not an earlier chunk's figure.
+                observed_cost_nanousd: from_chunk.observed_cost_nanousd,
             };
         }
     }
@@ -297,6 +304,77 @@ mod tests {
         );
         assert_eq!(parsed.model.as_deref(), Some("gpt-4o-2024-08-06"));
         assert_eq!(parsed.request_id.as_deref(), Some("chatcmpl-Stream1"));
+    }
+
+    /// A real OpenRouter response, captured verbatim on 2026-08-05.
+    ///
+    /// This is the shape that makes the price book unnecessary for a routed
+    /// call: the router says what it charged, so no rate has to be on file for
+    /// whichever of its providers actually served the request. That request
+    /// was routed to StreamLake, which no catalog of ours lists.
+    ///
+    /// Held as a fixture rather than written by hand so the parser is pinned
+    /// to a response that actually happened, and so a change in OpenRouter's
+    /// shape is caught by re-capturing rather than by reasoning about docs.
+    #[test]
+    fn a_router_stating_its_charge_has_that_cost_read_off_a_real_body() {
+        let body = include_str!("../tests/fixtures/openrouter-chat-completion-2026-08-05.json");
+        let parsed = parse_json_response(body.as_bytes());
+
+        // "cost": 4.8888e-06 dollars.
+        assert_eq!(parsed.observed_cost_nanousd, Some(4_889));
+        assert_eq!(
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 11,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 2,
+            }),
+            "the counts still land: they are the unit economics"
+        );
+        assert_eq!(
+            parsed.request_id.as_deref(),
+            Some("gen-1785937685-oXkc2ftOELkoToVUrLpM")
+        );
+    }
+
+    /// A charge of a few thousand nanodollars must not round to nothing.
+    ///
+    /// Real routed calls cost fractions of a cent. If the conversion lost
+    /// them, the ledger would read as free precisely where it is busiest.
+    #[test]
+    fn a_fraction_of_a_cent_survives_the_conversion() {
+        let body = include_str!("../tests/fixtures/openrouter-chat-completion-2026-08-05.json");
+        let cost = parse_json_response(body.as_bytes())
+            .observed_cost_nanousd
+            .expect("cost");
+        assert!(cost > 0, "a real charge must never record as free");
+    }
+
+    /// The counts must survive a provider that reports no cost, because that
+    /// is every direct vendor.
+    #[test]
+    fn a_provider_stating_no_charge_yields_counts_and_no_cost() {
+        let body = br#"{"id":"chatcmpl-1","model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":2}}"#;
+        let parsed = parse_json_response(body);
+        assert_eq!(parsed.observed_cost_nanousd, None);
+        assert!(parsed.tokens.is_some());
+    }
+
+    /// A stream reports its cost in the terminal chunk, alongside the counts.
+    #[test]
+    fn a_streamed_charge_is_read_from_the_terminal_chunk() {
+        let sse = concat!(
+            r#"data: {"id":"gen-2","model":"m","choices":[],"usage":null}"#,
+            "\n\n",
+            r#"data: {"id":"gen-2","model":"m","usage":{"prompt_tokens":5,"completion_tokens":1,"cost":0.001}}"#,
+            "\n\n",
+            "data: [DONE]\n\n",
+        );
+        let parsed = parse_sse_response(sse.as_bytes());
+        assert_eq!(parsed.observed_cost_nanousd, Some(1_000_000));
     }
 
     #[test]

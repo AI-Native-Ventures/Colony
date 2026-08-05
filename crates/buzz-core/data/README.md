@@ -197,6 +197,22 @@ provider, and that reaches the Spend screen. A rate wrong by a reseller's margin
 looks exactly like a right one, so the basis is what lets anyone notice. A line
 priced from list for a provider known to resell is the prompt to add a row.
 
+## This book is the fallback, not the first answer
+
+When a provider states on the response what it charged, the engine uses that
+figure and never opens this file. The entry reports a basis of `observed`.
+
+That is the better answer wherever it is available, because it is the charge
+rather than a model of the charge: it already carries the provider's margin,
+whatever promotion was running, the tier it actually applied, and the routing
+decision behind it. It also needs no maintenance and works for a provider whose
+rates were never entered here.
+
+So this file only has to answer for providers that stay silent about money,
+which today is every direct vendor. That is the right shape: hand-authored rows
+for the handful of accounts held directly, and no row at all for the long tail
+of resellers.
+
 ## What this book still cannot express
 
 **Service tiers are not yet observed.** `tier` rows parse and match, but the

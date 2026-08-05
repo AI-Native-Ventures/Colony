@@ -123,6 +123,9 @@ pub struct MeteredCall {
     /// Provider-itemized token counts. `None` for a non-2xx response or a
     /// body the parser did not understand.
     pub tokens: Option<UsageBreakdown>,
+    /// What the provider said the call cost, in nanoUSD, when it said.
+    /// `None` leaves the price book to work it out.
+    pub observed_cost_nanousd: Option<u64>,
     /// RFC 3339 UTC timestamp captured at response completion.
     pub timestamp: String,
     /// Label bound to the agent that made the call.
@@ -765,6 +768,7 @@ impl Tee {
             model: parsed.model,
             http_status: meta.http_status.as_u16(),
             tokens: parsed.tokens,
+            observed_cost_nanousd: parsed.observed_cost_nanousd,
             timestamp: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             agent_label: meta.agent_label,
             credential: meta.credential,

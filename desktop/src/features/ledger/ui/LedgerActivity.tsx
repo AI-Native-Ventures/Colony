@@ -31,6 +31,8 @@ function atListPrice(entry: LedgerEntry): boolean {
 
 function describePriceBasis(entry: LedgerEntry): string | undefined {
   switch (entry.priceBasis) {
+    case "observed":
+      return `${entry.provider} stated this charge on the call itself.`;
     case "providerRow":
       return `Priced at ${entry.provider}'s own rate.`;
     case "listRow":

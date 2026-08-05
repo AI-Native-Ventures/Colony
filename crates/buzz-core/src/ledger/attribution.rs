@@ -177,6 +177,7 @@ mod tests {
                 output_tokens: 1,
             }),
             amount_nanousd: None,
+            observed_cost_nanousd: None,
             harness: harness.map(str::to_string),
             session_id: None,
             turn_id: None,

@@ -74,6 +74,33 @@ tunnelling to a real vendor through `127.0.0.1` would have their spend read as
 zero. Free is a claim someone has to make, not something inferred from an
 octet.
 
+## When the provider states what it charged
+
+Some providers report the cost of a call on the call itself. The checkpoint
+reads that figure, records it in nanoUSD alongside the token counts, and the
+ledger uses it in preference to any rate in the price book. Such an entry
+reports a price basis of `observed`.
+
+This matters most for routers. OpenRouter picks a serving provider per request,
+and the cost depends on which one it picked, so no rate table of ours could be
+right in advance. It states `usage.cost` on every response, streaming included,
+where it arrives in the terminal chunk.
+
+The token counts are still recorded. The money comes from the provider; the
+counts are what unit economics are built on.
+
+**BYOK is handled separately and deliberately.** When a call runs on your own
+key at the upstream provider, OpenRouter's `cost` narrows to its own 5% routing
+fee, while the model itself is billed to your account with that provider under
+`cost_details.upstream_inference_cost`. Both are your money, so the checkpoint
+records the sum. If the upstream figure is absent, no observed cost is recorded
+at all and the price book answers instead: the fee alone would understate the
+call by roughly twentyfold, and an estimate that knows it is an estimate beats a
+precise-looking figure that is wrong.
+
+A stated cost of exactly zero is kept as zero. That is a provider saying the
+call was free, which is a fact, unlike a zero the ledger inferred.
+
 ## Providers that are not routed through the checkpoint
 
 An agent configured to call a provider directly (for example

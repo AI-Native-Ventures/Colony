@@ -348,6 +348,7 @@ mod tests {
                 payment_mode: PaymentMode::Metered,
                 tokens: Some(breakdown),
                 amount_nanousd: None,
+                observed_cost_nanousd: None,
                 harness: None,
                 session_id: None,
                 turn_id: None,

@@ -6,6 +6,7 @@
 use buzz_core::usage_record::UsageBreakdown;
 use serde_json::Value;
 
+use crate::cost::observed_cost_nanousd;
 use crate::sse::data_payloads;
 use crate::ParsedUsage;
 
@@ -63,13 +64,14 @@ pub fn parse_json_response(body: &[u8]) -> ParsedUsage {
         return ParsedUsage::default();
     };
 
+    let usage = root.get("usage").filter(|usage| usage.is_object());
     ParsedUsage {
-        tokens: root
-            .get("usage")
-            .filter(|usage| usage.is_object())
-            .map(breakdown),
+        tokens: usage.map(breakdown),
         model: string_field(&root, "model"),
         request_id: string_field(&root, "id"),
+        // Anthropic itself states no cost. A reseller speaking Anthropic's
+        // dialect may, and the dialect is not the vendor, so we look.
+        observed_cost_nanousd: usage.and_then(observed_cost_nanousd),
     }
 }
 
@@ -98,18 +100,20 @@ pub fn parse_sse_response(body: &[u8]) -> ParsedUsage {
                 parsed.model = string_field(message, "model");
                 parsed.request_id = string_field(message, "id");
                 if let Some(usage) = message.get("usage").filter(|usage| usage.is_object()) {
+                    parsed.observed_cost_nanousd = observed_cost_nanousd(usage);
                     start_usage = Some(usage.clone());
                 }
             }
             Some("message_delta") => {
+                let Some(usage) = event.get("usage").filter(|usage| usage.is_object()) else {
+                    continue;
+                };
                 // Cumulative, so the last one that reports usage is the turn.
-                if let Some(output) = event
-                    .get("usage")
-                    .filter(|usage| usage.is_object())
-                    .and_then(|usage| usage.get("output_tokens"))
-                    .and_then(Value::as_u64)
-                {
+                if let Some(output) = usage.get("output_tokens").and_then(Value::as_u64) {
                     final_output_tokens = Some(output);
+                }
+                if let Some(cost) = observed_cost_nanousd(usage) {
+                    parsed.observed_cost_nanousd = Some(cost);
                 }
             }
             _ => {}

@@ -84,6 +84,15 @@ pub struct UsageRecordPayload {
     pub tokens: Option<UsageBreakdown>,
     /// Direct cost in nanoUSD, for non-token records.
     pub amount_nanousd: Option<u64>,
+    /// What the provider itself said this call cost, in nanoUSD.
+    ///
+    /// Distinct from `amount_nanousd`, which replaces token pricing entirely.
+    /// This sits alongside `tokens`: the counts still matter for unit
+    /// economics, but the money is the provider's own figure rather than one
+    /// the price book worked out. The engine prefers it when present, because
+    /// it already carries margin, promotions and routing we cannot see.
+    #[serde(default)]
+    pub observed_cost_nanousd: Option<u64>,
     /// Harness that spawned the calling agent, when known.
     pub harness: Option<String>,
     /// Agent session identifier, when known.
@@ -134,6 +143,14 @@ impl UsageRecordPayload {
                     "exactly one of tokens or amountNanousd must be set (got neither)".to_string(),
                 ))
             }
+        }
+        if self.observed_cost_nanousd.is_some() && self.amount_nanousd.is_some() {
+            // Both are money, and nothing says which one the engine should
+            // believe. An amount record is the owner stating a cost outright;
+            // an observed cost is a provider stating one for a token call.
+            return Err(ObserverPayloadError::InvalidPayload(
+                "observedCostNanousd cannot accompany amountNanousd".to_string(),
+            ));
         }
         if let Some(work_context) = &self.work_context {
             work_context
@@ -191,6 +208,7 @@ mod tests {
                 output_tokens: 750,
             }),
             amount_nanousd: None,
+            observed_cost_nanousd: None,
             harness: Some("buzz-acp".to_string()),
             session_id: Some("sess-1".to_string()),
             turn_id: Some("turn-3".to_string()),

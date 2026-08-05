@@ -459,6 +459,14 @@ pub struct PricedCall {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PriceBasis {
+    /// No row: the provider stated what it charged, on the call itself.
+    ///
+    /// The strongest basis there is. A rate table models a charge; this is the
+    /// charge, already carrying the margin, promotions, tier discounts and
+    /// routing decisions no table of ours can see. Nothing needs maintaining
+    /// for it to stay right, and it works for a provider whose rates we have
+    /// never entered.
+    Observed,
     /// A row naming this call's provider. The rate is what that provider
     /// charges.
     ProviderRow,
