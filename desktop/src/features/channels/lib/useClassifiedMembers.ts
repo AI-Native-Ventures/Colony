@@ -5,9 +5,11 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { ChannelMember } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
+import { collapseAgentMembersByRole } from "./collapseAgentMembersByRole";
 import { compareMembersByRole } from "./memberUtils";
 
 export function useClassifiedMembers(
@@ -28,6 +30,22 @@ export function useClassifiedMembers(
   const relayAgentPubkeys = React.useMemo(
     () => new Set(relayAgents.map((agent) => normalizePubkey(agent.pubkey))),
     [relayAgents],
+  );
+
+  // Roles come from published kind-0 profiles: the one source that covers
+  // another member's agent as well as our own.
+  const memberPubkeys = React.useMemo(
+    () => members.map((member) => member.pubkey),
+    [members],
+  );
+  const memberProfilesQuery = useUsersBatchQuery(memberPubkeys, {
+    enabled: memberPubkeys.length > 0,
+  });
+  const roleOfMember = React.useCallback(
+    (member: ChannelMember) =>
+      memberProfilesQuery.data?.profiles?.[normalizePubkey(member.pubkey)]
+        ?.role ?? null,
+    [memberProfilesQuery.data?.profiles],
   );
 
   const isBot = React.useCallback(
@@ -74,12 +92,14 @@ export function useClassifiedMembers(
         compareMembersByRole(left, right, currentPubkey),
       );
 
+    // One workspace role reads as one colleague: instances owned by different
+    // members collapse to the viewer's own (docs/design/role-agents.html).
     return {
       people: sort(peopleList),
-      bots: sort(botList),
+      bots: collapseAgentMembersByRole(sort(botList), roleOfMember, isMyBot),
       archived: sort(archivedList),
     };
-  }, [currentPubkey, isArchived, isBot, members]);
+  }, [currentPubkey, isArchived, isBot, isMyBot, members, roleOfMember]);
 
   return {
     people,

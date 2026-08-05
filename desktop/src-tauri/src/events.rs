@@ -609,6 +609,7 @@ pub fn build_profile(
     picture: Option<&str>,
     about: Option<&str>,
     nip05: Option<&str>,
+    role: Option<&str>,
 ) -> Result<EventBuilder, String> {
     let mut map = serde_json::Map::new();
     if let Some(v) = display_name {
@@ -625,6 +626,12 @@ pub fn build_profile(
     }
     if let Some(v) = nip05 {
         map.insert("nip05".into(), serde_json::Value::String(v.into()));
+    }
+    // Workspace role. Each member runs their own instance of a role, so this
+    // is the only field that lets one member's client recognise another
+    // member's instance as the same colleague (docs/design/role-agents.html).
+    if let Some(v) = role {
+        map.insert("role".into(), serde_json::Value::String(v.into()));
     }
     let content = serde_json::Value::Object(map).to_string();
     Ok(EventBuilder::new(Kind::Custom(0), content))

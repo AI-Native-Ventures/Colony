@@ -58,6 +58,7 @@ import {
   globalSearchIdentityKey,
   type ActorMentionCandidate,
   mentionCandidateLabel,
+  mergeMentionCandidate,
 } from "./mentionCandidates";
 import { useBlockMentions } from "./useBlockMentions";
 const MENTION_DEBOUNCE_MS = 120;
@@ -271,39 +272,17 @@ export function useMentions(
       ) {
         return;
       }
-      const current = candidatesByPubkey.get(pubkey);
-      if (!current) {
-        candidatesByPubkey.set(pubkey, { ...candidate, pubkey });
-        return;
-      }
-
-      candidatesByPubkey.set(pubkey, {
-        ...current,
-        avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
-        displayName:
-          current.isAgent && !candidate.isAgent
-            ? current.displayName
-            : candidate.isAgent && !current.isAgent
-              ? (candidate.displayName ?? current.displayName)
-              : (current.displayName ?? candidate.displayName),
-        isAgent: current.isAgent || candidate.isAgent,
-        isMember: current.isMember || candidate.isMember,
-        personaId: current.personaId ?? candidate.personaId,
-        personaName: current.personaName ?? candidate.personaName ?? null,
-        role: current.role ?? candidate.role ?? null,
-        roleId: current.roleId ?? candidate.roleId ?? null,
-        roleTitle: current.roleTitle ?? candidate.roleTitle ?? null,
-        secondaryLabel:
-          current.secondaryLabel ?? candidate.secondaryLabel ?? null,
-        ownerPubkey:
-          current.ownerPubkey ??
-          candidate.ownerPubkey ??
-          (candidate.isAgent && candidate.pubkey
-            ? profiles?.[pubkey]?.ownerPubkey
-            : null) ??
-          null,
-        isManagedAgent: current.isManagedAgent || candidate.isManagedAgent,
-      });
+      candidatesByPubkey.set(
+        pubkey,
+        mergeMentionCandidate(
+          candidatesByPubkey.get(pubkey),
+          {
+            ...candidate,
+            pubkey,
+          },
+          profiles?.[pubkey] ?? null,
+        ),
+      );
     };
     for (const member of members ?? []) {
       const pubkey = normalizePubkey(member.pubkey);

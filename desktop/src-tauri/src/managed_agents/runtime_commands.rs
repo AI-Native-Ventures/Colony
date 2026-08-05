@@ -315,6 +315,7 @@ fn start_pair(
         pubkey: record.pubkey.clone(),
         agent_command: record_agent_command(record, &reconcile_personas),
         persona_id: record.persona_id.clone(),
+        role_id: record.role_id.clone(),
     };
     runtimes.insert(key.clone(), ManagedAgentPairRuntime::starting(process));
     let status = status_for(&app, record, &key, runtimes.get(&key), None);

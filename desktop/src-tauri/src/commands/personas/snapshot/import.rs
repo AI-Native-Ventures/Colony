@@ -573,6 +573,7 @@ pub async fn confirm_agent_snapshot_import(
         &display_name,
         effective_avatar.as_deref(),
         auth_tag.as_deref(),
+        record.role_id.as_deref(),
     )
     .await
     .err();
@@ -818,11 +819,17 @@ mod import_avatar_tests {
         .unwrap()
         .unwrap();
 
-        let event =
-            crate::events::build_profile(Some("Imported agent"), None, Some(&avatar), None, None)
-                .unwrap()
-                .sign_with_keys(&nostr::Keys::generate())
-                .unwrap();
+        let event = crate::events::build_profile(
+            Some("Imported agent"),
+            None,
+            Some(&avatar),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .sign_with_keys(&nostr::Keys::generate())
+        .unwrap();
         assert!(event.content.len() < 64 * 1024);
         assert!(!event.content.contains("data:image/"));
         assert!(event

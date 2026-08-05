@@ -26,6 +26,7 @@ mod relay_mesh;
 mod repos;
 mod restore;
 pub mod retention;
+mod role_backfill;
 mod runtime;
 mod runtime_commands;
 mod runtime_types;

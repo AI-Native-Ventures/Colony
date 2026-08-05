@@ -68,10 +68,17 @@ export const WELCOME_TEAM_STARTERS = [
 
 export type WelcomeTeamAgents = [ManagedAgent];
 
-const welcomeTeamPromises = new Map<
-  string,
-  Promise<WelcomeTeamAgents | null>
->();
+export type WelcomeTeamProvisioning = {
+  agents: WelcomeTeamAgents;
+  /**
+   * Another member's agents already staff this community. The instance is
+   * still provisioned; only the kickoff choreography is suppressed so the
+   * channel keeps one intro rather than one per member who joins.
+   */
+  alreadyStaffed: boolean;
+};
+
+const welcomeTeamPromises = new Map<string, Promise<WelcomeTeamProvisioning>>();
 
 function normalizeRelayUrl(relayUrl: string | null | undefined) {
   return relayUrl?.trim().replace(/\/+$/, "") ?? null;
@@ -268,10 +275,10 @@ export async function buildWelcomeStarterCreateInput(
     relayUrl: relayUrl ?? undefined,
     spawnAfterCreate: false,
     startOnAppLaunch: false,
-    // Workspace agents answer any community member (role-agents phase 1).
-    // The relay's membership gate bounds who can reach the channel at all,
-    // so "anyone" here means "any member of this workspace", not the world.
-    respondTo: "anyone",
+    // Owner-only: every member runs their own instance of the role, so an
+    // agent only ever answers the member who owns it, on that member's
+    // machine and subscription (docs/design/role-agents.html).
+    respondTo: "owner-only",
   };
 }
 
@@ -314,26 +321,18 @@ export function welcomeStarterRuntimeUpdate(
 async function provisionWelcomeTeam(
   channelId: string,
   relayUrl?: string | null,
-): Promise<WelcomeTeamAgents | null> {
+): Promise<WelcomeTeamProvisioning> {
   const existingAgents = await listManagedAgents();
 
-  // Join-flow dedup: when another member's fleet already staffs this
-  // community and this install never minted its own starter, don't mint one.
-  // The existing team's opener is already in the channel history; the joiner
-  // simply talks to the workspace's agents. An install that already has its
-  // own starter (pre-dedup builds) keeps using it.
-  const hasOwnStarter = WELCOME_TEAM_STARTERS.every((starter) =>
-    pickWelcomeTeamStarterAgentForRelay(existingAgents, starter, relayUrl),
+  // A joiner still mints its own instance of the role - that instance is what
+  // answers them, on their machine and their subscription, and the UI merges
+  // it with the other members' instances into one colleague. What it must not
+  // do is repeat the kickoff, so the channel keeps a single intro.
+  const members = await getChannelMembers(channelId).catch(() => []);
+  const ownPubkeys = new Set(
+    existingAgents.map((agent) => normalizePubkey(agent.pubkey)),
   );
-  if (!hasOwnStarter) {
-    const members = await getChannelMembers(channelId).catch(() => []);
-    const ownPubkeys = new Set(
-      existingAgents.map((agent) => normalizePubkey(agent.pubkey)),
-    );
-    if (communityAlreadyStaffed(members, ownPubkeys)) {
-      return null;
-    }
-  }
+  const alreadyStaffed = communityAlreadyStaffed(members, ownPubkeys);
 
   await ensureWelcomeTeamPersonasActive();
   const [personas, runtimeCatalog, globalConfig] = await Promise.all([
@@ -389,13 +388,13 @@ async function provisionWelcomeTeam(
   // the audience).
   const welcomeAgents: WelcomeTeamAgents = [chiefOfStaff];
   await ensureWelcomeTeamMembership(channelId, welcomeAgents);
-  return welcomeAgents;
+  return { agents: welcomeAgents, alreadyStaffed };
 }
 
 export function ensureWelcomeTeam(
   channelId: string,
   relayUrl?: string | null,
-): Promise<WelcomeTeamAgents | null> {
+): Promise<WelcomeTeamProvisioning> {
   const key = `${normalizeRelayUrl(relayUrl) ?? ""}:${channelId}`;
   const current = welcomeTeamPromises.get(key);
   if (current) return current;

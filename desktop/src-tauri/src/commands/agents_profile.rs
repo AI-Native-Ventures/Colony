@@ -28,6 +28,9 @@ pub(crate) struct ProfileReconcileData {
     /// backfill to recover the correct avatar from the persona record when the
     /// relay profile has been corrupted.
     pub(crate) persona_id: Option<String>,
+    /// Workspace role this instance fills, published so other members' clients
+    /// can recognise their own instance of the same role.
+    pub(crate) role_id: Option<String>,
 }
 
 /// Resolve the avatar to backfill for a legacy agent record (pre-PR-921, no
@@ -145,7 +148,12 @@ pub(crate) async fn reconcile_profile_at(
         Some(expected_avatar)
     };
 
-    if !profile_needs_sync(existing.as_ref(), &data.name, expected_avatar.as_deref()) {
+    if !profile_needs_sync(
+        existing.as_ref(),
+        &data.name,
+        expected_avatar.as_deref(),
+        data.role_id.as_deref(),
+    ) {
         return Ok(());
     }
 
@@ -166,6 +174,7 @@ pub(crate) async fn reconcile_profile_at(
         &data.name,
         expected_avatar.as_deref(),
         data.auth_tag.as_deref(),
+        data.role_id.as_deref(),
     )
     .await
 }
@@ -177,13 +186,18 @@ pub(super) fn profile_needs_sync(
     existing: Option<&crate::relay::AgentProfileInfo>,
     expected_name: &str,
     expected_avatar: Option<&str>,
+    expected_role: Option<&str>,
 ) -> bool {
     match existing {
         None => true,
         Some(info) => {
             let name_matches = info.display_name.as_deref() == Some(expected_name);
             let picture_matches = info.picture.as_deref() == expected_avatar;
-            !name_matches || !picture_matches
+            // A profile published before roles existed carries no role, so
+            // this is also the migration trigger: every agent republishes once
+            // to advertise the role its members' clients group it by.
+            let role_matches = info.role.as_deref() == expected_role;
+            !name_matches || !picture_matches || !role_matches
         }
     }
 }
