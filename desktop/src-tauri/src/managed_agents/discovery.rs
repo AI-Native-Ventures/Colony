@@ -1208,66 +1208,107 @@ pub(crate) fn probe_codex_acp_version_with_path(
     use std::io::{Read as _, Seek as _, SeekFrom};
     use std::time::{Duration, Instant};
     const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+    // Linux refuses to exec a file any process still holds open for writing and
+    // fails with ETXTBSY. A perfectly good adapter hits this: the installer that
+    // just wrote it may not have closed its descriptor, and any concurrent fork
+    // in this process inherits that descriptor for the window before it execs.
+    // The condition clears in milliseconds, so retry rather than report the
+    // adapter missing. macOS does not enforce the rule, so only Linux retries.
+    const EXEC_ATTEMPTS: usize = 10;
+    const EXEC_RETRY_DELAY: Duration = Duration::from_millis(50);
+    // glibc's `posix_spawn`, which `Command::spawn` uses on Linux, does not
+    // report a failed exec to the caller: it succeeds, and the child exits 127
+    // having written nothing. So a transient ETXTBSY arrives here as an exit
+    // status, never as a spawn error, and both have to be caught.
+    const EXEC_FAILED_EXIT_CODE: i32 = 127;
 
-    // A regular file returns EOF at its current size even when a descendant
-    // inherits its descriptor, bounding the post-exit read cross-platform.
-    let mut tmp = tempfile::tempfile().ok()?;
-
-    let mut command = Command::new(binary_path);
-    command.arg("--version");
-    if let Some(path) = augmented_path {
-        command.env("PATH", path);
-    }
-    crate::util::configure_no_window(&mut command);
-    let mut child = command
-        .stdout(tmp.try_clone().ok()?)
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-
-    // Poll until the deadline rather than blocking on stdout EOF.
+    // Every attempt shares one deadline, so retrying can never stretch the
+    // probe past the timeout a caller is already prepared to wait.
     let deadline = Instant::now() + VERSION_PROBE_TIMEOUT;
-    let exit_status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if Instant::now() >= deadline {
+
+    for attempt in 1..=EXEC_ATTEMPTS {
+        let retries_left = attempt < EXEC_ATTEMPTS && Instant::now() < deadline;
+
+        // A regular file returns EOF at its current size even when a descendant
+        // inherits its descriptor, bounding the post-exit read cross-platform.
+        // Fresh per attempt so a previous attempt's bytes cannot be read back.
+        let mut tmp = tempfile::tempfile().ok()?;
+
+        // Rebuilt per attempt: spawning consumes the stdout handle.
+        let mut command = Command::new(binary_path);
+        command.arg("--version");
+        if let Some(path) = augmented_path {
+            command.env("PATH", path);
+        }
+        crate::util::configure_no_window(&mut command);
+        let spawned = command
+            .stdout(tmp.try_clone().ok()?)
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        let mut child = match spawned {
+            Ok(child) => child,
+            // Not the path glibc takes, but musl and other platforms do report
+            // the errno, and then it is the same transient.
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && retries_left => {
+                std::thread::sleep(EXEC_RETRY_DELAY);
+                continue;
+            }
+            Err(_) => return None,
+        };
+
+        // Poll until the deadline rather than blocking on stdout EOF.
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(_) => {
                     let _ = child.kill();
                     let _ = child.wait();
                     return None;
                 }
-                std::thread::sleep(Duration::from_millis(50));
             }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+        };
+
+        // Read at most 4 KiB from the regular file without blocking.
+        tmp.seek(SeekFrom::Start(0)).ok()?;
+        let mut buf = Vec::with_capacity(128);
+        let _ = (&mut tmp as &mut dyn std::io::Read)
+            .take(4096)
+            .read_to_end(&mut buf);
+
+        if !exit_status.success() {
+            // Exactly glibc's failed-exec signature: 127 and not one byte of
+            // output. A real adapter that exits 127 with nothing to say is
+            // retried too and still ends as None, only later.
+            if exit_status.code() == Some(EXEC_FAILED_EXIT_CODE) && buf.is_empty() && retries_left {
+                std::thread::sleep(EXEC_RETRY_DELAY);
+                continue;
             }
+            return None;
         }
-    };
 
-    if !exit_status.success() {
-        return None;
+        let stdout = String::from_utf8_lossy(&buf);
+        // Output format: "<package-name> <major>.<minor>.<patch>"
+        let version_str = stdout.split_whitespace().last()?;
+        let mut components = version_str.split('.');
+        let major = components.next()?.parse::<u64>().ok()?;
+        let minor = components.next()?.parse::<u64>().ok()?;
+        let patch = components.next()?.parse::<u64>().ok()?;
+        if components.next().is_some() {
+            return None;
+        }
+        return Some((major, minor, patch));
     }
 
-    // Read at most 4 KiB from the regular file without blocking.
-    tmp.seek(SeekFrom::Start(0)).ok()?;
-    let mut buf = Vec::with_capacity(128);
-    let _ = (&mut tmp as &mut dyn std::io::Read)
-        .take(4096)
-        .read_to_end(&mut buf);
-
-    let stdout = String::from_utf8_lossy(&buf);
-    // Output format: "<package-name> <major>.<minor>.<patch>"
-    let version_str = stdout.split_whitespace().last()?;
-    let mut components = version_str.split('.');
-    let major = components.next()?.parse::<u64>().ok()?;
-    let minor = components.next()?.parse::<u64>().ok()?;
-    let patch = components.next()?.parse::<u64>().ok()?;
-    if components.next().is_some() {
-        return None;
-    }
-    Some((major, minor, patch))
+    None
 }
 
 /// Classifies a resolved codex-acp binary path as [`AcpAvailabilityStatus::Available`]
