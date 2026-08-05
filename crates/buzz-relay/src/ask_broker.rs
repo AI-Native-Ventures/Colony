@@ -432,6 +432,11 @@ async fn close_superseded_prior(
     }
 }
 
+/// The `asks.status` value a closed-by-withdrawal row carries. Mirrors the
+/// literal in `Db::withdraw_ask`'s `UPDATE asks SET status = 'withdrawn'`,
+/// which is the statement [`close_superseded_prior`] ends on.
+const ASK_STATUS_WITHDRAWN: &str = "withdrawn";
+
 /// After a resolution closes an ask that superseded a prior (a manual
 /// escalation chain), wake the PRIOR's filer too: the answer belongs to
 /// whoever was originally blocked, not only to the agent that carried the
@@ -444,6 +449,36 @@ async fn close_superseded_prior(
 /// woken this way. Without those checks an agent could point `prior` at
 /// any ask in the community and have the relay deliver "resolved" wake-ups
 /// to its filer.
+///
+/// **The prior must actually be closed.** `find_ask_by_event_id` loads a row
+/// in ANY status, so without a status gate this wakes the filer of an ask
+/// that no successor ever superseded and that is still in flight -- the
+/// exact false unblock this subsystem exists to prevent. Two ordinary
+/// (non-adversarial) paths reach it:
+///
+/// 1. A `promoted` prior. The deadline sweep already carried the need one
+///    tier up under its own successor, and a leader that then files its own
+///    ask citing the one it was handed produces a prior that
+///    [`close_superseded_prior`] correctly declined to touch (its lookup is
+///    `find_open_ask_by_event_id`).
+/// 2. An `open` prior whose audience cannot be outranked. A pubkey that is
+///    both an executive-tier agent and a community owner ranks 3 on the
+///    altitude ladder ([`audience_altitude`] checks the owner role first),
+///    so no successor is strictly higher, [`close_superseded_prior`]
+///    declines and the prior stays open.
+///
+/// Requiring `status == "withdrawn"` -- the state [`close_superseded_prior`]
+/// leaves a prior it closed, since it ends by calling `withdraw_ask` --
+/// closes `open`, `resolved` and `promoted` in one check.
+///
+/// It does not distinguish a prior withdrawn by THIS successor's supersede
+/// from one withdrawn earlier for an unrelated reason (the executive may
+/// withdraw any ask). That residual case is not the failure this guard is
+/// for: such a prior is genuinely closed, so nobody is told an ask resolved
+/// while still waiting on it, and the standing rule already restricts the
+/// wake to the agent the prior was addressed to. Pinning it exactly would
+/// mean matching the prior's `resolution_event` against the withdrawal this
+/// successor produced, which means string-matching a human-readable reason.
 async fn wake_superseded_prior_filer(
     tenant: &TenantContext,
     state: &Arc<AppState>,
@@ -468,10 +503,15 @@ async fn wake_superseded_prior_filer(
             return;
         }
     };
-    if prior.ask_type == AskType::Stall.as_str() {
+    if prior.status != ASK_STATUS_WITHDRAWN {
         return;
     }
+    // Standing, then the stall exemption, in the same order
+    // `close_superseded_prior` applies them.
     if prior.audience_pubkey != successor_event.pubkey.to_bytes().to_vec() {
+        return;
+    }
+    if prior.ask_type == AskType::Stall.as_str() {
         return;
     }
     let Some(origin_thread) = &prior.origin_thread else {
@@ -484,13 +524,19 @@ async fn wake_superseded_prior_filer(
     // self-escalation, or resolve_filer landing on the same key); one wake
     // is enough. But that receipt only fires when the SUCCESSOR itself
     // carries an origin thread (handle_resolution's own gate); without
-    // requiring that here too, a self-addressed prior (filer == audience,
-    // reachable when the same pubkey is both an executive-tier agent and a
-    // community owner -- check_altitude's executive branch only checks that
-    // the audience holds the owner role, never that it differs from the
-    // signer) escalated with no origin thread on the escalation would be
-    // skipped believing the primary path already delivered, when in fact
-    // nothing did.
+    // requiring that here too, a self-addressed prior (filer == audience)
+    // escalated with no origin thread on the escalation would be skipped
+    // believing the primary path already delivered, when in fact nothing
+    // did.
+    //
+    // A self-addressed ask is reachable because check_altitude's executive
+    // branch only checks that the audience holds the owner role, never that
+    // it differs from the signer, so a pubkey that is both an
+    // executive-tier agent and a community owner can address itself. Such a
+    // prior is never closed by the supersede path (it ranks 3, so no
+    // successor strictly outranks it), and the withdrawn gate above
+    // therefore only lets it through when that executive withdrew its own
+    // ask deliberately before filing the successor.
     if successor_ask.origin_thread_hex.is_some() {
         if let Ok(primary) = resolve_filer(state, successor_event, successor_ask) {
             if primary == filer {
