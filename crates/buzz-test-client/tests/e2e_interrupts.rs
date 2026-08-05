@@ -471,6 +471,45 @@ async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
         filed_ok.message
     );
 
+    // ---- Step 3b: the ladder actually enforces, not just permits --------
+    // Step 3 above only proves the CORRECT sequence is accepted; it says
+    // nothing about whether an incorrect one is refused (neuter
+    // `ask_broker::check_altitude` to always return `Ok(None)` and every
+    // assertion up to this point still passes). A worker skipping the
+    // ladder entirely -- addressing the owner directly -- must come back
+    // refused, over the wire, with the relay's own conflict message naming
+    // the missing hop.
+    let ladder_skip_event = build_ask(&AskFields {
+        ask_type: "credential",
+        audience_hex: &owner_hex,
+        initiative: &initiative,
+        need: "vendor-key-direct-to-owner",
+        thread_hex: &root_id,
+        prior_hex: None,
+        channel: &channel_id,
+        headline: "Skipping the ladder: need the vendor API key from you",
+    })
+    .sign_with_keys(&worker)
+    .expect("sign ladder-skipping ask");
+    let ladder_skip_ok = worker_ws
+        .send_event(ladder_skip_event)
+        .await
+        .expect("send ladder-skipping ask");
+    assert!(
+        !ladder_skip_ok.accepted,
+        "a worker addressing the owner directly (skipping leader and executive) must be refused"
+    );
+    assert!(
+        ladder_skip_ok.message.starts_with("conflict:"),
+        "unexpected ladder-skip rejection message: {}",
+        ladder_skip_ok.message
+    );
+    assert!(
+        ladder_skip_ok.message.contains("leader"),
+        "expected an altitude-ladder refusal naming the missing hop, got: {}",
+        ladder_skip_ok.message
+    );
+
     // ---- Step 4: a sibling raise for the same need dedupes to the first -
     // A second worker, blocked on the exact same (initiative, need) as the
     // original raise, must get back the FIRST ask's event id rather than a
