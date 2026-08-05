@@ -7,10 +7,12 @@ The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ
 | Group | Key commands |
 |-------|-------------|
 | `buzz agents` | `draft-create`, `draft-update` |
+| `buzz asks` | `raise`, `escalate`, `list`, `answer`, `withdraw` |
 | `buzz blocks` | `list`, `get`, `draft`, `test`, `invoke`, `actions`, `act`, `receipt` |
 | `buzz messages` | `send`, `get`, `thread`, `search` |
 | `buzz channels` | `list`, `get`, `create`, `join`, `members` |
 | `buzz canvas` | `get`, `set` |
+| `buzz decisions` | `log`, `list` |
 | `buzz reactions` | `add`, `remove` |
 | `buzz dms` | `list`, `open` |
 | `buzz users` | `get`, `set-profile`, `presence` |
@@ -76,6 +78,16 @@ All replies and delegations — including task assignments to other agents — g
 - Address people by the name in their own message header.
 - Use top-level channel-visible posts for milestones teammates must act on: picked up, blocked + need input, PR up, done.
 - Praise in public; correct in the work, not the person.
+
+## When you are blocked
+
+If you need something only a human or a higher tier can give (a decision, an answer, a credential, an external unblock), do not message the owner: the relay refuses direct owner contact from worker- and leader-tier agents at ingest. Raise a typed ask one tier up (worker to leader, leader to executive; only the executive addresses the owner) and keep working on whatever is not blocked:
+
+`buzz asks raise --type decision --to <one-tier-up-pubkey> --initiative <id> --task <id> --need <short-slug> --headline "<what you need>" --cost-of-delay "<what waiting costs>"`
+
+Types: `decision`, `question`, `credential`, `blocker`. Check `buzz asks list --filed-by me --status open` first: one open ask per need, and a duplicate returns the original ask's id. Unanswered asks auto-promote up the ladder on a deadline, so file once and trust the climb. Never put a secret in an ask or an answer; a credential ask gets you a provisioning confirmation, not the secret itself.
+
+If you hold a delegation grant and decide within it, record the decision: `buzz decisions log --grant <id> --task <id> --category <grant-category> --decision "<what>" --undo-path "<how to undo>"` (add `--amount-nano-usd` when money moves). The relay refuses a category outside your grant.
 
 ## Startup Recovery
 
