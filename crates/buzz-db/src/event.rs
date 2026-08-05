@@ -1699,7 +1699,9 @@ pub struct StallCandidateTask {
 
 /// Query the latest in-progress task heads across every non-archived
 /// community, for the stall-detection sweep, EXCLUDING any task that
-/// already carries an open `stall` ask.
+/// already carries an open `stall` ask, and EXCLUDING any task I4's
+/// re-filing suppression would decline anyway (a closed stall ask that
+/// postdates the task's own last measured activity).
 ///
 /// NIP-33 latest-wins resolution happens FIRST (the `latest_task_heads` CTE),
 /// and the `status = 'inProgress'` filter is applied only to that already-
@@ -1714,24 +1716,44 @@ pub struct StallCandidateTask {
 /// completed/cancelled tasks must never be able to crowd its few genuinely
 /// in-progress tasks out of a capped batch.
 ///
-/// The `NOT EXISTS` clause against `asks` is the SAME lesson applied to a
-/// second, sharper starvation the status filter alone does not close: a
-/// task head's `created_at` never moves once it stalls (nothing
-/// republishes it), so under `ORDER BY created_at ASC` an already-flagged
-/// task sorts at the very front of every future batch, permanently, since
-/// nothing ever pushes its deadline forward the way an ask row's
-/// `deadline_at` can be re-armed. Once enough already-flagged tasks
-/// accumulate across a deployment, they alone can fill `batch_limit` on
-/// every tick, and a task that stalls later is never examined -- silently,
-/// with no human ever told. Excluding rows that already have a live stall
-/// ask removes them from contention entirely rather than re-selecting and
-/// re-skipping them every pass. The `need_key` this excludes on is derived
-/// with the exact same SHA-256-of-task-id construction as
+/// Two `NOT EXISTS` clauses against `asks` apply the SAME lesson to two
+/// starvation shapes the status filter alone does not close, both rooted in
+/// the same underlying fact: a task head's `created_at` never moves once it
+/// stalls (nothing republishes it), so under `ORDER BY created_at ASC` a
+/// candidate this query declines to act on sorts at the very front of every
+/// future batch, permanently -- there is no `deadline_at` here to re-arm
+/// the way the ask-deadline sweep does.
+///
+/// - **C1**: a task that already has a live open stall ask. Re-selecting it
+///   every tick just to hit the dedupe index and file nothing wastes the
+///   slot forever.
+/// - **NB2**: a task I4's suppression (`interrupt_runtime::process_stall_candidate`)
+///   would decline anyway -- a closed (`resolved`/`withdrawn`) stall ask
+///   whose `updated_at` is at or after this task's own last measured
+///   activity (the later of its head's `created_at` and the last event in
+///   its `sourceChannelId`, computed here with the same `GREATEST`/
+///   `COALESCE` shape the Rust check uses). Filtering ONLY C1 in SQL left
+///   NB2's converged set filtering in Rust, AFTER the candidate already
+///   consumed a slot -- exactly the C1 shape one class smaller, and reached
+///   in completely ordinary use (I4 is designed to let a need be filed,
+///   closed, and refiled, so a closed-with-no-fresh-activity task is not a
+///   pathological state).
+///
+/// Once enough tasks in either class accumulate across a deployment, they
+/// alone can fill `batch_limit` on every tick, and a task that stalls later
+/// is never examined -- silently, with no human ever told. Both `need_key`
+/// derivations use the exact same SHA-256-of-task-id construction as
 /// `interrupt_runtime::stall_need_key` (`'stall-' || first 32 hex chars of
 /// sha256(task id)`, via pgcrypto's `digest()`, already required by
 /// migration 0001) -- the two MUST stay in lockstep, since this is what
-/// lets the exclusion recognize a task's own prior stall ask by need alone,
-/// without a second round trip per candidate.
+/// lets the exclusion recognize a task's own prior stall asks by need
+/// alone, without a second round trip per candidate.
+///
+/// The `sourceChannelId` cast is guarded by a `CASE` (which Postgres always
+/// short-circuits, unlike a bare `AND` chain) rather than cast directly,
+/// since it is filer-controlled JSON content, not a validated column: an
+/// unguarded `::uuid` cast on a malformed value would fail the WHOLE query
+/// for every community's candidates, not just the one bad row.
 ///
 /// Ordered oldest-revision-first so a systematic sweep naturally rotates
 /// toward whichever in-progress tasks have sat longest without a status
@@ -1759,6 +1781,7 @@ pub async fn query_in_progress_task_heads(
         FROM latest_task_heads AS t
         WHERE t.content::jsonb ->> 'status' = 'inProgress'
           AND NOT EXISTS (
+            -- C1: already carries a live open stall ask.
             SELECT 1 FROM asks AS a
             WHERE a.community_id = t.community_id
               AND a.ask_type = 'stall'
@@ -1767,6 +1790,32 @@ pub async fn query_in_progress_task_heads(
                     encode(digest(t.content::jsonb ->> 'id', 'sha256'), 'hex')
                     from 1 for 32
                   )
+          )
+          AND NOT EXISTS (
+            -- NB2: I4 would suppress re-filing anyway -- a closed stall ask
+            -- postdates this task's own last measured activity.
+            SELECT 1 FROM asks AS a2
+            WHERE a2.community_id = t.community_id
+              AND a2.ask_type = 'stall'
+              AND a2.status IN ('resolved', 'withdrawn')
+              AND a2.need_key = 'stall-' || substring(
+                    encode(digest(t.content::jsonb ->> 'id', 'sha256'), 'hex')
+                    from 1 for 32
+                  )
+              AND a2.updated_at >= EXTRACT(EPOCH FROM GREATEST(
+                    t.created_at,
+                    COALESCE(
+                      (SELECT MAX(ev.created_at) FROM events AS ev
+                       WHERE ev.deleted_at IS NULL
+                         AND ev.channel_id = CASE
+                               WHEN t.content::jsonb ->> 'sourceChannelId'
+                                    ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                               THEN (t.content::jsonb ->> 'sourceChannelId')::uuid
+                               ELSE NULL
+                             END),
+                      t.created_at
+                    )
+                  ))::bigint
           )
         ORDER BY t.created_at ASC
         LIMIT $2

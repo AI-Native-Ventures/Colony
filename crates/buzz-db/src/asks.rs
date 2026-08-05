@@ -394,37 +394,55 @@ pub async fn query_due_asks(pool: &PgPool, now_secs: i64, limit: i64) -> Result<
     rows.into_iter().map(row_to_ask_row).collect()
 }
 
-/// Returns `promoted` asks that are genuine orphans -- rows for which NO
-/// OTHER `asks` row (any status) has EVER existed for the same
-/// `(community_id, initiative_id, need_key)` -- across every community,
-/// capped at `limit` rows.
+/// Returns `promoted` asks that are genuine orphans -- rows for which no
+/// OTHER `asks` row for the same `(community_id, initiative_id, need_key)`
+/// was created at or after THIS row's claim (its `updated_at`, stamped by
+/// [`mark_ask_promoted`]) -- across every community, capped at `limit` rows.
 ///
-/// This is deliberately NOT "the named successor (`resolution_event`) does
-/// not exist as a row": that weaker check also matches
+/// This is deliberately NOT "no other row has EVER existed for this need"
+/// (an earlier, over-corrected version of this query): a need's dedupe slot
+/// is only held while `status = 'open'`, so an OLDER, already-closed ask for
+/// the SAME need is ordinary history, not evidence the current promotion
+/// was superseded -- `interrupt_runtime::process_stall_candidate`'s own I4
+/// fix deliberately re-enables filing the same need again once a prior ask
+/// on it closes and shows fresh activity. Treating any historical row as
+/// proof-of-coverage made a genuine crash orphan permanently invisible
+/// whenever its need had ANY closed history: file, resolve, file again,
+/// promote, crash -- the second (orphaned) promotion's own `NOT EXISTS`
+/// would find the FIRST (long-closed) row and wrongly conclude the need was
+/// covered, forever.
+///
+/// It is also deliberately NOT "the named successor (`resolution_event`)
+/// does not exist as a row": that check matches
 /// `interrupt_runtime::promote_to`'s `Duplicate` arm, which leaves the
-/// original `promoted` toward a successor event that was built, signed,
-/// and then simply discarded -- never stored -- because a DIFFERENT ask
-/// (a different `ask_event_id`, same need) won the race in the instant
-/// between the claim and the filing attempt. In that case the need is not
-/// orphaned at all; it has (or, later, had and properly closed) a live ask
-/// under the winner's event id, and reopening the original would resurrect
-/// a need that was correctly superseded -- worse, this can succeed outright
-/// once the winner itself resolves and no longer holds the
-/// `asks_open_need_uniq` slot, silently telling a founder an already-
-/// answered need needs answering again. Checking for the presence of ANY
-/// other row for the same need (open, resolved, withdrawn, or promoted
-/// further) rather than one specific event id closes both the false-orphan
-/// case and this resurrection case at once.
+/// original `promoted` toward a successor event that was built, signed, and
+/// then simply discarded -- never stored -- because a DIFFERENT ask (a
+/// different `ask_event_id`, same need) won the race in the instant between
+/// the claim and the filing attempt. In that case the need is not orphaned;
+/// it has (or later had, and properly closed) a live ask under the winner's
+/// event id, and reopening the original would resurrect a need that was
+/// correctly superseded -- this can succeed outright once the winner itself
+/// resolves and no longer holds the `asks_open_need_uniq` slot, silently
+/// telling a founder an already-answered need needs answering again.
+///
+/// The `created_at >= a.updated_at` bound is what distinguishes a genuine
+/// racing successor from old history: `promote_to`'s claim
+/// (`mark_ask_promoted`, which stamps `updated_at`) and the race winner's
+/// `insert_ask` (which stamps ITS `created_at`) happen back-to-back in the
+/// same filing attempt, so the winner's `created_at` is always at or after
+/// the claim's `updated_at`. An ask that closed and was superseded long
+/// before this promotion was even attempted has a `created_at` well before
+/// that claim, and so no longer masks a true orphan.
 ///
 /// The genuine crash residual `interrupt_runtime::promote_to`'s doc comment
 /// describes -- a process crash in the narrow window between
 /// [`mark_ask_promoted`] committing and the successor being filed at all --
-/// leaves the original as the ONLY row that has ever existed for its need,
-/// which this correctly still matches. Only Task 8's IN-PROCESS
-/// compensation (`reopen_after_promotion_failure`, for an ordinary `Err` or
-/// `Refused` in that same window) exists at filing time; this out-of-process
-/// backstop is what a stall sweep can find later, since no in-process
-/// compensation survives a genuine crash.
+/// leaves nothing else created at or after the claim for its need, which
+/// this correctly still matches. Only Task 8's IN-PROCESS compensation
+/// (`reopen_after_promotion_failure`, for an ordinary `Err` or `Refused` in
+/// that same window) exists at filing time; this out-of-process backstop is
+/// what a stall sweep can find later, since no in-process compensation
+/// survives a genuine crash.
 ///
 /// `updated_at <= cutoff_secs` guards against mistaking a promotion that is
 /// merely mid-flight (the claim committed a moment ago and the successor's
@@ -452,6 +470,7 @@ pub async fn query_orphaned_promoted_asks(
                AND s.initiative_id = a.initiative_id \
                AND s.need_key = a.need_key \
                AND s.ask_event_id != a.ask_event_id \
+               AND s.created_at >= a.updated_at \
            ) \
          ORDER BY a.updated_at ASC, a.ask_event_id ASC LIMIT $2",
     )
