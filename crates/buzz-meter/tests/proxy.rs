@@ -515,6 +515,61 @@ async fn openai_bearer_credential_is_swapped_for_the_real_key() {
     handle.shutdown();
 }
 
+/// The whole point of pointing the checkpoint somewhere else.
+///
+/// The two routes are wire formats, not vendors. Any OpenAI-compatible seller
+/// (OpenRouter, Alibaba, DeepSeek, a local runtime) is metered by aiming the
+/// route at it, and the record must carry **that seller's** name, because the
+/// ledger prices and reconciles per provider. Recorded as `openai`, the spend
+/// would be priced from OpenAI's rates and checked against an OpenAI invoice
+/// that never contained it.
+#[tokio::test]
+async fn a_redirected_route_records_the_vendor_the_operator_named() {
+    let fake = FakeUpstream::start(UpstreamReply::json(OPENAI_JSON)).await;
+    let (port, mut rx, handle) = start_meter(MeterConfig {
+        // Stands in for `https://openrouter.ai/api/v1`. The slug cannot be
+        // derived here precisely because the upstream is a loopback test
+        // server, which is the same shape a local runtime has.
+        openai_upstream: fake.base_url.clone(),
+        openai_provider: Some("openrouter".to_string()),
+        openai_api_key: Some(REAL_OPENAI_KEY.to_string()),
+        ..MeterConfig::default()
+    })
+    .await
+    .expect("start meter");
+    let key = handle.issue_virtual_key("closer");
+
+    let response = client()
+        .post(format!(
+            "http://127.0.0.1:{port}/openai/v1/chat/completions"
+        ))
+        .bearer_auth(&key)
+        .header("content-type", "application/json")
+        .body(r#"{"model":"gpt-4o","stream":false}"#)
+        .send()
+        .await
+        .expect("proxied request");
+    let _ = response.bytes().await.expect("drain body");
+
+    let call = next_call(&mut rx).await;
+    assert_eq!(
+        call.provider, "openrouter",
+        "the record must name the seller, not the dialect the route speaks"
+    );
+    // Everything else about metering is unchanged by the redirect: the real
+    // credential is still substituted and the tokens still come off the wire.
+    assert_eq!(
+        fake.requests()[0].header("authorization").as_deref(),
+        Some(format!("Bearer {REAL_OPENAI_KEY}").as_str())
+    );
+    assert_eq!(
+        call.tokens.map(|t| t.output_tokens),
+        Some(120),
+        "tokens are still read from the provider's own response"
+    );
+    handle.shutdown();
+}
+
 #[tokio::test]
 async fn openai_streaming_request_gains_include_usage() {
     let sse = concat!(

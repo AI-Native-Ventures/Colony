@@ -132,12 +132,23 @@ pub struct MeteredCall {
 }
 
 /// How the checkpoint reaches each provider, and with which real credential.
+///
+/// The two routes are API **dialects**, not vendors. Anything speaking
+/// Anthropic's wire format goes through one and anything speaking OpenAI's
+/// through the other, which is why an upstream and a vendor slug are separate
+/// settings: Vertex, Bedrock, DeepSeek, OpenRouter and a local runtime all
+/// speak one of the two dialects while each sending its own invoice.
 #[derive(Debug, Clone)]
 pub struct MeterConfig {
-    /// Base URL for Anthropic requests.
+    /// Base URL for Anthropic-dialect requests.
     pub anthropic_upstream: String,
-    /// Base URL for OpenAI requests.
+    /// Base URL for OpenAI-dialect requests.
     pub openai_upstream: String,
+    /// Vendor slug recorded for Anthropic-dialect calls, when the operator
+    /// states it. Absent means derive it from the upstream host.
+    pub anthropic_provider: Option<String>,
+    /// Vendor slug recorded for OpenAI-dialect calls, on the same terms.
+    pub openai_provider: Option<String>,
     /// Real Anthropic API key. Lives only in this process.
     pub anthropic_api_key: Option<String>,
     /// Real OpenAI API key. Lives only in this process.
@@ -149,6 +160,8 @@ impl Default for MeterConfig {
         Self {
             anthropic_upstream: "https://api.anthropic.com".to_string(),
             openai_upstream: "https://api.openai.com".to_string(),
+            anthropic_provider: None,
+            openai_provider: None,
             anthropic_api_key: None,
             openai_api_key: None,
         }
@@ -170,9 +183,38 @@ impl MeterConfig {
     /// `/openai` route but sends its own invoice, and reconciliation compares
     /// per provider. Recording that spend as "openai" would compare it
     /// against the wrong bill.
+    ///
+    /// An operator-stated slug wins over the derivation, because a host name
+    /// does not always name the seller: a loopback address, a gateway, a
+    /// private endpoint and a vanity domain all bill under a name the URL
+    /// never mentions. It is stated rather than guessed for the same reason
+    /// the price book will not infer that a local runtime is free from the
+    /// fact that its address is a loopback one. Guessing there means real
+    /// spend silently reading as zero.
     fn provider_slug(&self, provider: Provider) -> String {
-        provider_slug_from_upstream(self.upstream(provider))
+        let stated = match provider {
+            Provider::Anthropic => self.anthropic_provider.as_deref(),
+            Provider::OpenAi => self.openai_provider.as_deref(),
+        };
+        stated
+            .map(str::trim)
+            .filter(|slug| !slug.is_empty())
+            .map(|slug| slug.to_ascii_lowercase())
+            .or_else(|| provider_slug_from_upstream(self.upstream(provider)))
             .unwrap_or_else(|| provider.slug().to_string())
+    }
+
+    /// The vendor slug Anthropic-dialect calls will be recorded under.
+    ///
+    /// Exposed so an operator can be told at startup, before any money is
+    /// spent under a name they did not intend.
+    pub fn recorded_provider_anthropic(&self) -> String {
+        self.provider_slug(Provider::Anthropic)
+    }
+
+    /// The vendor slug OpenAI-dialect calls will be recorded under.
+    pub fn recorded_provider_openai(&self) -> String {
+        self.provider_slug(Provider::OpenAi)
     }
 
     fn credential(&self, provider: Provider) -> Option<&str> {
@@ -829,5 +871,74 @@ mod slug_tests {
             ..MeterConfig::default()
         };
         assert_eq!(deepseek.provider_slug(Provider::OpenAi), "deepseek");
+    }
+
+    /// A host name does not always name the seller. Bedrock and Vertex serve
+    /// Anthropic's models under Amazon's and Google's domains and send their
+    /// own invoices, and a private or gateway endpoint may carry a name that
+    /// appears on no bill at all. The operator states it; the URL does not
+    /// get a vote.
+    #[test]
+    fn a_stated_slug_wins_over_the_host() {
+        let bedrock = MeterConfig {
+            anthropic_upstream: "https://bedrock-runtime.us-east-1.amazonaws.com".to_string(),
+            anthropic_provider: Some("bedrock".to_string()),
+            ..MeterConfig::default()
+        };
+        assert_eq!(bedrock.provider_slug(Provider::Anthropic), "bedrock");
+        assert_eq!(
+            provider_slug_from_upstream(&bedrock.anthropic_upstream).as_deref(),
+            Some("amazonaws"),
+            "and without the operator saying so it would have been billed to 'amazonaws'"
+        );
+    }
+
+    /// The case that must never be inferred. A loopback upstream yields no
+    /// vendor, so without a stated slug the call is recorded under the route's
+    /// dialect and would reconcile against OpenAI's invoice. Saying `local`
+    /// out loud is what makes it safe to price at zero later; deriving it from
+    /// the fact that an address is a loopback one would zero the spend of
+    /// anyone tunnelling to a real vendor through 127.0.0.1.
+    #[test]
+    fn a_local_runtime_is_recorded_only_when_the_operator_names_it() {
+        let unnamed = MeterConfig {
+            openai_upstream: "http://127.0.0.1:11434/v1".to_string(),
+            ..MeterConfig::default()
+        };
+        assert_eq!(
+            unnamed.provider_slug(Provider::OpenAi),
+            "openai",
+            "an unnamed loopback upstream is not silently called local"
+        );
+
+        let named = MeterConfig {
+            openai_provider: Some("ollama".to_string()),
+            ..unnamed
+        };
+        assert_eq!(named.provider_slug(Provider::OpenAi), "ollama");
+    }
+
+    /// Slugs are compared case-insensitively against price rows and are half
+    /// of a usage record's dedupe key, so they are normalised once here rather
+    /// than at every reader.
+    #[test]
+    fn a_stated_slug_is_trimmed_and_lowercased() {
+        let config = MeterConfig {
+            openai_provider: Some("  OpenRouter  ".to_string()),
+            ..MeterConfig::default()
+        };
+        assert_eq!(config.provider_slug(Provider::OpenAi), "openrouter");
+    }
+
+    /// A blank statement is not a statement. Falling through to the host
+    /// keeps an empty environment variable from renaming every record to "".
+    #[test]
+    fn a_blank_stated_slug_falls_through_to_the_host() {
+        let config = MeterConfig {
+            openai_upstream: "https://api.deepseek.com".to_string(),
+            openai_provider: Some("   ".to_string()),
+            ..MeterConfig::default()
+        };
+        assert_eq!(config.provider_slug(Provider::OpenAi), "deepseek");
     }
 }
