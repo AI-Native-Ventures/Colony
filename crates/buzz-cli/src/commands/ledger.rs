@@ -48,22 +48,27 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
             note,
         } => {
             let rates = PriceRates {
-                input_nanousd_per_token: per_mtok_to_nanousd(&input, "--input")?,
-                cache_read_nanousd_per_token: per_mtok_to_nanousd(&cache_read, "--cache-read")?,
-                cache_write_5m_nanousd_per_token: per_mtok_to_nanousd(
+                input_nanousd_per_mtok: per_mtok_to_nanousd(&input, "--input")?,
+                cache_read_nanousd_per_mtok: per_mtok_to_nanousd(&cache_read, "--cache-read")?,
+                cache_write_5m_nanousd_per_mtok: per_mtok_to_nanousd(
                     &cache_write_5m,
                     "--cache-write-5m",
                 )?,
-                cache_write_1h_nanousd_per_token: per_mtok_to_nanousd(
+                cache_write_1h_nanousd_per_mtok: per_mtok_to_nanousd(
                     &cache_write_1h,
                     "--cache-write-1h",
                 )?,
-                output_nanousd_per_token: per_mtok_to_nanousd(&output, "--output")?,
+                output_nanousd_per_mtok: per_mtok_to_nanousd(&output, "--output")?,
             };
             let entry = PriceEntry {
                 model,
                 effective_from: parse_effective_from(effective_from.as_deref())?,
                 rates,
+                // `prices-add` publishes an unconditional rate. Conditional
+                // rows (a batch tier, a long-context tier, peak hours) come
+                // from the catalog; an owner writing one by hand is not a
+                // flag this command should grow before anyone asks for it.
+                conditions: Default::default(),
                 note,
                 origin: buzz_core::ledger::prices::PriceOrigin::Owner,
             };
@@ -161,6 +166,12 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
             tolerance_bps,
             floor_tokens,
         } => cross_check_report(client, tolerance_bps, floor_tokens).await,
+        // Handled before the relay client is built, since signing the feed
+        // touches no relay and uses the publisher's key rather than this
+        // process's identity. See `run` in lib.rs.
+        LedgerCmd::FeedSign { catalog, key, out } => {
+            crate::commands::price_feed::sign_feed(&catalog, key, out)
+        }
     }
 }
 
@@ -708,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn a_price_finer_than_one_nanousd_per_token_is_refused_not_rounded() {
+    fn a_price_finer_than_one_nanousd_per_mtok_is_refused_not_rounded() {
         let error = per_mtok_to_nanousd("0.0001", "--input")
             .expect_err("sub-nano precision must be refused");
         assert!(

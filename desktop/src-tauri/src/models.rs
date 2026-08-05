@@ -52,6 +52,9 @@ pub struct UserProfileSummaryInfo {
     pub owner_pubkey: Option<String>,
     #[serde(default)]
     pub is_agent: bool,
+    /// Workspace role from kind:0, used to group members' instances.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

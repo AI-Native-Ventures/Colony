@@ -24,6 +24,7 @@
 
 use serde::Deserialize;
 
+use super::conditions::{DailyWindow, PriceConditions};
 use super::prices::{PriceEntry, PriceOrigin, PriceRates};
 
 /// The catalog as it ships, before conversion into book entries.
@@ -48,6 +49,72 @@ struct CatalogRow {
     cache_write_1h_per_mtok: String,
     output_per_mtok: String,
     note: Option<String>,
+    /// Service tier this rate is for: `batch`, `flex`, `fast`. Absent means
+    /// the rate applies whatever tier the call used.
+    tier: Option<String>,
+    /// Long-context tier: applies at or above this many input tokens.
+    min_input_tokens: Option<u64>,
+    /// Short-context tier: applies below this many input tokens.
+    max_input_tokens: Option<u64>,
+    /// Recurring local-time windows this rate applies in, e.g. peak hours.
+    #[serde(default)]
+    hours: Vec<CatalogWindow>,
+}
+
+/// A recurring window, written the way a vendor publishes it.
+///
+/// `"09:00"` rather than `540` because this file is edited by hand and read
+/// by people checking it against a vendor's page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CatalogWindow {
+    /// Local start time, `HH:MM`, inclusive.
+    start: String,
+    /// Local end time, `HH:MM`, exclusive. Earlier than `start` wraps midnight.
+    end: String,
+    /// Minutes to add to UTC to reach the vendor's local time. Beijing is 480.
+    utc_offset_minutes: i32,
+}
+
+/// `HH:MM` to minutes past midnight.
+fn parse_hh_mm(value: &str, model: &str) -> Result<u32, CatalogError> {
+    let bad = || CatalogError(format!("{model}: {value} is not an HH:MM local time"));
+    let (hours, minutes) = value.split_once(':').ok_or_else(bad)?;
+    if hours.len() != 2 || minutes.len() != 2 {
+        return Err(bad());
+    }
+    let hours: u32 = hours.parse().map_err(|_| bad())?;
+    let minutes: u32 = minutes.parse().map_err(|_| bad())?;
+    if hours > 24 || minutes > 59 || (hours == 24 && minutes != 0) {
+        return Err(bad());
+    }
+    Ok(hours * 60 + minutes)
+}
+
+fn parse_conditions(row: &CatalogRow) -> Result<PriceConditions, CatalogError> {
+    let mut hours = Vec::with_capacity(row.hours.len());
+    for window in &row.hours {
+        hours.push(DailyWindow {
+            start_minute: parse_hh_mm(&window.start, &row.model)?,
+            end_minute: parse_hh_mm(&window.end, &row.model)?,
+            utc_offset_minutes: window.utc_offset_minutes,
+        });
+    }
+    let conditions = PriceConditions {
+        tier: row.tier.clone(),
+        min_input_tokens: row.min_input_tokens,
+        max_input_tokens: row.max_input_tokens,
+        hours,
+    };
+    // A row nothing can satisfy looks like the price is covered while every
+    // call falls through to something else.
+    if !conditions.is_valid() {
+        return Err(CatalogError(format!(
+            "{}: no call could satisfy these conditions",
+            row.model
+        )));
+    }
+    Ok(conditions)
 }
 
 /// The catalog shipped with this build.
@@ -68,10 +135,18 @@ impl std::fmt::Display for CatalogError {
 
 impl std::error::Error for CatalogError {}
 
-/// Dollars per million tokens to nanoUSD per token, exactly.
+/// Dollars per million tokens to nanoUSD per million tokens, exactly.
 ///
-/// Parsed as text so 0.1 cannot arrive as 0.09999999999999999, and refused
-/// rather than rounded when finer than one nanoUSD per token.
+/// A pure scale by 10^9 with nothing to lose, because the stored unit is the
+/// same unit vendors quote. Parsed as text so 0.1 cannot arrive as
+/// 0.09999999999999999, and capped at nine decimal places of dollars, which
+/// is finer than any published rate.
+///
+/// This used to divide by a further 10^6 to reach nanoUSD per *token*, and
+/// refused anything with a remainder. That refusal was not theoretical: it
+/// kept DeepSeek V4 Flash and V4 Pro out of the catalog entirely, because
+/// their cache-hit rates ($0.0028 and $0.003625 per million tokens) are 2.8
+/// and 3.625 nanoUSD per token.
 fn per_mtok_to_nanousd(value: &str, model: &str, field: &str) -> Result<u64, CatalogError> {
     let trimmed = value.trim();
     let bad = || CatalogError(format!("{model}: {field} {value} is not a dollar amount"));
@@ -94,16 +169,10 @@ fn per_mtok_to_nanousd(value: &str, model: &str, field: &str) -> Result<u64, Cat
         padded.push('0');
     }
     let nanos: u64 = padded.parse().map_err(|_| bad())?;
-    let total = dollars
+    dollars
         .checked_mul(1_000_000_000)
         .and_then(|scaled| scaled.checked_add(nanos))
-        .ok_or_else(bad)?;
-    if total % 1_000_000 != 0 {
-        return Err(CatalogError(format!(
-            "{model}: {field} {value} is finer than one nanoUSD per token"
-        )));
-    }
-    Ok(total / 1_000_000)
+        .ok_or_else(bad)
 }
 
 fn parse_rfc3339(value: &str, model: &str) -> Result<u64, CatalogError> {
@@ -130,37 +199,45 @@ fn parse_catalog(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
     let mut seen = std::collections::BTreeSet::new();
     for row in file.entries {
         let effective_from = parse_rfc3339(&row.effective_from, &row.model)?;
-        // Two rows for one model at one instant have no defined winner, and
-        // whichever landed second would silently decide the price.
-        if !seen.insert((row.model.clone(), effective_from)) {
+        let conditions = parse_conditions(&row)?;
+        // Two rows for one model at one instant *under the same conditions*
+        // have no defined winner, and whichever landed second would silently
+        // decide the price. Conditions are part of the key because a short-
+        // and a long-context rate legitimately share a model and a date.
+        let key = (
+            row.model.clone(),
+            effective_from,
+            serde_json::to_string(&conditions).map_err(|e| CatalogError(e.to_string()))?,
+        );
+        if !seen.insert(key) {
             return Err(CatalogError(format!(
-                "{} has two entries effective {}",
+                "{} has two entries effective {} under the same conditions",
                 row.model, row.effective_from
             )));
         }
         entries.push(PriceEntry {
             rates: PriceRates {
-                input_nanousd_per_token: per_mtok_to_nanousd(
+                input_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.input_per_mtok,
                     &row.model,
                     "input",
                 )?,
-                cache_read_nanousd_per_token: per_mtok_to_nanousd(
+                cache_read_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.cache_read_per_mtok,
                     &row.model,
                     "cache read",
                 )?,
-                cache_write_5m_nanousd_per_token: per_mtok_to_nanousd(
+                cache_write_5m_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.cache_write_5m_per_mtok,
                     &row.model,
                     "5m cache write",
                 )?,
-                cache_write_1h_nanousd_per_token: per_mtok_to_nanousd(
+                cache_write_1h_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.cache_write_1h_per_mtok,
                     &row.model,
                     "1h cache write",
                 )?,
-                output_nanousd_per_token: per_mtok_to_nanousd(
+                output_nanousd_per_mtok: per_mtok_to_nanousd(
                     &row.output_per_mtok,
                     &row.model,
                     "output",
@@ -168,6 +245,7 @@ fn parse_catalog(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
             },
             model: row.model,
             effective_from,
+            conditions,
             note: row.note,
             origin: PriceOrigin::Catalog,
         });
@@ -178,6 +256,72 @@ fn parse_catalog(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
 /// The catalog shipped with this build, as book entries.
 pub fn shipped_catalog() -> Result<Vec<PriceEntry>, CatalogError> {
     parse_catalog(CATALOG_JSON)
+}
+
+/// Parse a catalog document that did not ship with this build.
+///
+/// Same schema, same validation. Used for the signed remote price feed, so a
+/// vendor's price change reaches a running relay without a deploy.
+pub fn parse_catalog_document(json: &str) -> Result<Vec<PriceEntry>, CatalogError> {
+    parse_catalog(json)
+}
+
+/// One coordinate carrying two different prices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogConflict {
+    /// Model both sources priced.
+    pub model: String,
+    /// Instant they priced differently.
+    pub effective_from: u64,
+}
+
+/// Combine the shipped catalog with a remote feed, remote winning.
+///
+/// The shipped file is a frozen snapshot and an offline floor; the feed is
+/// the maintained source. So where both describe the same `(model,
+/// effective date)` the feed's rates are the ones kept.
+///
+/// Disagreement at a coordinate means one of the two is wrong about a price
+/// that has already been in force, which is worth saying out loud rather
+/// than resolving in silence; the returned conflicts are for the caller to
+/// log. Identical rates are not a conflict; the feed is expected to be a
+/// superset of the file.
+///
+/// Note this only decides what the *catalog* says. Whether it reaches a book
+/// is still [`missing_from`]'s call, and a coordinate already seeded from the
+/// shipped file is never restated, because an append-only book does not rewrite
+/// spend it has already reported.
+pub fn merge_catalogs(
+    shipped: Vec<PriceEntry>,
+    remote: Vec<PriceEntry>,
+) -> (Vec<PriceEntry>, Vec<CatalogConflict>) {
+    let mut conflicts = Vec::new();
+    let mut merged: Vec<PriceEntry> = Vec::with_capacity(shipped.len() + remote.len());
+    let mut index: std::collections::BTreeMap<(String, u64), usize> =
+        std::collections::BTreeMap::new();
+
+    for entry in shipped {
+        index.insert((entry.model.clone(), entry.effective_from), merged.len());
+        merged.push(entry);
+    }
+    for entry in remote {
+        match index.get(&(entry.model.clone(), entry.effective_from)) {
+            Some(&position) => {
+                if merged[position].rates != entry.rates {
+                    conflicts.push(CatalogConflict {
+                        model: entry.model.clone(),
+                        effective_from: entry.effective_from,
+                    });
+                }
+                merged[position] = entry;
+            }
+            None => {
+                index.insert((entry.model.clone(), entry.effective_from), merged.len());
+                merged.push(entry);
+            }
+        }
+    }
+    (merged, conflicts)
 }
 
 /// The catalog entries missing from `existing`.
@@ -191,13 +335,20 @@ pub fn shipped_catalog() -> Result<Vec<PriceEntry>, CatalogError> {
 /// engine charges, since an owner's row wins the tie, but it would leave two
 /// contradictory rows in a book people read to understand their costs.
 pub fn missing_from(catalog: &[PriceEntry], existing: &[PriceEntry]) -> Vec<PriceEntry> {
-    let present: std::collections::BTreeSet<(&str, u64)> = existing
-        .iter()
-        .map(|entry| (entry.model.as_str(), entry.effective_from))
-        .collect();
+    // Keyed on conditions as well as model and date: a long-context rate and
+    // a short-context rate share both, and keying on the pair alone would
+    // seed whichever came first and silently drop the other.
+    let key = |entry: &PriceEntry| {
+        (
+            entry.model.clone(),
+            entry.effective_from,
+            serde_json::to_string(&entry.conditions).unwrap_or_default(),
+        )
+    };
+    let present: std::collections::BTreeSet<_> = existing.iter().map(key).collect();
     catalog
         .iter()
-        .filter(|entry| !present.contains(&(entry.model.as_str(), entry.effective_from)))
+        .filter(|entry| !present.contains(&key(entry)))
         .cloned()
         .collect()
 }
@@ -222,18 +373,52 @@ mod tests {
         }
     }
 
-    /// $3 per million tokens is 3000 nanoUSD per token.
+    /// $3 per million tokens is 3_000_000_000 nanoUSD per million tokens.
     #[test]
     fn dollars_per_million_tokens_convert_exactly() {
-        assert_eq!(per_mtok_to_nanousd("3", "m", "input").unwrap(), 3_000);
-        assert_eq!(per_mtok_to_nanousd("0.30", "m", "input").unwrap(), 300);
-        assert_eq!(per_mtok_to_nanousd("0.075", "m", "input").unwrap(), 75);
+        assert_eq!(
+            per_mtok_to_nanousd("3", "m", "input").unwrap(),
+            3_000_000_000
+        );
+        assert_eq!(
+            per_mtok_to_nanousd("0.30", "m", "input").unwrap(),
+            300_000_000
+        );
+        assert_eq!(
+            per_mtok_to_nanousd("0.075", "m", "input").unwrap(),
+            75_000_000
+        );
         assert_eq!(per_mtok_to_nanousd("0", "m", "input").unwrap(), 0);
     }
 
+    /// The rates that were refused before this unit existed, and the reason
+    /// it exists. Both are real published DeepSeek V4 cache-hit prices.
     #[test]
-    fn a_rate_finer_than_one_nanousd_per_token_is_refused() {
-        assert!(per_mtok_to_nanousd("0.0000001", "m", "input").is_err());
+    fn sub_nanousd_per_token_vendor_rates_are_now_exact() {
+        assert_eq!(
+            per_mtok_to_nanousd("0.0028", "deepseek-v4-flash", "cache read").unwrap(),
+            2_800_000,
+            "$0.0028/MTok is 2.8 nanoUSD per token, which had no integer form"
+        );
+        assert_eq!(
+            per_mtok_to_nanousd("0.003625", "deepseek-v4-pro", "cache read").unwrap(),
+            3_625_000
+        );
+    }
+
+    /// Nine decimal places of dollars is the floor, and it is finer than
+    /// anything a vendor publishes.
+    #[test]
+    fn a_rate_finer_than_the_stored_unit_is_still_refused() {
+        assert_eq!(
+            per_mtok_to_nanousd("0.000000001", "m", "input").unwrap(),
+            1,
+            "one nanoUSD per million tokens is representable"
+        );
+        assert!(
+            per_mtok_to_nanousd("0.0000000001", "m", "input").is_err(),
+            "ten decimal places is finer than the unit and must be refused, not rounded"
+        );
     }
 
     #[test]
@@ -271,13 +456,14 @@ mod tests {
             model: model.to_string(),
             effective_from,
             rates: PriceRates {
-                input_nanousd_per_token: input,
-                cache_read_nanousd_per_token: 0,
-                cache_write_5m_nanousd_per_token: 0,
-                cache_write_1h_nanousd_per_token: 0,
-                output_nanousd_per_token: 0,
+                input_nanousd_per_mtok: input,
+                cache_read_nanousd_per_mtok: 0,
+                cache_write_5m_nanousd_per_mtok: 0,
+                cache_write_1h_nanousd_per_mtok: 0,
+                output_nanousd_per_mtok: 0,
             },
             note: None,
+            conditions: Default::default(),
             origin: PriceOrigin::Owner,
         }
     }
@@ -324,8 +510,7 @@ mod tests {
             entries: vec![owner_entry("m", 1_000, 42), catalog_row],
         };
         assert_eq!(
-            book.rates_for("m", 2_000)
-                .map(|r| r.input_nanousd_per_token),
+            book.rates_for("m", 2_000).map(|r| r.input_nanousd_per_mtok),
             Some(42),
             "the owner's negotiated rate must survive a catalog refresh"
         );
@@ -341,15 +526,226 @@ mod tests {
             entries: vec![owner_entry("m", 1_000, 42), newer],
         };
         assert_eq!(
-            book.rates_for("m", 3_000)
-                .map(|r| r.input_nanousd_per_token),
+            book.rates_for("m", 3_000).map(|r| r.input_nanousd_per_mtok),
             Some(7)
         );
         // And before it took effect, the older price still stands.
         assert_eq!(
-            book.rates_for("m", 1_500)
-                .map(|r| r.input_nanousd_per_token),
+            book.rates_for("m", 1_500).map(|r| r.input_nanousd_per_mtok),
             Some(42)
         );
+    }
+
+    fn catalog_entry(model: &str, effective_from: u64, input: u64) -> PriceEntry {
+        let mut entry = owner_entry(model, effective_from, input);
+        entry.origin = PriceOrigin::Catalog;
+        entry
+    }
+
+    /// A feed carrying a model the shipped file never heard of is the point
+    /// of the feed: a model released after this build still gets priced.
+    #[test]
+    fn a_model_only_the_feed_knows_about_is_added() {
+        let (merged, conflicts) = merge_catalogs(
+            vec![catalog_entry("shipped", 1_000, 1)],
+            vec![catalog_entry("brand-new", 2_000, 5)],
+        );
+        assert_eq!(merged.len(), 2);
+        assert!(conflicts.is_empty());
+        assert!(merged.iter().any(|entry| entry.model == "brand-new"));
+    }
+
+    /// The feed is expected to restate what the file already says. That is
+    /// not a conflict and must not be reported as one, or every refresh
+    /// would log noise that hides a real disagreement.
+    #[test]
+    fn a_feed_restating_a_shipped_price_is_not_a_conflict() {
+        let (merged, conflicts) = merge_catalogs(
+            vec![catalog_entry("m", 1_000, 7)],
+            vec![catalog_entry("m", 1_000, 7)],
+        );
+        assert_eq!(merged.len(), 1);
+        assert!(conflicts.is_empty());
+    }
+
+    /// Two different prices for one instant means one source is wrong about
+    /// money already spent. The feed wins, and the caller is told.
+    #[test]
+    fn a_disagreement_at_one_coordinate_is_reported_and_the_feed_wins() {
+        let (merged, conflicts) = merge_catalogs(
+            vec![catalog_entry("m", 1_000, 7)],
+            vec![catalog_entry("m", 1_000, 9)],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].rates.input_nanousd_per_mtok, 9);
+        assert_eq!(
+            conflicts,
+            vec![CatalogConflict {
+                model: "m".to_owned(),
+                effective_from: 1_000,
+            }]
+        );
+    }
+
+    /// Merging must not reorder or drop the shipped entries, since a relay
+    /// with an unreachable feed falls back to exactly this list.
+    #[test]
+    fn merging_an_empty_feed_leaves_the_shipped_catalog_untouched() {
+        let shipped = shipped_catalog().unwrap();
+        let (merged, conflicts) = merge_catalogs(shipped.clone(), Vec::new());
+        assert_eq!(merged, shipped);
+        assert!(conflicts.is_empty());
+    }
+
+    /// The remote document is held to the same validation as the shipped
+    /// one; a signed feed is not a reason to trust its arithmetic.
+    /// The catalog has to price the string the *meter* records, which is the
+    /// resolved snapshot from the provider's response body, not the alias a
+    /// caller asked for. Three of the five entries this catalog started with
+    /// priced nothing at all for exactly this reason.
+    #[test]
+    fn the_shipped_catalog_prices_the_snapshots_providers_report() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let now = 1_790_553_600; // 2026-09-28, after every entry below takes effect
+        for observed in [
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-1-20250805",
+            "claude-opus-4-5-20251101",
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-20250514",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "gpt-4o-2024-08-06",
+            "gpt-5.6-sol",
+            "gpt-5.3-codex",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+        ] {
+            assert!(
+                book.rates_for(observed, now).is_some(),
+                "{observed} is unpriced; the meter records this exact string"
+            );
+        }
+    }
+
+    /// The two models the old per-token unit could not hold at all. Their
+    /// cache-hit rates are 2.8 and 3.625 nanoUSD per token, so both entries
+    /// were refused outright and the models went unpriced.
+    #[test]
+    fn the_shipped_catalog_prices_deepseek_v4_cache_hits_exactly() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let now = 1_790_553_600;
+        assert_eq!(
+            book.rates_for("deepseek-v4-flash", now)
+                .map(|r| r.cache_read_nanousd_per_mtok),
+            Some(2_800_000),
+            "$0.0028 per million tokens"
+        );
+        assert_eq!(
+            book.rates_for("deepseek-v4-pro", now)
+                .map(|r| r.cache_read_nanousd_per_mtok),
+            Some(3_625_000),
+            "$0.003625 per million tokens"
+        );
+    }
+
+    /// OpenAI bills prompts over 272K input tokens at 2x input and 1.5x
+    /// output. Without a conditional row the book carries only the short
+    /// rate, so a long call is understated by half and nothing about the
+    /// result looks wrong.
+    #[test]
+    fn the_shipped_catalog_charges_openai_long_context_at_the_higher_rate() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let now = 1_790_553_600;
+        let facts = |input_tokens| super::super::conditions::CallFacts {
+            input_tokens,
+            at_unix: now,
+            tier: None,
+        };
+
+        let short = book
+            .rates_for_call("gpt-5.6-sol", &facts(272_000))
+            .expect("short rate");
+        assert_eq!(short.input_nanousd_per_mtok, 5_000_000_000);
+        assert_eq!(short.output_nanousd_per_mtok, 30_000_000_000);
+
+        let long = book
+            .rates_for_call("gpt-5.6-sol", &facts(272_001))
+            .expect("long rate");
+        assert_eq!(
+            long.input_nanousd_per_mtok, 10_000_000_000,
+            "2x input above the threshold"
+        );
+        assert_eq!(
+            long.output_nanousd_per_mtok, 45_000_000_000,
+            "1.5x output above the threshold"
+        );
+    }
+
+    /// The threshold is on the whole prompt, so cached tokens count toward
+    /// it. Summing only uncached input would leave a heavily cached long
+    /// prompt on the short rate.
+    #[test]
+    fn cached_tokens_count_toward_the_long_context_threshold() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let tokens = crate::usage_record::UsageBreakdown {
+            input_uncached_tokens: 2_000,
+            cache_read_tokens: 270_002,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            output_tokens: 1_000_000,
+        };
+        // 272_002 input tokens in total, so the long rate applies and the
+        // million output tokens cost $45 rather than $30.
+        assert_eq!(
+            book.price_tokens("gpt-5.6-sol", &tokens, 1_790_553_600)
+                .unwrap(),
+            2_000 * 10_000 + 270_002 * 1_000 + 1_000_000 * 45_000
+        );
+    }
+
+    /// Sonnet 5's introductory rate is the case effective dating exists for,
+    /// and it is in the shipped catalog as two rows rather than one edit.
+    #[test]
+    fn the_shipped_catalog_carries_both_sides_of_the_sonnet_5_price_change() {
+        let book = PriceBook {
+            entries: shipped_catalog().unwrap(),
+        };
+        let during_intro = 1_787_529_600; // 2026-08-24
+        let after_change = 1_790_553_600; // 2026-09-28
+        assert_eq!(
+            book.rates_for("claude-sonnet-5", during_intro)
+                .map(|r| r.input_nanousd_per_mtok),
+            Some(2_000_000_000),
+            "introductory $2/MTok while it was in force"
+        );
+        assert_eq!(
+            book.rates_for("claude-sonnet-5", after_change)
+                .map(|r| r.input_nanousd_per_mtok),
+            Some(3_000_000_000),
+            "standard $3/MTok from 2026-09-01"
+        );
+    }
+
+    #[test]
+    fn a_remote_document_is_validated_like_the_shipped_one() {
+        let json = r#"{"version":1,"entries":[{"model":"m","effectiveFrom":"2026-01-01T00:00:00Z",
+            "inputPerMtok":"3","cacheReadPerMtok":"0.30","cacheWrite5mPerMtok":"3.75",
+            "cacheWrite1hPerMtok":"6","outputPerMtok":"15"}]}"#;
+        let entries = parse_catalog_document(json).unwrap();
+        assert_eq!(entries[0].rates.input_nanousd_per_mtok, 3_000_000_000);
+        assert_eq!(entries[0].origin, PriceOrigin::Catalog);
+
+        assert!(parse_catalog_document(r#"{"version":2,"entries":[]}"#).is_err());
+        assert!(parse_catalog_document("not json").is_err());
     }
 }

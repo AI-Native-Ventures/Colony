@@ -78,6 +78,23 @@ ensure_infra() {
 run_unit_tests() {
   section "Unit Tests (no infra required)"
 
+  # Compile gate, first because everything below it is scoped by hand.
+  #
+  # The steps in this function name crates individually, and that list covers 7
+  # of the workspace's 29 members. A change to a shared type therefore breaks
+  # unnamed crates without any local gate noticing: making `PriceEntry::origin`
+  # required left `buzz-test-client` uncompilable, `just test-unit` passed, the
+  # pre-push hook passed, and (develop-targeted PRs run no CI) it merged.
+  #
+  # `--all-targets` is what makes this work: the break was in a test file, which
+  # a plain `cargo check` does not compile. This does not run anyone's tests --
+  # it proves every crate and every test target in the workspace still builds,
+  # which is the failure the hand-scoped list structurally cannot see. Cheaper
+  # than `just clippy` (no lint passes) and it front-loads the compilation the
+  # steps below need anyway.
+  run_test_step "workspace compiles (all targets)" \
+    cargo check --workspace --all-targets --quiet
+
   run_test_step "buzz-core tests" \
     cargo test -p buzz-core --lib -- --nocapture
 

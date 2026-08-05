@@ -297,20 +297,34 @@ fn created_avatar_uses_command_fallback_without_input_or_persona() {
 }
 
 fn profile(name: Option<&str>, picture: Option<&str>) -> crate::relay::AgentProfileInfo {
+    profile_with_role(name, picture, None)
+}
+
+fn profile_with_role(
+    name: Option<&str>,
+    picture: Option<&str>,
+    role: Option<&str>,
+) -> crate::relay::AgentProfileInfo {
     crate::relay::AgentProfileInfo {
         display_name: name.map(str::to_string),
         picture: picture.map(str::to_string),
+        role: role.map(str::to_string),
     }
 }
 
 #[test]
 fn profile_needs_sync_when_missing() {
-    assert!(profile_needs_sync(None, "Duncan", Some("https://x/a.png")));
+    assert!(profile_needs_sync(
+        None,
+        "Duncan",
+        Some("https://x/a.png"),
+        None
+    ));
 }
 
 #[test]
 fn profile_needs_sync_when_missing_even_without_expected_avatar() {
-    assert!(profile_needs_sync(None, "Duncan", None));
+    assert!(profile_needs_sync(None, "Duncan", None, None));
 }
 
 #[test]
@@ -319,7 +333,8 @@ fn profile_needs_sync_when_name_diverges() {
     assert!(profile_needs_sync(
         Some(&existing),
         "Duncan",
-        Some("https://x/a.png")
+        Some("https://x/a.png"),
+        None
     ));
 }
 
@@ -329,7 +344,8 @@ fn profile_needs_sync_when_picture_diverges() {
     assert!(profile_needs_sync(
         Some(&existing),
         "Duncan",
-        Some("https://x/new.png")
+        Some("https://x/new.png"),
+        None
     ));
 }
 
@@ -339,14 +355,15 @@ fn profile_in_sync_when_name_and_picture_match() {
     assert!(!profile_needs_sync(
         Some(&existing),
         "Duncan",
-        Some("https://x/a.png")
+        Some("https://x/a.png"),
+        None
     ));
 }
 
 #[test]
 fn profile_in_sync_when_both_avatars_absent() {
     let existing = profile(Some("Duncan"), None);
-    assert!(!profile_needs_sync(Some(&existing), "Duncan", None));
+    assert!(!profile_needs_sync(Some(&existing), "Duncan", None, None));
 }
 
 #[test]
@@ -356,13 +373,14 @@ fn profile_needs_sync_when_existing_name_is_none() {
         Some(&existing),
         "Duncan",
         Some("https://x/a.png"),
+        None
     ));
 }
 
 #[test]
 fn profile_needs_sync_when_expected_avatar_absent_but_published() {
     let existing = profile(Some("Duncan"), Some("https://x/a.png"));
-    assert!(profile_needs_sync(Some(&existing), "Duncan", None));
+    assert!(profile_needs_sync(Some(&existing), "Duncan", None, None));
 }
 
 #[test]
@@ -449,4 +467,39 @@ fn deploy_payload_carries_the_full_behavioral_quad() {
     assert_eq!(payload["model"], "gpt-x");
     assert_eq!(payload["provider"], "openai");
     assert_eq!(payload["relay_url"], "wss://relay.example");
+}
+
+#[test]
+fn profile_needs_sync_when_role_is_missing_from_a_published_profile() {
+    // The migration case: every agent published before roles existed carries
+    // no role, and must republish once so other members' clients can group it.
+    let existing = profile(Some("Duncan"), Some("https://x/a.png"));
+    assert!(profile_needs_sync(
+        Some(&existing),
+        "Duncan",
+        Some("https://x/a.png"),
+        Some("chief-of-staff")
+    ));
+}
+
+#[test]
+fn profile_needs_sync_when_role_diverges() {
+    let existing = profile_with_role(Some("Duncan"), None, Some("swordmaster"));
+    assert!(profile_needs_sync(
+        Some(&existing),
+        "Duncan",
+        None,
+        Some("chief-of-staff")
+    ));
+}
+
+#[test]
+fn profile_in_sync_when_role_matches() {
+    let existing = profile_with_role(Some("Duncan"), None, Some("chief-of-staff"));
+    assert!(!profile_needs_sync(
+        Some(&existing),
+        "Duncan",
+        None,
+        Some("chief-of-staff")
+    ));
 }

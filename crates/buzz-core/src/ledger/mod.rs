@@ -9,14 +9,17 @@
 
 pub mod attribution;
 pub mod catalog;
+pub mod conditions;
 pub mod crosscheck;
 pub mod engine;
+pub mod feed;
 pub mod prices;
 pub mod reconcile;
 
 pub use attribution::{
     AttributionRule, Budget, Correction, CorrectionBook, RuleAssignment, Rulebook,
 };
+pub use conditions::{CallFacts, DailyWindow, PriceConditions};
 pub use crosscheck::{
     cross_check, CrossCheckFinding, CrossCheckReport, CrossCheckRow, SelfReportedTurn,
 };
@@ -24,5 +27,6 @@ pub use engine::{
     compute_ledger, AttributionMethod, BudgetStatus, ClassTotals, DailySum, LedgerEntry,
     LedgerException, LedgerReport, MissingSide, StoredUsageRecord,
 };
+pub use feed::{sign_feed_document, verify_feed_document, FeedError};
 pub use prices::{PriceBook, PriceEntry, PriceRates};
 pub use reconcile::{diagnose, reconcile, ProviderDailyCost};

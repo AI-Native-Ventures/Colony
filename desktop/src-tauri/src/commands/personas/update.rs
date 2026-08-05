@@ -55,7 +55,14 @@ fn propagate_persona_name_rename(
 }
 
 /// Profile sync params collected under the store lock for async relay publish.
-type ProfileSyncParams = Vec<(nostr::Keys, String, String, Option<String>, Option<String>)>;
+type ProfileSyncParams = Vec<(
+    nostr::Keys,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)>;
 
 #[tauri::command]
 pub async fn update_persona(
@@ -207,6 +214,7 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
                                 record.name.clone(),
                                 record.avatar_url.clone(),
                                 record.auth_tag.clone(),
+                                record.role_id.clone(),
                             ));
                         }
                     }
@@ -242,7 +250,9 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
     // sees the fresh relay profile. Best-effort — failures are logged, not surfaced.
     if !profile_sync_params.is_empty() {
         let state = app.state::<AppState>();
-        for (agent_keys, relay_url, display_name, avatar_url, auth_tag) in profile_sync_params {
+        for (agent_keys, relay_url, display_name, avatar_url, auth_tag, role_id) in
+            profile_sync_params
+        {
             if let Err(e) = crate::relay::sync_managed_agent_profile(
                 &state,
                 &relay_url,
@@ -250,6 +260,7 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
                 &display_name,
                 avatar_url.as_deref(),
                 auth_tag.as_deref(),
+                role_id.as_deref(),
             )
             .await
             {
