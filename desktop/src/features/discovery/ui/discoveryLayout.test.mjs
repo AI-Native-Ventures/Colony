@@ -8,6 +8,7 @@ import {
   discoveryFilterKey,
   discoveryFiltersForSearch,
   discoverySurface,
+  discoveryTopTab,
   industryVerticalSearch,
   isCampaignListSearch,
   fieldRolesSearch,
@@ -15,6 +16,13 @@ import {
   roleCampaignsSearch,
   verticalCampaignsSearch,
 } from "./discoveryLayout.ts";
+
+test("leads surface maps to the Leads top tab and everything else to Discover", () => {
+  assert.equal(discoveryTopTab("leads"), "leads");
+  assert.equal(discoveryTopTab("industries"), "discover");
+  assert.equal(discoveryTopTab("campaign"), "discover");
+  assert.equal(discoveryTopTab("verticals"), "discover");
+});
 
 test("direct campaign leads links infer the leads tab when tab is omitted", () => {
   assert.equal(

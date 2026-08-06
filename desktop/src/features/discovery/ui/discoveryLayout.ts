@@ -98,6 +98,15 @@ export function discoverySurface(
   return "industries";
 }
 
+/** The two top-level Discovery tabs: Leads (default) and Discover. */
+export type DiscoveryTopTab = "leads" | "discover";
+
+export function discoveryTopTab(
+  surface: NonNullable<DiscoverySearch["surface"]>,
+): DiscoveryTopTab {
+  return surface === "leads" ? "leads" : "discover";
+}
+
 /** Infer the campaign tab for direct links that omit an explicit tab. */
 export function campaignTabForSearch(
   search: DiscoverySearch,
