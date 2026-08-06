@@ -15,9 +15,11 @@ import type {
   DiscoveryEvent,
   Industry,
   Lead,
+  LeadDetail,
   LeadCounts,
   LeadPage,
   LeadScope,
+  LeadUpdateInput,
   OutreachDraft,
   OutreachStatus,
   ProfessionalField,
@@ -189,6 +191,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     string,
     ConversationThread[]
   >();
+  private readonly leadProfiles = new Map<string, Partial<LeadDetail>>();
   private readonly emptyLeads: boolean;
   private nextCampaignNumber = 1;
   private nextRunToken = 1;
@@ -270,6 +273,34 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       industries,
       verticals,
     };
+  }
+
+  async getLead(leadId: string): Promise<LeadDetail> {
+    const all = this.getGlobalLeads();
+    const lead = all.find((candidate) => candidate.id === leadId);
+    if (!lead) {
+      throw new Error(`Unknown Discovery lead: ${leadId}`);
+    }
+    const profile = this.leadProfiles.get(leadId) ?? {};
+    return {
+      ...lead,
+      status: profile.status ?? "candidate",
+      ...profile,
+    } as LeadDetail;
+  }
+
+  async updateLead(
+    leadId: string,
+    input: LeadUpdateInput,
+  ): Promise<LeadDetail> {
+    await this.getLead(leadId);
+    const current = this.leadProfiles.get(leadId) ?? {};
+    this.leadProfiles.set(leadId, {
+      ...current,
+      ...input,
+      updatedAt: new Date().toISOString(),
+    });
+    return this.getLead(leadId);
   }
 
   async getVerticals(industryId: string): Promise<Vertical[]> {

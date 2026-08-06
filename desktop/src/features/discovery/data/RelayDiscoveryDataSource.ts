@@ -14,9 +14,12 @@ import type {
   ConversationThread,
   DiscoveryEvent,
   Industry,
+  LeadDetail,
+  LeadFunnelStatus,
   LeadCounts,
   LeadPage,
   LeadScope,
+  LeadUpdateInput,
   OutreachDraft,
   OutreachStatus,
   ProfessionalField,
@@ -47,6 +50,39 @@ import {
 } from "./relayBroker";
 
 export { canonicalDiscoveryJson } from "./relayBroker";
+
+type RawLeadDetail = LeadProjection & {
+  status?: string;
+  owner_persona_id?: string | null;
+  website_override?: string | null;
+  email?: string | null;
+  phone_override?: string | null;
+  linkedin_url?: string | null;
+  contact_name?: string | null;
+  contact_title?: string | null;
+  notes?: string | null;
+  score?: number | null;
+  updated_by?: string | null;
+  updated_at?: string | null;
+};
+
+function mapLeadDetail(raw: RawLeadDetail): LeadDetail {
+  const lead = mapLead(raw);
+  return {
+    ...lead,
+    website: raw.website_override ?? lead.website,
+    phone: raw.phone_override ?? lead.phone,
+    email: raw.email ?? lead.email,
+    linkedinUrl: raw.linkedin_url ?? lead.linkedinUrl,
+    contactName: raw.contact_name ?? lead.contactName,
+    contactTitle: raw.contact_title ?? lead.contactTitle,
+    score: raw.score ?? lead.score,
+    status: (raw.status ?? "candidate") as LeadFunnelStatus,
+    owner: raw.owner_persona_id ?? undefined,
+    notes: raw.notes ?? undefined,
+    updatedAt: raw.updated_at ?? undefined,
+  };
+}
 
 class RunSignal {
   private pending = 0;
@@ -139,6 +175,45 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
         verticalId: row.verticalId ?? undefined,
       })),
     };
+  }
+
+  async getLead(leadId: string): Promise<LeadDetail> {
+    if (!(await this.live())) return this.demo.getLead(leadId);
+    const result = await this.broker.workspace("get_lead", {
+      operation: "get_lead",
+      lead_id: leadId,
+    });
+    if (result.result !== "lead") {
+      throw new Error("The relay returned the wrong lead result.");
+    }
+    return mapLeadDetail(result.lead as unknown as RawLeadDetail);
+  }
+
+  async updateLead(
+    leadId: string,
+    input: LeadUpdateInput,
+  ): Promise<LeadDetail> {
+    if (!(await this.live())) return this.demo.updateLead(leadId, input);
+    const result = await this.broker.workspace("update_lead", {
+      operation: "update_lead",
+      lead_id: leadId,
+      input: {
+        website: input.website ?? null,
+        email: input.email ?? null,
+        phone: input.phone ?? null,
+        linkedin_url: input.linkedinUrl ?? null,
+        contact_name: input.contactName ?? null,
+        contact_title: input.contactTitle ?? null,
+        notes: input.notes ?? null,
+        score: input.score ?? null,
+        owner_persona_id: input.owner ?? null,
+        status: input.status ?? null,
+      },
+    });
+    if (result.result !== "lead") {
+      throw new Error("The relay returned the wrong lead result.");
+    }
+    return mapLeadDetail(result.lead as unknown as RawLeadDetail);
   }
 
   async getIndustries(): Promise<Industry[]> {

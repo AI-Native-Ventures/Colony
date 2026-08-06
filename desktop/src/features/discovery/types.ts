@@ -127,6 +127,37 @@ export type CampaignDraft = {
 
 export type LeadStatus = "new" | "enriched" | "qualified" | "rejected";
 
+/** Funnel status vocabulary mirroring the Party relationship lifecycle. */
+export type LeadFunnelStatus =
+  | "candidate"
+  | "accepted"
+  | "qualified"
+  | "dormant"
+  | "disqualified"
+  | "client_active";
+
+/** One retained Lead plus its editable profile. */
+export type LeadDetail = Omit<Lead, "status"> & {
+  status: LeadFunnelStatus;
+  owner?: string;
+  notes?: string;
+  updatedAt?: string;
+};
+
+/** Editable fields for `updateLead`. */
+export type LeadUpdateInput = {
+  website?: string;
+  email?: string;
+  phone?: string;
+  linkedinUrl?: string;
+  contactName?: string;
+  contactTitle?: string;
+  notes?: string;
+  score?: number;
+  owner?: string;
+  status?: LeadFunnelStatus;
+};
+
 export type Lead = {
   id: string;
   entityType?: "company" | "person";
