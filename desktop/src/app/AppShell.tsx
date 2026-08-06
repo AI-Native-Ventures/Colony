@@ -870,7 +870,9 @@ export function AppShell() {
                           }}
                           onSelectAgents={() => void goAgents()}
                           onSelectBlocks={() => void goBlocks()}
-                          onSelectDiscovery={() => void goDiscovery()}
+                          onSelectDiscovery={() =>
+                            void goDiscovery({ surface: "leads" })
+                          }
                           onSelectChannel={(channelId) =>
                             void goChannel(channelId)
                           }
