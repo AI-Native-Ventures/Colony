@@ -54,7 +54,10 @@ export function CampaignTabs({
       }}
       value={value}
     >
-      <TabsList className="h-auto w-full justify-center gap-1 overflow-x-auto rounded-none border-b border-border/50 bg-transparent p-0 text-muted-foreground">
+      <TabsList
+        className="h-auto w-full justify-center gap-1 overflow-x-auto rounded-none border-b border-border/50 bg-transparent p-0 text-muted-foreground"
+        data-testid="campaign-tabs"
+      >
         {visibleTabs.map((tab) => (
           <TabsTrigger
             className="gap-2 rounded-none border-b-2 border-transparent px-3.5 py-2.5 text-sm font-semibold data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"

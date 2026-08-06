@@ -29,6 +29,12 @@ const SCREENSHOTS = [
   "discovery-access-locked.png",
 ] as const;
 
+declare global {
+  interface Window {
+    __BUZZ_E2E_DISCOVERY_EMPTY_LEADS__?: boolean;
+  }
+}
+
 test.describe.configure({ mode: "serial" });
 test.use({ viewport: { width: 1440, height: 1000 } });
 
@@ -89,7 +95,11 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
 
   await page.getByTestId("open-discovery-view").click();
   await expect(page).toHaveURL(/#\/discovery/);
-  await expect(page.getByTestId("open-discovery-view")).toBeVisible();
+  await expect(page.getByTestId("discovery-top-tab-leads")).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await page.getByTestId("discovery-top-tab-discover").click();
   await expect(
     page.getByRole("heading", { name: /Millions of leads, one search away/ }),
   ).toBeVisible();
@@ -177,7 +187,10 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   });
   await capture(appWorkspace(page), page, "discovery-progress.png");
 
-  await page.getByRole("tab", { name: /Leads/ }).click();
+  await page
+    .getByTestId("campaign-tabs")
+    .getByRole("tab", { name: /Leads/ })
+    .click();
   await expect(page.getByTestId("campaign-lead-table")).toBeVisible();
   await expect(page.getByText("10 companies found")).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-campaign-leads.png");
@@ -235,6 +248,7 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(page.getByTestId("global-people-table")).toBeVisible();
 
   await page.goto("/#/discovery");
+  await page.getByTestId("discovery-top-tab-discover").click();
   await page.getByRole("button", { name: "People", exact: true }).click();
   await expect(
     page.getByText(
@@ -290,7 +304,10 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
       name: "Open campaign Marketing Directors — United States",
     })
     .click();
-  await page.getByRole("tab", { name: /Leads/ }).click();
+  await page
+    .getByTestId("campaign-tabs")
+    .getByRole("tab", { name: /Leads/ })
+    .click();
   await expect(page.getByTestId("campaign-people-table")).toBeVisible();
   await expect(page.getByText("8 people found", { exact: true })).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-people-leads.png");
@@ -332,4 +349,35 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await capture(entitlementDialog, page, "discovery-access-locked.png");
 
   expect(errors, "Discovery parity flow emitted browser errors").toEqual([]);
+});
+
+test("Discovery defaults to the Leads tab with an empty state and Discover more", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  await page.addInitScript(() => {
+    window.__BUZZ_E2E_DISCOVERY_EMPTY_LEADS__ = true;
+  });
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
+  await installMockBridge(page);
+  await page.goto("/");
+  await page.getByTestId("open-discovery-view").click();
+
+  await expect(page.getByTestId("discovery-top-tabs")).toBeVisible();
+  await expect(page.getByTestId("discovery-top-tab-leads")).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(page.getByTestId("leads-empty-state")).toBeVisible();
+  await page.getByTestId("discover-more-button").click();
+  await expect(page.getByTestId("discovery-top-tab-discover")).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  expect(errors, "Leads empty-state flow emitted browser errors").toEqual([]);
 });

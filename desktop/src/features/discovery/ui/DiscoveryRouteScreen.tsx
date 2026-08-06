@@ -66,6 +66,7 @@ function routeNeedsLeads(search: DiscoverySearch) {
 
 type DiscoveryE2eWindow = Window & {
   __BUZZ_E2E_DISCOVERY_ENTITLEMENT__?: DiscoveryEntitlementState;
+  __BUZZ_E2E_DISCOVERY_EMPTY_LEADS__?: boolean;
 };
 
 /**
@@ -78,6 +79,13 @@ function fixtureEntitlementOverride(): DiscoveryEntitlementState | undefined {
     return undefined;
   }
   return (window as DiscoveryE2eWindow).__BUZZ_E2E_DISCOVERY_ENTITLEMENT__;
+}
+
+function fixtureEmptyLeadsOverride(): boolean | undefined {
+  if (import.meta.env.MODE !== "e2e" || typeof window === "undefined") {
+    return undefined;
+  }
+  return (window as DiscoveryE2eWindow).__BUZZ_E2E_DISCOVERY_EMPTY_LEADS__;
 }
 
 async function loadReadModel(
@@ -150,6 +158,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
       import.meta.env.MODE === "e2e"
         ? createFixtureDiscoveryDataSource({
             entitlement: fixtureEntitlementOverride(),
+            emptyLeads: fixtureEmptyLeadsOverride(),
           })
         : createRelayDiscoveryDataSource();
   }
