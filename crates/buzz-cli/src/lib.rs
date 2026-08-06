@@ -2566,6 +2566,12 @@ pub enum JobsCmd {
         /// The result
         #[arg(long)]
         result: String,
+        /// Provider that executed the job; stamped on the head
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model that executed the job; stamped on the head
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Report a job failed (kind 43013). Only the current lease holder may.
     Fail {
