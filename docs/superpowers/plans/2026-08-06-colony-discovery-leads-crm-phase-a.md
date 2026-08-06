@@ -15,11 +15,11 @@
 ## Task 1: Migration — allow `list_lead_counts` in workspace action claims
 
 **Files:**
-- Create: `migrations/0042_discovery_workspace_ops.sql`
+- Create: `migrations/0045_discovery_workspace_ops.sql`
 
 - [ ] **Step 1: Write the migration**
 
-Create `migrations/0042_discovery_workspace_ops.sql`:
+Create `migrations/0045_discovery_workspace_ops.sql`:
 
 ```sql
 -- Phase A: extend the private Discovery workspace contract with lead-count
@@ -44,7 +44,7 @@ ALTER TABLE discovery_workspace_action_claims
 Run against the isolated Postgres used by the relay harness:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/0042_discovery_workspace_ops.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/0045_discovery_workspace_ops.sql
 ```
 
 Expected: no error, and the constraint now contains `'list_lead_counts'`:
@@ -58,7 +58,7 @@ WHERE conname = 'discovery_workspace_action_claims_operation_check';
 
 ```bash
 cd /Users/mac/Desktop/Billion/AI-Native-Ventures-App-worktrees/discovery-leads-crm
-git add migrations/0042_discovery_workspace_ops.sql
+git add migrations/0045_discovery_workspace_ops.sql
 git commit -s -m "migrate(discovery): admit list_lead_counts workspace operation"
 ```
 
