@@ -803,24 +803,13 @@ git commit -s -m "feat(discovery): expose lead detail and update through the des
 
 - [ ] **Step 1: Add the e2e test**
 
-```rust
-#[tokio::test]
-#[ignore = "requires the isolated Postgres, Redis, and relay harness"]
-async fn lead_update_persists_and_rejects_illegal_transitions() {
-    // Reuse the pattern from lead_counts_aggregate_retained_businesses:
-    // provision member, enable entitlement, create campaign, insert a run +
-    // one observation, then:
-    // 1. submit GetLead and assert status == candidate;
-    // 2. submit UpdateLead { status: accepted, notes: "Warm intro", score: 82 }
-    //    and assert the receipt detail carries them;
-    // 3. submit UpdateLead { status: disqualified } then UpdateLead
-    //    { status: accepted } and assert the second is refused;
-    // 4. submit ListLeads { status: Some(accepted) } and assert only the
-    //    updated lead is returned.
-}
-```
-
-Implement the body following the Phase A e2e helpers (`submit_workspace_action`, direct SQL inserts).
+Add `lead_update_persists_and_rejects_illegal_transitions` to
+`crates/buzz-test-client/tests/e2e_discovery.rs` (implemented in Task 7's
+commit; it follows the Phase A helpers: provision member, enable entitlement,
+create campaign, insert a run + one observation, then `GetLead`,
+`UpdateLead { status: accepted, notes, score }`, `ListLeads { status:
+accepted }`, `UpdateLead { status: disqualified }`, and a refused
+`disqualified -> accepted` transition).
 
 - [ ] **Step 2: Run against the isolated harness**
 
