@@ -28,6 +28,7 @@ import type {
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
 import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
+import { unsupportedDiscoveryEntitlement } from "./relayDiscoverySupport";
 import {
   type CampaignProjection,
   eventBase,
@@ -75,6 +76,7 @@ class RunSignal {
     });
   }
 }
+
 export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   private readonly broker: DiscoveryBroker;
   private readonly demo = createFixtureDiscoveryDataSource({
@@ -107,6 +109,8 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
           };
         })
         .catch((error) => {
+          const fallback = unsupportedDiscoveryEntitlement(error);
+          if (fallback) return fallback;
           this.entitlementPromise = null;
           throw error;
         });

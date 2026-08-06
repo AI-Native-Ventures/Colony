@@ -554,6 +554,21 @@ test("inactive workspaces stay on the cost-free demo and cannot create live reco
   assert.deepEqual(locked.operations, ["access"]);
 });
 
+test("a relay without Discovery kinds falls back to the cost-free demo", async () => {
+  const unsupported = harness(false);
+  unsupported.dependencies.publish = async () => {
+    throw new Error("restricted: unknown event kind");
+  };
+  const source = new RelayDiscoveryDataSource(unsupported.dependencies);
+
+  assert.deepEqual(await source.getEntitlement(), {
+    feature: "discovery_engine",
+    state: "not_entitled",
+    experience: "demo",
+  });
+  assert.ok((await source.getIndustries()).length > 0);
+});
+
 test("a receipt not signed by the tenant relay cannot grant Discovery access", async () => {
   const forged = harness(true, generateSecretKey());
   const source = new RelayDiscoveryDataSource(forged.dependencies);
