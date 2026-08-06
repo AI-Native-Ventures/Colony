@@ -14,6 +14,7 @@ import {
   fieldRolesSearch,
   peopleCampaignDetailSearch,
   roleCampaignsSearch,
+  sortByLeadCountDesc,
   verticalCampaignsSearch,
 } from "./discoveryLayout.ts";
 
@@ -22,6 +23,18 @@ test("leads surface maps to the Leads top tab and everything else to Discover", 
   assert.equal(discoveryTopTab("industries"), "discover");
   assert.equal(discoveryTopTab("campaign"), "discover");
   assert.equal(discoveryTopTab("verticals"), "discover");
+});
+
+test("taxonomy grids sort by lead count descending, then name", () => {
+  const sorted = sortByLeadCountDesc([
+    { leadCount: 2, name: "Zeta" },
+    { leadCount: 9, name: "Alpha" },
+    { leadCount: 9, name: "Beta" },
+  ]);
+  assert.deepEqual(
+    sorted.map((item) => item.name),
+    ["Alpha", "Beta", "Zeta"],
+  );
 });
 
 test("direct campaign leads links infer the leads tab when tab is omitted", () => {

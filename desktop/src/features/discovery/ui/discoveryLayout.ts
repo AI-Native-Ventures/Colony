@@ -107,6 +107,16 @@ export function discoveryTopTab(
   return surface === "leads" ? "leads" : "discover";
 }
 
+/** Stable descending sort by lead count, then name, for taxonomy grids. */
+export function sortByLeadCountDesc<
+  T extends { leadCount: number; name: string },
+>(items: readonly T[]): T[] {
+  return [...items].sort(
+    (left, right) =>
+      right.leadCount - left.leadCount || left.name.localeCompare(right.name),
+  );
+}
+
 /** Infer the campaign tab for direct links that omit an explicit tab. */
 export function campaignTabForSearch(
   search: DiscoverySearch,
