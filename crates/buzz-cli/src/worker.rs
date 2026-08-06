@@ -205,7 +205,7 @@ struct OpenJob {
 /// finished appears twice: an "open" head and a "done" head. Without this
 /// dedup the worker finds the stale open one first, claims it, loses (it's
 /// done), and loops forever on a job that no longer needs it.
-fn newest_head_per_job<'a>(events: &'a [serde_json::Value]) -> Vec<&'a serde_json::Value> {
+fn newest_head_per_job(events: &[serde_json::Value]) -> Vec<&serde_json::Value> {
     let mut newest: std::collections::HashMap<String, &serde_json::Value> =
         std::collections::HashMap::new();
     for event in events {
