@@ -9,7 +9,7 @@ use crate::discovery::{
     DiscoveryBusinessSearchSpec, DiscoveryProvider, DiscoveryRunProjection, DiscoverySourceConfig,
 };
 use crate::discovery_worker::DiscoveryRunSourceProjection;
-use crate::party::{RelationshipKind, RelationshipStatus};
+use crate::party::RelationshipStatus;
 
 const MAX_NAME_BYTES: usize = 256;
 const MAX_TAXONOMY_ID_BYTES: usize = 128;
@@ -437,15 +437,22 @@ pub struct DiscoveryLeadCounts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryLeadStatus {
+    /// Returned by Discovery, not yet accepted by the company.
     Candidate,
+    /// Accepted as a prospect the company owns.
     Accepted,
+    /// Qualified for commercial pursuit.
     Qualified,
+    /// Parked without being ruled out.
     Dormant,
+    /// Judged not worth pursuing.
     Disqualified,
+    /// Converted to an active Client relationship.
     ClientActive,
 }
 
 impl DiscoveryLeadStatus {
+    /// Map this Discovery status onto the Party relationship lifecycle.
     pub const fn to_relationship_status(self) -> RelationshipStatus {
         match self {
             Self::Candidate => RelationshipStatus::Candidate,
@@ -457,6 +464,7 @@ impl DiscoveryLeadStatus {
         }
     }
 
+    /// Map a Party relationship status back onto the Discovery vocabulary.
     pub const fn from_relationship_status(status: RelationshipStatus) -> Self {
         match status {
             RelationshipStatus::Candidate => Self::Candidate,
@@ -474,19 +482,30 @@ impl DiscoveryLeadStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DiscoveryLeadUpdateInput {
+    /// Website override.
     pub website: Option<String>,
+    /// Email override.
     pub email: Option<String>,
+    /// Phone override.
     pub phone: Option<String>,
+    /// LinkedIn profile URL.
     pub linkedin_url: Option<String>,
+    /// Contact name (People leads).
     pub contact_name: Option<String>,
+    /// Contact title (People leads).
     pub contact_title: Option<String>,
+    /// Free-text notes.
     pub notes: Option<String>,
+    /// Quality score from zero through 100.
     pub score: Option<u16>,
+    /// Persona accountable for this Lead.
     pub owner_persona_id: Option<String>,
+    /// Funnel status to move the Lead to.
     pub status: Option<DiscoveryLeadStatus>,
 }
 
 impl DiscoveryLeadUpdateInput {
+    /// Validate every editable field against its bound.
     pub fn validate(&self) -> Result<(), DiscoveryWorkspaceValidationError> {
         for (value, field) in [
             (&self.website, "website"),
@@ -519,20 +538,33 @@ impl DiscoveryLeadUpdateInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DiscoveryLeadDetail {
+    /// The immutable observation this profile edits.
     #[serde(flatten)]
     pub lead: DiscoveryBusinessLeadProjection,
+    /// Current funnel status.
     pub status: DiscoveryLeadStatus,
+    /// Persona accountable for this Lead.
     pub owner_persona_id: Option<String>,
+    /// Website override.
     pub website_override: Option<String>,
+    /// Email override.
     pub email: Option<String>,
+    /// Phone override.
     pub phone_override: Option<String>,
+    /// LinkedIn profile URL.
     pub linkedin_url: Option<String>,
+    /// Contact name (People leads).
     pub contact_name: Option<String>,
+    /// Contact title (People leads).
     pub contact_title: Option<String>,
+    /// Free-text notes.
     pub notes: Option<String>,
+    /// Quality score from zero through 100.
     pub score: Option<u16>,
-    pub updated_by: String,
-    pub updated_at: DateTime<Utc>,
+    /// Public key of the last editor, hex-encoded.
+    pub updated_by: Option<String>,
+    /// Time of the last edit.
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 /// Private result returned in a relay-signed workspace receipt.
