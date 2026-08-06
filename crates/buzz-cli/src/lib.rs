@@ -3,7 +3,10 @@ mod client;
 mod commands;
 pub mod company_scan;
 mod error;
+pub mod llm;
+pub mod seat;
 mod validate;
+pub mod worker;
 
 use clap::{Parser, Subcommand};
 use client::BuzzClient;
@@ -2583,6 +2586,20 @@ pub enum JobsCmd {
         /// The job id (64 hex characters)
         #[arg(long)]
         job: String,
+    },
+    /// Run as a worker: poll for your open jobs, claim one, execute the
+    /// instruction via an LLM, heartbeat the lease, and post the result.
+    /// Reads ~/.config/buzz/seat.toml for provider/model bindings.
+    Work {
+        /// Only work jobs for this employee (pubkey hex)
+        #[arg(long)]
+        employee: Option<String>,
+        /// Seconds between polls when no open work exists
+        #[arg(long, default_value = "5")]
+        poll: u64,
+        /// Path to seat config file
+        #[arg(long)]
+        config: Option<String>,
     },
 }
 

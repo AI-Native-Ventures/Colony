@@ -203,6 +203,29 @@ pub async fn cmd_show(client: &BuzzClient, job: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Run as a worker: poll, claim, execute, heartbeat, finish, repeat.
+pub async fn cmd_work(
+    client: &BuzzClient,
+    employee_filter: Option<&str>,
+    config_path: Option<&str>,
+) -> Result<(), CliError> {
+    let config: crate::seat::SeatConfig = if let Some(path) = config_path {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| CliError::Other(format!("could not read {path}: {e}")))?;
+        toml::from_str(&contents)
+            .map_err(|e| CliError::Other(format!("could not parse {path}: {e}")))?
+    } else {
+        crate::seat::load_seat_config().map_err(CliError::Other)?
+    };
+
+    if let Some(filter) = employee_filter {
+        eprintln!("worker: --employee filter not yet wired, will work all employees");
+        let _ = filter;
+    }
+
+    crate::worker::run_worker(client, &config).await
+}
+
 /// Keep only the current head for each job.
 ///
 /// Job heads are replaceable, and a query returns the revisions the relay has
@@ -297,5 +320,8 @@ pub async fn dispatch(cmd: crate::JobsCmd, client: &BuzzClient) -> Result<(), Cl
             cmd_list(client, status.as_deref(), involving.as_deref()).await
         }
         JobsCmd::Show { job } => cmd_show(client, &job).await,
+        JobsCmd::Work {
+            employee, config, ..
+        } => cmd_work(client, employee.as_deref(), config.as_deref()).await,
     }
 }
