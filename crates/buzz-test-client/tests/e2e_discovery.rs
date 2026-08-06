@@ -728,6 +728,96 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
 }
 
 #[tokio::test]
+#[ignore = "requires the isolated Postgres, Redis, and relay harness with fake Discovery enabled"]
+async fn lead_counts_aggregate_retained_businesses() {
+    let _test_guard = DISCOVERY_E2E_LOCK.lock().await;
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5471/buzz".to_owned());
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("connect isolated Postgres");
+    let host = buzz_core::tenant::relay_url_authority(&relay_url());
+    let community_id: Uuid = sqlx::query("SELECT id FROM communities WHERE lower(host)=lower($1)")
+        .bind(&host)
+        .fetch_one(&pool)
+        .await
+        .expect("isolated community exists")
+        .try_get("id")
+        .expect("community UUID");
+    let actor = Keys::generate();
+    provision_member(&pool, community_id, &actor).await;
+    sqlx::query(
+        "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
+         VALUES ($1,TRUE,now()) ON CONFLICT (community_id) \
+         DO UPDATE SET active=TRUE,updated_at=now()",
+    )
+    .bind(community_id)
+    .execute(&pool)
+    .await
+    .expect("enable entitlement");
+    let relay = relay_pubkey().await;
+    let mut client = BuzzTestClient::connect(&relay_url(), &actor)
+        .await
+        .expect("authenticate actor");
+    let campaign_id = create_campaign(&mut client, &actor, relay).await;
+    let run_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO discovery_runs \
+         (community_id,id,campaign_id,requested_by,start_idempotency_key,state,total_steps) \
+         VALUES ($1,$2,$3,$4,$5,'succeeded',4)",
+    )
+    .bind(community_id)
+    .bind(run_id)
+    .bind(campaign_id)
+    .bind(actor.public_key().to_bytes().as_slice())
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .expect("insert succeeded run");
+    for (name, provider_record_id) in [
+        ("Sandton Dental One", "maps:dentist-1"),
+        ("Sandton Dental Two", "maps:dentist-2"),
+    ] {
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper',$4,$5,decode(repeat('ab',32),'hex'))",
+        )
+        .bind(community_id)
+        .bind(Uuid::new_v4())
+        .bind(run_id)
+        .bind(provider_record_id)
+        .bind(name)
+        .execute(&pool)
+        .await
+        .expect("insert retained observation");
+    }
+    let result = submit_workspace_action(
+        &mut client,
+        &actor,
+        relay,
+        DiscoveryWorkspaceActionPayload::ListLeadCounts,
+    )
+    .await;
+    let DiscoveryWorkspaceResult::LeadCounts { counts } = result else {
+        panic!("lead counts must return the counts projection");
+    };
+    assert_eq!(counts.total, 2);
+    let healthcare = counts
+        .industries
+        .iter()
+        .find(|row| row.industry_id == "healthcare")
+        .expect("healthcare industry count");
+    assert_eq!(healthcare.count, 2);
+    let dentists = counts
+        .verticals
+        .iter()
+        .find(|row| row.vertical_id.as_deref() == Some("dentists"))
+        .expect("dentists vertical count");
+    assert_eq!(dentists.count, 2);
+}
+
+#[tokio::test]
 #[ignore = "requires isolated Postgres, Redis, and relay with external Discovery workers enabled"]
 async fn local_worker_is_restart_safe_private_and_fenced() {
     let _test_guard = DISCOVERY_E2E_LOCK.lock().await;

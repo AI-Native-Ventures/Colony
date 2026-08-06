@@ -11,6 +11,8 @@ import {
 
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import { Card } from "@/shared/ui/card";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import { describeExportOutcome, exportLeadsToCsv } from "../lib/exportLeads";
 import type { CampaignDetail, LeadPage } from "../types";
@@ -266,6 +268,7 @@ function GlobalLeads({
   const [mode, setMode] = React.useState<LeadMode>(initialMode);
   const [view, setView] = React.useState<LeadTableView>("list");
   const [message, setMessage] = React.useState<string | null>(null);
+  const { goDiscovery } = useAppNavigation();
 
   React.useEffect(() => setMode(initialMode), [initialMode]);
 
@@ -311,6 +314,44 @@ function GlobalLeads({
   );
   const visibleLeads = filterLeads(modeLeads, filters);
   if (isLoading) return <LoadingLeads />;
+
+  if (leads.length === 0) {
+    return (
+      <div className="space-y-5">
+        <GlobalLeadsHeader
+          mode={mode}
+          onModeChange={setMode}
+          onAction={setMessage}
+          onExport={() => undefined}
+        />
+        <Card
+          className="border-dashed border-border/70 bg-background/30 p-10 text-center shadow-none"
+          data-testid="leads-empty-state"
+        >
+          <UsersRound
+            aria-hidden="true"
+            className="mx-auto h-8 w-8 text-muted-foreground"
+          />
+          <h2 className="mt-3 text-lg font-semibold text-foreground">
+            No leads yet
+          </h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            Run a Discovery campaign and every retained business appears here
+            automatically.
+          </p>
+          <Button
+            className="mt-5"
+            data-testid="discover-more-button"
+            onClick={() => void goDiscovery({ surface: "industries" })}
+            type="button"
+          >
+            <Plus aria-hidden="true" />
+            Discover more
+          </Button>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">

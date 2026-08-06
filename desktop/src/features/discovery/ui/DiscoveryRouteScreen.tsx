@@ -15,7 +15,9 @@ import {
   DiscoveryWorkspace,
   type DiscoveryRouteReadModel,
 } from "./DiscoveryWorkspace";
+import { DiscoveryTopTabs } from "./DiscoveryTopTabs";
 import { DISCOVERY_LIGHT_SURFACE_STYLE } from "./discoverySurfaceStyle";
+import { discoverySurface } from "./discoveryLayout";
 
 type DiscoveryRouteScreenProps = {
   search: DiscoverySearch;
@@ -64,6 +66,7 @@ function routeNeedsLeads(search: DiscoverySearch) {
 
 type DiscoveryE2eWindow = Window & {
   __BUZZ_E2E_DISCOVERY_ENTITLEMENT__?: DiscoveryEntitlementState;
+  __BUZZ_E2E_DISCOVERY_EMPTY_LEADS__?: boolean;
 };
 
 /**
@@ -76,6 +79,13 @@ function fixtureEntitlementOverride(): DiscoveryEntitlementState | undefined {
     return undefined;
   }
   return (window as DiscoveryE2eWindow).__BUZZ_E2E_DISCOVERY_ENTITLEMENT__;
+}
+
+function fixtureEmptyLeadsOverride(): boolean | undefined {
+  if (import.meta.env.MODE !== "e2e" || typeof window === "undefined") {
+    return undefined;
+  }
+  return (window as DiscoveryE2eWindow).__BUZZ_E2E_DISCOVERY_EMPTY_LEADS__;
 }
 
 async function loadReadModel(
@@ -148,6 +158,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
       import.meta.env.MODE === "e2e"
         ? createFixtureDiscoveryDataSource({
             entitlement: fixtureEntitlementOverride(),
+            emptyLeads: fixtureEmptyLeadsOverride(),
           })
         : createRelayDiscoveryDataSource();
   }
@@ -201,6 +212,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
       className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background text-foreground"
       style={DISCOVERY_LIGHT_SURFACE_STYLE}
     >
+      <DiscoveryTopTabs surface={discoverySurface(search)} />
       <DiscoveryWorkspace
         dataSource={dataSource}
         entitlement={state.entitlement}

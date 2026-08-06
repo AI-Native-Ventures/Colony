@@ -308,6 +308,7 @@ fn is_v1_request(request: &DiscoveryWorkspaceRequest) -> bool {
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
             ..
         } => false,
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListLeadCounts => false,
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::Access
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetCampaign { .. }
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListCampaigns { .. }
@@ -336,6 +337,7 @@ fn receipt_for_wire_version(
                 }
             }
             DiscoveryWorkspaceResult::Access { .. } => {}
+            DiscoveryWorkspaceResult::LeadCounts { .. } => {}
         }
     }
     compatible
@@ -381,6 +383,9 @@ fn validate_receipt(receipt: &DiscoveryWorkspaceReceipt) -> Result<(), Discovery
         ) | (
             DiscoveryWorkspaceOperation::ListLeads,
             DiscoveryWorkspaceResult::Leads { .. }
+        ) | (
+            DiscoveryWorkspaceOperation::ListLeadCounts,
+            DiscoveryWorkspaceResult::LeadCounts { .. }
         )
     );
     if !matches {
@@ -399,6 +404,7 @@ fn operation_tag(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
+        DiscoveryWorkspaceOperation::ListLeadCounts => "list_lead_counts",
     }
 }
 
@@ -410,6 +416,7 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkspaceOperation, Discovery
         "get_campaign" => Ok(DiscoveryWorkspaceOperation::GetCampaign),
         "list_campaigns" => Ok(DiscoveryWorkspaceOperation::ListCampaigns),
         "list_leads" => Ok(DiscoveryWorkspaceOperation::ListLeads),
+        "list_lead_counts" => Ok(DiscoveryWorkspaceOperation::ListLeadCounts),
         _ => Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
             "workspace action",
         )),
@@ -667,5 +674,33 @@ mod tests {
         assert_eq!(parsed.request, request);
         assert!(event.content.contains("update_campaign_sources"));
         assert!(!event.content.contains("api_key"));
+    }
+
+    #[test]
+    fn list_lead_counts_is_v2_only() {
+        let relay = Keys::generate().public_key();
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::ListLeadCounts,
+        };
+        assert!(
+            build_discovery_workspace_action_for_version(
+                DiscoveryWorkspaceWireVersion::V2,
+                relay,
+                &request,
+            )
+            .is_ok(),
+            "v2 must carry the new operation"
+        );
+        assert!(
+            build_discovery_workspace_action_for_version(
+                DiscoveryWorkspaceWireVersion::V1,
+                relay,
+                &request,
+            )
+            .is_err(),
+            "v1 must reject an operation it cannot represent"
+        );
     }
 }

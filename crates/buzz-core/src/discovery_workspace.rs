@@ -38,6 +38,8 @@ pub enum DiscoveryWorkspaceOperation {
     ListCampaigns,
     /// List normalized retained Businesses Leads.
     ListLeads,
+    /// List retained-Lead counts per taxonomy row.
+    ListLeadCounts,
 }
 
 /// Immutable input used to create a live Businesses campaign.
@@ -197,6 +199,8 @@ pub enum DiscoveryWorkspaceActionPayload {
         /// Bounded filters and pagination.
         request: DiscoveryLeadListRequest,
     },
+    /// List retained-Lead counts per taxonomy row.
+    ListLeadCounts,
 }
 
 impl DiscoveryWorkspaceActionPayload {
@@ -211,6 +215,7 @@ impl DiscoveryWorkspaceActionPayload {
             Self::GetCampaign { .. } => DiscoveryWorkspaceOperation::GetCampaign,
             Self::ListCampaigns { .. } => DiscoveryWorkspaceOperation::ListCampaigns,
             Self::ListLeads { .. } => DiscoveryWorkspaceOperation::ListLeads,
+            Self::ListLeadCounts => DiscoveryWorkspaceOperation::ListLeadCounts,
         }
     }
 
@@ -231,6 +236,7 @@ impl DiscoveryWorkspaceActionPayload {
             Self::GetCampaign { campaign_id } => validate_uuid(*campaign_id, "campaign_id"),
             Self::ListCampaigns { request } => request.validate(),
             Self::ListLeads { request } => request.validate(),
+            Self::ListLeadCounts => Ok(()),
         }
     }
 }
@@ -376,6 +382,30 @@ pub struct DiscoveryLeadPage {
     pub limit: u16,
 }
 
+/// One aggregated retained-Lead count for a taxonomy row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryLeadCountRow {
+    /// Taxonomy industry identifier.
+    pub industry_id: String,
+    /// Taxonomy vertical identifier; present when this row counts a vertical.
+    pub vertical_id: Option<String>,
+    /// Number of retained Leads in the workspace for this row.
+    pub count: u32,
+}
+
+/// Aggregated retained-Lead counts for taxonomy grids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryLeadCounts {
+    /// Total retained Leads in the workspace.
+    pub total: u32,
+    /// Counts per industry, highest first.
+    pub industries: Vec<DiscoveryLeadCountRow>,
+    /// Counts per vertical within their industry, highest first.
+    pub verticals: Vec<DiscoveryLeadCountRow>,
+}
+
 /// Private result returned in a relay-signed workspace receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
@@ -399,6 +429,11 @@ pub enum DiscoveryWorkspaceResult {
     Leads {
         /// Complete entitled Lead page.
         page: DiscoveryLeadPage,
+    },
+    /// Aggregated retained-Lead counts.
+    LeadCounts {
+        /// Complete entitled count aggregation.
+        counts: DiscoveryLeadCounts,
     },
 }
 
@@ -587,5 +622,42 @@ mod tests {
             serde_json::from_value(value).expect("decode legacy Campaign");
         assert_eq!(decoded.source_config, DiscoverySourceConfig::default());
         assert_eq!(decoded.validate(), Ok(()));
+    }
+
+    #[test]
+    fn lead_counts_round_trip_and_operation_mapping() {
+        let counts = DiscoveryLeadCounts {
+            total: 2,
+            industries: vec![DiscoveryLeadCountRow {
+                industry_id: "healthcare".into(),
+                vertical_id: None,
+                count: 2,
+            }],
+            verticals: vec![DiscoveryLeadCountRow {
+                industry_id: "healthcare".into(),
+                vertical_id: Some("dentists".into()),
+                count: 2,
+            }],
+        };
+        let value = serde_json::to_value(&counts).expect("serialize counts");
+        let decoded: DiscoveryLeadCounts = serde_json::from_value(value).expect("decode counts");
+        assert_eq!(decoded, counts);
+
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::ListLeadCounts,
+        };
+        assert_eq!(
+            request.payload.operation(),
+            DiscoveryWorkspaceOperation::ListLeadCounts
+        );
+        assert_eq!(request.validate(), Ok(()));
+
+        let result = DiscoveryWorkspaceResult::LeadCounts { counts };
+        let encoded: DiscoveryWorkspaceResult =
+            serde_json::from_value(serde_json::to_value(&result).expect("serialize"))
+                .expect("decode");
+        assert_eq!(encoded, result);
     }
 }

@@ -144,6 +144,25 @@ test("every advertised business industry exposes the complete SalesTeams taxonom
   );
 });
 
+test("fixture lead counts match the taxonomy cards", async () => {
+  const source = createFixtureDiscoveryDataSource();
+  const [industries, counts] = await Promise.all([
+    source.getIndustries(),
+    source.getLeadCounts(),
+  ]);
+  assert.equal(
+    counts.total,
+    industries.reduce((sum, item) => sum + item.leadCount, 0),
+  );
+  for (const industry of industries) {
+    const row = counts.industries.find(
+      (candidate) => candidate.industryId === industry.id,
+    );
+    assert.equal(row?.count, industry.leadCount);
+  }
+  assert.ok(counts.verticals.length > 0);
+});
+
 test("fixture source returns the complete SalesTeams people hierarchy", async () => {
   const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
   const fields = await source.getFields();

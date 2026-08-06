@@ -7,9 +7,10 @@ use buzz_core::{
     },
     discovery_workspace::{
         DiscoveryBusinessLeadProjection, DiscoveryCampaignInput, DiscoveryCampaignListRequest,
-        DiscoveryCampaignPage, DiscoveryCampaignProjection, DiscoveryLeadListRequest,
-        DiscoveryLeadPage, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceOperation,
-        DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
+        DiscoveryCampaignPage, DiscoveryCampaignProjection, DiscoveryLeadCountRow,
+        DiscoveryLeadCounts, DiscoveryLeadListRequest, DiscoveryLeadPage,
+        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceOperation, DiscoveryWorkspaceRequest,
+        DiscoveryWorkspaceResult,
     },
     CommunityId, StoredEvent,
 };
@@ -320,6 +321,11 @@ async fn apply_workspace_operation_tx(
                 page: list_leads_tx(tx, community_id, request).await?,
             })
         }
+        DiscoveryWorkspaceActionPayload::ListLeadCounts => {
+            Ok(DiscoveryWorkspaceResult::LeadCounts {
+                counts: list_lead_counts_tx(tx, community_id).await?,
+            })
+        }
     }
 }
 
@@ -510,6 +516,68 @@ async fn list_leads_tx(
     })
 }
 
+async fn list_lead_counts_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+) -> Result<DiscoveryLeadCounts> {
+    let total: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM discovery_business_observations \
+         WHERE community_id=$1",
+    )
+    .bind(community_id.as_uuid())
+    .fetch_one(&mut **tx)
+    .await?;
+    let industry_rows = sqlx::query(
+        "SELECT c.industry_id, count(*) AS lead_count \
+         FROM discovery_business_observations o \
+         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
+         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         WHERE o.community_id=$1 \
+         GROUP BY c.industry_id \
+         ORDER BY lead_count DESC, c.industry_id ASC",
+    )
+    .bind(community_id.as_uuid())
+    .fetch_all(&mut **tx)
+    .await?;
+    let industries = industry_rows
+        .iter()
+        .map(|row| {
+            Ok(DiscoveryLeadCountRow {
+                industry_id: row.try_get("industry_id")?,
+                vertical_id: None,
+                count: count_to_u32(row.try_get::<i64, _>("lead_count")?, "Lead count")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let vertical_rows = sqlx::query(
+        "SELECT c.industry_id, c.vertical_id, count(*) AS lead_count \
+         FROM discovery_business_observations o \
+         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
+         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         WHERE o.community_id=$1 \
+         GROUP BY c.industry_id, c.vertical_id \
+         ORDER BY lead_count DESC, c.vertical_id ASC",
+    )
+    .bind(community_id.as_uuid())
+    .fetch_all(&mut **tx)
+    .await?;
+    let verticals = vertical_rows
+        .iter()
+        .map(|row| {
+            Ok(DiscoveryLeadCountRow {
+                industry_id: row.try_get("industry_id")?,
+                vertical_id: Some(row.try_get("vertical_id")?),
+                count: count_to_u32(row.try_get::<i64, _>("lead_count")?, "Lead count")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(DiscoveryLeadCounts {
+        total: count_to_u32(total, "Lead count")?,
+        industries,
+        verticals,
+    })
+}
+
 const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
     "SELECT ",
     "c.id AS campaign_record_id,c.name,c.industry_id,c.industry_name,c.vertical_id,c.vertical_name,\
@@ -691,6 +759,7 @@ fn operation_text(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
+        DiscoveryWorkspaceOperation::ListLeadCounts => "list_lead_counts",
     }
 }
 

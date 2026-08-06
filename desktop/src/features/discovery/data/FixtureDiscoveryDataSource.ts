@@ -15,6 +15,7 @@ import type {
   DiscoveryEvent,
   Industry,
   Lead,
+  LeadCounts,
   LeadPage,
   LeadScope,
   OutreachDraft,
@@ -48,6 +49,8 @@ import {
 export type FixtureDiscoveryDataSourceOptions = {
   entitlement?: DiscoveryEntitlementState | DiscoveryEntitlement;
   scenario?: FixtureScenario;
+  /** Return an empty global Leads page so the empty state is browser-testable. */
+  emptyLeads?: boolean;
 };
 
 export type CreateFixtureDiscoveryDataSourceOptions =
@@ -186,12 +189,14 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     string,
     ConversationThread[]
   >();
+  private readonly emptyLeads: boolean;
   private nextCampaignNumber = 1;
   private nextRunToken = 1;
 
   constructor(options: FixtureDiscoveryDataSourceOptions = {}) {
     this.entitlement = normalizeEntitlement(options.entitlement);
     this.defaultScenario = options.scenario ?? "concurrent";
+    this.emptyLeads = options.emptyLeads ?? false;
 
     const fixtureCampaign = clone(CAMPAIGN_FIXTURE);
     fixtureCampaign.run = createIdleDiscoveryRun(fixtureCampaign);
@@ -248,6 +253,23 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
 
   async getIndustries(): Promise<Industry[]> {
     return clone(FIXTURE_INDUSTRIES);
+  }
+
+  async getLeadCounts(): Promise<LeadCounts> {
+    const industries = FIXTURE_INDUSTRIES.map((industry) => ({
+      industryId: industry.id,
+      count: industry.leadCount,
+    }));
+    const verticals = FIXTURE_VERTICAL_DETAILS.map((vertical) => ({
+      industryId: vertical.industryId,
+      verticalId: vertical.id,
+      count: vertical.leadCount,
+    }));
+    return {
+      total: industries.reduce((sum, row) => sum + row.count, 0),
+      industries,
+      verticals,
+    };
   }
 
   async getVerticals(industryId: string): Promise<Vertical[]> {
@@ -325,6 +347,15 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   }
 
   async getLeads(scope: LeadScope): Promise<LeadPage> {
+    if (this.emptyLeads && scope.scope !== "campaign") {
+      return {
+        leads: [],
+        total: 0,
+        page: 1,
+        pageSize: scope.pageSize ?? 25,
+        hasNextPage: false,
+      };
+    }
     const scopeKind = scope.scope ?? scope.kind ?? scope.type ?? "global";
     const sourceLeads =
       scopeKind === "campaign"
