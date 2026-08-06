@@ -12,7 +12,13 @@
 
 use std::time::Duration;
 
-use buzz_core::kind::{KIND_JOB_CLAIM, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME};
+use buzz_core::kind::{
+    KIND_JOB_CLAIM, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_USAGE_RECORD,
+};
+use buzz_core::usage_record::{
+    encrypt_usage_record, PaymentMode, UsageBreakdown, UsageRecordPayload, UsageSource,
+};
+use chrono::{SecondsFormat, Utc};
 use nostr::{EventBuilder, Kind, Tag};
 use tokio::time::sleep;
 
@@ -118,8 +124,17 @@ pub async fn run_worker(client: &BuzzClient, config: &SeatConfig) -> Result<(), 
 
         match result {
             Ok(reply) => {
-                let outcome = sign_finish(client, &open.job_id, attempt, "done", &reply.text)?;
+                let outcome = sign_finish(
+                    client,
+                    &open.job_id,
+                    attempt,
+                    "done",
+                    &reply.text,
+                    Some(&reply.provider),
+                    Some(&reply.model),
+                )?;
                 client.submit_event(outcome).await?;
+                publish_usage(client, &open, &reply).await;
                 eprintln!(
                     "worker: job {} done (provider={}, model={})",
                     open.job_id, reply.provider, reply.model
@@ -127,7 +142,8 @@ pub async fn run_worker(client: &BuzzClient, config: &SeatConfig) -> Result<(), 
             }
             Err(e) => {
                 let detail = format!("worker could not run this: {e}");
-                let outcome = sign_finish(client, &open.job_id, attempt, "failed", &detail)?;
+                let outcome =
+                    sign_finish(client, &open.job_id, attempt, "failed", &detail, None, None)?;
                 client.submit_event(outcome).await?;
                 eprintln!("worker: job {} failed: {e}", open.job_id);
             }
@@ -341,21 +357,119 @@ fn sign_finish(
     attempt: i32,
     status: &str,
     detail: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
 ) -> Result<nostr::Event, CliError> {
     let attempt_str = attempt.to_string();
-    let tags = [
+    let mut parsed = vec![
         Tag::parse(["job", job]),
         Tag::parse(["attempt", &attempt_str]),
         Tag::parse(["status", status]),
-    ]
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| CliError::Other(format!("tag error: {e}")))?;
+    ];
+    if let Some(provider) = provider {
+        parsed.push(Tag::parse(["provider", provider]));
+    }
+    if let Some(model) = model {
+        parsed.push(Tag::parse(["model", model]));
+    }
+    let tags = parsed
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| CliError::Other(format!("tag error: {e}")))?;
 
     EventBuilder::new(Kind::Custom(KIND_JOB_OUTCOME as u16), detail)
         .tags(tags)
         .sign_with_keys(client.keys())
         .map_err(|e| CliError::Other(format!("failed to sign outcome: {e}")))
+}
+
+/// Post one provider call to the Colony cost ledger, best effort.
+///
+/// The job result is already durable by the time this runs; a ledger record
+/// that fails to post is logged and does not fail the job, because the work
+/// itself is done either way.
+async fn publish_usage(client: &BuzzClient, job: &OpenJob, reply: &crate::llm::LlmResponse) {
+    let request_id = reply
+        .request_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let payload = UsageRecordPayload {
+        source: UsageSource::Wire,
+        provider: reply.provider.clone(),
+        request_id,
+        model: Some(reply.model.clone()),
+        timestamp: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        payment_mode: PaymentMode::Metered,
+        tokens: Some(UsageBreakdown {
+            input_uncached_tokens: reply.input_tokens as u64,
+            cache_read_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            output_tokens: reply.output_tokens as u64,
+        }),
+        amount_nanousd: None,
+        observed_cost_nanousd: None,
+        harness: Some("buzz-worker".to_string()),
+        session_id: None,
+        turn_id: Some(job.job_id.clone()),
+        http_status: Some(200),
+        description: None,
+        agent_pubkey: Some(job.employee.clone()),
+        channel_id: None,
+        work_context: None,
+    };
+
+    let owner = client.keys().public_key();
+    let ciphertext = match encrypt_usage_record(client.keys(), &owner, &payload) {
+        Ok(ciphertext) => ciphertext,
+        Err(error) => {
+            eprintln!(
+                "worker: usage record not posted for {}: {error}",
+                job.job_id
+            );
+            return;
+        }
+    };
+
+    let owner_hex = owner.to_hex();
+    let employee_hex = job.employee.clone();
+    let tags = match vec![
+        Tag::parse(["p", owner_hex.as_str()]),
+        Tag::parse(["agent", employee_hex.as_str()]),
+    ]
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(tags) => tags,
+        Err(error) => {
+            eprintln!(
+                "worker: usage record not posted for {}: tag error: {error}",
+                job.job_id
+            );
+            return;
+        }
+    };
+
+    let event = match EventBuilder::new(Kind::Custom(KIND_USAGE_RECORD as u16), ciphertext)
+        .tags(tags)
+        .sign_with_keys(client.keys())
+    {
+        Ok(event) => event,
+        Err(error) => {
+            eprintln!(
+                "worker: usage record not posted for {}: {error}",
+                job.job_id
+            );
+            return;
+        }
+    };
+
+    if let Err(error) = client.submit_event(event).await {
+        eprintln!(
+            "worker: usage record not posted for {}: {error}",
+            job.job_id
+        );
+    }
 }
 
 #[cfg(test)]

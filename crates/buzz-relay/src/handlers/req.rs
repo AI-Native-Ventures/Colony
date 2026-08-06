@@ -7,8 +7,8 @@ use tracing::{debug, warn};
 
 use buzz_core::filter::filters_match;
 use buzz_core::kind::{
-    is_unshared_persona_event, AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_PERSONA, P_GATED_KINDS,
-    RESULT_GATED_KINDS,
+    is_unshared_persona_event, AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_PERSONA,
+    KIND_USAGE_RECORD, P_GATED_KINDS, RESULT_GATED_KINDS,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::EventQuery;
@@ -1063,8 +1063,25 @@ pub(crate) fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: 
             return true;
         }
 
-        filter.generic_tags.get(&p_tag).is_some_and(|values| {
+        if filter.generic_tags.get(&p_tag).is_some_and(|values| {
             !values.is_empty() && values.iter().all(|value| value == authed_pubkey_hex)
+        }) {
+            return true;
+        }
+
+        // Self-metered seats: a worker on the member's own machine authors
+        // and owns the same usage record, and the relay drops a `#p` that
+        // points at the event's own author. The author side is the owner
+        // side for that shape, so a filter that names KIND_USAGE_RECORD and
+        // is scoped to the reader's own pubkey is authorized.
+        filter.kinds.as_ref().is_some_and(|ks| {
+            ks.iter()
+                .any(|kind| (kind.as_u16() as u32) == KIND_USAGE_RECORD)
+        }) && filter.authors.as_ref().is_some_and(|authors| {
+            !authors.is_empty()
+                && authors
+                    .iter()
+                    .all(|author| author.to_hex() == authed_pubkey_hex)
         })
     })
 }
@@ -1659,6 +1676,35 @@ mod tests {
             ))
             .custom_tags(p_tag, [authed]);
         assert!(p_gated_filters_authorized(&[matching_p], authed));
+    }
+
+    #[test]
+    fn self_metered_usage_records_are_readable_by_their_author() {
+        let authed = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let kind = nostr::Kind::Custom(KIND_USAGE_RECORD as u16);
+
+        let self_authored = Filter::new()
+            .kind(kind)
+            .authors(vec![authed.parse::<nostr::PublicKey>().unwrap()]);
+        assert!(
+            p_gated_filters_authorized(&[self_authored], authed),
+            "a seat must be able to read usage records it authored itself"
+        );
+
+        let someone_elses = Filter::new()
+            .kind(kind)
+            .authors(vec![other.parse::<nostr::PublicKey>().unwrap()]);
+        assert!(
+            !p_gated_filters_authorized(&[someone_elses], authed),
+            "an author filter for another pubkey must stay unauthorized"
+        );
+
+        let unscoped = Filter::new().kind(kind);
+        assert!(
+            !p_gated_filters_authorized(&[unscoped], authed),
+            "an unscoped usage-record filter must stay unauthorized"
+        );
     }
 
     #[test]

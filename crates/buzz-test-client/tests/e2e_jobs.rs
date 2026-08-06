@@ -1,4 +1,6 @@
-//! End-to-end proof of the job queue (`docs/design/company-employees.html`, phase 2).
+//! End-to-end proof of the job queue (`docs/design/company-employees.html`,
+//! phases 2 and 3). Phase 2 is the queue itself; phase 3 is the execution
+//! stamp on a finished head and the usage record a seat posts to the ledger.
 //!
 //! The phase gate is: a job filed by one member, claimed and completed by a
 //! worker, survives a mid-job worker kill by being re-leased. Everything here
@@ -46,13 +48,17 @@ mod common;
 
 use std::time::Duration;
 
-use nostr::{EventBuilder, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp};
 use uuid::Uuid;
 
 use buzz_core::job::MAX_JOB_ATTEMPTS;
 use buzz_core::kind::{
     KIND_EMPLOYEE, KIND_HIRE_REQUEST, KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD,
-    KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME,
+    KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_USAGE_RECORD,
+};
+use buzz_core::usage_record::{
+    decrypt_usage_record, encrypt_usage_record, PaymentMode, UsageBreakdown, UsageRecordPayload,
+    UsageSource,
 };
 
 use common::{default_community, e2e_db_pool, query, seed_relay_owner, submit, tag_value};
@@ -127,6 +133,77 @@ fn finish_job(worker: &Keys, job: &str, attempt: i32, status: &str, detail: &str
         ])
         .sign_with_keys(worker)
         .expect("sign job outcome")
+}
+
+/// Finish a job with the execution stamp a worker's seat puts on it.
+fn finish_job_stamped(
+    worker: &Keys,
+    job: &str,
+    attempt: i32,
+    status: &str,
+    detail: &str,
+    provider: &str,
+    model: &str,
+) -> nostr::Event {
+    EventBuilder::new(Kind::Custom(KIND_JOB_OUTCOME as u16), detail)
+        .tags(vec![
+            Tag::parse(["job", job]).unwrap(),
+            Tag::parse(["attempt", &attempt.to_string()]).unwrap(),
+            Tag::parse(["status", status]).unwrap(),
+            Tag::parse(["provider", provider]).unwrap(),
+            Tag::parse(["model", model]).unwrap(),
+        ])
+        .sign_with_keys(worker)
+        .expect("sign stamped job outcome")
+}
+
+/// Publish the usage record a worker's seat posts after one LLM call.
+async fn publish_usage_record(
+    founder: &Keys,
+    employee: &str,
+    provider: &str,
+    model: &str,
+    job: &str,
+) -> String {
+    let payload = UsageRecordPayload {
+        source: UsageSource::Wire,
+        provider: provider.to_string(),
+        request_id: format!("req-{job}"),
+        model: Some(model.to_string()),
+        timestamp: Timestamp::now().to_human_datetime(),
+        payment_mode: PaymentMode::Metered,
+        tokens: Some(UsageBreakdown {
+            input_uncached_tokens: 100,
+            cache_read_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            output_tokens: 40,
+        }),
+        amount_nanousd: None,
+        observed_cost_nanousd: None,
+        harness: Some("buzz-worker".to_string()),
+        session_id: None,
+        turn_id: Some(job.to_string()),
+        http_status: Some(200),
+        description: None,
+        agent_pubkey: Some(employee.to_string()),
+        channel_id: None,
+        work_context: None,
+    };
+    let founder_hex = founder.public_key().to_hex();
+    let ciphertext =
+        encrypt_usage_record(founder, &founder.public_key(), &payload).expect("record encrypts");
+    let event = EventBuilder::new(Kind::Custom(KIND_USAGE_RECORD as u16), ciphertext)
+        .tags(vec![
+            Tag::parse(["p", &founder_hex]).unwrap(),
+            Tag::parse(["agent", &founder_hex]).unwrap(),
+        ])
+        .sign_with_keys(founder)
+        .expect("record signs");
+
+    let (accepted, body) = submit(&event).await;
+    assert!(accepted, "usage record not accepted: {body}");
+    event.id.to_hex()
 }
 
 /// Poll for the job head in a given state.
@@ -591,4 +668,116 @@ async fn a_stranger_cannot_publish_a_job_head() {
         error.contains("not an employee"),
         "expected the employment gate to refuse this, got: {error}"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn the_same_employee_completes_both_founders_jobs_with_distinct_stamps() {
+    // Phase 3 gate: the same employee completes jobs for both founders on
+    // different bindings, and each finished head carries that seat's stamp
+    // (lease holder, provider, model) plus the ledger record for the call.
+    let community = default_community().await;
+    let founder_a = Keys::generate();
+    let founder_b = Keys::generate();
+    seed_relay_owner(community, &founder_a).await;
+    seed_relay_owner(community, &founder_b).await;
+    let employee = hire_an_employee(&founder_a).await;
+
+    let filing_a = file_job(&founder_a, &employee, "Draft the investor update");
+    let filing_b = file_job(&founder_b, &employee, "Summarize the pipeline");
+    assert!(
+        submit(&filing_a).await.0,
+        "founder A's filing was not accepted"
+    );
+    assert!(
+        submit(&filing_b).await.0,
+        "founder B's filing was not accepted"
+    );
+    let job_a = filing_a.id.to_hex();
+    let job_b = filing_b.id.to_hex();
+    await_job_state(&founder_a, &job_a, "open").await;
+    await_job_state(&founder_b, &job_b, "open").await;
+
+    for (founder, job, provider, model, result) in [
+        (
+            &founder_a,
+            job_a.as_str(),
+            "deepseek",
+            "deepseek-chat",
+            "draft ready",
+        ),
+        (
+            &founder_b,
+            job_b.as_str(),
+            "openrouter",
+            "anthropic/claude-sonnet-4",
+            "pipeline summary",
+        ),
+    ] {
+        assert!(
+            submit(&claim_job(founder, job)).await.0,
+            "{provider} seat could not claim its own job"
+        );
+        let leased = await_job_state(founder, job, "leased").await;
+        assert_eq!(
+            tag_value(&leased, "lease-holder"),
+            founder.public_key().to_hex(),
+            "the claiming founder must hold the lease"
+        );
+        let attempt = attempt_of(&leased);
+
+        assert!(
+            submit(&finish_job_stamped(
+                founder, job, attempt, "done", result, provider, model,
+            ))
+            .await
+            .0,
+            "{provider} seat could not finish its job"
+        );
+
+        let done = await_job_state(founder, job, "done").await;
+        assert_eq!(
+            tag_value(&done, "employee"),
+            employee,
+            "both jobs must be owed by the same employee"
+        );
+        assert_eq!(
+            tag_value(&done, "lease-holder"),
+            founder.public_key().to_hex(),
+            "the head must name the founder whose seat executed it"
+        );
+        assert_eq!(tag_value(&done, "attempts"), "1");
+        assert_eq!(tag_value(&done, "provider"), provider);
+        assert_eq!(tag_value(&done, "model"), model);
+        assert_eq!(
+            head_content(&done)["result"],
+            serde_json::json!(result),
+            "the finished head must carry the seat's result"
+        );
+
+        let record_id = publish_usage_record(founder, &employee, provider, model, job).await;
+        assert!(!record_id.is_empty(), "usage record id must be present");
+
+        // The seat authored the record itself, so the relay drops the
+        // self-referential `p` tag; the ledger still has to be able to read
+        // it back by author. This is the read shape the CLI report uses.
+        let readback = query(
+            founder,
+            serde_json::json!({
+                "kinds": [KIND_USAGE_RECORD],
+                "authors": [founder.public_key().to_hex()]
+            }),
+        )
+        .await;
+        let record = readback.iter().find_map(|value| {
+            let Ok(event) = Event::from_json(value.to_string()) else {
+                return None;
+            };
+            decrypt_usage_record(founder, &event).ok()
+        });
+        let record = record.expect("the founder must be able to read its usage record");
+        assert_eq!(record.provider, provider);
+        assert_eq!(record.model.as_deref(), Some(model));
+        assert_eq!(record.agent_pubkey.as_deref(), Some(employee.as_str()));
+    }
 }

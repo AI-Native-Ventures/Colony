@@ -26,6 +26,11 @@ use std::time::Duration;
 pub struct LlmResponse {
     /// The model's text response.
     pub text: String,
+    /// The provider's request id, when it returned one.
+    ///
+    /// This is the ledger's dedupe key together with the provider, so a
+    /// retried HTTP call cannot be counted twice.
+    pub request_id: Option<String>,
     /// Provider that served the call, as-stated in the binding.
     pub provider: String,
     /// Model that served the call, as-stated in the binding.
@@ -81,6 +86,7 @@ struct ChatMessage<'a> {
 /// The subset of the response the worker cares about.
 #[derive(Deserialize)]
 struct ChatResponse {
+    id: Option<String>,
     choices: Vec<ChatChoice>,
     usage: Option<ChatUsage>,
 }
@@ -204,6 +210,7 @@ async fn call_openai_compatible(
         .json()
         .await
         .map_err(|e| LlmError::BadResponse(e.to_string()))?;
+    let request_id = chat.id.clone();
 
     let text = chat
         .choices
@@ -220,6 +227,7 @@ async fn call_openai_compatible(
 
     Ok(LlmResponse {
         text,
+        request_id,
         provider: binding.provider.clone(),
         model: binding.model.clone(),
         input_tokens,
@@ -281,6 +289,11 @@ async fn call_anthropic(
         });
     }
 
+    let request_id = resp
+        .headers()
+        .get("request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let msg: AnthropicResponse = resp
         .json()
         .await
@@ -294,6 +307,7 @@ async fn call_anthropic(
 
     Ok(LlmResponse {
         text,
+        request_id,
         provider: binding.provider.clone(),
         model: binding.model.clone(),
         input_tokens: msg.usage.input_tokens,
