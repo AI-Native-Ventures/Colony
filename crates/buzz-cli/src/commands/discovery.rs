@@ -160,6 +160,14 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
             )
             .await
         }
+        DiscoveryCmd::LeadsCounts { idempotency_key } => {
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::ListLeadCounts,
+                idempotency_key,
+            )
+            .await
+        }
         DiscoveryCmd::Start {
             campaign,
             query,

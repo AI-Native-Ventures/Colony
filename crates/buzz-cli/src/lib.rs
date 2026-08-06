@@ -800,6 +800,12 @@ pub enum DiscoveryCmd {
         #[arg(long)]
         idempotency_key: Option<Uuid>,
     },
+    /// List retained-Lead counts per industry and vertical
+    LeadsCounts {
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
     /// Start a durable run for an existing campaign reference
     Start {
         /// Campaign UUID owned by the Discovery work surface.
@@ -2929,6 +2935,14 @@ mod tests {
             vec!["buzz", "discovery", "campaign-get", "--campaign", campaign],
             vec!["buzz", "discovery", "campaign-list", "--limit", "100"],
             vec!["buzz", "discovery", "leads-list", "--campaign", campaign],
+            vec!["buzz", "discovery", "leads-counts"],
+            vec![
+                "buzz",
+                "discovery",
+                "leads-counts",
+                "--idempotency-key",
+                retry,
+            ],
             vec![
                 "buzz",
                 "discovery",
