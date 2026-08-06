@@ -197,6 +197,18 @@ export type LeadPage = {
   hasNextPage: boolean;
 };
 
+export type LeadCountRow = {
+  industryId: string;
+  verticalId?: string;
+  count: number;
+};
+
+export type LeadCounts = {
+  total: number;
+  industries: LeadCountRow[];
+  verticals: LeadCountRow[];
+};
+
 export type OutreachChannel = "Email" | "LinkedIn" | "WhatsApp";
 export type OutreachStatus = "Draft" | "Approved" | "Scheduled";
 

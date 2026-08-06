@@ -5,6 +5,7 @@ import type {
   ConversationThread,
   DiscoveryEvent,
   Industry,
+  LeadCounts,
   LeadPage,
   LeadScope,
   OutreachDraft,
@@ -27,6 +28,7 @@ export interface DiscoveryDataSource {
   getRole(fieldId: string, roleId: string): Promise<ProfessionalRoleDetail>;
   getCampaign(campaignId: string): Promise<CampaignDetail>;
   getLeads(scope: LeadScope): Promise<LeadPage>;
+  getLeadCounts(): Promise<LeadCounts>;
   getOutreach(campaignId: string): Promise<OutreachDraft[]>;
   createOutreach(campaignId: string): Promise<OutreachDraft>;
   updateOutreachStatus(

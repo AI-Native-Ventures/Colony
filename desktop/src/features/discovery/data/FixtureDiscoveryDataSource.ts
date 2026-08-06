@@ -15,6 +15,7 @@ import type {
   DiscoveryEvent,
   Industry,
   Lead,
+  LeadCounts,
   LeadPage,
   LeadScope,
   OutreachDraft,
@@ -248,6 +249,23 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
 
   async getIndustries(): Promise<Industry[]> {
     return clone(FIXTURE_INDUSTRIES);
+  }
+
+  async getLeadCounts(): Promise<LeadCounts> {
+    const industries = FIXTURE_INDUSTRIES.map((industry) => ({
+      industryId: industry.id,
+      count: industry.leadCount,
+    }));
+    const verticals = FIXTURE_VERTICAL_DETAILS.map((vertical) => ({
+      industryId: vertical.industryId,
+      verticalId: vertical.id,
+      count: vertical.leadCount,
+    }));
+    return {
+      total: industries.reduce((sum, row) => sum + row.count, 0),
+      industries,
+      verticals,
+    };
   }
 
   async getVerticals(industryId: string): Promise<Vertical[]> {
