@@ -4,6 +4,7 @@ mod commands;
 pub mod company_scan;
 mod error;
 pub mod llm;
+mod links;
 pub mod seat;
 mod validate;
 pub mod worker;
