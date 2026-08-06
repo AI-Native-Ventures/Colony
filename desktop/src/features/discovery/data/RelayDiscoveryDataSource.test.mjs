@@ -263,6 +263,23 @@ function harness(
           };
         } else if (operation === "get_campaign") {
           result = { result: "campaign", campaign };
+        } else if (operation === "list_lead_counts") {
+          result = {
+            result: "lead_counts",
+            counts: {
+              total: 1,
+              industries: [
+                { industryId: "automotive", verticalId: null, count: 1 },
+              ],
+              verticals: [
+                {
+                  industryId: "automotive",
+                  verticalId: "auto-repair",
+                  count: 1,
+                },
+              ],
+            },
+          };
         } else {
           result = {
             result: "leads",
@@ -610,4 +627,25 @@ test("a released V1 worker receipt still wakes the V2 desktop run loop", async (
     events.push(event);
   }
   assert.equal(events.at(-1).type, "session_completed");
+});
+
+test("live lead counts come from the workspace operation", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const counts = await source.getLeadCounts();
+  assert.equal(counts.total, 1);
+  assert.equal(counts.industries[0].industryId, "automotive");
+  assert.equal(counts.verticals[0].verticalId, "auto-repair");
+  assert.ok(live.operations.includes("list_lead_counts"));
+});
+
+test("live industries and verticals carry relay lead counts", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const industries = await source.getIndustries();
+  const automotive = industries.find((item) => item.id === "automotive");
+  assert.equal(automotive?.leadCount, 1);
+  const verticals = await source.getVerticals("automotive");
+  const repair = verticals.find((item) => item.id === "auto-repair");
+  assert.equal(repair?.leadCount, 1);
 });
