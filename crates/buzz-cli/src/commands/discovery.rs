@@ -7,7 +7,7 @@ use buzz_core::{
     },
     discovery_workspace::{
         DiscoveryCampaignInput, DiscoveryCampaignListRequest, DiscoveryLeadListRequest,
-        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
+        DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
     },
     kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKSPACE_RECEIPT},
 };
@@ -152,6 +152,7 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                         campaign_id: campaign,
                         industry_id: industry.map(|value| value.trim().to_owned()),
                         vertical_id: vertical.map(|value| value.trim().to_owned()),
+                        status: None,
                         offset,
                         limit,
                     },
@@ -164,6 +165,52 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
             publish_workspace_payload(
                 client,
                 DiscoveryWorkspaceActionPayload::ListLeadCounts,
+                idempotency_key,
+            )
+            .await
+        }
+        DiscoveryCmd::LeadGet {
+            lead,
+            idempotency_key,
+        } => {
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::GetLead { lead_id: lead },
+                idempotency_key,
+            )
+            .await
+        }
+        DiscoveryCmd::LeadUpdate {
+            lead,
+            website,
+            email,
+            phone,
+            linkedin_url,
+            contact_name,
+            contact_title,
+            notes,
+            score,
+            owner,
+            status,
+            idempotency_key,
+        } => {
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::UpdateLead {
+                    lead_id: lead,
+                    input: DiscoveryLeadUpdateInput {
+                        website: website.map(|value| value.trim().to_owned()),
+                        email: email.map(|value| value.trim().to_owned()),
+                        phone: phone.map(|value| value.trim().to_owned()),
+                        linkedin_url: linkedin_url.map(|value| value.trim().to_owned()),
+                        contact_name: contact_name.map(|value| value.trim().to_owned()),
+                        contact_title: contact_title.map(|value| value.trim().to_owned()),
+                        notes: notes.map(|value| value.trim().to_owned()),
+                        score,
+                        owner_persona_id: owner.map(|value| value.trim().to_owned()),
+                        status: status.map(Into::into),
+                    },
+                },
                 idempotency_key,
             )
             .await
