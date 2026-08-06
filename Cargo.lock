@@ -902,6 +902,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "buzz-browser"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "reqwest 0.13.4",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "buzz-cli"
 version = "0.1.0"
 dependencies = [
