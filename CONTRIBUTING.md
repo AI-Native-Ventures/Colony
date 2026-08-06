@@ -486,6 +486,12 @@ only a narrow HTTP surface: NIP-11/NIP-05 metadata, `/events`, `/query`,
 `/count`, `/hooks/{id}`, Blossom media, git smart HTTP, git policy hooks, and
 health probes.
 
+What the relay answers a write with, on both transports, is specified in
+[docs/write-response-contract.md](docs/write-response-contract.md). Read it
+before writing any client that decides whether a write succeeded: `accepted`
+means the submitted event is durably stored, and it is not the same question as
+"did the relay handle my request".
+
 If an HTTP endpoint is still necessary:
 
 1. **Define the handler** in the appropriate module under

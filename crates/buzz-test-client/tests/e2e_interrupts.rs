@@ -26,7 +26,7 @@
 
 use std::time::Duration;
 
-use buzz_test_client::{BuzzTestClient, RelayMessage, TestClientError};
+use buzz_test_client::{BuzzTestClient, RelayMessage};
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
 use uuid::Uuid;
 
@@ -36,6 +36,24 @@ use buzz_core::kind::{
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
+}
+
+/// The Host the relay will see, derived from the same `RELAY_URL` the client
+/// dials.
+///
+/// The relay binds every request to a community by Host header, and this test
+/// seeds its fixtures (community, owner role, tiers) against whatever host it
+/// names. A hardcoded host does not fail cleanly when `RELAY_URL` points
+/// somewhere else: the fixtures land in ONE community while the requests bind
+/// to ANOTHER, so the run proceeds against a community that has no owner and
+/// no tiers, and dies on whichever assertion happens to depend on them first.
+/// Deriving both from one source is what keeps the failure legible.
+fn relay_host() -> String {
+    relay_url()
+        .trim_start_matches("wss://")
+        .trim_start_matches("ws://")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn relay_http_url() -> String {
@@ -213,34 +231,6 @@ fn build_resolution(ask_hex: &str, answer: serde_json::Value) -> EventBuilder {
         .tags(vec![tag(&["e", ask_hex])])
 }
 
-/// Send a raw EVENT frame and wait for the next OK frame on the connection,
-/// without `BuzzTestClient::send_event`'s requirement that the OK's
-/// `event_id` match the submitted event's own id.
-///
-/// A relay-side "duplicate" outcome (here: `ask_broker::AskBrokerOutcome::
-/// Duplicate`) reports the WINNING event's id in the OK frame, not the
-/// submitted (losing) event's id -- the same shape every other duplicate
-/// path in this relay uses (`handlers::ingest.rs`'s repeated `"duplicate:
-/// original action {id}"` sites for channels, reactions, and Company
-/// Actions). `send_event`'s strict per-id matching would wait forever for
-/// an OK that names the id it sent, which never arrives, and time out. This
-/// helper reads the connection directly instead, matching what a real
-/// WebSocket client has to do to observe a duplicate result at all.
-async fn send_raw_and_wait_ok(
-    client: &mut BuzzTestClient,
-    event: &nostr::Event,
-) -> Result<buzz_ws_client::OkResponse, TestClientError> {
-    client
-        .send_raw(&serde_json::json!(["EVENT", event]))
-        .await?;
-    loop {
-        match client.recv_event(Duration::from_secs(10)).await? {
-            RelayMessage::Ok(ok) => return Ok(ok),
-            _ => continue,
-        }
-    }
-}
-
 /// Fetch a single stored Ask event by id via POST /query, proving it is
 /// really retrievable from the relay's own store rather than only known to
 /// this test from the local copy it signed. Always scopes by `kinds`
@@ -342,7 +332,8 @@ fn has_p_tag(event: &serde_json::Value, pubkey_hex: &str) -> bool {
 #[ignore = "requires Postgres"]
 async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
     let url = relay_url();
-    let host = "localhost:3000";
+    let host = relay_host();
+    let host = host.as_str();
     let community_id = ensure_test_community(host).await;
 
     // ---- Step 1: identities, owner role, tiers, channel -----------------
@@ -485,19 +476,26 @@ async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
     })
     .sign_with_keys(&worker2)
     .expect("sign duplicate raise");
-    // `send_event`'s OK-matching (by the SUBMITTED event's id) cannot
-    // observe this outcome: the relay's OK frame for a duplicate carries
-    // the WINNING ask's id, not the submitted one (see
-    // `send_raw_and_wait_ok`'s doc comment). Drive the raw frame instead.
-    let duplicate_ok = send_raw_and_wait_ok(&mut worker2_ws, &duplicate_event)
+    // Issue #88: this used to need a raw frame. `send_event` correlates the
+    // OK by the id it SENT, and the relay used to answer a duplicate with the
+    // WINNING ask's id, so the client waited for an OK that never came and
+    // timed out. Driving it through the ordinary client is now the assertion:
+    // if the id slot regressed, this call hangs and fails.
+    let duplicate_id = duplicate_event.id.to_hex();
+    let duplicate_ok = worker2_ws
+        .send_event(duplicate_event)
         .await
         .expect("send duplicate raise");
+    assert_eq!(
+        duplicate_ok.event_id, duplicate_id,
+        "the OK frame must identify the event this client SUBMITTED (issue #88)"
+    );
     assert!(
         !duplicate_ok.accepted,
         "a second raise for the same (initiative, need) must not be accepted as a new ask"
     );
     assert!(
-        duplicate_ok.message.starts_with("duplicate:"),
+        duplicate_ok.message.starts_with("conflict:"),
         "unexpected duplicate response message: {}",
         duplicate_ok.message
     );
@@ -505,10 +503,6 @@ async fn end_to_end_interrupt_chain_tiers_dedupe_resolution_provenance() {
         duplicate_ok.message.contains(&raise_id),
         "duplicate response must name the FIRST ask's event id ({raise_id}), got: {}",
         duplicate_ok.message
-    );
-    assert_eq!(
-        duplicate_ok.event_id, raise_id,
-        "duplicate OK frame's event_id must be the original ask's id"
     );
 
     let escalate_event = build_ask(&AskFields {

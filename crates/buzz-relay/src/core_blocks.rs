@@ -191,7 +191,7 @@ async fn ensure_core_blocks_with(
             .replace_parameterized_event(community, &catalog_event, &manifest.handle, None)
             .await
             .with_context(|| format!("failed to store Core catalog head {}", manifest.handle))?;
-        inserted += usize::from(catalog_inserted);
+        inserted += usize::from(catalog_inserted.was_inserted());
     }
 
     Ok(inserted)
@@ -766,12 +766,12 @@ mod tests {
         let newer_head =
             build_core_catalog_event(&newer_manifest, &newer_manifest_event, &relay_keys)
                 .expect("newer catalog head");
-        assert!(
-            db.replace_parameterized_event(community, &newer_head, "section", None)
-                .await
-                .expect("select newer head")
-                .1
-        );
+        assert!(db
+            .replace_parameterized_event(community, &newer_head, "section", None)
+            .await
+            .expect("select newer head")
+            .1
+            .was_inserted());
 
         assert_eq!(
             ensure_core_blocks_with(&db, &relay_keys, community)

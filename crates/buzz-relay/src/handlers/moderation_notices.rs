@@ -205,7 +205,7 @@ async fn publish_moderation_profile(
         .db
         .replace_addressable_event(tenant.community(), &event, None)
         .await?;
-    if was_inserted {
+    if was_inserted.was_inserted() {
         let kind_u32 = event_kind_u32(&stored.event);
         dispatch_persistent_event(tenant, state, &stored, kind_u32, relay_pubkey_hex, None).await;
     }
