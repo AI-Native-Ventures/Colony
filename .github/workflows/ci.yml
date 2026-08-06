@@ -1,13 +1,14 @@
 name: CI
-# Promotion-gate model: day-to-day PRs target `develop` and run no CI (the
-# repo's local gates cover them: pre-commit fmt, pre-push clippy + unit
-# tests, `just ci`). Full CI runs only where it gates production: PRs that
-# promote develop into main (or release), and pushes to those branches.
+# CI gates every integration point now: PRs targeting `develop` run the
+# path-filtered suite (so schema/code drift can't land silently and pile up
+# for the promotion gate), and pushes to develop run the full relevant matrix
+# on the merged result. Full CI still gates production: PRs that promote
+# develop into main (or release), and pushes to those branches.
 on:
   push:
-    branches: [main, release]
+    branches: [main, develop, release]
   pull_request:
-    branches: [main, release]
+    branches: [main, develop, release]
 
 # One run per ref, newest wins. Rapid promotions to main collapse into a
 # single run that tests the cumulative state instead of billing one full
