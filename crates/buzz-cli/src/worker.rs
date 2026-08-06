@@ -36,11 +36,10 @@ const LLM_TIMEOUT_SECS: u64 = 300;
 /// Run the worker loop until interrupted (SIGINT).
 pub async fn run_worker(client: &BuzzClient, config: &SeatConfig) -> Result<(), CliError> {
     if !config.is_configured() {
-        return Err(CliError::Usage(
-            "no seat bindings configured. Create ~/.config/buzz/seat.toml with at \
-             least a [default] binding to start working."
-                .to_string(),
-        ));
+        return Err(CliError::Usage(format!(
+            "no seat bindings configured. Create {} with at least a [default] binding to start working.",
+            crate::seat::seat_config_path().display()
+        )));
     }
 
     let me = client.keys().public_key().to_hex();
@@ -200,16 +199,39 @@ struct OpenJob {
     instruction: String,
 }
 
-/// Poll for the first open job belonging to `pubkey`.
-async fn find_open_job(client: &BuzzClient, pubkey: &str) -> Result<Option<OpenJob>, CliError> {
-    let events = client
-        .query_all(serde_json::json!({
-            "kinds": [KIND_JOB_HEAD],
-            "#p": [pubkey],
-        }))
-        .await?;
+/// Keep only the newest head per job (`d` tag), in the relay's original order.
+///
+/// The relay returns every revision it has stored, so a job that was just
+/// finished appears twice: an "open" head and a "done" head. Without this
+/// dedup the worker finds the stale open one first, claims it, loses (it's
+/// done), and loops forever on a job that no longer needs it.
+fn newest_head_per_job(events: &[serde_json::Value]) -> Vec<&serde_json::Value> {
+    let mut newest: std::collections::HashMap<String, &serde_json::Value> =
+        std::collections::HashMap::new();
+    for event in events {
+        let job = extract_tag_value(event, "d");
+        let created = event["created_at"].as_i64().unwrap_or(0);
+        match newest.get(&job) {
+            Some(seen) if seen["created_at"].as_i64().unwrap_or(0) >= created => {}
+            _ => {
+                newest.insert(job, event);
+            }
+        }
+    }
 
-    for event in &events {
+    events
+        .iter()
+        .filter(|event| {
+            newest
+                .get(&extract_tag_value(event, "d"))
+                .is_some_and(|seen| std::ptr::eq(*seen, *event))
+        })
+        .collect()
+}
+
+/// Pick the first job whose newest head is still open.
+fn first_open_job(events: &[serde_json::Value]) -> Option<OpenJob> {
+    for event in newest_head_per_job(events) {
         if extract_tag_value(event, "status") != "open" {
             continue;
         }
@@ -228,14 +250,25 @@ async fn find_open_job(client: &BuzzClient, pubkey: &str) -> Result<Option<OpenJ
         if instruction.is_empty() {
             continue;
         }
-        return Ok(Some(OpenJob {
+        return Some(OpenJob {
             job_id,
             employee: extract_tag_value(event, "employee"),
             instruction,
-        }));
+        });
     }
+    None
+}
 
-    Ok(None)
+/// Poll for the first open job belonging to `pubkey`.
+async fn find_open_job(client: &BuzzClient, pubkey: &str) -> Result<Option<OpenJob>, CliError> {
+    let events = client
+        .query_all(serde_json::json!({
+            "kinds": [KIND_JOB_HEAD],
+            "#p": [pubkey],
+        }))
+        .await?;
+
+    Ok(first_open_job(&events))
 }
 
 /// Read the attempt number off the head after claiming.
@@ -323,4 +356,63 @@ fn sign_finish(
         .tags(tags)
         .sign_with_keys(client.keys())
         .map_err(|e| CliError::Other(format!("failed to sign outcome: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn job_head(id: &str, status: &str, created_at: i64) -> serde_json::Value {
+        json!({
+            "id": format!("{id}-{status}-{created_at}"),
+            "created_at": created_at,
+            "tags": [
+                ["d", id],
+                ["status", status],
+                ["employee", "employee-1"],
+            ],
+            "content": json!({ "instruction": format!("{status} {id}") }).to_string(),
+        })
+    }
+
+    #[test]
+    fn newest_head_per_job_keeps_one_revision_per_job_in_order() {
+        let events = vec![
+            job_head("job-1", "open", 100),
+            job_head("job-1", "done", 200),
+            job_head("job-2", "open", 300),
+        ];
+
+        let newest = newest_head_per_job(&events);
+
+        assert_eq!(newest.len(), 2);
+        assert_eq!(extract_tag_value(newest[0], "status"), "done");
+        assert_eq!(extract_tag_value(newest[1], "status"), "open");
+    }
+
+    #[test]
+    fn a_finished_job_no_longer_looks_open_to_the_worker() {
+        let events = vec![
+            job_head("job-1", "open", 100),
+            job_head("job-1", "done", 200),
+        ];
+
+        let open = first_open_job(&events);
+
+        assert!(open.is_none());
+    }
+
+    #[test]
+    fn distinct_open_jobs_are_picked_in_relay_order() {
+        let events = vec![
+            job_head("job-1", "open", 100),
+            job_head("job-2", "open", 200),
+        ];
+
+        let open = first_open_job(&events).expect("an open job should be found");
+
+        assert_eq!(open.job_id, "job-1");
+        assert_eq!(open.instruction, "open job-1");
+    }
 }

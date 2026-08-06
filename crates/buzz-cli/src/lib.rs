@@ -3,8 +3,8 @@ mod client;
 mod commands;
 pub mod company_scan;
 mod error;
-pub mod llm;
 mod links;
+pub mod llm;
 pub mod seat;
 mod validate;
 pub mod worker;
@@ -2596,7 +2596,8 @@ pub enum JobsCmd {
     },
     /// Run as a worker: poll for your open jobs, claim one, execute the
     /// instruction via an LLM, heartbeat the lease, and post the result.
-    /// Reads ~/.config/buzz/seat.toml for provider/model bindings.
+    /// Reads the default seat config (`dirs::config_dir()/buzz/seat.toml`)
+    /// for provider/model bindings.
     Work {
         /// Only work jobs for this employee (pubkey hex)
         #[arg(long)]

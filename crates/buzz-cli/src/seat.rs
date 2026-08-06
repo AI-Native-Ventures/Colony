@@ -6,11 +6,12 @@
 //! directly determines what the seat's owner pays (their subscription, their
 //! budget) and the quality of the result.
 //!
-//! This module reads a member's `~/.config/buzz/seat.toml`. Each binding is
-//! one provider-model pair plus the env var carrying the API key, and every
-//! employee draws from an ordered list. The worker tries them in order and
-//! walks the chain on failure, so a quota-exhausted provider degrades rather
-//! than stopping.
+//! This module reads a member's seat config from the platform config
+//! directory (`dirs::config_dir()/buzz/seat.toml`; e.g. `~/Library/Application
+//! Support/buzz/seat.toml` on macOS). Each binding is one provider-model pair
+//! plus the env var carrying the API key, and every employee draws from an
+//! ordered list. The worker tries them in order and walks the chain on
+//! failure, so a quota-exhausted provider degrades rather than stopping.
 //!
 //! Nothing here is relay-side. A binding names a credential that lives on one
 //! machine, and a member's subscription terms are between them and their
@@ -60,9 +61,10 @@ impl EmployeeBindings {
 
 /// A member's seat: what runs where, on which budget.
 ///
-/// Read from `~/.config/buzz/seat.toml`. A file with nothing in it means the
-/// seat is not set up and the worker has nothing to do, which is deliberate:
-/// the seat must be opted into rather than guessed.
+/// Read from the default seat config path (`dirs::config_dir()/buzz/seat.toml`).
+/// A file with nothing in it means the seat is not set up and the worker has
+/// nothing to do, which is deliberate: the seat must be opted into rather than
+/// guessed.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SeatConfig {
     /// The fallback when no per-employee override says otherwise.
