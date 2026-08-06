@@ -1413,7 +1413,7 @@ async fn lead_counts_aggregate_retained_businesses() {
         sqlx::query(
             "INSERT INTO discovery_business_observations \
              (community_id,id,first_run_id,provider,provider_record_id,name,observation_fingerprint) \
-             VALUES ($1,$2,$3,'outscraper',$4,$5,decode(repeat('ab',16),'hex'))",
+             VALUES ($1,$2,$3,'outscraper',$4,$5,decode(repeat('ab',32),'hex'))",
         )
         .bind(community_id)
         .bind(Uuid::new_v4())
