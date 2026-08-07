@@ -36,6 +36,21 @@ const IDLE_POLL_SECS: u64 = 5;
 /// miss three of these to lose its lease, not one.
 const HEARTBEAT_SECS: u64 = 30;
 
+/// The heartbeat cadence, with an env override.
+///
+/// `BUZZ_WORKER_HEARTBEAT_SECS` shortens the cadence without touching the
+/// relay's lease constant, which is how the E2E suite proves renewal under
+/// a slow provider call in seconds instead of waiting out the real 30s
+/// interval. The lease itself (`JOB_LEASE_SECS`) is untouched: whatever the
+/// cadence, a lease must outlive several missed beats.
+fn heartbeat_secs() -> u64 {
+    std::env::var("BUZZ_WORKER_HEARTBEAT_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(HEARTBEAT_SECS)
+}
+
 /// How long the LLM has to respond.
 const LLM_TIMEOUT_SECS: u64 = 300;
 
@@ -185,13 +200,14 @@ async fn run_with_heartbeats(
     for binding in bindings {
         let llm_fut = call_llm(instruction, binding, Duration::from_secs(LLM_TIMEOUT_SECS));
         tokio::pin!(llm_fut);
+        let heartbeat_every = Duration::from_secs(heartbeat_secs());
 
         let result = loop {
             tokio::select! {
                 outcome = &mut llm_fut => {
                     break outcome;
                 }
-                _ = tokio::time::sleep(Duration::from_secs(HEARTBEAT_SECS)) => {
+                _ = tokio::time::sleep(heartbeat_every) => {
                     match sign_heartbeat(client, job_id, attempt) {
                         Ok(event) => {
                             if client.submit_event(event).await.is_err() {
