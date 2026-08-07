@@ -140,10 +140,30 @@ if [[ "${OUR_HARNESS_UP}" == true ]]; then
   # postgres container carries an owner label with the worktree that brought
   # it up. A mismatched owner means another agent's harness is up with its
   # relay temporarily down — the one case the port checks above cannot see.
-  # (Containers created before the label existed have no owner; treat those
-  # as unknown and proceed, matching the old behavior.)
+  # Ownership precedence, most deliberate first:
+  #   1. dev.buzz.harness.owner label — set by our own launcher since the
+  #      marker shipped (see docker-compose.harness.yml).
+  #   2. com.docker.compose.project.working_dir — compose metadata on
+  #      containers created BEFORE the marker existed. It is the worktree
+  #      path of whoever created the stack, so it identifies the owner
+  #      without a label. Prefer it over config_files: it is already the
+  #      path (no dirname), and it stays a single value even with multiple
+  #      -f files, where config_files would become a list.
+  #   3. com.docker.compose.project.config_files (dirname'd) — last resort
+  #      for stacks carrying no working_dir.
+  # Only when none of these exist do we treat the stack as unknown and
+  # proceed, matching the pre-marker behavior.
   pg_container="$(docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" ps --status running -q postgres 2>/dev/null | head -1)"
   owner="$(docker inspect --format '{{if .Config.Labels}}{{if index .Config.Labels "dev.buzz.harness.owner"}}{{index .Config.Labels "dev.buzz.harness.owner"}}{{end}}{{end}}' "${pg_container}" 2>/dev/null || true)"
+  if [[ -z "${owner}" ]]; then
+    owner="$(docker inspect --format '{{if .Config.Labels}}{{index .Config.Labels "com.docker.compose.project.working_dir"}}{{end}}' "${pg_container}" 2>/dev/null || true)"
+  fi
+  if [[ -z "${owner}" ]]; then
+    config_files="$(docker inspect --format '{{if .Config.Labels}}{{index .Config.Labels "com.docker.compose.project.config_files"}}{{end}}' "${pg_container}" 2>/dev/null || true)"
+    if [[ -n "${config_files}" ]]; then
+      owner="$(dirname "${config_files}")"
+    fi
+  fi
   if [[ -n "${owner}" && "${owner}" != "${REPO_ROOT}" ]]; then
     err "Compose project ${PROJECT} is already running and owned by ${owner}; refusing to reset its database."
     port_override_hint
