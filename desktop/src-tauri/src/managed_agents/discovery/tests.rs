@@ -1215,7 +1215,7 @@ fn test_login_shell_path_returns_none_on_windows() {
     let _guard = crate::managed_agents::lock_path_mutex();
 
     // Force a fresh fetch — don't rely on whatever prior tests cached.
-    refresh_login_shell_path();
+    super::refresh_login_shell_path();
     let path = super::login_shell_path();
 
     assert_eq!(
