@@ -518,6 +518,11 @@ fn advance_query_cursor(
     Ok(())
 }
 
+/// A client for one relay connection, bound to one Nostr identity.
+///
+/// Every write is a signed event; every read is a NIP-98-authed query. The
+/// worker and all `buzz` subcommands share this client, so what a command
+/// does in production is exactly what this type does in a test.
 pub struct BuzzClient {
     http: reqwest::Client,
     relay_url: String, // base URL, no trailing slash, e.g. "https://relay.buzz.place"

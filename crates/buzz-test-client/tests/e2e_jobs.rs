@@ -2,11 +2,16 @@
 //! phases 2 and 3). Phase 2 is the queue itself; phase 3 is the execution
 //! stamp on a finished head and the usage record a seat posts to the ledger.
 //!
-//! The phase gate is: a job filed by one member, claimed and completed by a
-//! worker, survives a mid-job worker kill by being re-leased. Everything here
-//! goes through the door a real client uses (signed events over HTTP `/events`
-//! and `/query`); nothing calls into `buzz-relay`'s internals, so what passes
-//! here is what a worker on a founder's laptop would see.
+//! The phase 2 gate is: a job filed by one member, claimed and completed by a
+//! worker, survives a mid-job worker kill by being re-leased. The phase 3
+//! gate is: the same employee completes jobs for both founders on different
+//! bindings, stamps and ledger correct. Most tests here sign the events a
+//! worker would sign directly; the last one drives the real worker loop
+//! (`buzz_cli::worker::run_worker_once`) against a real seat config on disk
+//! and a local provider stub, so binding selection is proven, not assumed.
+//! Everything goes through the door a real client uses (signed events over
+//! HTTP `/events` and `/query`); nothing calls into `buzz-relay`'s internals,
+//! so what passes here is what a worker on a founder's laptop would see.
 //!
 //! Five properties, each of which the queue is worthless without:
 //!
@@ -62,6 +67,10 @@ use buzz_core::usage_record::{
 };
 
 use common::{default_community, e2e_db_pool, query, seed_relay_owner, submit, tag_value};
+
+use buzz_cli::seat::load_seat_config;
+use buzz_cli::worker::run_worker_once;
+use buzz_cli::BuzzClient;
 
 /// Hire an employee and return its pubkey.
 ///
@@ -779,5 +788,244 @@ async fn the_same_employee_completes_both_founders_jobs_with_distinct_stamps() {
         assert_eq!(record.provider, provider);
         assert_eq!(record.model.as_deref(), Some(model));
         assert_eq!(record.agent_pubkey.as_deref(), Some(employee.as_str()));
+    }
+}
+
+/// Write a real seat config for `employee` into a fresh temp dir and load it
+/// back through `load_seat_config`, the loader a real seat uses.
+///
+/// The `BUZZ_SEAT_CONFIG` env var redirects the loader to the file, exactly
+/// as it would for a seat pointing at a shared or per-worktree config. The
+/// returned config is what the worker runs on; nothing here builds a
+/// `SeatConfig` in memory.
+fn write_seat_config(
+    employee: &str,
+    provider: &str,
+    model: &str,
+    endpoint: &str,
+    key_var: &str,
+) -> (buzz_cli::seat::SeatConfig, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("buzz-e2e-seat-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("seat.toml");
+    let toml = format!(
+        "[employees.{employee}]\n\
+         bindings = [\n\
+         \x20 {{ provider = \"{provider}\", model = \"{model}\", endpoint = \"{endpoint}\", key_var = \"{key_var}\" }},\n\
+         ]\n"
+    );
+    std::fs::write(&path, toml).unwrap();
+    std::env::set_var("BUZZ_SEAT_CONFIG", &path);
+    let config = load_seat_config()
+        .unwrap_or_else(|e| panic!("load seat config from {}: {e}", path.display()));
+    (config, path)
+}
+
+/// Spawn a tiny OpenAI-compatible provider stub on an ephemeral port.
+///
+/// `POST /v1/seat-a` answers 200 with an `id` (the dedupe-key passthrough
+/// case); `POST /v1/seat-b` answers 201 without one (the deterministic
+/// `local:{job}:{attempt}` fallback case). The statuses differ on purpose so
+/// the ledger's `http_status` is provably the wire value, not a hardcoded
+/// 200.
+async fn spawn_provider_stub() -> String {
+    use axum::routing::post;
+    use axum::Router;
+
+    async fn seat_a() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+        (
+            axum::http::StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "id": "stub-a-req-1",
+                "choices": [{ "message": { "content": "draft ready on seat A" } }],
+                "usage": { "prompt_tokens": 12, "completion_tokens": 34 },
+            })),
+        )
+    }
+
+    async fn seat_b() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+        (
+            axum::http::StatusCode::CREATED,
+            axum::Json(serde_json::json!({
+                "choices": [{ "message": { "content": "pipeline summary on seat B" } }],
+                "usage": { "prompt_tokens": 5, "completion_tokens": 9 },
+            })),
+        )
+    }
+
+    let app = Router::new()
+        .route("/v1/seat-a", post(seat_a))
+        .route("/v1/seat-b", post(seat_b));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// Read back and decrypt the ledger record a seat posted for its own call.
+async fn read_usage_record(owner: &Keys) -> UsageRecordPayload {
+    let readback = query(
+        owner,
+        serde_json::json!({
+            "kinds": [KIND_USAGE_RECORD],
+            "authors": [owner.public_key().to_hex()]
+        }),
+    )
+    .await;
+    let record = readback.iter().find_map(|value| {
+        let Ok(event) = Event::from_json(value.to_string()) else {
+            return None;
+        };
+        decrypt_usage_record(owner, &event).ok()
+    });
+    record.expect("the seat must be able to read back its own usage record")
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn the_worker_executes_jobs_on_bindings_from_the_seat_config() {
+    // The phase 3 gate through the real worker path: a seat config on disk,
+    // the worker's job loop, and a real HTTP call to a provider stub. The
+    // stamps and ledger records below must come from the config each seat
+    // loaded, never from literals this test signs itself.
+    let community = default_community().await;
+    let founder_a = Keys::generate();
+    let founder_b = Keys::generate();
+    seed_relay_owner(community, &founder_a).await;
+    seed_relay_owner(community, &founder_b).await;
+    let employee = hire_an_employee(&founder_a).await;
+
+    let stub = spawn_provider_stub().await;
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+
+    // Seat A: the same employee maps to openai on stub A, with the key in a
+    // custom env var so `key_var` is exercised too.
+    let (config_a, path_a) = write_seat_config(
+        &employee,
+        "openai",
+        "stub-model-a",
+        &format!("{stub}/v1/seat-a"),
+        "STUB_KEY_A",
+    );
+    std::env::set_var("STUB_KEY_A", "test-key-a");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path_a,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding_a = &config_a.bindings_for(&employee)[0];
+
+    let filing_a = file_job(&founder_a, &employee, "Draft the investor update");
+    assert!(submit(&filing_a).await.0, "founder A's filing not accepted");
+    let job_a = filing_a.id.to_hex();
+    await_job_state(&founder_a, &job_a, "open").await;
+
+    let client_a = BuzzClient::new(common::relay_http_url(), founder_a.clone(), None, None)
+        .expect("client for founder A");
+    assert!(
+        run_worker_once(&client_a, &config_a)
+            .await
+            .expect("worker pass A"),
+        "seat A must find and work its job"
+    );
+
+    let done_a = await_job_state(&founder_a, &job_a, "done").await;
+    assert_eq!(
+        tag_value(&done_a, "provider"),
+        binding_a.provider,
+        "the head's provider stamp must be the seat config's binding"
+    );
+    assert_eq!(
+        tag_value(&done_a, "model"),
+        binding_a.model,
+        "the head's model stamp must be the seat config's binding"
+    );
+    assert_eq!(
+        tag_value(&done_a, "lease-holder"),
+        founder_a.public_key().to_hex()
+    );
+    assert_eq!(
+        head_content(&done_a)["result"],
+        serde_json::json!("draft ready on seat A")
+    );
+
+    let record_a = read_usage_record(&founder_a).await;
+    assert_eq!(record_a.provider, binding_a.provider);
+    assert_eq!(record_a.model.as_deref(), Some(binding_a.model.as_str()));
+    assert_eq!(
+        record_a.http_status,
+        Some(200),
+        "the ledger must carry the stub's real HTTP status"
+    );
+    assert_eq!(
+        record_a.request_id, "stub-a-req-1",
+        "a provider request id passes through to the ledger as the dedupe key"
+    );
+    assert_eq!(record_a.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    // Seat B: the same employee, a different config, a different binding.
+    let (config_b, path_b) = write_seat_config(
+        &employee,
+        "deepseek",
+        "stub-model-b",
+        &format!("{stub}/v1/seat-b"),
+        "STUB_KEY_B",
+    );
+    std::env::set_var("STUB_KEY_B", "test-key-b");
+    assert_eq!(buzz_cli::seat::seat_config_path(), path_b);
+    let binding_b = &config_b.bindings_for(&employee)[0];
+    assert_ne!(
+        binding_a.provider, binding_b.provider,
+        "the two seats must run on different bindings by design"
+    );
+
+    let filing_b = file_job(&founder_b, &employee, "Summarize the pipeline");
+    assert!(submit(&filing_b).await.0, "founder B's filing not accepted");
+    let job_b = filing_b.id.to_hex();
+    await_job_state(&founder_b, &job_b, "open").await;
+
+    let client_b = BuzzClient::new(common::relay_http_url(), founder_b.clone(), None, None)
+        .expect("client for founder B");
+    assert!(
+        run_worker_once(&client_b, &config_b)
+            .await
+            .expect("worker pass B"),
+        "seat B must find and work its job"
+    );
+
+    let done_b = await_job_state(&founder_b, &job_b, "done").await;
+    assert_eq!(
+        tag_value(&done_b, "provider"),
+        binding_b.provider,
+        "the head's provider stamp must be seat B's binding, not seat A's"
+    );
+    assert_eq!(tag_value(&done_b, "model"), binding_b.model);
+    assert_ne!(
+        tag_value(&done_b, "provider"),
+        tag_value(&done_a, "provider"),
+        "two seats on different bindings must stamp the same employee differently"
+    );
+
+    let record_b = read_usage_record(&founder_b).await;
+    assert_eq!(record_b.provider, binding_b.provider);
+    assert_eq!(record_b.model.as_deref(), Some(binding_b.model.as_str()));
+    assert_eq!(
+        record_b.http_status,
+        Some(201),
+        "the ledger must carry stub B's real status, not a hardcoded 200"
+    );
+    assert_eq!(
+        record_b.request_id,
+        format!("local:{job_b}:1"),
+        "without a provider request id, the deterministic local fallback is the dedupe key"
+    );
+    assert_eq!(record_b.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    // Leave the environment as we found it.
+    std::env::remove_var("STUB_KEY_A");
+    std::env::remove_var("STUB_KEY_B");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
     }
 }

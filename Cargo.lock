@@ -1289,7 +1289,9 @@ name = "buzz-test-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64",
+ "buzz-cli",
  "buzz-core",
  "buzz-media",
  "buzz-sdk",

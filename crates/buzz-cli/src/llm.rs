@@ -169,7 +169,7 @@ async fn call_openai_compatible(
     key: &str,
     timeout: Duration,
 ) -> Result<LlmResponse, LlmError> {
-    let endpoint = endpoint_for(&binding.provider);
+    let endpoint = binding_endpoint(binding);
     let body = ChatRequest {
         model: &binding.model,
         messages: [ChatMessage {
@@ -243,7 +243,21 @@ fn endpoint_for(provider: &str) -> String {
         "openrouter" => "https://openrouter.ai/api/v1/chat/completions".to_string(),
         "deepseek" => "https://api.deepseek.com/v1/chat/completions".to_string(),
         "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
+        "anthropic" => "https://api.anthropic.com/v1/messages".to_string(),
         _ => unreachable!(),
+    }
+}
+
+/// The endpoint to reach for a binding.
+///
+/// A binding's explicit `endpoint` override wins when present; otherwise the
+/// hardcoded default for its provider is used. The override is how a seat
+/// points at a proxy, an AI gateway, or a self-hosted model, and how tests
+/// drive these calls against a local stub.
+fn binding_endpoint(binding: &Binding) -> String {
+    match &binding.endpoint {
+        Some(endpoint) => endpoint.clone(),
+        None => endpoint_for(&binding.provider),
     }
 }
 
@@ -268,7 +282,7 @@ async fn call_anthropic(
         .map_err(|e| LlmError::Http(e.to_string()))?;
 
     let resp = client
-        .post("https://api.anthropic.com/v1/messages")
+        .post(binding_endpoint(binding))
         .header("x-api-key", key)
         .header("anthropic-version", "2023-06-01")
         .header("Content-Type", "application/json")
@@ -341,6 +355,37 @@ mod tests {
             endpoint_for("openai"),
             "https://api.openai.com/v1/chat/completions"
         );
+        assert_eq!(
+            endpoint_for("anthropic"),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn an_endpoint_override_wins_over_the_provider_default() {
+        let overridden = Binding {
+            provider: "openrouter".into(),
+            model: "x".into(),
+            key_var: None,
+            endpoint: Some("http://127.0.0.1:9999/v1/chat/completions".into()),
+        };
+        assert_eq!(
+            binding_endpoint(&overridden),
+            "http://127.0.0.1:9999/v1/chat/completions"
+        );
+
+        // Without an override the pinned default still stands, so the
+        // existing test above stays the authority for the default URLs.
+        let defaulted = Binding {
+            provider: "openrouter".into(),
+            model: "x".into(),
+            key_var: None,
+            endpoint: None,
+        };
+        assert_eq!(
+            binding_endpoint(&defaulted),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -358,6 +403,7 @@ mod tests {
             provider: "openrouter".into(),
             model: "test".into(),
             key_var: Some("NONEXISTENT_KEY_DO_NOT_SET".into()),
+            endpoint: None,
         };
         let result = rt.block_on(call_llm("hi", &binding, Duration::from_secs(1)));
 
