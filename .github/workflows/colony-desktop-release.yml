@@ -98,6 +98,36 @@ jobs:
           scripts/verify-release-ref.sh v "$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+      # Unlike a hosted runner, this one is a real machine whose disk is shared
+      # with development worktrees, so it can already be nearly full when a
+      # release starts. v0.10.9 spent ~20 minutes compiling and then died with
+      #   cp: desktop/src-tauri/binaries/buzz-aarch64-apple-darwin:
+      #   fcopyfile failed: No space left on device
+      # which reads like a build bug rather than a full disk. Check first and
+      # say plainly what filled it.
+      #
+      # The floor covers a cold build: the workspace holds ~8 GiB warm (~5.5
+      # GiB of that in target/ dirs), a cold rebuild transiently needs roughly
+      # double, and bundling copies the .app, dmg and tar.gz on top. The usual
+      # cause of a full disk here is one cargo target/ per git worktree.
+      - name: Check the runner has room to build
+        env:
+          MIN_FREE_GIB: "25"
+        run: |
+          set -euo pipefail
+          AVAIL_GIB=$(($(df -Pk . | awk 'NR==2 {print $4}') / 1024 / 1024))
+          echo "Free space on the release volume: ${AVAIL_GIB} GiB (minimum ${MIN_FREE_GIB} GiB)"
+          if [ "$AVAIL_GIB" -ge "$MIN_FREE_GIB" ]; then
+            exit 0
+          fi
+          echo "::error::Only ${AVAIL_GIB} GiB free on the release runner, and a release build needs at least ${MIN_FREE_GIB} GiB. Failing now instead of part way through the build. Free space and re-run this job at the same tag."
+          echo "Largest cargo target directories under ${HOME} (usually one per git worktree):"
+          find "$HOME" -maxdepth 6 -type d -name target -prune 2>/dev/null \
+            | while read -r d; do du -sk "$d" 2>/dev/null; done \
+            | sort -rn | head -10 \
+            | awk '{printf "  %7.1f GiB  %s\n", $1/1024/1024, $2}'
+          exit 1
+
       - name: Build sidecar binaries
         run: |
           . ./bin/activate-hermit
