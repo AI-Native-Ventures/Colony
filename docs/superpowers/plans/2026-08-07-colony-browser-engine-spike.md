@@ -123,9 +123,10 @@ pub mod input;
 pub mod journey;
 pub mod mcp;
 pub mod snapshot;
-
-pub use contracts::{BrowserError, SnapshotCaps};
 ```
+
+Do not re-export `BrowserError`/`SnapshotCaps` yet — they do not exist until
+Task 2 adds them; Task 2 re-adds the `pub use` line.
 
 `crates/buzz-browser/src/main.rs`:
 

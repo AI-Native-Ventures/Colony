@@ -1,3 +1,3 @@
-fn main() {
-    // The stdio MCP server lands in Task 8.
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    buzz_browser::mcp::run_stdio_server()
 }
