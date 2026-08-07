@@ -53,6 +53,7 @@ function harness(
     source_url: "https://maps.example/sandton-auto",
     image_url: null,
     added_at: NOW,
+    status: "candidate",
   };
   const operations = [];
   return {
@@ -650,7 +651,7 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
   });
   assert.equal(page.total, 1);
   assert.equal(page.leads[0].companyName, "Sandton Auto Works");
-  assert.equal(page.leads[0].status, "new");
+  assert.equal(page.leads[0].status, "candidate");
   assert.equal(page.leads[0].score, 0);
   assert.equal(page.leads[0].source, "brave_search");
   assert.equal(page.leads[0].sourceLabel, "Brave Web Search");

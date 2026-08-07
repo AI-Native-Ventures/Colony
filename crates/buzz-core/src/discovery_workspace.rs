@@ -344,6 +344,8 @@ pub struct DiscoveryBusinessLeadProjection {
     pub industry_id: String,
     /// Taxonomy vertical inherited from the first campaign.
     pub vertical_id: String,
+    /// Current funnel status; unedited Leads report the lifecycle entry state.
+    pub status: DiscoveryLeadStatus,
     /// Provider that first retained this unique business.
     #[serde(
         default = "default_outscraper_provider",
