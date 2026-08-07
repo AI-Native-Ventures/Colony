@@ -17,16 +17,20 @@ missing file 404s in production even though the build itself succeeds.
 
 `site/dist` is gitignored. Nothing under it is committed; every deploy rebuilds from source.
 
-## Deploy (preview)
+## Deploy
 
 ```bash
-npx wrangler pages project create colony-site --production-branch colony-rebrand
-npx wrangler pages deploy site/dist --project-name colony-site
+npx wrangler pages project create colony-site --production-branch main
+npx wrangler pages deploy site/dist --project-name colony-site --branch main
 ```
 
 The `project create` step only needs to run once; once `colony-site` exists, re-running it
 fails harmlessly with "already exists" and can be ignored. `pages deploy` is the command to
 re-run for every subsequent deploy.
+
+`--branch main` matters: wrangler deploys to **preview** unless the branch matches the
+project's production branch. Deploying from a feature branch without `--branch` produces a
+preview with a branch alias (`<branch>.colony-site.pages.dev`) and never flips production.
 
 Requires `npx wrangler whoami` to show an authenticated account with `pages (write)`
 permission. If not authenticated, run `wrangler login` interactively before deploying;
@@ -34,36 +38,22 @@ do not attempt to deploy unauthenticated.
 
 - **Project name:** `colony-site`
 - **Account:** `Phiribash@gmail.com's Account`, account ID `828c27dca37f41abb7d43603228ea05d`
-- **Production branch (Pages project setting):** `colony-rebrand`
+- **Production branch (Pages project setting):** `main`
+- **Custom domain (live):** `https://colony.ainative.ventures`
 
 Each `wrangler pages deploy` prints a deployment-specific URL in the form
 `https://<hash>.colony-site.pages.dev`, plus the project's stable alias
 `https://colony-site.pages.dev`, which always points at the latest production deployment.
-Prefer the stable alias when sharing a preview link: the hash-specific subdomain has been
-observed to intermittently fail TLS handshakes shortly after a fresh deploy (see "Known
-issues" below), while the stable alias has been reliable in testing.
+The custom domain `colony.ainative.ventures` is attached to the project and serves the
+latest production deployment, so a successful `--branch main` deploy is immediately live
+there.
 
-## Custom domain (do not run yet)
+## Custom domain
 
-The target production domain is `colony.ainative.ventures`. Attaching it is a deliberate,
-owner-approved step, not part of a routine deploy. It happens only after the owner reviews
-the `*.pages.dev` preview and signs off.
-
-When the owner approves, a human performs this in the Cloudflare dashboard, it is not
-scripted:
-
-1. Cloudflare dashboard, Pages, `colony-site`, Custom domains.
-2. Add domain: `colony.ainative.ventures`.
-3. This requires the `ainative.ventures` zone to already live in the same Cloudflare account
-   as the `colony-site` Pages project. If it is in a different account, transfer or delegate
-   the zone first.
-4. Cloudflare provisions the certificate and DNS record automatically once the domain is
-   added to the Pages project; no manual DNS record needs to be created by hand in the
-   common case.
-
-DNS cutover to `colony.ainative.ventures` happens only after the owner has approved the
-preview. Nobody should attach the custom domain, edit DNS, or make any zone-level change on
-`ainative.ventures` before that approval.
+Already attached and serving production: `colony.ainative.ventures` is a Pages custom domain
+on the `colony-site` project, provisioned against the `ainative.ventures` zone in the same
+Cloudflare account. No manual DNS records are needed for routine deploys. Zone-level changes
+(cache purge, DNS) are owner-only actions and should not be part of a routine deploy.
 
 ## CI/CD
 
@@ -72,6 +62,15 @@ with `wrangler`. Automating this (GitHub Actions, Pages' native Git integration,
 is a separate follow-up, not assumed by this runbook.
 
 ## Resolved issues
+
+- **Stale 404-fallback cache on the custom domain.** A missing hashed asset URL
+  (`/assets/index-*.js`) can be cached at the `ainative.ventures` zone edge with the SPA
+  fallback for up to `max-age=14400` (4 hours), which breaks a freshly deployed site until
+  the entry expires. Fixed by renaming the hashed assets in `dist` (fresh URLs miss the
+  stale fallback) and redeploying; the orphaned entries expire on their own. If this bites
+  again and an owner is available, purge the zone cache instead (the machine OAuth token
+  only has `zone:read`, so the purge must be done by an owner in the dashboard or with a
+  token scoped to `zone:cache:purge`).
 
 - **Download and GitHub links pointed at the wrong repo (fixed).** The primary call to
   action ("Download Colony for macOS" in `site/src/sections/Download.tsx`) used to link to
