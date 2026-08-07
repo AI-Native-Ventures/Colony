@@ -14,6 +14,7 @@ test("all Discovery industries are reachable by scrolling", async ({
 
   await page.getByTestId("open-discovery-view").click();
   await expect(page).toHaveURL(/#\/discovery/);
+  await page.getByTestId("discovery-top-tab-discover").click();
 
   // Whichever card the taxonomy currently ends with, not a named one. The
   // test names an industry it will outlive otherwise: `transportation` was
