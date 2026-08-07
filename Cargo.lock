@@ -905,6 +905,7 @@ dependencies = [
 name = "buzz-browser"
 version = "0.1.0"
 dependencies = [
+ "buzz-acp",
  "futures-util",
  "reqwest 0.13.4",
  "rmcp",
