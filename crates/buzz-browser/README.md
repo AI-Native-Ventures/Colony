@@ -9,7 +9,7 @@ snapshot-first MCP tools over stdio, and enforces a per-task context budget.
 - A real browser tab can be launched, navigated, snapshotted (accessibility
   outline with `rN` refs), clicked, typed into, and verified — all over CDP.
 - The snapshot-first information diet keeps agent context tiny: the reference
-  journey completes in **2 calls / 148 estimated tokens** vs **3 calls / 301
+  journey completes in **2 calls / 148 estimated tokens** vs **3 calls / 317
   estimated tokens** for the naive DOM-dump baseline.
 - The daemon is a stdio MCP server, so any ACP agent
   (`goose acp`, `codex-acp`, `claude-agent-acp`) can attach it as an MCP server
@@ -71,7 +71,7 @@ the two fixture servers running.
 | Journey | Calls | Est. tokens |
 | --- | --- | --- |
 | Snapshot-first (reference) | 2 | 148 |
-| Naive DOM dump baseline | 3 | 301 |
+| Naive DOM dump baseline | 3 | 317 |
 | Gate | ≤ 25 | ≤ 40,000 |
 
 `estimate_tokens` is a deterministic heuristic (`max(1, ceil(chars/4))`);

@@ -7,7 +7,7 @@ Status: Draft — pending live agent gate and owner decision
 
 `buzz-browser` (Rust) launches headless Chromium, drives it over CDP, and
 exposes snapshot-first MCP tools over stdio. The reference journey completes in
-2 calls / 148 estimated tokens; the naive DOM-dump baseline is 3 calls / 301
+2 calls / 148 estimated tokens; the naive DOM-dump baseline is 3 calls / 317
 tokens. The daemon is shell-agnostic: it runs today without any desktop shell.
 
 The live ACP agent gate is **not yet passed**: the wiring compiles and its unit
