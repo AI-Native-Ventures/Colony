@@ -15,11 +15,17 @@ set -euo pipefail
 # a platform this run is itself publishing are never carried over, so the
 # freshly built artifact always wins.
 #
-# Usage: merge-latest-json.sh <version> <existing-manifest-url|-> <output-file> \
-#         <platform-key:sig-file:archive-url> [...]
+# The existing manifest is given either as @<file> (already fetched, which is
+# what the release workflow does via fetch-latest-json.sh) or as a URL to
+# fetch. Prefer @<file>: reading the public download URL can return a copy the
+# CDN has held for minutes, and merging onto a stale manifest drops the other
+# platform's entry. See fetch-latest-json.sh for the full failure mode.
+#
+# Usage: merge-latest-json.sh <version> <@existing-file|existing-url|-> \
+#         <output-file> <platform-key:sig-file:archive-url> [...]
 
 if [[ $# -lt 3 ]]; then
-  echo "Usage: merge-latest-json.sh <version> <existing-manifest-url|-> <output-file> <platform-key:sig-file:url>..." >&2
+  echo "Usage: merge-latest-json.sh <version> <@existing-file|existing-url|-> <output-file> <platform-key:sig-file:url>..." >&2
   exit 1
 fi
 
@@ -52,11 +58,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Pull the manifest currently being served so its other-platform entries can
-# be carried into the new one. A 404 (first release) or any fetch failure
-# means there is nothing to preserve.
+# Pull the manifest currently published so its other-platform entries can be
+# carried into the new one. A missing file, a 404 (first release), or any
+# fetch failure means there is nothing to preserve.
 EXISTING=""
-if [[ "$EXISTING_URL" != "-" ]]; then
+if [[ "$EXISTING_URL" == @* ]]; then
+  EXISTING_FILE="${EXISTING_URL#@}"
+  if [[ -s "$EXISTING_FILE" ]]; then
+    EXISTING=$(cat "$EXISTING_FILE")
+  fi
+elif [[ "$EXISTING_URL" != "-" ]]; then
   EXISTING=$(curl -fsSL "$EXISTING_URL" 2>/dev/null || true)
 fi
 
