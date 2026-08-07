@@ -1055,6 +1055,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "buzz-core",
+ "buzz-meter-core",
  "bytes",
  "chrono",
  "dashmap",
@@ -1067,6 +1068,14 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "buzz-meter-core"
+version = "0.1.0"
+dependencies = [
+ "buzz-core",
+ "serde_json",
 ]
 
 [[package]]
