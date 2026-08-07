@@ -1,17 +1,17 @@
 {
-  "commit": "3e598758c5491d14441e5f9f0f26aab5c97a1dde",
+  "commit": "d6daf867b7940b3b53dba694245463601d5a993c",
   "files": {
-    "rust_total": 298,
-    "rust_lines": 125903,
+    "rust_total": 299,
+    "rust_lines": 126281,
     "tauri_coupled": 132,
-    "portable": 166,
-    "portable_lines": 64480
+    "portable": 167,
+    "portable_lines": 64787
   },
   "commands": {
-    "registered": 263,
-    "defined": 263,
+    "registered": 264,
+    "defined": 264,
     "by_reach": {
-      "frontend": 257,
+      "frontend": 258,
       "NO CALLER FOUND": 3,
       "frontend-plugin-prefixed": 2,
       "test-only": 1
@@ -24,7 +24,7 @@
   },
   "params": {
     "AppHandle": 237,
-    "State": 196,
+    "State": 197,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 3
@@ -32,7 +32,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 237,
-      "State": 196,
+      "State": 197,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 3
@@ -103,10 +103,10 @@
     "src-tauri/src/commands/agent_discovery.rs": 7,
     "src-tauri/src/commands/project_git.rs": 7,
     "src-tauri/src/commands/relay_members.rs": 6,
+    "src-tauri/src/commands/identity_archive.rs": 6,
     "src-tauri/src/commands/media_download.rs": 6,
     "src-tauri/src/managed_agents/runtime_commands.rs": 6,
     "src-tauri/src/commands/mesh_llm.rs": 6,
-    "src-tauri/src/commands/identity_archive.rs": 5,
     "src-tauri/src/commands/project_git_workflow.rs": 5,
     "src-tauri/src/commands/channel_templates.rs": 5,
     "src-tauri/src/commands/agent_config.rs": 5,
@@ -1322,6 +1322,15 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/projectGit.ts:314"
+      ]
+    },
+    "get_relay_discovery_support": {
+      "defining_file": "src-tauri/src/commands/identity_archive.rs",
+      "module": "identity_archive",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/discovery/data/relayDiscoverySupport.ts:23"
       ]
     },
     "get_relay_http_url": {
