@@ -15,6 +15,16 @@ pub struct JourneyConfig {
     pub naive: bool,
 }
 
+/// Extract the first `[rN]` ref from an outline line containing `role`.
+pub fn ref_for_role(outline: &str, role: &str) -> Option<String> {
+    outline.lines().find(|l| l.contains(role)).and_then(|l| {
+        l.split('[')
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .map(|s| s.to_string())
+    })
+}
+
 /// Run the reference journey and return the budget report.
 pub async fn run_reference_journey(
     cfg: &JourneyConfig,
@@ -50,12 +60,10 @@ pub async fn run_reference_journey(
         ledger.record("dom_dump", dom.len());
     }
 
-    // Focus the input by clicking its ref, then type and submit.
-    let input_ref = snap
-        .refs
-        .keys()
-        .find(|_| snap.outline.contains("textbox"))
-        .cloned()
+    // Focus the input by clicking its ref, then type and submit. The ref is
+    // taken from the outline line that names the textbox, not an arbitrary
+    // key from the refs map.
+    let input_ref = ref_for_role(&snap.outline, "textbox")
         .ok_or_else(|| BrowserError::Input("no textbox ref".into()))?;
     click_ref(&mut client, &snap, &input_ref).await?;
     type_text(&mut client, "colony-agent").await?;
@@ -77,6 +85,13 @@ pub async fn run_reference_journey(
 mod tests {
     use super::*;
 
+    #[test]
+    fn ref_for_role_picks_textbox_not_first_ref() {
+        let outline = "- button [r1] Submit\n  - textbox [r2] Name";
+        assert_eq!(ref_for_role(outline, "textbox").as_deref(), Some("r2"));
+        assert_eq!(ref_for_role(outline, "button").as_deref(), Some("r1"));
+    }
+
     #[tokio::test]
     #[ignore = "requires fixture servers; run explicitly in Task 9 Step 4"]
     async fn journey_budget_meets_gate() {
@@ -94,7 +109,4 @@ mod tests {
             report.total_tokens
         );
     }
-
-    #[test]
-    fn module_loads() {}
 }
