@@ -518,6 +518,11 @@ fn advance_query_cursor(
     Ok(())
 }
 
+/// A client for one relay connection, bound to one Nostr identity.
+///
+/// Every write is a signed event; every read is a NIP-98-authed query. The
+/// worker and all `buzz` subcommands share this client, so what a command
+/// does in production is exactly what this type does in a test.
 pub struct BuzzClient {
     http: reqwest::Client,
     relay_url: String, // base URL, no trailing slash, e.g. "https://relay.buzz.place"
@@ -1387,19 +1392,25 @@ pub fn extract_p_tags(event: &serde_json::Value) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
-/// Return a create-command response with an entity ID injected.
-pub fn create_response_with_id(resp: &str, id_key: &str, id_val: &str) -> String {
+/// Return a create-command response, injecting the entity ID **only** when the
+/// relay accepted the event (`"accepted": true`). When the relay rejected the
+/// event, emitting the locally-computed link would be misleading — callers
+/// that copy or share the link would reference an event that was never stored.
+pub fn create_response_with_id_if_accepted(resp: &str, id_key: &str, id_val: &str) -> String {
     let mut v: serde_json::Value = serde_json::from_str(resp).unwrap_or(serde_json::json!({}));
-    v[id_key] = serde_json::json!(id_val);
-    if v.get("accepted").is_none() {
-        v["accepted"] = serde_json::json!(true);
+    let accepted = v.get("accepted").and_then(|a| a.as_bool()).unwrap_or(false);
+    if accepted {
+        v[id_key] = serde_json::json!(id_val);
     }
     v.to_string()
 }
 
 /// Print a create-command response, injecting the generated entity ID.
 pub fn print_create_response(resp: &str, id_key: &str, id_val: &str) {
-    println!("{}", create_response_with_id(resp, id_key, id_val));
+    println!(
+        "{}",
+        create_response_with_id_if_accepted(resp, id_key, id_val)
+    );
 }
 
 /// Extract a JSON field from relay write response messages shaped as
@@ -1433,47 +1444,59 @@ pub fn normalize_write_response(raw: &str) -> String {
 
 /// Why a relay write did not durably store the event, or `None` when it did.
 ///
-/// A write is a success only when the relay actually stored something. Two
-/// different responses report a write that was NOT stored, and only one of
-/// them says `accepted: false`:
+/// A write is a success only when the relay actually stored something. The
+/// relay says which of those happened in the `outcome` field of its response:
 ///
-/// - `accepted: false` is the ordinary refusal (a bad altitude, a broker
-///   duplicate, a rejected event).
-/// - `accepted: true` with a `message` beginning `duplicate:` is how
-///   `ingest_event` reports a write it discarded: either the exact event was
-///   already stored, or a NIP-33 head at the same `(kind, pubkey, d)` address
-///   dominated it on the last-write-wins tiebreak. Nostr `created_at` is
-///   whole seconds, so two heads written inside one second collide and the
-///   loser is decided by a byte comparison of event ids.
+/// - `stored` -- newly written. A success.
+/// - `already_stored` -- the identical event was there already, so this write
+///   landed on an earlier attempt. Also a success, and the reason the field
+///   exists: [`Client::post_events`] retries the same serialized bytes when a
+///   response is lost, and that retry must not be reported as a conflict.
+/// - `superseded` -- a different event won the address and this one was thrown
+///   away. Never a success, whatever `accepted` says.
+/// - `refused` -- the relay declined the write on a durable rule.
 ///
-/// Testing only `accepted` therefore reports a discarded write as a success.
-/// For `buzz grants revoke` that meant printing success and exiting 0 while
-/// the grant stayed active, with no stored event to audit afterwards.
+/// A relay that predates the field falls back to the older rule: treat any
+/// `duplicate:`-prefixed message as a discard regardless of `accepted`, since
+/// on those relays a dominated NIP-33 write and an idempotent repeat are
+/// indistinguishable and only failing loudly is safe. That is what kept `buzz
+/// grants revoke` from printing success while the grant stayed active.
 ///
 /// The returned reason has any `duplicate:`/`conflict:` prefix stripped
 /// (with or without the trailing space the relay is inconsistent about);
 /// callers surface it as [`CliError::Conflict`], exit code 5.
 pub fn write_conflict_reason(raw: &str) -> Option<String> {
     let response = serde_json::from_str::<serde_json::Value>(raw).ok();
-    let accepted = response
-        .as_ref()
-        .and_then(|value| value.get("accepted").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false);
-    let message = response
-        .as_ref()
-        .and_then(|value| {
-            value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| raw.to_owned());
+    let string_field = |name: &str| {
+        response
+            .as_ref()
+            .and_then(|value| value.get(name).and_then(serde_json::Value::as_str))
+            .map(str::to_owned)
+    };
+    let message = string_field("message").unwrap_or_else(|| raw.to_owned());
 
-    let discarded = message == "duplicate" || message.starts_with("duplicate:");
-    if accepted && !discarded {
-        return None;
+    match string_field("outcome").as_deref() {
+        Some("stored" | "already_stored") => None,
+        Some("superseded") => Some(match string_field("winner_event_id") {
+            Some(winner) => format!(
+                "this write was discarded: event {winner} already holds this address; nothing \
+                 changed"
+            ),
+            None => strip_write_conflict_prefix(&message),
+        }),
+        Some(_) => Some(strip_write_conflict_prefix(&message)),
+        None => {
+            let accepted = response
+                .as_ref()
+                .and_then(|value| value.get("accepted").and_then(serde_json::Value::as_bool))
+                .unwrap_or(false);
+            let discarded = message == "duplicate" || message.starts_with("duplicate:");
+            if accepted && !discarded {
+                return None;
+            }
+            Some(strip_write_conflict_prefix(&message))
+        }
     }
-    Some(strip_write_conflict_prefix(&message))
 }
 
 /// Strip the relay's `duplicate:`/`conflict:` prefix from a write-response
@@ -1500,10 +1523,77 @@ fn strip_write_conflict_prefix(message: &str) -> String {
 mod write_response_tests {
     use super::write_conflict_reason;
 
-    /// The shape `ingest_event` returns for a write it discarded: `accepted`
-    /// is `true` and the message is a bare `"duplicate:"` with no trailing
-    /// space. Reading only `accepted` reports this as a success, which is how
-    /// `buzz grants revoke` printed success while the grant stayed active.
+    /// A dominated write is a conflict, and the reason names the head that
+    /// beat it so the operator can go look at what actually holds the address.
+    ///
+    /// This is the server-side half of the `buzz grants revoke` Critical: the
+    /// relay threw the revocation away, and the CLI must exit 5 rather than 0.
+    #[test]
+    fn a_superseded_write_is_a_conflict_naming_the_winner() {
+        let reason = write_conflict_reason(
+            r#"{"event_id":"mine","accepted":false,"outcome":"superseded",
+                "winner_event_id":"theirs","message":"conflict: superseded by event theirs"}"#,
+        )
+        .expect("a discarded write must not report success");
+
+        assert!(
+            reason.contains("theirs"),
+            "the reason must name the winning event; got: {reason}"
+        );
+    }
+
+    /// An identical re-submission landed, so it is NOT a conflict.
+    ///
+    /// `post_events` retries the same serialized bytes when a response is
+    /// lost. Before the relay grew `outcome`, that retry was indistinguishable
+    /// from a dominance discard, so the CLI had to call it a conflict; an
+    /// agent following the exit-5 contract would then re-file a decision it
+    /// had already filed.
+    #[test]
+    fn an_identical_resubmission_is_a_success_not_a_conflict() {
+        assert_eq!(
+            write_conflict_reason(
+                r#"{"event_id":"mine","accepted":true,"outcome":"already_stored",
+                    "message":"duplicate: identical event already stored"}"#
+            ),
+            None,
+            "a write that did land must not be reported as a conflict"
+        );
+    }
+
+    /// A newly stored write is a success.
+    #[test]
+    fn a_stored_write_is_not_a_conflict() {
+        assert_eq!(
+            write_conflict_reason(
+                r#"{"event_id":"mine","accepted":true,"outcome":"stored","message":""}"#
+            ),
+            None
+        );
+    }
+
+    /// A refusal keeps its own reason.
+    #[test]
+    fn a_refusal_carries_the_relays_reason() {
+        assert_eq!(
+            write_conflict_reason(
+                r#"{"event_id":"mine","accepted":false,"outcome":"refused",
+                    "message":"conflict: bad altitude"}"#
+            )
+            .as_deref(),
+            Some("bad altitude")
+        );
+    }
+
+    /// The shape `ingest_event` returned for a write it discarded BEFORE the
+    /// `outcome` field existed: `accepted` is `true` and the message is a bare
+    /// `"duplicate:"` with no trailing space. Reading only `accepted` reports
+    /// this as a success, which is how `buzz grants revoke` printed success
+    /// while the grant stayed active.
+    ///
+    /// A relay that predates the fix still answers this way, and against one
+    /// the two cases really are indistinguishable, so the CLI must keep
+    /// failing loudly. This is the compatibility fallback, not dead code.
     #[test]
     fn nip33_dominance_response_is_a_conflict_despite_accepted_true() {
         let reason =
@@ -2427,7 +2517,8 @@ mod retry_policy_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_query_cursor, create_response_with_id, extract_relay_response_field, BuzzClient,
+        advance_query_cursor, create_response_with_id_if_accepted, extract_relay_response_field,
+        BuzzClient,
     };
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
@@ -2475,13 +2566,28 @@ mod tests {
     }
 
     #[test]
-    fn create_response_with_id_overrides_local_id_with_relay_id() {
+    fn create_response_with_id_if_accepted_injects_id_when_accepted() {
         let raw = r#"{"event_id":"abc","accepted":true,"message":"response:{\"workflow_id\":\"relay-id\"}"}"#;
-        let out = create_response_with_id(raw, "workflow_id", "relay-id");
+        let out = create_response_with_id_if_accepted(raw, "workflow_id", "relay-id");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // ID injected and original fields preserved when accepted.
         assert_eq!(v["workflow_id"].as_str(), Some("relay-id"));
         assert_eq!(v["event_id"].as_str(), Some("abc"));
         assert_eq!(v["accepted"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn create_response_with_id_if_accepted_omits_id_when_rejected() {
+        let raw = r#"{"event_id":"abc","accepted":false,"message":"duplicate"}"#;
+        let out = create_response_with_id_if_accepted(raw, "workflow_id", "local-id");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // ID must not be present when relay rejected the event; emitting a
+        // link to an event that was never stored would mislead callers.
+        assert!(
+            v.get("workflow_id").is_none(),
+            "link field must be absent on rejected create"
+        );
+        assert_eq!(v["accepted"].as_bool(), Some(false));
     }
 
     // --- (a) auth-suppression regression pair ---

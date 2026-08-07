@@ -15,8 +15,11 @@ import type {
   DiscoveryEvent,
   Industry,
   Lead,
+  LeadDetail,
+  LeadCounts,
   LeadPage,
   LeadScope,
+  LeadUpdateInput,
   OutreachDraft,
   OutreachStatus,
   ProfessionalField,
@@ -48,6 +51,8 @@ import {
 export type FixtureDiscoveryDataSourceOptions = {
   entitlement?: DiscoveryEntitlementState | DiscoveryEntitlement;
   scenario?: FixtureScenario;
+  /** Return an empty global Leads page so the empty state is browser-testable. */
+  emptyLeads?: boolean;
 };
 
 export type CreateFixtureDiscoveryDataSourceOptions =
@@ -186,12 +191,15 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     string,
     ConversationThread[]
   >();
+  private readonly leadProfiles = new Map<string, Partial<LeadDetail>>();
+  private readonly emptyLeads: boolean;
   private nextCampaignNumber = 1;
   private nextRunToken = 1;
 
   constructor(options: FixtureDiscoveryDataSourceOptions = {}) {
     this.entitlement = normalizeEntitlement(options.entitlement);
     this.defaultScenario = options.scenario ?? "concurrent";
+    this.emptyLeads = options.emptyLeads ?? false;
 
     const fixtureCampaign = clone(CAMPAIGN_FIXTURE);
     fixtureCampaign.run = createIdleDiscoveryRun(fixtureCampaign);
@@ -248,6 +256,51 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
 
   async getIndustries(): Promise<Industry[]> {
     return clone(FIXTURE_INDUSTRIES);
+  }
+
+  async getLeadCounts(): Promise<LeadCounts> {
+    const industries = FIXTURE_INDUSTRIES.map((industry) => ({
+      industryId: industry.id,
+      count: industry.leadCount,
+    }));
+    const verticals = FIXTURE_VERTICAL_DETAILS.map((vertical) => ({
+      industryId: vertical.industryId,
+      verticalId: vertical.id,
+      count: vertical.leadCount,
+    }));
+    return {
+      total: industries.reduce((sum, row) => sum + row.count, 0),
+      industries,
+      verticals,
+    };
+  }
+
+  async getLead(leadId: string): Promise<LeadDetail> {
+    const all = this.getGlobalLeads();
+    const lead = all.find((candidate) => candidate.id === leadId);
+    if (!lead) {
+      throw new Error(`Unknown Discovery lead: ${leadId}`);
+    }
+    const profile = this.leadProfiles.get(leadId) ?? {};
+    return {
+      ...lead,
+      status: profile.status ?? "candidate",
+      ...profile,
+    } as LeadDetail;
+  }
+
+  async updateLead(
+    leadId: string,
+    input: LeadUpdateInput,
+  ): Promise<LeadDetail> {
+    await this.getLead(leadId);
+    const current = this.leadProfiles.get(leadId) ?? {};
+    this.leadProfiles.set(leadId, {
+      ...current,
+      ...input,
+      updatedAt: new Date().toISOString(),
+    });
+    return this.getLead(leadId);
   }
 
   async getVerticals(industryId: string): Promise<Vertical[]> {
@@ -325,6 +378,15 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   }
 
   async getLeads(scope: LeadScope): Promise<LeadPage> {
+    if (this.emptyLeads && scope.scope !== "campaign") {
+      return {
+        leads: [],
+        total: 0,
+        page: 1,
+        pageSize: scope.pageSize ?? 25,
+        hasNextPage: false,
+      };
+    }
     const scopeKind = scope.scope ?? scope.kind ?? scope.type ?? "global";
     const sourceLeads =
       scopeKind === "campaign"

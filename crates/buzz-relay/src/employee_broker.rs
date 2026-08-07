@@ -129,7 +129,11 @@ pub async fn handle_hire_request(
 }
 
 /// Re-derive an employee's signing keys from its sealed column.
-fn open_employee_keys(
+///
+/// The only way to speak as an employee. `job_broker` uses it to sign job
+/// heads, which is why an employee-signed event is in practice a relay-signed
+/// one: nobody else can open the seal.
+pub(crate) fn open_employee_keys(
     state: &Arc<AppState>,
     tenant: &TenantContext,
     pubkey: &[u8],

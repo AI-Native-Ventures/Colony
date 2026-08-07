@@ -16,10 +16,12 @@
 //!    a turn to a guess is worse than not running it, because the guess is
 //!    indistinguishable from a fact once it is written down.
 
+use std::collections::HashMap;
+
 use buzz_core::{
     company::{
-        classify_cost, AgentWorkContext, AttributionState, CommercialPurpose, CompanyProfile,
-        CompanyTask, Initiative,
+        classify_cost, AgentWorkContext, AttributionState, CommercialPurpose,
+        CompanyOnboardingStatus, CompanyProfile, CompanyTask, Initiative,
     },
     kind::{KIND_COMPANY_PROFILE, KIND_INITIATIVE, KIND_TASK},
 };
@@ -301,6 +303,81 @@ pub async fn resolve_for_event(
     .map(Some)
 }
 
+/// Resolve the workspace's onboarding status from an already-fetched set of
+/// company-profile heads.
+///
+/// A Colony workspace has at most one company. NIP-33 replacement is enforced
+/// at write time (`Db::replace_parameterized_replaceable`), so at most one
+/// live head exists per company id -- this never has to resolve "latest
+/// wins" itself, only "how many distinct companies are live".
+///
+/// `None` covers two states [`crate::should_inject_company_onboarding`]
+/// treats identically: no company has been published yet, and -- a
+/// defensive case this data model does not otherwise produce -- more than
+/// one distinct company id is live at once. Guessing which of several
+/// companies governs the workspace would be worse than withholding the
+/// protocol, so ambiguity logs a warning and falls back to `None` rather
+/// than picking one.
+fn resolve_onboarding_status_from_heads(
+    events: &[Event],
+    relay_pubkey: &nostr::PublicKey,
+) -> Option<CompanyOnboardingStatus> {
+    let mut by_id: HashMap<String, CompanyOnboardingStatus> = HashMap::new();
+    for event in events {
+        if relay_authored(event, relay_pubkey, "company").is_err() {
+            continue;
+        }
+        let Ok(profile) = parse_company_event(event) else {
+            continue;
+        };
+        by_id.insert(profile.id, profile.onboarding_status);
+    }
+    match by_id.len() {
+        0 => None,
+        1 => by_id.into_values().next(),
+        count => {
+            tracing::warn!(
+                target: "work_context::onboarding",
+                company_count = count,
+                "more than one company profile is live; withholding the onboarding protocol \
+                 rather than guessing which one governs the workspace"
+            );
+            None
+        }
+    }
+}
+
+/// Fetch every company-profile head this relay has published and resolve the
+/// workspace's onboarding status from them.
+///
+/// Queried by kind and author only -- no `d` tag -- because the caller does
+/// not know a company id to look up yet; that is exactly the "no company
+/// yet" state the onboarding protocol exists for. `limit` is generous
+/// headroom over the "at most one" a workspace is expected to hold.
+pub async fn fetch_company_onboarding_status(
+    rest: &crate::relay::RestClient,
+) -> Result<Option<CompanyOnboardingStatus>, String> {
+    let relay_pubkey = rest
+        .relay_self()
+        .await
+        .map_err(|error| format!("could not read the relay identity: {error}"))?
+        .ok_or_else(|| {
+            "this relay advertises no stable identity, so its company records cannot be trusted"
+                .to_string()
+        })?;
+
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(KIND_COMPANY_PROFILE as u16))
+        .author(relay_pubkey)
+        .limit(32);
+    let events = rest
+        .query_events(&[filter])
+        .await
+        .map_err(|error| format!("could not read company records: {error}"))?;
+
+    Ok(resolve_onboarding_status_from_heads(&events, &relay_pubkey))
+}
+
 fn purpose_label(purpose: CommercialPurpose) -> &'static str {
     match purpose {
         CommercialPurpose::ClientDelivery => "client delivery",
@@ -448,10 +525,13 @@ mod tests {
     }
 
     fn company_head(keys: &Keys) -> Event {
-        let record = company();
+        company_head_for(&company(), keys)
+    }
+
+    fn company_head_for(record: &CompanyProfile, keys: &Keys) -> Event {
         head(
             KIND_COMPANY_PROFILE,
-            &serde_json::to_value(&record).expect("company json"),
+            &serde_json::to_value(record).expect("company json"),
             vec![
                 scalar("d", &record.id),
                 scalar("c", &record.id),
@@ -825,6 +905,78 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn no_company_heads_resolve_to_no_status() {
+        let keys = relay();
+        assert_eq!(
+            resolve_onboarding_status_from_heads(&[], &keys.public_key()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_single_company_head_resolves_to_its_status() {
+        let keys = relay();
+        let mut draft = company();
+        draft.onboarding_status = CompanyOnboardingStatus::Draft;
+        assert_eq!(
+            resolve_onboarding_status_from_heads(
+                &[company_head_for(&draft, &keys)],
+                &keys.public_key()
+            ),
+            Some(CompanyOnboardingStatus::Draft)
+        );
+
+        let approved = company(); // fixture default is Approved
+        assert_eq!(
+            resolve_onboarding_status_from_heads(
+                &[company_head_for(&approved, &keys)],
+                &keys.public_key()
+            ),
+            Some(CompanyOnboardingStatus::Approved)
+        );
+    }
+
+    // Any authenticated member can publish a `KIND_COMPANY_PROFILE` event --
+    // the same client-writable exposure `interrupt_runtime.rs` documents for
+    // `KIND_MANAGED_AGENT`. Without the author check, an impostor head could
+    // convince every agent onboarding is either still open or already closed.
+    #[test]
+    fn heads_not_authored_by_the_relay_are_ignored() {
+        let relay_keys = relay();
+        let mut draft = company();
+        draft.onboarding_status = CompanyOnboardingStatus::Draft;
+        let forged = company_head_for(&draft, &impostor());
+        assert_eq!(
+            resolve_onboarding_status_from_heads(&[forged], &relay_keys.public_key()),
+            None,
+            "an impostor-authored head must not decide onboarding status"
+        );
+    }
+
+    // Never guess which of several companies governs the workspace -- that is
+    // the same "Ok(None), never guess" discipline `persona_pubkey_in_roster`
+    // and `unique_executive_in_roster` use in `interrupt_runtime.rs`.
+    #[test]
+    fn more_than_one_distinct_company_is_ambiguous_and_withheld() {
+        let keys = relay();
+        let mut first = company();
+        first.id = "horizonlabs".to_string();
+        first.onboarding_status = CompanyOnboardingStatus::Draft;
+        let mut second = company();
+        second.id = "other-co".to_string();
+        second.onboarding_status = CompanyOnboardingStatus::Approved;
+
+        let heads = [
+            company_head_for(&first, &keys),
+            company_head_for(&second, &keys),
+        ];
+        assert_eq!(
+            resolve_onboarding_status_from_heads(&heads, &keys.public_key()),
+            None
+        );
+    }
 }
 
 /// Guards on how the pool wires work context into every turn.
@@ -885,6 +1037,79 @@ mod pool_wiring_tests {
         assert!(
             section < blocks,
             "the work section must exist before the prompt blocks that carry it"
+        );
+    }
+
+    /// The composed system prompt only carries the onboarding protocol if
+    /// production code actually resolves company status and threads it
+    /// through the composition pipeline -- not merely because
+    /// `COMPANY_ONBOARDING_PROMPT` and `should_inject_company_onboarding`
+    /// exist somewhere in the crate. This is exactly the gap issue #98
+    /// closes: the pre-fix tests asserted on the constant directly, which
+    /// passed whether or not anything ever injected it.
+    #[test]
+    fn create_session_and_apply_model_wires_the_onboarding_gate() {
+        assert!(
+            POOL.contains("crate::should_inject_company_onboarding"),
+            "the pool must consult the onboarding gate before composing a session's prompt"
+        );
+        assert!(
+            POOL.contains("crate::work_context::fetch_company_onboarding_status"),
+            "the pool must fetch the company's onboarding status, not assume one"
+        );
+
+        let definition_start = POOL
+            .find("async fn create_session_and_apply_model(")
+            .expect("session creation exists");
+        let definition_end = POOL[definition_start..]
+            .find("\nasync fn ")
+            .map(|offset| definition_start + offset)
+            .expect("a later top-level async fn bounds this one");
+        let body = &POOL[definition_start..definition_end];
+
+        assert!(
+            body.contains("onboarding_section: Option<&str>"),
+            "session creation must accept the resolved onboarding section as a parameter -- \
+             the fetch happens once at the call site, not on every session-creation call"
+        );
+        assert!(
+            body.contains("with_company_onboarding("),
+            "the accepted onboarding section must be composed into the system prompt"
+        );
+    }
+
+    /// Companion to `create_session_and_apply_model_wires_the_onboarding_gate`:
+    /// that test proves the gate is consulted at session creation; this one
+    /// proves `run_prompt_task` actually retries an unresolved lookup rather
+    /// than only checking it once. Complements the pure-logic tests in
+    /// `pool::tests` (`retry_recovers_onboarding_after_a_cold_start_timeout`
+    /// and its neighbors), which prove the retry decision functions
+    /// themselves are correct in isolation but cannot prove anything calls
+    /// them in production.
+    #[test]
+    fn run_prompt_task_wires_the_onboarding_retry() {
+        let definition_start = POOL
+            .find("pub async fn run_prompt_task(")
+            .expect("run_prompt_task exists");
+        let definition_end = POOL[definition_start..]
+            .find("\nasync fn ")
+            .map(|offset| definition_start + offset)
+            .expect("a later top-level async fn bounds this one");
+        let body = &POOL[definition_start..definition_end];
+
+        assert!(
+            body.contains("needs_onboarding_lookup("),
+            "the pool must check whether an onboarding lookup is needed, including on retry"
+        );
+        assert!(
+            body.contains("apply_onboarding_resolution("),
+            "a resolved lookup must be applied -- cached, and the stale session invalidated \
+             when a retry determines it should have carried the protocol"
+        );
+        assert!(
+            body.contains("cached_onboarding_section("),
+            "the onboarding section for a new session must come from the resolution cache, \
+             not a value computed inline and disconnected from the retry cache"
         );
     }
 }

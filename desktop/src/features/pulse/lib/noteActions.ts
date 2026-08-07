@@ -48,9 +48,31 @@ export function applyReactionState(
   return next;
 }
 
+/**
+ * Whether this failure means the emoji is already on the note.
+ *
+ * The user's intent is satisfied either way, so the caller keeps the
+ * optimistic "reacted" state instead of showing an error.
+ *
+ * The relay reports the reaction slot being held three ways, and all three
+ * mean the same thing here. `duplicate: reaction already exists` is what
+ * relays before the write-contract fix answered; newer ones distinguish
+ * re-sending the very event that holds the slot from a different event
+ * holding it. The OK frame has no room for the machine-readable `outcome`
+ * field that `POST /events` carries, so over WebSocket this is the message
+ * we get.
+ */
 export function isDuplicateReactionError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
   return (
-    error instanceof Error &&
-    error.message.toLowerCase().includes("duplicate: reaction already exists")
+    message.includes("duplicate: reaction already exists") ||
+    message.includes("identical reaction already applied") ||
+    message.includes("superseded by original reaction") ||
+    // A legacy `reactions` row with no linked kind:7 event: the relay cannot
+    // name a holder, but the emoji is still on the note.
+    message.includes("an active reaction already exists")
   );
 }

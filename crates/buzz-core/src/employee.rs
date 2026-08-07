@@ -11,6 +11,7 @@
 //! reply. Both are parsed here so the relay, the CLI, and the desktop agree on
 //! one definition. See `docs/design/company-employees.html`.
 
+use crate::event_tags::TagLookupError;
 use crate::interrupt::AgentTier;
 
 /// A role slug: lowercase, digits, `-` and `_`, starting alphanumeric.
@@ -107,21 +108,10 @@ fn hex64(field: &'static str, value: &str) -> Result<String, EmployeeParseError>
 }
 
 fn single_tag(event: &nostr::Event, name: &'static str) -> Result<String, EmployeeParseError> {
-    let mut found: Option<String> = None;
-    for tag in event.tags.iter() {
-        let parts = tag.as_slice();
-        if parts.first().map(String::as_str) == Some(name) {
-            let value = parts
-                .get(1)
-                .cloned()
-                .ok_or(EmployeeParseError::MissingTag(name))?;
-            if found.is_some() {
-                return Err(EmployeeParseError::DuplicateTag(name));
-            }
-            found = Some(value);
-        }
-    }
-    found.ok_or(EmployeeParseError::MissingTag(name))
+    crate::event_tags::single_tag(event, name).map_err(|error| match error {
+        TagLookupError::Missing => EmployeeParseError::MissingTag(name),
+        TagLookupError::Duplicate => EmployeeParseError::DuplicateTag(name),
+    })
 }
 
 fn role_and_name(event: &nostr::Event) -> Result<(String, String), EmployeeParseError> {

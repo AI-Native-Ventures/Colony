@@ -953,11 +953,17 @@ async fn main() -> anyhow::Result<()> {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(buzz_relay::interrupt_runtime::DEFAULT_STALL_AFTER_SECS);
+        let job_unclaimed_after_secs: i64 =
+            std::env::var(buzz_relay::job_runtime::JOB_UNCLAIMED_AFTER_SECS_ENV)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(buzz_relay::job_runtime::DEFAULT_JOB_UNCLAIMED_AFTER_SECS);
         tokio::spawn(async move {
             info!(
                 interval_secs = interrupt_sweep_interval_secs,
                 batch_limit = interrupt_sweep_batch_limit,
                 stall_after_secs,
+                job_unclaimed_after_secs,
                 "Colony interrupt sweep started"
             );
             loop {
@@ -1002,6 +1008,39 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => {
                         error!("Stall sweep tick failed: {e}");
+                    }
+                }
+
+                // The job queue's own two sweeps ride the same loop for the
+                // same reasons: a worker that dies mid-job announces nothing,
+                // so only a timer can take its lease back, and a job nobody
+                // ever claims has to reach a human rather than sit forever.
+                match buzz_relay::job_runtime::run_job_lease_tick(&interrupt_state, now_secs).await
+                {
+                    Ok(reclaimed) => {
+                        if reclaimed > 0 {
+                            info!(reclaimed, "Job sweep: lapsed leases reclaimed");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Job lease sweep tick failed: {e}");
+                    }
+                }
+
+                match buzz_relay::job_runtime::run_job_escalation_tick(
+                    &interrupt_state,
+                    now_secs,
+                    job_unclaimed_after_secs,
+                )
+                .await
+                {
+                    Ok(filed) => {
+                        if filed > 0 {
+                            info!(filed, "Job sweep: stuck jobs raised with their owners");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Job escalation sweep tick failed: {e}");
                     }
                 }
             }

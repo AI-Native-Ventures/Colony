@@ -9,6 +9,7 @@ use crate::discovery::{
     DiscoveryBusinessSearchSpec, DiscoveryProvider, DiscoveryRunProjection, DiscoverySourceConfig,
 };
 use crate::discovery_worker::DiscoveryRunSourceProjection;
+use crate::party::RelationshipStatus;
 
 const MAX_NAME_BYTES: usize = 256;
 const MAX_TAXONOMY_ID_BYTES: usize = 128;
@@ -38,6 +39,12 @@ pub enum DiscoveryWorkspaceOperation {
     ListCampaigns,
     /// List normalized retained Businesses Leads.
     ListLeads,
+    /// List retained-Lead counts per taxonomy row.
+    ListLeadCounts,
+    /// Read one retained Lead with its editable profile.
+    GetLead,
+    /// Update one retained Lead's editable profile and funnel status.
+    UpdateLead,
 }
 
 /// Immutable input used to create a live Businesses campaign.
@@ -142,6 +149,8 @@ pub struct DiscoveryLeadListRequest {
     pub industry_id: Option<String>,
     /// Optional taxonomy vertical filter.
     pub vertical_id: Option<String>,
+    /// Optional funnel status filter.
+    pub status: Option<DiscoveryLeadStatus>,
     /// Zero-based row offset.
     pub offset: u32,
     /// Page size, from 1 through 100.
@@ -197,6 +206,20 @@ pub enum DiscoveryWorkspaceActionPayload {
         /// Bounded filters and pagination.
         request: DiscoveryLeadListRequest,
     },
+    /// List retained-Lead counts per taxonomy row.
+    ListLeadCounts,
+    /// Read one retained Lead with its editable profile.
+    GetLead {
+        /// Stable observation identifier.
+        lead_id: Uuid,
+    },
+    /// Update one retained Lead's editable profile and funnel status.
+    UpdateLead {
+        /// Stable observation identifier.
+        lead_id: Uuid,
+        /// Complete replacement profile fields.
+        input: DiscoveryLeadUpdateInput,
+    },
 }
 
 impl DiscoveryWorkspaceActionPayload {
@@ -211,6 +234,9 @@ impl DiscoveryWorkspaceActionPayload {
             Self::GetCampaign { .. } => DiscoveryWorkspaceOperation::GetCampaign,
             Self::ListCampaigns { .. } => DiscoveryWorkspaceOperation::ListCampaigns,
             Self::ListLeads { .. } => DiscoveryWorkspaceOperation::ListLeads,
+            Self::ListLeadCounts => DiscoveryWorkspaceOperation::ListLeadCounts,
+            Self::GetLead { .. } => DiscoveryWorkspaceOperation::GetLead,
+            Self::UpdateLead { .. } => DiscoveryWorkspaceOperation::UpdateLead,
         }
     }
 
@@ -231,6 +257,12 @@ impl DiscoveryWorkspaceActionPayload {
             Self::GetCampaign { campaign_id } => validate_uuid(*campaign_id, "campaign_id"),
             Self::ListCampaigns { request } => request.validate(),
             Self::ListLeads { request } => request.validate(),
+            Self::ListLeadCounts => Ok(()),
+            Self::GetLead { lead_id } => validate_uuid(*lead_id, "lead_id"),
+            Self::UpdateLead { lead_id, input } => {
+                validate_uuid(*lead_id, "lead_id")?;
+                input.validate()
+            }
         }
     }
 }
@@ -376,6 +408,165 @@ pub struct DiscoveryLeadPage {
     pub limit: u16,
 }
 
+/// One aggregated retained-Lead count for a taxonomy row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryLeadCountRow {
+    /// Taxonomy industry identifier.
+    pub industry_id: String,
+    /// Taxonomy vertical identifier; present when this row counts a vertical.
+    pub vertical_id: Option<String>,
+    /// Number of retained Leads in the workspace for this row.
+    pub count: u32,
+}
+
+/// Aggregated retained-Lead counts for taxonomy grids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryLeadCounts {
+    /// Total retained Leads in the workspace.
+    pub total: u32,
+    /// Counts per industry, highest first.
+    pub industries: Vec<DiscoveryLeadCountRow>,
+    /// Counts per vertical within their industry, highest first.
+    pub verticals: Vec<DiscoveryLeadCountRow>,
+}
+
+/// Funnel status vocabulary for a retained Lead, mirroring the Party
+/// relationship lifecycle (`client_active` displays as Converted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryLeadStatus {
+    /// Returned by Discovery, not yet accepted by the company.
+    Candidate,
+    /// Accepted as a prospect the company owns.
+    Accepted,
+    /// Qualified for commercial pursuit.
+    Qualified,
+    /// Parked without being ruled out.
+    Dormant,
+    /// Judged not worth pursuing.
+    Disqualified,
+    /// Converted to an active Client relationship.
+    ClientActive,
+}
+
+impl DiscoveryLeadStatus {
+    /// Map this Discovery status onto the Party relationship lifecycle.
+    pub const fn to_relationship_status(self) -> RelationshipStatus {
+        match self {
+            Self::Candidate => RelationshipStatus::Candidate,
+            Self::Accepted => RelationshipStatus::Accepted,
+            Self::Qualified => RelationshipStatus::Qualified,
+            Self::Dormant => RelationshipStatus::Dormant,
+            Self::Disqualified => RelationshipStatus::Disqualified,
+            Self::ClientActive => RelationshipStatus::Active,
+        }
+    }
+
+    /// Map a Party relationship status back onto the Discovery vocabulary.
+    pub const fn from_relationship_status(status: RelationshipStatus) -> Self {
+        match status {
+            RelationshipStatus::Candidate => Self::Candidate,
+            RelationshipStatus::Accepted => Self::Accepted,
+            RelationshipStatus::Qualified => Self::Qualified,
+            RelationshipStatus::Dormant => Self::Dormant,
+            RelationshipStatus::Disqualified => Self::Disqualified,
+            RelationshipStatus::Active => Self::ClientActive,
+            RelationshipStatus::Paused | RelationshipStatus::Former => Self::ClientActive,
+        }
+    }
+}
+
+/// Editable lead fields carried by an `update_lead` workspace action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryLeadUpdateInput {
+    /// Website override.
+    pub website: Option<String>,
+    /// Email override.
+    pub email: Option<String>,
+    /// Phone override.
+    pub phone: Option<String>,
+    /// LinkedIn profile URL.
+    pub linkedin_url: Option<String>,
+    /// Contact name (People leads).
+    pub contact_name: Option<String>,
+    /// Contact title (People leads).
+    pub contact_title: Option<String>,
+    /// Free-text notes.
+    pub notes: Option<String>,
+    /// Quality score from zero through 100.
+    pub score: Option<u16>,
+    /// Persona accountable for this Lead.
+    pub owner_persona_id: Option<String>,
+    /// Funnel status to move the Lead to.
+    pub status: Option<DiscoveryLeadStatus>,
+}
+
+impl DiscoveryLeadUpdateInput {
+    /// Validate every editable field against its bound.
+    pub fn validate(&self) -> Result<(), DiscoveryWorkspaceValidationError> {
+        for (value, field) in [
+            (&self.website, "website"),
+            (&self.email, "email"),
+            (&self.phone, "phone"),
+            (&self.linkedin_url, "linkedin_url"),
+            (&self.contact_name, "contact_name"),
+            (&self.contact_title, "contact_title"),
+        ] {
+            if let Some(value) = value {
+                validate_text(value, 2048, field)?;
+            }
+        }
+        if let Some(notes) = &self.notes {
+            validate_text(notes, 8000, "notes")?;
+        }
+        if let Some(score) = self.score {
+            if score > 100 {
+                return Err(DiscoveryWorkspaceValidationError::InvalidField("score"));
+            }
+        }
+        if let Some(owner) = &self.owner_persona_id {
+            validate_text(owner, 256, "owner_persona_id")?;
+        }
+        Ok(())
+    }
+}
+
+/// One retained Lead plus its editable profile fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryLeadDetail {
+    /// The immutable observation this profile edits.
+    #[serde(flatten)]
+    pub lead: DiscoveryBusinessLeadProjection,
+    /// Current funnel status.
+    pub status: DiscoveryLeadStatus,
+    /// Persona accountable for this Lead.
+    pub owner_persona_id: Option<String>,
+    /// Website override.
+    pub website_override: Option<String>,
+    /// Email override.
+    pub email: Option<String>,
+    /// Phone override.
+    pub phone_override: Option<String>,
+    /// LinkedIn profile URL.
+    pub linkedin_url: Option<String>,
+    /// Contact name (People leads).
+    pub contact_name: Option<String>,
+    /// Contact title (People leads).
+    pub contact_title: Option<String>,
+    /// Free-text notes.
+    pub notes: Option<String>,
+    /// Quality score from zero through 100.
+    pub score: Option<u16>,
+    /// Public key of the last editor, hex-encoded.
+    pub updated_by: Option<String>,
+    /// Time of the last edit.
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 /// Private result returned in a relay-signed workspace receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
@@ -399,6 +590,16 @@ pub enum DiscoveryWorkspaceResult {
     Leads {
         /// Complete entitled Lead page.
         page: DiscoveryLeadPage,
+    },
+    /// Aggregated retained-Lead counts.
+    LeadCounts {
+        /// Complete entitled count aggregation.
+        counts: DiscoveryLeadCounts,
+    },
+    /// One retained Lead with its editable profile.
+    Lead {
+        /// Complete entitled lead detail.
+        lead: Box<DiscoveryLeadDetail>,
     },
 }
 
@@ -476,6 +677,7 @@ fn validate_taxonomy_id(
 mod tests {
     use super::*;
     use crate::discovery::{DiscoverySource, DiscoverySourceConfig, DiscoverySourceMode};
+    use crate::party::{is_relationship_transition_allowed, RelationshipKind, RelationshipStatus};
 
     fn campaign() -> DiscoveryCampaignInput {
         DiscoveryCampaignInput {
@@ -519,6 +721,7 @@ mod tests {
             campaign_id: None,
             industry_id: None,
             vertical_id: None,
+            status: None,
             offset: 0,
             limit: 100,
         };
@@ -587,5 +790,90 @@ mod tests {
             serde_json::from_value(value).expect("decode legacy Campaign");
         assert_eq!(decoded.source_config, DiscoverySourceConfig::default());
         assert_eq!(decoded.validate(), Ok(()));
+    }
+
+    #[test]
+    fn lead_counts_round_trip_and_operation_mapping() {
+        let counts = DiscoveryLeadCounts {
+            total: 2,
+            industries: vec![DiscoveryLeadCountRow {
+                industry_id: "healthcare".into(),
+                vertical_id: None,
+                count: 2,
+            }],
+            verticals: vec![DiscoveryLeadCountRow {
+                industry_id: "healthcare".into(),
+                vertical_id: Some("dentists".into()),
+                count: 2,
+            }],
+        };
+        let value = serde_json::to_value(&counts).expect("serialize counts");
+        let decoded: DiscoveryLeadCounts = serde_json::from_value(value).expect("decode counts");
+        assert_eq!(decoded, counts);
+
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::ListLeadCounts,
+        };
+        assert_eq!(
+            request.payload.operation(),
+            DiscoveryWorkspaceOperation::ListLeadCounts
+        );
+        assert_eq!(request.validate(), Ok(()));
+
+        let result = DiscoveryWorkspaceResult::LeadCounts { counts };
+        let encoded: DiscoveryWorkspaceResult =
+            serde_json::from_value(serde_json::to_value(&result).expect("serialize"))
+                .expect("decode");
+        assert_eq!(encoded, result);
+    }
+
+    #[test]
+    fn lead_update_input_round_trips_and_uses_party_status_vocabulary() {
+        let input = DiscoveryLeadUpdateInput {
+            website: Some("https://acme.example".into()),
+            email: Some("hello@acme.example".into()),
+            phone: None,
+            linkedin_url: None,
+            contact_name: None,
+            contact_title: None,
+            notes: Some("Warm intro from Sipho".into()),
+            score: Some(82),
+            owner_persona_id: Some("chief-of-staff".into()),
+            status: Some(DiscoveryLeadStatus::Qualified),
+        };
+        assert_eq!(input.validate(), Ok(()));
+
+        let payload = DiscoveryWorkspaceActionPayload::UpdateLead {
+            lead_id: Uuid::new_v4(),
+            input,
+        };
+        assert_eq!(payload.operation(), DiscoveryWorkspaceOperation::UpdateLead);
+        assert_eq!(payload.validate(), Ok(()));
+
+        let get = DiscoveryWorkspaceActionPayload::GetLead {
+            lead_id: Uuid::new_v4(),
+        };
+        assert_eq!(get.operation(), DiscoveryWorkspaceOperation::GetLead);
+        assert_eq!(get.validate(), Ok(()));
+    }
+
+    #[test]
+    fn lead_status_uses_the_party_lifecycle_and_rejects_client_only_states() {
+        assert_eq!(
+            DiscoveryLeadStatus::Candidate.to_relationship_status(),
+            RelationshipStatus::Candidate
+        );
+        assert!(is_relationship_transition_allowed(
+            RelationshipKind::Lead,
+            RelationshipStatus::Candidate,
+            RelationshipStatus::Accepted,
+        ));
+        assert!(!is_relationship_transition_allowed(
+            RelationshipKind::Lead,
+            RelationshipStatus::Disqualified,
+            RelationshipStatus::Accepted,
+        ));
     }
 }

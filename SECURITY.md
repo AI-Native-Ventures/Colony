@@ -122,6 +122,32 @@ keys scoped to this deployment; they are not credentials to any AI vendor, and
 no member's subscription token is ever stored server-side. And an employee head
 (kind `30190`) is refused at ingest unless its author is a registered employee
 of that community, so minting a keypair and claiming employment does not work.
+The job head (kind `30191`) carries the same gate for the same reason: a worker
+reads the head to decide whether it still holds its lease, so a forged one is a
+way to stop somebody else's work or to report a result nobody produced.
+
+### The Job Queue
+
+Members supply the execution an employee needs, and the relay arbitrates who is
+executing what (`docs/design/company-employees.html`). Three rules there are
+security properties rather than conveniences:
+
+- **A worker may claim only its own human's jobs.** Each member's worker runs
+  on that member's machine under that member's AI-vendor account. Letting one
+  seat pick up another member's work would be account sharing in effect, and
+  can get a subscription banned. The relay checks the claimant against the
+  job's originator; a job whose human is offline waits rather than being
+  rerouted. There is deliberately no setting that relaxes this.
+- **A delegated job keeps the human it started with.** When an employee files
+  a job it must name the job it is delegating from, and the relay reads the
+  originator off that parent row rather than believing the event. Naming
+  somebody else's job does not borrow their name: the parent must be a job
+  that same employee owes.
+- **Only the current lease holder may finish a job.** A pubkey does not
+  identify a worker, because one person's laptop and desktop share an
+  identity. Every lease carries an attempt number that rises on each claim,
+  and heartbeats and outcomes must name it, so a worker that hung and was
+  replaced cannot overwrite the live worker's result with a stale one.
 
 ### Input Validation
 

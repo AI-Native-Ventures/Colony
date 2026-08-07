@@ -119,13 +119,64 @@ impl EventQuery {
     }
 }
 
+/// What a replaceable-write path did with the event a client submitted.
+///
+/// Replaceable (NIP-16) and parameterized-replaceable (NIP-33) writes resolve a
+/// last-write-wins race, so "not inserted on this call" has two very different
+/// meanings that callers must be able to tell apart:
+///
+/// - the identical event was already stored, so the client's write did land --
+///   an idempotent repeat, which is what a retried HTTP request looks like;
+/// - a different event dominated it, so the submitted event is not stored at
+///   all and never will be.
+///
+/// Reporting the second as if it were the first is what let `buzz grants
+/// revoke` print success while the grant stayed active (issue #100), so this
+/// enum replaces the bare `was_inserted` boolean that could not express it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplaceOutcome {
+    /// The submitted event was newly stored by this call.
+    Inserted,
+    /// The identical event (same event id) was already stored. Nothing changed,
+    /// but the submitted event IS in the store.
+    AlreadyStored,
+    /// A different event at the same address dominates the submitted one under
+    /// last-write-wins, so the submitted event was discarded and is not stored.
+    Superseded {
+        /// Raw 32-byte id of the event that won the address.
+        winner_event_id: Vec<u8>,
+    },
+}
+
+impl ReplaceOutcome {
+    /// Whether this call inserted the submitted event.
+    ///
+    /// False for both discard cases, so it is exactly the old `was_inserted`
+    /// boolean: callers that only gate fan-out on "did I write a new row" can
+    /// keep using it unchanged.
+    pub fn was_inserted(&self) -> bool {
+        matches!(self, Self::Inserted)
+    }
+
+    /// Whether the submitted event is in the store at the end of the call,
+    /// whether or not this particular call is what put it there.
+    pub fn is_stored(&self) -> bool {
+        matches!(self, Self::Inserted | Self::AlreadyStored)
+    }
+}
+
 /// Result of atomically inserting a kind:7 reaction event and its reaction row.
 #[derive(Debug)]
 pub enum ReactionEventInsertOutcome {
     /// Target event was absent in this community, or was soft-deleted. No writes committed.
     TargetMissing,
     /// The active `(target, actor, emoji)` reaction already exists. No event was stored.
-    Duplicate,
+    Duplicate {
+        /// Raw id of the kind:7 event holding the active reaction, when the row
+        /// records one. `None` for rows with no linked event, which the relay
+        /// reports as a plain refusal because it cannot name a winner.
+        active_reaction_event_id: Option<Vec<u8>>,
+    },
     /// Reaction row and event transaction committed.
     Inserted {
         /// Stored reaction event.
@@ -1673,8 +1724,24 @@ pub async fn insert_reaction_event_with_thread_metadata(
     .await?;
 
     if !reaction_inserted {
+        // Name the kind:7 event that holds the slot, so the relay can tell an
+        // idempotent repeat of that very event from a different one losing.
+        let holder: Option<(Option<Vec<u8>>,)> = sqlx::query_as(
+            "SELECT reaction_event_id FROM reactions \
+             WHERE community_id = $1 AND event_id = $2 AND event_created_at = $3 \
+               AND pubkey = $4 AND emoji = $5 AND removed_at IS NULL LIMIT 1",
+        )
+        .bind(community_id.as_uuid())
+        .bind(target_event_id)
+        .bind(target_created_at)
+        .bind(actor_pubkey)
+        .bind(emoji)
+        .fetch_optional(&mut *tx)
+        .await?;
         tx.rollback().await?;
-        return Ok(ReactionEventInsertOutcome::Duplicate);
+        return Ok(ReactionEventInsertOutcome::Duplicate {
+            active_reaction_event_id: holder.and_then(|row| row.0),
+        });
     }
 
     let (stored_event, was_inserted) = insert_event_with_thread_metadata_tx(
@@ -2632,7 +2699,10 @@ mod tests {
         )
         .await
         .expect("duplicate reaction insert");
-        assert!(matches!(duplicate, ReactionEventInsertOutcome::Duplicate));
+        assert!(matches!(
+            duplicate,
+            ReactionEventInsertOutcome::Duplicate { .. }
+        ));
 
         let duplicate_event = get_event_by_id(&pool, community, second.id.as_bytes())
             .await

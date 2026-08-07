@@ -640,7 +640,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 43);
+        assert_eq!(migrations.len(), 49);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -700,6 +700,41 @@ mod tests {
         assert!(discovery_trials.contains("CREATE FUNCTION provision_discovery_trial"));
         assert!(discovery_trials.contains("AFTER INSERT ON communities"));
         assert!(discovery_trials.contains("communities_provision_discovery_trial"));
+        assert_eq!(migrations[44].version, 45);
+        assert!(migrations[44].sql.as_str().contains("'list_lead_counts'"));
+        assert_eq!(migrations[45].version, 46);
+        assert!(migrations[45]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE discovery_lead_profiles"));
+        assert_eq!(migrations[46].version, 47);
+        assert!(migrations[46]
+            .sql
+            .as_str()
+            .contains("ALTER TABLE jobs ADD COLUMN provider TEXT"));
+        // Channel-id → community lookups (bc9e6528a7): covering
+        // (INCLUDE (community_id)) and partial (WHERE deleted_at IS NULL) so
+        // Db::communities_of_channels / Db::community_of_channel can serve
+        // index-only without a community_id predicate. Deliberately NOT
+        // UNIQUE — `id` alone is not unique in this table, because the same
+        // channel id can appear under more than one community.
+        assert_eq!(migrations[47].version, 48);
+        let channels_id_lookup = migrations[47].sql.as_str();
+        assert!(channels_id_lookup.contains("idx_channels_id_live"));
+        assert!(channels_id_lookup.contains("INCLUDE (community_id)"));
+        assert!(channels_id_lookup.contains("WHERE deleted_at IS NULL"));
+        assert!(
+            !channels_id_lookup.contains("CREATE UNIQUE INDEX"),
+            "channel ids are not unique across communities; a UNIQUE index would encode a false constraint and fail to build"
+        );
+
+        // Max-length custom emoji reactions (2ea9385015): a 64-character
+        // shortcode is stored wrapped in colons, so `:shortcode:` is 66.
+        assert_eq!(migrations[48].version, 49);
+        assert!(migrations[48]
+            .sql
+            .as_str()
+            .contains("ALTER TABLE reactions ALTER COLUMN emoji TYPE VARCHAR(66)"));
         assert!(migrations[0]
             .sql
             .as_str()
@@ -1022,6 +1057,28 @@ mod tests {
         // Community-scoped, so it must never be registered as operator-global.
         assert!(!employees.contains("_operator_global_tables"));
 
+        // The job queue. The lease columns and the status they belong to have
+        // to agree, or the queue has lost track of who is working: an open job
+        // showing a holder, or a leased job with no deadline, would each be a
+        // job nobody could reason about. The check is in the schema so no
+        // future code path can write that state at all.
+        assert_eq!(migrations[43].version, 44);
+        let jobs = migrations[43].sql.as_str();
+        assert!(jobs.contains("CREATE TABLE IF NOT EXISTS jobs"));
+        assert!(jobs.contains("PRIMARY KEY (community_id, job_id)"));
+        assert!(jobs
+            .contains("(status = 'open' AND lease_holder IS NULL AND lease_expires_at IS NULL)"));
+        assert!(jobs.contains(
+            "(status = 'leased' AND lease_holder IS NOT NULL AND lease_expires_at IS NOT NULL)"
+        ));
+        // The monotonic head stamp: NIP-33 resolves replaceable events by
+        // `created_at` at one-second resolution, and a job routinely moves
+        // twice in a second, so heads stamped with the wall clock tie and
+        // readers keep the stale one.
+        assert!(jobs.contains("head_at          BIGINT NOT NULL DEFAULT 0"));
+        // Community-scoped, so it must never be registered as operator-global.
+        assert!(!jobs.contains("_operator_global_tables"));
+
         // Use-limited invite links: durable relay_invites table stores only
         // the SHA-256 of an opaque v2 code, scoped by community_id. Never
         // listed in _operator_global_tables — it is community-scoped.
@@ -1045,6 +1102,10 @@ mod tests {
         assert!(
             desired_schema.contains("CREATE TABLE join_policy_acceptances"),
             "desired-state schema must include join-policy evidence used by invite claims",
+        );
+        assert!(
+            desired_schema.contains("idx_channels_id_live"),
+            "desired-state schema must carry the channel-id lookup covering index",
         );
 
         // Replica heartbeat (this branch, renumbered to 0026 after
@@ -1406,7 +1467,7 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(26));
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(49));
     }
 
     #[tokio::test]

@@ -308,6 +308,9 @@ fn is_v1_request(request: &DiscoveryWorkspaceRequest) -> bool {
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
             ..
         } => false,
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListLeadCounts => false,
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetLead { .. }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateLead { .. } => false,
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::Access
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetCampaign { .. }
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListCampaigns { .. }
@@ -336,6 +339,8 @@ fn receipt_for_wire_version(
                 }
             }
             DiscoveryWorkspaceResult::Access { .. } => {}
+            DiscoveryWorkspaceResult::LeadCounts { .. } => {}
+            DiscoveryWorkspaceResult::Lead { .. } => {}
         }
     }
     compatible
@@ -381,6 +386,12 @@ fn validate_receipt(receipt: &DiscoveryWorkspaceReceipt) -> Result<(), Discovery
         ) | (
             DiscoveryWorkspaceOperation::ListLeads,
             DiscoveryWorkspaceResult::Leads { .. }
+        ) | (
+            DiscoveryWorkspaceOperation::ListLeadCounts,
+            DiscoveryWorkspaceResult::LeadCounts { .. }
+        ) | (
+            DiscoveryWorkspaceOperation::GetLead | DiscoveryWorkspaceOperation::UpdateLead,
+            DiscoveryWorkspaceResult::Lead { .. }
         )
     );
     if !matches {
@@ -399,6 +410,9 @@ fn operation_tag(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
+        DiscoveryWorkspaceOperation::ListLeadCounts => "list_lead_counts",
+        DiscoveryWorkspaceOperation::GetLead => "get_lead",
+        DiscoveryWorkspaceOperation::UpdateLead => "update_lead",
     }
 }
 
@@ -410,6 +424,9 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkspaceOperation, Discovery
         "get_campaign" => Ok(DiscoveryWorkspaceOperation::GetCampaign),
         "list_campaigns" => Ok(DiscoveryWorkspaceOperation::ListCampaigns),
         "list_leads" => Ok(DiscoveryWorkspaceOperation::ListLeads),
+        "list_lead_counts" => Ok(DiscoveryWorkspaceOperation::ListLeadCounts),
+        "get_lead" => Ok(DiscoveryWorkspaceOperation::GetLead),
+        "update_lead" => Ok(DiscoveryWorkspaceOperation::UpdateLead),
         _ => Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
             "workspace action",
         )),
@@ -667,5 +684,64 @@ mod tests {
         assert_eq!(parsed.request, request);
         assert!(event.content.contains("update_campaign_sources"));
         assert!(!event.content.contains("api_key"));
+    }
+
+    #[test]
+    fn list_lead_counts_is_v2_only() {
+        let relay = Keys::generate().public_key();
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::ListLeadCounts,
+        };
+        assert!(
+            build_discovery_workspace_action_for_version(
+                DiscoveryWorkspaceWireVersion::V2,
+                relay,
+                &request,
+            )
+            .is_ok(),
+            "v2 must carry the new operation"
+        );
+        assert!(
+            build_discovery_workspace_action_for_version(
+                DiscoveryWorkspaceWireVersion::V1,
+                relay,
+                &request,
+            )
+            .is_err(),
+            "v1 must reject an operation it cannot represent"
+        );
+    }
+
+    #[test]
+    fn lead_update_round_trips_as_a_private_canonical_action() {
+        let relay = Keys::generate();
+        let actor = Keys::generate();
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            payload: DiscoveryWorkspaceActionPayload::UpdateLead {
+                lead_id: Uuid::new_v4(),
+                input: buzz_core::discovery_workspace::DiscoveryLeadUpdateInput {
+                    website: Some("https://acme.example".into()),
+                    email: None,
+                    phone: None,
+                    linkedin_url: None,
+                    contact_name: None,
+                    contact_title: None,
+                    notes: None,
+                    score: None,
+                    owner_persona_id: None,
+                    status: Some(buzz_core::discovery_workspace::DiscoveryLeadStatus::Accepted),
+                },
+            },
+        };
+        let event = build_discovery_workspace_action(relay.public_key(), &request)
+            .expect("build update lead")
+            .sign_with_keys(&actor)
+            .expect("sign update lead");
+        let parsed = parse_discovery_workspace_action(&event).expect("parse update lead");
+        assert_eq!(parsed.request, request);
     }
 }

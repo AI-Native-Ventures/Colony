@@ -29,6 +29,7 @@ import {
   industryVerticalSearch,
   peopleCampaignDetailSearch,
   roleCampaignsSearch,
+  sortByLeadCountDesc,
   verticalCampaignsSearch,
 } from "./discoveryLayout";
 import { CampaignListView } from "./CampaignListView";
@@ -335,7 +336,7 @@ export function DiscoveryWorkspace({
         />
         <RoleGrid
           fieldName={field.name}
-          roles={visibleRoles}
+          roles={sortByLeadCountDesc(visibleRoles)}
           onSelect={(selectedRole) =>
             void goDiscovery(roleCampaignsSearch(field.id, selectedRole.id))
           }
@@ -420,7 +421,7 @@ export function DiscoveryWorkspace({
         <EntitlementNotice entitlement={entitlement} />
         <RoleGrid
           fieldName={field.name}
-          roles={visibleRoles}
+          roles={sortByLeadCountDesc(visibleRoles)}
           onSelect={(selectedRole) =>
             void goDiscovery(roleCampaignsSearch(field.id, selectedRole.id))
           }
@@ -462,7 +463,7 @@ export function DiscoveryWorkspace({
           viewMode="grid"
         />
         <FieldGrid
-          fields={visibleFields}
+          fields={sortByLeadCountDesc(visibleFields)}
           onSelect={(selectedField) =>
             void goDiscovery(fieldRolesSearch(selectedField.id))
           }
@@ -526,7 +527,7 @@ export function DiscoveryWorkspace({
               ),
             )
           }
-          verticals={visibleVerticals}
+          verticals={sortByLeadCountDesc(visibleVerticals)}
         />
         <EntitlementNotice entitlement={entitlement} />
         <CampaignListView
@@ -626,7 +627,7 @@ export function DiscoveryWorkspace({
               verticalCampaignsSearch(industry.id, selectedVertical.id),
             )
           }
-          verticals={visibleVerticals}
+          verticals={sortByLeadCountDesc(visibleVerticals)}
         />
       </div>
     );
@@ -683,7 +684,7 @@ export function DiscoveryWorkspace({
         viewMode="grid"
       />
       <IndustryGrid
-        industries={visibleIndustries}
+        industries={sortByLeadCountDesc(visibleIndustries)}
         onSelect={(industryToOpen) =>
           void goDiscovery(industryVerticalSearch(industryToOpen.id))
         }

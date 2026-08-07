@@ -3,13 +3,18 @@ mod client;
 mod commands;
 pub mod company_scan;
 mod error;
+mod links;
+pub mod llm;
+pub mod seat;
 mod validate;
+pub mod worker;
 
 use clap::{Parser, Subcommand};
-use client::BuzzClient;
 use error::CliError;
 use nostr::Keys;
 use uuid::Uuid;
+
+pub use client::BuzzClient;
 
 /// Run the Buzz CLI from raw arguments (including `argv[0]`).
 ///
@@ -270,6 +275,9 @@ enum Cmd {
     /// Hire and list the workspace's employees (kinds 9045/30190)
     #[command(subcommand)]
     Employees(EmployeesCmd),
+    /// File, claim, heartbeat, and finish employee jobs (kinds 43010-43013)
+    #[command(subcommand)]
+    Jobs(JobsCmd),
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -674,6 +682,36 @@ pub enum DiscoverySourceArg {
     ExaSearch,
 }
 
+/// Funnel status accepted by `buzz discovery lead-update`.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum DiscoveryLeadStatusArg {
+    #[value(name = "candidate")]
+    Candidate,
+    #[value(name = "accepted")]
+    Accepted,
+    #[value(name = "qualified")]
+    Qualified,
+    #[value(name = "dormant")]
+    Dormant,
+    #[value(name = "disqualified")]
+    Disqualified,
+    #[value(name = "client_active")]
+    ClientActive,
+}
+
+impl From<DiscoveryLeadStatusArg> for buzz_core::discovery_workspace::DiscoveryLeadStatus {
+    fn from(value: DiscoveryLeadStatusArg) -> Self {
+        match value {
+            DiscoveryLeadStatusArg::Candidate => Self::Candidate,
+            DiscoveryLeadStatusArg::Accepted => Self::Accepted,
+            DiscoveryLeadStatusArg::Qualified => Self::Qualified,
+            DiscoveryLeadStatusArg::Dormant => Self::Dormant,
+            DiscoveryLeadStatusArg::Disqualified => Self::Disqualified,
+            DiscoveryLeadStatusArg::ClientActive => Self::ClientActive,
+        }
+    }
+}
+
 /// Workspace-scoped business Discovery operations.
 #[derive(Subcommand)]
 pub enum DiscoveryCmd {
@@ -790,6 +828,60 @@ pub enum DiscoveryCmd {
         /// Page size from 1 through 100.
         #[arg(long, default_value_t = 25)]
         limit: u16,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// List retained-Lead counts per industry and vertical
+    LeadsCounts {
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Read one retained Lead with its editable profile
+    LeadGet {
+        /// Lead UUID.
+        #[arg(long)]
+        lead: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Update one retained Lead's editable profile and funnel status
+    LeadUpdate {
+        /// Lead UUID.
+        #[arg(long)]
+        lead: Uuid,
+        /// Website override.
+        #[arg(long)]
+        website: Option<String>,
+        /// Email override.
+        #[arg(long)]
+        email: Option<String>,
+        /// Phone override.
+        #[arg(long)]
+        phone: Option<String>,
+        /// LinkedIn profile URL.
+        #[arg(long)]
+        linkedin_url: Option<String>,
+        /// Contact name (People leads).
+        #[arg(long)]
+        contact_name: Option<String>,
+        /// Contact title (People leads).
+        #[arg(long)]
+        contact_title: Option<String>,
+        /// Free-text notes.
+        #[arg(long)]
+        notes: Option<String>,
+        /// Quality score 0-100.
+        #[arg(long)]
+        score: Option<u16>,
+        /// Owner persona id.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Funnel status.
+        #[arg(long, value_enum)]
+        status: Option<DiscoveryLeadStatusArg>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -2495,6 +2587,115 @@ pub enum EmployeesCmd {
     List,
 }
 
+/// Subcommands for `buzz jobs`: the queue an employee works from (kinds
+/// 43010-43013). Filing creates work; claiming takes an exclusive lease on
+/// it; heartbeating holds that lease; finishing reports back. A lease nobody
+/// renews lapses and the job returns to the queue, which is how work survives
+/// the machine running it dying. See `docs/design/company-employees.html`.
+#[derive(Subcommand)]
+pub enum JobsCmd {
+    /// File a job against an employee (kind 43010). The event id is the job
+    /// id; the relay answers by publishing the job head.
+    File {
+        /// The employee's pubkey (64 hex characters)
+        #[arg(long)]
+        employee: String,
+        /// What to do
+        #[arg(long)]
+        instruction: String,
+        /// Channel UUID this job came from
+        #[arg(long)]
+        channel: Option<String>,
+        /// Thread root event id this job came from
+        #[arg(long)]
+        thread: Option<String>,
+        /// The job being delegated from. Required when the filer is itself
+        /// an employee: the job stays the parent's human's, not the
+        /// delegating employee's.
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Take the lease on a job (kind 43011). Only the job's own human may
+    /// claim it. Read the head afterwards to find out whether you won.
+    Claim {
+        /// The job id (64 hex characters)
+        #[arg(long)]
+        job: String,
+    },
+    /// Push the lease deadline out (kind 43012). Run it more often than the
+    /// lease is long, or the job goes back in the queue.
+    Beat {
+        /// The job id (64 hex characters)
+        #[arg(long)]
+        job: String,
+        /// The `attempts` count the head showed when you claimed. Identifies
+        /// which lease you hold, so a worker that hung and was replaced
+        /// cannot act on a lease it has lost.
+        #[arg(long)]
+        attempt: i32,
+    },
+    /// Report a job finished (kind 43013). Only the current lease holder may.
+    Done {
+        /// The job id (64 hex characters)
+        #[arg(long)]
+        job: String,
+        /// The `attempts` count the head showed when you claimed
+        #[arg(long)]
+        attempt: i32,
+        /// The result
+        #[arg(long)]
+        result: String,
+        /// Provider that executed the job; stamped on the head
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model that executed the job; stamped on the head
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// Report a job failed (kind 43013). Only the current lease holder may.
+    Fail {
+        /// The job id (64 hex characters)
+        #[arg(long)]
+        job: String,
+        /// The `attempts` count the head showed when you claimed
+        #[arg(long)]
+        attempt: i32,
+        /// Why it failed
+        #[arg(long)]
+        reason: String,
+    },
+    /// List job heads (kind 30191)
+    List {
+        /// Only jobs in this state: open, leased, done, failed, abandoned
+        #[arg(long)]
+        status: Option<String>,
+        /// Only jobs involving this pubkey, as employee or as owner
+        #[arg(long)]
+        involving: Option<String>,
+    },
+    /// Show one job head
+    Show {
+        /// The job id (64 hex characters)
+        #[arg(long)]
+        job: String,
+    },
+    /// Run as a worker: poll for your open jobs, claim one, execute the
+    /// instruction via an LLM, heartbeat the lease, and post the result.
+    /// Reads the default seat config (`dirs::config_dir()/buzz/seat.toml`)
+    /// for provider/model bindings.
+    Work {
+        /// Only work jobs for this employee (pubkey hex)
+        #[arg(long)]
+        employee: Option<String>,
+        /// Seconds between polls when no open work exists
+        #[arg(long, default_value = "5")]
+        poll: u64,
+        /// Path to seat config file
+        #[arg(long)]
+        config: Option<String>,
+    },
+}
+
 /// Subcommands for `buzz asks`, the agent-facing surface of Colony's
 /// interrupt protocol (kinds 44300-44302). A worker raises to its own
 /// leader, a leader escalates to the executive, and only the executive
@@ -2722,6 +2923,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Grants(sub) => commands::grants::dispatch(sub, &client).await,
         Cmd::Decisions(sub) => commands::decisions::dispatch(sub, &client).await,
         Cmd::Employees(sub) => commands::employees::dispatch(sub, &client).await,
+        Cmd::Jobs(sub) => commands::jobs::dispatch(sub, &client).await,
         Cmd::Pack(_) => unreachable!("handled above"),
     }
 }
@@ -2820,6 +3022,26 @@ mod tests {
             vec!["buzz", "discovery", "campaign-get", "--campaign", campaign],
             vec!["buzz", "discovery", "campaign-list", "--limit", "100"],
             vec!["buzz", "discovery", "leads-list", "--campaign", campaign],
+            vec!["buzz", "discovery", "leads-counts"],
+            vec![
+                "buzz",
+                "discovery",
+                "leads-counts",
+                "--idempotency-key",
+                retry,
+            ],
+            vec!["buzz", "discovery", "lead-get", "--lead", campaign],
+            vec![
+                "buzz",
+                "discovery",
+                "lead-update",
+                "--lead",
+                campaign,
+                "--status",
+                "accepted",
+                "--notes",
+                "Warm intro",
+            ],
             vec![
                 "buzz",
                 "discovery",
@@ -3172,6 +3394,7 @@ mod tests {
             "grants",
             "initiatives",
             "issues",
+            "jobs",
             "ledger",
             "media",
             "mem",

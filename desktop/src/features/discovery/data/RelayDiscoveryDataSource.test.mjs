@@ -30,9 +30,10 @@ function harness(
   let runAction = null;
   let runActions = 0;
   let run = null;
+  let leadStatus = null;
   const publishedEvents = [];
   const workerId = "1f507956-6f08-4e6a-bf38-3a7011565047";
-  const lead = {
+  let lead = {
     lead_id: "b53e6fb2-2a91-45bc-a382-60feb217767a",
     campaign_id: "",
     industry_id: "automotive",
@@ -263,6 +264,52 @@ function harness(
           };
         } else if (operation === "get_campaign") {
           result = { result: "campaign", campaign };
+        } else if (operation === "list_lead_counts") {
+          result = {
+            result: "lead_counts",
+            counts: {
+              total: 1,
+              industries: [
+                { industryId: "automotive", verticalId: null, count: 1 },
+              ],
+              verticals: [
+                {
+                  industryId: "automotive",
+                  verticalId: "auto-repair",
+                  count: 1,
+                },
+              ],
+            },
+          };
+        } else if (operation === "get_lead") {
+          result = {
+            result: "lead",
+            lead: {
+              ...lead,
+              status: leadStatus ?? "candidate",
+              owner: null,
+              notes: null,
+              updatedAt: null,
+            },
+          };
+        } else if (operation === "update_lead") {
+          const input = request.payload.input;
+          leadStatus = input.status ?? leadStatus ?? "candidate";
+          lead = {
+            ...lead,
+            website: input.website ?? lead.website,
+            phone: input.phone ?? lead.phone,
+          };
+          result = {
+            result: "lead",
+            lead: {
+              ...lead,
+              status: leadStatus,
+              owner: input.owner_persona_id ?? null,
+              notes: input.notes ?? null,
+              updatedAt: NOW,
+            },
+          };
         } else {
           result = {
             result: "leads",
@@ -537,6 +584,21 @@ test("inactive workspaces stay on the cost-free demo and cannot create live reco
   assert.deepEqual(locked.operations, ["access"]);
 });
 
+test("a relay without Discovery kinds falls back to the cost-free demo", async () => {
+  const unsupported = harness(false);
+  unsupported.dependencies.publish = async () => {
+    throw new Error("restricted: unknown event kind");
+  };
+  const source = new RelayDiscoveryDataSource(unsupported.dependencies);
+
+  assert.deepEqual(await source.getEntitlement(), {
+    feature: "discovery_engine",
+    state: "not_entitled",
+    experience: "demo",
+  });
+  assert.ok((await source.getIndustries()).length > 0);
+});
+
 test("a receipt not signed by the tenant relay cannot grant Discovery access", async () => {
   const forged = harness(true, generateSecretKey());
   const source = new RelayDiscoveryDataSource(forged.dependencies);
@@ -610,4 +672,41 @@ test("a released V1 worker receipt still wakes the V2 desktop run loop", async (
     events.push(event);
   }
   assert.equal(events.at(-1).type, "session_completed");
+});
+
+test("live lead counts come from the workspace operation", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const counts = await source.getLeadCounts();
+  assert.equal(counts.total, 1);
+  assert.equal(counts.industries[0].industryId, "automotive");
+  assert.equal(counts.verticals[0].verticalId, "auto-repair");
+  assert.ok(live.operations.includes("list_lead_counts"));
+});
+
+test("live industries and verticals carry relay lead counts", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const industries = await source.getIndustries();
+  const automotive = industries.find((item) => item.id === "automotive");
+  assert.equal(automotive?.leadCount, 1);
+  const verticals = await source.getVerticals("automotive");
+  const repair = verticals.find((item) => item.id === "auto-repair");
+  assert.equal(repair?.leadCount, 1);
+});
+
+test("live lead get and update round-trip through the workspace ops", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const detail = await source.getLead("b53e6fb2-2a91-45bc-a382-60feb217767a");
+  assert.equal(detail.status, "candidate");
+
+  const updated = await source.updateLead(detail.id, {
+    status: "accepted",
+    notes: "Warm intro",
+  });
+  assert.equal(updated.status, "accepted");
+  assert.equal(updated.notes, "Warm intro");
+  assert.ok(live.operations.includes("get_lead"));
+  assert.ok(live.operations.includes("update_lead"));
 });

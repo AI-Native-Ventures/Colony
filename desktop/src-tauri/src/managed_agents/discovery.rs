@@ -10,7 +10,15 @@ use crate::managed_agents::{
     HarnessSource,
 };
 
+mod nvm;
 mod runtime_metadata;
+
+// Re-exported so every existing path to these keeps working: `runtime.rs`
+// reaches `find_nvm_default_bin` through `managed_agents`, and the tests reach
+// all three through `discovery`.
+pub use nvm::find_nvm_default_bin;
+#[cfg(test)]
+pub(crate) use nvm::{is_safe_nvm_tag, parse_semver_tag};
 
 pub(crate) use runtime_metadata::KnownAcpRuntime;
 
@@ -905,95 +913,6 @@ fn is_login_shell_path_uninit() -> bool {
     )
 }
 
-/// Return `true` when `tag` is a safe nvm alias/version tag that can be joined
-/// onto a `PathBuf` without escaping the nvm root.
-///
-/// nvm uses tags like `v22.1.0` or `lts/hydrogen`. We allow ASCII alphanumeric
-/// plus `. - / _` and require that no path component is `..` and that the tag
-/// does not start with `/` (which would replace the base in `PathBuf::join`).
-fn is_safe_nvm_tag(tag: &str) -> bool {
-    if tag.is_empty() {
-        return false;
-    }
-    // An absolute path in the alias file would let PathBuf::join silently
-    // replace the nvm root with an attacker-controlled path.
-    if tag.starts_with('/') {
-        return false;
-    }
-    // Reject any .. component to prevent upward traversal.
-    for component in tag.split('/') {
-        if component == ".." {
-            return false;
-        }
-    }
-    // Allow only the characters nvm uses in real tag names.
-    tag.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '/' | '_'))
-}
-
-/// Locate the `bin` directory for nvm's default Node.js version.
-///
-/// Reads `~/.nvm/alias/default`; resolves at most one alias hop to handle
-/// nvm alias chains; falls back to the highest-semver directory under
-/// `~/.nvm/versions/node/`. Returns the `bin` subdirectory only when it exists.
-///
-/// Cheap: at most two file reads or one `read_dir`. Never cached — computed
-/// fresh per call so a mid-session `nvm install` is visible at the next spawn.
-pub fn find_nvm_default_bin(home: &Path) -> Option<PathBuf> {
-    let nvm_root = home.join(".nvm");
-    let versions_root = nvm_root.join("versions").join("node");
-
-    // 1. Try alias/default, with at most one hop.
-    let default_alias = nvm_root.join("alias").join("default");
-    if let Ok(content) = std::fs::read_to_string(&default_alias) {
-        let tag = content.trim().to_string();
-        if is_safe_nvm_tag(&tag) {
-            let candidate = versions_root.join(&tag).join("bin");
-            if candidate.is_dir() {
-                return Some(candidate);
-            }
-            // One alias hop: ~/.nvm/alias/<tag>
-            let hop_file = nvm_root.join("alias").join(&tag);
-            if let Ok(hop_content) = std::fs::read_to_string(&hop_file) {
-                let hop_tag = hop_content.trim().to_string();
-                if is_safe_nvm_tag(&hop_tag) {
-                    let hop_candidate = versions_root.join(&hop_tag).join("bin");
-                    if hop_candidate.is_dir() {
-                        return Some(hop_candidate);
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Fall back to highest-semver directory under ~/.nvm/versions/node/.
-    let entries = std::fs::read_dir(&versions_root).ok()?;
-    let best = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name();
-            let s = name.to_string_lossy().into_owned();
-            parse_semver_tag(&s).map(|v| (v, s))
-        })
-        .max_by(|(a, _), (b, _)| a.cmp(b));
-
-    let (_, tag) = best?;
-    let bin = versions_root.join(&tag).join("bin");
-    bin.is_dir().then_some(bin)
-}
-
-/// Parse a `vMAJ.MIN.PATCH` (or `vMAJ.MIN.PATCH-extra`) tag into a numeric
-/// triple for semver comparison.
-fn parse_semver_tag(s: &str) -> Option<(u64, u64, u64)> {
-    let s = s.strip_prefix('v')?;
-    let mut parts = s.splitn(3, '.');
-    let major = parts.next()?.parse::<u64>().ok()?;
-    let minor = parts.next()?.parse::<u64>().ok()?;
-    let patch_str = parts.next()?;
-    let patch = patch_str.split('-').next()?.parse::<u64>().ok()?;
-    Some((major, minor, patch))
-}
-
 pub(crate) fn find_command(command: &str) -> Option<PathBuf> {
     resolve_command(command)
 }
@@ -1208,66 +1127,107 @@ pub(crate) fn probe_codex_acp_version_with_path(
     use std::io::{Read as _, Seek as _, SeekFrom};
     use std::time::{Duration, Instant};
     const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+    // Linux refuses to exec a file any process still holds open for writing and
+    // fails with ETXTBSY. A perfectly good adapter hits this: the installer that
+    // just wrote it may not have closed its descriptor, and any concurrent fork
+    // in this process inherits that descriptor for the window before it execs.
+    // The condition clears in milliseconds, so retry rather than report the
+    // adapter missing. macOS does not enforce the rule, so only Linux retries.
+    const EXEC_ATTEMPTS: usize = 10;
+    const EXEC_RETRY_DELAY: Duration = Duration::from_millis(50);
+    // glibc's `posix_spawn`, which `Command::spawn` uses on Linux, does not
+    // report a failed exec to the caller: it succeeds, and the child exits 127
+    // having written nothing. So a transient ETXTBSY arrives here as an exit
+    // status, never as a spawn error, and both have to be caught.
+    const EXEC_FAILED_EXIT_CODE: i32 = 127;
 
-    // A regular file returns EOF at its current size even when a descendant
-    // inherits its descriptor, bounding the post-exit read cross-platform.
-    let mut tmp = tempfile::tempfile().ok()?;
-
-    let mut command = Command::new(binary_path);
-    command.arg("--version");
-    if let Some(path) = augmented_path {
-        command.env("PATH", path);
-    }
-    crate::util::configure_no_window(&mut command);
-    let mut child = command
-        .stdout(tmp.try_clone().ok()?)
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-
-    // Poll until the deadline rather than blocking on stdout EOF.
+    // Every attempt shares one deadline, so retrying can never stretch the
+    // probe past the timeout a caller is already prepared to wait.
     let deadline = Instant::now() + VERSION_PROBE_TIMEOUT;
-    let exit_status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if Instant::now() >= deadline {
+
+    for attempt in 1..=EXEC_ATTEMPTS {
+        let retries_left = attempt < EXEC_ATTEMPTS && Instant::now() < deadline;
+
+        // A regular file returns EOF at its current size even when a descendant
+        // inherits its descriptor, bounding the post-exit read cross-platform.
+        // Fresh per attempt so a previous attempt's bytes cannot be read back.
+        let mut tmp = tempfile::tempfile().ok()?;
+
+        // Rebuilt per attempt: spawning consumes the stdout handle.
+        let mut command = Command::new(binary_path);
+        command.arg("--version");
+        if let Some(path) = augmented_path {
+            command.env("PATH", path);
+        }
+        crate::util::configure_no_window(&mut command);
+        let spawned = command
+            .stdout(tmp.try_clone().ok()?)
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        let mut child = match spawned {
+            Ok(child) => child,
+            // Not the path glibc takes, but musl and other platforms do report
+            // the errno, and then it is the same transient.
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && retries_left => {
+                std::thread::sleep(EXEC_RETRY_DELAY);
+                continue;
+            }
+            Err(_) => return None,
+        };
+
+        // Poll until the deadline rather than blocking on stdout EOF.
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(_) => {
                     let _ = child.kill();
                     let _ = child.wait();
                     return None;
                 }
-                std::thread::sleep(Duration::from_millis(50));
             }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+        };
+
+        // Read at most 4 KiB from the regular file without blocking.
+        tmp.seek(SeekFrom::Start(0)).ok()?;
+        let mut buf = Vec::with_capacity(128);
+        let _ = (&mut tmp as &mut dyn std::io::Read)
+            .take(4096)
+            .read_to_end(&mut buf);
+
+        if !exit_status.success() {
+            // Exactly glibc's failed-exec signature: 127 and not one byte of
+            // output. A real adapter that exits 127 with nothing to say is
+            // retried too and still ends as None, only later.
+            if exit_status.code() == Some(EXEC_FAILED_EXIT_CODE) && buf.is_empty() && retries_left {
+                std::thread::sleep(EXEC_RETRY_DELAY);
+                continue;
             }
+            return None;
         }
-    };
 
-    if !exit_status.success() {
-        return None;
+        let stdout = String::from_utf8_lossy(&buf);
+        // Output format: "<package-name> <major>.<minor>.<patch>"
+        let version_str = stdout.split_whitespace().last()?;
+        let mut components = version_str.split('.');
+        let major = components.next()?.parse::<u64>().ok()?;
+        let minor = components.next()?.parse::<u64>().ok()?;
+        let patch = components.next()?.parse::<u64>().ok()?;
+        if components.next().is_some() {
+            return None;
+        }
+        return Some((major, minor, patch));
     }
 
-    // Read at most 4 KiB from the regular file without blocking.
-    tmp.seek(SeekFrom::Start(0)).ok()?;
-    let mut buf = Vec::with_capacity(128);
-    let _ = (&mut tmp as &mut dyn std::io::Read)
-        .take(4096)
-        .read_to_end(&mut buf);
-
-    let stdout = String::from_utf8_lossy(&buf);
-    // Output format: "<package-name> <major>.<minor>.<patch>"
-    let version_str = stdout.split_whitespace().last()?;
-    let mut components = version_str.split('.');
-    let major = components.next()?.parse::<u64>().ok()?;
-    let minor = components.next()?.parse::<u64>().ok()?;
-    let patch = components.next()?.parse::<u64>().ok()?;
-    if components.next().is_some() {
-        return None;
-    }
-    Some((major, minor, patch))
+    None
 }
 
 /// Classifies a resolved codex-acp binary path as [`AcpAvailabilityStatus::Available`]

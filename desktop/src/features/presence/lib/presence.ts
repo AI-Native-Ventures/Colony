@@ -41,6 +41,12 @@ export function mergePresenceUpdate(
 // platform exposes it; otherwise fall back to in-app activity.
 export const PRESENCE_IDLE_TIMEOUT_MS = 10 * 60_000;
 
+// Keep the local optimistic cache and relay expiry at three heartbeat windows.
+// The relay owns the authoritative TTL; deploy its TTL increase before shipping
+// a desktop build with a slower heartbeat.
+export const PRESENCE_HEARTBEAT_INTERVAL_MS = 60_000;
+export const PRESENCE_TTL_SECONDS = 3 * (PRESENCE_HEARTBEAT_INTERVAL_MS / 1000);
+
 export function resolveAutomaticPresenceStatus(
   osIdleSeconds: number | null,
   lastActivityAt: number,
