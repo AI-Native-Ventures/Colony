@@ -143,6 +143,19 @@ tmux kill-session -t blocks-acp-3030
 tmux kill-session -t blocks-relay-3030
 ```
 
+## CI
+
+`.github/workflows/ci.yml` runs this gate as the `blocks-live-gate` job on
+GitHub-hosted `ubuntu-latest` (free on this public repository). It is
+path-filtered to the Blocks surface — the relay/core validators, the desktop
+`features/blocks` code and kind constants, the live spec and ACP fixture, the
+Blocks migrations, and the two harness scripts — plus every push to
+`develop`, following the same path-filter pattern as the rest of the suite.
+The job installs tmux and runs `scripts/prove-blocks.sh` unchanged, so CI and
+the local gate prove exactly the same loop. Gate evidence is uploaded as the
+`blocks-live-gate-artifacts` artifact (`desktop/test-results/blocks`, relay
+and ACP logs).
+
 To tear down the isolated backing services as well (this removes their isolated
 database volume):
 
