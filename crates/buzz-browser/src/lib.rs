@@ -9,3 +9,5 @@ pub mod input;
 pub mod journey;
 pub mod mcp;
 pub mod snapshot;
+
+pub use contracts::{BrowserError, SnapshotCaps};
