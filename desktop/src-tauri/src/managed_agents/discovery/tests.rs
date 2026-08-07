@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-
 use super::overrides::{divergent_agent_command_override, update_time_agent_command_override};
+#[cfg(windows)]
+use super::refresh_login_shell_path;
 use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
     codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
@@ -10,7 +10,7 @@ use super::{
     GOOSE_AVATAR_URL,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
-
+use std::path::PathBuf;
 #[test]
 fn resolves_known_avatar_for_bare_command() {
     let avatar_url = managed_agent_avatar_url("goose").expect("goose avatar should resolve");

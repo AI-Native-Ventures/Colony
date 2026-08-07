@@ -681,6 +681,36 @@ pub enum DiscoverySourceArg {
     ExaSearch,
 }
 
+/// Funnel status accepted by `buzz discovery lead-update`.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum DiscoveryLeadStatusArg {
+    #[value(name = "candidate")]
+    Candidate,
+    #[value(name = "accepted")]
+    Accepted,
+    #[value(name = "qualified")]
+    Qualified,
+    #[value(name = "dormant")]
+    Dormant,
+    #[value(name = "disqualified")]
+    Disqualified,
+    #[value(name = "client_active")]
+    ClientActive,
+}
+
+impl From<DiscoveryLeadStatusArg> for buzz_core::discovery_workspace::DiscoveryLeadStatus {
+    fn from(value: DiscoveryLeadStatusArg) -> Self {
+        match value {
+            DiscoveryLeadStatusArg::Candidate => Self::Candidate,
+            DiscoveryLeadStatusArg::Accepted => Self::Accepted,
+            DiscoveryLeadStatusArg::Qualified => Self::Qualified,
+            DiscoveryLeadStatusArg::Dormant => Self::Dormant,
+            DiscoveryLeadStatusArg::Disqualified => Self::Disqualified,
+            DiscoveryLeadStatusArg::ClientActive => Self::ClientActive,
+        }
+    }
+}
+
 /// Workspace-scoped business Discovery operations.
 #[derive(Subcommand)]
 pub enum DiscoveryCmd {
@@ -803,6 +833,54 @@ pub enum DiscoveryCmd {
     },
     /// List retained-Lead counts per industry and vertical
     LeadsCounts {
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Read one retained Lead with its editable profile
+    LeadGet {
+        /// Lead UUID.
+        #[arg(long)]
+        lead: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Update one retained Lead's editable profile and funnel status
+    LeadUpdate {
+        /// Lead UUID.
+        #[arg(long)]
+        lead: Uuid,
+        /// Website override.
+        #[arg(long)]
+        website: Option<String>,
+        /// Email override.
+        #[arg(long)]
+        email: Option<String>,
+        /// Phone override.
+        #[arg(long)]
+        phone: Option<String>,
+        /// LinkedIn profile URL.
+        #[arg(long)]
+        linkedin_url: Option<String>,
+        /// Contact name (People leads).
+        #[arg(long)]
+        contact_name: Option<String>,
+        /// Contact title (People leads).
+        #[arg(long)]
+        contact_title: Option<String>,
+        /// Free-text notes.
+        #[arg(long)]
+        notes: Option<String>,
+        /// Quality score 0-100.
+        #[arg(long)]
+        score: Option<u16>,
+        /// Owner persona id.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Funnel status.
+        #[arg(long, value_enum)]
+        status: Option<DiscoveryLeadStatusArg>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -2950,6 +3028,18 @@ mod tests {
                 "leads-counts",
                 "--idempotency-key",
                 retry,
+            ],
+            vec!["buzz", "discovery", "lead-get", "--lead", campaign],
+            vec![
+                "buzz",
+                "discovery",
+                "lead-update",
+                "--lead",
+                campaign,
+                "--status",
+                "accepted",
+                "--notes",
+                "Warm intro",
             ],
             vec![
                 "buzz",

@@ -293,6 +293,7 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
                 campaign_id: Some(campaign_id),
                 industry_id: None,
                 vertical_id: None,
+                status: None,
                 offset: 0,
                 limit: 100,
             },
