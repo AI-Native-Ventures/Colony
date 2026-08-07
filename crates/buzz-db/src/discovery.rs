@@ -6303,14 +6303,13 @@ mod tests {
 
         let detail = get_detail(lead_ids[0]).await;
         assert_eq!(
-            detail.status,
+            detail.lead.status,
             DiscoveryLeadStatus::Candidate,
             "get_lead must agree with the list row before any edit"
         );
-        assert_eq!(detail.lead.status, detail.status);
 
         let updated = update_status(lead_ids[0], DiscoveryLeadStatus::Accepted).await;
-        assert_eq!(updated.status, DiscoveryLeadStatus::Accepted);
+        assert_eq!(updated.lead.status, DiscoveryLeadStatus::Accepted);
 
         let page = list_page(Some(DiscoveryLeadStatus::Accepted)).await;
         assert_eq!(page.total, 1, "edited lead must match the accepted filter");
@@ -6318,7 +6317,7 @@ mod tests {
         assert_eq!(page.leads[0].status, DiscoveryLeadStatus::Accepted);
         let detail = get_detail(lead_ids[0]).await;
         assert_eq!(
-            detail.status, page.leads[0].status,
+            detail.lead.status, page.leads[0].status,
             "get_lead must agree with the list row after the edit"
         );
 

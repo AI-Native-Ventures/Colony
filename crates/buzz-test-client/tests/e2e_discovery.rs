@@ -919,7 +919,7 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
     let DiscoveryWorkspaceResult::Lead { lead } = result else {
         panic!("get lead must return the detail projection");
     };
-    assert_eq!(lead.status, DiscoveryLeadStatus::Candidate);
+    assert_eq!(lead.lead.status, DiscoveryLeadStatus::Candidate);
 
     let result = submit_workspace_action(
         &mut client,
@@ -945,7 +945,7 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
     let DiscoveryWorkspaceResult::Lead { lead } = result else {
         panic!("update lead must return the detail projection");
     };
-    assert_eq!(lead.status, DiscoveryLeadStatus::Accepted);
+    assert_eq!(lead.lead.status, DiscoveryLeadStatus::Accepted);
     assert_eq!(lead.notes.as_deref(), Some("Warm intro"));
     assert_eq!(lead.score, Some(82));
     assert_eq!(
@@ -999,7 +999,7 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
     let DiscoveryWorkspaceResult::Lead { lead } = result else {
         panic!("disqualify must return the detail projection");
     };
-    assert_eq!(lead.status, DiscoveryLeadStatus::Disqualified);
+    assert_eq!(lead.lead.status, DiscoveryLeadStatus::Disqualified);
 
     let refused = DiscoveryWorkspaceRequest {
         request_id: Uuid::new_v4(),
@@ -1031,6 +1031,31 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
             "unexpected illegal transition error: {error}"
         ),
     }
+
+    sqlx::query("DELETE FROM discovery_business_observations WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(lead_id)
+        .execute(&pool)
+        .await
+        .expect("clean up observations");
+    sqlx::query("DELETE FROM discovery_lead_profiles WHERE community_id=$1 AND lead_id=$2")
+        .bind(community_id)
+        .bind(lead_id)
+        .execute(&pool)
+        .await
+        .expect("clean up lead profiles");
+    sqlx::query("DELETE FROM discovery_runs WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("clean up run");
+    sqlx::query("DELETE FROM discovery_campaigns WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(campaign_id)
+        .execute(&pool)
+        .await
+        .expect("clean up campaign");
 }
 
 #[tokio::test]
@@ -1134,11 +1159,10 @@ async fn list_leads_candidate_filter_returns_unedited_leads() {
         panic!("get lead must return the detail projection");
     };
     assert_eq!(
-        before.status,
+        before.lead.status,
         DiscoveryLeadStatus::Candidate,
         "get_lead must agree with the list row before any edit"
     );
-    assert_eq!(before.lead.status, before.status);
 
     let result = submit_workspace_action(
         &mut client,
@@ -1164,7 +1188,7 @@ async fn list_leads_candidate_filter_returns_unedited_leads() {
     let DiscoveryWorkspaceResult::Lead { lead: updated } = result else {
         panic!("update lead must return the detail projection");
     };
-    assert_eq!(updated.status, DiscoveryLeadStatus::Accepted);
+    assert_eq!(updated.lead.status, DiscoveryLeadStatus::Accepted);
 
     let page = list_leads_page(
         &mut client,
@@ -1190,7 +1214,7 @@ async fn list_leads_candidate_filter_returns_unedited_leads() {
         panic!("get lead must return the detail projection");
     };
     assert_eq!(
-        after.status, page.leads[0].status,
+        after.lead.status, page.leads[0].status,
         "get_lead must agree with the list row after the edit"
     );
 

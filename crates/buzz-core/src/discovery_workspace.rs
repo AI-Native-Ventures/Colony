@@ -540,11 +540,11 @@ impl DiscoveryLeadUpdateInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DiscoveryLeadDetail {
-    /// The immutable observation this profile edits.
+    /// The immutable observation this profile edits. The flattened projection
+    /// carries the current funnel status, so the detail and the list rows
+    /// always agree on one value.
     #[serde(flatten)]
     pub lead: DiscoveryBusinessLeadProjection,
-    /// Current funnel status.
-    pub status: DiscoveryLeadStatus,
     /// Persona accountable for this Lead.
     pub owner_persona_id: Option<String>,
     /// Website override.

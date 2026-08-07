@@ -784,11 +784,9 @@ fn parse_lead_status(value: Option<String>) -> DiscoveryLeadStatus {
 }
 
 fn lead_detail_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryLeadDetail> {
-    let status = parse_lead_status(row.try_get("status")?);
     let score: Option<i16> = row.try_get("score")?;
     Ok(DiscoveryLeadDetail {
         lead: lead_from_row(row)?,
-        status,
         owner_persona_id: row.try_get("owner_persona_id")?,
         website_override: row.try_get("website_override")?,
         email: row.try_get("email")?,
@@ -845,9 +843,9 @@ async fn update_lead_tx(
     let previous = get_lead_tx(tx, community_id, lead_id).await?;
     let next_status = input
         .status
-        .unwrap_or(previous.status)
+        .unwrap_or(previous.lead.status)
         .to_relationship_status();
-    let from = previous.status.to_relationship_status();
+    let from = previous.lead.status.to_relationship_status();
     if !is_relationship_transition_allowed(RelationshipKind::Lead, from, next_status) {
         return Err(DbError::InvalidData(format!(
             "Lead status transition {from:?} -> {next_status:?} is not allowed"
