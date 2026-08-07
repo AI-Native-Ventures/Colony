@@ -59,6 +59,8 @@ jobs:
             desktop:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
+              - 'scripts/native-inventory-core.mjs'
+              - 'scripts/native-inventory-core.test.mjs'
               - 'desktop/**'
               - '!desktop/src-tauri/**'
               - 'pnpm-lock.yaml'
@@ -92,7 +94,7 @@ jobs:
       - name: Mobile worktree identity contract
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
-        run: node --test scripts/check-file-sizes-core.test.mjs
+        run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
 
   rust-lint:
     name: Rust Lint
