@@ -1167,7 +1167,7 @@ CREATE TABLE discovery_workspace_action_claims (
     idempotency_key UUID NOT NULL,
     operation TEXT NOT NULL CHECK (operation IN (
         'access', 'create_campaign', 'update_campaign_sources',
-        'get_campaign', 'list_campaigns', 'list_leads'
+        'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts'
     )),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
