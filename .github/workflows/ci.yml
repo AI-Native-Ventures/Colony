@@ -691,6 +691,13 @@ jobs:
         run: cd desktop && pnpm exec playwright install chromium
       - name: Install Playwright system dependencies
         run: cd desktop && pnpm exec playwright install-deps chromium
+      - name: Create Tauri sidecar placeholders
+        # prove-blocks.sh runs `cargo test --manifest-path
+        # desktop/src-tauri/Cargo.toml agent_proposal`, and Tauri's build.rs
+        # validates externalBin at compile time. The just recipe that every
+        # other Tauri CI step depends on creates empty placeholders for the
+        # host triple; nothing executes them, so stubs are sufficient.
+        run: just _ensure-sidecar-stubs
       - name: Run the Blocks live gate
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
