@@ -27,6 +27,7 @@ use buzz_core::usage_record::decrypt_usage_record;
 use buzz_sdk::ledger::{build_ledger_action, ledger_coordinate, LedgerAction, LedgerActionPayload};
 use nostr::{Event, JsonUtil, PublicKey};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::client::BuzzClient;
@@ -580,16 +581,37 @@ async fn load_usage_records(
     client: &BuzzClient,
 ) -> Result<(Vec<StoredUsageRecord>, usize), CliError> {
     let keys = client.keys();
-    let raw = client
+    let mine = keys.public_key().to_hex();
+    let mut raw = client
         .query_all(json!({
             "kinds": [KIND_USAGE_RECORD],
-            "#p": [keys.public_key().to_hex()]
+            "#p": [mine]
         }))
         .await?;
+    // A seat meter is the member's own machine, so the member both authors
+    // and owns the record. The relay drops a `p` tag that points at the
+    // event's own author, which makes those records invisible to a `#p`
+    // query; read the author side too and dedupe on event id.
+    raw.extend(
+        client
+            .query_all(json!({
+                "kinds": [KIND_USAGE_RECORD],
+                "authors": [mine]
+            }))
+            .await?,
+    );
 
     let mut records = Vec::with_capacity(raw.len());
     let mut unreadable = 0usize;
+    let mut seen = HashSet::new();
     for value in raw {
+        let Some(id) = value["id"].as_str().map(str::to_string) else {
+            unreadable += 1;
+            continue;
+        };
+        if !seen.insert(id) {
+            continue;
+        }
         let Ok(event) = Event::from_json(value.to_string()) else {
             unreadable += 1;
             continue;

@@ -640,7 +640,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 46);
+        assert_eq!(migrations.len(), 47);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -707,6 +707,11 @@ mod tests {
             .sql
             .as_str()
             .contains("CREATE TABLE discovery_lead_profiles"));
+        assert_eq!(migrations[46].version, 47);
+        assert!(migrations[46]
+            .sql
+            .as_str()
+            .contains("ALTER TABLE jobs ADD COLUMN provider TEXT"));
         assert!(migrations[0]
             .sql
             .as_str()

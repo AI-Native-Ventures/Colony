@@ -304,6 +304,8 @@ async fn handle_outcome(
                 attempt: outcome.attempt,
                 status: outcome.status.as_str(),
                 detail: &outcome.detail,
+                provider: outcome.provider.as_deref(),
+                model: outcome.model.as_deref(),
                 now: chrono::Utc::now().timestamp(),
             },
         )
@@ -463,6 +465,12 @@ fn build_job_head(keys: &Keys, job: &JobRow, head_at: i64) -> Result<Event, Stri
     if let Some(thread) = &job.thread {
         tags.push(vec!["e".to_string(), hex::encode(thread)]);
     }
+    if let Some(provider) = &job.provider {
+        tags.push(vec!["provider".to_string(), provider.clone()]);
+    }
+    if let Some(model) = &job.model {
+        tags.push(vec!["model".to_string(), model.clone()]);
+    }
 
     let tags = tags
         .into_iter()
@@ -503,6 +511,8 @@ mod tests {
             attempts: 0,
             result: None,
             failure: None,
+            provider: None,
+            model: None,
             escalated_ask: None,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
@@ -547,6 +557,20 @@ mod tests {
         let parsed = parse_job_head(&event).unwrap();
         assert_eq!(parsed.result.as_deref(), Some("Here is the draft"));
         assert!(parsed.status.is_terminal());
+    }
+
+    #[test]
+    fn a_finished_head_carries_its_execution_stamp() {
+        let mut row = job("done");
+        row.result = Some("Here is the draft".to_string());
+        row.provider = Some("deepseek".to_string());
+        row.model = Some("deepseek-chat".to_string());
+
+        let event = build_job_head(&Keys::generate(), &row, 1_700_000_000).unwrap();
+        let parsed = parse_job_head(&event).unwrap();
+
+        assert_eq!(parsed.provider.as_deref(), Some("deepseek"));
+        assert_eq!(parsed.model.as_deref(), Some("deepseek-chat"));
     }
 
     #[test]

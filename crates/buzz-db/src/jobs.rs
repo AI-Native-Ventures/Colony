@@ -67,6 +67,10 @@ pub struct JobRow {
     pub result: Option<String>,
     /// Why it failed, once it has.
     pub failure: Option<String>,
+    /// The provider stamp on a finished job, when the worker set one.
+    pub provider: Option<String>,
+    /// The model stamp on a finished job, when the worker set one.
+    pub model: Option<String>,
     /// The stall ask filed about this job, if one has been.
     pub escalated_ask: Option<Vec<u8>>,
     /// Unix seconds when the job was filed.
@@ -106,6 +110,10 @@ pub struct FinishedJob<'a> {
     pub status: &'a str,
     /// The result, or why it failed.
     pub detail: &'a str,
+    /// Provider stamp for the head, when the outcome carried one.
+    pub provider: Option<&'a str>,
+    /// Model stamp for the head, when the outcome carried one.
+    pub model: Option<&'a str>,
     /// Unix seconds to stamp the row with.
     pub now: i64,
 }
@@ -148,6 +156,8 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<JobRow> {
         attempts: row.try_get("attempts")?,
         result: row.try_get("result")?,
         failure: row.try_get("failure")?,
+        provider: row.try_get("provider")?,
+        model: row.try_get("model")?,
         escalated_ask: row.try_get("escalated_ask")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -180,7 +190,7 @@ pub async fn insert_job(
          ON CONFLICT DO NOTHING \
          RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   escalated_ask, created_at, updated_at",
+                   provider, model, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job.job_id)
@@ -206,7 +216,7 @@ pub async fn find_job(
     let row = sqlx::query(
         "SELECT job_id, employee, filed_by, originator, channel_id, thread, instruction, \
                 status, lease_holder, lease_expires_at, attempts, result, failure, \
-                escalated_ask, created_at, updated_at \
+                provider, model, escalated_ask, created_at, updated_at \
          FROM jobs WHERE community_id = $1 AND job_id = $2",
     )
     .bind(community.as_uuid())
@@ -249,7 +259,7 @@ pub async fn claim_job(
            AND (status = 'open' OR (status = 'leased' AND lease_expires_at < $6)) \
          RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   escalated_ask, created_at, updated_at",
+                   provider, model, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)
@@ -284,7 +294,7 @@ pub async fn heartbeat_job(
            AND lease_holder = $3 AND attempts = $4 \
          RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   escalated_ask, created_at, updated_at",
+                   provider, model, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)
@@ -317,19 +327,23 @@ pub async fn finish_job(
         attempt,
         status,
         detail,
+        provider,
+        model,
         now,
     } = outcome;
     let row = sqlx::query(
         "UPDATE jobs SET status = $5, \
                          result = CASE WHEN $5 = 'done' THEN $6 ELSE result END, \
                          failure = CASE WHEN $5 = 'failed' THEN $6 ELSE failure END, \
+                         provider = CASE WHEN $5 = 'done' THEN $8 ELSE provider END, \
+                         model = CASE WHEN $5 = 'done' THEN $9 ELSE model END, \
                          lease_expires_at = NULL, \
                          updated_at = $7 \
          WHERE community_id = $1 AND job_id = $2 AND status = 'leased' \
            AND lease_holder = $3 AND attempts = $4 \
          RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   escalated_ask, created_at, updated_at",
+                   provider, model, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)
@@ -338,6 +352,8 @@ pub async fn finish_job(
     .bind(status)
     .bind(detail)
     .bind(now)
+    .bind(provider)
+    .bind(model)
     .fetch_optional(pool)
     .await?;
 
@@ -376,8 +392,8 @@ pub async fn expire_due_leases(
          RETURNING jobs.community_id, c.host, jobs.job_id, jobs.employee, jobs.filed_by, \
                    jobs.originator, jobs.channel_id, jobs.thread, jobs.instruction, \
                    jobs.status, jobs.lease_holder, jobs.lease_expires_at, jobs.attempts, \
-                   jobs.result, jobs.failure, jobs.escalated_ask, jobs.created_at, \
-                   jobs.updated_at",
+                   jobs.result, jobs.failure, jobs.provider, jobs.model, jobs.escalated_ask, \
+                   jobs.created_at, jobs.updated_at",
     )
     .bind(now)
     .bind(max_attempts)
@@ -401,8 +417,8 @@ pub async fn list_jobs_needing_escalation(
     let rows = sqlx::query(
         "SELECT j.community_id, c.host, j.job_id, j.employee, j.filed_by, j.originator, \
                 j.channel_id, j.thread, j.instruction, j.status, j.lease_holder, \
-                j.lease_expires_at, j.attempts, j.result, j.failure, j.escalated_ask, \
-                j.created_at, j.updated_at \
+                j.lease_expires_at, j.attempts, j.result, j.failure, j.provider, j.model, \
+                j.escalated_ask, j.created_at, j.updated_at \
          FROM jobs j JOIN communities c ON c.id = j.community_id \
          WHERE j.escalated_ask IS NULL \
            AND (j.status = 'abandoned' OR (j.status = 'open' AND j.created_at < $1)) \
@@ -453,7 +469,7 @@ pub async fn stamp_head(
          WHERE community_id = $1 AND job_id = $2 \
          RETURNING head_at, job_id, employee, filed_by, originator, channel_id, thread, \
                    instruction, status, lease_holder, lease_expires_at, attempts, result, \
-                   failure, escalated_ask, created_at, updated_at",
+                   failure, provider, model, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)

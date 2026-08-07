@@ -100,18 +100,23 @@ pub async fn cmd_finish(
     attempt: i32,
     status: JobStatus,
     detail: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
 ) -> Result<(), CliError> {
     let attempt = attempt.to_string();
-    let event = sign(
-        client,
-        KIND_JOB_OUTCOME,
-        detail,
-        vec![
-            vec!["job", job],
-            vec!["attempt", &attempt],
-            vec!["status", status.as_str()],
-        ],
-    )?;
+    let mut tags = vec![
+        vec!["job", job],
+        vec!["attempt", &attempt],
+        vec!["status", status.as_str()],
+    ];
+    if let Some(provider) = provider {
+        tags.push(vec!["provider", provider]);
+    }
+    if let Some(model) = model {
+        tags.push(vec!["model", model]);
+    }
+
+    let event = sign(client, KIND_JOB_OUTCOME, detail, tags)?;
     parse_job_outcome(&event).map_err(|e| CliError::Usage(format!("invalid job outcome: {e}")))?;
 
     let response = client.submit_event(event).await?;
@@ -262,6 +267,8 @@ fn project(event: &serde_json::Value) -> serde_json::Value {
         "attempts": extract_tag_value(event, "attempts"),
         "lease_holder": extract_tag_value(event, "lease-holder"),
         "lease_expires": extract_tag_value(event, "lease-expires"),
+        "provider": extract_tag_value(event, "provider"),
+        "model": extract_tag_value(event, "model"),
     })
 }
 
@@ -310,12 +317,36 @@ pub async fn dispatch(cmd: crate::JobsCmd, client: &BuzzClient) -> Result<(), Cl
             job,
             attempt,
             result,
-        } => cmd_finish(client, &job, attempt, JobStatus::Done, &result).await,
+            provider,
+            model,
+        } => {
+            cmd_finish(
+                client,
+                &job,
+                attempt,
+                JobStatus::Done,
+                &result,
+                provider.as_deref(),
+                model.as_deref(),
+            )
+            .await
+        }
         JobsCmd::Fail {
             job,
             attempt,
             reason,
-        } => cmd_finish(client, &job, attempt, JobStatus::Failed, &reason).await,
+        } => {
+            cmd_finish(
+                client,
+                &job,
+                attempt,
+                JobStatus::Failed,
+                &reason,
+                None,
+                None,
+            )
+            .await
+        }
         JobsCmd::List { status, involving } => {
             cmd_list(client, status.as_deref(), involving.as_deref()).await
         }
