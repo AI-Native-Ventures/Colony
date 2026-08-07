@@ -1,6 +1,6 @@
 //! Chrome discovery, launch, and shutdown.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tokio::net::TcpListener;
@@ -165,7 +165,7 @@ mod tests {
         };
         assert_eq!(
             cfg.binary.as_deref(),
-            Some(Path::new("/nonexistent/browser"))
+            Some(std::path::Path::new("/nonexistent/browser"))
         );
     }
 

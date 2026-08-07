@@ -19,6 +19,12 @@ pub struct Snapshot {
     pub est_tokens: usize,
 }
 
+impl std::fmt::Display for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.outline)
+    }
+}
+
 /// Where a ref's element is on screen (center, CSS pixels).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RefTarget {
@@ -146,13 +152,12 @@ pub fn build_outline(
         }
         stats.nodes += 1;
         let mut line = format!("{}- {}", "  ".repeat(depth), node.role);
-        let mut ref_id = None;
         if actionable(&node.role) {
             *ref_counter += 1;
-            ref_id = Some(format!("r{ref_counter}"));
+            let ref_id = format!("r{ref_counter}");
             if let Some(backend) = node.backend_node_id {
                 refs.insert(
-                    ref_id.clone().unwrap(),
+                    ref_id.clone(),
                     RefTarget {
                         backend_node_id: backend,
                         x: 0.0,
@@ -161,7 +166,7 @@ pub fn build_outline(
                     },
                 );
             }
-            line.push_str(&format!(" [{}]", ref_id.as_deref().unwrap_or("")));
+            line.push_str(&format!(" [{ref_id}]"));
         }
         if !node.name.is_empty() {
             let name = node.name.replace('\n', " ");
