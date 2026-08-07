@@ -2,6 +2,7 @@ import {
   KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_V2,
 } from "../../../shared/constants/kinds.ts";
+import { toSpeechText } from "./speechText.ts";
 
 export type LiveTtsEvent = {
   id: string;
@@ -72,7 +73,12 @@ export function classifySpeakableAgentText(
   const content = textWithoutAttachments(event).trim();
   if (content.length === 0 || content.startsWith("[System]"))
     return { text: null, reason: "empty_or_system" };
-  return { text: content, reason: null };
+  // Agents write markdown; the TTS engine wants speech. Raw content spoke
+  // "hash hash" for headings and read full URLs aloud. A message that is only
+  // code collapses to a short spoken notice rather than silence.
+  const speech = toSpeechText(content);
+  if (speech.length === 0) return { text: null, reason: "empty_or_system" };
+  return { text: speech, reason: null };
 }
 
 /** Classify and enqueue one live event through the production routing seam. */

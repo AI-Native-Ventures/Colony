@@ -65,6 +65,24 @@ test("speaks only new agent-authored text message events", () => {
   );
 });
 
+test("speaks markdown as speech, not as markup", () => {
+  assert.equal(
+    speakableText({ ...base, content: "## Plan\nShip the **relay** fix." }),
+    "Plan\nShip the relay fix.",
+    "headings and emphasis are spoken as words",
+  );
+  assert.equal(
+    speakableText({ ...base, content: "See [the docs](https://x.test/a)." }),
+    "See the docs.",
+    "link text is spoken without the URL",
+  );
+  assert.equal(
+    speakableText({ ...base, content: "```js\nconsole.log(1)\n```" }),
+    "I posted a code snippet in the chat.",
+    "a code-only message becomes a spoken notice, never silence",
+  );
+});
+
 test("routes managed stream-message-v2 through membership and enabled ordering", async () => {
   const invoked = [];
   const speaker = createOrderedSpeaker(async (text, routeId) => {
