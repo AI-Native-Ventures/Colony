@@ -24,6 +24,7 @@ import type {
   LeadProjection,
   RunProjection,
 } from "./relayDiscoveryModels";
+import { relaySupportsDiscovery } from "./relayDiscoverySupport";
 
 const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v2";
 const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v2";
@@ -101,6 +102,7 @@ export type DiscoveryBrokerDependencies = {
   ) => Promise<RelayEvent | null>;
   publish: (event: RelayEvent) => Promise<RelayEvent>;
   relaySelf: () => Promise<string | null>;
+  relaySupportsDiscovery: () => Promise<boolean>;
   sign: typeof signRelayEvent;
   subscribe: (
     filter: RelaySubscriptionFilter,
@@ -119,6 +121,7 @@ export const DEFAULT_BROKER: DiscoveryBrokerDependencies = {
       "The Discovery request could not be sent.",
     ),
   relaySelf: getRelaySelf,
+  relaySupportsDiscovery,
   sign: signRelayEvent,
   subscribe: (filter, onEvent) => relayClient.subscribeLive(filter, onEvent),
 };

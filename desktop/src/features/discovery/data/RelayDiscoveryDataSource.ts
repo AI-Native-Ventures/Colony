@@ -31,7 +31,10 @@ import type {
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
 import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
-import { unsupportedDiscoveryEntitlement } from "./relayDiscoverySupport";
+import {
+  DEMO_DISCOVERY_ENTITLEMENT,
+  relaySupportsDiscovery,
+} from "./relayDiscoverySupport";
 import {
   type CampaignProjection,
   eventBase,
@@ -121,10 +124,13 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   private entitlementPromise: Promise<DiscoveryEntitlement> | null = null;
   private readonly activeRuns = new Map<string, string>();
   private readonly credentialStatus: typeof getDiscoveryCredentialStatus;
+  private readonly relaySupportsDiscovery: () => Promise<boolean>;
   constructor(dependencies: DiscoveryBrokerDependencies = DEFAULT_BROKER) {
     this.broker = new DiscoveryBroker(dependencies);
     this.credentialStatus =
       dependencies.credentialStatus ?? getDiscoveryCredentialStatus;
+    this.relaySupportsDiscovery =
+      dependencies.relaySupportsDiscovery ?? relaySupportsDiscovery;
   }
   getEntitlement(): Promise<DiscoveryEntitlement> {
     if (!this.entitlementPromise) {
@@ -144,9 +150,13 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
             experience: result.active ? ("live" as const) : ("demo" as const),
           };
         })
-        .catch((error) => {
-          const fallback = unsupportedDiscoveryEntitlement(error);
-          if (fallback) return fallback;
+        .catch(async (error) => {
+          const advertisesDiscovery = await this.relaySupportsDiscovery().catch(
+            () => null,
+          );
+          if (advertisesDiscovery === false) {
+            return DEMO_DISCOVERY_ENTITLEMENT;
+          }
           this.entitlementPromise = null;
           throw error;
         });

@@ -65,6 +65,7 @@ function harness(
     dependencies: {
       delay: async () => {},
       relaySelf: async () => RELAY_PUBKEY,
+      relaySupportsDiscovery: async () => true,
       sign: async ({ kind, content, createdAt, tags }) =>
         finalizeEvent(
           {
@@ -587,6 +588,7 @@ test("inactive workspaces stay on the cost-free demo and cannot create live reco
 
 test("a relay without Discovery kinds falls back to the cost-free demo", async () => {
   const unsupported = harness(false);
+  unsupported.dependencies.relaySupportsDiscovery = async () => false;
   unsupported.dependencies.publish = async () => {
     throw new Error("restricted: unknown event kind");
   };
@@ -598,6 +600,58 @@ test("a relay without Discovery kinds falls back to the cost-free demo", async (
     experience: "demo",
   });
   assert.ok((await source.getIndustries()).length > 0);
+});
+
+test("a relay that advertises Discovery never falls back to the demo on a rejection", async () => {
+  const supported = harness(false);
+  supported.dependencies.relaySupportsDiscovery = async () => true;
+  supported.dependencies.publish = async () => {
+    throw new Error("restricted: unknown event kind");
+  };
+  const source = new RelayDiscoveryDataSource(supported.dependencies);
+
+  await assert.rejects(
+    source.getEntitlement(),
+    /restricted: unknown event kind/,
+  );
+});
+
+test("an unreachable NIP-11 capability probe never downgrades to the demo", async () => {
+  const unreachable = harness(false);
+  let probes = 0;
+  unreachable.dependencies.relaySupportsDiscovery = async () => {
+    probes += 1;
+    throw new Error("NIP-11 unreachable");
+  };
+  unreachable.dependencies.publish = async () => {
+    throw new Error("restricted: unknown event kind");
+  };
+  const source = new RelayDiscoveryDataSource(unreachable.dependencies);
+
+  await assert.rejects(
+    source.getEntitlement(),
+    /restricted: unknown event kind/,
+  );
+  // The loud path clears the memoised promise, so a retry re-runs the access
+  // call and re-probes instead of reusing the rejected promise.
+  await assert.rejects(
+    source.getEntitlement(),
+    /restricted: unknown event kind/,
+  );
+  assert.equal(probes, 2);
+});
+
+test("an unrelated error containing the phrase never yields the demo", async () => {
+  const supported = harness(false);
+  supported.dependencies.relaySupportsDiscovery = async () => true;
+  supported.dependencies.publish = async () => {
+    throw new Error(
+      "Failed to load the report; search for 'unknown event kind' in the logs",
+    );
+  };
+  const source = new RelayDiscoveryDataSource(supported.dependencies);
+
+  await assert.rejects(source.getEntitlement(), /Failed to load the report/);
 });
 
 test("a receipt not signed by the tenant relay cannot grant Discovery access", async () => {

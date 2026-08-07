@@ -225,9 +225,19 @@ pub struct ArchivedIdentitiesSnapshot {
 struct RelayInformationDocument {
     #[serde(default, rename = "self")]
     self_: Option<String>,
+    #[serde(default)]
+    supported_extensions: Option<Vec<String>>,
 }
 
-pub(crate) async fn fetch_relay_self(state: &AppState) -> Result<Option<String>, String> {
+/// Fetch and parse the active relay's NIP-11 information document.
+///
+/// `Ok(None)` means the relay answered with a non-success status; `Err` means
+/// it was unreachable or served a malformed document. Shared by
+/// [`fetch_relay_self`] and the Discovery capability probe so the two reads
+/// cannot drift in URL, header, or parse handling.
+async fn fetch_relay_information_document(
+    state: &AppState,
+) -> Result<Option<RelayInformationDocument>, String> {
     let relay_url = relay_ws_url_with_override(state);
     let http_url = relay_http_base_url(&relay_url);
     let response = state
@@ -242,10 +252,28 @@ pub(crate) async fn fetch_relay_self(state: &AppState) -> Result<Option<String>,
         return Ok(None);
     }
 
-    let doc = response
+    response
         .json::<RelayInformationDocument>()
         .await
-        .map_err(|_| "relay returned malformed NIP-11 document".to_string())?;
+        .map(Some)
+        .map_err(|_| "relay returned malformed NIP-11 document".to_string())
+}
+
+/// The NIP-11 `supported_extensions` token by which a relay advertises the
+/// Discovery capability. One spelling of the wire contract pinned in
+/// `crates/buzz-relay/src/nip11.rs` and `crates/buzz-test-client/tests/e2e_discovery.rs`.
+const DISCOVERY_EXTENSION: &str = "colony-discovery";
+
+fn document_advertises_discovery(doc: &RelayInformationDocument) -> bool {
+    doc.supported_extensions
+        .as_deref()
+        .is_some_and(|extensions| extensions.iter().any(|e| e == DISCOVERY_EXTENSION))
+}
+
+pub(crate) async fn fetch_relay_self(state: &AppState) -> Result<Option<String>, String> {
+    let Some(doc) = fetch_relay_information_document(state).await? else {
+        return Ok(None);
+    };
 
     let Some(relay_self) = doc.self_.map(|value| value.to_ascii_lowercase()) else {
         return Ok(None);
@@ -256,6 +284,18 @@ pub(crate) async fn fetch_relay_self(state: &AppState) -> Result<Option<String>,
     } else {
         Ok(None)
     }
+}
+
+/// Whether the active relay's NIP-11 document advertises the Discovery
+/// capability. `Ok(false)` means the relay answered and did not advertise;
+/// `Err` means the relay did not answer the question (unreachable,
+/// non-success status, or malformed document). Callers must treat `Err` as
+/// unknown, never as "does not support".
+pub(crate) async fn relay_advertises_discovery(state: &AppState) -> Result<bool, String> {
+    let Some(doc) = fetch_relay_information_document(state).await? else {
+        return Err("the relay did not answer the NIP-11 capability question".to_string());
+    };
+    Ok(document_advertises_discovery(&doc))
 }
 
 fn archived_pubkeys_from_snapshot(snapshot: &nostr::Event) -> Vec<String> {
@@ -328,6 +368,19 @@ pub async fn list_archived_identities(
 #[tauri::command]
 pub async fn get_relay_self(state: State<'_, AppState>) -> Result<Option<String>, String> {
     fetch_relay_self(&state).await
+}
+
+/// Ask whether the active relay advertises the `colony-discovery` capability
+/// in its NIP-11 document.
+///
+/// The Discovery entitlement gate uses this instead of reading rejection
+/// messages, so a relay hiccup can never silently demote a paying user to the
+/// demo: only a relay that answers and does not advertise yields the demo
+/// fallback. `Err` means the relay did not answer the question and the
+/// entitlement gate must surface the original error.
+#[tauri::command]
+pub async fn get_relay_discovery_support(state: State<'_, AppState>) -> Result<bool, String> {
+    relay_advertises_discovery(&state).await
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -410,6 +463,28 @@ mod tests {
             doc.self_.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         );
+    }
+
+    #[test]
+    fn relay_information_document_advertises_discovery_when_token_present() {
+        let doc: RelayInformationDocument =
+            serde_json::from_str(r#"{"supported_extensions":["nip-er","colony-discovery"]}"#)
+                .expect("NIP-11 document");
+        assert!(document_advertises_discovery(&doc));
+    }
+
+    #[test]
+    fn relay_information_document_without_token_does_not_advertise_discovery() {
+        // An old relay that omits `supported_extensions` entirely, or lists
+        // other extensions, must deserialize and answer "does not advertise".
+        let omitted: RelayInformationDocument =
+            serde_json::from_str(r#"{"name":"old relay"}"#).expect("NIP-11 document");
+        assert!(!document_advertises_discovery(&omitted));
+
+        let other: RelayInformationDocument =
+            serde_json::from_str(r#"{"supported_extensions":["nip-er"]}"#)
+                .expect("NIP-11 document");
+        assert!(!document_advertises_discovery(&other));
     }
 
     /// Spec test-vector regression for gotcha #3: the NIP-OA preimage subject
