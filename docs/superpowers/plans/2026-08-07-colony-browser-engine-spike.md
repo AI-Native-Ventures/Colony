@@ -1330,10 +1330,11 @@ mod tests {
     #[test]
     fn ledger_enforces_task_cap() {
         let mut ledger = BudgetLedger::default();
-        for _ in 0..26 {
+        for _ in 0..41 {
             ledger.record("browser_snapshot", 4_000);
         }
         assert!(ledger.total_tokens() > 40_000);
+        assert!(!ledger.within_budget());
     }
 }
 ```
