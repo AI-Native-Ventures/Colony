@@ -4,7 +4,7 @@ use crate::contracts::{BudgetEntry, BudgetReport};
 
 /// Estimate the token cost of `chars` of text (4 chars/token).
 pub fn estimate_tokens(chars: usize) -> usize {
-    ((chars + 3) / 4).max(1)
+    chars.div_ceil(4).max(1)
 }
 
 /// Task-scoped budget ledger. Caps: 25 calls / 40k estimated tokens.
@@ -74,7 +74,4 @@ mod tests {
         assert!(ledger.total_tokens() > 40_000);
         assert!(!ledger.within_budget());
     }
-
-    #[test]
-    fn module_loads() {}
 }

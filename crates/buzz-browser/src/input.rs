@@ -40,7 +40,7 @@ fn rand() -> f64 {
     // Simple deterministic LCG for tests; not security-sensitive.
     use std::cell::Cell;
     thread_local! {
-        static SEED: Cell<u64> = Cell::new(0x9E3779B97F4A7C15);
+        static SEED: Cell<u64> = const { Cell::new(0x9E3779B97F4A7C15) };
     }
     SEED.with(|s| {
         let mut x = s.get();
@@ -189,7 +189,4 @@ mod tests {
         assert_eq!(estimate_tokens("hello world".chars().count()), 3);
         assert_eq!(estimate_tokens(0), 1);
     }
-
-    #[test]
-    fn module_loads() {}
 }

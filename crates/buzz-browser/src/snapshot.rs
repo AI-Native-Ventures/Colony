@@ -99,18 +99,23 @@ pub fn build_outline(
     let mut lines: Vec<String> = Vec::new();
     let mut ref_counter = 0usize;
 
+    struct OutlineCtx<'a> {
+        refs: &'a mut HashMap<String, RefTarget>,
+        lines: &'a mut Vec<String>,
+        stats: &'a mut SnapshotStats,
+        ref_counter: &'a mut usize,
+        caps: &'a SnapshotCaps,
+    }
+
     fn walk(
         id: &str,
         depth: usize,
         _nodes: &[AxNode],
         by_id: &HashMap<&str, &AxNode>,
-        refs: &mut HashMap<String, RefTarget>,
-        lines: &mut Vec<String>,
-        stats: &mut SnapshotStats,
-        ref_counter: &mut usize,
-        caps: &SnapshotCaps,
+        ctx: &mut OutlineCtx<'_>,
     ) {
-        if stats.nodes >= caps.max_nodes || lines.join("\n").len() >= caps.max_chars {
+        if ctx.stats.nodes >= ctx.caps.max_nodes || ctx.lines.join("\n").len() >= ctx.caps.max_chars
+        {
             return;
         }
         let Some(node) = by_id.get(id).copied() else {
@@ -120,43 +125,23 @@ pub fn build_outline(
             // Ignored AX nodes (e.g. generic containers) can still hold
             // meaningful descendants — descend without emitting the node.
             for child in &node.child_ids {
-                walk(
-                    child,
-                    depth,
-                    _nodes,
-                    by_id,
-                    refs,
-                    lines,
-                    stats,
-                    ref_counter,
-                    caps,
-                );
+                walk(child, depth, _nodes, by_id, ctx);
             }
             return;
         }
         if skip(&node.role) {
             for child in &node.child_ids {
-                walk(
-                    child,
-                    depth,
-                    _nodes,
-                    by_id,
-                    refs,
-                    lines,
-                    stats,
-                    ref_counter,
-                    caps,
-                );
+                walk(child, depth, _nodes, by_id, ctx);
             }
             return;
         }
-        stats.nodes += 1;
+        ctx.stats.nodes += 1;
         let mut line = format!("{}- {}", "  ".repeat(depth), node.role);
         if actionable(&node.role) {
-            *ref_counter += 1;
-            let ref_id = format!("r{ref_counter}");
+            *ctx.ref_counter += 1;
+            let ref_id = format!("r{}", ctx.ref_counter);
             if let Some(backend) = node.backend_node_id {
-                refs.insert(
+                ctx.refs.insert(
                     ref_id.clone(),
                     RefTarget {
                         backend_node_id: backend,
@@ -177,21 +162,11 @@ pub fn build_outline(
                 line.push_str(&format!(" (value: {value})"));
             }
         }
-        lines.push(line);
+        ctx.lines.push(line);
         let label_only = LABEL_ONLY_ROLES.contains(&node.role.as_str());
         if !label_only {
             for child in &node.child_ids {
-                walk(
-                    child,
-                    depth + 1,
-                    _nodes,
-                    by_id,
-                    refs,
-                    lines,
-                    stats,
-                    ref_counter,
-                    caps,
-                );
+                walk(child, depth + 1, _nodes, by_id, ctx);
             }
         }
     }
@@ -207,11 +182,13 @@ pub fn build_outline(
             0,
             &nodes,
             &by_id,
-            &mut refs,
-            &mut lines,
-            &mut stats,
-            &mut ref_counter,
-            caps,
+            &mut OutlineCtx {
+                refs: &mut refs,
+                lines: &mut lines,
+                stats: &mut stats,
+                ref_counter: &mut ref_counter,
+                caps,
+            },
         );
     }
     let outline = lines.join("\n");
@@ -294,8 +271,10 @@ mod tests {
 
     #[test]
     fn outline_respects_node_cap() {
-        let mut caps = SnapshotCaps::default();
-        caps.max_nodes = 1;
+        let caps = SnapshotCaps {
+            max_nodes: 1,
+            ..Default::default()
+        };
         let (outline, _, stats) = build_outline(&sample_ax(), &caps);
         assert_eq!(stats.nodes, 1);
         assert!(outline.len() <= caps.max_chars);
@@ -326,7 +305,4 @@ mod tests {
             .unwrap();
         assert!(snap.outline.contains("button"));
     }
-
-    #[test]
-    fn module_loads() {}
 }

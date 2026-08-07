@@ -190,7 +190,4 @@ mod tests {
         assert_eq!(result["echo"], "Page.navigate");
         server.abort();
     }
-
-    #[test]
-    fn module_loads() {}
 }

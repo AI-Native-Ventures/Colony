@@ -71,7 +71,4 @@ mod tests {
         assert_eq!(server.name, "buzz-browser");
         assert_eq!(server.args, vec!["mcp"]);
     }
-
-    #[test]
-    fn module_loads() {}
 }

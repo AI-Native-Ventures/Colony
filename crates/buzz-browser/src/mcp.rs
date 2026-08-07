@@ -398,7 +398,4 @@ mod tests {
         assert_eq!(TOOL_TYPE, "browser_type");
         assert_eq!(TOOL_BUDGET, "context_budget_report");
     }
-
-    #[test]
-    fn module_loads() {}
 }
