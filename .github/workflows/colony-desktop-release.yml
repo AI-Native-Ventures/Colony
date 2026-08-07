@@ -475,13 +475,18 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
+          STAGING=$(mktemp -d)
+          # The site's download button fetches the unversioned asset name via
+          # /releases/latest/download/Colony_x86_64-setup_unsigned.exe, so
+          # every release must carry BOTH names.
+          cp "$EXE_PATH" "$STAGING/Colony_x86_64-setup_unsigned.exe"
           if ! gh release view "$TAG" --repo AI-Native-Ventures/colony-releases >/dev/null 2>&1; then
             gh release create "$TAG" --repo AI-Native-Ventures/colony-releases \
               --title "Colony ${VERSION}" \
               --notes "Colony ${VERSION} for Windows (unsigned NSIS installer)."
           fi
           gh release upload "$TAG" --repo AI-Native-Ventures/colony-releases --clobber \
-            "$EXE_PATH" "$EXE_SIG"
+            "$EXE_PATH" "$EXE_SIG" "$STAGING/Colony_x86_64-setup_unsigned.exe"
 
       # The auto-update loop. The app polls one fixed URL, so the manifest
       # lives on a rolling tag; each platform merges its own entry into
@@ -528,6 +533,23 @@ jobs:
             echo "::error::Manifest signature does not match the signature this build produced"
             exit 1
           fi
+
+      - name: Verify the public download
+        run: |
+          set -euo pipefail
+          EXPECTED=$(stat -c %s "$EXE_PATH")
+          URL="https://github.com/AI-Native-Ventures/colony-releases/releases/latest/download/Colony_x86_64-setup_unsigned.exe"
+          for attempt in 1 2 3 4 5; do
+            GOT=$(curl -sIL "$URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${GOT:-0}" = "$EXPECTED" ]; then
+              echo "latest/download serves the new installer ($GOT bytes)"
+              exit 0
+            fi
+            echo "Attempt $attempt: got '${GOT:-none}' bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::latest/download/Colony_x86_64-setup_unsigned.exe does not serve the freshly published installer"
+          exit 1
           EXPECTED=$(stat -c %s "$EXE_PATH")
           for attempt in 1 2 3 4 5; do
             SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
