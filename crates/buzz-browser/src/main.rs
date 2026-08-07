@@ -31,8 +31,13 @@ async fn journey_main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error
     };
     let report = buzz_browser::journey::run_reference_journey(&cfg).await?;
     std::fs::create_dir_all("target/browser-spike")?;
+    let filename = if naive {
+        "budget-report-naive.json"
+    } else {
+        "budget-report.json"
+    };
     std::fs::write(
-        "target/browser-spike/budget-report.json",
+        format!("target/browser-spike/{filename}"),
         serde_json::to_string_pretty(&report)?,
     )?;
     println!(

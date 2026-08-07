@@ -41,8 +41,10 @@ cargo run -p buzz-browser --bin buzz-browserd -- journey --base-url http://127.0
 ```
 
 The journey fills the interaction fixture, submits, verifies PASS, and writes
-`target/browser-spike/budget-report.json`. Gate: **≤ 25 calls and ≤ 40,000
-estimated input tokens**; the naive baseline must be measurably worse.
+`target/browser-spike/budget-report.json` (reference) or
+`target/browser-spike/budget-report-naive.json` (naive baseline). Gate:
+**≤ 25 calls and ≤ 40,000 estimated input tokens**; the naive baseline must be
+measurably worse.
 
 ### 3. Agent wiring proof
 
