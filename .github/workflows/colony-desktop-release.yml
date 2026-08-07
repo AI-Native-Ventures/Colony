@@ -276,7 +276,13 @@ jobs:
           cp "$ARCHIVE" "$STAGING/$ARCHIVE_NAME"
           ARCHIVE_URL="https://github.com/AI-Native-Ventures/colony-releases/releases/download/${ROLLING}/${ARCHIVE_NAME}"
 
-          desktop/scripts/merge-latest-json.sh "$VERSION" "$UPDATER_ENDPOINT" "$STAGING/latest.json" \
+          # Read the current manifest through the API, not the download URL:
+          # the CDN serves a stale copy for minutes after an upload, and
+          # merging onto a stale copy drops the other platform's entry.
+          desktop/scripts/fetch-latest-json.sh \
+            AI-Native-Ventures/colony-releases "$ROLLING" > "$STAGING/current.json"
+
+          desktop/scripts/merge-latest-json.sh "$VERSION" "@$STAGING/current.json" "$STAGING/latest.json" \
             "darwin-aarch64:${ARCHIVE_SIG}:${ARCHIVE_URL}"
 
           if ! gh release view "$ROLLING" --repo AI-Native-Ventures/colony-releases >/dev/null 2>&1; then
@@ -292,9 +298,15 @@ jobs:
             "$STAGING/latest.json"
 
       - name: Verify the update manifest
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
         run: |
           set -euo pipefail
-          MANIFEST=$(curl -sL "$UPDATER_ENDPOINT")
+          # Read what was actually stored, not what the download CDN is still
+          # serving. Reading the CDN here failed v0.10.9 on both platforms
+          # while every published artifact was correct.
+          MANIFEST=$(desktop/scripts/fetch-latest-json.sh \
+            AI-Native-Ventures/colony-releases colony-desktop-latest)
           GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
           GOT_URL=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].url')
           GOT_SIG=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].signature')
@@ -505,7 +517,15 @@ jobs:
           cp "$EXE_PATH" "$STAGING/$EXE_NAME"
           EXE_URL="https://github.com/AI-Native-Ventures/colony-releases/releases/download/${ROLLING}/${EXE_NAME}"
 
-          desktop/scripts/merge-latest-json.sh "$VERSION" "$UPDATER_ENDPOINT" "$STAGING/latest.json" \
+          # Read the current manifest through the API, not the download URL:
+          # the CDN serves a stale copy for minutes after an upload, and
+          # merging onto a stale copy drops the other platform's entry. This
+          # job finishes long after the Mac one, so a stale read here is
+          # exactly how a Mac entry would go missing.
+          desktop/scripts/fetch-latest-json.sh \
+            AI-Native-Ventures/colony-releases "$ROLLING" > "$STAGING/current.json"
+
+          desktop/scripts/merge-latest-json.sh "$VERSION" "@$STAGING/current.json" "$STAGING/latest.json" \
             "windows-x86_64:${EXE_SIG}:${EXE_URL}"
 
           if ! gh release view "$ROLLING" --repo AI-Native-Ventures/colony-releases >/dev/null 2>&1; then
@@ -519,9 +539,15 @@ jobs:
             "$STAGING/latest.json"
 
       - name: Verify the update manifest
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
         run: |
           set -euo pipefail
-          MANIFEST=$(curl -sL "$UPDATER_ENDPOINT")
+          # Read what was actually stored, not what the download CDN is still
+          # serving. Reading the CDN here failed v0.10.9 on both platforms
+          # while every published artifact was correct.
+          MANIFEST=$(desktop/scripts/fetch-latest-json.sh \
+            AI-Native-Ventures/colony-releases colony-desktop-latest)
           GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
           GOT_URL=$(echo "$MANIFEST" | jq -r '.platforms["windows-x86_64"].url')
           GOT_SIG=$(echo "$MANIFEST" | jq -r '.platforms["windows-x86_64"].signature')
@@ -533,6 +559,21 @@ jobs:
             echo "::error::Manifest signature does not match the signature this build produced"
             exit 1
           fi
+          # The installer the manifest points at has to be the one this build
+          # produced. This is a download-URL check on purpose - it is what a
+          # client actually fetches - so it retries through CDN propagation.
+          EXPECTED=$(stat -c %s "$EXE_PATH")
+          for attempt in 1 2 3 4 5; do
+            SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${SERVED:-0}" = "$EXPECTED" ]; then
+              echo "Manifest and installer agree: v${VERSION}, ${SERVED} bytes"
+              exit 0
+            fi
+            echo "Attempt $attempt: installer served ${SERVED:-none} bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::The installer the manifest points at is not the one this build produced"
+          exit 1
 
       - name: Verify the public download
         run: |
@@ -549,16 +590,4 @@ jobs:
             sleep 10
           done
           echo "::error::latest/download/Colony_x86_64-setup_unsigned.exe does not serve the freshly published installer"
-          exit 1
-          EXPECTED=$(stat -c %s "$EXE_PATH")
-          for attempt in 1 2 3 4 5; do
-            SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
-            if [ "${SERVED:-0}" = "$EXPECTED" ]; then
-              echo "Manifest and archive agree: v${VERSION}, ${SERVED} bytes"
-              exit 0
-            fi
-            echo "Attempt $attempt: archive served ${SERVED:-none} bytes, expected $EXPECTED; retrying"
-            sleep 10
-          done
-          echo "::error::The archive the manifest points at is not the one this build produced"
           exit 1
