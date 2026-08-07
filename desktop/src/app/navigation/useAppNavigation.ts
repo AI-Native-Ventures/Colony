@@ -35,6 +35,7 @@ export type DiscoveryNavigationOptions = NavigationBehavior &
       | "fieldId"
       | "roleId"
       | "campaignId"
+      | "leadId"
     >
   > & {
     surface?: DiscoverySurface;
@@ -53,6 +54,7 @@ export function buildDiscoverySearch(
     ...(options?.fieldId ? { fieldId: options.fieldId } : {}),
     ...(options?.roleId ? { roleId: options.roleId } : {}),
     ...(options?.campaignId ? { campaignId: options.campaignId } : {}),
+    ...(options?.leadId ? { leadId: options.leadId } : {}),
     ...(options?.tab ? { tab: options.tab } : {}),
   };
 }

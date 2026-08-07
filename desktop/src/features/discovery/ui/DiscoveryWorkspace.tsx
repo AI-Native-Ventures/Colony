@@ -641,6 +641,7 @@ export function DiscoveryWorkspace({
           initialLeads={readModel.leads}
           initialMode={mode === "people" ? "people" : "companies"}
           scope="global"
+          search={search}
         />
       </div>
     );

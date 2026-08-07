@@ -12,3 +12,13 @@ test("an industry deep link keeps an inferred surface", () => {
   assert.equal(search.surface, undefined);
   assert.equal(search.industryId, "healthcare");
 });
+
+test("a leadId deep link is validated and preserved", () => {
+  const search = validateDiscoverySearch({ leadId: "lead-001" });
+  assert.equal(search.leadId, "lead-001");
+});
+
+test("an empty leadId is dropped at the router boundary", () => {
+  const search = validateDiscoverySearch({ leadId: "" });
+  assert.equal(search.leadId, undefined);
+});
