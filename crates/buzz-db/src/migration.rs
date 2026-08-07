@@ -640,7 +640,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 47);
+        assert_eq!(migrations.len(), 49);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -712,6 +712,29 @@ mod tests {
             .sql
             .as_str()
             .contains("ALTER TABLE jobs ADD COLUMN provider TEXT"));
+        // Channel-id → community lookups (bc9e6528a7): covering
+        // (INCLUDE (community_id)) and partial (WHERE deleted_at IS NULL) so
+        // Db::communities_of_channels / Db::community_of_channel can serve
+        // index-only without a community_id predicate. Deliberately NOT
+        // UNIQUE — `id` alone is not unique in this table, because the same
+        // channel id can appear under more than one community.
+        assert_eq!(migrations[47].version, 48);
+        let channels_id_lookup = migrations[47].sql.as_str();
+        assert!(channels_id_lookup.contains("idx_channels_id_live"));
+        assert!(channels_id_lookup.contains("INCLUDE (community_id)"));
+        assert!(channels_id_lookup.contains("WHERE deleted_at IS NULL"));
+        assert!(
+            !channels_id_lookup.contains("CREATE UNIQUE INDEX"),
+            "channel ids are not unique across communities; a UNIQUE index would encode a false constraint and fail to build"
+        );
+
+        // Max-length custom emoji reactions (2ea9385015): a 64-character
+        // shortcode is stored wrapped in colons, so `:shortcode:` is 66.
+        assert_eq!(migrations[48].version, 49);
+        assert!(migrations[48]
+            .sql
+            .as_str()
+            .contains("ALTER TABLE reactions ALTER COLUMN emoji TYPE VARCHAR(66)"));
         assert!(migrations[0]
             .sql
             .as_str()
@@ -1080,6 +1103,10 @@ mod tests {
             desired_schema.contains("CREATE TABLE join_policy_acceptances"),
             "desired-state schema must include join-policy evidence used by invite claims",
         );
+        assert!(
+            desired_schema.contains("idx_channels_id_live"),
+            "desired-state schema must carry the channel-id lookup covering index",
+        );
 
         // Replica heartbeat (this branch, renumbered to 0026 after
         // 0025_relay_invites landed on main): the fence's portable read-side
@@ -1440,7 +1467,7 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(26));
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(49));
     }
 
     #[tokio::test]
