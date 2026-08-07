@@ -29,7 +29,9 @@
 # The Compose project name follows the relay port, so the second harness gets
 # its own containers, volumes, and database. The pre-flight guard below fails
 # BEFORE any mutation (compose up / schema reset / seed) when the port set is
-# already owned by another process.
+# already owned by another process, and a per-port-set start lock serializes
+# concurrent launcher runs so two agents starting at the same moment cannot
+# both pass the guard.
 #
 # Usage:
 #   ./scripts/start-isolated-test-relay.sh [--profile <cargo-profile>]
@@ -100,7 +102,6 @@ err() { echo -e "${RED}[isolated-relay]${NC} $*" >&2; }
 # else and the script stops before touching a single row.
 RELAY_LOG="${RELAY_LOG:-/tmp/dawn-relay-${RELAY_MAIN}.log}"
 TMUX_SESSION="${TMUX_SESSION:-dawn-relay-${RELAY_MAIN}}"
-tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null || true
 
 port_in_use() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 port_override_hint() {
@@ -119,14 +120,52 @@ automatically.
 HINT_EOF
 }
 
-# A relay already listening on our main port means another agent owns this
-# port set (or an orphaned relay is squatting on it). Always abort.
-if command -v lsof >/dev/null 2>&1 && port_in_use "${RELAY_MAIN}"; then
-  err "Port ${RELAY_MAIN} is already in use; refusing to report a stale relay as this harness."
-  lsof -nP -iTCP:"${RELAY_MAIN}" -sTCP:LISTEN >&2 || true
+# The port guard is the safety story of this script; it must not silently
+# degrade. Make lsof a hard requirement rather than an optional capability.
+if ! command -v lsof >/dev/null 2>&1; then
+  err "lsof is required for the port guard but was not found on PATH; refusing to start a harness without it."
   port_override_hint
   exit 1
 fi
+
+# ── Start lock: serialize harness starts per port set ────────────────────────
+# Two agents starting on the same port set inside the guard-to-bind window can
+# both pass every check below (no project exists yet, relay not bound) and
+# both reach the schema reset, so the later one destroys the earlier one's
+# mid-run state. The lock makes that impossible: the first start holds the
+# port set for its whole run, and a concurrent start either waits for the
+# winner and then fails the re-run guard (the winner's relay or owner is now
+# visible) or times out here, before any mutation. flock(1) is not available
+# on macOS by default, so this is an atomic mkdir lock. We never auto-remove
+# a lock we did not create: a stale lock fails closed and tells the operator
+# exactly how to clear it.
+LOCK_DIR="/tmp/buzz-harness-start-${PROJECT}"
+LOCK_WAIT="${BUZZ_HARNESS_START_LOCK_WAIT:-20}"
+acquire_start_lock() {
+  local deadline=$(( $(date +%s) + LOCK_WAIT ))
+  while :; do
+    if mkdir "${LOCK_DIR}" 2>/dev/null; then
+      printf '%s\n' "$$" > "${LOCK_DIR}/pid"
+      return 0
+    fi
+    if [[ "$(date +%s)" -ge "${deadline}" ]]; then
+      err "Another harness start is already in progress on project ${PROJECT} (lock ${LOCK_DIR}); aborting to avoid racing it."
+      err "If no harness is actually starting, remove the lock and retry: rm -rf '${LOCK_DIR}'"
+      port_override_hint
+      return 1
+    fi
+    sleep 1
+  done
+}
+release_start_lock() {
+  if [[ "$(cat "${LOCK_DIR}/pid" 2>/dev/null || true)" == "$$" ]]; then
+    rm -rf "${LOCK_DIR}"
+  fi
+}
+if ! acquire_start_lock; then
+  exit 1
+fi
+trap release_start_lock EXIT
 
 # Backing-service ports may legitimately be bound by OUR OWN previous run of
 # this port set (the reuse path: containers stay up, schema is re-applied).
@@ -166,13 +205,29 @@ if [[ "${OUR_HARNESS_UP}" == true ]]; then
   fi
   if [[ -n "${owner}" && "${owner}" != "${REPO_ROOT}" ]]; then
     err "Compose project ${PROJECT} is already running and owned by ${owner}; refusing to reset its database."
+    err "If that worktree was moved or renamed since the stack was created, reclaim it with: docker compose -p ${PROJECT} -f ${COMPOSE_FILE} down -v"
     port_override_hint
     exit 1
   fi
 fi
+
+# Only our own previous relay may be killed, and only once the owner check has
+# passed: the session name is port-scoped, so killing it while another agent's
+# harness owns this port set would take down their relay.
+tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null || true
+
+# A relay already listening on our main port means another agent owns this
+# port set (or an orphaned relay is squatting on it). Always abort.
+if port_in_use "${RELAY_MAIN}"; then
+  err "Port ${RELAY_MAIN} is already in use; refusing to report a stale relay as this harness."
+  lsof -nP -iTCP:"${RELAY_MAIN}" -sTCP:LISTEN >&2 || true
+  port_override_hint
+  exit 1
+fi
+
 if [[ "${OUR_HARNESS_UP}" != true ]]; then
-  for port in "${PG_PORT}" "${REDIS_PORT}" "${MINIO_PORT}" "${RELAY_HEALTH}" "${RELAY_METRICS}"; do
-    if command -v lsof >/dev/null 2>&1 && port_in_use "${port}"; then
+  for port in "${PG_PORT}" "${REDIS_PORT}" "${MINIO_PORT}" "${MINIO_CONSOLE_PORT}" "${RELAY_HEALTH}" "${RELAY_METRICS}"; do
+    if port_in_use "${port}"; then
       err "Port ${port} is already in use by another process; refusing to start a harness that would collide with it."
       lsof -nP -iTCP:"${port}" -sTCP:LISTEN >&2 || true
       port_override_hint
