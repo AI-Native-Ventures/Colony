@@ -719,7 +719,7 @@ async fn cmd_credits_reconcile(date_arg: &str, csv_path: &std::path::Path) -> Re
 
 /// Convert a dollar amount to nanoUSD integers (rounding, sub-nano floor of
 /// 1, negatives rejected) — the same money semantics as
-/// `crates/buzz-meter/src/cost.rs::to_nanousd`.
+/// `crates/buzz-meter-core/src/cost.rs::to_nanousd`.
 fn usd_to_nanousd(usd: f64) -> std::result::Result<i64, String> {
     let nanos = (usd * NANOUSD_PER_USD).round();
     if !nanos.is_finite() || nanos < 0.0 || nanos > i64::MAX as f64 {

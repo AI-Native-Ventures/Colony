@@ -2,7 +2,7 @@
 //! debit/credit API.
 //!
 //! Money is nanoUSD integers everywhere — never floats in the schema or the
-//! API (matching `crates/buzz-meter/src/cost.rs`). The balance is usage
+//! API (matching `crates/buzz-meter-core/src/cost.rs`). The balance is usage
 //! credits: every model call debits the provider's **observed cost 1:1**
 //! (see `colony-credits-gateway` spec, "Checkout model"). Colony's fee is
 //! charged once at purchase time and never appears in this ledger.
@@ -19,7 +19,7 @@ use crate::error::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 
-/// NanoUSD in one US dollar. Mirrors `buzz-meter/src/cost.rs`; providers
+/// NanoUSD in one US dollar. Mirrors `buzz-meter-core/src/cost.rs`; providers
 /// report money in dollars and the ledger stores integers.
 pub const NANOUSD_PER_USD: f64 = 1_000_000_000.0;
 
@@ -111,7 +111,7 @@ pub async fn seed(
 /// Debit the provider's observed cost 1:1, idempotent on `reference`.
 ///
 /// `cost` is nanoUSD as reported by the provider (see
-/// `buzz-meter::observed_cost_nanousd`). The ledger line's `delta` is
+/// `buzz-meter-core::observed_cost_nanousd`). The ledger line's `delta` is
 /// `-cost` and `observed_cost` records the basis. `model` and `request_id`
 /// are the gateway's attribution for the call. A replayed reference is a
 /// no-op returning the original entry.
