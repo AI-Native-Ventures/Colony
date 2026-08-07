@@ -146,6 +146,10 @@ test.describe("Blocks live Gate C", () => {
       "BUZZ_E2E_APPROVAL_COUNTER",
       process.env.BUZZ_E2E_APPROVAL_COUNTER,
     );
+    const harnessProject = required(
+      "BUZZ_E2E_HARNESS_PROJECT",
+      process.env.BUZZ_E2E_HARNESS_PROJECT,
+    );
     const evidence = evidenceRoot;
     const name = `blocks-live-${process.pid}`;
 
@@ -597,7 +601,7 @@ test.describe("Blocks live Gate C", () => {
       [
         "compose",
         "-p",
-        process.env.BUZZ_E2E_HARNESS_PROJECT ?? "buzz-harness",
+        harnessProject,
         "-f",
         "docker-compose.harness.yml",
         "exec",
