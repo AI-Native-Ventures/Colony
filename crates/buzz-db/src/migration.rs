@@ -427,6 +427,10 @@ mod tests {
             "push_gateway_delivery_request_replays",
             "product_feedback",
             "replica_heartbeat",
+            "accounts",
+            "credit_ledger",
+            "gateway_tokens",
+            "model_catalog",
         ] {
             if normalized[insert_pos..].contains(&format!("'{value}'")) {
                 globals.insert(value.to_owned());
@@ -640,7 +644,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 49);
+        assert_eq!(migrations.len(), 50);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1467,7 +1471,70 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(49));
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(50));
+    }
+
+    /// Acceptance 3 (upgrade path): migration 0050 (credit ledger) applies
+    /// cleanly on top of a populated 0049 schema — additive only.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn migration_0050_credit_ledger_applies_on_populated_0049_schema() {
+        let pool = connect_test_pool().await;
+        reset_public_schema(&pool).await;
+        MIGRATOR
+            .run_to(49, &pool)
+            .await
+            .expect("apply migrations 1-49");
+
+        // Production-like pre-0050 data: community, member, channel, event.
+        let community_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(community_id)
+            .bind(format!("pre-0050-{}.example", community_id.simple()))
+            .execute(&pool)
+            .await
+            .expect("insert community");
+        sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2)")
+            .bind(community_id)
+            .bind(vec![1_u8; 32])
+            .execute(&pool)
+            .await
+            .expect("insert user");
+        sqlx::query(
+            "INSERT INTO channels (id, community_id, name, channel_type, visibility, created_by) \
+             VALUES ($1, $2, 'pre-0050', 'stream', 'open', $3)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(community_id)
+        .bind(vec![2_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("insert channel");
+
+        run_migrations(&pool)
+            .await
+            .expect("0050 must apply additively on a populated schema");
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(50));
+
+        for table in [
+            "accounts",
+            "credit_ledger",
+            "gateway_tokens",
+            "model_catalog",
+        ] {
+            let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+                .bind(table)
+                .fetch_one(&pool)
+                .await
+                .expect("probe table");
+            assert!(exists, "{table} must exist after 0050");
+        }
+        // Pre-existing data survives.
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .expect("count users");
+        assert_eq!(users, 1, "pre-0050 rows must survive the upgrade");
     }
 
     #[tokio::test]

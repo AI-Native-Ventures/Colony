@@ -35,3 +35,5 @@ tracing = { workspace = true }
 sqlx = { workspace = true }
 url = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+csv = "1"
+chrono = { workspace = true }

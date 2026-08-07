@@ -20,13 +20,16 @@
 //! newest timestamp and collide on the bumped second. run.sh serialization is
 //! the guard against parallel adds (e.g. `xargs -P`).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use buzz_core::kind::KIND_NIP43_MEMBERSHIP_LIST;
 use buzz_core::tenant::{relay_url_authority, TenantContext};
+use buzz_db::credits::{self, NANOUSD_PER_USD};
 use buzz_db::{Db, DbConfig};
 use buzz_pubsub::{EventTopic, PubSubManager};
+use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use nostr::{EventBuilder, Keys, Kind, Tag};
 use tracing::warn;
@@ -93,6 +96,44 @@ enum Command {
         #[arg(long)]
         relay_key: Option<String>,
     },
+    /// Colony Credits: seed balances, read balances, reconcile against the
+    /// Vercel usage export. Money is nanoUSD integers end to end.
+    Credits {
+        #[command(subcommand)]
+        command: CreditsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CreditsCommand {
+    /// Seed a credit balance (Phase 1 money in). Idempotent on --ref.
+    Seed {
+        /// Account pubkey — bech32 npub or 64-char hex.
+        #[arg(long)]
+        pubkey: String,
+        /// Amount in US dollars (converted to nanoUSD; never stored as a float).
+        #[arg(long)]
+        usd: f64,
+        /// Idempotency reference — the same ref twice credits once.
+        #[arg(long)]
+        r#ref: String,
+    },
+    /// Show an account's current balance.
+    Balance {
+        /// Account pubkey — bech32 npub or 64-char hex.
+        #[arg(long)]
+        pubkey: String,
+    },
+    /// Reconcile credit_ledger debits for one UTC day against the Vercel AI
+    /// Gateway usage export. Exits non-zero when drift exceeds 1%.
+    Reconcile {
+        /// UTC day to reconcile, YYYY-MM-DD.
+        #[arg(long)]
+        date: String,
+        /// Path to the Vercel usage CSV export.
+        #[arg(long)]
+        vercel_csv: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -152,6 +193,7 @@ async fn run(cli: Cli) -> Result<i32> {
             reconcile_channels(relay_key).await?;
             Ok(0)
         }
+        Command::Credits { command } => cmd_credits(command).await,
     }
 }
 
@@ -581,4 +623,200 @@ async fn reconcile_channels(relay_key_arg: Option<String>) -> Result<()> {
         channels.len()
     );
     Ok(())
+}
+
+// ---- Colony Credits -------------------------------------------------------
+
+async fn cmd_credits(command: CreditsCommand) -> Result<i32> {
+    match command {
+        CreditsCommand::Seed { pubkey, usd, r#ref } => cmd_credits_seed(&pubkey, usd, &r#ref).await,
+        CreditsCommand::Balance { pubkey } => cmd_credits_balance(&pubkey).await,
+        CreditsCommand::Reconcile { date, vercel_csv } => {
+            cmd_credits_reconcile(&date, &vercel_csv).await
+        }
+    }
+}
+
+async fn cmd_credits_seed(pubkey_arg: &str, usd: f64, reference: &str) -> Result<i32> {
+    let pubkey_hex = match parse_pubkey_hex(pubkey_arg) {
+        Ok(h) => h,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Ok(1);
+        }
+    };
+    let nanos = match usd_to_nanousd(usd) {
+        Ok(n) => n,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Ok(1);
+        }
+    };
+    let db = connect_db().await?;
+    let entry = credits::seed(db.pool(), &hex::decode(&pubkey_hex)?, nanos, reference).await?;
+    println!(
+        "seeded ${usd} ({nanos} nanoUSD) for {pubkey_hex} — ledger entry {} (kind {}, ref {reference})",
+        entry.id, entry.kind
+    );
+    let bal = credits::balance(db.pool(), &hex::decode(&pubkey_hex)?).await?;
+    println!(
+        "new balance: {bal} nanoUSD (${:.6})",
+        bal as f64 / NANOUSD_PER_USD
+    );
+    Ok(0)
+}
+
+async fn cmd_credits_balance(pubkey_arg: &str) -> Result<i32> {
+    let pubkey_hex = match parse_pubkey_hex(pubkey_arg) {
+        Ok(h) => h,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Ok(1);
+        }
+    };
+    let db = connect_db().await?;
+    let bal = credits::balance(db.pool(), &hex::decode(&pubkey_hex)?).await?;
+    println!(
+        "{pubkey_hex}: {bal} nanoUSD (${:.6})",
+        bal as f64 / NANOUSD_PER_USD
+    );
+    Ok(0)
+}
+
+async fn cmd_credits_reconcile(date_arg: &str, csv_path: &std::path::Path) -> Result<i32> {
+    let day = NaiveDate::parse_from_str(date_arg, "%Y-%m-%d")
+        .map_err(|e| anyhow::anyhow!("invalid --date '{date_arg}' (expected YYYY-MM-DD): {e}"))?;
+    let db = connect_db().await?;
+    let ledger = credits::debits_on_day(db.pool(), day).await?;
+    let vercel = sum_vercel_csv(csv_path, day)?;
+
+    let drift = if vercel == 0 {
+        if ledger == 0 {
+            0.0
+        } else {
+            f64::INFINITY
+        }
+    } else {
+        (ledger as i128 - vercel as i128).unsigned_abs() as f64 / vercel as f64
+    };
+
+    println!(
+        "reconcile {day}: ledger debits {ledger} nanoUSD (${:.6}) vs Vercel export {vercel} nanoUSD (${:.6})",
+        ledger as f64 / NANOUSD_PER_USD,
+        vercel as f64 / NANOUSD_PER_USD,
+    );
+    if drift > 0.01 {
+        bail!(
+            "drift {:.2}% exceeds the 1% threshold — ledger {} vs Vercel {} nanoUSD",
+            drift * 100.0,
+            ledger,
+            vercel
+        );
+    }
+    println!("drift {:.2}% — within the 1% threshold", drift * 100.0);
+    Ok(0)
+}
+
+/// Convert a dollar amount to nanoUSD integers (rounding, sub-nano floor of
+/// 1, negatives rejected) — the same money semantics as
+/// `crates/buzz-meter/src/cost.rs::to_nanousd`.
+fn usd_to_nanousd(usd: f64) -> std::result::Result<i64, String> {
+    let nanos = (usd * NANOUSD_PER_USD).round();
+    if !nanos.is_finite() || nanos < 0.0 || nanos > i64::MAX as f64 {
+        return Err(format!("amount ${usd} cannot be represented in nanoUSD"));
+    }
+    if nanos == 0.0 && usd > 0.0 {
+        return Ok(1);
+    }
+    Ok(nanos as i64)
+}
+
+/// Sum the cost column of a Vercel usage CSV export for one UTC day, in
+/// nanoUSD. Column names are matched case-insensitively because Vercel's
+/// export shape is not contractual; a row whose date column (if present) does
+/// not fall on `day` is skipped.
+fn sum_vercel_csv(path: &std::path::Path, day: NaiveDate) -> Result<i64> {
+    let mut rdr = csv::Reader::from_path(path)
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+    let headers = rdr
+        .headers()
+        .map_err(|e| anyhow::anyhow!("cannot read headers from {}: {e}", path.display()))?;
+
+    let cost_col = headers
+        .iter()
+        .position(|h| {
+            matches!(
+                h.to_ascii_lowercase().as_str(),
+                "cost"
+                    | "total_cost"
+                    | "totalcost"
+                    | "cost_usd"
+                    | "costusd"
+                    | "amount"
+                    | "amount_usd"
+            )
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no cost column found in {} — headers: {}",
+                path.display(),
+                headers.iter().collect::<Vec<_>>().join(", ")
+            )
+        })?;
+    let date_col = headers.iter().position(|h| {
+        matches!(
+            h.to_ascii_lowercase().as_str(),
+            "date" | "created_at" | "createdat" | "timestamp" | "time" | "day" | "usage_date"
+        )
+    });
+
+    let mut total: i128 = 0;
+    for (i, record) in rdr.records().enumerate() {
+        let record = record.map_err(|e| {
+            anyhow::anyhow!("row {} in {} is not valid CSV: {e}", i + 2, path.display())
+        })?;
+        if let Some(dc) = date_col {
+            if let Some(raw_date) = record.get(dc) {
+                let raw_date = raw_date.trim();
+                if !raw_date.is_empty() && !csv_date_matches(raw_date, day) {
+                    continue;
+                }
+            }
+        }
+        let raw = record.get(cost_col).unwrap_or("").trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let row_no = record
+            .position()
+            .map(|p| p.line())
+            .unwrap_or((i + 2) as u64);
+        let usd: f64 = raw
+            .parse()
+            .map_err(|e| anyhow::anyhow!("row {row_no} cost '{raw}' is not a number: {e}"))?;
+        if !usd.is_finite() || usd < 0.0 {
+            anyhow::bail!("row {row_no} cost '{raw}' is not a valid non-negative amount");
+        }
+        total += i128::from(usd_to_nanousd(usd).map_err(anyhow::Error::msg)?);
+        if total > i64::MAX as i128 {
+            anyhow::bail!("CSV total exceeds the nanoUSD i64 range");
+        }
+    }
+    Ok(total as i64)
+}
+
+/// Does a CSV date cell (ISO date, ISO timestamp, or a bare YYYY-MM-DD) fall
+/// on `day`? Unknown shapes are treated as matching — the CSV total is the
+/// authority when the export has no usable date column.
+fn csv_date_matches(raw: &str, day: NaiveDate) -> bool {
+    let candidate = raw
+        .split(['T', ' '])
+        .next()
+        .unwrap_or(raw)
+        .chars()
+        .take(10)
+        .collect::<String>();
+    NaiveDate::parse_from_str(&candidate, "%Y-%m-%d")
+        .map(|d| d == day)
+        .unwrap_or(true)
 }
