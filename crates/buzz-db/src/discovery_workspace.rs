@@ -8,10 +8,11 @@ use buzz_core::{
     discovery_workspace::{
         DiscoveryBusinessLeadProjection, DiscoveryCampaignInput, DiscoveryCampaignListRequest,
         DiscoveryCampaignPage, DiscoveryCampaignProjection, DiscoveryLeadCountRow,
-        DiscoveryLeadCounts, DiscoveryLeadListRequest, DiscoveryLeadPage,
-        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceOperation, DiscoveryWorkspaceRequest,
-        DiscoveryWorkspaceResult,
+        DiscoveryLeadCounts, DiscoveryLeadDetail, DiscoveryLeadListRequest, DiscoveryLeadPage,
+        DiscoveryLeadStatus, DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload,
+        DiscoveryWorkspaceOperation, DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
     },
+    party::{is_relationship_transition_allowed, RelationshipKind},
     CommunityId, StoredEvent,
 };
 use nostr::Event;
@@ -326,6 +327,17 @@ async fn apply_workspace_operation_tx(
                 counts: list_lead_counts_tx(tx, community_id).await?,
             })
         }
+        DiscoveryWorkspaceActionPayload::GetLead { lead_id } => {
+            Ok(DiscoveryWorkspaceResult::Lead {
+                lead: Box::new(get_lead_tx(tx, community_id, *lead_id).await?),
+            })
+        }
+        DiscoveryWorkspaceActionPayload::UpdateLead { lead_id, input } => {
+            let lead = update_lead_tx(tx, community_id, actor_pubkey, *lead_id, input).await?;
+            Ok(DiscoveryWorkspaceResult::Lead {
+                lead: Box::new(lead),
+            })
+        }
     }
 }
 
@@ -473,18 +485,22 @@ async fn list_leads_tx(
     request
         .validate()
         .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    let status = request.status.map(status_text);
     let total: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM discovery_business_observations o \
          JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
          JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id \
          WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) \
            AND ($3::text IS NULL OR c.industry_id=$3) \
-           AND ($4::text IS NULL OR c.vertical_id=$4)",
+           AND ($4::text IS NULL OR c.vertical_id=$4) \
+           AND ($5::text IS NULL OR p.status=$5)",
     )
     .bind(community_id.as_uuid())
     .bind(request.campaign_id)
     .bind(request.industry_id.as_deref())
     .bind(request.vertical_id.as_deref())
+    .bind(status)
     .fetch_one(&mut **tx)
     .await?;
     let rows = sqlx::query(
@@ -494,15 +510,18 @@ async fn list_leads_tx(
          FROM discovery_business_observations o \
          JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
          JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id \
          WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) \
            AND ($3::text IS NULL OR c.industry_id=$3) \
            AND ($4::text IS NULL OR c.vertical_id=$4) \
-         ORDER BY o.first_observed_at DESC,o.id DESC LIMIT $5 OFFSET $6",
+           AND ($5::text IS NULL OR p.status=$5) \
+         ORDER BY o.first_observed_at DESC,o.id DESC LIMIT $6 OFFSET $7",
     )
     .bind(community_id.as_uuid())
     .bind(request.campaign_id)
     .bind(request.industry_id.as_deref())
     .bind(request.vertical_id.as_deref())
+    .bind(status)
     .bind(i64::from(request.limit))
     .bind(i64::from(request.offset))
     .fetch_all(&mut **tx)
@@ -720,6 +739,133 @@ fn lead_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryBusinessLeadPro
     })
 }
 
+fn status_text(status: DiscoveryLeadStatus) -> &'static str {
+    match status {
+        DiscoveryLeadStatus::Candidate => "candidate",
+        DiscoveryLeadStatus::Accepted => "accepted",
+        DiscoveryLeadStatus::Qualified => "qualified",
+        DiscoveryLeadStatus::Dormant => "dormant",
+        DiscoveryLeadStatus::Disqualified => "disqualified",
+        DiscoveryLeadStatus::ClientActive => "client_active",
+    }
+}
+
+fn lead_detail_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryLeadDetail> {
+    let status: Option<String> = row.try_get("status")?;
+    let status = match status.as_deref() {
+        Some("accepted") => DiscoveryLeadStatus::Accepted,
+        Some("qualified") => DiscoveryLeadStatus::Qualified,
+        Some("dormant") => DiscoveryLeadStatus::Dormant,
+        Some("disqualified") => DiscoveryLeadStatus::Disqualified,
+        Some("client_active") => DiscoveryLeadStatus::ClientActive,
+        _ => DiscoveryLeadStatus::Candidate,
+    };
+    let score: Option<i16> = row.try_get("score")?;
+    Ok(DiscoveryLeadDetail {
+        lead: lead_from_row(row)?,
+        status,
+        owner_persona_id: row.try_get("owner_persona_id")?,
+        website_override: row.try_get("website_override")?,
+        email: row.try_get("email")?,
+        phone_override: row.try_get("phone_override")?,
+        linkedin_url: row.try_get("linkedin_url")?,
+        contact_name: row.try_get("contact_name")?,
+        contact_title: row.try_get("contact_title")?,
+        notes: row.try_get("notes")?,
+        score: score
+            .map(u16::try_from)
+            .transpose()
+            .map_err(|_| DbError::InvalidData("Discovery lead score is invalid".into()))?,
+        updated_by: row.try_get("updated_by")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+async fn get_lead_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    lead_id: Uuid,
+) -> Result<DiscoveryLeadDetail> {
+    let row = sqlx::query(
+        "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.provider,o.name,\
+                o.website,o.phone,o.full_address,o.city,o.state,o.country,o.category,o.subtypes,\
+                o.rating_hundredths,o.reviews_count,o.source_url,o.image_url,o.first_observed_at,\
+                p.status,p.owner_persona_id,p.website AS website_override,p.email,\
+                p.phone AS phone_override,p.linkedin_url,p.contact_name,p.contact_title,p.notes,\
+                p.score,encode(p.updated_by,'hex') AS updated_by,p.updated_at \
+         FROM discovery_business_observations o \
+         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
+         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id \
+         WHERE o.community_id=$1 AND o.id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(lead_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| DbError::NotFound("Discovery Lead".into()))?;
+    lead_detail_from_row(&row)
+}
+
+async fn update_lead_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    actor_pubkey: &[u8; 32],
+    lead_id: Uuid,
+    input: &DiscoveryLeadUpdateInput,
+) -> Result<DiscoveryLeadDetail> {
+    input
+        .validate()
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    let previous = get_lead_tx(tx, community_id, lead_id).await?;
+    let next_status = input
+        .status
+        .unwrap_or(previous.status)
+        .to_relationship_status();
+    let from = previous.status.to_relationship_status();
+    if !is_relationship_transition_allowed(RelationshipKind::Lead, from, next_status) {
+        return Err(DbError::InvalidData(format!(
+            "Lead status transition {from:?} -> {next_status:?} is not allowed"
+        )));
+    }
+    let status = DiscoveryLeadStatus::from_relationship_status(next_status);
+    let score: Option<i16> = input
+        .score
+        .map(|score| {
+            i16::try_from(score)
+                .map_err(|_| DbError::InvalidData("Discovery lead score is invalid".into()))
+        })
+        .transpose()?;
+    sqlx::query(
+        "INSERT INTO discovery_lead_profiles \
+         (community_id,lead_id,status,owner_persona_id,website,email,phone,linkedin_url,\
+          contact_name,contact_title,notes,score,updated_by,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()) \
+         ON CONFLICT (community_id,lead_id) DO UPDATE SET \
+           status=EXCLUDED.status,owner_persona_id=EXCLUDED.owner_persona_id,\
+           website=EXCLUDED.website,email=EXCLUDED.email,phone=EXCLUDED.phone,\
+           linkedin_url=EXCLUDED.linkedin_url,contact_name=EXCLUDED.contact_name,\
+           contact_title=EXCLUDED.contact_title,notes=EXCLUDED.notes,score=EXCLUDED.score,\
+           updated_by=EXCLUDED.updated_by,updated_at=now()",
+    )
+    .bind(community_id.as_uuid())
+    .bind(lead_id)
+    .bind(status_text(status))
+    .bind(input.owner_persona_id.as_deref())
+    .bind(input.website.as_deref())
+    .bind(input.email.as_deref())
+    .bind(input.phone.as_deref())
+    .bind(input.linkedin_url.as_deref())
+    .bind(input.contact_name.as_deref())
+    .bind(input.contact_title.as_deref())
+    .bind(input.notes.as_deref())
+    .bind(score)
+    .bind(actor_pubkey.as_slice())
+    .execute(&mut **tx)
+    .await?;
+    get_lead_tx(tx, community_id, lead_id).await
+}
+
 async fn require_discovery_member_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
@@ -760,6 +906,8 @@ fn operation_text(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
         DiscoveryWorkspaceOperation::ListLeadCounts => "list_lead_counts",
+        DiscoveryWorkspaceOperation::GetLead => "get_lead",
+        DiscoveryWorkspaceOperation::UpdateLead => "update_lead",
     }
 }
 

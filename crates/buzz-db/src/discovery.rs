@@ -6063,6 +6063,7 @@ mod tests {
                     campaign_id: None,
                     industry_id: None,
                     vertical_id: None,
+                    status: None,
                     offset: 0,
                     limit: 100,
                 },

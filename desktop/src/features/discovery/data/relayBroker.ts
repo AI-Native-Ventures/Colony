@@ -18,7 +18,7 @@ import {
   isLiveDiscoverySource,
   type CampaignSourceConfig,
 } from "../sourceConfig";
-import type { LeadCounts } from "../types";
+import type { LeadCounts, LeadDetail } from "../types";
 import type {
   CampaignProjection,
   LeadProjection,
@@ -75,6 +75,10 @@ export type WorkspaceResult =
   | {
       result: "lead_counts";
       counts: LeadCounts;
+    }
+  | {
+      result: "lead";
+      lead: LeadDetail;
     };
 
 export type WorkspaceOperation =
@@ -84,7 +88,9 @@ export type WorkspaceOperation =
   | "get_campaign"
   | "list_campaigns"
   | "list_leads"
-  | "list_lead_counts";
+  | "list_lead_counts"
+  | "get_lead"
+  | "update_lead";
 export type RunOperation = "start" | "status" | "cancel";
 
 export type DiscoveryBrokerDependencies = {
@@ -123,6 +129,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /** Match buzz_core::block::canonical_json byte for byte. */
 export function canonicalDiscoveryJson(value: unknown): string {
+  return canonicalDiscoveryJsonAt(value, "$");
+}
+
+function canonicalDiscoveryJsonAt(value: unknown, path: string): string {
   if (
     value === null ||
     typeof value === "string" ||
@@ -132,22 +142,32 @@ export function canonicalDiscoveryJson(value: unknown): string {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new Error("Discovery records cannot contain non-finite numbers.");
+      throw new Error(
+        `Discovery records cannot contain non-finite numbers at ${path}.`,
+      );
     }
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map(canonicalDiscoveryJson).join(",")}]`;
+    return `[${value
+      .map((item, index) => canonicalDiscoveryJsonAt(item, `${path}[${index}]`))
+      .join(",")}]`;
   }
   if (isPlainObject(value)) {
     return `{${Object.keys(value)
       .sort()
       .map(
-        (key) => `${JSON.stringify(key)}:${canonicalDiscoveryJson(value[key])}`,
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalDiscoveryJsonAt(
+            value[key],
+            `${path}.${key}`,
+          )}`,
       )
       .join(",")}}`;
   }
-  throw new Error("Discovery records must contain JSON values only.");
+  throw new Error(
+    `Discovery records must contain JSON values only at ${path} (got ${String(value)}).`,
+  );
 }
 
 function exactTags(event: RelayEvent, names: string[]): boolean {

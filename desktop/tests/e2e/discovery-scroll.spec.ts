@@ -14,6 +14,7 @@ test("all Discovery industries are reachable by scrolling", async ({
 
   await page.getByTestId("open-discovery-view").click();
   await expect(page).toHaveURL(/#\/discovery/);
+  await page.getByTestId("discovery-top-tab-discover").click();
 
   // The sidebar opens Discovery on the Leads surface; the industry grid
   // lives under the Discover tab.
