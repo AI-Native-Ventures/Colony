@@ -714,6 +714,56 @@ impl AcpClient {
         })
     }
 
+    /// Like [`session_new_full`], but with a caller-supplied `_meta` object
+    /// merged alongside the optional `session_title`.
+    ///
+    /// `_meta` is an ACP escape hatch: adapters read adapter-specific keys
+    /// from it (e.g. `claude-agent-acp` honors `_meta.claudeCode.options`,
+    /// a pass-through of claude-agent-sdk options such as `disallowedTools`
+    /// and `env`). Callers that need session-level tool or env control
+    /// should use this and pass their adapter's meta shape; the extra keys
+    /// are ignored by adapters that do not use them.
+    pub async fn session_new_with_meta(
+        &mut self,
+        cwd: &str,
+        mcp_servers: Vec<McpServer>,
+        system_prompt: Option<&str>,
+        session_title: Option<&str>,
+        meta: Option<serde_json::Value>,
+    ) -> Result<SessionNewResponse, AcpError> {
+        let mut params = serde_json::json!({
+            "cwd": cwd,
+            "mcpServers": mcp_servers,
+        });
+        if let Some(sp) = system_prompt {
+            params["systemPrompt"] = serde_json::Value::String(sp.to_owned());
+        }
+        if session_title.is_some() || meta.is_some() {
+            let mut m = meta
+                .unwrap_or_else(|| serde_json::json!({}))
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            if let Some(title) = session_title {
+                m.insert(
+                    "sessionTitle".to_owned(),
+                    serde_json::Value::String(title.to_owned()),
+                );
+            }
+            params["_meta"] = serde_json::Value::Object(m);
+        }
+        let result = self.send_request("session/new", params).await?;
+        let session_id = result["sessionId"]
+            .as_str()
+            .ok_or_else(|| AcpError::Protocol("session/new response missing sessionId".into()))?
+            .to_owned();
+        tracing::info!(target: "acp::session", "session created: {session_id}");
+        Ok(SessionNewResponse {
+            session_id,
+            raw: result,
+        })
+    }
+
     /// Send `session/new` and return only the `sessionId` string.
     ///
     /// Convenience wrapper around [`session_new_full`].
@@ -3872,6 +3922,73 @@ mod tests {
         assert!(
             received["params"].get("_meta").is_none(),
             "_meta should be absent entirely, not an empty object or null"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_new_with_meta_merges_caller_meta_and_title() {
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"ses_test","_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+
+        let meta = serde_json::json!({
+            "claudeCode": {
+                "options": {
+                    "disallowedTools": ["Bash", "Read"]
+                }
+            }
+        });
+        let resp = client
+            .session_new_with_meta("/tmp", vec![], None, Some("Titled"), Some(meta))
+            .await
+            .expect("session_new_with_meta should succeed");
+
+        let received = &resp.raw["_receivedRequest"];
+        assert_eq!(
+            received["params"]["_meta"]["claudeCode"]["options"]["disallowedTools"][0].as_str(),
+            Some("Bash"),
+            "caller meta should ride through untouched"
+        );
+        assert_eq!(
+            received["params"]["_meta"]["sessionTitle"].as_str(),
+            Some("Titled"),
+            "sessionTitle should merge alongside caller meta"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_new_with_meta_omits_meta_when_both_none() {
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"ses_test","_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+
+        let resp = client
+            .session_new_with_meta("/tmp", vec![], None, None, None)
+            .await
+            .expect("session_new_with_meta should succeed");
+
+        let received = &resp.raw["_receivedRequest"];
+        assert!(
+            received["params"].get("_meta").is_none(),
+            "_meta should be absent when both title and meta are None"
         );
     }
 

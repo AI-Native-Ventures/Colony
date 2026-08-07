@@ -1,4 +1,12 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // stderr, never stdout: in `mcp` mode stdout carries the JSON-RPC frames,
+    // and a single log line on it desyncs the agent's parser.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("journey") {
         let rt = tokio::runtime::Builder::new_current_thread()
