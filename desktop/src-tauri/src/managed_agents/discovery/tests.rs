@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use super::overrides::{divergent_agent_command_override, update_time_agent_command_override};
+#[cfg(windows)]
+use super::refresh_login_shell_path;
 use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
     codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
