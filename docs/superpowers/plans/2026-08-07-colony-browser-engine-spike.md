@@ -633,7 +633,29 @@ impl CdpClient {
     pub async fn navigate(&mut self, url: &str) -> Result<(), BrowserError> {
         self.send_command("Page.navigate", serde_json::json!({ "url": url }))
             .await?;
+        self.wait_until_ready().await?;
         Ok(())
+    }
+
+    /// Poll `document.readyState` until `complete` (bounded), so callers get a
+    /// settled document before snapshotting or interacting.
+    pub async fn wait_until_ready(&mut self) -> Result<(), BrowserError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let ready = self
+                .evaluate("document.readyState")
+                .await
+                .unwrap_or(Value::Null);
+            if ready.as_str() == Some("complete") {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(BrowserError::Cdp(
+                    "page did not reach readyState complete".into(),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     pub async fn evaluate(&mut self, expression: &str) -> Result<Value, BrowserError> {
@@ -893,6 +915,13 @@ pub fn build_outline(
             return;
         };
         if node.ignored {
+            // Ignored AX nodes (e.g. generic containers) can still hold
+            // meaningful descendants — descend without emitting the node.
+            for child in &node.child_ids {
+                walk(
+                    child, depth, _nodes, by_id, refs, lines, stats, ref_counter, caps,
+                );
+            }
             return;
         }
         if skip(&node.role) {
