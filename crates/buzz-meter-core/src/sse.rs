@@ -9,7 +9,7 @@
 ///
 /// Leading whitespace after the colon is stripped, per the SSE convention.
 /// Non-data lines (`event:`, `id:`, comments, blank separators) are skipped.
-pub(crate) fn data_payloads(text: &str) -> impl Iterator<Item = &str> {
+pub fn data_payloads(text: &str) -> impl Iterator<Item = &str> {
     text.lines().filter_map(|line| {
         line.strip_prefix("data:")
             .map(|payload| payload.strip_prefix(' ').unwrap_or(payload))

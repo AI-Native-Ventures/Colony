@@ -1,0 +1,16 @@
+[package]
+name        = "buzz-meter-core"
+description = "Transport-independent usage parsing shared by the metering checkpoint and hosted gateways"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "buzz_meter_core"
+path = "src/lib.rs"
+
+[dependencies]
+buzz-core  = { workspace = true }
+serde_json = { workspace = true }
