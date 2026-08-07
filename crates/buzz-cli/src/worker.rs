@@ -52,103 +52,119 @@ pub async fn run_worker(client: &BuzzClient, config: &SeatConfig) -> Result<(), 
     eprintln!("worker started (pubkey={me})");
 
     loop {
-        let open = match find_open_job(client, &me).await {
-            Ok(Some(job)) => job,
-            Ok(None) => {
-                sleep(Duration::from_secs(IDLE_POLL_SECS)).await;
-                continue;
-            }
-            Err(e) => {
-                eprintln!("worker: could not poll for open jobs, retrying: {e}");
-                sleep(Duration::from_secs(IDLE_POLL_SECS)).await;
-                continue;
-            }
-        };
+        if run_worker_once(client, config).await? {
+            continue;
+        }
+        sleep(Duration::from_secs(IDLE_POLL_SECS)).await;
+    }
+}
 
+/// Run one pass of the worker loop: poll once for open work, and when there
+/// is any, claim and execute it to a finished or failed outcome.
+///
+/// Returns `Ok(true)` when a job was worked this pass, so the caller should
+/// poll again immediately; `Ok(false)` when there was nothing to do, so the
+/// caller should wait before polling again; and `Err` for failures that
+/// should stop the worker (signing errors, a finish write the relay
+/// rejected).
+///
+/// Split out of [`run_worker`] so a test can drive a single pass against a
+/// live relay instead of being stuck inside the infinite loop.
+pub async fn run_worker_once(client: &BuzzClient, config: &SeatConfig) -> Result<bool, CliError> {
+    let me = client.keys().public_key().to_hex();
+
+    let open = match find_open_job(client, &me).await {
+        Ok(Some(job)) => job,
+        Ok(None) => return Ok(false),
+        Err(e) => {
+            eprintln!("worker: could not poll for open jobs, retrying: {e}");
+            return Ok(false);
+        }
+    };
+
+    eprintln!(
+        "worker: found open job {} (employee={})",
+        open.job_id, open.employee
+    );
+
+    let bindings = config.bindings_for(&open.employee);
+    if bindings.is_empty() {
         eprintln!(
-            "worker: found open job {} (employee={})",
-            open.job_id, open.employee
+            "worker: no binding for employee {}, skipping",
+            open.employee
         );
+        return Ok(false);
+    }
 
-        let bindings = config.bindings_for(&open.employee);
-        if bindings.is_empty() {
+    // Cheapest failure first: at least one key must be set before we claim.
+    let usable = bindings
+        .iter()
+        .position(|b| {
+            std::env::var(b.key_var())
+                .ok()
+                .is_some_and(|v| !v.trim().is_empty())
+        })
+        .unwrap_or(bindings.len());
+    if usable == bindings.len() {
+        eprintln!(
+            "worker: no API keys set (tried {}), skipping this job",
+            bindings[0].key_var()
+        );
+        return Ok(false);
+    }
+
+    // Claim it.
+    let claim = sign_claim(client, &open.job_id)?;
+    if client.submit_event(claim).await.is_err() {
+        return Ok(true);
+    }
+
+    let attempt = match read_attempt(client, &open.job_id).await {
+        Some(a) => a,
+        None => return Ok(true),
+    };
+
+    // Heartbeat + LLM race. A `select!` is what makes a heartbeat happen
+    // concurrently without spawning: whichever completes first, the other
+    // is cancelled. When the heartbeat fires, we renew the lease and loop
+    // back to the select.
+    let result = run_with_heartbeats(
+        client,
+        &open.job_id,
+        attempt,
+        &open.instruction,
+        &bindings[usable..],
+    )
+    .await;
+
+    match result {
+        Ok(reply) => {
+            let outcome = sign_finish(
+                client,
+                &open.job_id,
+                attempt,
+                "done",
+                &reply.text,
+                Some(&reply.provider),
+                Some(&reply.model),
+            )?;
+            client.submit_event(outcome).await?;
+            publish_usage(client, &open, attempt, &reply).await;
             eprintln!(
-                "worker: no binding for employee {}, skipping",
-                open.employee
+                "worker: job {} done (provider={}, model={})",
+                open.job_id, reply.provider, reply.model
             );
-            sleep(Duration::from_secs(IDLE_POLL_SECS)).await;
-            continue;
         }
-
-        // Cheapest failure first: at least one key must be set before we claim.
-        let usable = bindings
-            .iter()
-            .position(|b| {
-                std::env::var(b.key_var())
-                    .ok()
-                    .is_some_and(|v| !v.trim().is_empty())
-            })
-            .unwrap_or(bindings.len());
-        if usable == bindings.len() {
-            eprintln!(
-                "worker: no API keys set (tried {}), skipping this job",
-                bindings[0].key_var()
-            );
-            sleep(Duration::from_secs(IDLE_POLL_SECS)).await;
-            continue;
-        }
-
-        // Claim it.
-        let claim = sign_claim(client, &open.job_id)?;
-        if client.submit_event(claim).await.is_err() {
-            continue;
-        }
-
-        let attempt = match read_attempt(client, &open.job_id).await {
-            Some(a) => a,
-            None => continue,
-        };
-
-        // Heartbeat + LLM race. A `select!` is what makes a heartbeat happen
-        // concurrently without spawning: whichever completes first, the other
-        // is cancelled. When the heartbeat fires, we renew the lease and loop
-        // back to the select.
-        let result = run_with_heartbeats(
-            client,
-            &open.job_id,
-            attempt,
-            &open.instruction,
-            &bindings[usable..],
-        )
-        .await;
-
-        match result {
-            Ok(reply) => {
-                let outcome = sign_finish(
-                    client,
-                    &open.job_id,
-                    attempt,
-                    "done",
-                    &reply.text,
-                    Some(&reply.provider),
-                    Some(&reply.model),
-                )?;
-                client.submit_event(outcome).await?;
-                publish_usage(client, &open, attempt, &reply).await;
-                eprintln!(
-                    "worker: job {} done (provider={}, model={})",
-                    open.job_id, reply.provider, reply.model
-                );
-            }
-            Err(e) => {
-                let detail = format!("worker could not run this: {e}");
-                let outcome =
-                    sign_finish(client, &open.job_id, attempt, "failed", &detail, None, None)?;
-                client.submit_event(outcome).await?;
-                eprintln!("worker: job {} failed: {e}", open.job_id);
-            }
+        Err(e) => {
+            let detail = format!("worker could not run this: {e}");
+            let outcome =
+                sign_finish(client, &open.job_id, attempt, "failed", &detail, None, None)?;
+            client.submit_event(outcome).await?;
+            eprintln!("worker: job {} failed: {e}", open.job_id);
         }
     }
+
+    Ok(true)
 }
 
 /// Run the LLM call with interleaved heartbeats.

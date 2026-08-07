@@ -29,6 +29,12 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
+# The worker path under test: `buzz jobs work` and its seat/llm modules live
+# here, and the E2E drives them against a live relay.
+buzz-cli = { path = "../buzz-cli" }
+# Local HTTP stub for provider responses; already a workspace dep and used the
+# same way in buzz-cli's own tests.
+axum = { workspace = true }
 base64 = "0.22"
 hex = { workspace = true }
 rand = { workspace = true }

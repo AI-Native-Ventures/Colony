@@ -10,10 +10,11 @@ mod validate;
 pub mod worker;
 
 use clap::{Parser, Subcommand};
-use client::BuzzClient;
 use error::CliError;
 use nostr::Keys;
 use uuid::Uuid;
+
+pub use client::BuzzClient;
 
 /// Run the Buzz CLI from raw arguments (including `argv[0]`).
 ///
