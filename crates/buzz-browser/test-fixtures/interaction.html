@@ -1,0 +1,18 @@
+<!doctype html>
+<title>interaction fixture</title>
+<h1>Interaction Fixture</h1>
+<p>Expected: fill the box, click submit, PASS appears.</p>
+<form id="form" action="interaction.html#submitted">
+  <input id="name" name="name" autocomplete="off" />
+  <button id="submit" type="submit">Submit</button>
+</form>
+<pre id="result">not-submitted</pre>
+<script>
+  document.getElementById("form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var name = document.getElementById("name").value;
+    var result = document.getElementById("result");
+    result.textContent =
+      name === "colony-agent" ? "PASS" : "FAIL:" + name;
+  });
+</script>

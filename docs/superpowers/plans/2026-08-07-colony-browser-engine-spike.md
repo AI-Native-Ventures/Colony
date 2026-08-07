@@ -1911,7 +1911,7 @@ mod tests {
     #[ignore = "requires fixture servers; run explicitly in Task 9 Step 4"]
     async fn journey_budget_meets_gate() {
         let report = run_reference_journey(&JourneyConfig {
-            binary: std::env::var("BUZZ_BROWSER_BINARY").ok(),
+            binary: std::env::var("BUZZ_BROWSER_BINARY").ok().map(PathBuf::from),
             base_url: "http://127.0.0.1:8777".into(),
             naive: false,
         })
