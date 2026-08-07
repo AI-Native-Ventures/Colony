@@ -1,17 +1,17 @@
 {
-  "commit": "fc4565ea43ecf6ed293ee062b1ba79013acb2bf5",
+  "commit": "764ae4fb5e7cd4a2d93628c1d0a7e99e9095ec42",
   "files": {
-    "rust_total": 299,
-    "rust_lines": 126281,
-    "tauri_coupled": 132,
+    "rust_total": 300,
+    "rust_lines": 126732,
+    "tauri_coupled": 133,
     "portable": 167,
-    "portable_lines": 64787
+    "portable_lines": 64789
   },
   "commands": {
-    "registered": 264,
-    "defined": 264,
+    "registered": 265,
+    "defined": 265,
     "by_reach": {
-      "frontend": 258,
+      "frontend": 259,
       "NO CALLER FOUND": 3,
       "frontend-plugin-prefixed": 2,
       "test-only": 1
@@ -23,16 +23,16 @@
     ]
   },
   "params": {
-    "AppHandle": 237,
-    "State": 197,
+    "AppHandle": 239,
+    "State": 198,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 3
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 237,
-      "State": 197,
+      "AppHandle": 239,
+      "State": 198,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 3
@@ -55,7 +55,7 @@
     ".emit_to(": 0,
     ".dialog()": 3,
     ".shell()": 0,
-    ".opener()": 0,
+    ".opener()": 1,
     ".notification()": 0,
     ".updater()": 0,
     ".get_webview_window(": 3,
@@ -142,6 +142,7 @@
     "src-tauri/src/huddle/transcription.rs": 2,
     "src-tauri/src/commands/personas/sharing.rs": 2,
     "src-tauri/src/commands/agent_metric_archive.rs": 1,
+    "src-tauri/src/commands/openrouter_connect.rs": 1,
     "src-tauri/src/commands/agent_creation.rs": 1,
     "src-tauri/src/commands/personas/create.rs": 1,
     "src-tauri/src/commands/agent_proposals.rs": 1,
@@ -424,6 +425,16 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriAgentAuth.ts:52"
+      ]
+    },
+    "connect_openrouter": {
+      "defining_file": "src-tauri/src/commands/openrouter_connect.rs",
+      "module": "openrouter_connect",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriOpenRouter.ts:4",
+        "src/shared/api/tauriOpenRouter.ts:27"
       ]
     },
     "copy_image_to_clipboard": {
@@ -2239,8 +2250,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriGlobalAgentConfig.ts:28",
-        "src/shared/api/types.ts:980"
+        "src/features/agents/ui/AgentConfigFields.tsx:208",
+        "src/features/agents/ui/OpenRouterConnectField.tsx:8",
+        "src/features/agents/ui/OpenRouterConnectField.tsx:71"
       ]
     },
     "set_huddle_transcription_enabled": {

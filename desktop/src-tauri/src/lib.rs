@@ -822,6 +822,7 @@ pub fn run() {
             put_agent_session_config,
             get_global_agent_config,
             set_global_agent_config,
+            connect_openrouter,
             mesh_start_node,
             mesh_stop_node,
             mesh_node_status,
