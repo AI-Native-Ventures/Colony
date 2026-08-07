@@ -72,6 +72,15 @@ use buzz_cli::seat::load_seat_config;
 use buzz_cli::worker::run_worker_once;
 use buzz_cli::BuzzClient;
 
+/// Serializes the tests that read or write process-global environment
+/// (`BUZZ_SEAT_CONFIG`, binding key vars, `BUZZ_WORKER_HEARTBEAT_SECS`).
+///
+/// Tokio tests in one binary run concurrently on separate threads, and these
+/// variables are process-wide: without the lock, two seats running at once
+/// would read each other's config mid-run and the suite would fail on
+/// scheduling rather than on behaviour.
+static SEAT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Hire an employee and return its pubkey.
 ///
 /// A fixture for these tests, and itself proven by `e2e_employees.rs`: the
@@ -805,13 +814,35 @@ fn write_seat_config(
     endpoint: &str,
     key_var: &str,
 ) -> (buzz_cli::seat::SeatConfig, std::path::PathBuf) {
+    write_seat_config_bindings(employee, &[(provider, model, endpoint, key_var)])
+}
+
+/// Write a seat config listing several bindings for `employee`, and load it
+/// back through `load_seat_config`, the loader a real seat uses.
+///
+/// The `BUZZ_SEAT_CONFIG` env var redirects the loader to the file, exactly
+/// as it would for a seat pointing at a shared or per-worktree config. The
+/// returned config is what the worker runs on; nothing here builds a
+/// `SeatConfig` in memory.
+fn write_seat_config_bindings(
+    employee: &str,
+    bindings: &[(&str, &str, &str, &str)],
+) -> (buzz_cli::seat::SeatConfig, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("buzz-e2e-seat-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("seat.toml");
+    let binding_lines = bindings
+        .iter()
+        .map(|(provider, model, endpoint, key_var)| {
+            format!(
+                "\x20 {{ provider = \"{provider}\", model = \"{model}\", endpoint = \"{endpoint}\", key_var = \"{key_var}\" }},\n"
+            )
+        })
+        .collect::<String>();
     let toml = format!(
         "[employees.{employee}]\n\
          bindings = [\n\
-         \x20 {{ provider = \"{provider}\", model = \"{model}\", endpoint = \"{endpoint}\", key_var = \"{key_var}\" }},\n\
+         {binding_lines}\
          ]\n"
     );
     std::fs::write(&path, toml).unwrap();
@@ -862,6 +893,161 @@ async fn spawn_provider_stub() -> String {
     format!("http://{addr}")
 }
 
+/// Spawn a two-route stub for the fallback-chain walk: the first binding's
+/// route always fails, the second always serves.
+///
+/// The returned counter is how the test proves the first binding was really
+/// tried: if the walk skipped straight to the working binding, the stamps
+/// and ledger would look right and the test would measure nothing.
+async fn spawn_fallback_stub() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use axum::routing::post;
+    use axum::Router;
+    use std::sync::atomic::Ordering;
+
+    let failures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failures_for_handler = failures.clone();
+
+    async fn serving() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+        (
+            axum::http::StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "id": "stub-b-req-1",
+                "choices": [{ "message": { "content": "served by binding B" } }],
+                "usage": { "prompt_tokens": 7, "completion_tokens": 13 },
+            })),
+        )
+    }
+
+    let app = Router::new()
+        .route(
+            "/v1/fallback-bad",
+            post(move || {
+                let failures = failures_for_handler.clone();
+                async move {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::Json(serde_json::json!({
+                            "error": { "message": "quota exhausted on binding A" }
+                        })),
+                    )
+                }
+            }),
+        )
+        .route("/v1/fallback-good", post(serving));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), failures)
+}
+
+/// Spawn a stub that answers like the Anthropic Messages API and records
+/// what it was asked.
+///
+/// The handler insists on the two headers the wire format requires
+/// (`x-api-key`, `anthropic-version`) and a Messages-shaped body, answering
+/// 400 when any of them are wrong, so a regression that drops a header fails
+/// the job instead of passing silently. The captured request is returned so
+/// the test can assert the exact shape positively as well.
+async fn spawn_anthropic_stub() -> (
+    String,
+    std::sync::Arc<tokio::sync::Mutex<serde_json::Value>>,
+) {
+    use axum::extract::Json;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::post;
+    use axum::Router;
+
+    #[derive(Clone)]
+    struct AnthropicStubState {
+        seen: std::sync::Arc<tokio::sync::Mutex<serde_json::Value>>,
+    }
+
+    async fn anthropic_messages(
+        State(state): State<AnthropicStubState>,
+        headers: HeaderMap,
+        body: Json<serde_json::Value>,
+    ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+        let captured = serde_json::json!({
+            "x-api-key": headers.get("x-api-key").and_then(|v| v.to_str().ok()),
+            "anthropic-version": headers.get("anthropic-version").and_then(|v| v.to_str().ok()),
+            "content-type": headers.get("content-type").and_then(|v| v.to_str().ok()),
+            "body": body.0.clone(),
+        });
+        let shape_ok = captured["x-api-key"].is_string()
+            && captured["anthropic-version"].as_str() == Some("2023-06-01")
+            && body["model"].is_string()
+            && body["max_tokens"].is_u64()
+            && body["messages"].is_array()
+            && body["messages"][0]["role"].as_str() == Some("user")
+            && body["messages"][0]["content"].is_string();
+        if !shape_ok {
+            return (
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                Json(serde_json::json!({
+                    "error": { "message": "unexpected request shape" }
+                })),
+            );
+        }
+        *state.seen.lock().await = captured;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "request-id",
+            axum::http::HeaderValue::from_static("msg_stub-1"),
+        );
+        (
+            StatusCode::OK,
+            headers,
+            Json(serde_json::json!({
+                "id": "msg_stub-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "anthropic reply text" }],
+                "model": body["model"],
+                "stop_reason": "end_turn",
+                "usage": { "input_tokens": 11, "output_tokens": 22 },
+            })),
+        )
+    }
+
+    let seen = std::sync::Arc::new(tokio::sync::Mutex::new(serde_json::json!({})));
+    let app = Router::new()
+        .route("/v1/messages", post(anthropic_messages))
+        .with_state(AnthropicStubState { seen: seen.clone() });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), seen)
+}
+
+/// Spawn a provider stub that holds the request open for `delay` before
+/// answering, so the worker's heartbeat loop has time to fire mid-call.
+async fn spawn_slow_stub(delay: Duration) -> String {
+    use axum::routing::post;
+    use axum::Router;
+
+    let app = Router::new().route(
+        "/v1/slow",
+        post(move || async move {
+            tokio::time::sleep(delay).await;
+            (
+                axum::http::StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "id": "slow-req-1",
+                    "choices": [{ "message": { "content": "slow call finished" } }],
+                    "usage": { "prompt_tokens": 9, "completion_tokens": 17 },
+                })),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
 /// Read back and decrypt the ledger record a seat posted for its own call.
 async fn read_usage_record(owner: &Keys) -> UsageRecordPayload {
     let readback = query(
@@ -888,6 +1074,7 @@ async fn the_worker_executes_jobs_on_bindings_from_the_seat_config() {
     // the worker's job loop, and a real HTTP call to a provider stub. The
     // stamps and ledger records below must come from the config each seat
     // loaded, never from literals this test signs itself.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
     let community = default_community().await;
     let founder_a = Keys::generate();
     let founder_b = Keys::generate();
@@ -1027,5 +1214,347 @@ async fn the_worker_executes_jobs_on_bindings_from_the_seat_config() {
     match previous_config {
         Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
         None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn a_worker_walks_the_fallback_chain_when_the_first_binding_fails() {
+    // The seat config lists two bindings for the employee, and the first
+    // one's provider is down (the stub answers 500). The worker must keep
+    // walking and serve the job from the second binding: the stamps on the
+    // finished head and the ledger record must be the second binding's. If
+    // the walk stopped at the first failure, the job would end `failed`
+    // with no stamps at all.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
+    let community = default_community().await;
+    let founder = Keys::generate();
+    seed_relay_owner(community, &founder).await;
+    let employee = hire_an_employee(&founder).await;
+
+    let (stub, failures) = spawn_fallback_stub().await;
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+    let (config, path) = write_seat_config_bindings(
+        &employee,
+        &[
+            (
+                "openai",
+                "stub-model-down",
+                &format!("{stub}/v1/fallback-bad"),
+                "E2E_FALLBACK_KEY_A",
+            ),
+            (
+                "deepseek",
+                "stub-model-up",
+                &format!("{stub}/v1/fallback-good"),
+                "E2E_FALLBACK_KEY_B",
+            ),
+        ],
+    );
+    std::env::set_var("E2E_FALLBACK_KEY_A", "test-key-a");
+    std::env::set_var("E2E_FALLBACK_KEY_B", "test-key-b");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding_b = &config.bindings_for(&employee)[1];
+
+    let filing = file_job(&founder, &employee, "Summarize the pipeline");
+    assert!(submit(&filing).await.0, "job filing not accepted");
+    let job = filing.id.to_hex();
+    await_job_state(&founder, &job, "open").await;
+
+    let client = BuzzClient::new(common::relay_http_url(), founder.clone(), None, None)
+        .expect("client for founder");
+    assert!(
+        run_worker_once(&client, &config)
+            .await
+            .expect("worker pass"),
+        "the worker must find and work the job"
+    );
+
+    let done = await_job_state(&founder, &job, "done").await;
+    assert_eq!(
+        tag_value(&done, "provider"),
+        binding_b.provider,
+        "the head must be stamped with the binding that actually served"
+    );
+    assert_eq!(tag_value(&done, "model"), binding_b.model);
+    assert_eq!(
+        tag_value(&done, "attempts"),
+        "1",
+        "the fallback walk is one lease, not a re-lease"
+    );
+    assert_eq!(
+        tag_value(&done, "lease-holder"),
+        founder.public_key().to_hex()
+    );
+    assert_eq!(
+        head_content(&done)["result"],
+        serde_json::json!("served by binding B")
+    );
+    assert_eq!(
+        failures.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the failing binding must have been tried exactly once before the walk moved on"
+    );
+
+    let record = read_usage_record(&founder).await;
+    assert_eq!(record.provider, binding_b.provider);
+    assert_eq!(record.model.as_deref(), Some(binding_b.model.as_str()));
+    assert_eq!(
+        record.request_id, "stub-b-req-1",
+        "the serving binding's request id must reach the ledger"
+    );
+    assert_eq!(record.http_status, Some(200));
+    assert_eq!(record.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    std::env::remove_var("E2E_FALLBACK_KEY_A");
+    std::env::remove_var("E2E_FALLBACK_KEY_B");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn a_worker_speaks_the_anthropic_messages_wire_format() {
+    // A seat whose binding names `anthropic` must use the Messages API, not
+    // the OpenAI-compatible path: `x-api-key` and `anthropic-version`
+    // headers, a `{model, max_tokens, messages}` body, and the
+    // `content[].text` response shape. The stub answers 400 to any request
+    // that is not that shape, so a regression in the format fails the job
+    // rather than passing silently, and the captured request lets the test
+    // assert the exact shape positively as well.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
+    let community = default_community().await;
+    let founder = Keys::generate();
+    seed_relay_owner(community, &founder).await;
+    let employee = hire_an_employee(&founder).await;
+
+    let (stub, seen) = spawn_anthropic_stub().await;
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+    let (config, path) = write_seat_config(
+        &employee,
+        "anthropic",
+        "claude-sonnet-stub",
+        &format!("{stub}/v1/messages"),
+        "E2E_ANTHROPIC_KEY",
+    );
+    std::env::set_var("E2E_ANTHROPIC_KEY", "anthropic-test-key");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding = &config.bindings_for(&employee)[0];
+
+    let instruction = "Draft the investor update";
+    let filing = file_job(&founder, &employee, instruction);
+    assert!(submit(&filing).await.0, "job filing not accepted");
+    let job = filing.id.to_hex();
+    await_job_state(&founder, &job, "open").await;
+
+    let client = BuzzClient::new(common::relay_http_url(), founder.clone(), None, None)
+        .expect("client for founder");
+    assert!(
+        run_worker_once(&client, &config)
+            .await
+            .expect("worker pass"),
+        "the worker must find and work the job"
+    );
+
+    let done = await_job_state(&founder, &job, "done").await;
+    assert_eq!(tag_value(&done, "provider"), binding.provider);
+    assert_eq!(tag_value(&done, "model"), binding.model);
+    assert_eq!(
+        head_content(&done)["result"],
+        serde_json::json!("anthropic reply text"),
+        "the Messages reply text must land in the head stamp"
+    );
+
+    let seen = seen.lock().await;
+    assert_eq!(
+        seen["x-api-key"],
+        serde_json::json!("anthropic-test-key"),
+        "the binding's key must ride in x-api-key, not Authorization"
+    );
+    assert_eq!(
+        seen["anthropic-version"],
+        serde_json::json!("2023-06-01"),
+        "the Messages API version header must be present"
+    );
+    assert!(
+        seen["content-type"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("application/json")),
+        "the call must be a JSON POST, got {:?}",
+        seen["content-type"]
+    );
+    assert_eq!(
+        seen["body"]["model"],
+        serde_json::json!("claude-sonnet-stub"),
+        "the request body must name the binding's model"
+    );
+    assert_eq!(
+        seen["body"]["max_tokens"],
+        serde_json::json!(4096),
+        "the request body must carry the worker's max_tokens"
+    );
+    assert_eq!(
+        seen["body"]["messages"],
+        serde_json::json!([{ "role": "user", "content": instruction }]),
+        "the request body must be Messages-shaped"
+    );
+    drop(seen);
+
+    let record = read_usage_record(&founder).await;
+    assert_eq!(record.provider, binding.provider);
+    assert_eq!(record.model.as_deref(), Some(binding.model.as_str()));
+    assert_eq!(
+        record.request_id, "msg_stub-1",
+        "the Messages response's request-id must reach the ledger"
+    );
+    assert_eq!(record.http_status, Some(200));
+    assert_eq!(record.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    std::env::remove_var("E2E_ANTHROPIC_KEY");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn a_slow_provider_call_keeps_its_lease_by_heartbeating() {
+    // The provider stub holds the call open longer than one heartbeat
+    // interval. The worker must renew its lease mid-call (observable as
+    // heartbeat events on the relay), a competing claim from the same
+    // human's other machine must be refused while the lease is live, and
+    // the job must finish on the original lease with the correct result.
+    // Without renewal the lease lapses and the competing claim takes the
+    // job over as a new attempt, which is what the deliberate-break run
+    // proves: the mid-call heartbeat assertion fails first.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
+    let community = default_community().await;
+    let founder = Keys::generate();
+    seed_relay_owner(community, &founder).await;
+    let employee = hire_an_employee(&founder).await;
+
+    let stub = spawn_slow_stub(Duration::from_secs(6)).await;
+    let previous_heartbeat = std::env::var_os("BUZZ_WORKER_HEARTBEAT_SECS");
+    std::env::set_var("BUZZ_WORKER_HEARTBEAT_SECS", "2");
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+    let (config, path) = write_seat_config(
+        &employee,
+        "openai",
+        "slow-model",
+        &format!("{stub}/v1/slow"),
+        "E2E_SLOW_KEY",
+    );
+    std::env::set_var("E2E_SLOW_KEY", "slow-key");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding = &config.bindings_for(&employee)[0];
+    let provider = binding.provider.clone();
+    let model = binding.model.clone();
+
+    let filing = file_job(&founder, &employee, "Run the long report");
+    assert!(submit(&filing).await.0, "job filing not accepted");
+    let job = filing.id.to_hex();
+    await_job_state(&founder, &job, "open").await;
+
+    let client = BuzzClient::new(common::relay_http_url(), founder.clone(), None, None)
+        .expect("client for founder");
+    let worker = tokio::spawn(async move {
+        run_worker_once(&client, &config)
+            .await
+            .expect("worker pass")
+    });
+
+    // Mid-flight: the heartbeat loop must actually reach the relay. Without
+    // renewal this assertion fails on the first beat that never comes.
+    let founder_hex = founder.public_key().to_hex();
+    let mut beats = 0usize;
+    for _ in 0..20 {
+        let events = query(
+            &founder,
+            serde_json::json!({ "kinds": [KIND_JOB_HEARTBEAT], "authors": [founder_hex] }),
+        )
+        .await;
+        beats = events
+            .iter()
+            .filter(|event| tag_value(event, "job") == job)
+            .count();
+        if beats > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(
+        beats > 0,
+        "no heartbeat for {job} reached the relay while the call was in flight"
+    );
+
+    // A competing machine with the same identity (the laptop and the desktop
+    // share a pubkey) asks for the job while the lease is live. The relay
+    // must refuse: same head, same attempt, same holder.
+    assert!(
+        submit(&claim_job(&founder, &job)).await.0,
+        "the competing claim must be accepted for storage"
+    );
+    let head = await_head(
+        &founder,
+        &job,
+        "still leased on the original attempt",
+        |head| tag_value(head, "status") == "leased" && attempt_of(head) == 1,
+    )
+    .await;
+    assert_eq!(
+        tag_value(&head, "lease-holder"),
+        founder_hex,
+        "the lease must still belong to the worker that is heartbeating"
+    );
+
+    // The slow call finishes; the worker posts its answer and the job ends
+    // on the original lease, not on a stolen one.
+    let worked = tokio::time::timeout(Duration::from_secs(60), worker)
+        .await
+        .expect("worker must finish within a minute")
+        .expect("worker task must not panic");
+    assert!(worked, "worker must report that it worked the job");
+
+    let done = await_job_state(&founder, &job, "done").await;
+    assert_eq!(tag_value(&done, "attempts"), "1");
+    assert_eq!(tag_value(&done, "provider"), provider);
+    assert_eq!(tag_value(&done, "model"), model);
+    assert_eq!(
+        head_content(&done)["result"],
+        serde_json::json!("slow call finished")
+    );
+
+    let record = read_usage_record(&founder).await;
+    assert_eq!(record.provider, provider);
+    assert_eq!(record.model.as_deref(), Some(model.as_str()));
+    assert_eq!(
+        record.request_id, "slow-req-1",
+        "the slow call's request id must reach the ledger"
+    );
+    assert_eq!(record.http_status, Some(200));
+
+    std::env::remove_var("E2E_SLOW_KEY");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+    match previous_heartbeat {
+        Some(value) => std::env::set_var("BUZZ_WORKER_HEARTBEAT_SECS", value),
+        None => std::env::remove_var("BUZZ_WORKER_HEARTBEAT_SECS"),
     }
 }
