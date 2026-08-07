@@ -22,6 +22,49 @@ use uuid::Uuid;
 
 use crate::{Db, DbError, Result};
 
+/// SQL expression for a Lead's funnel status. Unedited Leads have no profile
+/// row, so NULL defaults to the lifecycle entry state, matching `get_lead`.
+/// The list count query and the page query expand this one macro so a column
+/// count can never drift from its rows; `parse_lead_status` applies the same
+/// default on the Rust side.
+macro_rules! lead_status_projection {
+    () => {
+        "COALESCE(p.status,'candidate')"
+    };
+}
+
+const LIST_LEADS_COUNT_SQL: &str = concat!(
+    "SELECT count(*) FROM discovery_business_observations o ",
+    "JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id ",
+    "JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id ",
+    "LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id ",
+    "WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) ",
+    "AND ($3::text IS NULL OR c.industry_id=$3) ",
+    "AND ($4::text IS NULL OR c.vertical_id=$4) ",
+    "AND ($5::text IS NULL OR ",
+    lead_status_projection!(),
+    "=$5)"
+);
+
+const LIST_LEADS_PAGE_SQL: &str = concat!(
+    "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.provider,o.name,",
+    "o.website,o.phone,o.full_address,o.city,o.state,o.country,o.category,o.subtypes,",
+    "o.rating_hundredths,o.reviews_count,o.source_url,o.image_url,o.first_observed_at,",
+    lead_status_projection!(),
+    " AS status ",
+    "FROM discovery_business_observations o ",
+    "JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id ",
+    "JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id ",
+    "LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id ",
+    "WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) ",
+    "AND ($3::text IS NULL OR c.industry_id=$3) ",
+    "AND ($4::text IS NULL OR c.vertical_id=$4) ",
+    "AND ($5::text IS NULL OR ",
+    lead_status_projection!(),
+    "=$5) ",
+    "ORDER BY o.first_observed_at DESC,o.id DESC LIMIT $6 OFFSET $7"
+);
+
 /// Require a run search to exactly match its persisted immutable campaign.
 pub(crate) async fn require_campaign_search_tx(
     tx: &mut Transaction<'_, Postgres>,
@@ -486,46 +529,24 @@ async fn list_leads_tx(
         .validate()
         .map_err(|error| DbError::InvalidData(error.to_string()))?;
     let status = request.status.map(status_text);
-    let total: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM discovery_business_observations o \
-         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
-         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
-         LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id \
-         WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) \
-           AND ($3::text IS NULL OR c.industry_id=$3) \
-           AND ($4::text IS NULL OR c.vertical_id=$4) \
-           AND ($5::text IS NULL OR p.status=$5)",
-    )
-    .bind(community_id.as_uuid())
-    .bind(request.campaign_id)
-    .bind(request.industry_id.as_deref())
-    .bind(request.vertical_id.as_deref())
-    .bind(status)
-    .fetch_one(&mut **tx)
-    .await?;
-    let rows = sqlx::query(
-        "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.provider,o.name,\
-                o.website,o.phone,o.full_address,o.city,o.state,o.country,o.category,o.subtypes,\
-                o.rating_hundredths,o.reviews_count,o.source_url,o.image_url,o.first_observed_at \
-         FROM discovery_business_observations o \
-         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
-         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
-         LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id \
-         WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) \
-           AND ($3::text IS NULL OR c.industry_id=$3) \
-           AND ($4::text IS NULL OR c.vertical_id=$4) \
-           AND ($5::text IS NULL OR p.status=$5) \
-         ORDER BY o.first_observed_at DESC,o.id DESC LIMIT $6 OFFSET $7",
-    )
-    .bind(community_id.as_uuid())
-    .bind(request.campaign_id)
-    .bind(request.industry_id.as_deref())
-    .bind(request.vertical_id.as_deref())
-    .bind(status)
-    .bind(i64::from(request.limit))
-    .bind(i64::from(request.offset))
-    .fetch_all(&mut **tx)
-    .await?;
+    let total: i64 = sqlx::query_scalar(LIST_LEADS_COUNT_SQL)
+        .bind(community_id.as_uuid())
+        .bind(request.campaign_id)
+        .bind(request.industry_id.as_deref())
+        .bind(request.vertical_id.as_deref())
+        .bind(status)
+        .fetch_one(&mut **tx)
+        .await?;
+    let rows = sqlx::query(LIST_LEADS_PAGE_SQL)
+        .bind(community_id.as_uuid())
+        .bind(request.campaign_id)
+        .bind(request.industry_id.as_deref())
+        .bind(request.vertical_id.as_deref())
+        .bind(status)
+        .bind(i64::from(request.limit))
+        .bind(i64::from(request.offset))
+        .fetch_all(&mut **tx)
+        .await?;
     let leads = rows.iter().map(lead_from_row).collect::<Result<Vec<_>>>()?;
     Ok(DiscoveryLeadPage {
         leads,
@@ -715,6 +736,7 @@ fn lead_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryBusinessLeadPro
         campaign_id: row.try_get("campaign_id")?,
         industry_id: row.try_get("industry_id")?,
         vertical_id: row.try_get("vertical_id")?,
+        status: parse_lead_status(row.try_get("status")?),
         provider: super::discovery::parse_provider(row.try_get("provider")?)?,
         name: row.try_get("name")?,
         website: row.try_get("website")?,
@@ -750,20 +772,21 @@ fn status_text(status: DiscoveryLeadStatus) -> &'static str {
     }
 }
 
-fn lead_detail_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryLeadDetail> {
-    let status: Option<String> = row.try_get("status")?;
-    let status = match status.as_deref() {
+fn parse_lead_status(value: Option<String>) -> DiscoveryLeadStatus {
+    match value.as_deref() {
         Some("accepted") => DiscoveryLeadStatus::Accepted,
         Some("qualified") => DiscoveryLeadStatus::Qualified,
         Some("dormant") => DiscoveryLeadStatus::Dormant,
         Some("disqualified") => DiscoveryLeadStatus::Disqualified,
         Some("client_active") => DiscoveryLeadStatus::ClientActive,
         _ => DiscoveryLeadStatus::Candidate,
-    };
+    }
+}
+
+fn lead_detail_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryLeadDetail> {
     let score: Option<i16> = row.try_get("score")?;
     Ok(DiscoveryLeadDetail {
         lead: lead_from_row(row)?,
-        status,
         owner_persona_id: row.try_get("owner_persona_id")?,
         website_override: row.try_get("website_override")?,
         email: row.try_get("email")?,
@@ -820,9 +843,9 @@ async fn update_lead_tx(
     let previous = get_lead_tx(tx, community_id, lead_id).await?;
     let next_status = input
         .status
-        .unwrap_or(previous.status)
+        .unwrap_or(previous.lead.status)
         .to_relationship_status();
-    let from = previous.status.to_relationship_status();
+    let from = previous.lead.status.to_relationship_status();
     if !is_relationship_transition_allowed(RelationshipKind::Lead, from, next_status) {
         return Err(DbError::InvalidData(format!(
             "Lead status transition {from:?} -> {next_status:?} is not allowed"
