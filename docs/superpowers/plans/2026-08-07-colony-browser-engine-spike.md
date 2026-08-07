@@ -1137,6 +1137,12 @@ pub fn human_mouse_path(
         .map(|i| {
             let t = i as f64 / steps as f64;
             let eased = t * t * (3.0 - 2.0 * t);
+            if i == 1 {
+                return (from_x, from_y);
+            }
+            if i == steps {
+                return (to_x, to_y);
+            }
             let jitter = 1.5;
             (
                 from_x + (to_x - from_x) * eased + (rand() * 2.0 - 1.0) * jitter,
