@@ -9,7 +9,7 @@
 # in the foreground on override ports.
 #
 #   Topology (reuse this exact tuple for desktop parity runs):
-#     compose project : buzz-harness
+#     compose project : buzz-harness        (or buzz-harness-<relay> when overridden)
 #     postgres        : localhost:5471  (db=buzz, user=buzz, pass=buzz_dev)
 #     redis           : localhost:6471
 #     minio           : localhost:9471 (console 9472)
@@ -17,17 +17,34 @@
 #     relay health    : localhost:8088
 #     relay metrics   : localhost:9202
 #
+# Every port resolves from the BUZZ_HARNESS_*_PORT overrides in
+# scripts/harness-ports.sh; the defaults above are the historical fixed tuple,
+# so plain runs and every existing doc keep working unchanged. Run a second
+# harness concurrently on a disjoint set, e.g.:
+#
+#   export BUZZ_HARNESS_RELAY_PORT=3040  BUZZ_HARNESS_PG_PORT=5481
+#   export BUZZ_HARNESS_REDIS_PORT=6481  BUZZ_HARNESS_MINIO_PORT=9481
+#   export BUZZ_HARNESS_HEALTH_PORT=8098 BUZZ_HARNESS_METRICS_PORT=9212
+#
+# The Compose project name follows the relay port, so the second harness gets
+# its own containers, volumes, and database. The pre-flight guard below fails
+# BEFORE any mutation (compose up / schema reset / seed) when the port set is
+# already owned by another process.
+#
 # Usage:
 #   ./scripts/start-isolated-test-relay.sh [--profile <cargo-profile>]
 #
 # Teardown (safe — scoped to our project only):
-#   docker compose -p buzz-harness -f docker-compose.harness.yml down -v
+#   docker compose -p "${HARNESS_PROJECT}" -f docker-compose.harness.yml down -v
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
+
+# shellcheck source=scripts/harness-ports.sh
+source "${SCRIPT_DIR}/harness-ports.sh"
 
 CARGO_PROFILE="${CARGO_PROFILE:-ci}"
 while [[ $# -gt 0 ]]; do
@@ -50,17 +67,18 @@ case "${CARGO_PROFILE}" in
     ;;
 esac
 
-PROJECT="buzz-harness"
+PROJECT="${HARNESS_PROJECT}"
 COMPOSE_FILE="docker-compose.harness.yml"
 
 # Isolated ports (distinct from :3000 team relay, default dev stack, and Eva's
-# evaperf :5470/:6470/:9470/:3170 stack).
-PG_PORT=5471
-REDIS_PORT=6471
-MINIO_PORT=9471
-RELAY_MAIN=3030
-RELAY_HEALTH=8088
-RELAY_METRICS=9202
+# evaperf :5470/:6470/:9470/:3170 stack). Resolved from BUZZ_HARNESS_*_PORT.
+PG_PORT="${HARNESS_PG_PORT}"
+REDIS_PORT="${HARNESS_REDIS_PORT}"
+MINIO_PORT="${HARNESS_MINIO_PORT}"
+MINIO_CONSOLE_PORT="${HARNESS_MINIO_CONSOLE_PORT}"
+RELAY_MAIN="${HARNESS_RELAY_PORT}"
+RELAY_HEALTH="${HARNESS_HEALTH_PORT}"
+RELAY_METRICS="${HARNESS_METRICS_PORT}"
 COMMUNITY_HOST="localhost:${RELAY_MAIN}"
 DISCOVERY_EXTERNAL_WORKER_ENABLED="${BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED:-false}"
 DISCOVERY_FAKE_EXECUTOR_ENABLED="${BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED:-false}"
@@ -72,8 +90,87 @@ log() { echo -e "${BLUE}[isolated-relay]${NC} $*"; }
 ok()  { echo -e "${GREEN}[isolated-relay]${NC} $*"; }
 err() { echo -e "${RED}[isolated-relay]${NC} $*" >&2; }
 
-# ── Backing services (scoped to buzz-harness only) ───────────────────────────
+# ── Pre-flight guard: fail BEFORE any mutation ────────────────────────────────
+# This check must run before `docker compose up`, before the schema reset, and
+# before the seed. The original script performed all of those first and only
+# then refused on a busy port — by which point a second agent's shared
+# Postgres had already been wiped. The only thing mutated here is our own
+# previous tmux session, which is scoped to this port set and owns only our
+# own previous relay; anything still listening afterwards belongs to someone
+# else and the script stops before touching a single row.
+RELAY_LOG="${RELAY_LOG:-/tmp/dawn-relay-${RELAY_MAIN}.log}"
+TMUX_SESSION="${TMUX_SESSION:-dawn-relay-${RELAY_MAIN}}"
+tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null || true
+
+port_in_use() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+port_override_hint() {
+  cat >&2 <<HINT_EOF
+To run this harness on a disjoint port set (example: +10 on every port):
+
+  export BUZZ_HARNESS_RELAY_PORT=3040  BUZZ_HARNESS_PG_PORT=5481
+  export BUZZ_HARNESS_REDIS_PORT=6481  BUZZ_HARNESS_MINIO_PORT=9481
+  export BUZZ_HARNESS_HEALTH_PORT=8098 BUZZ_HARNESS_METRICS_PORT=9212
+  ${REPO_ROOT}/scripts/prove-blocks.sh   # or start-isolated-test-relay.sh
+
+Every port of the set must be disjoint from any running harness. This run
+would use Compose project '${PROJECT}'; the project name derives from the relay
+port, so a second harness gets its own containers, volumes, and database
+automatically.
+HINT_EOF
+}
+
+# A relay already listening on our main port means another agent owns this
+# port set (or an orphaned relay is squatting on it). Always abort.
+if command -v lsof >/dev/null 2>&1 && port_in_use "${RELAY_MAIN}"; then
+  err "Port ${RELAY_MAIN} is already in use; refusing to report a stale relay as this harness."
+  lsof -nP -iTCP:"${RELAY_MAIN}" -sTCP:LISTEN >&2 || true
+  port_override_hint
+  exit 1
+fi
+
+# Backing-service ports may legitimately be bound by OUR OWN previous run of
+# this port set (the reuse path: containers stay up, schema is re-applied).
+# A bound port while our project's postgres is NOT running is someone else's.
+OUR_HARNESS_UP=false
+if docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" ps --status running -q postgres 2>/dev/null | grep -q .; then
+  OUR_HARNESS_UP=true
+fi
+if [[ "${OUR_HARNESS_UP}" == true ]]; then
+  # A running project on this port set must be OUR OWN previous run: the
+  # postgres container carries an owner label with the worktree that brought
+  # it up. A mismatched owner means another agent's harness is up with its
+  # relay temporarily down — the one case the port checks above cannot see.
+  # (Containers created before the label existed have no owner; treat those
+  # as unknown and proceed, matching the old behavior.)
+  pg_container="$(docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" ps --status running -q postgres 2>/dev/null | head -1)"
+  owner="$(docker inspect --format '{{if .Config.Labels}}{{if index .Config.Labels "dev.buzz.harness.owner"}}{{index .Config.Labels "dev.buzz.harness.owner"}}{{end}}{{end}}' "${pg_container}" 2>/dev/null || true)"
+  if [[ -n "${owner}" && "${owner}" != "${REPO_ROOT}" ]]; then
+    err "Compose project ${PROJECT} is already running and owned by ${owner}; refusing to reset its database."
+    port_override_hint
+    exit 1
+  fi
+fi
+if [[ "${OUR_HARNESS_UP}" != true ]]; then
+  for port in "${PG_PORT}" "${REDIS_PORT}" "${MINIO_PORT}" "${RELAY_HEALTH}" "${RELAY_METRICS}"; do
+    if command -v lsof >/dev/null 2>&1 && port_in_use "${port}"; then
+      err "Port ${port} is already in use by another process; refusing to start a harness that would collide with it."
+      lsof -nP -iTCP:"${port}" -sTCP:LISTEN >&2 || true
+      port_override_hint
+      exit 1
+    fi
+  done
+fi
+ok "Port set is free (main :${RELAY_MAIN}, pg :${PG_PORT}, redis :${REDIS_PORT}, minio :${MINIO_PORT}, health :${RELAY_HEALTH}, metrics :${RELAY_METRICS})"
+
+# ── Backing services (scoped to our project only) ───────────────────────────
 log "Bringing up backing services (project=${PROJECT})..."
+# Normalize the operator-facing overrides to the resolved values so the
+# Compose file interpolates this port set even when only some were exported.
+export BUZZ_HARNESS_PG_PORT="${HARNESS_PG_PORT}"
+export BUZZ_HARNESS_REDIS_PORT="${HARNESS_REDIS_PORT}"
+export BUZZ_HARNESS_MINIO_PORT="${HARNESS_MINIO_PORT}"
+export BUZZ_HARNESS_MINIO_CONSOLE_PORT="${HARNESS_MINIO_CONSOLE_PORT}"
+export BUZZ_HARNESS_OWNER="${REPO_ROOT}"
 docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" up -d
 
 wait_pg() {
@@ -94,9 +191,9 @@ psql_h() { docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" exec -T postgres 
   psql -U buzz -d buzz -v ON_ERROR_STOP=1 "$@"; }
 
 log "Resetting isolated database and applying schema..."
-# This database belongs only to the buzz-harness Compose project. Reset it on
-# every launch so stale partitions/events from an earlier proof cannot alter
-# schema planning or test results.
+# This database belongs only to our Compose project (unique per port set).
+# Reset it on every launch so stale partitions/events from an earlier proof
+# cannot alter schema planning or test results.
 psql_h -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 export PGSCHEMA_PLAN_HOST=localhost PGSCHEMA_PLAN_PORT=${PG_PORT}
 export PGSCHEMA_PLAN_DB=buzz PGSCHEMA_PLAN_USER=buzz PGSCHEMA_PLAN_PASSWORD=buzz_dev
@@ -135,14 +232,6 @@ ok "Relay built"
 # shells whose process group is reaped on return, which SIGTERMs a foreground
 # relay ~seconds after startup. tmux fully daemonizes the session so the relay
 # survives (same pattern the perf stack uses). Logs to ${RELAY_LOG}.
-RELAY_LOG="${RELAY_LOG:-/tmp/dawn-relay-run.log}"
-TMUX_SESSION="${TMUX_SESSION:-dawn-relay}"
-tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null || true
-if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"${RELAY_MAIN}" -sTCP:LISTEN >/dev/null 2>&1; then
-  err "Port ${RELAY_MAIN} is already in use; refusing to report a stale relay as this harness."
-  lsof -nP -iTCP:"${RELAY_MAIN}" -sTCP:LISTEN >&2 || true
-  exit 1
-fi
 log "Starting relay in tmux session '${TMUX_SESSION}' on :${RELAY_MAIN} (health :${RELAY_HEALTH}, metrics :${RELAY_METRICS})..."
 tmux new-session -d -s "${TMUX_SESSION}" "cd '${REPO_ROOT}' && env \
   DATABASE_URL=postgres://buzz:buzz_dev@localhost:${PG_PORT}/buzz \

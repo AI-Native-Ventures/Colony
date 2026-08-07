@@ -12,6 +12,8 @@ cd "${REPO_ROOT}"
 # command so a system Node or Cargo cannot accidentally prove a different build.
 # shellcheck disable=SC1091
 . ./bin/activate-hermit
+# shellcheck source=scripts/harness-ports.sh
+source "${SCRIPT_DIR}/harness-ports.sh"
 
 fail() { printf 'prove-blocks: %s\n' "$*" >&2; exit 1; }
 require_command() {
@@ -28,20 +30,21 @@ readonly RELAY_SELF="79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f
 readonly OWNER_PUBKEY="e5ebc6cdb579be112e336cc319b5989b4bb6af11786ea90dbe52b5f08d741b34"
 readonly AGENT_PRIVATE_KEY="813fc3bb90587a82b2bfee9b833503e7686c7480681850b3d789c6987e997fc8"
 readonly AGENT_AUTH_TAG='["auth","e5ebc6cdb579be112e336cc319b5989b4bb6af11786ea90dbe52b5f08d741b34","","b7634ac722501fe8031046ca577e67c8c3e90167e01c43bf285525129f6c726a12ab4acc2276fcc37fa0f4ef9ebb952ab0e5486a9b608d06cc132d3fc4096b4a"]'
-readonly RELAY_HTTP_URL="http://localhost:3030"
-readonly RELAY_WS_URL="ws://localhost:3030"
-readonly DATABASE_URL="postgres://buzz:buzz_dev@localhost:5471/buzz"
+readonly RELAY_HTTP_URL="${HARNESS_RELAY_HTTP_URL}"
+readonly RELAY_WS_URL="${HARNESS_RELAY_WS_URL}"
+readonly DATABASE_URL="${HARNESS_DATABASE_URL}"
 readonly CARGO_PROFILE="${CARGO_PROFILE:-ci}"
 readonly CARGO_BUILD_PROFILE="$([[ "${CARGO_PROFILE}" == "dev" || "${CARGO_PROFILE}" == "debug" ]] && printf dev || printf '%s' "${CARGO_PROFILE}")"
 readonly TARGET_PROFILE="$([[ "${CARGO_PROFILE}" == "dev" || "${CARGO_PROFILE}" == "debug" ]] && printf debug || printf '%s' "${CARGO_PROFILE}")"
-readonly RELAY_LOG="${RELAY_LOG:-/tmp/blocks-relay-run.log}"
-readonly ACP_LOG="${ACP_LOG:-/tmp/blocks-acp-run.log}"
-readonly RELAY_TMUX_SESSION="${RELAY_TMUX_SESSION:-blocks-relay}"
-readonly ACP_TMUX_SESSION="${ACP_TMUX_SESSION:-blocks-acp}"
+readonly RELAY_LOG="${RELAY_LOG:-/tmp/blocks-relay-${HARNESS_RELAY_PORT}.log}"
+readonly ACP_LOG="${ACP_LOG:-/tmp/blocks-acp-${HARNESS_RELAY_PORT}.log}"
+readonly RELAY_TMUX_SESSION="${RELAY_TMUX_SESSION:-blocks-relay-${HARNESS_RELAY_PORT}}"
+readonly ACP_TMUX_SESSION="${ACP_TMUX_SESSION:-blocks-acp-${HARNESS_RELAY_PORT}}"
 readonly ACP_FIXTURE="${REPO_ROOT}/desktop/tests/e2e/fixtures/fake-acp-agent.mjs"
 
 mkdir -p "${REPO_ROOT}/desktop/test-results/blocks/gate-c"
 
+echo "[blocks] harness port set: relay :${HARNESS_RELAY_PORT}, pg :${HARNESS_PG_PORT}, redis :${HARNESS_REDIS_PORT}, minio :${HARNESS_MINIO_PORT}, health :${HARNESS_HEALTH_PORT}, metrics :${HARNESS_METRICS_PORT} (compose project ${HARNESS_PROJECT})"
 echo "[blocks] building real relay, CLI, and ACP binaries (profile=${CARGO_BUILD_PROFILE})..."
 cargo build --profile "${CARGO_BUILD_PROFILE}" -p buzz-relay -p buzz-cli -p buzz-acp
 
@@ -52,6 +55,7 @@ export BUZZ_E2E_RELAY_BIN="${REPO_ROOT}/target/${TARGET_PROFILE}/buzz-relay"
 export BUZZ_E2E_CLI_BIN="${REPO_ROOT}/target/${TARGET_PROFILE}/buzz"
 export BUZZ_E2E_ACP_BIN="${REPO_ROOT}/target/${TARGET_PROFILE}/buzz-acp"
 export BUZZ_E2E_DATABASE_URL="${DATABASE_URL}"
+export BUZZ_E2E_HARNESS_PROJECT="${HARNESS_PROJECT}"
 export BUZZ_E2E_EVIDENCE_DIR="${REPO_ROOT}/desktop/test-results/blocks/gate-c"
 export BUZZ_E2E_AGENT_AUTH_TAG="${AGENT_AUTH_TAG}"
 export BUZZ_E2E_APPROVAL_COUNTER="${BUZZ_E2E_EVIDENCE_DIR}/approval-counter.json"
@@ -81,7 +85,7 @@ tmux new-session -d -s "${TMUX_ENV_ANCHOR}" "sleep 600"
 tmux set-environment -g BUZZ_RELAY_PRIVATE_KEY "${BUZZ_RELAY_PRIVATE_KEY}"
 tmux set-environment -g RELAY_OWNER_PUBKEY "${RELAY_OWNER_PUBKEY}"
 
-echo "[blocks] starting isolated relay on ${RELAY_HTTP_URL} (Postgres :5471, Redis :6471)..."
+echo "[blocks] starting isolated relay on ${RELAY_HTTP_URL} (Postgres :${HARNESS_PG_PORT}, Redis :${HARNESS_REDIS_PORT})..."
 env CARGO_PROFILE="${CARGO_PROFILE}" \
   ./scripts/start-isolated-test-relay.sh --profile "${CARGO_PROFILE}"
 
