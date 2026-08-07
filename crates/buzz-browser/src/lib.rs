@@ -1,6 +1,7 @@
 //! Shell-agnostic browser engine spike: CDP host, snapshot-first tools,
 //! and a token budget for agent browser use.
 
+pub mod agent_proof;
 pub mod budget;
 pub mod cdp;
 pub mod contracts;
