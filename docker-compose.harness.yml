@@ -1,13 +1,20 @@
 # =============================================================================
 # Isolated test-relay backing stack — GUI read-model overhaul harness (Dawn).
 #
-# A SEPARATE Compose project (`buzz-harness`) so the shared :3000 relay and the
+# A SEPARATE Compose project (`buzz-harness`, or `buzz-harness-<relay-port>`
+# when BUZZ_HARNESS_RELAY_PORT is overridden) so the shared :3000 relay and the
 # default `buzz-*` dev stack are never touched. No fixed container_names (they
 # collide across projects) and alternate host ports. Mirrors Eva's evaperf-*
 # isolation pattern.
 #
 #   Bring up:  docker compose -p buzz-harness -f docker-compose.harness.yml up -d
-#   Ports:     postgres 5471 · redis 6471 · minio 9471/9472
+#   Ports:     postgres 5471 · redis 6471 · minio 9471/9472  (interpolated from
+#              BUZZ_HARNESS_PG_PORT / BUZZ_HARNESS_REDIS_PORT /
+#              BUZZ_HARNESS_MINIO_PORT / BUZZ_HARNESS_MINIO_CONSOLE_PORT — the
+#              same overrides scripts/harness-ports.sh resolves, defaults
+#              shown; the console port is minio + 1 and scripts/
+#              start-isolated-test-relay.sh exports it automatically — set it
+#              too when running `docker compose up` by hand)
 #   Relay (run separately by scripts/start-isolated-test-relay.sh):
 #              main 3030 · health 8088 · metrics 9202
 # =============================================================================
@@ -20,7 +27,9 @@ services:
       POSTGRES_DB: buzz
       PGDATA: /var/lib/postgresql/data
     ports:
-      - "5471:5432"
+      - "${BUZZ_HARNESS_PG_PORT:-5471}:5432"
+    labels:
+      dev.buzz.harness.owner: "${BUZZ_HARNESS_OWNER:-}"
     volumes:
       - harness-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -33,7 +42,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6471:6379"
+      - "${BUZZ_HARNESS_REDIS_PORT:-6471}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -48,8 +57,8 @@ services:
       MINIO_ROOT_USER: buzz_dev
       MINIO_ROOT_PASSWORD: buzz_dev_secret
     ports:
-      - "9471:9000"
-      - "9472:9001"
+      - "${BUZZ_HARNESS_MINIO_PORT:-9471}:9000"
+      - "${BUZZ_HARNESS_MINIO_CONSOLE_PORT:-9472}:9001"
     volumes:
       - harness-minio-data:/data
     healthcheck:

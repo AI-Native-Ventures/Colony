@@ -23,6 +23,7 @@ export type DiscoverySearch = {
   fieldId?: string;
   roleId?: string;
   campaignId?: string;
+  leadId?: string;
   tab?: DiscoveryTab;
 };
 
@@ -79,6 +80,7 @@ export function validateDiscoverySearch(
     fieldId: nonEmptyString(search.fieldId),
     roleId: nonEmptyString(search.roleId),
     campaignId: nonEmptyString(search.campaignId),
+    leadId: nonEmptyString(search.leadId),
     tab: enumValue(search.tab, DISCOVERY_TABS),
   };
 }

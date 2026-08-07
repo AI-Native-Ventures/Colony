@@ -42,7 +42,7 @@ export function Hero() {
               href="#download"
               className="rounded-full bg-colony-ink px-8 py-3 text-base font-medium text-colony-canvas transition hover:opacity-90 lg:px-10 lg:py-4 lg:text-lg"
             >
-              Download for macOS
+              Download Colony
             </a>
             <a
               href="#story"

@@ -136,6 +136,7 @@ export default defineConfig({
         "**/discovery.spec.ts",
         "**/discovery-scroll.spec.ts",
         "**/discovery-settings.spec.ts",
+        "**/discovery-lead-detail.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

@@ -6,13 +6,15 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 . ./bin/activate-hermit
+# shellcheck source=scripts/harness-ports.sh
+source "${SCRIPT_DIR}/harness-ports.sh"
 
 export BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED=true
 export BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED=false
 export BUZZ_DISCOVERY_LEASE_SECONDS=5
 export BUZZ_RELAY_PRIVATE_KEY=1111111111111111111111111111111111111111111111111111111111111111
-export RELAY_URL=ws://localhost:3030
-export DATABASE_URL=postgres://buzz:buzz_dev@localhost:5471/buzz
+export RELAY_URL="${HARNESS_RELAY_WS_URL}"
+export DATABASE_URL="${HARNESS_DATABASE_URL}"
 
 ./scripts/start-isolated-test-relay.sh --profile dev
 
@@ -53,12 +55,12 @@ case "${DISCOVERY_PROOF_DB}" in
 esac
 cleanup_discovery_proof_db() {
   PGPASSWORD=buzz_dev dropdb --if-exists --force \
-    --host localhost --port 5471 --username buzz "${DISCOVERY_PROOF_DB}"
+    --host localhost --port "${HARNESS_PG_PORT}" --username buzz "${DISCOVERY_PROOF_DB}"
 }
 trap cleanup_discovery_proof_db EXIT
 PGPASSWORD=buzz_dev createdb \
-  --host localhost --port 5471 --username buzz "${DISCOVERY_PROOF_DB}"
-BUZZ_TEST_DATABASE_URL="postgres://buzz:buzz_dev@localhost:5471/${DISCOVERY_PROOF_DB}" \
+  --host localhost --port "${HARNESS_PG_PORT}" --username buzz "${DISCOVERY_PROOF_DB}"
+BUZZ_TEST_DATABASE_URL="postgres://buzz:buzz_dev@localhost:${HARNESS_PG_PORT}/${DISCOVERY_PROOF_DB}" \
   cargo test -p buzz-db \
   observation_batches_replay_and_deduplicate_across_campaigns \
   -- --ignored --nocapture --test-threads=1

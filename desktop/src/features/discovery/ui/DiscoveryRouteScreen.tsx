@@ -15,6 +15,7 @@ import {
   DiscoveryWorkspace,
   type DiscoveryRouteReadModel,
 } from "./DiscoveryWorkspace";
+import { LeadDetailDrawer } from "./LeadDetailDrawer";
 import { DiscoveryTopTabs } from "./DiscoveryTopTabs";
 import { DISCOVERY_LIGHT_SURFACE_STYLE } from "./discoverySurfaceStyle";
 import { discoverySurface } from "./discoveryLayout";
@@ -152,6 +153,15 @@ async function loadReadModel(
 }
 
 export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
+  /**
+   * The read model ignores `leadId`: opening or closing the drawer is a
+   * navigation, and the surfaces behind it must not refetch or flash their
+   * loading state because the drawer opened.
+   */
+  const readModelSearch = React.useMemo(() => {
+    const { leadId: _leadId, ...rest } = search;
+    return rest;
+  }, [search]);
   const dataSourceRef = React.useRef<DiscoveryDataSource | null>(null);
   if (!dataSourceRef.current) {
     dataSourceRef.current =
@@ -181,7 +191,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
 
     void Promise.all([
       dataSource.getEntitlement(),
-      loadReadModel(dataSource, search),
+      loadReadModel(dataSource, readModelSearch),
     ])
       .then(([entitlement, readModel]) => {
         if (cancelled) return;
@@ -205,7 +215,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
     return () => {
       cancelled = true;
     };
-  }, [dataSource, search]);
+  }, [dataSource, readModelSearch]);
 
   return (
     <div
@@ -221,6 +231,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
         readModel={state.readModel}
         search={search}
       />
+      <LeadDetailDrawer dataSource={dataSource} search={search} />
     </div>
   );
 }

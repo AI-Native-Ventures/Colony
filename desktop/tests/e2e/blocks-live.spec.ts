@@ -597,7 +597,7 @@ test.describe("Blocks live Gate C", () => {
       [
         "compose",
         "-p",
-        "buzz-harness",
+        process.env.BUZZ_E2E_HARNESS_PROJECT ?? "buzz-harness",
         "-f",
         "docker-compose.harness.yml",
         "exec",
