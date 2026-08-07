@@ -192,6 +192,7 @@ export function CampaignDetailView({
             dataSource={dataSource}
             initialLeads={leads}
             scope="campaign"
+            search={search}
           />
         ) : null}
         {activeTab === "outreach" && !outsideLivePhase ? (

@@ -13,6 +13,7 @@ import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import type { DiscoverySearch } from "@/app/routes/discovery";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import { describeExportOutcome, exportLeadsToCsv } from "../lib/exportLeads";
 import type { CampaignDetail, LeadPage } from "../types";
@@ -34,6 +35,7 @@ export type LeadsWorkspaceProps = {
   campaign?: CampaignDetail | null;
   scope: "campaign" | "global";
   initialMode?: LeadMode;
+  search: DiscoverySearch;
 };
 
 /**
@@ -142,10 +144,12 @@ function CampaignLeads({
   campaign,
   dataSource,
   initialLeads,
+  search,
 }: {
   campaign: CampaignDetail;
   dataSource: DiscoveryDataSource;
   initialLeads: LeadPage | null | undefined;
+  search: DiscoverySearch;
 }) {
   const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
   const [isLoading, setIsLoading] = React.useState(!initialLeads);
@@ -244,9 +248,19 @@ function CampaignLeads({
         <ViewToggle onChange={setView} value={view} />
       </div>
       {people ? (
-        <PeopleLeadTable leads={visibleLeads} scope="campaign" view={view} />
+        <PeopleLeadTable
+          leads={visibleLeads}
+          scope="campaign"
+          search={search}
+          view={view}
+        />
       ) : (
-        <LeadTable leads={visibleLeads} scope="campaign" view={view} />
+        <LeadTable
+          leads={visibleLeads}
+          scope="campaign"
+          search={search}
+          view={view}
+        />
       )}
     </div>
   );
@@ -256,10 +270,12 @@ function GlobalLeads({
   dataSource,
   initialLeads,
   initialMode,
+  search,
 }: {
   dataSource: DiscoveryDataSource;
   initialLeads: LeadPage | null | undefined;
   initialMode: LeadMode;
+  search: DiscoverySearch;
 }) {
   const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
   const [isLoading, setIsLoading] = React.useState(!initialLeads);
@@ -389,9 +405,19 @@ function GlobalLeads({
         <ViewToggle onChange={setView} value={view} />
       </div>
       {mode === "people" ? (
-        <PeopleLeadTable leads={visibleLeads} scope="global" view={view} />
+        <PeopleLeadTable
+          leads={visibleLeads}
+          scope="global"
+          search={search}
+          view={view}
+        />
       ) : (
-        <LeadTable leads={visibleLeads} scope="global" view={view} />
+        <LeadTable
+          leads={visibleLeads}
+          scope="global"
+          search={search}
+          view={view}
+        />
       )}
     </div>
   );
@@ -476,6 +502,7 @@ export function LeadsWorkspace({
   initialMode = "companies",
   initialLeads,
   scope,
+  search,
 }: LeadsWorkspaceProps) {
   if (scope === "campaign" && campaign) {
     return (
@@ -483,6 +510,7 @@ export function LeadsWorkspace({
         campaign={campaign}
         dataSource={dataSource}
         initialLeads={initialLeads}
+        search={search}
       />
     );
   }
@@ -491,6 +519,7 @@ export function LeadsWorkspace({
       dataSource={dataSource}
       initialLeads={initialLeads}
       initialMode={initialMode}
+      search={search}
     />
   );
 }
