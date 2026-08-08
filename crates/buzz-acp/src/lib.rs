@@ -1370,10 +1370,10 @@ async fn tokio_main() -> Result<()> {
         ));
     }
     if config.provisioned
-        && !config
+        && config
             .meter_openai_key
             .as_deref()
-            .is_some_and(|key| !key.trim().is_empty())
+            .is_none_or(|key| key.trim().is_empty())
     {
         return Err(anyhow::anyhow!(
             "provisioned Colony Credits requires a gateway meter credential"
