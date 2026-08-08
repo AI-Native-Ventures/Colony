@@ -4,10 +4,19 @@ name: CI
 # for the promotion gate), and pushes to develop run the full relevant matrix
 # on the merged result. Full CI still gates production: PRs that promote
 # develop into main (or release), and pushes to those branches.
+#
+# `merge_group` is required, not optional: a merge queue builds a synthetic ref
+# and waits for the required checks to report on it. Without this trigger no
+# workflow ever runs for a queued entry, so every PR sits in AWAITING_CHECKS
+# until the queue's timeout drops it and nothing can ever merge. Queue entries
+# run the full matrix (see below) because the merge group is the last gate
+# before the code lands, and batching means one run covers up to five PRs.
 on:
   push:
     branches: [main, develop, release]
   pull_request:
+    branches: [main, develop, release]
+  merge_group:
     branches: [main, develop, release]
 
 # One run per ref, newest wins. Rapid promotions to main collapse into a
@@ -121,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
     permissions:
       contents: read
     steps:
@@ -142,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -164,7 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -245,7 +254,7 @@ jobs:
             desktop/test-results
           if-no-files-found: ignore
       - name: Save pnpm store cache
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
@@ -259,7 +268,7 @@ jobs:
     # two shards that were making progress. Warm runs finish far below it.
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -295,7 +304,7 @@ jobs:
       - name: Install Playwright system dependencies
         run: cd desktop && pnpm exec playwright install-deps chromium
       - name: Save Playwright browser cache
-        if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && matrix.shard == 1
+        if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && matrix.shard == 1
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
@@ -325,7 +334,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, desktop-core, desktop-smoke-e2e]
-    if: always() && (github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     steps:
@@ -351,7 +360,7 @@ jobs:
     # headroom exists for cold builds only; a cache hit skips every build step.
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -422,7 +431,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -471,7 +480,7 @@ jobs:
       - name: Install Playwright system dependencies
         run: cd desktop && pnpm exec playwright install-deps chromium
       - name: Save Playwright browser cache
-        if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && matrix.shard == 1
+        if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && matrix.shard == 1
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
@@ -592,7 +601,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Save pnpm store cache
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
@@ -603,7 +612,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, desktop-e2e-integration-shard]
-    if: always() && (github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     steps:
@@ -635,7 +644,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.blocks == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.blocks == 'true'
     permissions:
       contents: read
     steps:
@@ -725,7 +734,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Save pnpm store cache
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
@@ -736,7 +745,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -942,7 +951,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -990,7 +999,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'
     permissions:
       contents: read
     steps:
@@ -1014,7 +1023,7 @@ jobs:
       - name: Web build
         run: just web-build
       - name: Save pnpm store cache
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
@@ -1028,7 +1037,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.mobile == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.mobile == 'true'
     permissions:
       contents: read
     steps:
@@ -1089,7 +1098,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -1127,7 +1136,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     strategy:
@@ -1169,7 +1178,7 @@ jobs:
     # macOS runs are expensive: desktop release build + relay + sidecars.
     timeout-minutes: 150
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     # NON-BLOCKING in Phase 0 on purpose (desktop/e2e-real-shell/README.md):
     # brand-new harness, cold macOS builds, real devices/keychains/audio. A red
     # run must be read in the job log + flow-results ledger, not silently
@@ -1243,7 +1252,7 @@ jobs:
     # cold across four steps; budget generously.
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
     permissions:
       contents: read
     env:
