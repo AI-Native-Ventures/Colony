@@ -85,7 +85,9 @@ use std::sync::Arc;
 
 use buzz_core::company::CompanyTask;
 use buzz_core::interrupt::{parse_ask, AgentTier, AskType};
-use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT};
+use buzz_core::kind::{
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT, KIND_TEAM,
+};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::asks::AskRow;
@@ -929,6 +931,181 @@ async fn find_unique_executive(
 ) -> Result<Option<PublicKey>, String> {
     let roster = fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
     unique_executive_in_roster(&roster)
+}
+
+/// An owner-authored team roster (kind [`KIND_TEAM`]): `(d_tag, content)`
+/// pairs, one per distinct team id with a CURRENT-owner-authored head --
+/// the same latest-wins / owner-authored trust rule
+/// [`fetch_owner_authored_managed_agent_roster`] applies to agent heads,
+/// over the team kind.
+type TeamRoster = Vec<(String, serde_json::Value)>;
+
+/// Fetch every owner-authored team head (kind [`KIND_TEAM`]) in `tenant`,
+/// resolved NIP-33 latest-wins per team `d` tag. Same SQL trust rule
+/// (`Db::query_latest_owner_authored_heads`'s owner `JOIN`) as the
+/// managed-agent roster, so a non-owner-authored team head can never shadow
+/// or stand in for the owner's authoritative team record.
+async fn fetch_owner_authored_teams(
+    tenant: &TenantContext,
+    state: &AppState,
+    limit: i64,
+) -> Result<TeamRoster, String> {
+    let rows = state
+        .db
+        .query_latest_owner_authored_heads(tenant.community(), KIND_TEAM as i32, limit)
+        .await
+        .map_err(|error| format!("database error scanning team roster: {error}"))?;
+
+    let mut teams = TeamRoster::new();
+    for stored in rows {
+        let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.len() >= 2 && parts[0] == "d").then(|| parts[1].clone())
+        }) else {
+            continue;
+        };
+        let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
+            continue;
+        };
+        teams.push((d_tag, content));
+    }
+    Ok(teams)
+}
+
+/// Resolve `worker`'s own team lead from already-fetched rosters: the single
+/// Leader-tier agent whose persona is the lead of the single team whose
+/// member list contains the worker's persona.
+///
+/// `Ok(None)` under any ambiguity or gap -- the worker has no owner-authored
+/// head, its persona appears in zero or more than one team, the owning team
+/// names no lead, or the lead persona resolves to zero/several pubkeys or to
+/// an agent that is not Leader-tier. Never guess (design point 3); callers
+/// fall back to the unique executive or refuse the write.
+fn team_lead_in_rosters(
+    heads: &ManagedAgentRoster,
+    teams: &TeamRoster,
+    worker: &PublicKey,
+) -> Result<Option<PublicKey>, String> {
+    // 1. The worker's persona id, from its own owner-authored head. A worker
+    //    with no head is untiered; nothing to route (the router checks the
+    //    tier before calling here, so this is defensive totality).
+    let Some(worker_persona) = heads.iter().find_map(|(d_tag, content)| {
+        (d_tag == &worker.to_hex())
+            .then(|| {
+                content
+                    .get("persona_id")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .flatten()
+    }) else {
+        return Ok(None);
+    };
+
+    // 2. Exactly one team must contain the worker's persona; zero or many
+    //    makes "the worker's team" unanswerable without guessing.
+    let mut owning_teams = teams.iter().filter(|(_, content)| {
+        content
+            .get("persona_ids")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(worker_persona)))
+    });
+    let (_, team) = match (owning_teams.next(), owning_teams.next()) {
+        (Some(team), None) => team,
+        _ => return Ok(None),
+    };
+
+    // 3. The team must name a lead persona. Blueprint validation requires the
+    //    lead to be a member, but the field is nullable at runtime.
+    let Some(lead_persona) = team
+        .get("lead_persona_id")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+
+    // 4. The lead persona must resolve to exactly one live agent
+    //    (`persona_pubkey_in_roster`) whose head declares Leader tier.
+    let Some(lead_pubkey) = persona_pubkey_in_roster(heads, lead_persona)? else {
+        return Ok(None);
+    };
+    let lead_tier = heads
+        .iter()
+        .find_map(|(_, content)| {
+            (content
+                .get("persona_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(lead_persona))
+            .then(|| content.get("tier").and_then(serde_json::Value::as_str))
+            .flatten()
+        })
+        .and_then(AgentTier::parse);
+    if lead_tier != Some(AgentTier::Leader) {
+        return Ok(None);
+    }
+
+    Ok(Some(lead_pubkey))
+}
+
+/// What an owner-bound mention from an agent should become.
+pub enum OwnerMentionRoute {
+    /// The author may address owners directly (Executive tier, or no
+    /// managed-agent head at all) -- leave the mention as a `p` tag.
+    Keep,
+    /// Route the owner mention to this next-in-line agent instead.
+    Route(PublicKey),
+}
+
+/// Resolve where an owner-bound mention from `actor` must go, per the
+/// interrupt ladder:
+///
+/// - Worker → its own team lead (Leader-tier, uniquely resolvable), else the
+///   community's unique executive.
+/// - Leader → the community's unique executive.
+/// - Executive, or no tier (human / unmanaged client) → `Keep`, matching the
+///   owner-contact gate which lets both through.
+///
+/// `Err` when a Worker/Leader's next-in-line cannot be resolved: zero or
+/// multiple teams, leads, or executives is an ambiguity the caller must not
+/// guess through (design point 3), and an owner-bound mention that cannot be
+/// routed must not silently degrade into a direct owner contact.
+pub async fn resolve_owner_mention_route(
+    tenant: &TenantContext,
+    state: &AppState,
+    actor: &PublicKey,
+) -> Result<OwnerMentionRoute, String> {
+    let Some(tier) = agent_tier(tenant, state, actor).await? else {
+        return Ok(OwnerMentionRoute::Keep);
+    };
+    match tier {
+        AgentTier::Executive => Ok(OwnerMentionRoute::Keep),
+        AgentTier::Leader => {
+            let Some(executive) = find_unique_executive(tenant, state).await? else {
+                return Err(format!(
+                    "leader {} has no unique community executive to route to (never guessing)",
+                    actor
+                ));
+            };
+            Ok(OwnerMentionRoute::Route(executive))
+        }
+        AgentTier::Worker => {
+            let heads =
+                fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
+            let teams = fetch_owner_authored_teams(tenant, state, MAX_ROSTER_HEADS).await?;
+            if let Some(lead) = team_lead_in_rosters(&heads, &teams, actor)? {
+                return Ok(OwnerMentionRoute::Route(lead));
+            }
+            // Fallback rung: the unique executive, resolved from the roster
+            // already fetched for the team-lead scan (no second round trip).
+            let Some(executive) = unique_executive_in_roster(&heads)? else {
+                return Err(format!(
+                    "worker {} has no unique team lead or community executive \
+                     to route to (never guessing)",
+                    actor
+                ));
+            };
+            Ok(OwnerMentionRoute::Route(executive))
+        }
+    }
 }
 
 /// Resolve the community's unique human owner: the single pubkey currently

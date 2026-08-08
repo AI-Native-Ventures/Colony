@@ -30,6 +30,38 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+/// Apply migrations unless the database was already provisioned from
+/// `schema/schema.sql` rather than from the migration sequence.
+///
+/// Postgres-gated test harnesses run against two differently-provisioned
+/// databases and must work in both:
+///
+/// * A developer's fresh `createdb` — empty, so migrations must run.
+/// * CI's integration Postgres — provisioned by `pgschema apply --file
+///   schema/schema.sql`, with the relay started with `BUZZ_AUTO_MIGRATE` off.
+///   The schema is fully present but `_sqlx_migrations` was never created, so
+///   [`run_migrations`] would replay `0001` against live objects and abort on
+///   the first `CREATE TYPE` / `CREATE TABLE` (`42710 type "channel_type"
+///   already exists`).
+///
+/// The two are distinguished by bookkeeping, not by schema contents: a
+/// database carrying `_sqlx_migrations` is migration-managed and still runs
+/// the full migrator, so genuine version drift keeps failing loudly with
+/// `VersionMismatch` instead of being silently skipped.
+pub async fn run_migrations_unless_provisioned(pool: &PgPool) -> Result<()> {
+    let migration_bookkeeping: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
+            .fetch_one(pool)
+            .await?;
+    let schema_present: Option<String> = sqlx::query_scalar("SELECT to_regclass('events')::text")
+        .fetch_one(pool)
+        .await?;
+    if migration_bookkeeping.is_none() && schema_present.is_some() {
+        return Ok(());
+    }
+    run_migrations(pool).await
+}
+
 /// Backfill pre-multi-source paid observations with the exact runtime
 /// normalizers. The version cursor makes this bounded, restart-safe, and
 /// idempotent even when multiple relay instances start together.

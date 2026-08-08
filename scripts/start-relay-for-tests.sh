@@ -18,6 +18,19 @@
 # =============================================================================
 set -euo pipefail
 
+# Durable relay identity. Without one the relay falls back to an ephemeral
+# key, and every relay-signed protocol action refuses: the interrupt runtime
+# declines its whole sweep tick, and the ask broker cannot emit the kind-44302
+# withdrawal that closes an escalated ask. e2e_interrupts documents the
+# requirement in its module header and fails with "escalating must close the
+# prior ask with exactly one withdrawal, got []" without it.
+#
+# Test-only, deliberately fixed so the relay identity is stable across a run
+# and reproducible locally. This is a throwaway relay on a throwaway database
+# with BUZZ_REQUIRE_AUTH_TOKEN=false; it is no more a secret than the
+# buzz:buzz_dev credentials above it. Never reuse it for a real deployment.
+: "${BUZZ_TEST_RELAY_PRIVATE_KEY:=0000000000000000000000000000000000000000000000000000000000000001}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -104,6 +117,9 @@ export PGSCHEMA_PLAN_USER=buzz
 export PGSCHEMA_PLAN_PASSWORD=buzz_dev
 
 ./bin/pgschema apply --file schema/schema.sql --auto-approve
+# pgschema does not manage extensions; see scripts/create-required-extensions.sql.
+docker exec -i -e PGPASSWORD="${PGPASSWORD}" buzz-postgres \
+  psql -U "${PGUSER}" -d "${PGDATABASE}" -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
 docker exec -i -e PGPASSWORD="${PGPASSWORD}" buzz-postgres \
   psql -U "${PGUSER}" -d "${PGDATABASE}" -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
 ok "Schema applied"
@@ -159,6 +175,7 @@ nohup env \
   BUZZ_REQUIRE_AUTH_TOKEN=false \
   BUZZ_RECONCILE_CHANNELS=true \
   BUZZ_GIT_PROBE_WRITERS=8 \
+  BUZZ_RELAY_PRIVATE_KEY="${BUZZ_TEST_RELAY_PRIVATE_KEY}" \
   "./target/${CARGO_PROFILE}/buzz-relay" > /tmp/buzz-relay.log 2>&1 &
 echo $! > /tmp/buzz-relay.pid
 

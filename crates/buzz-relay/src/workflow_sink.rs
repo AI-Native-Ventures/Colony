@@ -17,6 +17,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::handlers::event::dispatch_persistent_event;
+use crate::interrupt_runtime::{resolve_owner_mention_route, OwnerMentionRoute};
 use crate::state::AppState;
 
 /// Resolves `@Name` mentions in workflow message text to the pubkeys of the
@@ -266,10 +267,6 @@ impl ActionSink for RelayActionSink {
                     .map_err(|e| ActionSinkError::EventBuild(format!("workflow tag: {e}")))?,
             ];
 
-            // Resolve `@Name` mentions to channel-member pubkeys and append a
-            // `p` tag for each (skipping the author, already tagged above). A
-            // resolution failure must not drop the message, so log and proceed
-            // with the base tags.
             let members = state
                 .db
                 .get_members(tenant.community(), channel_uuid)
@@ -288,14 +285,70 @@ impl ActionSink for RelayActionSink {
                     Some((name, nostr::PublicKey::from_slice(&u.pubkey).ok()?.to_hex()))
                 })
                 .collect();
-            for mentioned in resolve_mention_pubkeys(&text, &named_members) {
-                if mentioned == author_pubkey_hex {
+            // Resolve `@Name` mentions to channel-member pubkeys and append a
+            // `p` tag for each (skipping the author, already tagged above).
+            //
+            // Owner-contact hierarchy (Option C): a mention that resolves to a
+            // community owner is only legal from an Executive or an untiered
+            // actor (gate parity). From a Worker/Leader the mention is routed
+            // to the next-in-line agent -- own team lead, else the unique
+            // executive -- and the owner is re-emitted as a reference-only
+            // `mention` tag: the @chip still renders and resolves, but the
+            // owner is never woken (wake is `p`-tag gated) nor indexed in
+            // `event_mentions`. If no next-in-line resolves, the step fails:
+            // never guess a target, never silently drop the mention.
+            let mentions = resolve_mention_pubkeys(&text, &named_members);
+            let mut owner_targets: Vec<&str> = Vec::new();
+            for mentioned in &mentions {
+                if mentioned == &author_pubkey_hex {
                     continue;
                 }
-                tags.push(
-                    Tag::parse(["p", &mentioned])
-                        .map_err(|e| ActionSinkError::EventBuild(format!("mention p tag: {e}")))?,
-                );
+                let member = state
+                    .db
+                    .get_relay_member(tenant.community(), mentioned)
+                    .await
+                    .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+                if member.is_some_and(|member| member.role == "owner") {
+                    owner_targets.push(mentioned.as_str());
+                }
+            }
+
+            let route = if owner_targets.is_empty() {
+                None
+            } else {
+                Some(
+                    resolve_owner_mention_route(&tenant, &state, &author_pubkey)
+                        .await
+                        .map_err(ActionSinkError::OwnerContactUnroutable)?,
+                )
+            };
+
+            let mut routed: Vec<String> = Vec::new();
+            for mentioned in &mentions {
+                if mentioned == &author_pubkey_hex {
+                    continue;
+                }
+                match route {
+                    Some(OwnerMentionRoute::Route(target))
+                        if owner_targets.contains(&mentioned.as_str()) =>
+                    {
+                        let target_hex = target.to_hex();
+                        if !routed.contains(&target_hex) {
+                            tags.push(Tag::parse(["p", &target_hex]).map_err(|e| {
+                                ActionSinkError::EventBuild(format!("routed p tag: {e}"))
+                            })?);
+                            routed.push(target_hex);
+                        }
+                        tags.push(Tag::parse(["mention", mentioned]).map_err(|e| {
+                            ActionSinkError::EventBuild(format!("mention ref tag: {e}"))
+                        })?);
+                    }
+                    _ => {
+                        tags.push(Tag::parse(["p", mentioned]).map_err(|e| {
+                            ActionSinkError::EventBuild(format!("mention p tag: {e}"))
+                        })?);
+                    }
+                }
             }
 
             let kind = Kind::from(KIND_STREAM_MESSAGE as u16);
@@ -577,6 +630,14 @@ mod integration_tests {
         config.require_relay_membership = false;
         config.redis_url = "redis://127.0.0.1:1".to_string();
         let pool = sqlx::PgPool::connect_lazy(&config.database_url).expect("lazy pg pool");
+        // The relay applies migrations at startup; a fresh test database has
+        // none, so apply them here before any table is touched. CI's Postgres
+        // is provisioned from schema/schema.sql by pgschema instead, so the
+        // migrator is skipped there rather than replaying 0001 over live
+        // objects.
+        buzz_db::migration::run_migrations_unless_provisioned(&pool)
+            .await
+            .expect("apply migrations");
         let db = buzz_db::Db::from_pool(pool.clone());
         let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
@@ -706,6 +767,617 @@ mod integration_tests {
         assert!(
             p_tag_targets.contains(&agent_hex.as_str()),
             "mentioned member {agent_hex} must be p-tagged so it wakes; got {p_tag_targets:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Owner-contact routing (Option C): a Worker/Leader workflow author whose
+    // send_message mentions an owner must have the mention routed to the
+    // next-in-line agent (own team lead, else the unique executive) and the
+    // owner re-emitted as a reference-only `mention` tag. The owner is never
+    // p-tagged, so it is never woken or mention-indexed.
+    // ---------------------------------------------------------------------
+
+    use buzz_core::kind::{KIND_MANAGED_AGENT, KIND_TEAM};
+    use buzz_db::event::EventQuery;
+    use nostr::PublicKey;
+
+    /// Write an owner-authored managed-agent head (kind 30177) at `agent_hex`
+    /// declaring `tier` and, when given, a `persona_id` (the team-roster key).
+    async fn write_agent_head(
+        db: &buzz_db::Db,
+        community: buzz_core::CommunityId,
+        owner: &nostr::Keys,
+        agent_hex: &str,
+        tier: &str,
+        persona_id: Option<&str>,
+    ) {
+        let content = match persona_id {
+            Some(pid) => format!(r#"{{"tier":"{tier}","persona_id":"{pid}"}}"#),
+            None => format!(r#"{{"tier":"{tier}"}}"#),
+        };
+        let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content)
+            .tags(vec![Tag::parse(["d", agent_hex]).expect("d tag")])
+            .sign_with_keys(owner)
+            .expect("sign managed-agent head");
+        let (_, inserted) = db
+            .insert_event(community, &event, None)
+            .await
+            .expect("store managed-agent head");
+        assert!(inserted);
+    }
+
+    /// Write an owner-authored team head (kind 30176).
+    async fn write_team(
+        db: &buzz_db::Db,
+        community: buzz_core::CommunityId,
+        owner: &nostr::Keys,
+        team_id: &str,
+        persona_ids: &[&str],
+        lead_persona_id: Option<&str>,
+    ) {
+        let lead = match lead_persona_id {
+            Some(l) => format!(r#""{l}""#),
+            None => "null".to_string(),
+        };
+        let pids = persona_ids
+            .iter()
+            .map(|p| format!(r#""{p}""#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let content =
+            format!(r#"{{"name":"Test Team","persona_ids":[{pids}],"lead_persona_id":{lead}}}"#);
+        let event = EventBuilder::new(Kind::Custom(KIND_TEAM as u16), content)
+            .tags(vec![Tag::parse(["d", team_id]).expect("d tag")])
+            .sign_with_keys(owner)
+            .expect("sign team head");
+        let (_, inserted) = db
+            .insert_event(community, &event, None)
+            .await
+            .expect("store team head");
+        assert!(inserted);
+    }
+
+    /// Fresh open channel whose member set includes the owner under a
+    /// resolvable display name (so `@Boss` resolves to the owner pubkey).
+    async fn open_channel_with_owner_member(
+        state: &Arc<AppState>,
+        community: buzz_core::CommunityId,
+        creator: &nostr::Keys,
+        owner_hex: &str,
+        owner_display_name: &str,
+        name: &str,
+    ) -> Uuid {
+        let channel = state
+            .db
+            .create_channel(
+                community,
+                name,
+                ChannelType::Stream,
+                ChannelVisibility::Open,
+                None,
+                &creator.public_key().to_bytes(),
+                None,
+            )
+            .await
+            .expect("create channel");
+        let owner_bytes = PublicKey::from_hex(owner_hex)
+            .expect("owner pubkey")
+            .to_bytes()
+            .to_vec();
+        state
+            .db
+            .ensure_user(community, &owner_bytes)
+            .await
+            .expect("ensure owner user row");
+        state
+            .db
+            .update_user_profile(
+                community,
+                &owner_bytes,
+                Some(owner_display_name),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("set owner display name");
+        state
+            .db
+            .add_member(
+                community,
+                channel.id,
+                &owner_bytes,
+                MemberRole::Owner,
+                Some(&creator.public_key().to_bytes()),
+            )
+            .await
+            .expect("add owner channel member");
+        channel.id
+    }
+
+    async fn stored_event(
+        state: &Arc<AppState>,
+        community: buzz_core::CommunityId,
+        event_id_hex: &str,
+    ) -> buzz_core::StoredEvent {
+        let id_bytes = nostr::EventId::from_hex(event_id_hex)
+            .expect("event id")
+            .as_bytes()
+            .to_vec();
+        state
+            .db
+            .get_event_by_id(community, &id_bytes)
+            .await
+            .expect("query event")
+            .expect("event persisted")
+    }
+
+    fn p_tag_targets(stored: &buzz_core::StoredEvent) -> Vec<String> {
+        stored
+            .event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("p"))
+            .filter_map(|t| t.as_slice().get(1).map(|s| s.to_string()))
+            .collect()
+    }
+
+    fn mention_tag_targets(stored: &buzz_core::StoredEvent) -> Vec<String> {
+        stored
+            .event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("mention"))
+            .filter_map(|t| t.as_slice().get(1).map(|s| s.to_string()))
+            .collect()
+    }
+
+    async fn mention_indexed(
+        state: &Arc<AppState>,
+        community: buzz_core::CommunityId,
+        channel_id: Uuid,
+        pubkey_hex: &str,
+    ) -> Vec<buzz_core::StoredEvent> {
+        state
+            .db
+            .query_events(&EventQuery {
+                community_id: community,
+                kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+                channel_id: Some(channel_id),
+                p_tag_hex: Some(pubkey_hex.to_ascii_lowercase()),
+                limit: Some(10),
+                ..EventQuery::for_community(community)
+            })
+            .await
+            .expect("query mention index")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn workflow_send_message_worker_mentioning_owner_routes_to_team_lead() {
+        let state = test_state().await;
+        let owner = nostr::Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        let worker = nostr::Keys::generate();
+        let worker_hex = worker.public_key().to_hex();
+        let lead = nostr::Keys::generate();
+        let lead_hex = lead.public_key().to_hex();
+
+        let host = format!("wf-route-lead-{}.example", uuid::Uuid::new_v4().simple());
+        let community = match state
+            .db
+            .create_community_with_owner(&host, &owner_hex)
+            .await
+            .expect("create community")
+        {
+            CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("expected fresh community, got {other:?}"),
+        };
+
+        // Org: worker belongs to team-1 whose lead is `lead` (Leader tier).
+        write_agent_head(
+            &state.db,
+            community,
+            &owner,
+            &worker_hex,
+            "worker",
+            Some("p-worker"),
+        )
+        .await;
+        write_agent_head(
+            &state.db,
+            community,
+            &owner,
+            &lead_hex,
+            "leader",
+            Some("p-lead"),
+        )
+        .await;
+        write_team(
+            &state.db,
+            community,
+            &owner,
+            "team-1",
+            &["p-worker", "p-lead"],
+            Some("p-lead"),
+        )
+        .await;
+
+        let channel_id = open_channel_with_owner_member(
+            &state, community, &owner, &owner_hex, "Boss", "wf-route",
+        )
+        .await;
+
+        let sink = RelayActionSink::new(&state);
+        let event_id_hex = sink
+            .send_message(
+                community,
+                &channel_id.to_string(),
+                "cc @Boss on this",
+                &worker_hex,
+            )
+            .await
+            .expect("send_message");
+
+        let stored = stored_event(&state, community, &event_id_hex).await;
+        let p_tags = p_tag_targets(&stored);
+        assert!(
+            p_tags.contains(&lead_hex),
+            "owner mention must route to the team lead; got {p_tags:?}"
+        );
+        assert!(
+            !p_tags.contains(&owner_hex),
+            "owner must never be p-tagged; got {p_tags:?}"
+        );
+        let mention_refs = mention_tag_targets(&stored);
+        assert!(
+            mention_refs.contains(&owner_hex),
+            "owner must remain as a reference-only mention tag; got {mention_refs:?}"
+        );
+        assert!(
+            mention_indexed(&state, community, channel_id, &owner_hex)
+                .await
+                .is_empty(),
+            "owner must not be mention-indexed"
+        );
+        assert!(
+            !mention_indexed(&state, community, channel_id, &lead_hex)
+                .await
+                .is_empty(),
+            "team lead must be mention-indexed so it wakes"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn workflow_send_message_worker_mentioning_owner_falls_back_to_unique_executive() {
+        let state = test_state().await;
+        let owner = nostr::Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        let worker = nostr::Keys::generate();
+        let worker_hex = worker.public_key().to_hex();
+        let executive = nostr::Keys::generate();
+        let executive_hex = executive.public_key().to_hex();
+
+        let host = format!("wf-route-exec-{}.example", uuid::Uuid::new_v4().simple());
+        let community = match state
+            .db
+            .create_community_with_owner(&host, &owner_hex)
+            .await
+            .expect("create community")
+        {
+            CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("expected fresh community, got {other:?}"),
+        };
+
+        // No team contains the worker: unique executive is the fallback.
+        write_agent_head(
+            &state.db,
+            community,
+            &owner,
+            &worker_hex,
+            "worker",
+            Some("p-worker"),
+        )
+        .await;
+        write_agent_head(
+            &state.db,
+            community,
+            &owner,
+            &executive_hex,
+            "executive",
+            Some("p-exec"),
+        )
+        .await;
+
+        let channel_id = open_channel_with_owner_member(
+            &state, community, &owner, &owner_hex, "Boss", "wf-route",
+        )
+        .await;
+
+        let sink = RelayActionSink::new(&state);
+        let event_id_hex = sink
+            .send_message(
+                community,
+                &channel_id.to_string(),
+                "cc @Boss on this",
+                &worker_hex,
+            )
+            .await
+            .expect("send_message");
+
+        let stored = stored_event(&state, community, &event_id_hex).await;
+        let p_tags = p_tag_targets(&stored);
+        assert!(
+            p_tags.contains(&executive_hex),
+            "owner mention must fall back to the unique executive; got {p_tags:?}"
+        );
+        assert!(
+            !p_tags.contains(&owner_hex),
+            "owner must never be p-tagged; got {p_tags:?}"
+        );
+        assert!(
+            mention_tag_targets(&stored).contains(&owner_hex),
+            "owner must remain as a reference-only mention tag"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn workflow_send_message_worker_mentioning_owner_without_any_route_fails_step() {
+        let state = test_state().await;
+        let owner = nostr::Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        let worker = nostr::Keys::generate();
+        let worker_hex = worker.public_key().to_hex();
+
+        let host = format!("wf-route-fail-{}.example", uuid::Uuid::new_v4().simple());
+        let community = match state
+            .db
+            .create_community_with_owner(&host, &owner_hex)
+            .await
+            .expect("create community")
+        {
+            CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("expected fresh community, got {other:?}"),
+        };
+
+        // Worker exists but has no team and no executive: never guess a target.
+        write_agent_head(
+            &state.db,
+            community,
+            &owner,
+            &worker_hex,
+            "worker",
+            Some("p-worker"),
+        )
+        .await;
+        let channel_id = open_channel_with_owner_member(
+            &state, community, &owner, &owner_hex, "Boss", "wf-route",
+        )
+        .await;
+
+        let sink = RelayActionSink::new(&state);
+        let result = sink
+            .send_message(
+                community,
+                &channel_id.to_string(),
+                "cc @Boss on this",
+                &worker_hex,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(ActionSinkError::OwnerContactUnroutable(_))),
+            "unroutable owner mention must fail the step, got {result:?}"
+        );
+
+        let persisted = state
+            .db
+            .query_events(&EventQuery {
+                community_id: community,
+                kinds: Some(vec![KIND_STREAM_MESSAGE as i32]),
+                channel_id: Some(channel_id),
+                limit: Some(10),
+                ..EventQuery::for_community(community)
+            })
+            .await
+            .expect("query channel messages");
+        assert!(
+            persisted.is_empty(),
+            "a failed step must not persist a message"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn workflow_send_message_leader_mentioning_owner_routes_to_executive() {
+        let state = test_state().await;
+        let owner = nostr::Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        let leader = nostr::Keys::generate();
+        let leader_hex = leader.public_key().to_hex();
+        let executive = nostr::Keys::generate();
+        let executive_hex = executive.public_key().to_hex();
+
+        let host = format!("wf-route-leader-{}.example", uuid::Uuid::new_v4().simple());
+        let community = match state
+            .db
+            .create_community_with_owner(&host, &owner_hex)
+            .await
+            .expect("create community")
+        {
+            CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("expected fresh community, got {other:?}"),
+        };
+
+        write_agent_head(
+            &state.db,
+            community,
+            &owner,
+            &leader_hex,
+            "leader",
+            Some("p-leader"),
+        )
+        .await;
+        write_agent_head(
+            &state.db,
+            community,
+            &owner,
+            &executive_hex,
+            "executive",
+            Some("p-exec"),
+        )
+        .await;
+
+        let channel_id = open_channel_with_owner_member(
+            &state, community, &owner, &owner_hex, "Boss", "wf-route",
+        )
+        .await;
+
+        let sink = RelayActionSink::new(&state);
+        let event_id_hex = sink
+            .send_message(
+                community,
+                &channel_id.to_string(),
+                "cc @Boss on this",
+                &leader_hex,
+            )
+            .await
+            .expect("send_message");
+
+        let stored = stored_event(&state, community, &event_id_hex).await;
+        let p_tags = p_tag_targets(&stored);
+        assert!(
+            p_tags.contains(&executive_hex),
+            "leader owner mention must route to the unique executive; got {p_tags:?}"
+        );
+        assert!(
+            !p_tags.contains(&owner_hex),
+            "owner must never be p-tagged; got {p_tags:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn workflow_send_message_untiered_author_mentioning_owner_is_not_rewritten() {
+        let state = test_state().await;
+        // The workflow author is a human owner with no managed-agent head:
+        // parity with the gate, which lets untiered actors through untouched.
+        let author = nostr::Keys::generate();
+        let author_hex = author.public_key().to_hex();
+        let co_owner = nostr::Keys::generate();
+        let co_owner_hex = co_owner.public_key().to_hex();
+
+        let host = format!(
+            "wf-route-untiered-{}.example",
+            uuid::Uuid::new_v4().simple()
+        );
+        let community = match state
+            .db
+            .create_community_with_owner(&host, &author_hex)
+            .await
+            .expect("create community")
+        {
+            CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("expected fresh community, got {other:?}"),
+        };
+
+        // Second relay owner, so the @mention target is genuinely an owner.
+        state
+            .db
+            .add_relay_member(community, &co_owner_hex, "owner", Some(&author_hex))
+            .await
+            .expect("add co-owner");
+
+        let channel_id = open_channel_with_owner_member(
+            &state,
+            community,
+            &author,
+            &co_owner_hex,
+            "Boss",
+            "wf-route",
+        )
+        .await;
+
+        let sink = RelayActionSink::new(&state);
+        let event_id_hex = sink
+            .send_message(
+                community,
+                &channel_id.to_string(),
+                "cc @Boss on this",
+                &author_hex,
+            )
+            .await
+            .expect("send_message");
+
+        let stored = stored_event(&state, community, &event_id_hex).await;
+        let p_tags = p_tag_targets(&stored);
+        assert!(
+            p_tags.contains(&co_owner_hex),
+            "untiered author keeps a direct owner p-tag (gate parity); got {p_tags:?}"
+        );
+        assert!(
+            mention_tag_targets(&stored).is_empty(),
+            "untiered author must not introduce reference-only mention tags"
+        );
+    }
+}
+
+#[cfg(test)]
+mod write_path_guard {
+    //! CI-detectable seam guard (Option E). `insert_event_with_thread_metadata`
+    //! is the near-chokepoint every member-facing message write passes through.
+    //! The owner-contact hierarchy must be enforced on every path that reaches
+    //! it: the ingest path calls `enforce_owner_contact`, the workflow sink
+    //! calls `resolve_owner_mention_route`. A new caller that references
+    //! neither would silently reopen the workflow bypass the regression tests
+    //! above close, so this test fails the build when one appears.
+
+    use std::fs;
+    use std::path::PathBuf;
+
+    const CALL_MARKER: &str = "insert_event_with_thread_metadata(";
+    const GATE_SYMBOLS: [&str; 2] = ["enforce_owner_contact", "resolve_owner_mention_route"];
+
+    fn rust_files(dir: &PathBuf, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("read src dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn every_message_write_path_enforces_owner_contact() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_files(&src, &mut files);
+
+        let offenders: Vec<String> = files
+            .into_iter()
+            .filter_map(|path| {
+                let content = fs::read_to_string(&path).expect("read source file");
+                if content.contains(CALL_MARKER)
+                    && !GATE_SYMBOLS.iter().any(|symbol| content.contains(symbol))
+                {
+                    Some(path.display().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "callers of {CALL_MARKER} must also enforce owner contact \
+             ({}) -- a write path that can p-tag an owner without the \
+             hierarchy is a bypass: {}",
+            GATE_SYMBOLS.join(" or "),
+            offenders.join(", ")
         );
     }
 }

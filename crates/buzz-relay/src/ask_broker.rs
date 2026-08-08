@@ -1304,7 +1304,10 @@ mod tests {
         let pool = PgPool::connect(&database_url)
             .await
             .expect("connect to test Postgres");
-        buzz_db::migration::run_migrations(&pool)
+        // Same dual-provisioning rule as the other Postgres-gated harnesses:
+        // migrate a fresh developer database, skip CI's pgschema-provisioned
+        // one.
+        buzz_db::migration::run_migrations_unless_provisioned(&pool)
             .await
             .expect("apply migrations");
         pool
