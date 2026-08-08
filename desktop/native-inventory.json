@@ -1,17 +1,17 @@
 {
-  "commit": "e1d78af82864d58eb5d2309a8b1c0b674e655561",
+  "commit": "b35f53e4d22a925322fbd7dd15899c5ba013dd23",
   "files": {
     "rust_total": 320,
-    "rust_lines": 131295,
+    "rust_lines": 131314,
     "tauri_coupled": 143,
     "portable": 177,
     "portable_lines": 64638
   },
   "commands": {
-    "registered": 280,
-    "defined": 280,
+    "registered": 281,
+    "defined": 281,
     "by_reach": {
-      "frontend": 276,
+      "frontend": 277,
       "frontend-plugin-prefixed": 2,
       "NO CALLER FOUND": 2
     },
@@ -22,7 +22,7 @@
   },
   "params": {
     "AppHandle": 272,
-    "State": 212,
+    "State": 213,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 3
@@ -30,7 +30,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 272,
-      "State": 212,
+      "State": 213,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 3
@@ -113,13 +113,13 @@
     "src-tauri/src/commands/channel_templates.rs": 5,
     "src-tauri/src/commands/agent_config.rs": 5,
     "src-tauri/src/commands/workspace.rs": 4,
+    "src-tauri/src/colony_provisioning.rs": 4,
     "src-tauri/src/commands/team_snapshot.rs": 4,
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
     "src-tauri/src/commands/agents.rs": 4,
     "src-tauri/src/commands/media.rs": 4,
     "src-tauri/src/commands/pairing.rs": 3,
-    "src-tauri/src/colony_provisioning.rs": 3,
     "src-tauri/src/discovery_credentials.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
@@ -375,7 +375,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/hostedCommunityApi.ts:31",
+        "src/features/communities/hostedCommunityApi.ts:46",
         "src/parity/session/script.ts:1293",
         "src/parity/session/script.ts:1294"
       ]
@@ -386,7 +386,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/hostedCommunityApi.ts:35",
+        "src/features/communities/hostedCommunityApi.ts:50",
         "src/parity/session/script.ts:1300",
         "src/parity/session/script.ts:1302"
       ]
@@ -397,9 +397,18 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/hostedCommunityApi.ts:39",
+        "src/features/communities/hostedCommunityApi.ts:54",
         "src/parity/session/script.ts:1307",
         "src/parity/session/script.ts:1308"
+      ]
+    },
+    "colony_provisioning_config": {
+      "defining_file": "src-tauri/src/colony_provisioning.rs",
+      "module": "colony_provisioning",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/communities/hostedCommunityApi.ts:42"
       ]
     },
     "complete_company_blueprint": {
