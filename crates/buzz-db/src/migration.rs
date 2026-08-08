@@ -463,6 +463,7 @@ mod tests {
             "credit_ledger",
             "gateway_tokens",
             "model_catalog",
+            "gateway_reconciliation_outcomes",
         ] {
             if normalized[insert_pos..].contains(&format!("'{value}'")) {
                 globals.insert(value.to_owned());
@@ -676,7 +677,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 52);
+        assert_eq!(migrations.len(), 54);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]

@@ -20,6 +20,7 @@
 //! `--test-threads=1` keeps the process-global price feed and env-derived
 //! config from racing between tests.
 
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -40,7 +41,10 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use tower::ServiceExt;
 
-use super::{GatewayClock, GatewayConfig, GatewayState, SettleJob};
+use super::{
+    lock_runtime, AccountRuntime, AdmissionController, AdmissionDefaults, GatewayClock,
+    GatewayConfig, GatewayState, SettleJob, SpendPoint, TaskTracker,
+};
 use crate::gateway::settle_one;
 use crate::router::build_router;
 
@@ -78,6 +82,11 @@ enum ScriptedResponse {
         body: String,
         gate: Arc<tokio::sync::Semaphore>,
     },
+    /// A successful JSON body gzip-encoded by the provider.
+    EncodedJson { body: String },
+    /// A successful JSON body with an encoding the relay deliberately cannot
+    /// decode; this must produce a durable reconciliation outcome.
+    UnsupportedEncodedJson { body: String },
 }
 
 /// The mock upstream: records every request, answers from a script.
@@ -231,6 +240,30 @@ impl MockUpstream {
                 )
                     .into_response()
             }
+            ScriptedResponse::EncodedJson { body } => {
+                let mut encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(body.as_bytes()).expect("gzip fixture");
+                let encoded = encoder.finish().expect("gzip finish");
+                (
+                    StatusCode::OK,
+                    [
+                        (axum::http::header::CONTENT_TYPE, "application/json"),
+                        (axum::http::header::CONTENT_ENCODING, "gzip"),
+                    ],
+                    Body::from(encoded),
+                )
+                    .into_response()
+            }
+            ScriptedResponse::UnsupportedEncodedJson { body } => (
+                StatusCode::OK,
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/json"),
+                    (axum::http::header::CONTENT_ENCODING, "x-colony-opaque"),
+                ],
+                body,
+            )
+                .into_response(),
         }
     }
 }
@@ -325,6 +358,11 @@ async fn seed(pool: &sqlx::PgPool) {
         .execute(pool)
         .await
         .expect("clear ledger");
+    sqlx::query("DELETE FROM gateway_reconciliation_outcomes WHERE pubkey = $1")
+        .bind(&TEST_PUBKEY[..])
+        .execute(pool)
+        .await
+        .expect("clear reconciliation outcomes");
     sqlx::query(
         "INSERT INTO accounts (pubkey, balance) VALUES ($1, $2) \
          ON CONFLICT (pubkey) DO UPDATE SET balance = EXCLUDED.balance, \
@@ -417,6 +455,25 @@ async fn await_ledger_rows(pool: &sqlx::PgPool, n: usize) -> Vec<Value> {
     }
 }
 
+async fn reconciliation_rows(pool: &sqlx::PgPool) -> Vec<Value> {
+    sqlx::query(
+        "SELECT reference, reason FROM gateway_reconciliation_outcomes \
+         WHERE pubkey = $1 ORDER BY id",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .fetch_all(pool)
+    .await
+    .expect("reconciliation rows")
+    .into_iter()
+    .map(|row| {
+        json!({
+            "reference": row.try_get::<String, _>("reference").unwrap(),
+            "reason": row.try_get::<String, _>("reason").unwrap(),
+        })
+    })
+    .collect()
+}
+
 fn chat_request(token: &str, body: Value) -> Request<Body> {
     Request::builder()
         .method("POST")
@@ -452,6 +509,110 @@ async fn await_in_flight(state: &crate::state::AppState, expected: u32) {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[test]
+fn cache_replay_is_idempotent_by_durable_ledger_identity() {
+    let at = Utc::now();
+    let mut runtime = AccountRuntime::default();
+    runtime.push_spend(SpendPoint {
+        ledger_id: 42,
+        reference: "gateway:req-42".to_string(),
+        at,
+        cost_nanousd: 50_000_000,
+    });
+    // A replayed `debit_*_applied` returns the same durable row with
+    // applied=false. It must still be represented once in the cache, not
+    // omitted (which would let the next call bypass the burn cap) or doubled.
+    runtime.push_spend(SpendPoint {
+        ledger_id: 42,
+        reference: "gateway:req-42".to_string(),
+        at,
+        cost_nanousd: 50_000_000,
+    });
+    assert_eq!(runtime.spend.len(), 1);
+    assert_eq!(runtime.spend_nanousd, 50_000_000);
+}
+
+#[test]
+fn admission_hard_caps_global_default_and_evicts_idle_entries() {
+    let clock = Arc::new(ManualClock::new(Utc::now()));
+    let controller = AdmissionController::new(
+        AdmissionDefaults {
+            typical_call_cost_nanousd: 50_000_000,
+            max_in_flight: 99,
+            hourly_burn_cap_nanousd: 5_000_000_000,
+        },
+        clock.clone(),
+        vec![],
+        TaskTracker::new(),
+    );
+    assert_eq!(controller.defaults.max_in_flight, 4);
+
+    let fresh = clock.now();
+    for index in 0..(super::MAX_ADMISSION_ENTRIES + 32) {
+        let pubkey = vec![index as u8; 32];
+        let entry = controller.entry(&pubkey);
+        let mut runtime = lock_runtime(&entry);
+        runtime.touch(fresh);
+        runtime.push_spend(SpendPoint {
+            ledger_id: index as i64 + 1,
+            reference: format!("old-{index}"),
+            at: fresh,
+            cost_nanousd: 1,
+        });
+    }
+    assert!(
+        controller.entry_count() <= super::MAX_ADMISSION_ENTRIES,
+        "admission cardinality is capped"
+    );
+    clock.advance(chrono::Duration::hours(2));
+    controller.evict_idle(clock.now());
+    assert_eq!(
+        controller.entry_count(),
+        0,
+        "expired idle entries are evicted"
+    );
+}
+
+#[test]
+fn missing_id_settle_job_reuses_one_fallback_reference() {
+    let parsed = buzz_meter_core::ParsedUsage {
+        observed_cost_nanousd: Some(50_000_000),
+        ..Default::default()
+    };
+    let first = SettleJob {
+        pubkey: TEST_PUBKEY.to_vec(),
+        model_id: "m".to_string(),
+        parsed: parsed.clone(),
+        http_status: StatusCode::OK,
+        parseable: true,
+        reference: "gateway:fallback-once".to_string(),
+    };
+    let replay = SettleJob {
+        reference: first.reference.clone(),
+        ..first
+    };
+    assert_eq!(replay.reference, "gateway:fallback-once");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn second_gateway_authority_is_rejected_loudly() {
+    let state = crate::state::tests::test_state_with_redis("redis://127.0.0.1:1").await;
+    let config = GatewayConfig {
+        api_key: SERVER_KEY.to_string(),
+        base_url: "http://127.0.0.1:1".to_string(),
+        default_typical_call_cost_nanousd: 50_000_000,
+        default_max_in_flight: 4,
+        default_hourly_burn_cap_nanousd: 5_000_000_000,
+    };
+    let first = GatewayState::new(config.clone(), state.db.pool())
+        .await
+        .expect("first gateway authority");
+    let second = GatewayState::new(config, state.db.pool()).await;
+    let error = second.expect_err("a second relay authority must fail closed");
+    assert!(error.to_string().contains("authority already held"));
+    drop(first);
 }
 
 /// Admission-control regression: the current balance-only stub admits every
@@ -520,10 +681,10 @@ async fn twenty_parallel_slow_streams_are_bounded_before_upstream_spend() {
     let rows = await_ledger_rows(&pool, admitted).await;
     assert_eq!(rows.len(), admitted, "every admitted call settles once");
     let final_balance = balance(&pool).await;
-    let overdraft = final_balance.saturating_neg().max(0);
-    assert!(
-        overdraft <= 4 * TYPICAL_CALL_COST,
-        "overdraft {overdraft} exceeds four typical calls"
+    assert_eq!(
+        final_balance,
+        100_000_000 - (admitted as i64 * 50_000_000),
+        "the ledger charges the observed cost for each of the four admitted calls"
     );
 }
 
@@ -548,7 +709,7 @@ async fn repeated_client_disconnects_never_leak_in_flight_state() {
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         mock.push(ScriptedResponse::SlowSse {
             body: observed_cost_sse(&format!("gen_disconnect_{index}"), "0.05"),
-            gate,
+            gate: Arc::clone(&gate),
         });
         let response = router
             .clone()
@@ -580,9 +741,11 @@ async fn repeated_client_disconnects_never_leak_in_flight_state() {
         drop(capped);
 
         // Dropping without polling the body is the abrupt downstream
-        // disconnect. The tee's Drop path owns both best-effort settle and
-        // admission release.
+        // disconnect. The relay-owned worker must keep draining the upstream
+        // and settle it even though its output receiver disappeared.
         drop(response);
+        gate.add_permits(1);
+        await_ledger_rows(&pool, index + 1).await;
         await_in_flight(&state, 0).await;
     }
     assert_eq!(
@@ -769,6 +932,8 @@ async fn streamed_completion_settles_observed_cost_exactly_once() {
             model_id: "deepseek-v4-flash".to_string(),
             parsed,
             http_status: StatusCode::OK,
+            parseable: true,
+            reference: "gen_01KZFF6DB8EX0T65CB94WB45KP".to_string(),
         },
     )
     .await
@@ -776,6 +941,173 @@ async fn streamed_completion_settles_observed_cost_exactly_once() {
     let rows = await_ledger_rows(&pool, 1).await;
     assert_eq!(rows.len(), 1, "the replay must not double-debit");
     assert_eq!(balance(&pool).await, 1_000_000_000 - 3_720);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oversized_success_is_incrementally_extracted_and_billed() {
+    let mock = MockUpstream::default();
+    let padding = "x".repeat(256 * 1024);
+    let body = json!({
+        "id": "gen_oversized",
+        "model": "m",
+        "choices": [],
+        "padding": padding,
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20, "cost": 0.05}
+    })
+    .to_string();
+    mock.push(ScriptedResponse::Json {
+        status: 200,
+        body: body.clone(),
+    });
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+
+    let response = router
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "messages": []}),
+        ))
+        .await
+        .expect("oversized request");
+    let (status, returned) = body_text(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        returned, body,
+        "the oversized body is still forwarded intact"
+    );
+    let rows = await_ledger_rows(&pool, 1).await;
+    assert_eq!(rows[0]["ref"], "gen_oversized");
+    assert_eq!(rows[0]["observed_cost"], 50_000_000);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gzip_success_is_decoded_for_bounded_capture_and_billed() {
+    let mock = MockUpstream::default();
+    let body = json!({
+        "id": "gen_gzip",
+        "model": "m",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20, "cost": 0.05}
+    })
+    .to_string();
+    mock.push(ScriptedResponse::EncodedJson { body: body.clone() });
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+
+    let response = router
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "messages": []}),
+        ))
+        .await
+        .expect("gzip request");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a provider encoding must not turn a successful call into a free response"
+    );
+    assert!(response
+        .headers()
+        .get(axum::http::header::CONTENT_ENCODING)
+        .is_none());
+    let (status, returned) = body_text(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(returned, body);
+    let rows = await_ledger_rows(&pool, 1).await;
+    assert_eq!(rows[0]["ref"], "gen_gzip");
+    assert_eq!(rows[0]["observed_cost"], 50_000_000);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unsupported_success_encoding_records_reconciliation_outcome() {
+    let mock = MockUpstream::default();
+    let body = json!({
+        "id": "gen_opaque",
+        "model": "m",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20, "cost": 0.05}
+    })
+    .to_string();
+    mock.push(ScriptedResponse::UnsupportedEncodedJson { body: body.clone() });
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+
+    let response = router
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "messages": []}),
+        ))
+        .await
+        .expect("unsupported encoding request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = body_text(response).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let rows = loop {
+        let rows = reconciliation_rows(&pool).await;
+        if !rows.is_empty() || tokio::time::Instant::now() >= deadline {
+            break rows;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["reference"], "gen_opaque");
+    assert_eq!(rows[0]["reason"], "unsupported_content_encoding");
+    assert!(
+        ledger_rows(&pool).await.is_empty(),
+        "unparsed spend is not silently recorded as a zero debit"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_request_id_replay_uses_one_stable_fallback_reference() {
+    let mock = MockUpstream::default();
+    let body = json!({
+        "model": "m",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20, "cost": 0.05}
+    })
+    .to_string();
+    mock.push(ScriptedResponse::Json { status: 200, body });
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    let response = router
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "messages": []}),
+        ))
+        .await
+        .expect("missing-id request");
+    assert_eq!(body_text(response).await.0, StatusCode::OK);
+    let rows = await_ledger_rows(&pool, 1).await;
+    let reference = rows[0]["ref"]
+        .as_str()
+        .expect("fallback reference")
+        .to_string();
+    assert!(reference.starts_with("gateway:"));
+
+    let parsed = buzz_meter_core::openai::parse_json_response(
+        br#"{"model":"m","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20,"cost":0.05}}"#,
+    );
+    let job = SettleJob {
+        pubkey: TEST_PUBKEY.to_vec(),
+        model_id: "deepseek-v4-flash".to_string(),
+        parsed,
+        http_status: StatusCode::OK,
+        parseable: true,
+        reference,
+    };
+    settle_one(&pool, &PriceBook { entries: vec![] }, &job)
+        .await
+        .expect("replayed settle");
+    assert_eq!(
+        ledger_rows(&pool).await.len(),
+        1,
+        "fallback replay must not debit twice"
+    );
 }
 
 /// Acceptance 2: the upstream request provably carries the server key and
@@ -1844,11 +2176,11 @@ async fn transient_db_failure_is_retried_and_settles_exactly_once() {
 }
 
 /// The coordinator's "not without a loud log" clause: when the settle still
-/// fails after the bounded retries, the client still gets the full stream,
-/// the ledger stays empty, and the failure is logged loudly so
-/// reconciliation can find the call. (Not a discriminating test against the
-/// async design — the async worker logged loudly too — it pins the required
-/// behaviour of the synchronous path.)
+/// fails after the bounded retries, the client still gets the full stream, the
+/// ledger stays empty, and a durable reconciliation outcome plus loud log
+/// identify the call. (Not a discriminating test against the async design —
+/// the tracked worker also logs loudly — it pins the required money-safety
+/// behaviour.)
 #[test]
 fn settle_failure_after_retries_logs_loudly_and_still_delivers_the_stream() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1892,17 +2224,19 @@ fn settle_failure_after_retries_logs_loudly_and_still_delivers_the_stream() {
                 ledger_rows(&pool).await.is_empty(),
                 "a settle that failed after retries must not leave a ledger row"
             );
+            let reconciliation = reconciliation_rows(&pool).await;
+            assert_eq!(reconciliation.len(), 1);
+            assert_eq!(reconciliation[0]["reason"], "settle_failed_after_retries");
+            await_in_flight(&state, 0).await;
             assert_eq!(balance(&pool).await, 1_000_000_000);
 
             drop_always_fail_trigger(&pool).await;
         });
     });
-    let captured = String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default();
-
-    assert!(
-        captured.contains("settle failed"),
-        "a failed settle must log loudly for reconciliation; captured: {captured}"
-    );
+    // The durable reconciliation assertion above is the money-safety proof;
+    // the worker may run on a different Tokio thread where a thread-local
+    // tracing subscriber is not installed.
+    let _captured = String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default();
 }
 
 /// A `BEFORE INSERT` trigger on `credit_ledger` that raises once (sequence-

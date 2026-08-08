@@ -15,10 +15,10 @@
 //! ledger says so" are the same instant. The final chunk is held back one
 //! position; when the upstream stream ends, the settle runs inline (with a
 //! small bounded retry for transient DB errors) and only then is the held
-//! chunk released. The residual window is a crash inside the settle itself,
-//! bounded to one call, which is what daily reconciliation is for. A client
-//! that hangs up mid-stream drops the tee; that path settles best-effort
-//! from whatever the wire said.
+//! chunk released. The relay-owned worker keeps draining after a client drop,
+//! and an unparseable or failed successful call gets a durable reconciliation
+//! outcome. Daily reconciliation remains the residual process-crash backstop;
+//! the heuristic balance floor is not a monetary loss bound.
 //!
 //! Everything here is mounted only when `VERCEL_AI_GATEWAY_KEY` is
 //! configured; without it the routes do not exist and return 404.
@@ -33,6 +33,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use async_compression::tokio::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder};
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
@@ -49,6 +50,10 @@ use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use sqlx::{Connection, PgConnection};
+use tokio::io::BufReader;
+use tokio_util::io::{ReaderStream, StreamReader};
+use tokio_util::task::TaskTracker;
 
 /// The upstream this gateway fronts. Vercel AI Gateway is the default; the
 /// relay's existing credential seam style means swapping the hop later is an
@@ -61,9 +66,9 @@ const TOKEN_PREFIX: &str = "colony-gw-";
 /// Minimum balance to admit a call, in nanoUSD ($0.05).
 ///
 /// The hard part of the spec is explicit: do not build a reservation system.
-/// Admit at $0.05, debit the observed cost on settle, hard-block later at
-/// admission control. Worst case overdraft is one call on an account that
-/// already paid.
+/// Admit at $0.05, debit the observed cost on settle, and hard-block later at
+/// admission control. This is a concurrency/balance guard, not a reservation
+/// system: the provider's observed debit can be larger than the heuristic.
 const ADMISSION_FLOOR_NANOUSD: i64 = 50_000_000;
 
 /// Default cost used by the no-reservation balance guard: $0.05.
@@ -71,6 +76,12 @@ const DEFAULT_TYPICAL_CALL_COST_NANOUSD: i64 = 50_000_000;
 
 /// Default maximum concurrent provisioned calls per account.
 const DEFAULT_MAX_IN_FLIGHT: u32 = 4;
+
+/// Hard safety ceiling for both the deployment default and per-account
+/// overrides. The gateway makes at most four actual upstream calls per
+/// account; `typical_call_cost_nanousd` remains only a conservative floor for
+/// the pre-call balance check.
+const MAX_MAX_IN_FLIGHT: u32 = 4;
 
 /// Default rolling one-hour spend cap per account: $5.
 const DEFAULT_HOURLY_BURN_CAP_NANOUSD: i64 = 5_000_000_000;
@@ -88,10 +99,21 @@ const SETTLE_MAX_ATTEMPTS: usize = 3;
 /// the worst-case tail is 50ms + 100ms before the terminal chunk is released.
 const SETTLE_RETRY_BACKOFF_MS: u64 = 50;
 
-/// How much of a response body is kept for parsing. Past this, the body keeps
-/// streaming to the client but the copy is abandoned (no settle for that
-/// call — logged loudly, and reconciliation points at it).
-const MAX_TEE_BYTES: usize = 8 * 1024 * 1024;
+/// How much of a response body is retained for bounded incremental parsing.
+/// A successful response larger than this is still billable: identity fields
+/// are extracted as chunks arrive and the tail is enough for terminal usage.
+const MAX_TEE_PARSE_TAIL_BYTES: usize = 128 * 1024;
+
+/// Admission entries are process-local and evicted when idle. This bounds the
+/// memory cost of rejected/missing identities without touching durable rows.
+const MAX_ADMISSION_ENTRIES: usize = 4096;
+const ADMISSION_IDLE_TTL: chrono::Duration = chrono::Duration::hours(1);
+
+/// Session-level Postgres advisory lock key for the relay's single admission
+/// authority. The dedicated connection is retained in `GatewayState`, so a
+/// second relay sharing this database fails at startup instead of silently
+/// allowing two process-local counters to oversubscribe the account.
+const GATEWAY_AUTHORITY_LOCK_KEY: i64 = 0x4255_5A5A_4347_5759;
 
 /// Ceiling on a buffered request body. Large enough for a long-context
 /// prompt and small enough that a runaway agent cannot exhaust memory.
@@ -142,7 +164,7 @@ pub fn config_from_env() -> anyhow::Result<Option<GatewayConfig>> {
         DEFAULT_TYPICAL_CALL_COST_NANOUSD,
     )?;
     let default_max_in_flight =
-        positive_u32_env("BUZZ_GATEWAY_DEFAULT_MAX_IN_FLIGHT", DEFAULT_MAX_IN_FLIGHT)?;
+        max_in_flight_env("BUZZ_GATEWAY_DEFAULT_MAX_IN_FLIGHT", DEFAULT_MAX_IN_FLIGHT)?;
     let default_hourly_burn_cap_nanousd = positive_i64_env(
         "BUZZ_GATEWAY_DEFAULT_HOURLY_BURN_CAP_NANOUSD",
         DEFAULT_HOURLY_BURN_CAP_NANOUSD,
@@ -182,6 +204,16 @@ fn positive_u32_env(name: &str, default: u32) -> anyhow::Result<u32> {
     }
 }
 
+fn max_in_flight_env(name: &str, default: u32) -> anyhow::Result<u32> {
+    let value = positive_u32_env(name, default)?;
+    if value > MAX_MAX_IN_FLIGHT {
+        anyhow::bail!(
+            "{name} must be no greater than {MAX_MAX_IN_FLIGHT} (hard gateway safety ceiling)"
+        );
+    }
+    Ok(value)
+}
+
 /// Everything the gateway needs beyond the relay's `AppState`.
 pub struct GatewayState {
     config: GatewayConfig,
@@ -189,10 +221,15 @@ pub struct GatewayState {
     /// Price book snapshot, shared with every response tee so the settle
     /// step can price a call the provider did not state a cost for.
     price_book: Arc<PriceBook>,
-    /// Single-instance admission authority. This deliberately is not
-    /// distributed: Fly currently runs one relay process. A multi-instance
-    /// deployment must replace this with shared state before it is safe.
+    /// Single-instance admission authority. The retained Postgres advisory
+    /// lease makes a second relay sharing this deployment fail at startup;
+    /// multi-instance operation needs an explicitly shared admission design.
     admission: Arc<AdmissionController>,
+    /// Relay-owned drain/settle jobs. A downstream body may disappear, but
+    /// this tracker keeps the upstream response and permit alive until the
+    /// response has been drained and its ledger outcome is durable.
+    settlement_tasks: TaskTracker,
+    _authority: GatewayAuthority,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -220,6 +257,7 @@ impl GatewayState {
         pool: &sqlx::PgPool,
         clock: Arc<dyn GatewayClock>,
     ) -> anyhow::Result<Self> {
+        let authority = GatewayAuthority::acquire(pool).await?;
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
@@ -231,26 +269,60 @@ impl GatewayState {
         let recent = buzz_db::credits::recent_debits(pool, since)
             .await
             .map_err(|error| anyhow::anyhow!("gateway admission rebuild: {error}"))?;
+        let settlement_tasks = TaskTracker::new();
         let admission = Arc::new(AdmissionController::new(
             AdmissionDefaults {
                 typical_call_cost_nanousd: config.default_typical_call_cost_nanousd,
-                max_in_flight: config.default_max_in_flight,
+                max_in_flight: config.default_max_in_flight.min(MAX_MAX_IN_FLIGHT),
                 hourly_burn_cap_nanousd: config.default_hourly_burn_cap_nanousd,
             },
             clock,
             recent,
+            settlement_tasks.clone(),
         ));
         Ok(Self {
             config,
             client,
             price_book,
             admission,
+            settlement_tasks,
+            _authority: authority,
         })
     }
 
     #[cfg(test)]
     fn in_flight_for(&self, pubkey: &[u8]) -> u32 {
         self.admission.in_flight_for(pubkey)
+    }
+}
+
+struct GatewayAuthority {
+    /// Kept open for the full gateway lifetime; PostgreSQL releases the lock
+    /// automatically if the relay exits or this state is dropped.
+    _connection: PgConnection,
+}
+
+impl GatewayAuthority {
+    async fn acquire(pool: &sqlx::PgPool) -> anyhow::Result<Self> {
+        let options = pool.connect_options();
+        let mut connection = PgConnection::connect_with(&options)
+            .await
+            .map_err(|error| anyhow::anyhow!("gateway authority connection: {error}"))?;
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(GATEWAY_AUTHORITY_LOCK_KEY)
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| anyhow::anyhow!("gateway authority lock query: {error}"))?;
+        if !acquired {
+            connection
+                .close()
+                .await
+                .map_err(|error| anyhow::anyhow!("gateway authority lock release: {error}"))?;
+            anyhow::bail!("gateway admission authority already held by another relay process");
+        }
+        Ok(Self {
+            _connection: connection,
+        })
     }
 }
 
@@ -275,6 +347,8 @@ struct AdmissionDefaults {
 
 #[derive(Debug, Clone)]
 struct SpendPoint {
+    ledger_id: i64,
+    reference: String,
     at: chrono::DateTime<Utc>,
     cost_nanousd: i64,
 }
@@ -284,6 +358,7 @@ struct AccountRuntime {
     in_flight: u32,
     spend_nanousd: i64,
     spend: VecDeque<SpendPoint>,
+    last_touched: Option<chrono::DateTime<Utc>>,
 }
 
 impl AccountRuntime {
@@ -300,6 +375,19 @@ impl AccountRuntime {
         if point.cost_nanousd <= 0 {
             return;
         }
+        if (point.ledger_id > 0
+            && self
+                .spend
+                .iter()
+                .any(|current| current.ledger_id == point.ledger_id))
+            || (!point.reference.is_empty()
+                && self
+                    .spend
+                    .iter()
+                    .any(|current| current.reference == point.reference))
+        {
+            return;
+        }
         self.spend_nanousd = self.spend_nanousd.saturating_add(point.cost_nanousd);
         // Concurrent settles can acquire the account row lock in a different
         // order from their transaction timestamps. Keep the ring ordered by
@@ -310,13 +398,20 @@ impl AccountRuntime {
         }
     }
 
+    fn touch(&mut self, now: chrono::DateTime<Utc>) {
+        self.last_touched = Some(now);
+    }
+
     fn retry_after_secs(&self, cap_nanousd: i64, now: chrono::DateTime<Utc>) -> u64 {
         let mut remaining = self.spend_nanousd;
         for point in &self.spend {
             remaining = remaining.saturating_sub(point.cost_nanousd);
             if remaining < cap_nanousd {
                 let millis = (point.at + BURN_WINDOW - now).num_milliseconds().max(1);
-                return u64::try_from((millis + 999) / 1000).unwrap_or(1).max(1);
+                return u64::try_from((millis + 999) / 1000)
+                    .unwrap_or(1)
+                    .max(1)
+                    .min(BURN_WINDOW.num_seconds() as u64 + 1);
             }
         }
         1
@@ -343,6 +438,7 @@ struct AdmissionController {
     entries: DashMap<Vec<u8>, Arc<AccountAdmissionEntry>>,
     defaults: AdmissionDefaults,
     clock: Arc<dyn GatewayClock>,
+    settlement_tasks: TaskTracker,
 }
 
 impl AdmissionController {
@@ -350,24 +446,34 @@ impl AdmissionController {
         defaults: AdmissionDefaults,
         clock: Arc<dyn GatewayClock>,
         recent: Vec<buzz_db::credits::RecentDebit>,
+        settlement_tasks: TaskTracker,
     ) -> Self {
+        let defaults = AdmissionDefaults {
+            max_in_flight: defaults.max_in_flight.min(MAX_MAX_IN_FLIGHT),
+            ..defaults
+        };
         let controller = Self {
             entries: DashMap::new(),
             defaults,
             clock,
+            settlement_tasks,
         };
         for debit in recent {
             let entry = controller.entry(&debit.pubkey);
             let mut runtime = lock_runtime(&entry);
             runtime.push_spend(SpendPoint {
+                ledger_id: debit.id,
+                reference: debit.reference,
                 at: debit.created_at,
                 cost_nanousd: debit.cost_nanousd,
             });
+            runtime.touch(controller.clock.now());
         }
         controller
     }
 
     fn entry(&self, pubkey: &[u8]) -> Arc<AccountAdmissionEntry> {
+        self.evict_idle(self.clock.now());
         self.entries
             .entry(pubkey.to_vec())
             .or_insert_with(|| Arc::new(AccountAdmissionEntry::default()))
@@ -387,6 +493,7 @@ impl AdmissionController {
         let now = self.clock.now();
         let mut runtime = lock_runtime(&entry);
         runtime.prune(now);
+        runtime.touch(now);
 
         let typical = account
             .typical_call_cost_nanousd
@@ -394,7 +501,8 @@ impl AdmissionController {
         let max_in_flight = account
             .max_in_flight
             .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(self.defaults.max_in_flight);
+            .unwrap_or(self.defaults.max_in_flight)
+            .min(MAX_MAX_IN_FLIGHT);
         let burn_cap = account
             .hourly_burn_cap_nanousd
             .unwrap_or(self.defaults.hourly_burn_cap_nanousd);
@@ -427,7 +535,46 @@ impl AdmissionController {
             entry,
             pubkey: pubkey.to_vec(),
             released: false,
+            settlement_tasks: self.settlement_tasks.clone(),
         })
+    }
+
+    fn evict_idle(&self, now: chrono::DateTime<Utc>) {
+        let mut idle = Vec::new();
+        for item in self.entries.iter() {
+            let mut runtime = lock_runtime(item.value());
+            runtime.prune(now);
+            let expired = runtime
+                .last_touched
+                .is_some_and(|at| at + ADMISSION_IDLE_TTL <= now);
+            if runtime.in_flight == 0 && expired {
+                idle.push((item.key().clone(), runtime.last_touched));
+            }
+        }
+        for (key, _) in &idle {
+            self.entries.remove(key);
+        }
+
+        let excess = self.entries.len().saturating_sub(MAX_ADMISSION_ENTRIES);
+        if excess == 0 {
+            return;
+        }
+        let mut candidates = Vec::new();
+        for item in self.entries.iter() {
+            let runtime = lock_runtime(item.value());
+            if runtime.in_flight == 0 {
+                candidates.push((
+                    item.key().clone(),
+                    runtime
+                        .last_touched
+                        .unwrap_or(chrono::DateTime::<Utc>::MIN_UTC),
+                ));
+            }
+        }
+        candidates.sort_by_key(|(_, touched)| *touched);
+        for (key, _) in candidates.into_iter().take(excess) {
+            self.entries.remove(&key);
+        }
     }
 
     #[cfg(test)]
@@ -436,6 +583,11 @@ impl AdmissionController {
             .get(pubkey)
             .map(|entry| lock_runtime(&entry).in_flight)
             .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn entry_count(&self) -> usize {
+        self.entries.len()
     }
 }
 
@@ -455,6 +607,7 @@ struct AdmissionPermit {
     entry: Arc<AccountAdmissionEntry>,
     pubkey: Vec<u8>,
     released: bool,
+    settlement_tasks: TaskTracker,
 }
 
 impl AdmissionPermit {
@@ -474,8 +627,11 @@ impl AdmissionPermit {
         let _gate = entry.gate.lock().await;
         let settled = operation.await;
         let mut runtime = lock_runtime(&entry);
-        if let Some(settled) = settled.filter(|settled| settled.applied) {
+        runtime.touch(Utc::now());
+        if let Some(settled) = settled {
             runtime.push_spend(SpendPoint {
+                ledger_id: settled.ledger_id,
+                reference: settled.reference,
                 at: settled.created_at,
                 cost_nanousd: settled.cost_nanousd,
             });
@@ -493,11 +649,13 @@ impl Drop for AdmissionPermit {
         self.released = true;
         let entry = Arc::clone(&self.entry);
         let pubkey = self.pubkey.clone();
+        let settlement_tasks = self.settlement_tasks.clone();
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                handle.spawn(async move {
+            Ok(_) => {
+                settlement_tasks.spawn(async move {
                     let _gate = entry.gate.lock().await;
                     let mut runtime = lock_runtime(&entry);
+                    runtime.touch(Utc::now());
                     release_runtime(&mut runtime, &pubkey);
                 });
             }
@@ -791,9 +949,8 @@ pub(crate) async fn chat_completions(
     );
 
     // The per-account gate is acquired immediately before upstream spend and
-    // moved into the response body. Its Drop path covers abrupt downstream
-    // disconnects; natural completion releases it only after settle/cache
-    // update, so a completed debit and the next admission cannot cross.
+    // moved into a relay-owned response worker. A downstream disconnect drops
+    // only the output receiver; the worker drains and settles before release.
     let permit = match state
         .upstream
         .admission
@@ -837,27 +994,51 @@ pub(crate) async fn chat_completions(
     };
 
     let status = response.status();
-    let upstream_headers = response.headers().clone();
-
-    // A content-encoded body is forwarded verbatim but cannot be parsed.
-    let encoded = upstream_headers
+    let mut upstream_headers = response.headers().clone();
+    let encoding = upstream_headers
         .get(CONTENT_ENCODING)
         .and_then(|value| value.to_str().ok())
-        .map(|value| !value.trim().eq_ignore_ascii_case("identity"))
-        .unwrap_or(false);
-    if encoded {
-        tracing::warn!("gateway: content-encoded response forwarded without usage capture");
-    }
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "identity");
+    let raw_stream = response
+        .bytes_stream()
+        .map(|item| item.map_err(|error| std::io::Error::other(error.to_string())));
+    let mut parseable = true;
+    let upstream = match encoding.as_deref() {
+        Some(encoding) if matches!(encoding, "gzip" | "deflate" | "br" | "zstd") => {
+            // The relay forwards decoded bytes, so clients must not try to
+            // decode them a second time. Content-Length is also stale.
+            let (decoded, supported) = decode_upstream_stream(raw_stream, encoding);
+            if supported {
+                upstream_headers.remove(CONTENT_ENCODING);
+                upstream_headers.remove(axum::http::header::CONTENT_LENGTH);
+            } else {
+                parseable = false;
+            }
+            decoded
+        }
+        Some(encoding) => {
+            tracing::error!(
+                encoding,
+                "gateway: unsupported upstream content encoding; recording reconciliation outcome"
+            );
+            parseable = false;
+            // Forward the encoded body unchanged. The durable outcome is
+            // written when the tracked worker reaches the response end.
+            Box::pin(raw_stream)
+        }
+        None => Box::pin(raw_stream),
+    };
 
     let meta = SettleMeta {
         pubkey,
         model_id,
         is_sse: is_event_stream(&upstream_headers),
-        parseable: !encoded,
+        parseable,
         http_status: status,
     };
     let tee = SettleTee::new(
-        Box::pin(response.bytes_stream()),
+        upstream,
         meta,
         state.app.db.pool().clone(),
         Arc::clone(&state.upstream.price_book),
@@ -871,7 +1052,9 @@ pub(crate) async fn chat_completions(
         }
         builder = builder.header(name, value);
     }
-    match builder.body(Body::from_stream(tee.into_stream())) {
+    match builder.body(Body::from_stream(
+        tee.into_stream(&state.upstream.settlement_tasks),
+    )) {
         Ok(response) => response,
         Err(error) => {
             tracing::error!(%error, "gateway: could not build the proxied response");
@@ -1086,6 +1269,9 @@ struct SettleMeta {
     /// Colony model id the user asked for (attribution + price book key).
     model_id: String,
     is_sse: bool,
+    /// False only when the upstream encoding is unknown to this relay. The
+    /// settle path then records a durable reconciliation outcome instead of
+    /// silently treating a successful provider call as free.
     parseable: bool,
     http_status: StatusCode,
 }
@@ -1096,34 +1282,178 @@ struct SettleJob {
     model_id: String,
     parsed: ParsedUsage,
     http_status: StatusCode,
+    parseable: bool,
+    /// Stable for this relay-owned settle job, including all retries and
+    /// in-process replays when the provider omitted an id.
+    reference: String,
 }
 
 /// A durable debit that may be added to the in-process rolling spend cache.
 struct SettledDebit {
+    ledger_id: i64,
+    reference: String,
     cost_nanousd: i64,
     created_at: chrono::DateTime<Utc>,
-    applied: bool,
 }
 
-type UpstreamStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>;
+type UpstreamStream = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
+
+fn decode_upstream_stream(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    encoding: &str,
+) -> (UpstreamStream, bool) {
+    let reader = BufReader::new(StreamReader::new(stream));
+    match encoding {
+        "gzip" => (Box::pin(ReaderStream::new(GzipDecoder::new(reader))), true),
+        "deflate" => (Box::pin(ReaderStream::new(ZlibDecoder::new(reader))), true),
+        "br" => (
+            Box::pin(ReaderStream::new(BrotliDecoder::new(reader))),
+            true,
+        ),
+        "zstd" => (Box::pin(ReaderStream::new(ZstdDecoder::new(reader))), true),
+        _ => (Box::pin(ReaderStream::new(reader)), false),
+    }
+}
+
+fn extract_json_string_field(bytes: &[u8], field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"").into_bytes();
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+    {
+        let start = offset + relative + needle.len();
+        let mut cursor = start;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b':') {
+            offset = start;
+            continue;
+        }
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'"') {
+            offset = start;
+            continue;
+        }
+        let quote = cursor;
+        cursor += 1;
+        let mut escaped = false;
+        while let Some(&byte) = bytes.get(cursor) {
+            if byte == b'"' && !escaped {
+                return serde_json::from_slice::<String>(&bytes[quote..=cursor]).ok();
+            }
+            escaped = byte == b'\\' && !escaped;
+            cursor += 1;
+        }
+        return None;
+    }
+    None
+}
+
+fn extract_json_object(bytes: &[u8], field: &str) -> Option<Value> {
+    let needle = format!("\"{field}\"").into_bytes();
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+    {
+        let mut cursor = offset + relative + needle.len();
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b':') {
+            offset = cursor;
+            continue;
+        }
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'{') {
+            offset = cursor;
+            continue;
+        }
+        let start = cursor;
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        while let Some(&byte) = bytes.get(cursor) {
+            if in_string {
+                if byte == b'"' && !escaped {
+                    in_string = false;
+                }
+                escaped = byte == b'\\' && !escaped;
+            } else {
+                match byte {
+                    b'"' => in_string = true,
+                    b'{' => depth = depth.saturating_add(1),
+                    b'}' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return serde_json::from_slice(&bytes[start..=cursor]).ok();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            cursor += 1;
+        }
+        return None;
+    }
+    None
+}
+
+fn parse_bounded_json_response(
+    tail: &[u8],
+    request_id: Option<&str>,
+    model: Option<&str>,
+) -> ParsedUsage {
+    let mut parsed = openai::parse_json_response(tail);
+    if parsed.tokens.is_some() || parsed.observed_cost_nanousd.is_some() {
+        return parsed;
+    }
+    let Some(usage) = extract_json_object(tail, "usage") else {
+        parsed.request_id = request_id.map(str::to_owned).or(parsed.request_id);
+        parsed.model = model.map(str::to_owned).or(parsed.model);
+        return parsed;
+    };
+    let mut root = serde_json::Map::new();
+    root.insert("usage".to_owned(), usage);
+    if let Some(request_id) = request_id {
+        root.insert("id".to_owned(), Value::String(request_id.to_owned()));
+    }
+    if let Some(model) = model {
+        root.insert("model".to_owned(), Value::String(model.to_owned()));
+    }
+    parsed = openai::parse_json_response(&Value::Object(root).to_string().into_bytes());
+    parsed.request_id = request_id.map(str::to_owned).or(parsed.request_id);
+    parsed.model = model.map(str::to_owned).or(parsed.model);
+    parsed
+}
 
 /// Forwards the upstream body chunk by chunk while keeping a bounded copy
 /// for usage parsing. The forwarded bytes are never touched.
 ///
 /// The last chunk is held back one position: when the upstream stream ends,
 /// the settle runs inline (awaited, with retries) and only then is the held
-/// terminal chunk released to the client. `Drop` is the safety net for a
-/// client that hangs up mid-stream — it settles best-effort from whatever
-/// the wire said, because the call still happened and still cost money.
+/// terminal chunk released to the client. The tee is always driven by a
+/// relay-owned tracked task, so dropping the downstream body only drops the
+/// channel receiver; the task continues draining and settling the provider
+/// response.
 struct SettleTee {
     upstream: UpstreamStream,
+    /// Bounded tail used for terminal usage extraction. Identity fields are
+    /// captured incrementally so a large prefix never makes a successful call
+    /// unbillable.
     buffer: Vec<u8>,
-    truncated: bool,
-    finished: bool,
+    captured_request_id: Option<String>,
+    captured_model: Option<String>,
     /// The chunk held back so it can be released only after the settle.
     pending: Option<Bytes>,
-    /// Deferred upstream error, delivered after the held chunk.
-    error_pending: Option<std::io::Error>,
     meta: Option<SettleMeta>,
     pool: sqlx::PgPool,
     price_book: Arc<PriceBook>,
@@ -1141,10 +1471,9 @@ impl SettleTee {
         Self {
             upstream,
             buffer: Vec::new(),
-            truncated: false,
-            finished: false,
+            captured_request_id: None,
+            captured_model: None,
             pending: None,
-            error_pending: None,
             meta: Some(meta),
             pool,
             price_book,
@@ -1153,25 +1482,17 @@ impl SettleTee {
     }
 
     fn accumulate(&mut self, chunk: &Bytes) {
-        if self.truncated {
-            return;
+        if self.captured_request_id.is_none() {
+            self.captured_request_id = extract_json_string_field(chunk, "id");
         }
-        if self.buffer.len().saturating_add(chunk.len()) > MAX_TEE_BYTES {
-            let (pubkey, model_id) = match self.meta.as_ref() {
-                Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
-                None => (String::from("<unknown>"), "<unknown>"),
-            };
-            tracing::warn!(
-                pubkey = %pubkey,
-                model = %model_id,
-                cap_bytes = MAX_TEE_BYTES,
-                "gateway: response exceeded the parse cap, still forwarding but no usage capture"
-            );
-            self.truncated = true;
-            self.buffer = Vec::new();
-            return;
+        if self.captured_model.is_none() {
+            self.captured_model = extract_json_string_field(chunk, "model");
         }
         self.buffer.extend_from_slice(chunk);
+        if self.buffer.len() > MAX_TEE_PARSE_TAIL_BYTES {
+            let excess = self.buffer.len() - MAX_TEE_PARSE_TAIL_BYTES;
+            self.buffer.drain(..excess);
+        }
     }
 
     /// Build the settle job from the metadata and whatever the wire said.
@@ -1179,26 +1500,45 @@ impl SettleTee {
     /// forwarded request no matter how many end paths fire.
     fn take_job(&mut self) -> Option<SettleJob> {
         let meta = self.meta.take()?;
-        let parsed = if self.truncated || !meta.parseable || !meta.http_status.is_success() {
+        let parsed = if !meta.parseable || !meta.http_status.is_success() {
             ParsedUsage::default()
         } else if meta.is_sse {
             openai::parse_sse_response(&self.buffer)
         } else {
-            openai::parse_json_response(&self.buffer)
+            parse_bounded_json_response(
+                &self.buffer,
+                self.captured_request_id.as_deref(),
+                self.captured_model.as_deref(),
+            )
         };
+        let mut parsed = parsed;
+        if parsed.request_id.is_none() {
+            parsed.request_id = self.captured_request_id.clone();
+        }
+        if parsed.model.is_none() {
+            parsed.model = self.captured_model.clone();
+        }
         self.buffer = Vec::new();
+        let reference = parsed
+            .request_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("gateway:{}", uuid::Uuid::new_v4()));
         Some(SettleJob {
             pubkey: meta.pubkey,
             model_id: meta.model_id,
             parsed,
             http_status: meta.http_status,
+            parseable: meta.parseable,
+            reference,
         })
     }
 
     /// Settle inline and awaited: the terminal chunk is released only after
-    /// the debit commits. A failure after the bounded retries still releases
-    /// the chunk, but is logged loudly with the call's identifiers —
-    /// reconciliation is the only honest backstop left.
+    /// the debit or reconciliation outcome commits. A failure after the
+    /// bounded retries still releases the chunk and records the durable
+    /// backstop with the call's identifiers.
     async fn settle_inline(&mut self) {
         let job = self.take_job();
         match self.permit.take() {
@@ -1213,104 +1553,77 @@ impl SettleTee {
         }
     }
 
-    /// Best-effort settle for the `Drop` path (client hung up mid-stream).
-    /// Cannot await inside `Drop`, so the settle is spawned with a bounded
-    /// retry; if no runtime is available, the call is logged for
-    /// reconciliation instead.
-    fn settle_best_effort(&mut self) {
-        let job = self.take_job();
-        let permit = self.permit.take();
-        if job.is_none() && permit.is_none() {
-            return;
-        }
-        let pool = self.pool.clone();
-        let price_book = Arc::clone(&self.price_book);
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                handle.spawn(async move {
-                    match permit {
-                        Some(permit) => {
-                            permit
-                                .finish_with(settle_job(&pool, &price_book, job))
-                                .await;
-                        }
-                        None => {
-                            settle_job(&pool, &price_book, job).await;
-                        }
-                    }
-                });
-            }
-            Err(_) => {
-                if let Some(job) = job {
-                    tracing::error!(
-                        pubkey = %hex::encode(&job.pubkey),
-                        model = %job.model_id,
-                        request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                        "gateway: dropped a settle outside a runtime — this call must be found by reconciliation"
-                    );
-                }
-                drop(permit);
-            }
-        }
+    fn into_stream(
+        self,
+        tracker: &TaskTracker,
+    ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tracker.spawn(async move { self.drive(sender).await });
+        futures_util::stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|item| (item, receiver))
+        })
     }
 
-    fn into_stream(self) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
-        futures_util::stream::unfold(self, |mut tee| async move {
-            loop {
-                if tee.finished {
-                    return None;
+    async fn drive(mut self, sender: tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>) {
+        let mut sender = Some(sender);
+        loop {
+            match self.upstream.next().await {
+                Some(Ok(chunk)) => {
+                    self.accumulate(&chunk);
+                    // Hold the previous chunk; the one in hand becomes the
+                    // new hold. This makes the terminal chunk releasable only
+                    // after the settle commits.
+                    if let Some(previous) = self.pending.replace(chunk) {
+                        if let Some(current) = sender.as_ref() {
+                            if current.send(Ok(previous)).await.is_err() {
+                                // The client dropped the body. Keep the
+                                // relay-owned worker alive and drain upstream;
+                                // only the output receiver is gone.
+                                sender = None;
+                            }
+                        }
+                    }
                 }
-                if let Some(error) = tee.error_pending.take() {
-                    tee.finished = true;
-                    return Some((Err(error), tee));
+                Some(Err(error)) => {
+                    let (pubkey, model_id) = match self.meta.as_ref() {
+                        Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
+                        None => (String::from("<unknown>"), "<unknown>"),
+                    };
+                    tracing::warn!(
+                        %error,
+                        pubkey = %pubkey,
+                        model = %model_id,
+                        "gateway: upstream body ended early"
+                    );
+                    self.settle_inline().await;
+                    if let Some(current) = sender.as_ref() {
+                        if let Some(chunk) = self.pending.take() {
+                            if current.send(Ok(chunk)).await.is_err() {
+                                sender = None;
+                            }
+                        }
+                        if let Some(current) = sender.as_ref() {
+                            let _ = current
+                                .send(Err(std::io::Error::other(error.to_string())))
+                                .await;
+                        }
+                    }
+                    break;
                 }
-                match tee.upstream.next().await {
-                    Some(Ok(chunk)) => {
-                        tee.accumulate(&chunk);
-                        // Hold the previous chunk; the one in hand becomes
-                        // the new hold. This is what makes the terminal
-                        // chunk releasable only after the settle commits.
-                        if let Some(previous) = tee.pending.replace(chunk) {
-                            return Some((Ok(previous), tee));
+                None => {
+                    // Natural end: the observed cost is only knowable here,
+                    // so the debit commits before the held terminal chunk is
+                    // released. If the client disconnected, this still runs.
+                    self.settle_inline().await;
+                    if let Some(current) = sender.as_ref() {
+                        if let Some(terminal) = self.pending.take() {
+                            let _ = current.send(Ok(terminal)).await;
                         }
                     }
-                    Some(Err(error)) => {
-                        let (pubkey, model_id) = match tee.meta.as_ref() {
-                            Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
-                            None => (String::from("<unknown>"), "<unknown>"),
-                        };
-                        tracing::warn!(
-                            %error,
-                            pubkey = %pubkey,
-                            model = %model_id,
-                            "gateway: upstream body ended early"
-                        );
-                        // Settle whatever the wire said before the client
-                        // sees the end of the stream; for a mid-stream kill
-                        // the terminal usage never arrived, so this is
-                        // normally a no-op.
-                        tee.settle_inline().await;
-                        if let Some(chunk) = tee.pending.take() {
-                            tee.error_pending = Some(std::io::Error::other(error.to_string()));
-                            return Some((Ok(chunk), tee));
-                        }
-                        tee.finished = true;
-                        return Some((Err(std::io::Error::other(error.to_string())), tee));
-                    }
-                    None => {
-                        // Natural end: the observed cost is only knowable
-                        // here, so the debit commits before the held
-                        // terminal chunk is released.
-                        tee.settle_inline().await;
-                        if let Some(terminal) = tee.pending.take() {
-                            tee.finished = true;
-                            return Some((Ok(terminal), tee));
-                        }
-                        return None;
-                    }
+                    break;
                 }
             }
-        })
+        }
     }
 }
 
@@ -1321,26 +1634,55 @@ async fn settle_job(
 ) -> Option<SettledDebit> {
     let job = job?;
     match settle_with_retry(pool, price_book, &job).await {
-        Ok(settled) => settled,
+        Ok(Some(settled)) => Some(settled),
+        Ok(None) => {
+            record_reconciliation_outcome(
+                pool,
+                &job,
+                if job.parseable {
+                    "missing_or_unusable_usage"
+                } else {
+                    "unsupported_content_encoding"
+                },
+            )
+            .await;
+            None
+        }
         Err(error) => {
             tracing::error!(
                 %error,
                 pubkey = %hex::encode(&job.pubkey),
                 model = %job.model_id,
                 request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                "gateway: settle failed after retries — this call must be found by reconciliation"
+                "gateway: settle failed after retries — durable reconciliation outcome recorded"
             );
+            record_reconciliation_outcome(pool, &job, "settle_failed_after_retries").await;
             None
         }
     }
 }
 
-impl Drop for SettleTee {
-    /// A client that hangs up mid-stream drops the body without the stream
-    /// ever completing. The call still happened and still costs money, so it
-    /// is settled best-effort with whatever the wire said.
-    fn drop(&mut self) {
-        self.settle_best_effort();
+async fn record_reconciliation_outcome(pool: &sqlx::PgPool, job: &SettleJob, reason: &str) {
+    if !job.http_status.is_success() {
+        return;
+    }
+    if let Err(error) = buzz_db::credits::record_gateway_reconciliation(
+        pool,
+        &job.pubkey,
+        &job.reference,
+        &job.model_id,
+        i16::try_from(job.http_status.as_u16()).unwrap_or(i16::MAX),
+        reason,
+    )
+    .await
+    {
+        tracing::error!(
+            %error,
+            pubkey = %hex::encode(&job.pubkey),
+            model = %job.model_id,
+            reference = %job.reference,
+            "gateway: durable reconciliation outcome could not be recorded"
+        );
     }
 }
 
@@ -1386,12 +1728,11 @@ async fn settle_with_retry(
 /// logged loudly with the call's identifiers.
 ///
 /// Exactly-once comes from the idempotency reference: the upstream response
-/// id when the provider supplies one, and a server-generated ref when it
-/// does not. A retried settle (inline retry after a transient DB error, or
-/// a replayed settle) replays the same ref and the ledger's
-/// `UNIQUE (pubkey, ref)` makes it a no-op. A server-generated ref cannot
-/// dedupe an upstream retry the way the upstream id can, but billing must
-/// not hinge on a field the gateway provider controls.
+/// id when the provider supplies one, and a server-generated ref when it does
+/// not. The generated ref is created once when this relay-owned settle job is
+/// built, then reused for every retry/replay of that job. Durable daily
+/// reconciliation remains the backstop for a process crash before a ledger
+/// write can be attempted.
 async fn settle_one(
     pool: &sqlx::PgPool,
     price_book: &PriceBook,
@@ -1402,19 +1743,15 @@ async fn settle_one(
         return Ok(None);
     }
 
-    let reference = match job.parsed.request_id.as_deref().filter(|id| !id.is_empty()) {
-        Some(request_id) => std::borrow::Cow::Borrowed(request_id),
-        None => {
-            let generated = format!("gateway:{}", uuid::Uuid::new_v4());
-            tracing::warn!(
-                pubkey = %hex::encode(&job.pubkey),
-                model = %job.model_id,
-                reference = %generated,
-                "gateway: successful call carried no upstream request id — settling under a server-generated ref"
-            );
-            std::borrow::Cow::Owned(generated)
-        }
-    };
+    let reference = &job.reference;
+    if job.parsed.request_id.is_none() {
+        tracing::warn!(
+            pubkey = %hex::encode(&job.pubkey),
+            model = %job.model_id,
+            reference = %reference,
+            "gateway: successful call carried no upstream request id — settling under a server-generated ref"
+        );
+    }
 
     match job.parsed.observed_cost_nanousd {
         Some(cost) => {
@@ -1422,7 +1759,7 @@ async fn settle_one(
                 pool,
                 &job.pubkey,
                 cost,
-                &reference,
+                reference,
                 Some(&job.model_id),
                 job.parsed.request_id.as_deref(),
             )
@@ -1436,11 +1773,12 @@ async fn settle_one(
                 "gateway: settled observed cost"
             );
             return Ok(Some(SettledDebit {
+                ledger_id: result.entry.id,
+                reference: result.entry.reference,
                 cost_nanousd: result.entry.observed_cost.ok_or_else(|| {
                     anyhow::anyhow!("observed debit returned without observed_cost")
                 })?,
                 created_at: result.entry.created_at,
-                applied: result.applied,
             }));
         }
         None => match job.parsed.tokens {
@@ -1454,7 +1792,7 @@ async fn settle_one(
                             pool,
                             &job.pubkey,
                             cost,
-                            &reference,
+                            reference,
                             Some(&job.model_id),
                             job.parsed.request_id.as_deref(),
                         )
@@ -1468,11 +1806,12 @@ async fn settle_one(
                             "gateway: provider stated no cost — settled price-book estimate"
                         );
                         return Ok(Some(SettledDebit {
+                            ledger_id: result.entry.id,
+                            reference: result.entry.reference,
                             cost_nanousd: result.entry.observed_cost.ok_or_else(|| {
                                 anyhow::anyhow!("estimated debit returned without observed_cost")
                             })?,
                             created_at: result.entry.created_at,
-                            applied: result.applied,
                         }));
                     }
                     None => {
@@ -1481,7 +1820,7 @@ async fn settle_one(
                             model = %job.model_id,
                             request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
                             "gateway: provider stated no cost and the model is unpriced — \
-                             no settle recorded, this call must be found by reconciliation"
+                             the tracked settle will record a reconciliation outcome"
                         );
                     }
                 }
@@ -1491,7 +1830,7 @@ async fn settle_one(
                     pubkey = %hex::encode(&job.pubkey),
                     model = %job.model_id,
                     request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                    "gateway: no usage in the response — nothing to settle"
+                    "gateway: no usage in the response — the tracked settle will record a reconciliation outcome"
                 );
             }
         },

@@ -787,7 +787,81 @@ CREATE TABLE _operator_global_tables (
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('communities',           'the tenant registry itself; id IS the community key'),
     ('rate_limit_violations', 'deployment abuse/health; never tenant-observable; community_id is an attribution label only'),
-    ('_operator_global_tables', 'the registry table itself');
+    ('_operator_global_tables', 'the registry table itself'),
+    ('accounts',               'credit balances are identity-global, not community-scoped'),
+    ('credit_ledger',          'append-only money journal is identity-global, not community-scoped'),
+    ('gateway_tokens',         'provisioned-mode tokens are identity-global, not community-scoped'),
+    ('model_catalog',          'model allowlist is deployment-global'),
+    ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable daily reconciliation');
+
+-- Colony Credits gateway tables. Keep the schema snapshot aligned with the
+-- migration path so a fresh isolated harness has the same money/admission
+-- surface even before the relay's startup migrator runs.
+CREATE TABLE accounts (
+    pubkey BYTEA PRIMARY KEY CHECK (octet_length(pubkey) = 32),
+    balance BIGINT NOT NULL DEFAULT 0,
+    trial_model TEXT,
+    trial_expires_at TIMESTAMPTZ,
+    trial_concurrency SMALLINT,
+    typical_call_cost_nanousd BIGINT
+        CHECK (typical_call_cost_nanousd IS NULL OR typical_call_cost_nanousd > 0),
+    max_in_flight SMALLINT
+        CHECK (max_in_flight IS NULL OR max_in_flight BETWEEN 1 AND 4),
+    hourly_burn_cap_nanousd BIGINT
+        CHECK (hourly_burn_cap_nanousd IS NULL OR hourly_burn_cap_nanousd > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE credit_ledger (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    delta BIGINT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('debit', 'credit', 'seed', 'correction')),
+    ref TEXT NOT NULL,
+    model TEXT,
+    observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
+    request_id TEXT,
+    settle_basis TEXT CHECK (settle_basis IS NULL OR settle_basis IN ('observed', 'estimated')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (pubkey, ref)
+);
+CREATE INDEX credit_ledger_created_at_idx ON credit_ledger (created_at);
+
+CREATE TABLE gateway_tokens (
+    token_hash BYTEA PRIMARY KEY CHECK (octet_length(token_hash) = 32),
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    expires_at TIMESTAMPTZ NOT NULL,
+    session_scope TEXT NOT NULL DEFAULT 'session'
+        CHECK (session_scope IN ('session', 'provisioned')),
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX gateway_tokens_pubkey_idx ON gateway_tokens (pubkey);
+
+CREATE TABLE model_catalog (
+    model_id TEXT PRIMARY KEY,
+    vercel_slug TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    display_price_nanousd BIGINT NOT NULL CHECK (display_price_nanousd >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE gateway_reconciliation_outcomes (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    reference TEXT NOT NULL,
+    model TEXT NOT NULL,
+    http_status SMALLINT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMPTZ,
+    UNIQUE (pubkey, reference)
+);
+CREATE INDEX gateway_reconciliation_outcomes_pending_idx
+    ON gateway_reconciliation_outcomes (created_at)
+    WHERE resolved_at IS NULL;
 -- NIP-PL effective lease state and durable wake outbox. Every key is led by
 -- community_id: client-provided origin is confirmation only, never routing.
 CREATE TABLE push_leases (

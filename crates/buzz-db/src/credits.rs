@@ -70,6 +70,11 @@ pub struct AdmissionAccount {
 /// One debit used to rebuild the relay's last-hour spend cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentDebit {
+    /// Durable ledger identity. Admission uses it to make cache replay
+    /// idempotent across restart and an in-process settle replay.
+    pub id: i64,
+    /// Durable idempotency reference for diagnostics and cache replay.
+    pub reference: String,
     /// Account the debit belongs to.
     pub pubkey: Vec<u8>,
     /// Debited provider cost in nanoUSD.
@@ -134,7 +139,7 @@ pub async fn admission_account(pool: &PgPool, pubkey: &[u8]) -> Result<Admission
 /// reconstruction of the relay's rolling spend cache.
 pub async fn recent_debits(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<RecentDebit>> {
     let rows = sqlx::query(
-        "SELECT pubkey, observed_cost, created_at FROM credit_ledger \
+        "SELECT id, pubkey, ref, observed_cost, created_at FROM credit_ledger \
          WHERE kind = 'debit' AND observed_cost > 0 AND created_at >= $1 \
          ORDER BY pubkey, created_at, id",
     )
@@ -144,12 +149,41 @@ pub async fn recent_debits(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<Re
     rows.iter()
         .map(|row| {
             Ok(RecentDebit {
+                id: row.try_get("id")?,
+                reference: row.try_get("ref")?,
                 pubkey: row.try_get("pubkey")?,
                 cost_nanousd: row.try_get("observed_cost")?,
                 created_at: row.try_get("created_at")?,
             })
         })
         .collect()
+}
+
+/// Record a successful gateway call whose provider usage could not be billed
+/// inline. This is a durable reconciliation outcome, not a balance mutation;
+/// the daily provider-export reconciliation owns the eventual correction.
+pub async fn record_gateway_reconciliation(
+    pool: &PgPool,
+    pubkey: &[u8],
+    reference: &str,
+    model: &str,
+    http_status: i16,
+    reason: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO gateway_reconciliation_outcomes \
+           (pubkey, reference, model, http_status, reason) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (pubkey, reference) DO NOTHING",
+    )
+    .bind(pubkey)
+    .bind(reference)
+    .bind(model)
+    .bind(http_status)
+    .bind(reason)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Credit an account (positive nanoUSD `delta`), idempotent on `reference`.

@@ -270,17 +270,16 @@ export PGPASSWORD=buzz_dev
 psql_h() { docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" exec -T postgres \
   psql -U buzz -d buzz -v ON_ERROR_STOP=1 "$@"; }
 
-log "Resetting isolated database and applying schema..."
+log "Resetting isolated database and running every committed migration..."
 # This database belongs only to our Compose project (unique per port set).
 # Reset it on every launch so stale partitions/events from an earlier proof
 # cannot alter schema planning or test results.
 psql_h -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-export PGSCHEMA_PLAN_HOST=localhost PGSCHEMA_PLAN_PORT=${PG_PORT}
-export PGSCHEMA_PLAN_DB=buzz PGSCHEMA_PLAN_USER=buzz PGSCHEMA_PLAN_PASSWORD=buzz_dev
 export PGHOST=localhost PGPORT=${PG_PORT} PGUSER=buzz PGDATABASE=buzz
-./bin/pgschema apply --file schema/schema.sql --auto-approve
-psql_h < scripts/attach-schema-partitions.sql
-ok "Schema applied"
+DATABASE_URL="postgres://buzz:buzz_dev@localhost:${PG_PORT}/buzz" \
+  REDIS_URL="redis://localhost:${REDIS_PORT}" \
+  cargo run --profile "${CARGO_BUILD_PROFILE}" -p buzz-admin -- migrate
+ok "All migrations applied"
 
 # ── Deployment community + channels + members ────────────────────────────────
 # setup-desktop-test-data.sh is the single writer of the dev community row and
