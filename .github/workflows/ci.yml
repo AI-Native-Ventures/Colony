@@ -985,6 +985,54 @@ jobs:
           path: /tmp/buzz-relay.log
           if-no-files-found: ignore
 
+  relay-suites:
+    name: Relay Suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, backend-integration, relay-e2e]
+    # `always()` so this still reports when a dependency fails or is skipped;
+    # without it the job is skipped along with them and reports nothing, which
+    # is the state this exists to end. The path condition matches the two jobs
+    # below exactly, so a PR that touches no Rust skips this too and the
+    # required check is satisfied by the skip.
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
+    permissions:
+      contents: read
+    steps:
+      # One stable check name standing in for two long jobs.
+      #
+      # `Backend Integration` and `relay-e2e` are the ONLY jobs that run the
+      # Postgres-gated relay suites -- `interrupt_gate`, `interrupt_runtime`,
+      # `e2e_interrupts`, the workflow owner-routing tests and the write-path
+      # guard. None of those jobs is a required check, so a PR could merge with
+      # every one of them red.
+      #
+      # That is not hypothetical. PR #174 stood at `Backend Integration: fail`,
+      # `Relay E2E: fail`, `mergeable=MERGEABLE`, and GitHub accepted it into
+      # the merge queue. Its failures were real: a missing `employees` table in
+      # schema.sql had broken the owner-contact gate outright. A change to the
+      # rule that stops agents interrupting a human was one working queue away
+      # from landing with its own tests failing.
+      #
+      # Requiring the two jobs directly would put ~30 minutes on the critical
+      # path of every merge and add two names to the ruleset. This adds one
+      # cheap stable name instead -- the same reasoning that keeps
+      # `Server Cross-Compile` (a varying matrix) out of the required set.
+      - name: Check relay suites
+        run: |
+          if [ "${{ needs.backend-integration.result }}" != "success" ]; then
+            echo "Backend Integration finished with: ${{ needs.backend-integration.result }}"
+            echo "The interrupt-core gate, runtime ladder, workflow owner-routing"
+            echo "tests and write-path guard run there and did not pass."
+            exit 1
+          fi
+          if [ "${{ needs.relay-e2e.result }}" != "success" ]; then
+            echo "Relay E2E finished with: ${{ needs.relay-e2e.result }}"
+            echo "e2e_interrupts runs there and did not pass."
+            exit 1
+          fi
+          echo "Relay suites passed"
+
   web:
     name: Web
     runs-on: ubuntu-latest
