@@ -8,9 +8,9 @@ import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import {
   PIPELINE_COLUMN_LABELS,
   pipelineMoveTargets,
+  statusMoveOptions,
 } from "../lib/pipelineTransitions";
 import type { Lead, LeadFunnelStatus, PipelineColumn } from "../types";
-import { PIPELINE_COLUMN_STATUSES } from "../types";
 
 export type PipelineWorkspaceProps = {
   dataSource: DiscoveryDataSource;
@@ -291,18 +291,16 @@ function PipelineLeadCard({
             <option disabled value="">
               {targets.length === 0 ? "Terminal" : "Move..."}
             </option>
-            {PIPELINE_COLUMN_STATUSES.map((status) => {
-              if (status === lead.status || status === "client_active") {
-                return null;
-              }
-              const legal = targets.includes(status);
-              return (
-                <option disabled={!legal} key={status} value={status}>
-                  {PIPELINE_COLUMN_LABELS[status]}
-                  {legal ? "" : " (not allowed)"}
-                </option>
-              );
-            })}
+            {statusMoveOptions(lead.status).map((option) => (
+              <option
+                disabled={!option.legal}
+                key={option.status}
+                value={option.status}
+              >
+                {option.label}
+                {option.legal ? "" : " (not allowed)"}
+              </option>
+            ))}
           </select>
         </label>
       ) : null}

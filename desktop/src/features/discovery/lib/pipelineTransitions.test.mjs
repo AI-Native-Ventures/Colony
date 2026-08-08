@@ -7,6 +7,7 @@ import {
   pipelineMoveTargets,
   PIPELINE_COLUMN_LABELS,
   relationshipLabel,
+  statusMoveOptions,
 } from "./pipelineTransitions.ts";
 
 test("columns run in lifecycle order: entry to terminal to client", () => {
@@ -123,4 +124,54 @@ test("the relay refusal label uses the relationship vocabulary", () => {
   assert.equal(relationshipLabel("candidate"), "Candidate");
   assert.equal(relationshipLabel("disqualified"), "Disqualified");
   assert.equal(relationshipLabel("client_active"), "Active");
+});
+
+test("the status control offers exactly the legal moves, and never Converted", () => {
+  // One builder backs both the Pipeline card and the drawer control, so this
+  // is the single place the offered set is pinned down.
+  for (const from of PIPELINE_COLUMN_STATUSES) {
+    const options = statusMoveOptions(from);
+    assert.ok(
+      options.every((option) => option.status !== from),
+      `${from} must not offer a move to itself`,
+    );
+    assert.ok(
+      options.every((option) => option.status !== "client_active"),
+      `${from} must never offer Converted: a Lead cannot belong to active`,
+    );
+    assert.deepEqual(
+      options.filter((option) => option.legal).map((option) => option.status),
+      pipelineMoveTargets(from),
+      `${from}: the legal options must match the transition matrix exactly`,
+    );
+    assert.deepEqual(
+      options.map((option) => option.label),
+      options.map((option) => PIPELINE_COLUMN_LABELS[option.status]),
+      `${from}: labels come from the shared map, not a second copy`,
+    );
+  }
+});
+
+test("illegal moves are offered as disabled options, not hidden", () => {
+  // Hiding them makes the funnel look shapeless. Candidate can only reach
+  // Accepted and Disqualified, but the user should still see that Qualified
+  // and Dormant exist and are out of reach from here.
+  const fromCandidate = statusMoveOptions("candidate");
+  assert.deepEqual(
+    fromCandidate.map((option) => [option.status, option.legal]),
+    [
+      ["accepted", true],
+      ["qualified", false],
+      ["dormant", false],
+      ["disqualified", true],
+    ],
+  );
+
+  // Disqualified is terminal, so every option it renders is disabled.
+  const fromDisqualified = statusMoveOptions("disqualified");
+  assert.ok(fromDisqualified.length > 0, "terminal still renders the shape");
+  assert.ok(
+    fromDisqualified.every((option) => !option.legal),
+    "no move out of a terminal status is legal",
+  );
 });

@@ -51,3 +51,36 @@ export function pipelineMoveTargets(
     (target) => target !== from && canMoveLead(from, target),
   );
 }
+
+/** One option in a status control: what to render and whether it is offerable. */
+export type StatusMoveOption = {
+  status: LeadFunnelStatus;
+  label: string;
+  legal: boolean;
+};
+
+/**
+ * Every option a status control renders for a lead in `from`, in lifecycle
+ * order, with illegal ones marked rather than dropped.
+ *
+ * Shared by the Pipeline card and the drawer control so the two cannot offer
+ * different moves for the same lead. Illegal targets stay in the list because
+ * showing a greyed-out move tells the user the funnel has a shape; hiding it
+ * just looks like the option does not exist.
+ *
+ * The lead's own status is excluded (a no-op move is not a move to offer), and
+ * so is `client_active`: a Lead can never belong to `active`, so the relay
+ * refuses it at the `belongs_to` guard before the matrix is consulted. Rendering
+ * it as "not allowed" would imply Converted is a move somebody could earn, and
+ * it is not. Conversion needs its own design.
+ */
+export function statusMoveOptions(from: LeadFunnelStatus): StatusMoveOption[] {
+  const targets = pipelineMoveTargets(from);
+  return PIPELINE_COLUMN_STATUSES.filter(
+    (status) => status !== from && status !== "client_active",
+  ).map((status) => ({
+    status,
+    label: PIPELINE_COLUMN_LABELS[status],
+    legal: targets.includes(status),
+  }));
+}

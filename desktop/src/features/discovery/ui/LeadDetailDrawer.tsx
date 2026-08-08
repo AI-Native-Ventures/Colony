@@ -30,6 +30,11 @@ import {
 import { Textarea } from "@/shared/ui/textarea";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import { publishLeadUpdate } from "../data/leadUpdates";
+import {
+  PIPELINE_COLUMN_LABELS,
+  pipelineMoveTargets,
+  statusMoveOptions,
+} from "../lib/pipelineTransitions";
 import type { LeadDetail, LeadFunnelStatus } from "../types";
 import {
   buildLeadUpdateInput,
@@ -39,15 +44,6 @@ import {
   parseLeadScore,
   type LeadEditDraft,
 } from "./leadEditForm";
-
-const STATUS_LABELS: Record<LeadFunnelStatus, string> = {
-  candidate: "Candidate",
-  accepted: "Accepted",
-  qualified: "Qualified",
-  dormant: "Dormant",
-  disqualified: "Disqualified",
-  client_active: "Client (active)",
-};
 
 function statusVariant(status: LeadFunnelStatus): BadgeProps["variant"] {
   if (status === "qualified" || status === "client_active") return "success";
@@ -125,6 +121,81 @@ function ContactLink({
   );
 }
 
+/**
+ * The funnel status control.
+ *
+ * A status change and a field edit are separate writes with separate failure
+ * modes, so this is disabled while edit mode is active rather than folded into
+ * the edit form's submit.
+ *
+ * Legality is presentation only. `pipelineMoveTargets` mirrors the relay's
+ * matrix so an illegal target renders disabled rather than hidden, but the
+ * relay decides, and when it refuses its own message is what shows.
+ * `client_active` is never a target: a Lead cannot belong to `active`, so
+ * `pipelineMoveTargets` cannot return it and the option is not rendered.
+ */
+function StatusControl({
+  disabled,
+  error,
+  lead,
+  moving,
+  onMove,
+}: {
+  disabled: boolean;
+  error: string | null;
+  lead: LeadDetail;
+  moving: boolean;
+  onMove: (target: LeadFunnelStatus) => void;
+}) {
+  const targets = pipelineMoveTargets(lead.status);
+  const terminal = targets.length === 0;
+  return (
+    <div className="mb-6" data-testid="lead-status-control">
+      <label className="flex items-center gap-2">
+        <span className="text-2xs uppercase tracking-[0.14em] text-muted-foreground">
+          Move to
+        </span>
+        <select
+          aria-label={`Move ${leadName(lead)} to`}
+          className="min-w-0 flex-1 rounded-md border border-input/40 bg-background px-2 py-1.5 text-sm text-foreground outline-hidden disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="lead-status-move"
+          disabled={disabled || moving || terminal}
+          onChange={(event) => {
+            const target = event.target.value as LeadFunnelStatus;
+            event.target.value = "";
+            if (target) onMove(target);
+          }}
+          value=""
+        >
+          <option disabled value="">
+            {terminal ? "Terminal" : moving ? "Moving..." : "Move..."}
+          </option>
+          {statusMoveOptions(lead.status).map((option) => (
+            <option
+              disabled={!option.legal}
+              key={option.status}
+              value={option.status}
+            >
+              {option.label}
+              {option.legal ? "" : " (not allowed)"}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error ? (
+        <p
+          className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-xs text-destructive"
+          data-testid="lead-status-error"
+          role="alert"
+        >
+          <AlertCircle aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>{error}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function LeadDetailBody({ lead }: { lead: LeadDetail }) {
   const name = leadName(lead);
   const isPerson = lead.entityType === "person" || Boolean(lead.personName);
@@ -147,7 +218,7 @@ function LeadDetailBody({ lead }: { lead: LeadDetail }) {
           </p>
         </div>
         <Badge variant={statusVariant(lead.status)}>
-          {STATUS_LABELS[lead.status]}
+          {PIPELINE_COLUMN_LABELS[lead.status]}
         </Badge>
       </div>
 
@@ -540,6 +611,8 @@ export function LeadDetailDrawer({
   const [draft, setDraft] = React.useState<LeadEditDraft | null>(null);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
+  const [statusError, setStatusError] = React.useState<string | null>(null);
+  const [movingStatus, setMovingStatus] = React.useState(false);
 
   React.useEffect(() => {
     if (!leadId) {
@@ -551,6 +624,7 @@ export function LeadDetailDrawer({
     setEditing(false);
     setDraft(null);
     setSubmitError(null);
+    setStatusError(null);
     void dataSource
       .getLead(leadId)
       .then((lead) => {
@@ -619,6 +693,39 @@ export function LeadDetailDrawer({
     })();
   }, [dataSource, draft, state]);
 
+  /**
+   * A status move, deliberately its own write.
+   *
+   * It sends only `status`, which is safe against the full-profile upsert
+   * precisely because `status` is the one column the relay carries forward from
+   * the previous value when the rest of the request is empty. Do not add fields
+   * here: sending a partial profile on any other path wipes the omitted ones.
+   */
+  const moveStatus = React.useCallback(
+    (target: LeadFunnelStatus) => {
+      if (state.status !== "ready" || editing) return;
+      const leadId = state.lead.id;
+      setMovingStatus(true);
+      setStatusError(null);
+      void (async () => {
+        try {
+          const updated = await dataSource.updateLead(leadId, {
+            status: target,
+          });
+          setState({ status: "ready", lead: updated, loadedAt: Date.now() });
+          publishLeadUpdate(updated);
+        } catch (cause) {
+          setStatusError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        } finally {
+          setMovingStatus(false);
+        }
+      })();
+    },
+    [dataSource, editing, state],
+  );
+
   const title =
     state.status === "ready"
       ? leadName(state.lead)
@@ -627,7 +734,7 @@ export function LeadDetailDrawer({
         : "Lead details";
   const description =
     state.status === "ready"
-      ? `${state.lead.location} - ${STATUS_LABELS[state.lead.status]}`
+      ? `${state.lead.location} - ${PIPELINE_COLUMN_LABELS[state.lead.status]}`
       : state.status === "error"
         ? "This lead could not be loaded."
         : "Loading lead details";
@@ -672,6 +779,15 @@ export function LeadDetailDrawer({
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
           {state.status === "loading" ? <LoadingBody /> : null}
+          {state.status === "ready" ? (
+            <StatusControl
+              disabled={editing}
+              error={statusError}
+              lead={state.lead}
+              moving={movingStatus}
+              onMove={moveStatus}
+            />
+          ) : null}
           {state.status === "ready" ? (
             editing && draft ? (
               <EditBody
