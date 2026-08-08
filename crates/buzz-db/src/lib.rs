@@ -35,6 +35,8 @@ pub mod error;
 pub mod event;
 /// Home feed queries.
 pub mod feed;
+/// Colony Credits gateway: provisioned-mode tokens and the model allowlist.
+pub mod gateway;
 /// Git repository name registry (NIP-34 kind:30617).
 pub mod git_repo;
 /// The job queue: work employees owe, and the leases that arbitrate it.

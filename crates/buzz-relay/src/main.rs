@@ -459,6 +459,21 @@ async fn main() -> anyhow::Result<()> {
         relay_keypair,
         media_storage,
     );
+    // Colony Credits hosted gateway: mounted only when the operator has
+    // configured a Vercel AI Gateway key. An unset or blank key leaves the
+    // OnceLock empty and the gateway routes answer 404.
+    if let Some(gateway_config) = buzz_relay::gateway::config_from_env()? {
+        let gateway =
+            buzz_relay::gateway::GatewayState::new(gateway_config, app_state.db.pool().clone())
+                .map_err(|e| anyhow::anyhow!("failed to initialize the credits gateway: {e}"))?;
+        app_state
+            .gateway
+            .set(Arc::new(gateway))
+            .map_err(|_| anyhow::anyhow!("credits gateway initialized twice"))?;
+        info!("Colony Credits gateway enabled");
+    } else {
+        info!("Colony Credits gateway disabled (no VERCEL_AI_GATEWAY_KEY)");
+    }
     let state = Arc::new(app_state);
 
     // Seed the relay-owned Block catalog before any client can connect. A

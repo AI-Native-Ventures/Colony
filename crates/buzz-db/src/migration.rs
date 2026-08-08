@@ -644,7 +644,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 50);
+        assert_eq!(migrations.len(), 51);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -739,6 +739,21 @@ mod tests {
             .sql
             .as_str()
             .contains("ALTER TABLE reactions ALTER COLUMN emoji TYPE VARCHAR(66)"));
+
+        // Credits gateway settle basis (0051): additive migration recording
+        // HOW a debit's cost was determined, plus the default provisioned
+        // model catalog — never folded into 0001.
+        assert_eq!(migrations[49].version, 50);
+        assert!(migrations[49]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE accounts"));
+        assert_eq!(migrations[50].version, 51);
+        let settle_basis = migrations[50].sql.as_str();
+        assert!(settle_basis.contains("settle_basis"));
+        assert!(settle_basis.contains("'observed'"));
+        assert!(settle_basis.contains("'estimated'"));
+        assert!(settle_basis.contains("deepseek-v4-flash"));
         assert!(migrations[0]
             .sql
             .as_str()
