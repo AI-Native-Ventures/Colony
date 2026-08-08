@@ -1,5 +1,5 @@
 {
-  "commit": "b35f53e4d22a925322fbd7dd15899c5ba013dd23",
+  "commit": "1a0b79f333cc823a41b60ed2c6a71c8619b9e29b",
   "files": {
     "rust_total": 320,
     "rust_lines": 131295,
@@ -390,8 +390,8 @@
     ".exit(": 0
   },
   "events": {
-    "distinct": 21,
-    "emit_sites": 29,
+    "distinct": 24,
+    "emit_sites": 34,
     "names": [
       "agents-data-changed",
       "deep-link-add-community",
@@ -406,7 +406,10 @@
       "huddle-state-changed",
       "huddle-tts-speaker-level",
       "legacy-nest-migrated",
+      "managed-agent-runtime-status",
       "media-upload-progress",
+      "mesh-download-progress",
+      "native-notification-activated",
       "pairing-aborted",
       "pairing-complete",
       "pairing-error",
@@ -414,7 +417,8 @@
       "prevent-sleep-expired",
       "ptt-state",
       "repos-dir-error"
-    ]
+    ],
+    "unresolved_emit_sites": []
   },
   "commands_per_module": {
     "src-tauri/src/commands/identity.rs": 18,

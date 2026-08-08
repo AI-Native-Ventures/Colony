@@ -349,9 +349,36 @@ function tauriCoupling(strippedText) {
 
 const EMIT_EVENT = /\.emit(?:_to|_filter)?\s*\(\s*(?:[A-Za-z0-9_"'.&]+\s*,\s*)?"([a-z0-9:_-]+)"/g;
 const EMIT_MULTILINE = /\.emit(?:_to|_filter)?\s*\([^)"]{0,200}?"([a-z0-9:_-]+)"/g;
+// `.emit(SOME_CONST, payload)` — the name is an identifier, not a literal, so
+// neither pattern above sees it. Three real events were absent from the
+// inventory for this reason: mesh-download-progress, managed-agent-runtime-status
+// and native-notification-activated. EventSink in Phase 1 is defined by exactly
+// this list, so a missing name is a missing part of the contract.
+const EMIT_CONST = /\.emit(?:_to|_filter)?\s*\(\s*([A-Z][A-Z0-9_]{2,})\s*[,)]/g;
+const STR_CONST_DEF = /\bconst\s+([A-Z][A-Z0-9_]{2,})\s*:\s*&(?:'static\s+)?str\s*=\s*"([^"]*)"/g;
+
+// Maps `const FOO: &str = "foo"` identifiers to their values, tree-wide. Const
+// names are unique enough in practice; if two files disagree on a name, the
+// conflict is recorded so it cannot resolve to an arbitrary winner.
+async function stringConstants(files) {
+  const out = new Map();
+  const conflicts = new Set();
+  for (const filePath of files) {
+    const src = await readStripped(filePath);
+    for (const match of src.matchAll(STR_CONST_DEF)) {
+      const [, ident, value] = match;
+      if (out.has(ident) && out.get(ident) !== value) conflicts.add(ident);
+      out.set(ident, value);
+    }
+  }
+  for (const ident of conflicts) out.delete(ident);
+  return out;
+}
 
 async function emittedEvents(files, projectRoot) {
   const out = new Map();
+  const unresolved = [];
+  const constants = await stringConstants(files);
   for (const filePath of files) {
     const rel = toPosixPath(path.relative(projectRoot, filePath));
     const src = await fs.readFile(filePath, "utf8");
@@ -362,15 +389,35 @@ async function emittedEvents(files, projectRoot) {
         out.get(name).push(`${rel}:${lineNo + 1}`);
       }
     }
+    // Multi-line: `.emit(\n  "name",\n  payload)`. Anchor the site to the line
+    // the `.emit(` is on, and record it even when the name is already known --
+    // four such sites went uncounted because the same event is also emitted on
+    // a single line elsewhere, which made emit_sites an undercount.
     const stripped = stripComments(src);
     for (const match of stripped.matchAll(EMIT_MULTILINE)) {
       const name = match[1];
-      if (!out.has(name)) {
-        out.set(name, [`${rel}:?`]);
+      const lineNo = stripped.slice(0, match.index).split(/\r?\n/).length;
+      const site = `${rel}:${lineNo}`;
+      if (!out.has(name)) out.set(name, []);
+      if (!out.get(name).includes(site)) out.get(name).push(site);
+    }
+    for (const [lineNo, line] of stripped.split(/\r?\n/).entries()) {
+      for (const match of line.matchAll(EMIT_CONST)) {
+        const ident = match[1];
+        const name = constants.get(ident);
+        const site = `${rel}:${lineNo + 1}`;
+        if (name === undefined) {
+          // Loud, not dropped. An emit whose name cannot be resolved is an
+          // event missing from the contract, which is how three of them hid.
+          unresolved.push(`${site} (${ident})`);
+          continue;
+        }
+        if (!out.has(name)) out.set(name, []);
+        if (!out.get(name).includes(site)) out.get(name).push(site);
       }
     }
   }
-  return out;
+  return { events: out, unresolved: unresolved.sort() };
 }
 
 const USAGE_PATTERNS = {
@@ -553,9 +600,16 @@ export async function buildInventory(projectRoot) {
     },
     apphandle_usage: await apphandleUsage(files),
     events: {
-      distinct: events.size,
-      emit_sites: [...events.values()].reduce((sum, sites) => sum + sites.length, 0),
-      names: [...events.keys()].sort(),
+      distinct: events.events.size,
+      emit_sites: [...events.events.values()].reduce(
+        (sum, sites) => sum + sites.length,
+        0,
+      ),
+      names: [...events.events.keys()].sort(),
+      // Emit sites whose event name is an identifier this script could not
+      // resolve to a string. Must stay empty: a name that cannot be resolved is
+      // a name missing from the EventSink contract.
+      unresolved_emit_sites: events.unresolved,
     },
     commands_per_module: Object.fromEntries(
       [...perModule.entries()].sort((a, b) => b[1] - a[1]),
@@ -593,6 +647,12 @@ export function formatSummary(data) {
     lines.push(`${commands.no_caller.length} with NO CALLER: ${commands.no_caller.join(", ")}`);
   }
   lines.push(`${events.distinct} distinct events, ${events.emit_sites} emit sites`);
+  if (events.unresolved_emit_sites?.length > 0) {
+    lines.push(
+      `  WARNING: ${events.unresolved_emit_sites.length} emit site(s) with an ` +
+        `unresolvable event name: ${events.unresolved_emit_sites.join(", ")}`,
+    );
+  }
   const paramBits = [
     `AppHandle ${params.AppHandle}`,
     `State ${params.State}`,
