@@ -9,6 +9,7 @@ mod discovery_credentials;
 mod discovery_worker;
 mod event_sync;
 mod events;
+mod host;
 mod huddle;
 mod initial_window;
 mod managed_agents;
@@ -425,10 +426,14 @@ pub fn run() {
 
             // Store the AppHandle so huddle commands can emit `huddle-state-changed`
             // events via `huddle::emit_huddle_state` without threading the handle
-            // through every call site.
+            // through every call site. Superseded by the HostCtx installed below;
+            // 3 readers remain, each owned by another Phase 1 ticket.
             if let Ok(mut guard) = state.app_handle.lock() {
                 *guard = Some(app_handle.clone());
             }
+
+            // The Phase 1 seam: converted commands take `&Ctx` as managed state.
+            host::install_ctx(&app_handle);
 
             let (tts_settings, tts_settings_load_error) =
                 huddle::tts_settings::load_for_app(&app_handle);

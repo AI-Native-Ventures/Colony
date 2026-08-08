@@ -321,6 +321,105 @@ test("events: const names resolve, multi-line sites count, unknowns are loud", a
   }
 });
 
+test("calls already routed through HostCtx are not counted as work left", async () => {
+  const desktop = await makeFixture();
+  try {
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "converted.rs"),
+      [
+        "use tauri::Emitter;",
+        "pub fn unconverted(app: &tauri::AppHandle) {",
+        '    let _ = app.emit("ptt-state", true);',
+        "    app.request_restart();",
+        "}",
+        "pub fn converted(ctx: &Ctx) {",
+        // Each of these collides with a USAGE_PATTERN but is the *finished*
+        // state, so counting it would make conversion look like regress.
+        '    let _ = ctx.events().emit("ptt-state", true);',
+        "    ctx.shell().request_restart();",
+        "    let _ = ctx.shell().run_on_main_thread(task);",
+        "    let _ = ctx.shell();",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const usage = (await buildInventory(desktop)).apphandle_usage;
+
+    assert.equal(usage[".emit("], 1, "only the app.emit site counts");
+    assert.equal(usage[".request_restart("], 1, "only the app site counts");
+    assert.equal(usage[".run_on_main_thread("], 0);
+    assert.equal(usage[".shell()"], 0, "ctx.shell() is not tauri's app.shell()");
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("the seam adapter is excluded from the migration counts", async () => {
+  const desktop = await makeFixture();
+  try {
+    const rust = path.join(desktop, "src-tauri", "src");
+    // host.rs is the adapter. It is Tauri-coupled forever by design, so counting
+    // it means the totals can never reach zero.
+    await fs.writeFile(
+      path.join(rust, "host.rs"),
+      [
+        "use tauri::{Emitter, Manager};",
+        "pub struct TauriEventSink { app: tauri::AppHandle }",
+        "pub fn build(app: &tauri::AppHandle) -> u8 {",
+        '    let _ = app.emit("ptt-state", true);',
+        "    let _ = app.state::<u8>();",
+        "    0",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    // A non-seam file with the same usage, so the assertion below distinguishes
+    // "excluded the adapter" from "counted nothing at all".
+    await fs.writeFile(
+      path.join(rust, "regular.rs"),
+      [
+        "use tauri::Manager;",
+        "pub fn regular(app: &tauri::AppHandle) {",
+        "    let _ = app.state::<u8>();",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const data = await buildInventory(desktop);
+
+    assert.deepEqual(data.files.seam_list, ["src-tauri/src/host.rs"]);
+    assert.ok(
+      !data.files.tauri_coupled_list.includes("src-tauri/src/host.rs"),
+      "the adapter must not appear in the coupled set",
+    );
+    assert.ok(
+      !data.files.portable_list.includes("src-tauri/src/host.rs"),
+      "nor in the portable set",
+    );
+    assert.equal(
+      data.files.tauri_coupled + data.files.portable,
+      data.files.rust_total,
+      "the two sets still partition the counted files",
+    );
+    // Both files have exactly one `.state::<` site. Only the non-seam one counts.
+    assert.equal(
+      data.apphandle_usage[".state::<"],
+      1,
+      "regular.rs counts, host.rs does not",
+    );
+    assert.ok(
+      data.files.tauri_coupled_list.includes("src-tauri/src/regular.rs"),
+      "the non-seam file is still classified normally",
+    );
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
 test("real repo: every emit site resolves to a name", async () => {
   // Two independent measures of the same thing: the raw `.emit(` occurrence
   // count and the per-event site tally. They must agree, or an emit is being
