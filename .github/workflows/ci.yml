@@ -9,6 +9,11 @@ on:
     branches: [main, develop, release]
   pull_request:
     branches: [main, develop, release]
+  # Required for the develop merge queue. Without this trigger the queue creates
+  # no check runs at all, so every required check stays pending and entries sit
+  # in AWAITING_CHECKS forever -- three PRs were stuck for an hour before anyone
+  # noticed, because "pending" looks like "running".
+  merge_group:
 
 # One run per ref, newest wins. Rapid promotions to main collapse into a
 # single run that tests the cumulative state instead of billing one full
@@ -30,19 +35,27 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # A merge_group run tests the merged result, exactly like a push to develop,
+    # and every gated job below already runs unconditionally on push. So the
+    # queue runs the full relevant matrix: all buckets are forced true rather
+    # than path-filtered. That also sidesteps the fact that paths-filter has no
+    # base to diff against in a merge_group context -- github.ref is the
+    # gh-readonly-queue branch, and fetch-depth 2 does not contain the queue's
+    # base_sha.
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      desktop: ${{ steps.filter.outputs.desktop }}
-      desktop-rust: ${{ steps.filter.outputs.desktop-rust }}
-      web: ${{ steps.filter.outputs.web }}
-      mobile: ${{ steps.filter.outputs.mobile }}
-      blocks: ${{ steps.filter.outputs.blocks }}
+      rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.rust }}
+      desktop: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop }}
+      desktop-rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop-rust }}
+      web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.web }}
+      mobile: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.mobile }}
+      blocks: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.blocks }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 2
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
+        if: github.event_name != 'merge_group'
         with:
           token: ''
           filters: |
