@@ -95,8 +95,10 @@ agent; branch protection may not mechanically enforce all of it, so agents
 enforce it themselves.
 
 - **`develop`** is the default and integration branch. All day-to-day PRs
-  target it. PRs into develop run **no CI**; the local gates below are the
-  only check, so never skip them.
+  target it. They **do** run CI, path-filtered, and a ruleset requires
+  `Detect Changed Paths`, `Desktop`, `Desktop Core`, `Rust Lint`, `Unit Tests`
+  and `Relay Suites` to pass. Run the local gates below anyway: they are
+  faster than a CI round trip and catch the same things.
 - **`main`** is production. The only thing that merges into main is a
   promotion PR from develop, and it runs the full CI matrix.
 - **Never merge a promotion PR while any check is failing or still running.**
@@ -106,6 +108,63 @@ enforce it themselves.
   genuinely infrastructure, say so to the human and let them decide.
 - Never push directly to main, never force-push main, and never bypass the
   gate because a change "only touches docs".
+
+### Arm auto-merge when you open a PR
+
+```bash
+gh pr merge <number> --repo AI-Native-Ventures/Colony --merge --auto
+```
+
+GitHub merges the PR the moment its required checks pass. Without it a green
+PR sits open until a human notices, which is how PRs here reached six hours
+old with nothing wrong in them. The `--auto` flag is not optional: plain
+`gh pr merge` on a PR whose checks are still running fails instead of arming.
+
+Auto-merge never merges a red PR. It waits for the required checks and honours
+the same ruleset you would be checking by hand, so this is automation of the
+gate, not an exemption from it.
+
+### The merge queue
+
+`develop` has a merge queue (ruleset "develop: CI gate + merge queue"), so
+arming auto-merge **enqueues** the PR rather than merging it directly. The
+queue then rebases each entry on whatever merged before it, runs CI on that
+combination, and merges it. Current settings: squash, batches of up to 5 with
+`ALLGREEN` grouping, a 5-minute minimum wait, and a 90-minute check timeout.
+
+What this means in practice:
+
+- **Merging is a two-CI-run operation.** Your PR runs the matrix, then the
+  queue runs it again on the merge-group ref. Budget roughly 25 extra minutes
+  per merge, and note that entries merge in order, so a slow one holds up the
+  ones behind it.
+- **`gh pr merge` without `--auto` is refused** with "the merge strategy for
+  develop is set by the merge queue". That is the queue talking, not a
+  permissions problem.
+- **The queue only works because CI triggers on `merge_group`.** If that
+  trigger is ever removed from `.github/workflows/ci.yml`, every queued PR
+  waits forever on checks that cannot run, and the branch stops merging
+  entirely. This happened on 2026-08-08: four PRs sat in `AWAITING_CHECKS`
+  for about two hours before anyone noticed.
+- **Never add a required check the queue cannot satisfy.** Also on
+  2026-08-08, `Relay Suites` was made required before any run had produced
+  it, which blocked every open PR at once, including the PR that would have
+  fixed it.
+
+An entry sitting in `AWAITING_CHECKS` far longer than one CI matrix means the
+queue is broken again, not busy. Check that a `merge_group` run exists for it:
+`gh run list --repo AI-Native-Ventures/Colony --event merge_group`.
+
+Two traps worth knowing:
+
+- **A green tick in the PR list is CI, not mergeability.** Two PRs can both
+  show a tick while one merges instantly and the other has conflicts. Check
+  `gh pr view <n> --json mergeStateStatus`: `CLEAN` merges, `DIRTY` needs a
+  rebase, `BLOCKED` is waiting on checks.
+- **A newly required check does not apply retroactively.** A PR whose last CI
+  run predates the requirement shows `Expected — Waiting for status to be
+  reported` forever, because you cannot add a check to a finished run. Push
+  anything, or run `gh pr update-branch <n>`, to get a run that reports it.
 
 ## Quality Gates
 
