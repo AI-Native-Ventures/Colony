@@ -227,6 +227,7 @@ export function AppShell() {
   useLiveHomeFeedActions(
     identityQuery.data?.pubkey,
     refetchHomeFeedFromLiveSignal,
+    channels.filter((channel) => channel.isMember).map((channel) => channel.id),
   );
   const { refetch: refetchChannels } = channelsQuery;
   const channelsErrorMessage =

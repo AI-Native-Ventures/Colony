@@ -41,11 +41,47 @@ export function homeFeedLiveFilters(pubkey: string, since: number) {
   };
 }
 
+/**
+ * Channel-scoped live filters for a single member channel. The relay's
+ * scoping invariant is symmetric: global (channel-less) subscriptions never
+ * receive channel-scoped events, and channel-scoped subscriptions never
+ * receive global events. Block receipts, actions, and stream messages are
+ * channel-scoped (they carry an `h` tag), so the home feed must subscribe per
+ * member channel to see them live instead of waiting for the 30s poll.
+ *
+ * Reminders (kind 30300, authored by self) are global events and are left to
+ * the global `reminder` filter in {@link homeFeedLiveFilters}.
+ */
+export function homeFeedChannelLiveFilters(
+  channelId: string,
+  pubkey: string,
+  since: number,
+) {
+  const global = homeFeedLiveFilters(pubkey, since);
+  return {
+    action: {
+      ...global.action,
+      "#h": [channelId],
+    },
+    receipt: {
+      ...global.receipt,
+      "#h": [channelId],
+    },
+  };
+}
+
 export function useLiveHomeFeedActions(
   pubkey: string | undefined,
   onHomeFeedEvent: () => void,
+  memberChannelIds: string[] = [],
 ) {
   const queryClient = useQueryClient();
+  // Stable primitive key so a fresh-but-equal member list (e.g. while the
+  // channels query is loading) does not churn live subscriptions.
+  const memberChannelIdsKey = React.useMemo(
+    () => [...new Set(memberChannelIds)].sort().join(","),
+    [memberChannelIds],
+  );
   const handleLiveHomeFeedEvent = React.useEffectEvent(() => {
     onHomeFeedEvent();
   });
@@ -69,6 +105,9 @@ export function useLiveHomeFeedActions(
     let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
     let retryAttempt = 0;
     const since = Math.floor(Date.now() / 1_000);
+    const memberChannelIdsAtStart = memberChannelIdsKey
+      ? memberChannelIdsKey.split(",")
+      : [];
 
     const disposeAll = (currentDisposers: Array<() => Promise<void>>) => {
       void Promise.allSettled(currentDisposers.map((dispose) => dispose()));
@@ -91,13 +130,32 @@ export function useLiveHomeFeedActions(
       }
       const filters = homeFeedLiveFilters(normalizedPubkey, since);
 
-      void Promise.allSettled([
+      // The relay scoping invariant never delivers channel-scoped events
+      // (receipts, actions, mentions) to global subscriptions, so subscribe
+      // per member channel to keep the home feed live instead of waiting for
+      // the 30s poll. Global subscriptions are kept alongside: the feed can
+      // also surface community-global events (channel-less mentions), and the
+      // two scopes are disjoint, so no event is delivered twice.
+      const subscriptions: Array<Promise<() => Promise<void>>> = [
         relayClient.subscribeLive(filters.action, handleLiveHomeFeedEvent),
+        relayClient.subscribeLive(filters.receipt, handleLiveHomeFeedEvent),
         relayClient.subscribeLive(filters.reminder, () => {
           handleLiveReminderEvent(normalizedPubkey);
         }),
-        relayClient.subscribeLive(filters.receipt, handleLiveHomeFeedEvent),
-      ]).then((results) => {
+        ...memberChannelIdsAtStart.flatMap((channelId) => {
+          const scoped = homeFeedChannelLiveFilters(
+            channelId,
+            normalizedPubkey,
+            since,
+          );
+          return [
+            relayClient.subscribeLive(scoped.action, handleLiveHomeFeedEvent),
+            relayClient.subscribeLive(scoped.receipt, handleLiveHomeFeedEvent),
+          ];
+        }),
+      ];
+
+      void Promise.allSettled(subscriptions).then((results) => {
         const nextDisposers = results.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : [],
         );
@@ -138,5 +196,5 @@ export function useLiveHomeFeedActions(
       disposers = [];
       disposeAll(currentDisposers);
     };
-  }, [pubkey]);
+  }, [memberChannelIdsKey, pubkey]);
 }
