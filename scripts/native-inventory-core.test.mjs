@@ -226,6 +226,111 @@ test("receiver-scoped .path(): DirEntry::path is not AppHandle usage", async () 
   }
 });
 
+test("coupling is classified on stripped source, and the lists are emitted", async () => {
+  const desktop = await makeFixture();
+  try {
+    // A file whose ONLY match is a doc comment asserting the absence of a
+    // Tauri dependency. Real example: managed_agents/readiness.rs says
+    // "no `AppHandle` dependency so it is fully unit-testable".
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "comment_only.rs"),
+      [
+        "//! Pure logic. Does NOT require an `AppHandle`, so it is",
+        "//! fully unit-testable without tauri::Manager.",
+        "pub fn add(a: u32, b: u32) -> u32 {",
+        "    a + b",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const data = await buildInventory(desktop);
+    const { portable_list: portable, tauri_coupled_list: coupled } = data.files;
+
+    assert.ok(
+      portable.some((f) => f.endsWith("comment_only.rs")),
+      "a comment-only AppHandle mention must not make a file coupled",
+    );
+    assert.ok(
+      !coupled.some((f) => f.endsWith("comment_only.rs")),
+      "comment_only.rs must not appear in the coupled list",
+    );
+
+    // The lists are the scope source for Phase 1, so they must reconcile with
+    // the counts they are reported alongside.
+    assert.equal(coupled.length, data.files.tauri_coupled);
+    assert.equal(portable.length, data.files.portable);
+    assert.equal(coupled.length + portable.length, data.files.rust_total);
+    assert.equal(
+      new Set([...coupled, ...portable]).size,
+      data.files.rust_total,
+      "no file may be both coupled and portable",
+    );
+    assert.deepEqual(coupled, [...coupled].sort(), "coupled list is sorted");
+    assert.deepEqual(portable, [...portable].sort(), "portable list is sorted");
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("events: const names resolve, multi-line sites count, unknowns are loud", async () => {
+  const desktop = await makeFixture();
+  try {
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "emitters.rs"),
+      [
+        'const STATUS_EVENT: &str = "managed-agent-runtime-status";',
+        "use tauri::Emitter;",
+        "pub fn a(app: &tauri::AppHandle) {",
+        // Name is an identifier, not a literal. Was invisible to the inventory.
+        "    let _ = app.emit(STATUS_EVENT, 1);",
+        // Multi-line, and the same name is emitted on one line below, so this
+        // site only counts if multi-line sites are recorded unconditionally.
+        "    let _ = app.emit(",
+        '        "ptt-state",',
+        "        true,",
+        "    );",
+        '    let _ = app.emit("ptt-state", false);',
+        // Unresolvable: no const definition anywhere in the tree.
+        "    let _ = app.emit(MYSTERY_EVENT, 2);",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { events } = await buildInventory(desktop);
+
+    assert.ok(
+      events.names.includes("managed-agent-runtime-status"),
+      "a const event name must be resolved to its string",
+    );
+    // Exactly 3 resolvable sites: the STATUS_EVENT const, the multi-line
+    // ptt-state, and the single-line ptt-state. The multi-line one only counts
+    // because sites are recorded even when the name is already known.
+    assert.equal(events.emit_sites, 3);
+    assert.deepEqual(events.names, ["managed-agent-runtime-status", "ptt-state"]);
+    assert.deepEqual(
+      events.unresolved_emit_sites.map((s) => s.replace(/^.*\((.*)\)$/, "$1")),
+      ["MYSTERY_EVENT"],
+      "an unresolvable emit name must be reported, never dropped",
+    );
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("real repo: every emit site resolves to a name", async () => {
+  // Two independent measures of the same thing: the raw `.emit(` occurrence
+  // count and the per-event site tally. They must agree, or an emit is being
+  // attributed to no event -- which is how three const-named events went
+  // missing from the EventSink contract.
+  const data = await buildInventory("desktop");
+  assert.deepEqual(data.events.unresolved_emit_sites, []);
+  assert.equal(data.events.emit_sites, data.apphandle_usage[".emit("]);
+});
+
 test("drift check: renaming a registered command makes the inventory stale", async () => {
   const desktop = await makeFixture();
   try {
