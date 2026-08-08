@@ -996,6 +996,15 @@ jobs:
           # needs DATABASE_URL as well as RELAY_URL; start-relay-for-tests.sh
           # brings up the same docker postgres the relay is pointed at.
           cargo test -p buzz-test-client --test e2e_interrupts -- --ignored --nocapture
+          # The climb again, but with nothing invented: a relay-authored
+          # initiative and task built by walking the real activation ladder,
+          # a rank read from the employees row, and the ask constructed by
+          # buzz-cli's own builder. e2e_interrupts passes against made-up
+          # identifiers, so it cannot catch an agent having no initiative or
+          # task to name, the state in which zero asks had ever been raised.
+          # --test-threads 1 because both cases share the relay's own
+          # community (requests bind to it by Host) and seed employees in it.
+          cargo test -p buzz-test-client --test e2e_ask_chain -- --ignored --nocapture --test-threads 1
         env:
           RELAY_URL: ws://localhost:3000
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz

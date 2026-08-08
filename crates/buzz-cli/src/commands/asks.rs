@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use nostr::{EventBuilder, Kind, PublicKey, Tag};
 
-use buzz_core::interrupt::{parse_ask, parse_resolution, parse_withdrawal, AskType};
+use buzz_core::interrupt::{parse_ask, parse_resolution, parse_withdrawal, AskType, NO_INITIATIVE};
 use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL};
 
 use crate::client::{
@@ -26,27 +26,61 @@ use crate::AskFileArgs;
 /// Fully-validated fields for constructing an Ask event (kind
 /// [`KIND_ASK`]). Shared by `raise` and `escalate`: escalate is exactly
 /// this plus a `prior` tag and a new audience; see [`build_ask_event`].
-struct AskEventFields<'a> {
-    ask_type: &'a str,
-    audience_hex: &'a str,
-    initiative_id: &'a str,
-    task_ids: &'a [String],
-    need_key: &'a str,
-    thread_hex: Option<&'a str>,
-    prior_hex: Option<&'a str>,
-    category: Option<&'a str>,
-    channel: Option<&'a str>,
-    headline: &'a str,
-    cost_of_delay: &'a str,
-    options: &'a [(String, String)],
-    default_option: Option<&'a str>,
-    window_secs: Option<u64>,
+///
+/// Public so tests that prove the ask path end to end build the event the
+/// same way the CLI does. `crates/buzz-test-client/tests/e2e_interrupts.rs`
+/// keeps its own copy of this shape, which is one drift away from proving a
+/// tag layout no agent actually sends; anything new builds from here.
+pub struct AskEventFields<'a> {
+    /// Canonical `ask-type` tag value, as `ask_type_str` produces it.
+    pub ask_type: &'a str,
+    /// Audience pubkey, 64-char hex, one tier above the filer.
+    pub audience_hex: &'a str,
+    /// Initiative id this ask groups under, or `None` when the work belongs
+    /// to no initiative; see `initiative_tag_value` for what `None` files as.
+    pub initiative_id: Option<&'a str>,
+    /// Task ids this ask blocks on; at least one is required.
+    pub task_ids: &'a [String],
+    /// Dedupe slug, `[a-z0-9-]{1,64}`.
+    pub need_key: &'a str,
+    /// Origin thread root event id, 64-char hex.
+    pub thread_hex: Option<&'a str>,
+    /// The ask this one supersedes, 64-char hex.
+    pub prior_hex: Option<&'a str>,
+    /// Category slug; hard-list categories forbid `default_option`.
+    pub category: Option<&'a str>,
+    /// Channel UUID this ask concerns.
+    pub channel: Option<&'a str>,
+    /// The one line the audience reads.
+    pub headline: &'a str,
+    /// What waiting costs, in the filer's own words.
+    pub cost_of_delay: &'a str,
+    /// `(label, consequence)` pairs; each option states its external effect.
+    pub options: &'a [(String, String)],
+    /// Label of the option that applies if nobody answers in time.
+    pub default_option: Option<&'a str>,
+    /// Seconds until `default_option` applies.
+    pub window_secs: Option<u64>,
 }
 
 /// Build a two-element string tag, e.g. `["need", "batch-size"]`.
 fn tag(parts: &[&str]) -> Result<Tag, CliError> {
     Tag::parse(parts.iter().copied())
         .map_err(|error| CliError::Other(format!("tag error: {error}")))
+}
+
+/// The `initiative` tag value for an ask, given the initiative the filer's
+/// work belongs to.
+///
+/// `None` is the ordinary case, not an error: every chat-derived implicit
+/// task carries no initiative (`buzz_sdk::implicit_task`), so requiring one
+/// here would mean an agent doing the most common kind of work could never
+/// file an ask at all. Those asks group under the same reserved value the
+/// relay's stall sweep already files initiative-less tasks under
+/// ([`buzz_core::interrupt::NO_INITIATIVE`]), rather than a second
+/// convention that would split one condition across two grouping keys.
+fn initiative_tag_value(initiative_id: Option<&str>) -> &str {
+    initiative_id.unwrap_or(NO_INITIATIVE)
 }
 
 /// Build the `EventBuilder` for a Colony interrupt Ask (kind [`KIND_ASK`])
@@ -57,14 +91,14 @@ fn tag(parts: &[&str]) -> Result<Tag, CliError> {
 /// vs. `default_option`, `default_window_secs` bounds, ...). Callers MUST
 /// self-validate the signed event with [`parse_ask`] before submitting it;
 /// see `cmd_raise_ask`.
-fn build_ask_event(fields: &AskEventFields) -> Result<EventBuilder, CliError> {
+pub fn build_ask_event(fields: &AskEventFields) -> Result<EventBuilder, CliError> {
     let audience = PublicKey::from_hex(fields.audience_hex)
         .map_err(|error| CliError::Usage(format!("invalid --to pubkey: {error}")))?;
 
     let mut tags = vec![
         tag(&["ask-type", fields.ask_type])?,
         Tag::public_key(audience),
-        tag(&["initiative", fields.initiative_id])?,
+        tag(&["initiative", initiative_tag_value(fields.initiative_id)])?,
         tag(&["need", fields.need_key])?,
     ];
     for task_id in fields.task_ids {
@@ -208,7 +242,7 @@ async fn cmd_raise_ask(
     let builder = build_ask_event(&AskEventFields {
         ask_type,
         audience_hex: &fields.to,
-        initiative_id: &fields.initiative,
+        initiative_id: fields.initiative.as_deref(),
         task_ids: &fields.task,
         need_key: &fields.need,
         thread_hex: fields.thread.as_deref(),
@@ -426,7 +460,7 @@ mod tests {
         let fields = AskEventFields {
             ask_type: "decision",
             audience_hex: &audience.public_key().to_hex(),
-            initiative_id: "init-1",
+            initiative_id: Some("init-1"),
             task_ids: &task_ids,
             need_key: "batch-size",
             thread_hex: None,
@@ -467,7 +501,7 @@ mod tests {
         let fields = AskEventFields {
             ask_type: "blocker",
             audience_hex: &audience.public_key().to_hex(),
-            initiative_id: "init-2",
+            initiative_id: Some("init-2"),
             task_ids: &task_ids,
             need_key: "prod-db-creds",
             thread_hex: Some(&thread),
@@ -489,6 +523,46 @@ mod tests {
         assert_eq!(parsed.origin_thread_hex.as_deref(), Some(thread.as_str()));
         assert_eq!(parsed.prior_ask_hex.as_deref(), Some(prior.as_str()));
         assert_eq!(parsed.default_option, None);
+    }
+
+    /// An agent whose work belongs to no initiative can still file an ask.
+    ///
+    /// This is the ordinary case, not an edge one: every task Colony creates
+    /// from chat carries `initiative_id: None` (`buzz_sdk::implicit_task`),
+    /// and `--initiative` used to be required, so a worker on such a task had
+    /// nothing valid to pass and could not file an ask at all. The reserved
+    /// grouping value is what makes the event constructible, and `parse_ask`
+    /// -- the relay's own parser -- has to accept it or nothing is proven.
+    #[test]
+    fn an_ask_about_work_with_no_initiative_files_under_the_reserved_value() {
+        let audience = Keys::generate();
+        let task_ids = vec!["horizonlabs:chat:0001".to_string()];
+        let fields = AskEventFields {
+            ask_type: "blocker",
+            audience_hex: &audience.public_key().to_hex(),
+            initiative_id: None,
+            task_ids: &task_ids,
+            need_key: "dns-txt-record",
+            thread_hex: None,
+            prior_hex: None,
+            category: None,
+            channel: None,
+            headline: "DNS needs a TXT record only you can add",
+            cost_of_delay: "the site cannot go live until this lands",
+            options: &[],
+            default_option: None,
+            window_secs: None,
+        };
+
+        let event = signed_ask(&fields);
+        let parsed =
+            parse_ask(&event).expect("an ask about initiative-less work must be constructible");
+        assert_eq!(
+            parsed.initiative_id, NO_INITIATIVE,
+            "it must group under the same reserved value the relay's stall sweep uses, \
+             not a second convention"
+        );
+        assert_eq!(parsed.task_ids, task_ids);
     }
 
     #[test]
@@ -606,7 +680,7 @@ mod tests {
         AskFileArgs {
             ask_type: "decision".to_string(),
             to,
-            initiative: "init-1".to_string(),
+            initiative: Some("init-1".to_string()),
             task: vec!["task-1".to_string()],
             need: "batch-size".to_string(),
             headline: "Choose batch size".to_string(),

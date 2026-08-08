@@ -60,9 +60,19 @@ never even produced an Ask gets one filed on its behalf.
   asked for, scoped to one `initiative`. At most one Ask can be open for a
   given `(initiative, need)` pair at a time.
 - **Initiative**: the grouping id an Ask is filed under, normally a
-  Colony initiative id. The sentinel value `no-initiative` groups a
-  stall Ask on a task with no `initiativeId` at all (see "Stall-detection
-  sweep" below); it is not a real initiative and appears only there.
+  Colony initiative id. The reserved value `no-initiative` groups any Ask
+  about work that belongs to no initiative: a stall Ask on a task with no
+  `initiativeId` (see "Stall-detection sweep" below), and an agent's own
+  Ask when it omits `--initiative`. That is the ordinary case rather than
+  an edge one (every task Colony derives from chat carries no initiative),
+  so an agent that could not file under it could not file at all. It is not
+  a real initiative id and never resolves to a record.
+
+  Deliberately flat rather than scoped per task: dedupe keys on
+  `(initiative, need)`, and "five agents blocked on one missing API key
+  produce one Ask, not five" is what that pairing is for. Two unrelated
+  initiative-less tasks naming the same `need` therefore converge on one
+  Ask, the same convergence they would get inside a shared initiative.
 - **Delegation grant**: a kind `30189` owner-authored record naming a
   category and scope a leader or executive agent may decide on its own,
   without asking, going forward.

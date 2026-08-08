@@ -2027,3 +2027,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS employees_hire_event_uniq
 -- refilled after its holder is retired.
 CREATE UNIQUE INDEX IF NOT EXISTS employees_active_role_uniq
     ON employees (community_id, role_id) WHERE status = 'active';
+
+-- Durable idempotency claims for relay-brokered Colony Company Actions
+-- (migration 0029).
+--
+-- The claim records the owner-signed action, the relay-authored head, and the
+-- relay-signed receipt that committed as one transaction, so a replayed action
+-- returns its original result instead of creating a second record. Community
+-- leads the key so identical retry UUIDs stay independent across tenants.
+--
+-- Every Company, Initiative, and Task write goes through this table, so a
+-- database without it cannot create company state at all: the broker answers
+-- `invalid: company action claim lookup failed` and no head is ever authored.
+CREATE TABLE IF NOT EXISTS company_action_claims (
+    community_id     UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key  UUID NOT NULL,
+    action_event_id  BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    head_event_id    BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key)
+);
