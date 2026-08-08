@@ -52,6 +52,7 @@ export default defineConfig({
         "**/activity-scope-label-screenshots.spec.ts",
         "**/welcome-agent-modal-screenshots.spec.ts",
         "**/local-archive-screenshots.spec.ts",
+        "**/voice-settings.spec.ts",
         "**/agent-readiness-screenshots.spec.ts",
         "**/agent-error-state-screenshots.spec.ts",
         "**/edit-agent.spec.ts",
@@ -137,6 +138,7 @@ export default defineConfig({
         "**/discovery-scroll.spec.ts",
         "**/discovery-settings.spec.ts",
         "**/discovery-lead-detail.spec.ts",
+        "**/huddle-transcription.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

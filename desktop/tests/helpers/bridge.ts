@@ -83,6 +83,17 @@ type MockRelayAgentSeed = {
   status?: "online" | "away" | "offline";
 };
 
+type MockHuddleSeed = {
+  parentChannelId: string;
+  ephemeralChannelId: string;
+  members: Array<{
+    pubkey: string;
+    role: "owner" | "admin" | "member" | "guest" | "bot";
+  }>;
+  transcriptionEnabled?: boolean;
+  isCreator?: boolean;
+};
+
 type MockPersonaSeed = {
   id?: string;
   displayName: string;
@@ -137,6 +148,11 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  ttsSettings?: {
+    version: number;
+    agentTextToSpeech: boolean;
+    voicePreferences: string[];
+  };
   /** Device-local Discovery credential state returned by the Tauri mock. */
   discoveryCredentialStatus?: "configured" | "missing" | "unavailable";
   discoveryCredentialStatuses?: Partial<
@@ -179,6 +195,8 @@ type MockBridgeOptions = {
    * key while retaining the standard channel fixtures.
    */
   activeIdentityInDefaultChannels?: boolean;
+  /** Native picker boundary result for Pocket voice import tests. */
+  pocketVoiceImportResult?: "success" | "cancel" | "invalid";
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */
@@ -199,6 +217,8 @@ type MockBridgeOptions = {
     tradingName?: string;
     refuseWith?: "rejected" | "failed" | "no-receipt";
   };
+  /** Native-like huddle state seeded from authoritative role-bearing membership. */
+  huddle?: MockHuddleSeed;
   /** Optional policy returned by the native join-policy discovery command. */
   joinPolicy?: {
     terms_markdown?: string;
@@ -262,6 +282,14 @@ type MockBridgeOptions = {
     mcp?: MockCommandAvailability;
   };
   managedAgents?: MockManagedAgentSeed[];
+  /** Result returned by the mocked `add_agent_to_huddle` command. */
+  addAgentToHuddleResult?: {
+    ephemeral_added: boolean;
+    parent_added: boolean;
+    parent_error: string | null;
+  };
+  /** Delay an invocation-time huddle snapshot to exercise hydration ordering. */
+  huddleStateReadDelayMs?: number;
   /** Per agent+relay runtime rows for pair-scoped lifecycle commands. */
   managedAgentRuntimes?: Array<{
     pubkey: string;
