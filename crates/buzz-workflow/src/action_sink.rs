@@ -29,6 +29,12 @@ pub enum ActionSinkError {
     /// Message content is empty or whitespace-only.
     #[error("empty message content")]
     EmptyContent,
+    /// A message mentions a community owner but the next-in-line escalation
+    /// target (own team lead, else the unique executive) cannot be resolved.
+    /// Failing the step beats guessing a target or silently dropping the
+    /// mention.
+    #[error("owner mention cannot be routed: {0}")]
+    OwnerContactUnroutable(String),
 }
 
 impl From<ActionSinkError> for crate::WorkflowError {
