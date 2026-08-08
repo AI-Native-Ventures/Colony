@@ -55,8 +55,42 @@ async function walk(root, extensions, out = []) {
   return out;
 }
 
+// The Phase 1 seam implementation. These files are Tauri-coupled *on purpose*:
+// they are the adapter between `buzz-native` and the shell, and they are the one
+// place that is supposed to hold an AppHandle forever.
+//
+// They are excluded from every "how much is left to convert" measurement.
+// Counting them means the AppHandle/State/usage totals can never reach zero, so
+// the conversion tickets could not distinguish finished from unfinished -- and
+// converting a command would *raise* the numbers, because the shell call moves
+// into the adapter rather than disappearing.
+//
+// Reported separately as `files.seam_list`. Adding an adapter file is a
+// deliberate act; if a new one appears it shows up in the coupled counts until
+// someone adds it here, which is the intended friction.
+const SEAM_FILES = new Set(["src-tauri/src/host.rs"]);
+
+function isSeamFile(projectRoot, filePath) {
+  return SEAM_FILES.has(toPosixPath(path.relative(projectRoot, filePath)));
+}
+
 async function rustFiles(projectRoot) {
-  return walk(path.join(projectRoot, "src-tauri", "src"), new Set([".rs"]));
+  const all = await walk(
+    path.join(projectRoot, "src-tauri", "src"),
+    new Set([".rs"]),
+  );
+  return all.filter((f) => !isSeamFile(projectRoot, f));
+}
+
+async function seamFiles(projectRoot) {
+  const all = await walk(
+    path.join(projectRoot, "src-tauri", "src"),
+    new Set([".rs"]),
+  );
+  return all
+    .filter((f) => isSeamFile(projectRoot, f))
+    .map((f) => toPosixPath(path.relative(projectRoot, f)))
+    .sort();
 }
 
 async function readStripped(filePath) {
@@ -436,11 +470,53 @@ const USAGE_PATTERNS = {
   // with std and third-party methods (`DirEntry::path`, `Command::env`), so
   // they only count on an app-handle-shaped receiver. Unscoped, `.path(`
   // reports 940 hits, nearly all of them std.
-  ".config()": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle|ctx\.app)\s*\.\s*config\s*\(\s*\)/g,
-  ".env()": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle|ctx\.app)\s*\.\s*env\s*\(\s*\)/g,
-  ".path()": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle|ctx\.app)\s*\.\s*path\s*\(\s*\)/g,
-  ".exit(": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle|ctx\.app)\s*\.\s*exit\s*\(/g,
+  ".config()": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle)\s*\.\s*config\s*\(\s*\)/g,
+  ".env()": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle)\s*\.\s*env\s*\(\s*\)/g,
+  ".path()": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle)\s*\.\s*path\s*\(\s*\)/g,
+  ".exit(": /(?:app|app_handle|handle|_app|self\.app|self\.app_handle)\s*\.\s*exit\s*\(/g,
 };
+
+// These counts measure how much is left to convert, so a call already routed
+// through `HostCtx` must not be counted -- it is the finished state, not work
+// remaining. Several of HostCtx's accessors collide with the patterns above:
+//
+//   ctx.shell()                        matches .shell()
+//   ctx.events().emit(...)             matches .emit(
+//   ctx.shell().request_restart()      matches .request_restart(
+//   ctx.shell().run_on_main_thread(..) matches .run_on_main_thread(
+//
+// Left uncorrected, converting a command would leave `.emit(` unchanged and push
+// `.shell()` from 0 upward, so the numbers would move the wrong way and the
+// conversion tickets could not tell progress from regress.
+const MIGRATED_RECEIVERS = new Set(["ctx", "_ctx"]);
+
+// Walks back from a match to the root identifier of its method-call chain, so
+// `ctx.events().emit(` reports `ctx` and `app.emit(` reports `app`.
+function receiverRoot(src, index) {
+  let i = index;
+  let depth = 0;
+  while (i > 0) {
+    const c = src[i - 1];
+    if (c === ")") {
+      depth += 1;
+      i -= 1;
+    } else if (c === "(") {
+      if (depth === 0) break;
+      depth -= 1;
+      i -= 1;
+    } else if (depth > 0 || /[A-Za-z0-9_.:<>'&]/.test(c)) {
+      i -= 1;
+    } else {
+      break;
+    }
+  }
+  const match = src.slice(i, index).match(/[A-Za-z_][A-Za-z0-9_]*/);
+  return match ? match[0] : null;
+}
+
+function isAlreadyMigrated(src, index) {
+  return MIGRATED_RECEIVERS.has(receiverRoot(src, index));
+}
 
 async function apphandleUsage(files) {
   const counts = {};
@@ -450,7 +526,9 @@ async function apphandleUsage(files) {
     for (const key of Object.keys(USAGE_PATTERNS)) {
       const pattern = USAGE_PATTERNS[key];
       pattern.lastIndex = 0;
-      counts[key] += [...src.matchAll(pattern)].length;
+      counts[key] += [...src.matchAll(pattern)].filter(
+        (m) => !isAlreadyMigrated(src, m.index),
+      ).length;
     }
   }
   return counts;
@@ -570,6 +648,8 @@ export async function buildInventory(projectRoot) {
       // a comment-only match got treated as a real Tauri dependency.
       tauri_coupled_list: coupled,
       portable_list: portable,
+      // Excluded from every count above. See SEAM_FILES.
+      seam_list: await seamFiles(projectRoot),
     },
     commands: {
       registered: registered.size,

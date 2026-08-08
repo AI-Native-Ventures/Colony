@@ -325,6 +325,12 @@ test-unit:
         # tests, no infra — they were absent from this gate, so a broken
         # base-prompt assertion sat red without CI noticing.
         cargo nextest run -p buzz-acp --lib
+        # buzz-native: the shell-agnostic core and the HostCtx seam. Pure unit
+        # tests, no infra. It is a new workspace member and this recipe is an
+        # explicit allowlist, not a workspace run, so without this line its
+        # tests exist and never execute -- which is how a seam that eleven
+        # conversion tickets code against could rot unnoticed.
+        cargo nextest run -p buzz-native --lib
         # buzz-db migrator/lint tests: pure SQL-parsing unit tests (no infra).
         # They guard the embedded-migrator invariant (exactly the consolidated
         # 0001; cutover/backfill stays an operator script, not startup state)
