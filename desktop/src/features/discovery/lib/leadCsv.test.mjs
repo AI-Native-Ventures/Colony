@@ -15,7 +15,7 @@ function lead(overrides = {}) {
     industryId: "prof-services",
     verticalId: "legal",
     campaignIds: [],
-    status: "new",
+    status: "candidate",
     addedAt: "2026-08-04T09:00:00Z",
     ...overrides,
   };

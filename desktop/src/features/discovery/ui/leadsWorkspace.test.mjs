@@ -31,7 +31,7 @@ test("lead mode preserves the companies/people switch", () => {
   assert.equal(resolveLeadMode("unexpected"), "companies");
 });
 
-test("text, location, status, channel, quality, and owner filters compose", async () => {
+test("text, location, channel, quality, and owner filters compose", async () => {
   const leads = await fixtureLeads("global");
   const ownedLead = { ...leads[0], owner: "Chief of Staff" };
   const withOwner = [ownedLead, ...leads.slice(1)];
@@ -49,12 +49,14 @@ test("text, location, status, channel, quality, and owner filters compose", asyn
     }).map((lead) => lead.id),
     ["lead-011"],
   );
+  // Status is relay-owned: the workspace fetches the selected status from the
+  // relay and the client-side filter never narrows by it again.
   assert.deepEqual(
     filterLeads(withOwner, {
       ...EMPTY_LEAD_FILTERS,
-      status: "enriched",
+      status: "qualified",
     }).map((lead) => lead.id),
-    ["lead-003", "lead-011"],
+    withOwner.map((lead) => lead.id),
   );
   assert.deepEqual(
     filterLeads(withOwner, {
@@ -130,7 +132,7 @@ test("campaign and global stats are derived from supplied lead data", async () =
     globalLeadStats(globalLeads, new Date("2026-08-05T00:00:00.000Z")),
     {
       totalLeads: 20,
-      enrichedLeads: 2,
+      highQualityLeads: 11,
       newThisWeek: 20,
       topIndustry: "Automotive",
     },

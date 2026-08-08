@@ -301,8 +301,6 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     }
     const all = await this.listLeadProjections(scope);
     let leads = all.map(mapLead);
-    if (scope.status)
-      leads = leads.filter((lead) => lead.status === scope.status);
     if (scope.search) {
       const query = scope.search.trim().toLowerCase();
       leads = leads.filter((lead) =>
@@ -637,6 +635,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
               : null,
           industry_id: scope.industryId ?? null,
           vertical_id: scope.verticalId ?? null,
+          status: scope.status ?? null,
           offset,
           limit: 100,
         },

@@ -4,11 +4,19 @@ import { Search, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { DISCOVERY_SOURCE_LABELS } from "../sourceConfig";
-import type { Lead } from "../types";
+import type { Lead, LeadFunnelStatus } from "../types";
 
 export type LeadMode = "companies" | "people";
 export type LeadQualityFilter = "all" | "high" | "needs-review";
-export type LeadStatusFilter = "all" | Lead["status"];
+export type LeadStatusFilter = "all" | LeadFunnelStatus;
+
+/**
+ * The score that separates "high quality" from "needs review".
+ *
+ * Shared with the Leads stats tile so the filter and the tile cannot drift
+ * apart.
+ */
+export const HIGH_QUALITY_SCORE_THRESHOLD = 80;
 
 export type LeadFilterState = {
   search: string;
@@ -94,14 +102,30 @@ export function leadMatchesFilters(
     normalized(lead.location) !== normalized(filters.location)
   )
     return false;
-  if (filters.status !== "all" && lead.status !== filters.status) return false;
   if (filters.owner !== "all" && leadOwner(lead) !== filters.owner)
     return false;
   if (filters.channel !== "all" && lead.source !== filters.channel)
     return false;
-  if (filters.quality === "high" && lead.score < 80) return false;
-  if (filters.quality === "needs-review" && lead.score >= 80) return false;
+  if (filters.quality === "high" && lead.score < HIGH_QUALITY_SCORE_THRESHOLD)
+    return false;
+  if (
+    filters.quality === "needs-review" &&
+    lead.score >= HIGH_QUALITY_SCORE_THRESHOLD
+  )
+    return false;
   return true;
+}
+
+/**
+ * The status the workspace fetches for, or undefined for "all statuses".
+ *
+ * The relay owns status filtering, so the client-side filter deliberately
+ * ignores status and the fetch scope carries it instead.
+ */
+export function selectedLeadStatus(
+  filters: LeadFilterState,
+): LeadFunnelStatus | undefined {
+  return filters.status === "all" ? undefined : filters.status;
 }
 
 /** Filter without mutating the adapter's stable lead ordering. */
@@ -224,10 +248,12 @@ export function LeadFilters({
           value={value.status}
         >
           <option value="all">All statuses</option>
-          <option value="new">New</option>
-          <option value="enriched">Enriched</option>
+          <option value="candidate">Candidate</option>
+          <option value="accepted">Accepted</option>
           <option value="qualified">Qualified</option>
-          <option value="rejected">Rejected</option>
+          <option value="dormant">Dormant</option>
+          <option value="disqualified">Disqualified</option>
+          <option value="client_active">Converted</option>
         </SelectFilter>
         <SelectFilter
           aria-label="Filter lead industry"

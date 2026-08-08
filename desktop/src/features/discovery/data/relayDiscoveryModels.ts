@@ -10,7 +10,6 @@ import type {
   DiscoveryRun,
   Lead,
   LeadFunnelStatus,
-  LeadStatus,
   SourceMetric,
   SourceStatus,
 } from "../types";
@@ -353,9 +352,7 @@ export function mapLead(lead: LeadProjection): Lead {
     industryId: lead.industry_id,
     verticalId: lead.vertical_id,
     campaignIds: [lead.campaign_id],
-    // The wire speaks funnel vocabulary; the old LeadStatus type is deleted
-    // in the vocabulary ticket, which is why this cast is needed for now.
-    status: (lead.status ?? "candidate") as LeadStatus,
+    status: lead.status ?? "candidate",
     addedAt: lead.added_at,
   };
 }
