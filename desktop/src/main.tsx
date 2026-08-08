@@ -155,11 +155,32 @@ function maybeStartParitySession() {
   );
 }
 
+async function installRealShellHarnessIfConfigured() {
+  // The WebDriverIO guest plugin (execute/mock/log surface) is bundled only
+  // into harness-mode builds (Vite replaces import.meta.env.VITE_HARNESS at
+  // compile time, so the branch and its import are eliminated from every
+  // other build). It pairs with the feature-gated Rust plugins in
+  // desktop/src-tauri; see desktop/e2e-real-shell/README.md.
+  if (import.meta.env.VITE_HARNESS !== "1") {
+    return;
+  }
+
+  // The harness runs the app from a background launch context; macOS keeps
+  // the window off the visible screen there, and WKWebView freezes CSS
+  // animations at their first keyframe (opacity 0), which makes WebDriver's
+  // displayed check never resolve. Kill entrance animation for harness runs
+  // only (desktop/src/harness-styles.css); the flows drive the real UI at
+  // rest. Shipping builds never reach this branch.
+  await import("@/harness-styles.css");
+  await import("@wdio/tauri-plugin");
+}
+
 async function bootstrap() {
   resetDevWebviewStateFromUrl();
   configureDevE2eBridgeFromUrl();
   recoverLocalStorageQuotaOnStartup();
   await installE2eBridgeIfConfigured();
+  await installRealShellHarnessIfConfigured();
   await migrateLegacyCommunityStorageBeforeRender();
   maybeStartParitySession();
   renderApp();

@@ -1,0 +1,13 @@
+/* Harness-build only: imported when VITE_HARNESS=1 (see main.tsx), never in
+   shipping builds. The harness launches the packaged app from a background
+   process, where macOS keeps the window off the visible screen and WKWebView
+   freezes CSS animations at their first keyframe (fill-mode backwards ->
+   opacity 0), so WebDriver's displayed check never resolves for any animated
+   element. Disabling entrance animation is the standard UI-test stability
+   technique; the flows exercise the real UI at rest. */
+*,
+*::before,
+*::after {
+  animation: none !important;
+  transition: none !important;
+}

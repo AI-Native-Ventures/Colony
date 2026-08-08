@@ -62,6 +62,9 @@ jobs:
               - 'scripts/check-file-sizes-core.test.mjs'
               - 'scripts/native-inventory-core.mjs'
               - 'scripts/native-inventory-core.test.mjs'
+              - 'scripts/build-real-shell-app.sh'
+              - 'scripts/bundle-sidecars.sh'
+              - 'scripts/run-real-shell-e2e.sh'
               - 'desktop/**'
               - '!desktop/src-tauri/**'
               - 'pnpm-lock.yaml'
@@ -1157,6 +1160,59 @@ jobs:
             -p buzz-dev-mcp \
             -p git-credential-nostr \
             -p git-sign-nostr
+
+  real-shell-e2e:
+    name: Real-shell E2E (macOS)
+    runs-on: macos-latest
+    # The mocked Playwright suite cannot detect a broken shell; this is the
+    # only job that launches the packaged app against a real backend. Cold
+    # macOS runs are expensive: desktop release build + relay + sidecars.
+    timeout-minutes: 150
+    needs: [changes]
+    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    # NON-BLOCKING in Phase 0 on purpose (desktop/e2e-real-shell/README.md):
+    # brand-new harness, cold macOS builds, real devices/keychains/audio. A red
+    # run must be read in the job log + flow-results ledger, not silently
+    # merged through; the README documents what would make it gating.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      - name: Start Docker (colima) for relay backing services
+        run: |
+          if ! docker info >/dev/null 2>&1; then
+            brew install --quiet colima docker docker-compose
+            colima start --cpu 2 --memory 4
+          fi
+          if ! docker compose version >/dev/null 2>&1; then
+            mkdir -p "$HOME/.docker/cli-plugins"
+            ln -sfn "$(brew --prefix)/opt/docker-compose/libexec/docker/cli-plugins/docker-compose" \
+              "$HOME/.docker/cli-plugins/docker-compose"
+          fi
+      - name: Run real-shell E2E suite
+        run: ./scripts/run-real-shell-e2e.sh
+      - name: Upload real-shell E2E results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: real-shell-e2e-results
+          path: |
+            desktop/e2e-real-shell/results
+          if-no-files-found: ignore
+          retention-days: 7
 
   windows-rust:
     name: Windows Rust (x86_64-pc-windows-msvc)
