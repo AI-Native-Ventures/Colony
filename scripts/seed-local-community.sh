@@ -10,12 +10,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# An explicitly exported variable outranks .env.
+#
+# `set -o allexport; source .env` overwrites variables the caller deliberately
+# set, which is the opposite of what every caller expects. It matters here
+# because this script decides which database gets seeded and under which host:
+# a launcher pointing at an isolated stack (PGPORT=5555, RELAY_URL on a private
+# port) would otherwise silently seed the SHARED dev database on 5432, and put
+# the community under the wrong host.
+_pre_PGHOST="${PGHOST:-}"
+_pre_PGPORT="${PGPORT:-}"
+_pre_PGUSER="${PGUSER:-}"
+_pre_PGPASSWORD="${PGPASSWORD:-}"
+_pre_PGDATABASE="${PGDATABASE:-}"
+_pre_RELAY_URL="${RELAY_URL:-}"
+
 if [[ -f ".env" ]]; then
   set -o allexport
   # shellcheck disable=SC1091
   source .env
   set +o allexport
 fi
+
+[[ -n "${_pre_PGHOST}" ]] && export PGHOST="${_pre_PGHOST}"
+[[ -n "${_pre_PGPORT}" ]] && export PGPORT="${_pre_PGPORT}"
+[[ -n "${_pre_PGUSER}" ]] && export PGUSER="${_pre_PGUSER}"
+[[ -n "${_pre_PGPASSWORD}" ]] && export PGPASSWORD="${_pre_PGPASSWORD}"
+[[ -n "${_pre_PGDATABASE}" ]] && export PGDATABASE="${_pre_PGDATABASE}"
+[[ -n "${_pre_RELAY_URL}" ]] && export RELAY_URL="${_pre_RELAY_URL}"
+unset _pre_PGHOST _pre_PGPORT _pre_PGUSER _pre_PGPASSWORD _pre_PGDATABASE _pre_RELAY_URL
 
 export PGHOST="${PGHOST:-localhost}"
 export PGPORT="${PGPORT:-5432}"
@@ -49,15 +72,24 @@ hosts = []
 if primary:
     hosts.append(primary)
 
-# Local desktop/dev tooling has historically used both localhost and 127.0.0.1,
-# and some HTTP clients can omit the default/non-default port in Host handling.
-# Under row-zero host binding these are distinct hosts, so seed loopback aliases
-# for local dev to avoid a fail-closed 404 when one side uses an alternate
-# authority. Non-loopback deployments seed only RELAY_URL's authority.
-if host in {"localhost", "127.0.0.1"}:
-    hosts.extend(["localhost", "127.0.0.1"])
-    if port:
-        hosts.extend([f"localhost:{port}", f"127.0.0.1:{port}"])
+# Loopback gets exactly ONE community, spelled the way every other component
+# canonicalises it.
+#
+# This used to seed `localhost`, `127.0.0.1`, and both with the port, to dodge a
+# fail-closed 404 when one side used a different spelling. Under row-zero host
+# binding those are four DISTINCT communities with four ids, so the effect was
+# the opposite of the intent: state split across tenants depending on how the
+# address happened to be spelled, and it was silent. It broke managed agents
+# outright, because `buzz_core::relay::normalize_relay_url` canonicalises every
+# loopback spelling to 127.0.0.1 before the desktop injects BUZZ_RELAY_URL,
+# while a user who typed `localhost` was bound to a different community.
+#
+# Aliasing at lookup time is not the fix: `verify_nip98_event` deliberately
+# refuses to collapse loopback spellings (see the "No loopback aliasing" note in
+# buzz-auth/src/nip98.rs), because the `u`-tag host IS the community binding.
+# So we remove the split at the source instead: one canonical row.
+if host in {"localhost", "127.0.0.1", "::1"}:
+    hosts = [authority("127.0.0.1", port, scheme)]
 
 seen = []
 for h in hosts:
@@ -99,6 +131,61 @@ if [[ -n "${OWNER_PUBKEY}" && ! "${OWNER_PUBKEY}" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 
+# The canonical authority alone, as a bare string, for the fold below.
+primary_host=$(python3 - <<'MARK'
+import os
+from urllib.parse import urlparse
+
+relay_url = os.environ.get("RELAY_URL", "ws://localhost:3000")
+parsed = urlparse(relay_url)
+host = (parsed.hostname or "").rstrip(".").lower()
+port = parsed.port
+scheme = parsed.scheme.lower()
+if host in {"localhost", "127.0.0.1", "::1"}:
+    host = "127.0.0.1"
+default_port = (scheme == "ws" and port == 80) or (scheme == "wss" and port == 443)
+display = f"[{host}]" if ":" in host and not host.startswith("[") else host
+print(f"{display}:{port}" if port and not default_port else display)
+MARK
+)
+
+# Loopback alias spellings this deployment's canonical host may have been
+# seeded under before. Empty for a non-loopback deployment, which never had
+# aliases to fold.
+case "${primary_host}" in
+  127.0.0.1*)
+    alias_port="${primary_host#127.0.0.1}"
+    fold_candidates="'localhost', '127.0.0.1', '[::1]', 'localhost${alias_port}', '[::1]${alias_port}'"
+    ;;
+  *)
+    fold_candidates="''"
+    ;;
+esac
+
+# Fold a pre-existing loopback community onto the canonical spelling before
+# inserting, so a dev database seeded by the old alias behaviour keeps its
+# channels, members, and events instead of appearing empty under the canonical
+# host. The community id never changes, so every scoped row follows it.
+#
+# Deliberately conservative: it renames at most one row, and only when the
+# canonical row does not already exist. A database that already has BOTH
+# spellings is genuinely split, and merging two communities is a data migration,
+# not something a seed script should attempt silently.
+fold_sql="
+UPDATE communities
+SET host = '${primary_host}'
+WHERE id = (
+  SELECT id FROM communities
+  WHERE lower(host) <> lower('${primary_host}')
+    AND lower(host) IN (${fold_candidates})
+  ORDER BY created_at
+  LIMIT 1
+)
+AND NOT EXISTS (
+  SELECT 1 FROM communities WHERE lower(host) = lower('${primary_host}')
+);
+"
+
 sql="
 INSERT INTO communities (host)
 SELECT host
@@ -138,6 +225,10 @@ run_psql() {
   fi
 }
 
+# Fold before insert. Renaming a legacy loopback alias has to happen while
+# the canonical row still does not exist, or the NOT EXISTS guard declines
+# and the old community stays stranded under a host nothing resolves to.
+run_psql -c "${fold_sql}"
 run_psql -c "${sql}"
 
 echo "Seeded local dev community host(s):"
