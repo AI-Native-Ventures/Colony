@@ -76,6 +76,32 @@ test("drift is reported sorted and deduplicated across migrations", () => {
   );
 });
 
+test("a paid-down entry warns but does not fail", async () => {
+  // The regression that broke develop: #170 and #181 merged between this
+  // guard being authored and merged, five KNOWN_DRIFT entries became stale,
+  // and the required check failed repo-wide for doing the right thing.
+  const { default: cp } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, join } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const r = cp.spawnSync(process.execPath, [join(here, "check-schema-drift.mjs")], {
+    encoding: "utf8",
+    env: { ...process.env },
+  });
+  // Every currently-listed table really is absent from schema.sql, so there is
+  // nothing to warn about; the assertion that matters is that the paid-down
+  // path cannot exit non-zero, which the source enforces by using console.warn
+  // with no process.exit.
+  const src = (await import("node:fs")).readFileSync(
+    join(here, "check-schema-drift.mjs"),
+    "utf8",
+  );
+  const paidDown = src.slice(src.indexOf("if (fixed.length > 0)"), src.indexOf("if (unexpected.length > 0)"));
+  assert.match(paidDown, /console\.warn/);
+  assert.doesNotMatch(paidDown, /process\.exit/);
+  assert.equal(r.status, 0);
+});
+
 test("the repo's real schema has no drift beyond KNOWN_DRIFT", async () => {
   // The end-to-end assertion: runs the real check against the real files, so
   // this test fails the moment someone adds a table to migrations/ only.

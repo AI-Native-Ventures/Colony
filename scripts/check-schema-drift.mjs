@@ -24,11 +24,15 @@
 // Partition children (`CREATE TABLE ... PARTITION OF ...`) are excluded: CI
 // creates those with scripts/attach-schema-partitions.sql, not schema.sql.
 //
-// KNOWN_DRIFT below is a burn-down list, not a permanent exemption. It exists
-// so this guard can land without blocking twelve tables' worth of other
-// people's in-flight work. Removing an entry means adding that table to
-// schema.sql. Adding an entry means you are knowingly shipping a table CI
-// cannot see -- do not, unless you also know no CI job will ever touch it.
+// KNOWN_DRIFT below is a burn-down list, not a permanent exemption. Adding an
+// entry means you are knowingly shipping a table CI cannot see -- do not,
+// unless you also know no CI job will ever touch it.
+//
+// The check is deliberately ASYMMETRIC. New drift fails; a listed table that
+// has since been added to schema.sql only warns. A hardcoded list in a repo
+// that merges every twenty minutes goes stale between authoring and merging,
+// and failing on the paid-down direction punishes the person who did the
+// right thing by breaking a required check for every open PR.
 
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -43,12 +47,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  * does not mention the table.
  */
 export const KNOWN_DRIFT = new Map([
-  ["accounts", "credits, in flight on #170"],
-  ["credit_ledger", "credits, in flight on #170"],
-  ["gateway_tokens", "credits, in flight on #170"],
-  ["model_catalog", "credits, in flight on #170"],
   ["discovery_lead_profiles", "discovery, owned elsewhere"],
-  ["company_action_claims", "being added by #181"],
   ["party_action_claims", "same broker shape as company_action_claims; fails the same way once a party suite runs"],
   ["ledger_action_claims", "same broker shape as company_action_claims"],
   ["jobs", "unowned"],
@@ -98,13 +97,19 @@ function main() {
   const unexpected = missing.filter((t) => !KNOWN_DRIFT.has(t));
   const fixed = [...KNOWN_DRIFT.keys()].filter((t) => !missing.includes(t));
 
+  // Warn, never fail. A listed table that has since been added to schema.sql
+  // is drift paid down -- the good direction -- and failing on it means the
+  // next person to fix a table breaks `Detect Changed Paths` for every open
+  // PR until they also edit this file. That is exactly what happened the day
+  // this guard landed: #170 and #181 merged between authoring and merging,
+  // five entries went stale, and the required check failed repo-wide. The
+  // protection this script exists for is the OTHER direction.
   if (fixed.length > 0) {
-    console.error(
-      `These tables are now in schema.sql, so remove them from KNOWN_DRIFT ` +
-        `in ${"scripts/check-schema-drift.mjs"}:\n` +
+    console.warn(
+      `These tables are now in schema.sql and can be dropped from ` +
+        `KNOWN_DRIFT in scripts/check-schema-drift.mjs (not a failure):\n` +
         fixed.map((t) => `  ${t}`).join("\n"),
     );
-    process.exit(1);
   }
 
   if (unexpected.length > 0) {
