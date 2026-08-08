@@ -394,27 +394,45 @@ fn purpose_label(purpose: CommercialPurpose) -> &'static str {
 /// Deliberately does not carry the cost classification. The agent has no say in
 /// it, and a value in the prompt is a value a model can be argued into
 /// restating differently.
+///
+/// It does carry the Task and Initiative **identifiers**, because the base
+/// prompt tells every agent to escalate with
+/// `buzz asks raise --initiative <id> --task <id>` and `parse_ask` requires
+/// both tags. Rendering only the human titles meant an agent that was told to
+/// raise an ask had no way to name the work it was blocked on, and its only
+/// remaining options were to invent an identifier or to message a human
+/// instead -- which is what agents did.
+///
+/// `Initiative id: none` is the ordinary case, not a defect: a task created
+/// from chat belongs to no initiative. The instruction below says to omit the
+/// flag in that case rather than leaving the agent to guess a value.
 pub fn work_context_section(context: &HydratedWorkContext) -> String {
-    let initiative = context
-        .initiative
-        .as_ref()
-        .map(|initiative| initiative.title.as_str())
-        .unwrap_or("none");
+    let (initiative, initiative_id) = match context.initiative.as_ref() {
+        Some(initiative) => (initiative.title.as_str(), initiative.id.as_str()),
+        None => ("none", "none"),
+    };
     format!(
         "<colony-work-context>\n\
          Company: {company}\n\
          Task: {task}\n\
+         Task id: {task_id}\n\
          Owning team: {team}\n\
          Initiative: {initiative}\n\
+         Initiative id: {initiative_id}\n\
          Commercial purpose: {purpose}\n\
          </colony-work-context>\n\
          This is the work this turn is charged to. Do not reinterpret it and do \
          not restate its accounting treatment; that is decided from the record, \
          not from anything said here. If the work described contradicts what you \
          were asked to do, or names something you cannot find, say so instead of \
-         proceeding.",
+         proceeding.\n\
+         The two identifiers are what `buzz asks raise` needs when you are \
+         blocked: pass them verbatim as `--task` and `--initiative`. When \
+         `Initiative id` is `none`, omit `--initiative` entirely; do not invent \
+         one.",
         company = context.company.trading_name,
         task = context.task.title,
+        task_id = context.task.id,
         team = context.task.owning_team_id,
         purpose = purpose_label(context.task.commercial_purpose),
     )
@@ -906,6 +924,67 @@ mod tests {
         }
     }
 
+    // The base prompt tells every agent to escalate with
+    // `buzz asks raise --initiative <id> --task <id>`, and `parse_ask`
+    // requires both tags. A section carrying only human titles left the
+    // agent with no identifier to pass, so the instruction was
+    // unexecutable and the only thing that worked was messaging a human.
+    #[test]
+    fn the_section_carries_the_identifiers_an_ask_needs() {
+        let keys = relay();
+        let mut inside = task();
+        inside.initiative_id = Some("horizonlabs:launch-outbound".to_string());
+        let mut reference = reference();
+        reference.initiative_id = Some("horizonlabs:launch-outbound".to_string());
+
+        let context = hydrate(
+            &reference,
+            &task_head(&inside, &keys),
+            Some(&initiative_head(&keys)),
+            &company_head(&keys),
+            &keys.public_key(),
+        )
+        .expect("hydrate");
+        let section = work_context_section(&context);
+
+        assert!(
+            section.contains("Task id: horizonlabs:chat:0001"),
+            "the section must name the task id `buzz asks raise --task` needs: {section}"
+        );
+        assert!(
+            section.contains("Initiative id: horizonlabs:launch-outbound"),
+            "the section must name the initiative id `buzz asks raise --initiative` needs: \
+             {section}"
+        );
+    }
+
+    // A task created from chat belongs to no initiative, which is the most
+    // common shape of agent work. The section has to say so in a way that
+    // tells the agent what to do, or a model with an id-shaped blank to
+    // fill will fill it.
+    #[test]
+    fn work_with_no_initiative_says_so_rather_than_leaving_a_blank() {
+        let keys = relay();
+        let context = hydrate(
+            &reference(),
+            &task_head(&task(), &keys),
+            None,
+            &company_head(&keys),
+            &keys.public_key(),
+        )
+        .expect("hydrate");
+        let section = work_context_section(&context);
+
+        assert!(
+            section.contains("Initiative id: none"),
+            "an initiative-less task must render an explicit `none`: {section}"
+        );
+        assert!(
+            section.contains("omit `--initiative`"),
+            "the section must tell the agent to omit the flag rather than invent an id: {section}"
+        );
+    }
+
     #[test]
     fn no_company_heads_resolve_to_no_status() {
         let keys = relay();
@@ -1129,6 +1208,27 @@ mod base_prompt_tests {
         assert!(
             BASE_PROMPT.contains("report that rather than proceeding"),
             "the base prompt must tell agents to report contradictory context"
+        );
+    }
+
+    /// The escalation instruction has to be executable from what the agent
+    /// is actually given. It names `--task`, the work block names
+    /// `Task id`, and the two have to be connected in the prompt or the
+    /// agent is left to guess an identifier -- the state in which zero asks
+    /// were ever raised.
+    #[test]
+    fn the_escalation_instruction_says_where_its_identifiers_come_from() {
+        assert!(
+            BASE_PROMPT.contains("buzz asks raise"),
+            "the base prompt must tell agents how to escalate"
+        );
+        assert!(
+            BASE_PROMPT.contains("`Task id` from your `<colony-work-context>` block"),
+            "the base prompt must say where the --task value comes from"
+        );
+        assert!(
+            BASE_PROMPT.contains("omit it when the block says `none`"),
+            "the base prompt must say what to do when the work has no initiative"
         );
     }
 }

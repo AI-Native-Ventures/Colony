@@ -332,6 +332,39 @@ than in anything company- or party-specific. It is not diagnosed. `head` in
 `e2e_party_identity` retries a timed-out read once, which is enough for a
 single run on a fresh relay but does not make repeat runs reliable.
 
+### Agent-raised asks (`e2e_ask_chain`)
+
+An employed worker raises an ask against work that actually exists, it climbs
+worker to leader to executive to owner, and the owner reads it back with the
+queries a Needs-Me surface runs: `{"kinds":[44300],"#p":[owner]}`, then
+44301/44302 by `#e` for open versus closed.
+
+`e2e_interrupts` already proves the ladder's rules, but against
+`initiative: "e2e-<uuid>"` and `task: "task-1"`, so nothing in it can fail
+because an agent had no initiative or task to name. This suite invents
+nothing: the initiative and task are relay-authored records produced by
+walking `buzz_sdk::initiative_activation::next_step`, the same ladder the
+desktop's `startInitiative` drives, and the ask is built by `buzz-cli`'s own
+`build_ask_event` rather than a second copy of the tag shape. The second case
+covers work with no initiative at all, which is what any task created from
+chat carries and therefore most agent work.
+
+```bash
+RELAY_URL=ws://localhost:3000 \
+DATABASE_URL=postgres://buzz:buzz_dev@localhost:5432/buzz \
+cargo test -p buzz-test-client --test e2e_ask_chain -- --ignored --nocapture --test-threads 1
+```
+
+Needs a relay started with a durable `BUZZ_RELAY_PRIVATE_KEY`: company heads
+and the kind-44302 withdrawal that closes a superseded ask are both
+relay-signed. `--test-threads 1` because both cases share the relay's own
+community (requests bind to it by Host header) and seed employees in it.
+
+Employees are seeded directly in Postgres, as they are in
+`crates/buzz-relay/tests/interrupt_gate.rs`. That is not a shortcut: the relay
+mints and seals an employee's keypair, so a test that has to *sign* as one
+cannot get the key. What a rank permits is exercised for real over the wire.
+
 ---
 
 ## Live Local Relay

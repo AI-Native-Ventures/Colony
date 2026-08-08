@@ -338,6 +338,30 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // A community with no owner is a legal state here: `bootstrap_owner`
+    // above only runs when `RELAY_OWNER_PUBKEY` is configured, and with
+    // membership enforcement off (the default, and every local dev relay)
+    // nothing else requires one. It is also a broken state for the interrupt
+    // ladder: `interrupt_runtime::find_unique_owner` resolves nothing, so an
+    // ask that has climbed to the executive can never be filed to a human and
+    // is re-deadlined indefinitely. That is logged only when an ask actually
+    // comes due, which can be days after the state was created and reads as a
+    // sweep problem rather than a provisioning one. Say it once, here, where
+    // it is decided.
+    if let Some(community) = deployment_community {
+        match db.list_relay_owners(community, 1).await {
+            Ok(owners) if owners.is_empty() => warn!(
+                community = %community,
+                "This community has no owner. Nothing can reach a human through the \
+                 interrupt ladder: an ask that climbs to the executive has no one left \
+                 to go to, and the relay will re-deadline it indefinitely. Set \
+                 RELAY_OWNER_PUBKEY, or assign one with `buzz-admin`."
+            ),
+            Ok(_) => {}
+            Err(e) => warn!("Could not check whether this community has an owner: {e}"),
+        }
+    }
+
     // NIP-33: backfill d_tag for any existing parameterized replaceable events
     // that predate the column addition. Idempotent — no-ops when fully populated.
     match db.backfill_d_tags().await {
