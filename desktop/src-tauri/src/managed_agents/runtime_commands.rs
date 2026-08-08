@@ -12,8 +12,89 @@ use super::{
     ManagedAgentRuntimeStatus,
 };
 use crate::app_state::AppState;
+use crate::provisioned_credits::{normalized_relay_http_origin, GatewayLease};
 
 const STATUS_EVENT: &str = "managed-agent-runtime-status";
+
+/// Failure returned while rotating a provisioned-credit token.  A handoff can
+/// fail after one or more pairs have already accepted the replacement; the
+/// lease manager must keep that replacement cached in that case so those
+/// pairs are not stranded and the token is not revoked out from under them.
+pub(crate) struct ProvisionedCreditsHandoffError {
+    pub(crate) message: String,
+    pub(crate) replacement_in_use: bool,
+    pub(crate) remaining_old_keys: Vec<ManagedAgentRuntimeKey>,
+}
+
+impl ProvisionedCreditsHandoffError {
+    fn new(
+        message: impl Into<String>,
+        replacement_in_use: bool,
+        remaining_old_keys: Vec<ManagedAgentRuntimeKey>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            replacement_in_use,
+            remaining_old_keys,
+        }
+    }
+}
+
+pub(crate) struct ProvisionedCreditsHandoff {
+    pub(crate) remaining_old_keys: Vec<ManagedAgentRuntimeKey>,
+}
+
+/// Drain live provisioned pairs owned by a previous signing identity. The
+/// lease cache remains relay-bound and is not blindly revoked on community
+/// switches; only an explicit owner change isolates the old generation.
+pub(crate) fn isolate_provisioned_credits_owner(
+    app: &AppHandle,
+    owner_pubkey: &str,
+) -> Result<(), String> {
+    crate::provisioned_credits::begin_identity_transition(app, owner_pubkey)?;
+    let result = isolate_provisioned_credits_runtime_owner(app, owner_pubkey);
+    if result.is_err() {
+        let _ = crate::provisioned_credits::finish_identity_transition(app);
+    }
+    result
+}
+
+fn isolate_provisioned_credits_runtime_owner(
+    app: &AppHandle,
+    owner_pubkey: &str,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _transition = state
+        .managed_agent_runtime_transition
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let _store = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let stale_keys: Vec<_> = runtimes
+        .iter()
+        .filter_map(|(key, runtime)| {
+            runtime
+                .provisioned_lease
+                .as_ref()
+                .filter(|binding| !binding.owner_pubkey.eq_ignore_ascii_case(owner_pubkey))
+                .map(|_| key.clone())
+        })
+        .collect();
+    for key in stale_keys {
+        if let Some(mut runtime) = runtimes.remove(&key) {
+            let _ = terminate_process(runtime.child.id());
+            let _ = runtime.child.wait();
+        }
+        super::remove_agent_runtime_receipt(app, &key);
+    }
+    Ok(())
+}
 
 fn status_for(
     app: &AppHandle,
@@ -227,6 +308,233 @@ pub(crate) fn start_managed_agent_runtime_pair_lazy(
     start_pair(pubkey, relay_url, true, None, app)
 }
 
+/// Stage a replacement meter lease into live pairs on the matching relay
+/// before the lease manager revokes the old token. `target_keys` is used by a
+/// retry to select only pairs still on a retained old generation; a full
+/// rotation passes `None`. Replacement harnesses are spawned first; if any
+/// spawn fails, all staged children are terminated and the existing pairs
+/// remain untouched. The returned/error key list is the exact subset that
+/// still uses the old generation, so the lease manager can retain and retry
+/// it without orphaning the raw token reference.
+pub(crate) fn handoff_provisioned_credits_pairs(
+    app: &AppHandle,
+    lease: &GatewayLease,
+    target_keys: Option<&[ManagedAgentRuntimeKey]>,
+    source_lease: Option<&GatewayLease>,
+) -> Result<ProvisionedCreditsHandoff, ProvisionedCreditsHandoffError> {
+    let state = app.state::<AppState>();
+    let current_owner = state
+        .signing_keys()
+        .map(|keys| keys.public_key().to_hex())
+        .map_err(|error| {
+            ProvisionedCreditsHandoffError::new(
+                error,
+                false,
+                target_keys.map(ToOwned::to_owned).unwrap_or_default(),
+            )
+        })?;
+    if !current_owner.eq_ignore_ascii_case(&lease.key.owner_pubkey) {
+        return Err(ProvisionedCreditsHandoffError::new(
+            "Colony Credits identity changed; reconnect the original identity before handoff",
+            false,
+            target_keys.map(ToOwned::to_owned).unwrap_or_default(),
+        ));
+    }
+    let _transition = state
+        .managed_agent_runtime_transition
+        .lock()
+        .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false, vec![]))?;
+    let _store = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false, vec![]))?;
+    let records = load_managed_agents(app)
+        .map_err(|error| ProvisionedCreditsHandoffError::new(error, false, vec![]))?;
+    let running_keys: Vec<ManagedAgentRuntimeKey> = {
+        let runtimes = state.managed_agent_processes.lock().map_err(|error| {
+            ProvisionedCreditsHandoffError::new(error.to_string(), false, vec![])
+        })?;
+        runtimes
+            .iter()
+            .filter_map(|(key, runtime)| {
+                let alive = process_is_running(runtime.child.id());
+                (alive
+                    && normalized_relay_http_origin(&key.relay_url).ok().as_deref()
+                        == Some(lease.key.relay_origin.as_str())
+                    && source_lease.is_some_and(|source| {
+                        runtime
+                            .provisioned_lease
+                            .as_ref()
+                            .is_some_and(|binding| binding.matches(source))
+                    })
+                    && target_keys
+                        .map(|targets| targets.iter().any(|target| target == key))
+                        .unwrap_or(true))
+                .then(|| key.clone())
+            })
+            .collect()
+    };
+    if running_keys.is_empty() {
+        return Ok(ProvisionedCreditsHandoff {
+            remaining_old_keys: vec![],
+        });
+    }
+    let mut remaining_old_keys = running_keys.clone();
+    // Snapshot locks are intentionally not held while spawning children. This
+    // keeps the runtime transition/store order independent from the lease
+    // manager and avoids the old manager↔runtime inversion.
+    drop(_transition);
+    drop(_store);
+    let mut staged: Vec<(ManagedAgentRuntimeKey, super::ManagedAgentProcess)> =
+        Vec::with_capacity(running_keys.len());
+    for key in &running_keys {
+        let Some(record) = records
+            .iter()
+            .find(|record| record.pubkey.eq_ignore_ascii_case(&key.pubkey))
+        else {
+            for (_, mut process) in staged {
+                let _ = terminate_process(process.child.id());
+                let _ = process.child.wait();
+            }
+            return Err(ProvisionedCreditsHandoffError::new(
+                format!("managed agent {} disappeared during reconnect", key.pubkey),
+                false,
+                remaining_old_keys.clone(),
+            ));
+        };
+        match super::spawn_agent_child_with_lease(
+            app,
+            record,
+            &key.relay_url,
+            true,
+            Some(lease.key.owner_pubkey.as_str()),
+            Some(lease),
+        ) {
+            Ok(process) => staged.push((key.clone(), process)),
+            Err(error) => {
+                for (_, mut process) in staged {
+                    let _ = terminate_process(process.child.id());
+                    let _ = process.child.wait();
+                }
+                return Err(ProvisionedCreditsHandoffError::new(
+                    error,
+                    false,
+                    remaining_old_keys.clone(),
+                ));
+            }
+        }
+    }
+
+    let _transition = state
+        .managed_agent_runtime_transition
+        .lock()
+        .map_err(|error| {
+            ProvisionedCreditsHandoffError::new(
+                error.to_string(),
+                false,
+                remaining_old_keys.clone(),
+            )
+        })?;
+    let _store = state.managed_agents_store_lock.lock().map_err(|error| {
+        ProvisionedCreditsHandoffError::new(error.to_string(), false, remaining_old_keys.clone())
+    })?;
+    let mut runtimes = state.managed_agent_processes.lock().map_err(|error| {
+        ProvisionedCreditsHandoffError::new(error.to_string(), false, remaining_old_keys.clone())
+    })?;
+    if !super::provisioned_lease_matches_current_identity(app, lease) {
+        for (_, mut process) in staged {
+            let _ = terminate_process(process.child.id());
+            let _ = process.child.wait();
+        }
+        return Err(ProvisionedCreditsHandoffError::new(
+            "Colony Credits identity changed during reconnect; retry reconnect",
+            false,
+            remaining_old_keys,
+        ));
+    }
+    let mut replacement_in_use = false;
+    for key in &running_keys {
+        let staged_index = staged.iter().position(|(staged_key, _)| staged_key == key);
+        let Some(staged_index) = staged_index else {
+            for (_, mut process) in staged {
+                let _ = terminate_process(process.child.id());
+                let _ = process.child.wait();
+            }
+            return Err(ProvisionedCreditsHandoffError::new(
+                "managed-agent replacement disappeared during reconnect",
+                replacement_in_use,
+                remaining_old_keys.clone(),
+            ));
+        };
+        let Some(mut runtime) = runtimes.remove(key) else {
+            for (_, mut process) in staged {
+                let _ = terminate_process(process.child.id());
+                let _ = process.child.wait();
+            }
+            return Err(ProvisionedCreditsHandoffError::new(
+                "managed-agent pair changed during reconnect",
+                replacement_in_use,
+                remaining_old_keys.clone(),
+            ));
+        };
+
+        if process_is_running(runtime.child.id()) {
+            if let Err(error) = terminate_process(runtime.child.id())
+                .and_then(|()| runtime.child.wait().map_err(|wait| wait.to_string()))
+            {
+                // Keep the pair that failed teardown tracked and leave any
+                // replacements already installed in place.  They now depend
+                // on the replacement token, so the lease manager must not
+                // revoke it on this partial-failure path.
+                runtimes.insert(key.clone(), runtime);
+                let (_, mut uninstalled) = staged.swap_remove(staged_index);
+                let _ = terminate_process(uninstalled.child.id());
+                let _ = uninstalled.child.wait();
+                for (_, mut process) in staged {
+                    let _ = terminate_process(process.child.id());
+                    let _ = process.child.wait();
+                }
+                return Err(ProvisionedCreditsHandoffError::new(
+                    error,
+                    replacement_in_use,
+                    remaining_old_keys.clone(),
+                ));
+            }
+        }
+
+        let (_, process) = staged.swap_remove(staged_index);
+        let now = crate::util::now_iso();
+        let receipt = ManagedAgentRuntimeReceipt {
+            key: key.clone(),
+            pid: process.child.id(),
+            desktop_instance_id: current_instance_id(app),
+            started_at: now,
+        };
+        let receipt_error = write_agent_runtime_receipt(app, &receipt).err();
+        runtimes.insert(
+            key.clone(),
+            ManagedAgentPairRuntime::starting_with_lease(process, lease),
+        );
+        replacement_in_use = true;
+        remaining_old_keys.retain(|old_key| old_key != key);
+        if let Some(error) = receipt_error {
+            // The replacement is already live and tracked.  Keep it running
+            // and let the caller retain the new lease while reporting the
+            // persistence failure for a later reconnect/recovery attempt.
+            for (_, mut process) in staged {
+                let _ = terminate_process(process.child.id());
+                let _ = process.child.wait();
+            }
+            return Err(ProvisionedCreditsHandoffError::new(
+                error,
+                true,
+                remaining_old_keys.clone(),
+            ));
+        }
+    }
+    Ok(ProvisionedCreditsHandoff { remaining_old_keys })
+}
+
 #[tauri::command]
 pub fn start_managed_agent_runtime(
     pubkey: String,
@@ -244,47 +552,93 @@ fn start_pair(
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
     let state = app.state::<AppState>();
-    let _transition = state
-        .managed_agent_runtime_transition
-        .lock()
-        .map_err(|e| e.to_string())?;
-    if state.shutdown_started.load(Ordering::Acquire) {
-        return Err("desktop shutdown has started".into());
-    }
-    let _store = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|e| e.to_string())?;
-    let mut records = load_managed_agents(&app)?;
-    let record = find_managed_agent_mut(&mut records, &pubkey)?;
-    if record.backend != BackendKind::Local {
-        return Err("managed runtime pairs require a local agent".into());
-    }
-    if expected_updated_at.is_some_and(|expected| record.updated_at != expected) {
-        return Err("managed agent changed while runtime reconciliation was in flight".into());
-    }
-    let key = ManagedAgentRuntimeKey::new(pubkey, &relay_url)?;
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|e| e.to_string())?;
-    if runtimes
-        .get_mut(&key)
-        .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none())
-    {
-        let status = status_for(&app, record, &key, runtimes.get(&key), None);
-        return Ok(status);
-    }
-    runtimes.remove(&key);
-    terminate_untracked_pair_runtime(&app, &key)?;
+    let (key, spawn_record) = {
+        let _transition = state
+            .managed_agent_runtime_transition
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if state.shutdown_started.load(Ordering::Acquire) {
+            return Err("desktop shutdown has started".into());
+        }
+        let _store = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let mut records = load_managed_agents(&app)?;
+        let record = find_managed_agent_mut(&mut records, &pubkey)?;
+        if record.backend != BackendKind::Local {
+            return Err("managed runtime pairs require a local agent".into());
+        }
+        if expected_updated_at.is_some_and(|expected| record.updated_at != expected) {
+            return Err("managed agent changed while runtime reconciliation was in flight".into());
+        }
+        let key = ManagedAgentRuntimeKey::new(pubkey, &relay_url)?;
+        let mut runtimes = state
+            .managed_agent_processes
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let pair_running = runtimes
+            .get_mut(&key)
+            .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none());
+        if pair_running {
+            let status = status_for(&app, record, &key, runtimes.get(&key), None);
+            return Ok(status);
+        }
+        runtimes.remove(&key);
+        terminate_untracked_pair_runtime(&app, &key)?;
+        // The lease manager may perform blocking mint I/O. Drop all runtime
+        // locks before spawning so a concurrent rotation can never wait for a
+        // lock held by a start that is itself waiting on the per-key gate.
+        (key, record.clone())
+    };
 
     let owner = state
         .keys
         .lock()
         .ok()
         .map(|keys| keys.public_key().to_hex());
-    let mut process = spawn_agent_child(&app, record, &key.relay_url, lazy, owner.as_deref())?;
+    let mut process =
+        spawn_agent_child(&app, &spawn_record, &key.relay_url, lazy, owner.as_deref())?;
     let process_log_path = process.log_path.clone();
+
+    let _transition = state
+        .managed_agent_runtime_transition
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let _store = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    if state.shutdown_started.load(Ordering::Acquire) {
+        let _ = terminate_process(process.child.id());
+        let _ = process.child.wait();
+        return Err("desktop shutdown has started".into());
+    }
+    if !super::provisioned_process_matches_current_identity(&app, &key.relay_url, &process) {
+        let _ = terminate_process(process.child.id());
+        let _ = process.child.wait();
+        return Err("Colony Credits identity changed during spawn; retry reconnect".into());
+    }
+    let mut records = load_managed_agents(&app)?;
+    let record = find_managed_agent_mut(&mut records, &key.pubkey)?;
+    if expected_updated_at.is_some_and(|expected| record.updated_at != expected) {
+        let _ = terminate_process(process.child.id());
+        let _ = process.child.wait();
+        return Err("managed agent changed while runtime reconciliation was in flight".into());
+    }
+    let mut runtimes = state
+        .managed_agent_processes
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let pair_running = runtimes
+        .get_mut(&key)
+        .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none());
+    if pair_running {
+        let _ = terminate_process(process.child.id());
+        let _ = process.child.wait();
+        let status = status_for(&app, record, &key, runtimes.get(&key), None);
+        return Ok(status);
+    }
     let now = crate::util::now_iso();
     let receipt = ManagedAgentRuntimeReceipt {
         key: key.clone(),
@@ -615,148 +969,4 @@ pub async fn reconcile_managed_agent_runtimes(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn payload(
-        relay_url: &str,
-        lifecycle: ManagedAgentRuntimeLifecycle,
-        error: Option<&str>,
-    ) -> super::super::ManagedAgentRuntimeLifecycleObserverPayload {
-        super::super::ManagedAgentRuntimeLifecycleObserverPayload {
-            pubkey: "aa".repeat(32),
-            relay_url: relay_url.into(),
-            start_nonce: "test-generation".into(),
-            lifecycle,
-            error: error.map(str::to_owned),
-        }
-    }
-
-    fn record_with_relay(relay_url: &str) -> super::super::ManagedAgentRecord {
-        serde_json::from_str(&format!(
-            r#"{{
-                "pubkey": "{}",
-                "name": "pin-test",
-                "relay_url": "{relay_url}",
-                "acp_command": "buzz-acp",
-                "agent_command": "goose",
-                "agent_args": [],
-                "mcp_command": "",
-                "turn_timeout_seconds": 320,
-                "system_prompt": "",
-                "created_at": "2026-01-01T00:00:00Z",
-                "updated_at": "2026-01-01T00:00:00Z"
-            }}"#,
-            "aa".repeat(32)
-        ))
-        .unwrap()
-    }
-
-    #[test]
-    fn legacy_relay_pin_is_ignored_for_fan_out() {
-        // Zero-touch cutover (#2122): a record carrying a creation-era
-        // `relay_url` pin must fan out exactly like an unpinned one — the
-        // stored field is parsed but never consulted. See
-        // `effective_agent_relay_url`.
-        let unpinned = record_with_relay("");
-        let pinned = record_with_relay("wss://one.example");
-        for record in [&unpinned, &pinned] {
-            assert_eq!(
-                crate::relay::effective_agent_relay_url(&record.relay_url, "wss://two.example"),
-                "wss://two.example"
-            );
-        }
-    }
-
-    #[test]
-    fn unkeyable_relay_degrades_to_failed_row() {
-        // A requested URL that cannot form a pair key must still yield a
-        // Failed row keyed by the raw requested string, so one bad community
-        // never aborts the rest of the reconcile batch.
-        let record = record_with_relay("");
-        let status = unkeyable_failed_status(
-            &record,
-            "not a url".to_string(),
-            "relay access probe timed out".to_string(),
-            &[],
-            &super::super::GlobalAgentConfig::default(),
-        );
-        assert!(matches!(
-            status.lifecycle,
-            ManagedAgentRuntimeLifecycle::Failed
-        ));
-        assert_eq!(status.relay_url, "not a url");
-        assert_eq!(status.requested_relay_url.as_deref(), Some("not a url"));
-        assert_eq!(status.pubkey, record.pubkey);
-        assert_eq!(
-            status.error.as_deref(),
-            Some("relay access probe timed out")
-        );
-        assert!(status.pid.is_none());
-    }
-
-    #[test]
-    fn runtime_key_rejects_non_hex_pubkeys() {
-        assert!(ManagedAgentRuntimeKey::new("../not-a-key", "wss://relay.example").is_err());
-        assert!(ManagedAgentRuntimeKey::new("gg".repeat(32), "wss://relay.example").is_err());
-    }
-
-    #[test]
-    fn runtime_key_canonicalizes_hex_pubkeys() {
-        let key = ManagedAgentRuntimeKey::new("AA".repeat(32), "wss://relay.example").unwrap();
-        assert_eq!(key.pubkey, "aa".repeat(32));
-    }
-
-    #[test]
-    fn observer_lifecycle_key_preserves_exact_canonical_pair() {
-        let first = payload(
-            "WSS://Relay.Example:443/",
-            ManagedAgentRuntimeLifecycle::Ready,
-            None,
-        );
-        let key = observer_lifecycle_key(&first.pubkey, &first).unwrap();
-        assert_eq!(key.pubkey, first.pubkey);
-        assert_eq!(key.relay_url, "wss://relay.example");
-
-        let other = payload(
-            "wss://other.example",
-            ManagedAgentRuntimeLifecycle::Ready,
-            None,
-        );
-        assert_ne!(key, observer_lifecycle_key(&other.pubkey, &other).unwrap());
-    }
-
-    #[test]
-    fn observer_lifecycle_rejects_cross_agent_and_desktop_states() {
-        let ready = payload(
-            "wss://relay.example",
-            ManagedAgentRuntimeLifecycle::Ready,
-            None,
-        );
-        assert!(observer_lifecycle_key(&"bb".repeat(32), &ready).is_err());
-
-        let stopped = payload(
-            "wss://relay.example",
-            ManagedAgentRuntimeLifecycle::Stopped,
-            None,
-        );
-        assert!(observer_lifecycle_key(&stopped.pubkey, &stopped).is_err());
-    }
-
-    #[test]
-    fn observer_lifecycle_enforces_failed_error_contract() {
-        let failed = payload(
-            "wss://relay.example",
-            ManagedAgentRuntimeLifecycle::Failed,
-            None,
-        );
-        assert!(observer_lifecycle_key(&failed.pubkey, &failed).is_err());
-
-        let ready_with_error = payload(
-            "wss://relay.example",
-            ManagedAgentRuntimeLifecycle::Ready,
-            Some("unexpected"),
-        );
-        assert!(observer_lifecycle_key(&ready_with_error.pubkey, &ready_with_error).is_err());
-    }
-}
+mod tests;

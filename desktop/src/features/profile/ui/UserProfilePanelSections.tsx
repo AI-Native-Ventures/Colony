@@ -419,6 +419,11 @@ export function ProfileSummaryView({
                 autoRestartEnabled={
                   managedAgent?.autoRestartOnConfigChange ?? false
                 }
+                colonyCreditsAgentPubkey={
+                  managedAgent?.backend.type === "local"
+                    ? managedAgent.pubkey
+                    : null
+                }
                 diagnosticsFields={diagnosticsFields}
                 diagnosticsSummary={diagnosticsTrailing}
                 needsRestart={managedAgent?.needsRestart ?? false}

@@ -98,7 +98,9 @@ pub fn build_usage_record_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{routing::any, Router};
     use buzz_core::usage_record::{decrypt_usage_record, UsageBreakdown};
+    use std::time::Duration;
 
     fn call() -> MeteredCall {
         MeteredCall {
@@ -198,5 +200,82 @@ mod tests {
             decrypt_usage_record(&stranger, &event).is_err(),
             "spend history must not be readable by another member"
         );
+    }
+
+    /// Credential-free production seam proof: a real local meter parses the
+    /// provider's `usage.cost`, the ACP publisher turns that call into the
+    /// encrypted usage event, and the relay publisher receives the exact
+    /// signed event that the desktop ledger already reads. The relay pair is
+    /// the production publisher boundary with a deterministic in-process
+    /// sink; no provider or relay credential is involved.
+    #[tokio::test]
+    async fn meter_cost_reaches_the_relay_usage_event_boundary() {
+        let upstream_body: &'static str = r#"{"id":"resp-credits","object":"chat.completion","model":"gpt-test","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"cost":0.012345678}}"#;
+        let upstream = Router::new().fallback(any(move || async move {
+            axum::response::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(upstream_body))
+                .expect("static upstream response")
+        }));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind upstream");
+        let upstream_port = listener.local_addr().expect("upstream address").port();
+        let upstream_task = tokio::spawn(async move {
+            let _ = axum::serve(listener, upstream).await;
+        });
+
+        let (meter_port, mut calls, meter_handle) =
+            buzz_meter::start_meter(buzz_meter::MeterConfig {
+                openai_upstream: format!("http://127.0.0.1:{upstream_port}"),
+                openai_api_key: Some("local-test-provider-key".to_string()),
+                ..buzz_meter::MeterConfig::default()
+            })
+            .await
+            .expect("start local meter");
+        let virtual_key = meter_handle.issue_virtual_key("agent-cost-proof");
+        let response = reqwest::Client::new()
+            .post(format!(
+                "http://127.0.0.1:{meter_port}/openai/v1/chat/completions"
+            ))
+            .bearer_auth(&virtual_key)
+            .header("content-type", "application/json")
+            .body(r#"{"model":"gpt-test","messages":[]}"#)
+            .send()
+            .await
+            .expect("meter request");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let _ = response.bytes().await.expect("drain provider response");
+
+        let call = tokio::time::timeout(Duration::from_secs(5), calls.recv())
+            .await
+            .expect("meter call within timeout")
+            .expect("meter channel open");
+        assert_eq!(call.agent_label, "agent-cost-proof");
+        assert_eq!(call.provider, "openai");
+        assert_eq!(call.observed_cost_nanousd, Some(12_345_678));
+
+        let agent = Keys::generate();
+        let owner = Keys::generate();
+        let event = build_usage_record_event(call, &agent, &owner.public_key(), &context())
+            .expect("cost-bearing call produces a usage event")
+            .expect("usage event signs");
+        let (publisher, mut published) = crate::relay::RelayEventPublisher::test_pair();
+        publisher
+            .publish_event(event)
+            .await
+            .expect("relay publisher accepts usage event");
+        let published_event = published
+            .recv()
+            .await
+            .expect("relay publisher forwards usage event");
+        let decoded = decrypt_usage_record(&owner, &published_event).expect("owner decrypts");
+        assert_eq!(decoded.observed_cost_nanousd, Some(12_345_678));
+        assert_eq!(decoded.request_id, "resp-credits");
+        assert_eq!(decoded.model.as_deref(), Some("gpt-test"));
+
+        meter_handle.shutdown();
+        upstream_task.abort();
     }
 }

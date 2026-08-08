@@ -1,12 +1,12 @@
 //! The loopback proxy server: virtual keys, credential swap, and metering.
 
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::{fmt, net::SocketAddr};
 
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use axum::http::header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
@@ -40,6 +40,37 @@ const UNKNOWN_KEY_BODY: &str = r#"{"error":"colony-meter: unknown virtual key"}"
 const NO_CREDENTIAL_BODY: &str = r#"{"error":"colony-meter: no provider credential configured"}"#;
 const UPSTREAM_FAILED_BODY: &str = r#"{"error":"colony-meter: upstream request failed"}"#;
 const UNROUTABLE_BODY: &str = r#"{"error":"colony-meter: no upstream route for this path"}"#;
+
+/// Response header carrying the stable gateway denial status for diagnostics.
+pub const COLONY_CREDITS_STATUS_HEADER: &str = "x-colony-credits-gateway-status";
+
+/// Exact body markers carried through OpenAI-compatible adapters. ACP only
+/// classifies these markers; ordinary text containing `401`/`402` is never a
+/// provisioned denial.
+pub const COLONY_CREDITS_GATEWAY_STATUS_401_MARKER: &str = "COLONY_CREDITS_GATEWAY_STATUS_401";
+/// Exact body marker for a depleted Colony Credits gateway response.
+pub const COLONY_CREDITS_GATEWAY_STATUS_402_MARKER: &str = "COLONY_CREDITS_GATEWAY_STATUS_402";
+
+/// Return the canonical OpenAI-compatible JSON body for a gateway denial.
+pub fn colony_credits_gateway_denial_body(status: u16) -> Option<&'static str> {
+    match status {
+        401 => Some(
+            r#"{"error":{"type":"colony_credits_gateway","code":"COLONY_CREDITS_GATEWAY_UNAUTHORIZED","message":"Colony Credits gateway authorization expired — reconnect","colony_credits_gateway_marker":"COLONY_CREDITS_GATEWAY_STATUS_401"}}"#,
+        ),
+        402 => Some(
+            r#"{"error":{"type":"colony_credits_gateway","code":"COLONY_CREDITS_GATEWAY_DEPLETED","message":"Colony Credits depleted — top up, then reconnect","colony_credits_gateway_marker":"COLONY_CREDITS_GATEWAY_STATUS_402"}}"#,
+        ),
+        _ => None,
+    }
+}
+
+fn colony_credits_status(status: StatusCode) -> Option<HeaderValue> {
+    match status {
+        StatusCode::UNAUTHORIZED => Some(HeaderValue::from_static("401")),
+        StatusCode::PAYMENT_REQUIRED => Some(HeaderValue::from_static("402")),
+        _ => None,
+    }
+}
 
 /// Which provider a request is bound for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +172,7 @@ pub struct MeteredCall {
 /// through the other, which is why an upstream and a vendor slug are separate
 /// settings: Vertex, Bedrock, DeepSeek, OpenRouter and a local runtime all
 /// speak one of the two dialects while each sending its own invoice.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MeterConfig {
     /// Base URL for Anthropic-dialect requests.
     pub anthropic_upstream: String,
@@ -156,6 +187,26 @@ pub struct MeterConfig {
     pub anthropic_api_key: Option<String>,
     /// Real OpenAI API key. Lives only in this process.
     pub openai_api_key: Option<String>,
+}
+
+impl fmt::Debug for MeterConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MeterConfig")
+            .field("anthropic_upstream", &self.anthropic_upstream)
+            .field("openai_upstream", &self.openai_upstream)
+            .field("anthropic_provider", &self.anthropic_provider)
+            .field("openai_provider", &self.openai_provider)
+            .field(
+                "anthropic_api_key",
+                &self.anthropic_api_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "openai_api_key",
+                &self.openai_api_key.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl Default for MeterConfig {
@@ -544,14 +595,28 @@ async fn forward(
         is_sse: is_event_stream(&upstream_headers),
         parseable: !encoded,
     };
-    let tee = Tee::new(Box::pin(response.bytes_stream()), meta, state.calls.clone());
+    let canonical_denial_body = colony_credits_gateway_denial_body(status.as_u16());
+    let response_stream: UpstreamStream = if let Some(body) = canonical_denial_body {
+        Box::pin(futures_util::stream::once(async move {
+            Ok::<Bytes, reqwest::Error>(Bytes::from_static(body.as_bytes()))
+        }))
+    } else {
+        Box::pin(response.bytes_stream())
+    };
+    let tee = Tee::new(response_stream, meta, state.calls.clone());
 
     let mut builder = Response::builder().status(status);
     for (name, value) in upstream_headers.iter() {
-        if is_hop_by_hop(name) {
+        if is_hop_by_hop(name) || (canonical_denial_body.is_some() && name == CONTENT_LENGTH) {
             continue;
         }
         builder = builder.header(name, value);
+    }
+    if let Some(status) = colony_credits_status(status) {
+        builder = builder.header(COLONY_CREDITS_STATUS_HEADER, status);
+    }
+    if canonical_denial_body.is_some() {
+        builder = builder.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     }
     match builder.body(Body::from_stream(tee.into_stream())) {
         Ok(response) => response,
@@ -823,6 +888,15 @@ mod slug_tests {
     use super::*;
 
     #[test]
+    fn gateway_denial_statuses_have_stable_machine_header_values() {
+        assert!(colony_credits_status(StatusCode::UNAUTHORIZED)
+            .is_some_and(|value| value.as_bytes() == b"401"));
+        assert!(colony_credits_status(StatusCode::PAYMENT_REQUIRED)
+            .is_some_and(|value| value.as_bytes() == b"402"));
+        assert!(colony_credits_status(StatusCode::BAD_GATEWAY).is_none());
+    }
+
+    #[test]
     fn a_vendor_slug_comes_from_the_upstream_host_not_the_route() {
         // Found by the live proof: a real DeepSeek call was recorded as
         // "openai" because it uses the OpenAI-compatible route. Reconciliation
@@ -944,5 +1018,17 @@ mod slug_tests {
             ..MeterConfig::default()
         };
         assert_eq!(config.provider_slug(Provider::OpenAi), "deepseek");
+    }
+
+    #[test]
+    fn meter_config_debug_redacts_provider_keys() {
+        let config = MeterConfig {
+            openai_api_key: Some("gateway-token-test".to_string()),
+            anthropic_api_key: Some("anthropic-token-test".to_string()),
+            ..MeterConfig::default()
+        };
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("gateway-token-test"));
+        assert!(!rendered.contains("anthropic-token-test"));
     }
 }

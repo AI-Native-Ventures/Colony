@@ -524,11 +524,20 @@ type E2eConfig = {
      * Pass a config with a provider to test Inherit-from-global behavior.
      */
     globalAgentConfig?: {
+      credential_mode?: "byok" | "colony_credits";
       env_vars: Record<string, string>;
       provider: string | null;
       model: string | null;
       preferred_runtime?: string | null;
     };
+    /** Volatile Colony Credits account response used by settings specs. */
+    colonyCreditsAccount?: {
+      balance_nanousd: string;
+      currency: "USD";
+      status: "active" | "depleted";
+    };
+    /** Reject the explicit Colony Credits reconnect action with this message. */
+    colonyCreditsReconnectError?: string;
     /** File-layer config returned by runtime id. */
     runtimeFileConfigs?: Record<string, RuntimeFileConfigSubset | null>;
     /** Baked build env returned by the display and key-name Tauri commands. */
@@ -8202,11 +8211,21 @@ let installCallCount = 0;
 const installCallCountByRuntime: Record<string, number> = {};
 let addChannelMembersCallCount = 0;
 let mockGlobalAgentConfig: {
+  credential_mode?: "byok" | "colony_credits";
   env_vars: Record<string, string>;
   provider: string | null;
   model: string | null;
   preferred_runtime?: string | null;
 } | null = null;
+let mockColonyCreditsAccount: {
+  balance_nanousd: string;
+  currency: "USD";
+  status: "active" | "depleted";
+} = {
+  balance_nanousd: "0",
+  currency: "USD" as const,
+  status: "depleted" as const,
+};
 
 // Per-page get_nsec call counter for sequenced error testing.
 let nsecCallCount = 0;
@@ -10604,8 +10623,15 @@ export function maybeInstallE2eTauriMocks() {
     }
   }
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
-    ? { ...config.mock.globalAgentConfig }
+    ? {
+        ...config.mock.globalAgentConfig,
+        credential_mode:
+          config.mock.globalAgentConfig.credential_mode ?? "byok",
+      }
     : null;
+  mockColonyCreditsAccount = config.mock?.colonyCreditsAccount
+    ? { ...config.mock.colonyCreditsAccount }
+    : { balance_nanousd: "0", currency: "USD", status: "depleted" };
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
   resetMockRelayAgents(config);
@@ -12864,12 +12890,22 @@ export function maybeInstallE2eTauriMocks() {
         // Return the mutable persisted mock value, seeded from the test config.
         return (
           mockGlobalAgentConfig ?? {
+            credential_mode: "byok",
             env_vars: {},
             provider: null,
             model: null,
             preferred_runtime: null,
           }
         );
+      }
+      case "get_colony_credits_account": {
+        return mockColonyCreditsAccount;
+      }
+      case "reconnect_colony_credits": {
+        if (activeConfig?.mock?.colonyCreditsReconnectError) {
+          throw new Error(activeConfig.mock.colonyCreditsReconnectError);
+        }
+        return null;
       }
       case "set_global_agent_config": {
         // Echo back the submitted config as the saved value (mirrors the
@@ -12878,6 +12914,7 @@ export function maybeInstallE2eTauriMocks() {
         const savedConfig = (
           payload as {
             config: {
+              credential_mode?: "byok" | "colony_credits";
               env_vars: Record<string, string>;
               provider: string | null;
               model: string | null;
@@ -12896,11 +12933,14 @@ export function maybeInstallE2eTauriMocks() {
         if (saveDelayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, saveDelayMs));
         }
-        mockGlobalAgentConfig = savedConfig;
+        mockGlobalAgentConfig = {
+          ...savedConfig,
+          credential_mode: savedConfig.credential_mode ?? "byok",
+        };
         // In the E2E environment there are no running agents to restart, so
         // the counts default to 0 unless a spec drives them explicitly.
         return {
-          config: savedConfig,
+          config: mockGlobalAgentConfig,
           restarted_count: config?.mock?.globalConfigRestartedCount ?? 0,
           failed_restart_count:
             config?.mock?.globalConfigFailedRestartCount ?? 0,

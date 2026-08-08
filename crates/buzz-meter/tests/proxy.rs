@@ -10,7 +10,10 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use buzz_core::usage_record::UsageBreakdown;
-use buzz_meter::{start_meter, CallCredential, MeterConfig, MeterHandle, MeteredCall};
+use buzz_meter::{
+    start_meter, CallCredential, MeterConfig, MeterHandle, MeteredCall,
+    COLONY_CREDITS_STATUS_HEADER,
+};
 use tokio::sync::mpsc::Receiver;
 use upstream::{FakeUpstream, UpstreamReply};
 
@@ -156,6 +159,57 @@ async fn upstream_429_passes_through_with_no_tokens() {
     assert_eq!(call.http_status, 429);
     assert_eq!(call.tokens, None);
     handle.shutdown();
+}
+
+#[tokio::test]
+async fn gateway_denials_preserve_status_and_emit_one_observed_call() {
+    for (status, marker) in [
+        (StatusCode::UNAUTHORIZED, "401"),
+        (StatusCode::PAYMENT_REQUIRED, "402"),
+    ] {
+        let fake = FakeUpstream::start(UpstreamReply::error(status, "gateway denial")).await;
+        let (port, mut rx, handle) = meter_for_anthropic(&fake).await;
+        let key = handle.issue_virtual_key("provisioned-agent");
+        let response = client()
+            .post(format!("http://127.0.0.1:{port}/anthropic/v1/messages"))
+            .header("x-api-key", &key)
+            .body("{}")
+            .send()
+            .await
+            .expect("proxied denial");
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            response
+                .headers()
+                .get(COLONY_CREDITS_STATUS_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(marker)
+        );
+        let body = response.bytes().await.expect("drain denial body");
+        assert!(
+            std::str::from_utf8(&body)
+                .expect("canonical denial JSON")
+                .contains(if status == StatusCode::UNAUTHORIZED {
+                    buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_401_MARKER
+                } else {
+                    buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_402_MARKER
+                }),
+            "meter must carry an exact denial marker through the adapter body"
+        );
+        let call = next_call(&mut rx).await;
+        assert_eq!(call.http_status, status.as_u16());
+        assert_eq!(call.tokens, None);
+        assert_eq!(
+            fake.request_count(),
+            1,
+            "one denial must make one upstream call"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "one denial must emit one observed call"
+        );
+        handle.shutdown();
+    }
 }
 
 // (d) An unroutable path returns 502 without panicking.

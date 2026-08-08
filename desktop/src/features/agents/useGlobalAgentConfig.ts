@@ -15,6 +15,7 @@ import { getGlobalAgentConfig } from "@/shared/api/tauriGlobalAgentConfig";
 import type { GlobalAgentConfig } from "@/shared/api/types";
 
 const EMPTY_CONFIG: GlobalAgentConfig = {
+  credential_mode: "byok",
   env_vars: {},
   provider: null,
   model: null,

@@ -515,6 +515,8 @@ type MockBridgeOptions = {
     model: string | null;
     preferred_runtime?: string | null;
   };
+  /** Reject the explicit Colony Credits reconnect action with this message. */
+  colonyCreditsReconnectError?: string;
   /** File-layer config returned by runtime id. */
   runtimeFileConfigs?: Record<
     string,

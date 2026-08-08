@@ -1380,6 +1380,7 @@ export const SESSION_STEPS: SessionStep[] = [
       provider: null,
       model: null,
       preferred_runtime: null,
+      credential_mode: "byok",
     }),
   ),
   step("agent-models-discover", "discover_agent_models", () =>

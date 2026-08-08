@@ -520,6 +520,26 @@ impl AcpClient {
             cmd.env("CODEX_CONFIG", merged);
         }
 
+        // A metered launch owns the checkpoint boundary. Never let an
+        // ambient no-meter/provisioned marker or raw gateway credential cross
+        // into the underlying agent process, even when the ACP parent itself
+        // inherited it from the desktop shell. The no-meter path remains
+        // untouched so BYOK/subscription launches keep their existing env.
+        if meter.is_some() {
+            cmd.env_remove("BUZZ_ACP_NO_METER");
+            cmd.env_remove("BUZZ_ACP_PROVISIONED");
+            for key in [
+                "BUZZ_METER_OPENAI_KEY",
+                "BUZZ_METER_ANTHROPIC_KEY",
+                "BUZZ_METER_OPENAI_UPSTREAM",
+                "BUZZ_METER_ANTHROPIC_UPSTREAM",
+                "BUZZ_METER_OPENAI_PROVIDER",
+                "BUZZ_METER_ANTHROPIC_PROVIDER",
+            ] {
+                cmd.env_remove(key);
+            }
+        }
+
         // Metering env is applied last and unconditionally, overriding both
         // persona `extra_env` and anything inherited from the parent process.
         // Every other key here lets an inherited value win, which is correct
@@ -3030,6 +3050,42 @@ mod tests {
             "the checkpoint URL carries the agent's key, so attribution survives \
              an agent that keeps its own credential"
         );
+    }
+
+    /// A provisioned ACP child cannot bypass the checkpoint with an ambient
+    /// no-meter flag or inherit the raw gateway credential used to configure
+    /// that checkpoint. This probes the actual spawned child environment.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn metered_child_scrubs_no_meter_marker_and_raw_gateway_key() {
+        std::env::set_var("BUZZ_ACP_NO_METER", "true");
+        std::env::set_var("BUZZ_METER_OPENAI_KEY", "gateway-token-test");
+        let meter = crate::meter_env::MeterEnv {
+            port: 51998,
+            virtual_key: "colony-vk-test".to_string(),
+            metered: crate::meter_env::MeteredProviders {
+                anthropic: false,
+                openai: true,
+            },
+        };
+        let no_meter = spawn_named_and_read_child_env_metered(
+            "scrub-no-meter",
+            "BUZZ_ACP_NO_METER",
+            &[],
+            Some(&meter),
+        )
+        .await;
+        let raw_key = spawn_named_and_read_child_env_metered(
+            "scrub-gateway-key",
+            "BUZZ_METER_OPENAI_KEY",
+            &[],
+            Some(&meter),
+        )
+        .await;
+        std::env::remove_var("BUZZ_ACP_NO_METER");
+        std::env::remove_var("BUZZ_METER_OPENAI_KEY");
+        assert_eq!(no_meter, "<unset>");
+        assert_eq!(raw_key, "<unset>");
     }
 
     /// With metering off, nothing changes: the parent value is inherited

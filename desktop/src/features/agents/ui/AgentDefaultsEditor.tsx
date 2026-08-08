@@ -37,6 +37,7 @@ import {
   AgentConfigFields,
   EMPTY_GLOBAL_CONFIG,
 } from "@/features/agents/ui/AgentConfigFields";
+import { ColonyCreditsCredentialChoice } from "@/features/agents/ui/ColonyCreditsCredentialChoice";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 
@@ -321,6 +322,11 @@ export function AgentDefaultsEditor({
               value={selectedRuntime?.id ?? ""}
             />
           </div>
+          <ColonyCreditsCredentialChoice
+            config={renderedConfig}
+            onConfigChange={handleConfigChange}
+            runtimeId={selectedRuntime?.id ?? ""}
+          />
           {flatLayout ? (
             <AnimatePresence initial={false}>
               {configFields ? (

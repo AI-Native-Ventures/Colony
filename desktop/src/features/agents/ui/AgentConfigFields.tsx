@@ -57,6 +57,7 @@ import { AdvancedRequiredBadge } from "./AdvancedRequiredBadge";
 import { getGlobalAgentCredentialState } from "./globalAgentCredentialState";
 
 export const EMPTY_GLOBAL_CONFIG: GlobalAgentConfig = {
+  credential_mode: "byok",
   env_vars: {},
   provider: null,
   model: null,

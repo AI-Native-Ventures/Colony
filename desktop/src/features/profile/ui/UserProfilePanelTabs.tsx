@@ -13,6 +13,16 @@ import type { ManagedAgent } from "@/shared/api/types";
 import type { ActiveTurnSummary } from "@/features/agents/activeAgentTurnsStore";
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
 import {
+  COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+  COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+  friendlyAgentLastError,
+} from "@/features/agents/lib/friendlyAgentLastError";
+import {
+  getLatestColonyCreditsDenial,
+  subscribeAgentObserverStore,
+} from "@/features/agents/observerRelayStore";
+import { reconnectColonyCredits } from "@/shared/api/tauriProvisionedCredits";
+import {
   AgentDetailsRows,
   AgentInstructionRow,
 } from "@/features/profile/ui/UserProfilePanelAgentDetails";
@@ -806,6 +816,7 @@ function ArchiveStatusTooltip() {
 export function ProfileRuntimeTabContent({
   agentInstruction,
   autoRestartEnabled = false,
+  colonyCreditsAgentPubkey = null,
   diagnosticsFields,
   diagnosticsSummary,
   needsRestart = false,
@@ -819,6 +830,8 @@ export function ProfileRuntimeTabContent({
   agentInstruction: string | null;
   /** Whether the per-agent auto-restart toggle is ON. */
   autoRestartEnabled?: boolean;
+  /** Local managed agent whose observer denial can expose one recovery action. */
+  colonyCreditsAgentPubkey?: string | null;
   diagnosticsFields: ProfileField[];
   diagnosticsSummary: React.ReactNode;
   /** True when the running agent's config has drifted from what it was spawned with. */
@@ -830,6 +843,60 @@ export function ProfileRuntimeTabContent({
   showDiagnosticsIngress: boolean;
   showInstructionBlock: boolean;
 }) {
+  const [isReconnecting, setIsReconnecting] = React.useState(false);
+  const [reconnectError, setReconnectError] = React.useState<string | null>(
+    null,
+  );
+  const subscribeToDenial = React.useCallback(
+    (listener: () => void) =>
+      colonyCreditsAgentPubkey
+        ? subscribeAgentObserverStore(listener)
+        : () => {},
+    [colonyCreditsAgentPubkey],
+  );
+  const liveDenial = React.useSyncExternalStore(
+    subscribeToDenial,
+    () => getLatestColonyCreditsDenial(colonyCreditsAgentPubkey),
+    () => getLatestColonyCreditsDenial(colonyCreditsAgentPubkey),
+  );
+  const liveDenialFriendlyError = liveDenial
+    ? friendlyAgentLastError(
+        (() => {
+          const payload =
+            typeof liveDenial.payload === "object" &&
+            liveDenial.payload !== null
+              ? (liveDenial.payload as {
+                  error?: unknown;
+                  gateway_status?: unknown;
+                })
+              : {};
+          const status = String(payload.gateway_status ?? "401");
+          const marker =
+            status === "402"
+              ? COLONY_CREDITS_GATEWAY_STATUS_402_MARKER
+              : COLONY_CREDITS_GATEWAY_STATUS_401_MARKER;
+          const detail =
+            typeof payload.error === "string" ? `: ${payload.error}` : "";
+          return `${marker}${detail}`;
+        })(),
+      )
+    : null;
+
+  async function handleReconnect() {
+    if (isReconnecting) return;
+    setIsReconnecting(true);
+    setReconnectError(null);
+    try {
+      await reconnectColonyCredits();
+    } catch (error) {
+      setReconnectError(
+        typeof error === "string" ? error : "Reconnect failed — try again.",
+      );
+    } finally {
+      setIsReconnecting(false);
+    }
+  }
+
   const statusDiagnosticsFields = diagnosticsFields.filter(
     (field) => field.label === "Status",
   );
@@ -867,6 +934,32 @@ export function ProfileRuntimeTabContent({
                 : "Configuration changed since this agent started. Automatic restart is off for this agent \u2014 stop and respawn it to apply the changes."}
             </p>
           </div>
+        </div>
+      ) : null}
+      {liveDenialFriendlyError?.severity === "actionable" &&
+      liveDenialFriendlyError.action === "reconnect" ? (
+        <div className="space-y-1" data-testid="colony-credits-recovery">
+          <p className="text-xs text-destructive">
+            {liveDenialFriendlyError.copy}
+          </p>
+          <Button
+            data-testid="managed-agent-colony-credits-reconnect"
+            disabled={isReconnecting}
+            onClick={() => void handleReconnect()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {isReconnecting ? "Reconnecting…" : "Reconnect"}
+          </Button>
+          {reconnectError ? (
+            <p
+              className="text-xs text-destructive"
+              data-testid="managed-agent-colony-credits-reconnect-error"
+            >
+              {reconnectError}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {showInstructionBlock ? (
