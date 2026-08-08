@@ -8,7 +8,11 @@ name: Huddle companion window smoke (scratch)
 # the huddle-window-smoke scratch branch once both platforms pass.
 
 on:
-  workflow_dispatch:
+  # Dispatched by pushing to the huddle-window-smoke scratch PR (workflow
+  # files must exist on the default branch for workflow_dispatch; a draft PR
+  # gives this scratch gate a run surface without touching develop).
+  pull_request:
+    branches: [develop]
 
 permissions:
   contents: read
