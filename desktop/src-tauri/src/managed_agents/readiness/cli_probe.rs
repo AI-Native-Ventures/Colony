@@ -100,6 +100,82 @@ pub(crate) fn classify_probe_output(stderr_bytes: &[u8], exit_success: bool) -> 
 mod tests {
     use super::{ProbeOutcome, CONFIG_PARSE_SIGNALS};
 
+    /// How long the ETXTBSY retry helpers below keep trying, and how long they
+    /// wait between attempts. The window they cover is one child process's
+    /// fork-to-exec gap, so this is generous by orders of magnitude.
+    #[cfg(unix)]
+    const BUSY_RETRIES: usize = 50;
+    #[cfg(unix)]
+    const BUSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
+
+    /// Run `attempt`, retrying while it fails with ETXTBSY ("Text file busy").
+    ///
+    /// A test that writes an executable and then runs it races every other
+    /// thread in the test binary. `fs::write` holds a write descriptor while it
+    /// writes; `cargo test` runs tests on parallel threads, so another thread
+    /// can fork inside that window. The child inherits the descriptor and holds
+    /// the file open for writing until it execs, and executing a file that any
+    /// process has open for writing fails with ETXTBSY — even though nothing is
+    /// wrong with the file.
+    ///
+    /// Rust opens files `O_CLOEXEC`, so the inherited copy closes at the child's
+    /// exec and the window is short and self-closing. That makes it a transient
+    /// worth retrying rather than a condition worth failing on. Only ETXTBSY is
+    /// retried; every other error returns immediately, so a genuine breakage
+    /// still fails fast.
+    #[cfg(unix)]
+    fn retry_while_text_file_busy<T>(
+        mut attempt: impl FnMut() -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        for _ in 1..BUSY_RETRIES {
+            match attempt() {
+                Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(BUSY_BACKOFF);
+                }
+                other => return other,
+            }
+        }
+        attempt()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retry_while_text_file_busy_retries_until_the_file_is_free() {
+        use std::cell::Cell;
+
+        let calls = Cell::new(0_usize);
+        let value = retry_while_text_file_busy(|| {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 {
+                Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok(calls.get())
+            }
+        })
+        .expect("a transient ETXTBSY should be retried, not surfaced");
+        assert_eq!(value, 3);
+        assert_eq!(calls.get(), 3, "it should stop retrying once it succeeds");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retry_while_text_file_busy_does_not_retry_other_errors() {
+        use std::cell::Cell;
+
+        let calls = Cell::new(0_usize);
+        let err = retry_while_text_file_busy(|| {
+            calls.set(calls.get() + 1);
+            Err::<(), _>(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        })
+        .expect_err("a non-ETXTBSY error must be surfaced");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            calls.get(),
+            1,
+            "retrying a real failure would hide it behind a timeout"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn login_probe_uses_augmented_path_for_env_shebang_interpreter() {
@@ -136,11 +212,13 @@ mod tests {
             .expect("join scrubbed PATH")
             .to_string_lossy()
             .into_owned();
-        let without_augmented_path = Command::new(&script_path)
-            .args(["login", "status"])
-            .env("PATH", &scrubbed_path)
-            .output()
-            .expect("run script with scrubbed PATH");
+        let without_augmented_path = retry_while_text_file_busy(|| {
+            Command::new(&script_path)
+                .args(["login", "status"])
+                .env("PATH", &scrubbed_path)
+                .output()
+        })
+        .expect("run script with scrubbed PATH");
         assert!(
             !without_augmented_path.status.success(),
             "with a scrubbed PATH, /usr/bin/env should not find node"
@@ -149,12 +227,31 @@ mod tests {
         let augmented_path =
             std::env::join_paths([interpreter_dir.as_path()]).expect("join augmented PATH");
         let augmented_path = augmented_path.to_string_lossy().into_owned();
-        assert_eq!(
-            super::login_probe(
+
+        // `login_probe` maps a spawn error to `LoggedOut`, so an ETXTBSY here is
+        // indistinguishable from a real "not authenticated" result and cannot be
+        // funnelled through `retry_while_text_file_busy`. Retry on that exact
+        // signature instead: `LoggedOut` while the marker shows the interpreter
+        // never ran. A genuine regression still fails, just after the attempts
+        // are spent.
+        let mut outcome = super::login_probe(
+            &script_path,
+            &["fake-codex", "login", "status"],
+            Some(&augmented_path),
+        );
+        for _ in 1..BUSY_RETRIES {
+            if outcome != ProbeOutcome::LoggedOut || marker_path.exists() {
+                break;
+            }
+            std::thread::sleep(BUSY_BACKOFF);
+            outcome = super::login_probe(
                 &script_path,
                 &["fake-codex", "login", "status"],
                 Some(&augmented_path),
-            ),
+            );
+        }
+        assert_eq!(
+            outcome,
             ProbeOutcome::LoggedIn,
             "the injected augmented PATH should allow /usr/bin/env to find the interpreter"
         );
