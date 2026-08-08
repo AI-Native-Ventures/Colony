@@ -15,10 +15,10 @@
 //! ledger says so" are the same instant. The final chunk is held back one
 //! position; when the upstream stream ends, the settle runs inline (with a
 //! small bounded retry for transient DB errors) and only then is the held
-//! chunk released. The residual window is a crash inside the settle itself,
-//! bounded to one call, which is what daily reconciliation is for. A client
-//! that hangs up mid-stream drops the tee; that path settles best-effort
-//! from whatever the wire said.
+//! chunk released. The relay-owned worker keeps draining after a client drop,
+//! and an unparseable or failed successful call keeps a durable settlement
+//! intent that an explicit provider-export resolver can finish. The heuristic
+//! balance floor is not a monetary loss bound.
 //!
 //! Everything here is mounted only when `VERCEL_AI_GATEWAY_KEY` is
 //! configured; without it the routes do not exist and return 404.
@@ -28,9 +28,13 @@
 //! dollars alongside integer token counts, in the body only (never a header),
 //! and the streaming terminal chunk carries it without `stream_options`.
 
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
+use async_compression::tokio::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder};
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
@@ -46,6 +50,10 @@ use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use sqlx::{Connection, PgConnection};
+use tokio::io::BufReader;
+use tokio_util::io::{ReaderStream, StreamReader};
+use tokio_util::task::TaskTracker;
 
 /// The upstream this gateway fronts. Vercel AI Gateway is the default; the
 /// relay's existing credential seam style means swapping the hop later is an
@@ -58,10 +66,28 @@ const TOKEN_PREFIX: &str = "colony-gw-";
 /// Minimum balance to admit a call, in nanoUSD ($0.05).
 ///
 /// The hard part of the spec is explicit: do not build a reservation system.
-/// Admit at $0.05, debit the observed cost on settle, hard-block later at
-/// admission control. Worst case overdraft is one call on an account that
-/// already paid.
+/// Admit at $0.05, debit the observed cost on settle, and hard-block later at
+/// admission control. This is a concurrency/balance guard, not a reservation
+/// system: the provider's observed debit can be larger than the heuristic.
 const ADMISSION_FLOOR_NANOUSD: i64 = 50_000_000;
+
+/// Default cost used by the no-reservation balance guard: $0.05.
+const DEFAULT_TYPICAL_CALL_COST_NANOUSD: i64 = 50_000_000;
+
+/// Default maximum concurrent provisioned calls per account.
+const DEFAULT_MAX_IN_FLIGHT: u32 = 4;
+
+/// Hard safety ceiling for both the deployment default and per-account
+/// overrides. The gateway makes at most four actual upstream calls per
+/// account; `typical_call_cost_nanousd` remains only a conservative floor for
+/// the pre-call balance check.
+const MAX_MAX_IN_FLIGHT: u32 = 4;
+
+/// Default rolling one-hour spend cap per account: $5.
+const DEFAULT_HOURLY_BURN_CAP_NANOUSD: i64 = 5_000_000_000;
+
+/// The durable/cache admission spend window.
+const BURN_WINDOW: chrono::Duration = chrono::Duration::hours(1);
 
 /// How many times a settle is attempted inline before giving up. A transient
 /// DB error (connection drop, lock timeout) should not turn one failed write
@@ -73,10 +99,21 @@ const SETTLE_MAX_ATTEMPTS: usize = 3;
 /// the worst-case tail is 50ms + 100ms before the terminal chunk is released.
 const SETTLE_RETRY_BACKOFF_MS: u64 = 50;
 
-/// How much of a response body is kept for parsing. Past this, the body keeps
-/// streaming to the client but the copy is abandoned (no settle for that
-/// call — logged loudly, and reconciliation points at it).
-const MAX_TEE_BYTES: usize = 8 * 1024 * 1024;
+/// How much of a response body is retained for bounded incremental parsing.
+/// A successful response larger than this is still billable: identity fields
+/// are extracted as chunks arrive and the tail is enough for terminal usage.
+const MAX_TEE_PARSE_TAIL_BYTES: usize = 128 * 1024;
+
+/// Admission entries are process-local and evicted when idle. This bounds the
+/// memory cost of rejected/missing identities without touching durable rows.
+const MAX_ADMISSION_ENTRIES: usize = 4096;
+const ADMISSION_IDLE_TTL: chrono::Duration = chrono::Duration::hours(1);
+
+/// Session-level Postgres advisory lock key for the relay's single admission
+/// authority. The dedicated connection is retained in `GatewayState`, so a
+/// second relay sharing this database fails at startup instead of silently
+/// allowing two process-local counters to oversubscribe the account.
+const GATEWAY_AUTHORITY_LOCK_KEY: i64 = 0x4255_5A5A_4347_5759;
 
 /// Ceiling on a buffered request body. Large enough for a long-context
 /// prompt and small enough that a runaway agent cannot exhaust memory.
@@ -98,6 +135,12 @@ pub struct GatewayConfig {
     pub api_key: String,
     /// Upstream base URL (`/v1/chat/completions` is appended).
     pub base_url: String,
+    /// Deployment default typical call cost, in nanoUSD.
+    pub default_typical_call_cost_nanousd: i64,
+    /// Deployment default concurrent call limit per account.
+    pub default_max_in_flight: u32,
+    /// Deployment default rolling one-hour spend cap, in nanoUSD.
+    pub default_hourly_burn_cap_nanousd: i64,
 }
 
 /// Read gateway config from the environment.
@@ -116,7 +159,59 @@ pub fn config_from_env() -> anyhow::Result<Option<GatewayConfig>> {
     if base_url.trim().is_empty() {
         anyhow::bail!("VERCEL_AI_GATEWAY_BASE_URL must not be blank when the gateway is enabled");
     }
-    Ok(Some(GatewayConfig { api_key, base_url }))
+    let default_typical_call_cost_nanousd = positive_i64_env(
+        "BUZZ_GATEWAY_DEFAULT_TYPICAL_CALL_COST_NANOUSD",
+        DEFAULT_TYPICAL_CALL_COST_NANOUSD,
+    )?;
+    let default_max_in_flight =
+        max_in_flight_env("BUZZ_GATEWAY_DEFAULT_MAX_IN_FLIGHT", DEFAULT_MAX_IN_FLIGHT)?;
+    let default_hourly_burn_cap_nanousd = positive_i64_env(
+        "BUZZ_GATEWAY_DEFAULT_HOURLY_BURN_CAP_NANOUSD",
+        DEFAULT_HOURLY_BURN_CAP_NANOUSD,
+    )?;
+    Ok(Some(GatewayConfig {
+        api_key,
+        base_url,
+        default_typical_call_cost_nanousd,
+        default_max_in_flight,
+        default_hourly_burn_cap_nanousd,
+    }))
+}
+
+fn positive_i64_env(name: &str, default: i64) -> anyhow::Result<i64> {
+    match std::env::var(name) {
+        Ok(raw) => raw
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow::anyhow!("{name} must be a positive integer")),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(anyhow::anyhow!("could not read {name}: {error}")),
+    }
+}
+
+fn positive_u32_env(name: &str, default: u32) -> anyhow::Result<u32> {
+    match std::env::var(name) {
+        Ok(raw) => raw
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow::anyhow!("{name} must be a positive integer")),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(anyhow::anyhow!("could not read {name}: {error}")),
+    }
+}
+
+fn max_in_flight_env(name: &str, default: u32) -> anyhow::Result<u32> {
+    let value = positive_u32_env(name, default)?;
+    if value > MAX_MAX_IN_FLIGHT {
+        anyhow::bail!(
+            "{name} must be no greater than {MAX_MAX_IN_FLIGHT} (hard gateway safety ceiling)"
+        );
+    }
+    Ok(value)
 }
 
 /// Everything the gateway needs beyond the relay's `AppState`.
@@ -126,6 +221,15 @@ pub struct GatewayState {
     /// Price book snapshot, shared with every response tee so the settle
     /// step can price a call the provider did not state a cost for.
     price_book: Arc<PriceBook>,
+    /// Single-instance admission authority. The retained Postgres advisory
+    /// lease makes a second relay sharing this deployment fail at startup;
+    /// multi-instance operation needs an explicitly shared admission design.
+    admission: Arc<AdmissionController>,
+    /// Relay-owned drain/settle jobs. A downstream body may disappear, but
+    /// this tracker keeps the upstream response and permit alive until the
+    /// response has been drained and its ledger outcome is durable.
+    settlement_tasks: TaskTracker,
+    _authority: GatewayAuthority,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -144,7 +248,16 @@ impl GatewayState {
     ///
     /// Fails when the upstream HTTP client cannot be built or the effective
     /// price catalog is invalid.
-    pub fn new(config: GatewayConfig) -> anyhow::Result<Self> {
+    pub async fn new(config: GatewayConfig, pool: &sqlx::PgPool) -> anyhow::Result<Self> {
+        Self::new_with_clock(config, pool, Arc::new(SystemGatewayClock)).await
+    }
+
+    async fn new_with_clock(
+        config: GatewayConfig,
+        pool: &sqlx::PgPool,
+        clock: Arc<dyn GatewayClock>,
+    ) -> anyhow::Result<Self> {
+        let authority = GatewayAuthority::acquire(pool).await?;
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
@@ -152,11 +265,526 @@ impl GatewayState {
         let entries = crate::price_feed::effective_catalog()
             .map_err(|error| anyhow::anyhow!("gateway price book: {error}"))?;
         let price_book = Arc::new(PriceBook { entries });
+        let since = clock.now() - BURN_WINDOW;
+        let recent = buzz_db::credits::recent_debits(pool, since)
+            .await
+            .map_err(|error| anyhow::anyhow!("gateway admission rebuild: {error}"))?;
+        let active_accounts = recent
+            .iter()
+            .map(|debit| debit.pubkey.as_slice())
+            .collect::<std::collections::HashSet<_>>();
+        if active_accounts.len() > MAX_ADMISSION_ENTRIES {
+            anyhow::bail!(
+                "gateway admission rebuild found {} active accounts, over the in-memory limit of {}; refusing to start rather than dropping burn windows",
+                active_accounts.len(),
+                MAX_ADMISSION_ENTRIES
+            );
+        }
+        let settlement_tasks = TaskTracker::new();
+        let admission = Arc::new(AdmissionController::try_new(
+            AdmissionDefaults {
+                typical_call_cost_nanousd: config.default_typical_call_cost_nanousd,
+                max_in_flight: config.default_max_in_flight.min(MAX_MAX_IN_FLIGHT),
+                hourly_burn_cap_nanousd: config.default_hourly_burn_cap_nanousd,
+            },
+            clock,
+            recent,
+            settlement_tasks.clone(),
+        )?);
         Ok(Self {
             config,
             client,
             price_book,
+            admission,
+            settlement_tasks,
+            _authority: authority,
         })
+    }
+
+    #[cfg(test)]
+    fn in_flight_for(&self, pubkey: &[u8]) -> u32 {
+        self.admission.in_flight_for(pubkey)
+    }
+
+    /// Stop admitting work and drain every relay-owned settlement task.
+    ///
+    /// The relay calls this after its listener exits. Keeping this explicit is
+    /// important for graceful shutdown: dropping a `TaskTracker` does not
+    /// wait for a provider response or its durable attribution outcome.
+    pub async fn shutdown(&self) {
+        self.admission.close();
+        self.settlement_tasks.close();
+        self.settlement_tasks.wait().await;
+    }
+}
+
+struct GatewayAuthority {
+    /// Kept open for the full gateway lifetime; PostgreSQL releases the lock
+    /// automatically if the relay exits or this state is dropped.
+    _connection: PgConnection,
+}
+
+impl GatewayAuthority {
+    async fn acquire(pool: &sqlx::PgPool) -> anyhow::Result<Self> {
+        let options = pool.connect_options();
+        let mut connection = PgConnection::connect_with(&options)
+            .await
+            .map_err(|error| anyhow::anyhow!("gateway authority connection: {error}"))?;
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(GATEWAY_AUTHORITY_LOCK_KEY)
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| anyhow::anyhow!("gateway authority lock query: {error}"))?;
+        if !acquired {
+            connection
+                .close()
+                .await
+                .map_err(|error| anyhow::anyhow!("gateway authority lock release: {error}"))?;
+            anyhow::bail!("gateway admission authority already held by another relay process");
+        }
+        Ok(Self {
+            _connection: connection,
+        })
+    }
+}
+
+trait GatewayClock: Send + Sync {
+    fn now(&self) -> chrono::DateTime<Utc>;
+}
+
+struct SystemGatewayClock;
+
+impl GatewayClock for SystemGatewayClock {
+    fn now(&self) -> chrono::DateTime<Utc> {
+        Utc::now()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AdmissionDefaults {
+    typical_call_cost_nanousd: i64,
+    max_in_flight: u32,
+    hourly_burn_cap_nanousd: i64,
+}
+
+#[derive(Debug, Clone)]
+struct SpendPoint {
+    ledger_id: i64,
+    reference: String,
+    at: chrono::DateTime<Utc>,
+    cost_nanousd: i64,
+}
+
+#[derive(Debug, Default)]
+struct AccountRuntime {
+    in_flight: u32,
+    spend_nanousd: i64,
+    spend: VecDeque<SpendPoint>,
+    last_touched: Option<chrono::DateTime<Utc>>,
+}
+
+impl AccountRuntime {
+    fn prune(&mut self, now: chrono::DateTime<Utc>) {
+        let cutoff = now - BURN_WINDOW;
+        while self.spend.front().is_some_and(|point| point.at <= cutoff) {
+            if let Some(point) = self.spend.pop_front() {
+                self.spend_nanousd = self.spend_nanousd.saturating_sub(point.cost_nanousd);
+            }
+        }
+    }
+
+    fn push_spend(&mut self, point: SpendPoint) {
+        if point.cost_nanousd <= 0 {
+            return;
+        }
+        if (point.ledger_id > 0
+            && self
+                .spend
+                .iter()
+                .any(|current| current.ledger_id == point.ledger_id))
+            || (!point.reference.is_empty()
+                && self
+                    .spend
+                    .iter()
+                    .any(|current| current.reference == point.reference))
+        {
+            return;
+        }
+        self.spend_nanousd = self.spend_nanousd.saturating_add(point.cost_nanousd);
+        // Concurrent settles can acquire the account row lock in a different
+        // order from their transaction timestamps. Keep the ring ordered by
+        // durable ledger time so front-pruning and Retry-After stay exact.
+        match self.spend.iter().position(|current| current.at > point.at) {
+            Some(index) => self.spend.insert(index, point),
+            None => self.spend.push_back(point),
+        }
+    }
+
+    fn touch(&mut self, now: chrono::DateTime<Utc>) {
+        self.last_touched = Some(now);
+    }
+
+    fn retry_after_secs(&self, cap_nanousd: i64, now: chrono::DateTime<Utc>) -> u64 {
+        let mut remaining = self.spend_nanousd;
+        for point in &self.spend {
+            remaining = remaining.saturating_sub(point.cost_nanousd);
+            if remaining < cap_nanousd {
+                let millis = (point.at + BURN_WINDOW - now).num_milliseconds().max(1);
+                return u64::try_from((millis + 999) / 1000)
+                    .unwrap_or(1)
+                    .max(1)
+                    .min(BURN_WINDOW.num_seconds() as u64 + 1);
+            }
+        }
+        1
+    }
+}
+
+struct AccountAdmissionEntry {
+    /// Serializes balance reads/admission with settle-and-release for one
+    /// account, closing the stale-balance window around a completed debit.
+    gate: tokio::sync::Mutex<()>,
+    /// Number of admission operations that have registered interest in this
+    /// gate. It stays non-zero while the gate is held, not only while a
+    /// waiter is queued, so capacity pruning cannot split one pubkey into two
+    /// independent authorities.
+    gate_users: AtomicU32,
+    runtime: Mutex<AccountRuntime>,
+}
+
+impl Default for AccountAdmissionEntry {
+    fn default() -> Self {
+        Self {
+            gate: tokio::sync::Mutex::new(()),
+            gate_users: AtomicU32::new(0),
+            runtime: Mutex::new(AccountRuntime::default()),
+        }
+    }
+}
+
+struct AdmissionController {
+    /// The map lock covers lookup, insertion, pruning, and capacity
+    /// enforcement as one operation. The old concurrent map evicted before
+    /// inserting, which could briefly contain 4097 entries and could remove
+    /// a gate that an admission had just started using.
+    entries: Mutex<HashMap<Vec<u8>, Arc<AccountAdmissionEntry>>>,
+    defaults: AdmissionDefaults,
+    clock: Arc<dyn GatewayClock>,
+    settlement_tasks: TaskTracker,
+    closed: AtomicBool,
+}
+
+impl AdmissionController {
+    fn try_new(
+        defaults: AdmissionDefaults,
+        clock: Arc<dyn GatewayClock>,
+        recent: Vec<buzz_db::credits::RecentDebit>,
+        settlement_tasks: TaskTracker,
+    ) -> anyhow::Result<Self> {
+        let defaults = AdmissionDefaults {
+            max_in_flight: defaults.max_in_flight.min(MAX_MAX_IN_FLIGHT),
+            ..defaults
+        };
+        let controller = Self {
+            entries: Mutex::new(HashMap::new()),
+            defaults,
+            clock,
+            settlement_tasks,
+            closed: AtomicBool::new(false),
+        };
+        let mut accounts = std::collections::HashSet::new();
+        for debit in &recent {
+            accounts.insert(debit.pubkey.clone());
+        }
+        if accounts.len() > MAX_ADMISSION_ENTRIES {
+            anyhow::bail!(
+                "gateway admission rebuild found {} active accounts, over the in-memory limit of {}; refusing to start rather than dropping burn windows",
+                accounts.len(),
+                MAX_ADMISSION_ENTRIES
+            );
+        }
+        for debit in recent {
+            let entry = controller.entry_unchecked(&debit.pubkey);
+            let mut runtime = lock_runtime(&entry);
+            runtime.push_spend(SpendPoint {
+                ledger_id: debit.id,
+                reference: debit.reference,
+                at: debit.created_at,
+                cost_nanousd: debit.cost_nanousd,
+            });
+            runtime.touch(controller.clock.now());
+        }
+        Ok(controller)
+    }
+
+    /// Test/helper path for identities known to fit in the map (not used for
+    /// live admissions). The caller must have established the capacity
+    /// invariant, as startup reconstruction does above.
+    fn entry_unchecked(&self, pubkey: &[u8]) -> Arc<AccountAdmissionEntry> {
+        let mut entries = lock_entries(&self.entries);
+        entries
+            .entry(pubkey.to_vec())
+            .or_insert_with(|| Arc::new(AccountAdmissionEntry::default()))
+            .clone()
+    }
+
+    /// Atomically prune safe idle entries and register this admission's gate
+    /// interest before releasing the map lock. A new identity is rejected at
+    /// capacity; existing identities always get their original Arc.
+    fn entry_for_admission(
+        &self,
+        pubkey: &[u8],
+    ) -> Result<Arc<AccountAdmissionEntry>, AdmissionError> {
+        let now = self.clock.now();
+        let mut entries = lock_entries(&self.entries);
+        prune_idle_entries(&mut entries, now);
+        if let Some(entry) = entries.get(pubkey) {
+            entry.gate_users.fetch_add(1, Ordering::AcqRel);
+            return Ok(Arc::clone(entry));
+        }
+        if entries.len() >= MAX_ADMISSION_ENTRIES {
+            return Err(AdmissionError::Rate {
+                message: "gateway admission capacity exhausted",
+                retry_after_secs: 1,
+            });
+        }
+        let entry = Arc::new(AccountAdmissionEntry::default());
+        entry.gate_users.store(1, Ordering::Release);
+        entries.insert(pubkey.to_vec(), Arc::clone(&entry));
+        Ok(entry)
+    }
+
+    async fn admit(
+        &self,
+        pool: &sqlx::PgPool,
+        pubkey: &[u8],
+    ) -> Result<AdmissionPermit, AdmissionError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(AdmissionError::Rate {
+                message: "gateway is shutting down",
+                retry_after_secs: 1,
+            });
+        }
+        let entry = self.entry_for_admission(pubkey)?;
+        let result = with_registered_gate(Arc::clone(&entry), async {
+            let account = buzz_db::credits::admission_account(pool, pubkey)
+                .await
+                .map_err(|error| AdmissionError::Database(error.to_string()))?;
+            let now = self.clock.now();
+            let mut runtime = lock_runtime(&entry);
+            runtime.prune(now);
+            runtime.touch(now);
+
+            let typical = account
+                .typical_call_cost_nanousd
+                .unwrap_or(self.defaults.typical_call_cost_nanousd);
+            let max_in_flight = account
+                .max_in_flight
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(self.defaults.max_in_flight)
+                .min(MAX_MAX_IN_FLIGHT);
+            let burn_cap = account
+                .hourly_burn_cap_nanousd
+                .unwrap_or(self.defaults.hourly_burn_cap_nanousd);
+            let balance_guard = i64::from(runtime.in_flight)
+                .saturating_mul(typical)
+                .max(ADMISSION_FLOOR_NANOUSD);
+            if account.balance < balance_guard {
+                return Err(AdmissionError::Payment {
+                    balance_nanousd: account.balance,
+                    required_nanousd: balance_guard,
+                });
+            }
+            if runtime.in_flight >= max_in_flight {
+                return Err(AdmissionError::Rate {
+                    message: "gateway concurrency limit reached",
+                    retry_after_secs: 1,
+                });
+            }
+            if runtime.spend_nanousd >= burn_cap {
+                return Err(AdmissionError::Rate {
+                    message: "gateway hourly spend limit reached",
+                    retry_after_secs: runtime.retry_after_secs(burn_cap, now),
+                });
+            }
+
+            runtime.in_flight = runtime.in_flight.saturating_add(1);
+            Ok(())
+        })
+        .await;
+        result?;
+        Ok(AdmissionPermit {
+            entry,
+            pubkey: pubkey.to_vec(),
+            released: false,
+            settlement_tasks: self.settlement_tasks.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    fn evict_idle(&self, now: chrono::DateTime<Utc>) {
+        prune_idle_entries(&mut lock_entries(&self.entries), now);
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    fn in_flight_for(&self, pubkey: &[u8]) -> u32 {
+        lock_entries(&self.entries)
+            .get(pubkey)
+            .map(|entry| lock_runtime(entry).in_flight)
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn entry_count(&self) -> usize {
+        lock_entries(&self.entries).len()
+    }
+}
+
+fn lock_entries(
+    entries: &Mutex<HashMap<Vec<u8>, Arc<AccountAdmissionEntry>>>,
+) -> std::sync::MutexGuard<'_, HashMap<Vec<u8>, Arc<AccountAdmissionEntry>>> {
+    entries
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn prune_idle_entries(
+    entries: &mut HashMap<Vec<u8>, Arc<AccountAdmissionEntry>>,
+    now: chrono::DateTime<Utc>,
+) {
+    entries.retain(|_, entry| {
+        let mut runtime = lock_runtime(entry);
+        runtime.prune(now);
+        let expired = runtime
+            .last_touched
+            .is_some_and(|at| at + ADMISSION_IDLE_TTL <= now);
+        let safe = entry.gate_users.load(Ordering::Acquire) == 0
+            && runtime.in_flight == 0
+            && runtime.spend.is_empty()
+            && expired;
+        !safe
+    });
+}
+
+async fn with_registered_gate<F, R>(entry: Arc<AccountAdmissionEntry>, operation: F) -> R
+where
+    F: Future<Output = R>,
+{
+    let guard = entry.gate.lock().await;
+    let result = operation.await;
+    drop(guard);
+    entry.gate_users.fetch_sub(1, Ordering::AcqRel);
+    result
+}
+
+#[derive(Debug)]
+enum AdmissionError {
+    Payment {
+        balance_nanousd: i64,
+        required_nanousd: i64,
+    },
+    Rate {
+        message: &'static str,
+        retry_after_secs: u64,
+    },
+    Database(String),
+}
+
+struct AdmissionPermit {
+    entry: Arc<AccountAdmissionEntry>,
+    pubkey: Vec<u8>,
+    released: bool,
+    settlement_tasks: TaskTracker,
+}
+
+impl AdmissionPermit {
+    async fn finish(self, settled: Option<SettledDebit>) {
+        self.finish_with(async move { settled }).await;
+    }
+
+    /// Run the final settle operation while holding the account admission
+    /// gate, then update cached spend and release the in-flight slot as one
+    /// serialized lifecycle. This closes both stale-balance and stale-burn
+    /// windows between a durable debit and the next admission.
+    async fn finish_with<F>(mut self, operation: F)
+    where
+        F: Future<Output = Option<SettledDebit>>,
+    {
+        let entry = Arc::clone(&self.entry);
+        entry.gate_users.fetch_add(1, Ordering::AcqRel);
+        let pubkey = self.pubkey.clone();
+        let runtime_entry = Arc::clone(&self.entry);
+        with_registered_gate(entry, async move {
+            let settled = operation.await;
+            let mut runtime = lock_runtime(&runtime_entry);
+            runtime.touch(Utc::now());
+            if let Some(settled) = settled {
+                runtime.push_spend(SpendPoint {
+                    ledger_id: settled.ledger_id,
+                    reference: settled.reference,
+                    at: settled.created_at,
+                    cost_nanousd: settled.cost_nanousd,
+                });
+            }
+            release_runtime(&mut runtime, &pubkey);
+        })
+        .await;
+        self.released = true;
+    }
+}
+
+impl Drop for AdmissionPermit {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        let entry = Arc::clone(&self.entry);
+        let pubkey = self.pubkey.clone();
+        let settlement_tasks = self.settlement_tasks.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => {
+                settlement_tasks.spawn(async move {
+                    entry.gate_users.fetch_add(1, Ordering::AcqRel);
+                    with_registered_gate(entry.clone(), async move {
+                        let mut runtime = lock_runtime(&entry);
+                        runtime.touch(Utc::now());
+                        release_runtime(&mut runtime, &pubkey);
+                    })
+                    .await;
+                });
+            }
+            Err(_) => {
+                tracing::error!(
+                    pubkey = %hex::encode(&pubkey),
+                    "gateway: admission permit dropped outside a runtime"
+                );
+                let mut runtime = lock_runtime(&entry);
+                release_runtime(&mut runtime, &pubkey);
+            }
+        }
+    }
+}
+
+fn lock_runtime(entry: &AccountAdmissionEntry) -> std::sync::MutexGuard<'_, AccountRuntime> {
+    entry
+        .runtime
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn release_runtime(runtime: &mut AccountRuntime, pubkey: &[u8]) {
+    if runtime.in_flight == 0 {
+        tracing::error!(
+            pubkey = %hex::encode(pubkey),
+            "gateway: admission in-flight release underflow"
+        );
+    } else {
+        runtime.in_flight -= 1;
     }
 }
 
@@ -178,6 +806,7 @@ pub fn router(app: Arc<crate::state::AppState>, upstream: Arc<GatewayState>) -> 
         )
         .route("/gateway/openai/v1/models", get(list_models))
         .route("/api/gateway/tokens", post(mint_token).delete(revoke_token))
+        .route("/api/gateway/account", get(account))
         .route_layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
 }
@@ -207,8 +836,15 @@ pub(crate) async fn mint_token(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<axum::Json<Value>, (StatusCode, axum::Json<Value>)> {
-    let (tenant, pubkey) =
-        authenticate(&state.app, &headers, "POST", "/api/gateway/tokens", &body).await?;
+    let (tenant, pubkey) = authenticate(
+        &state.app,
+        &headers,
+        "POST",
+        "/api/gateway/tokens",
+        Some(&body),
+        true,
+    )
+    .await?;
 
     let request: MintTokenRequest = serde_json::from_slice(&body)
         .map_err(|_| crate::api::api_error(StatusCode::BAD_REQUEST, "invalid JSON body"))?;
@@ -255,8 +891,15 @@ pub(crate) async fn revoke_token(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, axum::Json<Value>)> {
-    let (_tenant, _pubkey) =
-        authenticate(&state.app, &headers, "DELETE", "/api/gateway/tokens", &body).await?;
+    let (_tenant, _pubkey) = authenticate(
+        &state.app,
+        &headers,
+        "DELETE",
+        "/api/gateway/tokens",
+        Some(&body),
+        true,
+    )
+    .await?;
 
     let request: RevokeTokenRequest = serde_json::from_slice(&body)
         .map_err(|_| crate::api::api_error(StatusCode::BAD_REQUEST, "invalid JSON body"))?;
@@ -274,6 +917,44 @@ pub(crate) async fn revoke_token(
         ));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Read the NIP-98 signer's prepaid account — `GET /api/gateway/account`.
+///
+/// There is intentionally no pubkey selector and no ledger data. A missing
+/// account reads as zero/depleted without creating a row; signed nanoUSD is a
+/// decimal string so JavaScript never rounds a 64-bit balance.
+pub(crate) async fn account(
+    State(state): State<GatewayApiState>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, axum::Json<Value>)> {
+    let (_tenant, pubkey) = authenticate(
+        &state.app,
+        &headers,
+        "GET",
+        "/api/gateway/account",
+        None,
+        false,
+    )
+    .await?;
+    let balance = buzz_db::credits::balance(state.app.db.pool(), &pubkey.to_bytes())
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "gateway: account balance read failed");
+            crate::api::internal_error("gateway account balance read failed")
+        })?;
+    let status = if balance > 0 { "active" } else { "depleted" };
+    let mut response = axum::Json(serde_json::json!({
+        "balance_nanousd": balance.to_string(),
+        "currency": "USD",
+        "status": status,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 /// `GET /gateway/openai/v1/models` — the enabled catalog, OpenAI-list shaped.
@@ -347,24 +1028,6 @@ pub(crate) async fn chat_completions(
     };
     let vercel_slug = catalog.vercel_slug.clone();
 
-    // Admission stub (this ticket only): refuse below the floor. The balance
-    // query happens before any upstream spend, so an empty account is 402,
-    // not a free call.
-    let balance = match buzz_db::credits::balance(state.app.db.pool(), &pubkey).await {
-        Ok(balance) => balance,
-        Err(error) => {
-            tracing::error!(%error, "gateway: balance lookup failed");
-            return crate::api::internal_error("gateway balance lookup failed").into_response();
-        }
-    };
-    if balance < ADMISSION_FLOOR_NANOUSD {
-        return crate::api::api_error(
-            StatusCode::PAYMENT_REQUIRED,
-            "insufficient balance: top up credits to continue",
-        )
-        .into_response();
-    }
-
     // Rewrite the model to the Vercel slug, then apply the one permitted
     // streaming rewrite (ask for the usage block on the terminal chunk).
     let mut outbound = request;
@@ -378,10 +1041,66 @@ pub(crate) async fn chat_completions(
     };
     let outbound_body = openai::ensure_stream_usage(&outbound_body).unwrap_or(outbound_body);
 
-    let outbound_headers = build_upstream_headers(&headers, &state.upstream.config.api_key);
+    let mut outbound_headers = build_upstream_headers(&headers, &state.upstream.config.api_key);
     let url = format!(
         "{}/v1/chat/completions",
         state.upstream.config.base_url.trim_end_matches('/')
+    );
+
+    // The per-account gate is acquired immediately before upstream spend and
+    // moved into a relay-owned response worker. A downstream disconnect drops
+    // only the output receiver; the worker drains and settles before release.
+    let permit = match state
+        .upstream
+        .admission
+        .admit(state.app.db.pool(), &pubkey)
+        .await
+    {
+        Ok(permit) => permit,
+        Err(AdmissionError::Payment {
+            balance_nanousd,
+            required_nanousd,
+        }) => return payment_required_response(balance_nanousd, required_nanousd),
+        Err(AdmissionError::Rate {
+            message,
+            retry_after_secs,
+        }) => return rate_limited_response(message, retry_after_secs),
+        Err(AdmissionError::Database(error)) => {
+            tracing::error!(%error, "gateway: admission account lookup failed");
+            return crate::api::internal_error("gateway admission failed").into_response();
+        }
+    };
+
+    // Persist the exact account/reference attribution before the provider is
+    // contacted. This is not a funds reservation; it is the durable lookup
+    // key a later provider export can use if settlement loses the process.
+    let intent_reference = format!("gateway:{}", uuid::Uuid::new_v4());
+    let intent = match buzz_db::credits::create_gateway_settlement_intent(
+        state.app.db.pool(),
+        &pubkey,
+        &intent_reference,
+        &model_id,
+    )
+    .await
+    {
+        Ok(intent) => intent,
+        Err(error) => {
+            tracing::error!(%error, pubkey = %hex::encode(&pubkey), model = %model_id, "gateway: durable settlement intent failed");
+            permit.finish(None).await;
+            return crate::api::internal_error("gateway settlement intent failed").into_response();
+        }
+    };
+    let reference_header = match HeaderValue::from_str(&intent.reference) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "gateway: settlement reference header is invalid");
+            permit.finish(None).await;
+            return crate::api::internal_error("gateway settlement intent failed").into_response();
+        }
+    };
+    outbound_headers.insert(
+        HeaderName::from_static("x-colony-settlement-reference"),
+        reference_header,
     );
 
     let sent = state
@@ -396,6 +1115,16 @@ pub(crate) async fn chat_completions(
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "gateway: upstream request failed");
+            if let Err(intent_error) = buzz_db::credits::resolve_gateway_intent_no_charge(
+                state.app.db.pool(),
+                intent.id,
+                0,
+            )
+            .await
+            {
+                tracing::warn!(%intent_error, intent_id = intent.id, "gateway: upstream failure intent could not be closed");
+            }
+            permit.finish(None).await;
             return crate::api::api_error(
                 StatusCode::BAD_GATEWAY,
                 "gateway upstream request failed",
@@ -405,30 +1134,57 @@ pub(crate) async fn chat_completions(
     };
 
     let status = response.status();
-    let upstream_headers = response.headers().clone();
-
-    // A content-encoded body is forwarded verbatim but cannot be parsed.
-    let encoded = upstream_headers
+    let mut upstream_headers = response.headers().clone();
+    let encoding = upstream_headers
         .get(CONTENT_ENCODING)
         .and_then(|value| value.to_str().ok())
-        .map(|value| !value.trim().eq_ignore_ascii_case("identity"))
-        .unwrap_or(false);
-    if encoded {
-        tracing::warn!("gateway: content-encoded response forwarded without usage capture");
-    }
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "identity");
+    let raw_stream = response
+        .bytes_stream()
+        .map(|item| item.map_err(|error| std::io::Error::other(error.to_string())));
+    let mut parseable = true;
+    let upstream = match encoding.as_deref() {
+        Some(encoding) if matches!(encoding, "gzip" | "deflate" | "br" | "zstd") => {
+            // The relay forwards decoded bytes, so clients must not try to
+            // decode them a second time. Content-Length is also stale.
+            let (decoded, supported) = decode_upstream_stream(raw_stream, encoding);
+            if supported {
+                upstream_headers.remove(CONTENT_ENCODING);
+                upstream_headers.remove(axum::http::header::CONTENT_LENGTH);
+            } else {
+                parseable = false;
+            }
+            decoded
+        }
+        Some(encoding) => {
+            tracing::error!(
+                encoding,
+                "gateway: unsupported upstream content encoding; recording reconciliation outcome"
+            );
+            parseable = false;
+            // Forward the encoded body unchanged. The durable outcome is
+            // written when the tracked worker reaches the response end.
+            Box::pin(raw_stream)
+        }
+        None => Box::pin(raw_stream),
+    };
 
     let meta = SettleMeta {
         pubkey,
         model_id,
+        intent_id: intent.id,
+        intent_reference: intent.reference,
         is_sse: is_event_stream(&upstream_headers),
-        parseable: !encoded,
+        parseable,
         http_status: status,
     };
     let tee = SettleTee::new(
-        Box::pin(response.bytes_stream()),
+        upstream,
         meta,
         state.app.db.pool().clone(),
         Arc::clone(&state.upstream.price_book),
+        permit,
     );
 
     let mut builder = Response::builder().status(status);
@@ -438,7 +1194,9 @@ pub(crate) async fn chat_completions(
         }
         builder = builder.header(name, value);
     }
-    match builder.body(Body::from_stream(tee.into_stream())) {
+    match builder.body(Body::from_stream(
+        tee.into_stream(&state.upstream.settlement_tasks),
+    )) {
         Ok(response) => response,
         Err(error) => {
             tracing::error!(%error, "gateway: could not build the proxied response");
@@ -446,6 +1204,34 @@ pub(crate) async fn chat_completions(
                 .into_response()
         }
     }
+}
+
+fn payment_required_response(balance_nanousd: i64, required_nanousd: i64) -> Response {
+    (
+        StatusCode::PAYMENT_REQUIRED,
+        axum::Json(serde_json::json!({
+            "error": "insufficient_credits",
+            "message": "insufficient balance: top up credits to continue",
+            "balance_nanousd": balance_nanousd.to_string(),
+            "required_nanousd": required_nanousd.to_string(),
+            "top_up": "buzz://settings/credits",
+        })),
+    )
+        .into_response()
+}
+
+fn rate_limited_response(message: &str, retry_after_secs: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        axum::Json(serde_json::json!({ "error": message })),
+    )
+        .into_response();
+    let retry_after = HeaderValue::from_str(&retry_after_secs.max(1).to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("1"));
+    response
+        .headers_mut()
+        .insert(axum::http::header::RETRY_AFTER, retry_after);
+    response
 }
 
 /// Authenticate a gateway call: bearer Colony token -> hash -> live row.
@@ -491,7 +1277,8 @@ async fn authenticate(
     headers: &HeaderMap,
     method: &str,
     path: &str,
-    body: &[u8],
+    body: Option<&[u8]>,
+    require_payload: bool,
 ) -> Result<(buzz_core::TenantContext, nostr::PublicKey), (StatusCode, axum::Json<Value>)> {
     let raw_host = headers
         .get(axum::http::header::HOST)
@@ -511,9 +1298,9 @@ async fn authenticate(
         headers,
         method,
         &url,
-        Some(body),
+        body,
         true,
-        true,
+        require_payload,
     )?;
     crate::api::bridge::check_nip98_replay(state, &tenant, event_id_bytes).await?;
     Ok((tenant, pubkey))
@@ -623,7 +1410,15 @@ struct SettleMeta {
     pubkey: Vec<u8>,
     /// Colony model id the user asked for (attribution + price book key).
     model_id: String,
+    /// Durable pre-spend attribution id.
+    intent_id: i64,
+    /// Stable relay reference used when the provider omits a request id and
+    /// for exact provider-export correlation.
+    intent_reference: String,
     is_sse: bool,
+    /// False only when the upstream encoding is unknown to this relay. The
+    /// settle path then records a durable reconciliation outcome instead of
+    /// silently treating a successful provider call as free.
     parseable: bool,
     http_status: StatusCode,
 }
@@ -632,32 +1427,186 @@ struct SettleMeta {
 struct SettleJob {
     pubkey: Vec<u8>,
     model_id: String,
+    intent_id: i64,
+    intent_reference: String,
     parsed: ParsedUsage,
     http_status: StatusCode,
+    parseable: bool,
+    /// Stable for this relay-owned settle job, including all retries and
+    /// in-process replays when the provider omitted an id.
+    reference: String,
 }
 
-type UpstreamStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>;
+/// A durable debit that may be added to the in-process rolling spend cache.
+struct SettledDebit {
+    ledger_id: i64,
+    reference: String,
+    cost_nanousd: i64,
+    created_at: chrono::DateTime<Utc>,
+}
+
+type UpstreamStream = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
+
+fn decode_upstream_stream(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    encoding: &str,
+) -> (UpstreamStream, bool) {
+    let reader = BufReader::new(StreamReader::new(stream));
+    match encoding {
+        "gzip" => (Box::pin(ReaderStream::new(GzipDecoder::new(reader))), true),
+        "deflate" => (Box::pin(ReaderStream::new(ZlibDecoder::new(reader))), true),
+        "br" => (
+            Box::pin(ReaderStream::new(BrotliDecoder::new(reader))),
+            true,
+        ),
+        "zstd" => (Box::pin(ReaderStream::new(ZstdDecoder::new(reader))), true),
+        _ => (Box::pin(ReaderStream::new(reader)), false),
+    }
+}
+
+fn extract_json_string_field(bytes: &[u8], field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"").into_bytes();
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+    {
+        let start = offset + relative + needle.len();
+        let mut cursor = start;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b':') {
+            offset = start;
+            continue;
+        }
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'"') {
+            offset = start;
+            continue;
+        }
+        let quote = cursor;
+        cursor += 1;
+        let mut escaped = false;
+        while let Some(&byte) = bytes.get(cursor) {
+            if byte == b'"' && !escaped {
+                return serde_json::from_slice::<String>(&bytes[quote..=cursor]).ok();
+            }
+            escaped = byte == b'\\' && !escaped;
+            cursor += 1;
+        }
+        return None;
+    }
+    None
+}
+
+fn extract_json_object(bytes: &[u8], field: &str) -> Option<Value> {
+    let needle = format!("\"{field}\"").into_bytes();
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+    {
+        let mut cursor = offset + relative + needle.len();
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b':') {
+            offset = cursor;
+            continue;
+        }
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'{') {
+            offset = cursor;
+            continue;
+        }
+        let start = cursor;
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        while let Some(&byte) = bytes.get(cursor) {
+            if in_string {
+                if byte == b'"' && !escaped {
+                    in_string = false;
+                }
+                escaped = byte == b'\\' && !escaped;
+            } else {
+                match byte {
+                    b'"' => in_string = true,
+                    b'{' => depth = depth.saturating_add(1),
+                    b'}' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return serde_json::from_slice(&bytes[start..=cursor]).ok();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            cursor += 1;
+        }
+        return None;
+    }
+    None
+}
+
+fn parse_bounded_json_response(
+    tail: &[u8],
+    request_id: Option<&str>,
+    model: Option<&str>,
+) -> ParsedUsage {
+    let mut parsed = openai::parse_json_response(tail);
+    if parsed.tokens.is_some() || parsed.observed_cost_nanousd.is_some() {
+        return parsed;
+    }
+    let Some(usage) = extract_json_object(tail, "usage") else {
+        parsed.request_id = request_id.map(str::to_owned).or(parsed.request_id);
+        parsed.model = model.map(str::to_owned).or(parsed.model);
+        return parsed;
+    };
+    let mut root = serde_json::Map::new();
+    root.insert("usage".to_owned(), usage);
+    if let Some(request_id) = request_id {
+        root.insert("id".to_owned(), Value::String(request_id.to_owned()));
+    }
+    if let Some(model) = model {
+        root.insert("model".to_owned(), Value::String(model.to_owned()));
+    }
+    parsed = openai::parse_json_response(&Value::Object(root).to_string().into_bytes());
+    parsed.request_id = request_id.map(str::to_owned).or(parsed.request_id);
+    parsed.model = model.map(str::to_owned).or(parsed.model);
+    parsed
+}
 
 /// Forwards the upstream body chunk by chunk while keeping a bounded copy
 /// for usage parsing. The forwarded bytes are never touched.
 ///
 /// The last chunk is held back one position: when the upstream stream ends,
 /// the settle runs inline (awaited, with retries) and only then is the held
-/// terminal chunk released to the client. `Drop` is the safety net for a
-/// client that hangs up mid-stream — it settles best-effort from whatever
-/// the wire said, because the call still happened and still cost money.
+/// terminal chunk released to the client. The tee is always driven by a
+/// relay-owned tracked task, so dropping the downstream body only drops the
+/// channel receiver; the task continues draining and settling the provider
+/// response.
 struct SettleTee {
     upstream: UpstreamStream,
+    /// Bounded tail used for terminal usage extraction. Identity fields are
+    /// captured incrementally so a large prefix never makes a successful call
+    /// unbillable.
     buffer: Vec<u8>,
-    truncated: bool,
-    finished: bool,
+    captured_request_id: Option<String>,
+    captured_model: Option<String>,
     /// The chunk held back so it can be released only after the settle.
     pending: Option<Bytes>,
-    /// Deferred upstream error, delivered after the held chunk.
-    error_pending: Option<std::io::Error>,
     meta: Option<SettleMeta>,
     pool: sqlx::PgPool,
     price_book: Arc<PriceBook>,
+    permit: Option<AdmissionPermit>,
 }
 
 impl SettleTee {
@@ -666,40 +1615,33 @@ impl SettleTee {
         meta: SettleMeta,
         pool: sqlx::PgPool,
         price_book: Arc<PriceBook>,
+        permit: AdmissionPermit,
     ) -> Self {
         Self {
             upstream,
             buffer: Vec::new(),
-            truncated: false,
-            finished: false,
+            captured_request_id: None,
+            captured_model: None,
             pending: None,
-            error_pending: None,
             meta: Some(meta),
             pool,
             price_book,
+            permit: Some(permit),
         }
     }
 
     fn accumulate(&mut self, chunk: &Bytes) {
-        if self.truncated {
-            return;
+        if self.captured_request_id.is_none() {
+            self.captured_request_id = extract_json_string_field(chunk, "id");
         }
-        if self.buffer.len().saturating_add(chunk.len()) > MAX_TEE_BYTES {
-            let (pubkey, model_id) = match self.meta.as_ref() {
-                Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
-                None => (String::from("<unknown>"), "<unknown>"),
-            };
-            tracing::warn!(
-                pubkey = %pubkey,
-                model = %model_id,
-                cap_bytes = MAX_TEE_BYTES,
-                "gateway: response exceeded the parse cap, still forwarding but no usage capture"
-            );
-            self.truncated = true;
-            self.buffer = Vec::new();
-            return;
+        if self.captured_model.is_none() {
+            self.captured_model = extract_json_string_field(chunk, "model");
         }
         self.buffer.extend_from_slice(chunk);
+        if self.buffer.len() > MAX_TEE_PARSE_TAIL_BYTES {
+            let excess = self.buffer.len() - MAX_TEE_PARSE_TAIL_BYTES;
+            self.buffer.drain(..excess);
+        }
     }
 
     /// Build the settle job from the metadata and whatever the wire said.
@@ -707,142 +1649,202 @@ impl SettleTee {
     /// forwarded request no matter how many end paths fire.
     fn take_job(&mut self) -> Option<SettleJob> {
         let meta = self.meta.take()?;
-        let parsed = if self.truncated || !meta.parseable || !meta.http_status.is_success() {
+        let parsed = if !meta.parseable || !meta.http_status.is_success() {
             ParsedUsage::default()
         } else if meta.is_sse {
             openai::parse_sse_response(&self.buffer)
         } else {
-            openai::parse_json_response(&self.buffer)
+            parse_bounded_json_response(
+                &self.buffer,
+                self.captured_request_id.as_deref(),
+                self.captured_model.as_deref(),
+            )
         };
+        let mut parsed = parsed;
+        if parsed.request_id.is_none() {
+            parsed.request_id = self.captured_request_id.clone();
+        }
+        if parsed.model.is_none() {
+            parsed.model = self.captured_model.clone();
+        }
         self.buffer = Vec::new();
+        let reference = parsed
+            .request_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| meta.intent_reference.clone());
         Some(SettleJob {
             pubkey: meta.pubkey,
             model_id: meta.model_id,
+            intent_id: meta.intent_id,
+            intent_reference: meta.intent_reference,
             parsed,
             http_status: meta.http_status,
+            parseable: meta.parseable,
+            reference,
         })
     }
 
     /// Settle inline and awaited: the terminal chunk is released only after
-    /// the debit commits. A failure after the bounded retries still releases
-    /// the chunk, but is logged loudly with the call's identifiers —
-    /// reconciliation is the only honest backstop left.
+    /// the debit or reconciliation outcome commits. A failure after the
+    /// bounded retries still releases the chunk while leaving the durable
+    /// settlement intent pending for the exact export resolver.
     async fn settle_inline(&mut self) {
-        let Some(job) = self.take_job() else {
-            return;
-        };
-        if let Err(error) = settle_with_retry(&self.pool, &self.price_book, &job).await {
+        let job = self.take_job();
+        match self.permit.take() {
+            Some(permit) => {
+                permit
+                    .finish_with(settle_job(&self.pool, &self.price_book, job))
+                    .await;
+            }
+            None => {
+                settle_job(&self.pool, &self.price_book, job).await;
+            }
+        }
+    }
+
+    fn into_stream(
+        self,
+        tracker: &TaskTracker,
+    ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tracker.spawn(async move { self.drive(sender).await });
+        futures_util::stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|item| (item, receiver))
+        })
+    }
+
+    async fn drive(mut self, sender: tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>) {
+        let mut sender = Some(sender);
+        loop {
+            match self.upstream.next().await {
+                Some(Ok(chunk)) => {
+                    self.accumulate(&chunk);
+                    // Hold the previous chunk; the one in hand becomes the
+                    // new hold. This makes the terminal chunk releasable only
+                    // after the settle commits.
+                    if let Some(previous) = self.pending.replace(chunk) {
+                        if let Some(current) = sender.as_ref() {
+                            if current.send(Ok(previous)).await.is_err() {
+                                // The client dropped the body. Keep the
+                                // relay-owned worker alive and drain upstream;
+                                // only the output receiver is gone.
+                                sender = None;
+                            }
+                        }
+                    }
+                }
+                Some(Err(error)) => {
+                    let (pubkey, model_id) = match self.meta.as_ref() {
+                        Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
+                        None => (String::from("<unknown>"), "<unknown>"),
+                    };
+                    tracing::warn!(
+                        %error,
+                        pubkey = %pubkey,
+                        model = %model_id,
+                        "gateway: upstream body ended early"
+                    );
+                    self.settle_inline().await;
+                    if let Some(current) = sender.as_ref() {
+                        if let Some(chunk) = self.pending.take() {
+                            if current.send(Ok(chunk)).await.is_err() {
+                                sender = None;
+                            }
+                        }
+                        if let Some(current) = sender.as_ref() {
+                            let _ = current
+                                .send(Err(std::io::Error::other(error.to_string())))
+                                .await;
+                        }
+                    }
+                    break;
+                }
+                None => {
+                    // Natural end: the observed cost is only knowable here,
+                    // so the debit commits before the held terminal chunk is
+                    // released. If the client disconnected, this still runs.
+                    self.settle_inline().await;
+                    if let Some(current) = sender.as_ref() {
+                        if let Some(terminal) = self.pending.take() {
+                            let _ = current.send(Ok(terminal)).await;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn settle_job(
+    pool: &sqlx::PgPool,
+    price_book: &PriceBook,
+    job: Option<SettleJob>,
+) -> Option<SettledDebit> {
+    let job = job?;
+    if !job.http_status.is_success() {
+        if let Err(error) = buzz_db::credits::resolve_gateway_intent_no_charge(
+            pool,
+            job.intent_id,
+            i16::try_from(job.http_status.as_u16()).unwrap_or(i16::MAX),
+        )
+        .await
+        {
+            tracing::warn!(%error, intent_id = job.intent_id, "gateway: non-success intent could not be closed");
+        }
+        return None;
+    }
+    match settle_with_retry(pool, price_book, &job).await {
+        Ok(Some(settled)) => Some(settled),
+        Ok(None) => {
+            record_reconciliation_outcome(
+                pool,
+                &job,
+                if job.parseable {
+                    "missing_or_unusable_usage"
+                } else {
+                    "unsupported_content_encoding"
+                },
+            )
+            .await;
+            None
+        }
+        Err(error) => {
             tracing::error!(
                 %error,
                 pubkey = %hex::encode(&job.pubkey),
                 model = %job.model_id,
                 request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                "gateway: settle failed after retries — this call must be found by reconciliation"
+                "gateway: settle failed after retries — durable attribution remains pending"
             );
+            record_reconciliation_outcome(pool, &job, "settle_failed_after_retries").await;
+            None
         }
-    }
-
-    /// Best-effort settle for the `Drop` path (client hung up mid-stream).
-    /// Cannot await inside `Drop`, so the settle is spawned with a bounded
-    /// retry; if no runtime is available, the call is logged for
-    /// reconciliation instead.
-    fn settle_best_effort(&mut self) {
-        let Some(job) = self.take_job() else {
-            return;
-        };
-        let pool = self.pool.clone();
-        let price_book = Arc::clone(&self.price_book);
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                handle.spawn(async move {
-                    if let Err(error) = settle_with_retry(&pool, &price_book, &job).await {
-                        tracing::error!(
-                            %error,
-                            pubkey = %hex::encode(&job.pubkey),
-                            model = %job.model_id,
-                            request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                            "gateway: settle failed after retries — this call must be found by reconciliation"
-                        );
-                    }
-                });
-            }
-            Err(_) => {
-                tracing::error!(
-                    pubkey = %hex::encode(&job.pubkey),
-                    model = %job.model_id,
-                    request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                    "gateway: dropped a settle outside a runtime — this call must be found by reconciliation"
-                );
-            }
-        }
-    }
-
-    fn into_stream(self) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
-        futures_util::stream::unfold(self, |mut tee| async move {
-            loop {
-                if tee.finished {
-                    return None;
-                }
-                if let Some(error) = tee.error_pending.take() {
-                    tee.finished = true;
-                    return Some((Err(error), tee));
-                }
-                match tee.upstream.next().await {
-                    Some(Ok(chunk)) => {
-                        tee.accumulate(&chunk);
-                        // Hold the previous chunk; the one in hand becomes
-                        // the new hold. This is what makes the terminal
-                        // chunk releasable only after the settle commits.
-                        if let Some(previous) = tee.pending.replace(chunk) {
-                            return Some((Ok(previous), tee));
-                        }
-                    }
-                    Some(Err(error)) => {
-                        let (pubkey, model_id) = match tee.meta.as_ref() {
-                            Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
-                            None => (String::from("<unknown>"), "<unknown>"),
-                        };
-                        tracing::warn!(
-                            %error,
-                            pubkey = %pubkey,
-                            model = %model_id,
-                            "gateway: upstream body ended early"
-                        );
-                        // Settle whatever the wire said before the client
-                        // sees the end of the stream; for a mid-stream kill
-                        // the terminal usage never arrived, so this is
-                        // normally a no-op.
-                        tee.settle_inline().await;
-                        if let Some(chunk) = tee.pending.take() {
-                            tee.error_pending = Some(std::io::Error::other(error.to_string()));
-                            return Some((Ok(chunk), tee));
-                        }
-                        tee.finished = true;
-                        return Some((Err(std::io::Error::other(error.to_string())), tee));
-                    }
-                    None => {
-                        // Natural end: the observed cost is only knowable
-                        // here, so the debit commits before the held
-                        // terminal chunk is released.
-                        tee.settle_inline().await;
-                        if let Some(terminal) = tee.pending.take() {
-                            tee.finished = true;
-                            return Some((Ok(terminal), tee));
-                        }
-                        return None;
-                    }
-                }
-            }
-        })
     }
 }
 
-impl Drop for SettleTee {
-    /// A client that hangs up mid-stream drops the body without the stream
-    /// ever completing. The call still happened and still costs money, so it
-    /// is settled best-effort with whatever the wire said.
-    fn drop(&mut self) {
-        self.settle_best_effort();
+async fn record_reconciliation_outcome(pool: &sqlx::PgPool, job: &SettleJob, reason: &str) {
+    if let Err(error) = buzz_db::credits::mark_gateway_intent_reconciliation(
+        pool,
+        job.intent_id,
+        reason,
+        job.parsed.request_id.as_deref(),
+        job.parsed
+            .observed_cost_nanousd
+            .and_then(|cost| i64::try_from(cost).ok()),
+        i16::try_from(job.http_status.as_u16()).unwrap_or(i16::MAX),
+    )
+    .await
+    {
+        tracing::error!(
+            %error,
+            pubkey = %hex::encode(&job.pubkey),
+            model = %job.model_id,
+            reference = %job.intent_reference,
+            "gateway: durable settlement attribution could not be advanced"
+        );
     }
 }
 
@@ -855,11 +1857,11 @@ async fn settle_with_retry(
     pool: &sqlx::PgPool,
     price_book: &PriceBook,
     job: &SettleJob,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<SettledDebit>> {
     let mut last_error = None;
     for attempt in 0..SETTLE_MAX_ATTEMPTS {
         match settle_one(pool, price_book, job).await {
-            Ok(()) => return Ok(()),
+            Ok(settled) => return Ok(settled),
             Err(error) => {
                 tracing::warn!(
                     %error,
@@ -888,47 +1890,67 @@ async fn settle_with_retry(
 /// logged loudly with the call's identifiers.
 ///
 /// Exactly-once comes from the idempotency reference: the upstream response
-/// id when the provider supplies one, and a server-generated ref when it
-/// does not. A retried settle (inline retry after a transient DB error, or
-/// a replayed settle) replays the same ref and the ledger's
-/// `UNIQUE (pubkey, ref)` makes it a no-op. A server-generated ref cannot
-/// dedupe an upstream retry the way the upstream id can, but billing must
-/// not hinge on a field the gateway provider controls.
+/// id when the provider supplies one, and a server-generated ref when it does
+/// not. The generated ref is created once when this relay-owned settle job is
+/// built, then reused for every retry/replay of that job. The pre-spend
+/// settlement intent remains the durable account/reference anchor if a ledger
+/// write cannot be attempted before a process failure.
 async fn settle_one(
     pool: &sqlx::PgPool,
     price_book: &PriceBook,
     job: &SettleJob,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<SettledDebit>> {
     if !job.http_status.is_success() {
         // A failed call is not billed by the provider; nothing to settle.
-        return Ok(());
+        return Ok(None);
     }
 
-    let reference = match job.parsed.request_id.as_deref().filter(|id| !id.is_empty()) {
-        Some(request_id) => std::borrow::Cow::Borrowed(request_id),
-        None => {
-            let generated = format!("gateway:{}", uuid::Uuid::new_v4());
-            tracing::warn!(
-                pubkey = %hex::encode(&job.pubkey),
-                model = %job.model_id,
-                reference = %generated,
-                "gateway: successful call carried no upstream request id — settling under a server-generated ref"
-            );
-            std::borrow::Cow::Owned(generated)
-        }
-    };
+    // Advance the pre-spend attribution before touching the ledger. If this
+    // write is unavailable, the intent itself still survives and the exact
+    // provider export resolver can apply the later correction.
+    let observed_cost_i64 = job
+        .parsed
+        .observed_cost_nanousd
+        .map(|cost| {
+            i64::try_from(cost).map_err(|_| anyhow::anyhow!("observed cost exceeds BIGINT"))
+        })
+        .transpose()?;
+    buzz_db::credits::mark_gateway_provider_completed(
+        pool,
+        job.intent_id,
+        job.parsed.request_id.as_deref(),
+        observed_cost_i64,
+        i16::try_from(job.http_status.as_u16()).unwrap_or(i16::MAX),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("mark gateway provider completion: {error}"))?;
+
+    let reference = &job.reference;
+    if job.parsed.request_id.is_none() {
+        tracing::warn!(
+            pubkey = %hex::encode(&job.pubkey),
+            model = %job.model_id,
+            reference = %reference,
+            "gateway: successful call carried no upstream request id — settling under a server-generated ref"
+        );
+    }
 
     match job.parsed.observed_cost_nanousd {
         Some(cost) => {
-            buzz_db::credits::debit_observed(
+            let result = buzz_db::credits::debit_observed_applied(
                 pool,
                 &job.pubkey,
                 cost,
-                &reference,
+                reference,
                 Some(&job.model_id),
                 job.parsed.request_id.as_deref(),
             )
             .await?;
+            if let Err(error) =
+                buzz_db::credits::mark_gateway_intent_debited(pool, job.intent_id).await
+            {
+                tracing::error!(%error, intent_id = job.intent_id, "gateway: debit committed but intent state update failed; resolver can correlate the ledger row");
+            }
             tracing::info!(
                 cost_nanousd = cost,
                 pubkey = %hex::encode(&job.pubkey),
@@ -937,6 +1959,14 @@ async fn settle_one(
                 reference = %reference,
                 "gateway: settled observed cost"
             );
+            return Ok(Some(SettledDebit {
+                ledger_id: result.entry.id,
+                reference: result.entry.reference,
+                cost_nanousd: result.entry.observed_cost.ok_or_else(|| {
+                    anyhow::anyhow!("observed debit returned without observed_cost")
+                })?,
+                created_at: result.entry.created_at,
+            }));
         }
         None => match job.parsed.tokens {
             Some(tokens) => {
@@ -945,15 +1975,20 @@ async fn settle_one(
                     Some(cost) => {
                         let cost = u64::try_from(cost)
                             .map_err(|_| anyhow::anyhow!("estimated cost {cost} exceeds u64"))?;
-                        buzz_db::credits::debit_estimated(
+                        let result = buzz_db::credits::debit_estimated_applied(
                             pool,
                             &job.pubkey,
                             cost,
-                            &reference,
+                            reference,
                             Some(&job.model_id),
                             job.parsed.request_id.as_deref(),
                         )
                         .await?;
+                        if let Err(error) =
+                            buzz_db::credits::mark_gateway_intent_debited(pool, job.intent_id).await
+                        {
+                            tracing::error!(%error, intent_id = job.intent_id, "gateway: estimated debit committed but intent state update failed; resolver can correlate the ledger row");
+                        }
                         tracing::warn!(
                             cost_nanousd = cost,
                             pubkey = %hex::encode(&job.pubkey),
@@ -962,6 +1997,14 @@ async fn settle_one(
                             reference = %reference,
                             "gateway: provider stated no cost — settled price-book estimate"
                         );
+                        return Ok(Some(SettledDebit {
+                            ledger_id: result.entry.id,
+                            reference: result.entry.reference,
+                            cost_nanousd: result.entry.observed_cost.ok_or_else(|| {
+                                anyhow::anyhow!("estimated debit returned without observed_cost")
+                            })?,
+                            created_at: result.entry.created_at,
+                        }));
                     }
                     None => {
                         tracing::error!(
@@ -969,7 +2012,7 @@ async fn settle_one(
                             model = %job.model_id,
                             request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
                             "gateway: provider stated no cost and the model is unpriced — \
-                             no settle recorded, this call must be found by reconciliation"
+                             the tracked settle will record a reconciliation outcome"
                         );
                     }
                 }
@@ -979,12 +2022,12 @@ async fn settle_one(
                     pubkey = %hex::encode(&job.pubkey),
                     model = %job.model_id,
                     request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                    "gateway: no usage in the response — nothing to settle"
+                    "gateway: no usage in the response — the tracked settle will record a reconciliation outcome"
                 );
             }
         },
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]

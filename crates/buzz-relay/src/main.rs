@@ -487,7 +487,8 @@ async fn main() -> anyhow::Result<()> {
     // configured a Vercel AI Gateway key. An unset or blank key leaves the
     // OnceLock empty and the gateway routes answer 404.
     if let Some(gateway_config) = buzz_relay::gateway::config_from_env()? {
-        let gateway = buzz_relay::gateway::GatewayState::new(gateway_config)
+        let gateway = buzz_relay::gateway::GatewayState::new(gateway_config, app_state.db.pool())
+            .await
             .map_err(|e| anyhow::anyhow!("failed to initialize the credits gateway: {e}"))?;
         app_state
             .gateway
@@ -1319,6 +1320,13 @@ async fn main() -> anyhow::Result<()> {
     serve(router, health_router, Arc::clone(&state)).await?;
     discovery_shutdown.cancel();
     state.community_revalidator_cancel.cancel();
+
+    // The gateway owns relay-side settlement workers. Close admission and
+    // wait for every tracked drain before tearing down the database/telemetry
+    // workers so a graceful relay stop cannot strand provider attribution.
+    if let Some(gateway) = state.gateway.get() {
+        gateway.shutdown().await;
+    }
 
     // Signal the audit worker to stop accepting, flush buffered entries, and
     // exit. Uses a CancellationToken so it works regardless of how many
