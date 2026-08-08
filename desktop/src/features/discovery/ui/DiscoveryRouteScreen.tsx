@@ -232,7 +232,13 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
       className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background text-foreground"
       style={DISCOVERY_LIGHT_SURFACE_STYLE}
     >
-      <DiscoveryTopTabs surface={discoverySurface(search)} />
+      <DiscoveryTopTabs
+        showPipeline={
+          state.entitlement?.experience === "live" ||
+          (state.readModel?.leads?.total ?? 0) > 0
+        }
+        surface={discoverySurface(search)}
+      />
       <DiscoveryWorkspace
         dataSource={dataSource}
         entitlement={state.entitlement}

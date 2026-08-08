@@ -98,13 +98,15 @@ export function discoverySurface(
   return "industries";
 }
 
-/** The two top-level Discovery tabs: Leads (default) and Discover. */
-export type DiscoveryTopTab = "leads" | "discover";
+/** The top-level Discovery tabs: Leads (default), Pipeline, and Discover. */
+export type DiscoveryTopTab = "leads" | "pipeline" | "discover";
 
 export function discoveryTopTab(
   surface: NonNullable<DiscoverySearch["surface"]>,
 ): DiscoveryTopTab {
-  return surface === "leads" ? "leads" : "discover";
+  if (surface === "leads") return "leads";
+  if (surface === "pipeline") return "pipeline";
+  return "discover";
 }
 
 /** Stable descending sort by lead count, then name, for taxonomy grids. */

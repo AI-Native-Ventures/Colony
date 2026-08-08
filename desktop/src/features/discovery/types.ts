@@ -134,6 +134,16 @@ export type LeadFunnelStatus =
   | "disqualified"
   | "client_active";
 
+/** The Pipeline columns in lifecycle order: entry to terminal to client. */
+export const PIPELINE_COLUMN_STATUSES: readonly LeadFunnelStatus[] = [
+  "candidate",
+  "accepted",
+  "qualified",
+  "dormant",
+  "disqualified",
+  "client_active",
+];
+
 /** One retained Lead plus its editable profile. */
 export type LeadDetail = Lead & {
   notes?: string;
@@ -222,6 +232,13 @@ export type LeadPage = {
   page: number;
   pageSize: number;
   hasNextPage: boolean;
+};
+
+/** One Pipeline column: a bounded, status-filtered page plus the relay total. */
+export type PipelineColumn = {
+  status: LeadFunnelStatus;
+  leads: Lead[];
+  total: number;
 };
 
 export type LeadCountRow = {

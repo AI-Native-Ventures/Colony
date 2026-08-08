@@ -2,6 +2,7 @@ import type {
   DiscoveryEntitlement,
   DiscoveryEntitlementState,
 } from "../entitlement";
+import { canMoveLead, relationshipLabel } from "../lib/pipelineTransitions";
 import {
   resolveSourceConfig,
   type CampaignSourceConfig,
@@ -18,6 +19,7 @@ import type {
   LeadDetail,
   LeadCounts,
   LeadPage,
+  PipelineColumn,
   LeadScope,
   LeadUpdateInput,
   OutreachDraft,
@@ -28,6 +30,7 @@ import type {
   Vertical,
   VerticalDetail,
 } from "../types";
+import { PIPELINE_COLUMN_STATUSES } from "../types";
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import {
   CAMPAIGN_FIXTURE,
@@ -305,6 +308,14 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     }
     await this.getLead(leadId);
     const current = this.leadProfiles.get(leadId) ?? {};
+    const base = this.getGlobalLeads().find((lead) => lead.id === leadId);
+    const from = current.status ?? base?.status ?? "candidate";
+    const to = input.status ?? from;
+    if (!canMoveLead(from, to)) {
+      throw new Error(
+        `invalid: Lead status transition ${relationshipLabel(from)} -> ${relationshipLabel(to)} is not allowed`,
+      );
+    }
     // `update_lead` is a full-profile upsert on the relay: every editable
     // column is overwritten from the request, and a field the caller omits
     // binds NULL and wipes the stored value. Only `status` falls back to the
@@ -313,7 +324,8 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     // explicitly. A caller that sends a partial profile must lose data here
     // too, otherwise the demo path and Playwright are blind to the one hazard
     // this whole edit flow is built around.
-    const next: Partial<LeadDetail> = {
+    this.leadProfiles.set(leadId, {
+      status: to,
       website: input.website,
       email: input.email,
       phone: input.phone,
@@ -324,11 +336,22 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       score: input.score,
       notes: input.notes,
       updatedAt: new Date().toISOString(),
-    };
-    const status = input.status ?? current.status;
-    if (status) next.status = status;
-    this.leadProfiles.set(leadId, next);
+    });
     return this.getLead(leadId);
+  }
+
+  async getPipelineColumns(): Promise<PipelineColumn[]> {
+    return Promise.all(
+      PIPELINE_COLUMN_STATUSES.map(async (status) => {
+        const page = await this.getLeads({
+          scope: "global",
+          status,
+          page: 1,
+          pageSize: 100,
+        });
+        return { status, total: page.total, leads: page.leads };
+      }),
+    );
   }
 
   async getVerticals(industryId: string): Promise<Vertical[]> {
@@ -420,7 +443,11 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       scopeKind === "campaign"
         ? clone(this.campaignLeads.get(scope.campaignId ?? "") ?? [])
         : this.getGlobalLeads();
-    let leads = sourceLeads.filter((lead) => {
+    let leads = sourceLeads.map((lead) => {
+      const profile = this.leadProfiles.get(lead.id);
+      return profile ? { ...lead, ...profile } : lead;
+    });
+    leads = leads.filter((lead) => {
       if (scopeKind === "campaign" && scope.campaignId) {
         return lead.campaignIds.includes(scope.campaignId);
       }

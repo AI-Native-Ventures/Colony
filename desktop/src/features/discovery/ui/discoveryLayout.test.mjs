@@ -25,6 +25,11 @@ test("leads surface maps to the Leads top tab and everything else to Discover", 
   assert.equal(discoveryTopTab("verticals"), "discover");
 });
 
+test("the pipeline surface maps to its own top tab, not Discover", () => {
+  assert.equal(discoveryTopTab("pipeline"), "pipeline");
+  assert.equal(discoverySurface({ surface: "pipeline" }), "pipeline");
+});
+
 test("taxonomy grids sort by lead count descending, then name", () => {
   const sorted = sortByLeadCountDesc([
     { leadCount: 2, name: "Zeta" },

@@ -7,6 +7,13 @@ test("a bare discovery route defaults to the Leads surface", () => {
   assert.equal(validateDiscoverySearch({}).surface, "leads");
 });
 
+test("the pipeline surface is validated at the router boundary", () => {
+  assert.equal(
+    validateDiscoverySearch({ surface: "pipeline" }).surface,
+    "pipeline",
+  );
+});
+
 test("an industry deep link keeps an inferred surface", () => {
   const search = validateDiscoverySearch({ industryId: "healthcare" });
   assert.equal(search.surface, undefined);

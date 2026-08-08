@@ -35,6 +35,7 @@ function harness(
   let runActions = 0;
   let run = null;
   let leadStatus = null;
+  const publishedById = new Map();
   const publishedEvents = [];
   const workerId = "1f507956-6f08-4e6a-bf38-3a7011565047";
   let lead = {
@@ -82,6 +83,7 @@ function harness(
         ),
       publish: async (event) => {
         published = event;
+        publishedById.set(event.id, event);
         publishedEvents.push(event);
         if (event.kind === 40017) {
           runActions += 1;
@@ -128,18 +130,23 @@ function harness(
         };
       },
       fetchFirstEvent: async (filter) => {
-        assert.ok(published, "an action must be published before its receipt");
-        assert.deepEqual(filter["#e"], [published.id]);
-        assert.deepEqual(filter["#p"], [published.pubkey]);
-        if (published.kind === 40017) {
-          const action = JSON.parse(published.content);
+        const actionEvent =
+          publishedById.get(filter["#e"]?.[0] ?? "") ?? published;
+        assert.ok(
+          actionEvent,
+          "an action must be published before its receipt",
+        );
+        assert.deepEqual(filter["#e"], [actionEvent.id]);
+        assert.deepEqual(filter["#p"], [actionEvent.pubkey]);
+        if (actionEvent.kind === 40017) {
+          const action = JSON.parse(actionEvent.content);
           const receipt = finalizeEvent(
             {
               kind: 40018,
               created_at: 1_785_665_601,
               tags: [
-                ["p", published.pubkey],
-                ["e", published.id, "", "discovery-action"],
+                ["p", actionEvent.pubkey],
+                ["e", actionEvent.id, "", "discovery-action"],
                 ["run", run.run_id],
                 [
                   "discovery-receipt",
@@ -217,9 +224,9 @@ function harness(
           });
           return receipt;
         }
-        const action = JSON.parse(published.content);
+        const action = JSON.parse(actionEvent.content);
         const request = action.request;
-        const tuple = published.tags.find(
+        const tuple = actionEvent.tags.find(
           (tag) => tag[0] === "discovery-workspace-action",
         );
         const operation = tuple[2];
@@ -321,6 +328,23 @@ function harness(
               updatedAt: NOW,
             },
           };
+        } else if (operation === "list_leads") {
+          const requestStatus = request.payload.request.status ?? null;
+          const currentStatus = leadStatus ?? "candidate";
+          const rows =
+            campaign?.lead_count &&
+            (requestStatus === null || requestStatus === currentStatus)
+              ? [lead]
+              : [];
+          result = {
+            result: "leads",
+            page: {
+              leads: rows,
+              total: rows.length,
+              offset: 0,
+              limit: 100,
+            },
+          };
         } else {
           result = {
             result: "leads",
@@ -337,8 +361,8 @@ function harness(
             kind: 40022,
             created_at: 1_785_665_601,
             tags: [
-              ["p", published.pubkey],
-              ["e", published.id, "", "discovery-workspace-action"],
+              ["p", actionEvent.pubkey],
+              ["e", actionEvent.id, "", "discovery-workspace-action"],
               [
                 "discovery-workspace-receipt",
                 "2",
@@ -743,6 +767,99 @@ test("getLeads forwards the funnel status to the relay payload", async () => {
     "dormant",
     "the selected status must travel in the relay request, not a client-side filter",
   );
+});
+
+test("pipeline columns come from six bounded status-filtered list_leads calls", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const campaign = await source.createCampaign({
+    name: "Pipeline bounds",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+  });
+  const events = [];
+  for await (const event of source.startDiscovery(campaign.id)) {
+    events.push(event);
+  }
+
+  const columns = await source.getPipelineColumns();
+  const listEvents = live.publishedEvents.filter(
+    (event) =>
+      event.kind === 40021 &&
+      JSON.parse(event.content).request.payload.operation === "list_leads",
+  );
+  assert.equal(
+    listEvents.length,
+    6,
+    "one list_leads workspace action per column",
+  );
+  const requests = listEvents.map((event) => {
+    const payload = JSON.parse(event.content).request.payload.request;
+    return {
+      status: payload.status,
+      offset: payload.offset,
+      limit: payload.limit,
+      campaign_id: payload.campaign_id,
+    };
+  });
+  assert.deepEqual(
+    requests.map((request) => request.status),
+    [
+      "candidate",
+      "accepted",
+      "qualified",
+      "dormant",
+      "disqualified",
+      "client_active",
+    ],
+  );
+  for (const request of requests) {
+    assert.equal(request.offset, 0, "each column is one bounded page");
+    assert.equal(request.limit, 100, "each column is capped at one page");
+    assert.equal(
+      request.campaign_id,
+      null,
+      "the pipeline is global, never campaign-scoped",
+    );
+  }
+  assert.deepEqual(
+    columns.map((column) => [column.status, column.total]),
+    [
+      ["candidate", 1],
+      ["accepted", 0],
+      ["qualified", 0],
+      ["dormant", 0],
+      ["disqualified", 0],
+      ["client_active", 0],
+    ],
+    "column totals come from the relay response, never the loaded array",
+  );
+});
+
+test("pipeline totals follow the relay after a status move", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const campaign = await source.createCampaign({
+    name: "Pipeline move",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+  });
+  const events = [];
+  for await (const event of source.startDiscovery(campaign.id)) {
+    events.push(event);
+  }
+
+  const lead = await source.getLead("b53e6fb2-2a91-45bc-a382-60feb217767a");
+  await source.updateLead(lead.id, { status: "accepted" });
+  const columns = await source.getPipelineColumns();
+  const byStatus = new Map(columns.map((column) => [column.status, column]));
+  assert.equal(byStatus.get("candidate").total, 0);
+  assert.equal(byStatus.get("accepted").total, 1);
+  assert.equal(byStatus.get("accepted").leads[0].id, lead.id);
 });
 
 test("a released V1 worker receipt still wakes the V2 desktop run loop", async () => {
