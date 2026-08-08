@@ -129,24 +129,3 @@ export function buildLeadUpdateInput(draft: LeadEditDraft): LeadUpdateInput {
     notes: draft.notes === "" ? undefined : draft.notes,
   };
 }
-
-/** The editable fields the drawer form owns, in display order. */
-export function editableLeadFields(
-  lead: LeadDetail,
-): Array<{ key: keyof LeadEditDraft; label: string }> {
-  const fields: Array<{ key: keyof LeadEditDraft; label: string }> = [
-    { key: "website", label: "Website" },
-    { key: "email", label: "Email" },
-    { key: "phone", label: "Phone" },
-    { key: "linkedinUrl", label: "LinkedIn URL" },
-  ];
-  const isPerson = lead.entityType === "person" || Boolean(lead.personName);
-  if (isPerson) {
-    fields.push({ key: "contactName", label: "Contact name" });
-    fields.push({ key: "contactTitle", label: "Contact title" });
-  }
-  fields.push({ key: "owner", label: "Owner" });
-  fields.push({ key: "score", label: "Fit score" });
-  fields.push({ key: "notes", label: "Notes" });
-  return fields;
-}

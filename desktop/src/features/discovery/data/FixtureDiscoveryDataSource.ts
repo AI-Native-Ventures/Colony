@@ -305,11 +305,29 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     }
     await this.getLead(leadId);
     const current = this.leadProfiles.get(leadId) ?? {};
-    this.leadProfiles.set(leadId, {
-      ...current,
-      ...input,
+    // `update_lead` is a full-profile upsert on the relay: every editable
+    // column is overwritten from the request, and a field the caller omits
+    // binds NULL and wipes the stored value. Only `status` falls back to the
+    // previous value. Spreading `input` over `current` would preserve omitted
+    // fields and make demo disagree with live, so each field is written
+    // explicitly. A caller that sends a partial profile must lose data here
+    // too, otherwise the demo path and Playwright are blind to the one hazard
+    // this whole edit flow is built around.
+    const next: Partial<LeadDetail> = {
+      website: input.website,
+      email: input.email,
+      phone: input.phone,
+      linkedinUrl: input.linkedinUrl,
+      contactName: input.contactName,
+      contactTitle: input.contactTitle,
+      owner: input.owner,
+      score: input.score,
+      notes: input.notes,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    const status = input.status ?? current.status;
+    if (status) next.status = status;
+    this.leadProfiles.set(leadId, next);
     return this.getLead(leadId);
   }
 
