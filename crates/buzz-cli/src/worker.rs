@@ -22,7 +22,9 @@ use chrono::{SecondsFormat, Utc};
 use nostr::{EventBuilder, Kind, Tag};
 use tokio::time::sleep;
 
-use crate::client::{extract_tag_value, BuzzClient};
+use crate::client::{
+    extract_tag_value, head_is_newer, head_rank, report_malformed_head, BuzzClient,
+};
 use crate::error::CliError;
 use crate::llm::call_llm;
 use crate::seat::SeatConfig;
@@ -247,32 +249,6 @@ struct OpenJob {
     instruction: String,
 }
 
-/// NIP-16 rank of a job head: `(created_at, id)`, or `None` when either
-/// field is missing or the wrong JSON type. A malformed head must not be
-/// laundered into epoch zero: `None` means "skip it", not "1970".
-fn head_rank(event: &serde_json::Value) -> Option<(i64, &str)> {
-    let created_at = event["created_at"].as_i64()?;
-    let id = event["id"].as_str()?;
-    Some((created_at, id))
-}
-
-/// Is `candidate` the newer of two job heads?
-///
-/// NIP-16: the higher `created_at` wins; on a tie, the lexicographically
-/// lower `id` wins. This is the relay's own per-`d_tag` head selection
-/// (`crates/buzz-db/src/event.rs:1946`), so the worker picks the same
-/// revision the relay would. Returns `false` when either head is malformed;
-/// callers skip malformed heads before comparing.
-fn head_is_newer(candidate: &serde_json::Value, incumbent: &serde_json::Value) -> bool {
-    match (head_rank(candidate), head_rank(incumbent)) {
-        (Some((candidate_at, candidate_id)), Some((incumbent_at, incumbent_id))) => {
-            candidate_at > incumbent_at
-                || (candidate_at == incumbent_at && candidate_id < incumbent_id)
-        }
-        _ => false,
-    }
-}
-
 /// The newest head under NIP-16 ordering, or `None` when every head is
 /// malformed.
 fn newest_head(events: &[serde_json::Value]) -> Option<&serde_json::Value> {
@@ -293,25 +269,6 @@ fn newest_head(events: &[serde_json::Value]) -> Option<&serde_json::Value> {
                 best
             }
         })
-}
-
-/// Report a malformed job head once per process, so a broken relay cannot
-/// flood stderr on every 5-second poll.
-fn report_malformed_head(job: &str, event: &serde_json::Value) {
-    let key = match event["id"].as_str() {
-        Some(id) => format!("{job}:{id}"),
-        None => format!("{job}:{}", event["created_at"]),
-    };
-    static REPORTED_MALFORMED_HEADS: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashSet<String>>,
-    > = std::sync::OnceLock::new();
-    let reported = REPORTED_MALFORMED_HEADS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-    if let Ok(mut seen) = reported.lock() {
-        if seen.insert(key) {
-            eprintln!("worker: skipping malformed job head for job {job}");
-        }
-    }
 }
 
 /// Keep only the newest head per job (`d` tag), in the relay's original
@@ -602,6 +559,9 @@ async fn publish_usage(
 mod tests {
     use super::*;
     use serde_json::json;
+    // Convergence: the shared NIP-16 rule lives in
+    // `crate::client::tests::shared_head_comparator_selects_the_relays_head`;
+    // these tests pin worker-specific selection on top of it.
 
     fn job_head(id: &str, status: &str, created_at: i64) -> serde_json::Value {
         json!({
