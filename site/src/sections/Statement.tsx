@@ -12,13 +12,11 @@ export function Statement() {
     <section className="bg-colony-canvasMid px-6 pb-20 pt-12 sm:pb-28 sm:pt-16">
       <div className="mx-auto max-w-3xl text-center">
         <h2 className="text-3xl font-semibold leading-tight tracking-tight text-colony-ink [text-wrap:balance] sm:text-4xl lg:text-5xl">
-          Agents work where the team already is.
+          Delegate real work, not prompts.
         </h2>
         <p className="mx-auto mt-6 max-w-xl text-base leading-relaxed text-colony-ink/70 sm:text-lg">
-          No separate agent log, no side channel only a bot can read. Agents
-          join the same channels as everyone else, read the same history, and
-          post results back into the thread, so a person can pick up exactly
-          where the agent left off.
+          Colony gives you a team of AI agents that find customers, write the
+          outreach, and do the work. You stay in charge of what matters.
         </p>
       </div>
     </section>

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import { seedActiveIdentity } from "../helpers/onboarding";
 
 // Source of the marketing site's feature imagery (site/public/feature-*.png).
 //
@@ -456,5 +457,267 @@ test("capture: git built in", async ({ page }) => {
   await page.screenshot({
     path: `${SHOTS}/feature-git.png`,
     clip: { x: 290, y: 0, width: 990, height: 350 },
+  });
+});
+
+// The Discovery pipeline and outreach-approval shots ride the e2e fixture
+// data source (FixtureDiscoveryDataSource): MODE === "e2e" swaps it in at
+// DiscoveryRouteScreen, so the campaigns below are pre-seeded product
+// fixtures, not bridge mocks. Deep links are the seeding mechanism.
+test("capture: discovery pipeline", async ({ page }) => {
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
+  await installMockBridge(page);
+  // 1800 wide: at 1600 the lead table still ran past the panel and sliced
+  // the STATUS pills mid-word. 1000 tall for a full run of scored rows.
+  await page.setViewportSize({ width: 1800, height: 1000 });
+  await page.goto(
+    "/#/discovery?surface=campaign&industryId=automotive" +
+      "&verticalId=auto-repair&campaignId=auto-repair-johannesburg&tab=leads",
+    { waitUntil: "domcontentloaded" },
+  );
+  await expect(page.getByTestId("campaign-lead-table")).toBeVisible();
+  await expect(page.getByText("Rosebank Auto Care")).toBeVisible();
+  // Grid view, not the list: the list's table scrolls horizontally inside
+  // the panel at any viewport width, so its STATUS pills always render
+  // sliced mid-word. The card grid keeps every score and status chip
+  // inside the frame.
+  await page.getByRole("button", { name: "Grid view" }).click();
+  await expect(
+    page.locator('[data-testid^="lead-card-"]').first(),
+  ).toBeVisible();
+  await waitForAnimations(page);
+  // Clip to the campaign panel content, skipping the app sidebar: it
+  // repeats context the hero shot already gives the page, its width varies
+  // run to run (a fixed-x clip leaked a lavender sliver), and the mock
+  // identity chip at its foot ("E2E Test") has no place in marketing
+  // imagery. Anchor on the Back link (panel's left content edge) and the
+  // Run Discovery button (its right content edge) instead.
+  const back = await page.getByText("Back to Auto Repair").boundingBox();
+  const run = await page
+    .getByRole("button", { name: "Run Discovery" })
+    .boundingBox();
+  if (!back || !run) throw new Error("could not measure the campaign panel");
+  const left = back.x - 32;
+  const top = back.y - 20;
+  await page.screenshot({
+    path: `${SHOTS}/discovery-pipeline.png`,
+    clip: {
+      x: left,
+      y: top,
+      width: run.x + run.width + 32 - left,
+      height: 976 - top,
+    },
+  });
+});
+
+test("capture: outreach approval queue", async ({ page }) => {
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
+  await installMockBridge(page);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto(
+    "/#/discovery?surface=campaign&entity=people&fieldId=marketing" +
+      "&roleId=marketing-director&campaignId=marketing-directors-united-states" +
+      "&tab=outreach",
+    { waitUntil: "domcontentloaded" },
+  );
+  await expect(
+    page.getByRole("heading", { name: "Outreach", exact: true }),
+  ).toBeVisible();
+  // The seeded queue lists Approved and Scheduled cards first, which pushes
+  // every card with an Approve button below the fold. The WhatsApp channel
+  // filter isolates the one WhatsApp draft, so the frame holds the metric
+  // strip ("Drafts Ready / Awaiting approval") and a Draft card with its
+  // Approve button together: the whole claim in one screen.
+  await page.getByRole("button", { name: "WhatsApp", exact: true }).click();
+  const draftCard = page
+    .locator('[data-testid^="outreach-draft-"]')
+    .filter({ has: page.getByRole("button", { name: "Approve" }) })
+    .first();
+  await expect(draftCard).toBeVisible();
+  await waitForAnimations(page);
+  const heading = await page
+    .getByRole("heading", { name: "Outreach", exact: true })
+    .boundingBox();
+  const card = await draftCard.boundingBox();
+  // Same anchor trick as the pipeline shot: the sidebar width varies run
+  // to run, so derive the left edge from the panel's own content.
+  const create = await page
+    .getByRole("button", { name: "Create outreach" })
+    .boundingBox();
+  if (!heading || !card || !create) {
+    throw new Error("could not measure the outreach frame");
+  }
+  const left = heading.x - 32;
+  const top = Math.max(0, heading.y - 16);
+  await page.screenshot({
+    path: `${SHOTS}/outreach-approval.png`,
+    clip: {
+      x: left,
+      y: top,
+      width: create.x + create.width + 32 - left,
+      height: card.y + card.height + 24 - top,
+    },
+  });
+});
+
+// The delivered-work shot reuses the hero-shot channel machinery: build a
+// website channel, seed the finished-work exchange as history, read it once,
+// come back, capture the message cluster.
+const TENDER = {
+  pubkey: "7e19c4a8d2f6503b1e87ac40d5b92f634a01c8e7f52d3b96e0847ad1c5f29b60",
+  name: "Tender",
+  avatarUrl: "/onboarding/starter-team/tender.png",
+};
+const ID_DELIVERED = "5e".repeat(32);
+
+test("capture: work delivered in a channel", async ({ page }) => {
+  await installMockBridge(page, {
+    searchProfiles: [
+      { pubkey: MAYA.pubkey, displayName: MAYA.name },
+      { pubkey: AISHA.pubkey, displayName: AISHA.name },
+      {
+        pubkey: TENDER.pubkey,
+        displayName: TENDER.name,
+        avatarUrl: TENDER.avatarUrl,
+        isAgent: true,
+        ownerPubkey: MAYA.pubkey,
+      },
+    ],
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () =>
+      typeof (
+        window as unknown as { __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown }
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function",
+  );
+
+  await page.evaluate(
+    async ({ members }) => {
+      const w = window as unknown as {
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__: (
+          command: string,
+          payload: Record<string, unknown>,
+        ) => Promise<unknown>;
+        __BUZZ_E2E_INVALIDATE_CHANNELS__: () => void;
+      };
+      const channel = (await w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__(
+        "create_channel",
+        {
+          name: "website",
+          channelType: "stream",
+          visibility: "open",
+          description: "The studio site and everything on it",
+        },
+      )) as { id: string };
+      await w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__("add_channel_members", {
+        channelId: channel.id,
+        pubkeys: members,
+      });
+      w.__BUZZ_E2E_INVALIDATE_CHANNELS__();
+    },
+    { members: [AISHA.pubkey, TENDER.pubkey] },
+  );
+
+  await page.evaluate(
+    ({ maya, aisha, tender, idDelivered, t0 }) => {
+      const emit = (
+        window as unknown as {
+          __BUZZ_E2E_EMIT_MOCK_MESSAGE__: (
+            input: Record<string, unknown>,
+          ) => void;
+        }
+      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 700,
+        content:
+          "The services page still says we do consultations on Saturdays. We stopped that in June. Can we get the whole page brought up to date?",
+      });
+      emit({
+        channelName: "website",
+        pubkey: tender,
+        id: idDelivered,
+        createdAt: t0,
+        content: [
+          "Done. Every page is current again:",
+          "",
+          "- Services page: Saturday consultations removed, the three packages match the new price list",
+          "- Homepage: headline now leads with the 48-hour turnaround, new photo of the workshop floor",
+          "- Contact page: the old landline is gone, the booking link goes straight to your calendar",
+          "",
+          "Preview is live. One look from you and it publishes.",
+        ].join("\n"),
+      });
+      // Top level, not a thread reply: a reply collapses into a "1 reply"
+      // summary, and the owner signing off is the moment this shot exists
+      // to show.
+      emit({
+        channelName: "website",
+        pubkey: aisha,
+        createdAt: t0 + 240,
+        content: "Checked all three. Publish it.",
+      });
+      for (const [reactor, emoji, offset] of [
+        [maya, "🎉", 300],
+        [aisha, "👍", 320],
+      ] as const) {
+        emit({
+          channelName: "website",
+          pubkey: reactor,
+          kind: 7,
+          createdAt: t0 + offset,
+          content: emoji,
+          extraTags: [
+            ["e", idDelivered],
+            ["p", tender],
+          ],
+        });
+      }
+    },
+    {
+      maya: MAYA.pubkey,
+      aisha: AISHA.pubkey,
+      tender: TENDER.pubkey,
+      idDelivered: ID_DELIVERED,
+      t0: T0,
+    },
+  );
+
+  // First visit marks history read; return trip captures without the NEW rule.
+  await page.getByTestId("channel-website").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("website");
+  await expect(page.getByText("Publish it.")).toBeVisible();
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-website").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("website");
+  await expect(page.getByText("Preview is live")).toBeVisible();
+  // Gate on the agent PNG and the human initial fallbacks: Radix delays
+  // fallbacks ~200ms, and a capture that beats them ships empty avatar
+  // discs (the first take of this shot did exactly that).
+  await expect(
+    page.locator(`img[src="${TENDER.avatarUrl}"]`).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("message-avatar-fallback").first(),
+  ).toBeVisible();
+  await waitForAnimations(page);
+
+  // Frame from the owner's request down to the composer floor, minus the
+  // sidebar: the story is the delivery, not the channel list. The sticky
+  // day-divider pill pins itself to the top of the scroll area, so the
+  // clip starts just under its measured bottom edge; padding relative to
+  // the opener row kept slicing it (two takes running).
+  const pill = await page
+    .getByText("Saturday, August 1st", { exact: true })
+    .boundingBox();
+  if (!pill) throw new Error("could not measure the day-divider pill");
+  const top = pill.y + pill.height + 6;
+  await page.screenshot({
+    path: `${SHOTS}/work-delivered.png`,
+    clip: { x: 290, y: top, width: 990, height: 552 },
   });
 });

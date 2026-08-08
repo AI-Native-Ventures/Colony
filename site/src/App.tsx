@@ -1,7 +1,10 @@
+import { CapabilitiesStrip } from "@/sections/CapabilitiesStrip";
 import { Cards } from "@/sections/Cards";
+import { ChainOfCommand } from "@/sections/ChainOfCommand";
 import { Download } from "@/sections/Download";
 import { Footer } from "@/sections/Footer";
 import { Hero } from "@/sections/Hero";
+import { Jobs } from "@/sections/Jobs";
 import { ProductShowcase } from "@/sections/ProductShowcase";
 import { Statement } from "@/sections/Statement";
 
@@ -11,6 +14,9 @@ export function App() {
       <Hero />
       <Statement />
       <ProductShowcase />
+      <ChainOfCommand />
+      <Jobs />
+      <CapabilitiesStrip />
       <Cards />
       <Download />
       <Footer />
