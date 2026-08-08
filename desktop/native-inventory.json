@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 323,
-    "rust_lines": 132752,
-    "tauri_coupled": 135,
-    "portable": 188,
-    "portable_lines": 72746,
+    "rust_total": 325,
+    "rust_lines": 133415,
+    "tauri_coupled": 136,
+    "portable": 189,
+    "portable_lines": 72980,
     "tauri_coupled_list": [
       "src-tauri/src/app_state.rs",
       "src-tauri/src/archive/mod.rs",
@@ -138,6 +138,7 @@
       "src-tauri/src/native_websocket.rs",
       "src-tauri/src/prevent_sleep.rs",
       "src-tauri/src/provisioned_credits.rs",
+      "src-tauri/src/provisioned_credits/tests.rs",
       "src-tauri/src/ptt_shortcut.rs",
       "src-tauri/src/shutdown.rs",
       "src-tauri/src/templates/storage.rs"
@@ -283,6 +284,7 @@
       "src-tauri/src/managed_agents/runtime/path.rs",
       "src-tauri/src/managed_agents/runtime/sweep.rs",
       "src-tauri/src/managed_agents/runtime/tests.rs",
+      "src-tauri/src/managed_agents/runtime_commands/tests.rs",
       "src-tauri/src/managed_agents/runtime_types.rs",
       "src-tauri/src/managed_agents/snapshot_avatar.rs",
       "src-tauri/src/managed_agents/spawn_hash.rs",
@@ -350,7 +352,7 @@
     ]
   },
   "params": {
-    "AppHandle": 286,
+    "AppHandle": 292,
     "State": 214,
     "Window": 7,
     "ipc::Request": 1,
@@ -358,7 +360,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 286,
+      "AppHandle": 292,
       "State": 214,
       "Window": 7,
       "ipc::Request": 1,
@@ -377,7 +379,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 94,
+    ".state::<": 95,
     ".emit(": 34,
     ".emit_to(": 0,
     ".dialog()": 4,

@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     app_state::AppState,
+    managed_agents::{load_global_agent_config, CredentialMode},
     provisioned_credits::{force_reconnect_blocking, GatewayAccount},
     relay::{build_nip98_auth_header, classify_request_error, relay_api_base_url_with_override},
 };
@@ -35,6 +36,11 @@ fn stable_gateway_status_error(status: reqwest::StatusCode) -> String {
 /// being returned to the frontend.
 #[tauri::command]
 pub async fn get_colony_credits_account(app: AppHandle) -> Result<GatewayAccount, String> {
+    if load_global_agent_config(&app)?.credential_mode != CredentialMode::ColonyCredits {
+        return Err(
+            "Colony Credits account is available only when Colony Credits is selected".into(),
+        );
+    }
     let state = app.state::<AppState>();
     let base = relay_api_base_url_with_override(&state);
     let url = format!("{base}/api/gateway/account");
@@ -65,6 +71,11 @@ pub async fn get_colony_credits_account(app: AppHandle) -> Result<GatewayAccount
 /// single explicit action; no automatic retry loop is started here.
 #[tauri::command]
 pub async fn reconnect_colony_credits(app: AppHandle) -> Result<(), String> {
+    if load_global_agent_config(&app)?.credential_mode != CredentialMode::ColonyCredits {
+        return Err(
+            "Colony Credits reconnect is available only when Colony Credits is selected".into(),
+        );
+    }
     let relay_url = {
         let state = app.state::<AppState>();
         crate::relay::relay_ws_url_with_override(&state)

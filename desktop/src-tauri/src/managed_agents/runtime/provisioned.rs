@@ -77,7 +77,7 @@ pub(crate) fn apply_provisioned_meter_env(
     env.insert("BUZZ_METER_OPENAI_KEY".to_string(), token.to_string());
     env.insert(
         "BUZZ_METER_OPENAI_UPSTREAM".to_string(),
-        normalized_gateway_upstream(relay_url),
+        normalized_gateway_upstream(relay_url)?,
     );
     if matches!(runtime_id, "buzz-agent" | "goose") {
         // Readiness needs a provider key; buzz-acp replaces it with its
@@ -118,6 +118,11 @@ pub(crate) fn provisioned_spawn_env(
         request.descriptor_env.get(key).map(String::as_str)
     });
     let mut meter_env = request.descriptor_env.clone();
+    // The desktop owns this mode. An ambient opt-out must not reach ACP, and
+    // the explicit marker lets ACP reject any contradictory configuration at
+    // its own startup boundary as well.
+    meter_env.remove("BUZZ_ACP_NO_METER");
+    meter_env.insert("BUZZ_ACP_PROVISIONED".to_string(), "true".to_string());
     apply_provisioned_meter_env(
         &mut meter_env,
         request.relay_url,
@@ -171,7 +176,7 @@ mod tests {
         );
         assert_eq!(
             env.get("BUZZ_METER_OPENAI_UPSTREAM"),
-            Some(&"https://Relay.Example:443/gateway/openai".to_string())
+            Some(&"https://relay.example/gateway/openai".to_string())
         );
     }
 

@@ -1367,6 +1367,16 @@ async fn tokio_main() -> Result<()> {
 
     // Priority: BUZZ_AUTH_TAG (NIP-OA attestation) → --agent-owner flag.
     let startup_owner: Option<String> = resolve_agent_owner(&config);
+    if config.provisioned
+        && startup_owner
+            .as_deref()
+            .and_then(|owner| nostr::PublicKey::from_hex(owner).ok())
+            .is_none()
+    {
+        return Err(anyhow::anyhow!(
+            "provisioned Colony Credits requires a valid owner pubkey before metering can start"
+        ));
+    }
     if let Some(ref owner) = startup_owner {
         tracing::info!("agent owner: {owner}");
     } else {
@@ -1399,7 +1409,7 @@ async fn tokio_main() -> Result<()> {
     // spawn unmetered and spend money the ledger never sees. Metering needs an
     // owner to encrypt records to; without one there is nobody who could read
     // them, so it stays off rather than publishing records nobody can decrypt.
-    let mut meter_publisher_task = if config.no_meter {
+    let mut meter_publisher_task = if config.no_meter && !config.provisioned {
         tracing::warn!(
             "wire metering disabled (--no-meter): agent spend will not reach the cost ledger"
         );
@@ -3186,6 +3196,49 @@ fn is_auth_error(error: &acp::AcpError) -> bool {
     message.contains("Re-authenticate") || message.contains("API Error: 401")
 }
 
+/// Stable, non-retryable denial contract emitted by the provisioned meter
+/// boundary. The upstream body remains available for diagnostics, while this
+/// classifier gives the queue/pool and desktop observer a typed status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProvisionedCreditsDenial {
+    Unauthorized,
+    Depleted,
+}
+
+fn provisioned_credits_denial(error: &acp::AcpError) -> Option<ProvisionedCreditsDenial> {
+    let acp::AcpError::AgentError { message, .. } = error else {
+        return None;
+    };
+    let lower = message.to_ascii_lowercase();
+    // The meter preserves the upstream status line, but adapters do not all
+    // preserve the same prefix (`gateway`, `API Error`, or `llm`).  In
+    // provisioned mode any LLM 401/402 is therefore a terminal gateway
+    // decision; transport errors never contain an HTTP status and continue
+    // through the ordinary retry/respawn path.
+    if lower.contains("colony_credits_gateway_status=401") || lower.contains("401") {
+        return Some(ProvisionedCreditsDenial::Unauthorized);
+    }
+    if lower.contains("colony_credits_gateway_status=402")
+        || lower.contains("402")
+        || lower.contains("payment required")
+        || lower.contains("depleted")
+    {
+        return Some(ProvisionedCreditsDenial::Depleted);
+    }
+    None
+}
+
+fn provisioned_credits_copy(denial: ProvisionedCreditsDenial) -> &'static str {
+    match denial {
+        ProvisionedCreditsDenial::Unauthorized => {
+            "⚠️ Colony Credits authorization expired — reconnect to resume this agent."
+        }
+        ProvisionedCreditsDenial::Depleted => {
+            "⚠️ Colony Credits depleted — top up, then reconnect."
+        }
+    }
+}
+
 /// Spawn a task that posts a user-visible failure notice to the relay.
 ///
 /// Shared by the hard-cap immediate dead-letter path and the retries-exhausted
@@ -3306,6 +3359,24 @@ fn handle_prompt_result(
                 } else {
                     hard_timeout_fate_suffix = Some(" — requeued for retry (recently active)");
                 }
+            } else if config.provisioned
+                && matches!(&result.outcome, PromptOutcome::Error(e) if provisioned_credits_denial(e).is_some())
+            {
+                if let PromptOutcome::Error(error) = &result.outcome {
+                    if let Some(denial) = provisioned_credits_denial(error) {
+                        tracing::warn!(
+                            channel_id = %batch.channel_id,
+                            events = batch.events.len(),
+                            status = ?denial,
+                            "dead-lettering batch immediately — provisioned credits denial"
+                        );
+                        spawn_failure_notice(
+                            rest_client,
+                            &batch,
+                            provisioned_credits_copy(denial).to_string(),
+                        );
+                    }
+                }
             } else if matches!(&result.outcome, PromptOutcome::Error(e) if is_auth_error(e)) {
                 // Auth errors are non-retryable: the token won't self-repair
                 // between retries, so requeueing only wastes attempt slots and
@@ -3387,6 +3458,14 @@ fn handle_prompt_result(
         PromptSource::Heartbeat => None,
     };
     let turn_id = result.turn_id.clone();
+    let gateway_denial = if config.provisioned {
+        match &result.outcome {
+            PromptOutcome::Error(error) => provisioned_credits_denial(error),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let emit_turn_error = |error_msg: &str, error_code: Option<i64>| {
         if let Some(ref observer) = observer {
             let mut payload = serde_json::json!({
@@ -3395,6 +3474,13 @@ fn handle_prompt_result(
             });
             if let Some(code) = error_code {
                 payload["code"] = serde_json::json!(code);
+            }
+            if let Some(denial) = gateway_denial {
+                payload["gateway_status"] = serde_json::json!(match denial {
+                    ProvisionedCreditsDenial::Unauthorized => 401,
+                    ProvisionedCreditsDenial::Depleted => 402,
+                });
+                payload["action"] = serde_json::json!("reconnect");
             }
             observer.emit(
                 "turn_error",
@@ -3560,6 +3646,14 @@ fn handle_prompt_result(
                     tracing::error!("all agents dead — exiting");
                     return LoopAction::Exit;
                 }
+            } else if let Some(denial) = gateway_denial {
+                tracing::warn!(
+                    agent = agent_index,
+                    status = ?denial,
+                    "provisioned credits denial — returning healthy agent to pool"
+                );
+                emit_turn_error(provisioned_credits_copy(denial), error_code);
+                pool.return_agent(result.agent);
             } else {
                 tracing::warn!(
                     agent = agent_index,
@@ -5422,6 +5516,7 @@ mod build_mcp_servers_tests {
             channels_override: None,
             no_mention_filter: false,
             no_meter: true,
+            provisioned: false,
             meter_anthropic_key: None,
             meter_openai_key: None,
             meter_anthropic_upstream: None,
@@ -5651,6 +5746,7 @@ mod error_outcome_emission_tests {
             channels_override: None,
             no_mention_filter: false,
             no_meter: true,
+            provisioned: false,
             meter_anthropic_key: None,
             meter_openai_key: None,
             meter_anthropic_upstream: None,
@@ -6670,6 +6766,146 @@ mod error_outcome_emission_tests {
         assert!(
             !is_auth_error(&timeout),
             "WriteTimeout must not be classified as auth error"
+        );
+    }
+
+    #[test]
+    fn provisioned_credits_denial_accepts_adapter_status_variants() {
+        let unauthorized_messages = [
+            "llm auth: upstream returned 401",
+            "API Error: 401 Unauthorized",
+            "colony_credits_gateway_status=401",
+            "401",
+        ];
+        for message in unauthorized_messages {
+            let error = acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                provisioned_credits_denial(&error),
+                Some(ProvisionedCreditsDenial::Unauthorized),
+                "{message} must be a non-retryable provisioned denial"
+            );
+        }
+
+        let depleted_messages = [
+            "llm: 402 Payment Required",
+            "gateway returned 402",
+            "Colony Credits depleted (colony_credits_gateway_status=402)",
+            "payment required",
+        ];
+        for message in depleted_messages {
+            let error = acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                provisioned_credits_denial(&error),
+                Some(ProvisionedCreditsDenial::Depleted),
+                "{message} must be a non-retryable provisioned denial"
+            );
+        }
+    }
+
+    #[test]
+    fn provisioned_credits_denial_ignores_transport_and_unrelated_statuses() {
+        let transport = acp::AcpError::Io(std::io::Error::other("connection reset"));
+        assert_eq!(provisioned_credits_denial(&transport), None);
+        let unrelated = acp::AcpError::AgentError {
+            code: -32000,
+            message: "upstream returned 500 Internal Server Error".to_string(),
+        };
+        assert_eq!(provisioned_credits_denial(&unrelated), None);
+    }
+
+    async fn provisioned_denial_fate(message: &str) -> (usize, usize) {
+        let keys = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "test")
+            .sign_with_keys(&keys)
+            .unwrap();
+        let channel_id = uuid::Uuid::new_v4();
+        let batch = FlushBatch {
+            channel_id,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: std::time::Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![None]);
+        let task_id = pool.join_set.spawn(async {}).id();
+        pool.task_map_mut().insert(
+            task_id,
+            crate::pool::TaskMeta {
+                agent_index: 0,
+                channel_id: None,
+                turn_id: "test-turn-id".to_string(),
+                recoverable_batch: None,
+                control_tx: None,
+                steer_tx: None,
+            },
+        );
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let mut config = test_config();
+        config.provisioned = true;
+        let mut heartbeat_in_flight = false;
+        let removed_channels = std::collections::HashSet::new();
+        let mut crash_history = vec![SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        }];
+        let (respawn_tx, _respawn_rx) = mpsc::channel(8);
+        let mut respawn_tasks = tokio::task::JoinSet::new();
+        let result = PromptResult {
+            agent,
+            source: PromptSource::Channel(channel_id),
+            turn_id: "test-turn-id".to_string(),
+            outcome: PromptOutcome::Error(acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            }),
+            batch: Some(batch),
+        };
+        handle_prompt_result(
+            &mut pool,
+            &mut queue,
+            &config,
+            result,
+            &mut heartbeat_in_flight,
+            &removed_channels,
+            &mut crash_history,
+            &respawn_tx,
+            &mut respawn_tasks,
+            None,
+            None,
+        );
+        (queue.pending_channels(), pool.live_count())
+    }
+
+    #[tokio::test]
+    async fn provisioned_401_dead_letters_once_and_returns_agent_to_pool() {
+        let (pending_channels, live_agents) =
+            provisioned_denial_fate("llm auth: upstream returned 401").await;
+        assert_eq!(pending_channels, 0, "401 must not be requeued");
+        assert_eq!(
+            live_agents, 1,
+            "401 must leave the process healthy in the pool"
+        );
+    }
+
+    #[tokio::test]
+    async fn provisioned_402_dead_letters_once_and_returns_agent_to_pool() {
+        let (pending_channels, live_agents) =
+            provisioned_denial_fate("llm: 402 Payment Required").await;
+        assert_eq!(pending_channels, 0, "402 must not be requeued");
+        assert_eq!(
+            live_agents, 1,
+            "402 must leave the process healthy in the pool"
         );
     }
 

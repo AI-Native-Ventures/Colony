@@ -1,4 +1,4 @@
-import { invokeTauri } from "@/shared/api/tauri";
+import { invoke } from "@/shared/api/nativeBridge";
 
 export type ColonyCreditsAccountStatus = "active" | "depleted";
 export type ColonyCreditsAccount = {
@@ -9,12 +9,12 @@ export type ColonyCreditsAccount = {
 
 /** Read the current volatile Colony Credits account handle. */
 export function getColonyCreditsAccount(): Promise<ColonyCreditsAccount> {
-  return invokeTauri<ColonyCreditsAccount>("get_colony_credits_account");
+  return invoke<ColonyCreditsAccount>("get_colony_credits_account");
 }
 
 /** Trigger the one explicit replacement/reconnect path. */
 export function reconnectColonyCredits(): Promise<void> {
-  return invokeTauri<void>("reconnect_colony_credits");
+  return invoke<void>("reconnect_colony_credits");
 }
 
 /**

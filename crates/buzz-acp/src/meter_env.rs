@@ -36,7 +36,7 @@ impl MeteredProviders {
 
 /// Where the checkpoint is listening and which key this agent authenticates
 /// with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MeterEnv {
     /// Loopback port the checkpoint bound.
     pub port: u16,
@@ -44,6 +44,17 @@ pub struct MeterEnv {
     pub virtual_key: String,
     /// Providers whose credential the checkpoint owns.
     pub metered: MeteredProviders,
+}
+
+impl std::fmt::Debug for MeterEnv {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MeterEnv")
+            .field("port", &self.port)
+            .field("virtual_key", &"<redacted>")
+            .field("metered", &self.metered)
+            .finish()
+    }
 }
 
 /// Provider credential variables the harness overwrites, per provider.

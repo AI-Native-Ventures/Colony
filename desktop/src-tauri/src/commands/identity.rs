@@ -239,6 +239,7 @@ pub async fn import_identity(
         // observing false is guaranteed to see the updated keys.
         let pubkey = keys.public_key();
         *state.keys.lock().map_err(|e| e.to_string())? = keys;
+        crate::managed_agents::isolate_provisioned_credits_owner(&app_handle, &pubkey.to_hex())?;
 
         // Clear both recovery flags — an import is valid in either lost or
         // keyring-locked state and resolves both. In the locked case the

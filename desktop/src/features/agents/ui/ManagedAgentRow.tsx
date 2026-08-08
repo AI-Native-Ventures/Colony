@@ -27,6 +27,11 @@ import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastE
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { PubKey } from "@/shared/ui/PubKey";
 import { SubsectionLabel } from "@/shared/ui/PageHeader";
+import { reconnectColonyCredits } from "@/shared/api/tauriProvisionedCredits";
+import {
+  getLatestColonyCreditsDenial,
+  subscribeAgentObserverStore,
+} from "@/features/agents/observerRelayStore";
 
 export function ManagedAgentRow({
   agent,
@@ -75,6 +80,12 @@ export function ManagedAgentRow({
     [activeTurns, channelIdToName],
   );
   const isWorking = activeWorkingChannels.length > 0;
+  const [isReconnecting, setIsReconnecting] = React.useState(false);
+  const liveDenial = React.useSyncExternalStore(
+    subscribeAgentObserverStore,
+    () => getLatestColonyCreditsDenial(agent.pubkey),
+    () => getLatestColonyCreditsDenial(agent.pubkey),
+  );
   const processDetail =
     agent.pid !== null
       ? `PID ${agent.pid}`
@@ -89,10 +100,29 @@ export function ManagedAgentRow({
   // friendly "Community access denied this agent — check its community membership."
   // for auth failures so the user knows it's a membership thing, not a
   // crash. Generic exits stay verbatim so we don't lie about other failures.
-  const friendlyError = friendlyAgentLastError(
+  const persistedFriendlyError = friendlyAgentLastError(
     agent.lastError,
     agent.lastErrorCode,
   );
+  const liveFriendlyError = liveDenial
+    ? friendlyAgentLastError(
+        (() => {
+          const payload =
+            typeof liveDenial.payload === "object" &&
+            liveDenial.payload !== null
+              ? (liveDenial.payload as {
+                  error?: unknown;
+                  gateway_status?: unknown;
+                })
+              : {};
+          const status = String(payload.gateway_status ?? "401");
+          const detail =
+            typeof payload.error === "string" ? `: ${payload.error}` : "";
+          return `Colony Credits gateway returned ${status}${detail}`;
+        })(),
+      )
+    : null;
+  const friendlyError = liveFriendlyError ?? persistedFriendlyError;
 
   return (
     <div
@@ -104,35 +134,47 @@ export function ManagedAgentRow({
     >
       <div className="flex items-start gap-3 px-4 py-3">
         {isLocal ? (
-          <button
-            aria-expanded={isLogSelected}
-            className="-m-1 min-w-0 flex-1 rounded-lg p-1 text-left transition-colors hover:bg-background/40"
-            onClick={() =>
-              onSelectLogAgent(isLogSelected ? null : agent.pubkey)
-            }
-            type="button"
-          >
+          <div className="-m-1 min-w-0 flex-1 rounded-lg p-1">
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
-              <AgentSummary
-                activeWorkingChannels={activeWorkingChannels}
-                agent={agent}
-                channelNames={channelNames}
-                isExpandable
-                isLogSelected={isLogSelected}
-                personaLabel={personaLabel}
-                presenceStatus={presenceStatus}
-              />
+              <button
+                aria-expanded={isLogSelected}
+                className="min-w-0 rounded-lg p-1 text-left transition-colors hover:bg-background/40"
+                onClick={() =>
+                  onSelectLogAgent(isLogSelected ? null : agent.pubkey)
+                }
+                type="button"
+              >
+                <AgentSummary
+                  activeWorkingChannels={activeWorkingChannels}
+                  agent={agent}
+                  channelNames={channelNames}
+                  isExpandable
+                  isLogSelected={isLogSelected}
+                  personaLabel={personaLabel}
+                  presenceStatus={presenceStatus}
+                />
+              </button>
               <StatusBlock
                 friendlyError={friendlyError}
                 isWorking={isWorking}
+                isReconnecting={isReconnecting}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
                 status={agent.status}
+                onReconnect={async () => {
+                  if (isReconnecting) return;
+                  setIsReconnecting(true);
+                  try {
+                    await reconnectColonyCredits();
+                  } finally {
+                    setIsReconnecting(false);
+                  }
+                }}
               />
               <RuntimeBlock agent={agent} runtimeSource={runtimeSource} />
             </div>
-          </button>
+          </div>
         ) : (
           <div className="min-w-0 flex-1">
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
@@ -148,10 +190,20 @@ export function ManagedAgentRow({
               <StatusBlock
                 friendlyError={friendlyError}
                 isWorking={isWorking}
+                isReconnecting={isReconnecting}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
                 status={agent.status}
+                onReconnect={async () => {
+                  if (isReconnecting) return;
+                  setIsReconnecting(true);
+                  try {
+                    await reconnectColonyCredits();
+                  } finally {
+                    setIsReconnecting(false);
+                  }
+                }}
               />
               <RuntimeBlock agent={agent} runtimeSource={runtimeSource} />
             </div>
@@ -354,18 +406,22 @@ function WorkingBadge({
 
 function StatusBlock({
   friendlyError,
+  isReconnecting,
   isWorking,
   presenceLoaded,
   presenceStatus,
   processDetail,
   status,
+  onReconnect,
 }: {
   friendlyError: ReturnType<typeof friendlyAgentLastError>;
+  isReconnecting: boolean;
   isWorking: boolean;
   presenceLoaded: boolean;
   presenceStatus: PresenceStatus | undefined;
   processDetail: string;
   status: ManagedAgent["status"];
+  onReconnect: () => Promise<void>;
 }) {
   return (
     <div className="space-y-1 lg:pt-0.5">
@@ -378,18 +434,36 @@ function StatusBlock({
       />
       <p className="text-xs text-muted-foreground">{processDetail}</p>
       {friendlyError ? (
-        <p
-          className={cn(
-            "text-xs",
-            friendlyError.severity === "denied" ||
-              friendlyError.severity === "actionable"
-              ? "text-destructive"
-              : "text-muted-foreground",
-          )}
-          data-testid="managed-agent-last-error"
-        >
-          {friendlyError.copy}
-        </p>
+        <div className="space-y-1">
+          <p
+            className={cn(
+              "text-xs",
+              friendlyError.severity === "denied" ||
+                friendlyError.severity === "actionable"
+                ? "text-destructive"
+                : "text-muted-foreground",
+            )}
+            data-testid="managed-agent-last-error"
+          >
+            {friendlyError.copy}
+          </p>
+          {friendlyError.severity === "actionable" &&
+          friendlyError.action === "reconnect" ? (
+            <Button
+              data-testid="managed-agent-colony-credits-reconnect"
+              disabled={isReconnecting}
+              onClick={(event) => {
+                event.stopPropagation();
+                void onReconnect();
+              }}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {isReconnecting ? "Reconnecting…" : "Reconnect"}
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

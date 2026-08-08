@@ -22,6 +22,9 @@ pub(crate) fn shut_down_app(app: &tauri::AppHandle, shutdown_done: &std::sync::a
         if let Err(error) = shutdown_managed_agents(app) {
             eprintln!("buzz-desktop: failed to stop managed agents: {error}");
         }
+        if let Err(error) = crate::provisioned_credits::drain_provisioned_credits_blocking(app) {
+            eprintln!("buzz-desktop: failed to revoke Colony Credits leases: {error}");
+        }
         #[cfg(feature = "mesh-llm")]
         shutdown_mesh_runtime(app);
     }
@@ -41,6 +44,7 @@ pub(crate) fn install_signal_handler(
             .store(true, Ordering::SeqCst);
         if !shutdown_done.swap(true, Ordering::SeqCst) {
             let _ = shutdown_managed_agents(&app);
+            let _ = crate::provisioned_credits::drain_provisioned_credits_blocking(&app);
             #[cfg(feature = "mesh-llm")]
             shutdown_mesh_runtime(&app);
         }

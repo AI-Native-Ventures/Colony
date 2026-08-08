@@ -80,7 +80,7 @@ export function friendlyAgentLastError(
   // explicit reconnect action and never schedule an automatic retry loop.
   const lower = trimmed.toLowerCase();
   if (
-    lower.includes("gateway") &&
+    (lower.includes("gateway") || lower.includes("colony credits")) &&
     (lower.includes("401") ||
       lower.includes("unauthorized") ||
       lower.includes("authorization expired"))
@@ -92,7 +92,7 @@ export function friendlyAgentLastError(
     };
   }
   if (
-    lower.includes("gateway") &&
+    (lower.includes("gateway") || lower.includes("colony credits")) &&
     (lower.includes("402") ||
       lower.includes("payment required") ||
       lower.includes("depleted"))

@@ -175,9 +175,13 @@ pub async fn apply_workspace(
         // matching `resetRateLimitGate()` on the TS side (useCommunityInit.ts:38).
         crate::relay_admission::reset_gate_for_workspace_change();
 
+        let new_owner = parsed_keys.as_ref().map(|keys| keys.public_key().to_hex());
         if let Some(keys) = parsed_keys {
             let mut keys_guard = state.keys.lock().map_err(|e| e.to_string())?;
             *keys_guard = keys;
+        }
+        if let Some(owner) = new_owner {
+            crate::managed_agents::isolate_provisioned_credits_owner(&app, &owner)?;
         }
 
         // Keep the backend-side reconcile guard aligned with the frontend

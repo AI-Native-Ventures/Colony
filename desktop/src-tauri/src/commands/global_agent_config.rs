@@ -20,7 +20,7 @@ use crate::{
         load_global_agent_config, load_managed_agents, load_personas, record_agent_command,
         resolve_effective_agent_env, save_global_agent_config, save_managed_agents,
         stop_managed_agent_process, sync_managed_agent_processes, validate_global_config,
-        AgentReadiness, BackendKind, GlobalAgentConfig,
+        AgentReadiness, BackendKind, CredentialMode, GlobalAgentConfig,
     },
 };
 
@@ -191,6 +191,13 @@ fn collect_restart_candidates(
             if record.backend != BackendKind::Local {
                 return false;
             }
+            if new_global.credential_mode == CredentialMode::ColonyCredits
+                && !provisioned_runtime_supported(record, &all_personas, new_global)
+            {
+                // Unsupported Claude/custom/Anthropic pairs remain untouched
+                // when Colony Credits is selected globally.
+                return false;
+            }
             let has_live_runtime = runtimes.iter_mut().any(|(key, runtime)| {
                 key.pubkey.eq_ignore_ascii_case(&record.pubkey)
                     && runtime.child.try_wait().ok().flatten().is_none()
@@ -293,6 +300,13 @@ async fn restart_local_agent_on_config_change(
         if record.backend != BackendKind::Local {
             return Err(format!("agent {pubkey_owned} is no longer a local agent"));
         }
+        if new_global_clone.credential_mode == CredentialMode::ColonyCredits
+            && !provisioned_runtime_supported(record, &personas_owned, &new_global_clone)
+        {
+            return Err(format!(
+                "agent {pubkey_owned} uses a runtime unsupported by Colony Credits"
+            ));
+        }
         let runtime_keys =
             crate::managed_agents::managed_agent_runtime_keys(&runtimes, &pubkey_owned);
         if runtime_keys.is_empty() {
@@ -389,6 +403,40 @@ fn persist_last_error(app: &AppHandle, pubkey: &str, error: &str) -> Result<(), 
     record.last_error = Some(error.to_string());
     record.updated_at = crate::util::now_iso();
     save_managed_agents(app, &records)
+}
+
+/// Whether the effective harness can consume the OpenAI-compatible provisioned
+/// meter. This is evaluated per live record before any process is stopped.
+fn provisioned_runtime_supported(
+    record: &crate::managed_agents::ManagedAgentRecord,
+    personas: &[crate::managed_agents::AgentDefinition],
+    global: &GlobalAgentConfig,
+) -> bool {
+    let command = record_agent_command(record, personas);
+    let runtime_id = known_acp_runtime(&command)
+        .map(|runtime| runtime.id)
+        .unwrap_or("custom");
+    if runtime_id == "codex" {
+        return true;
+    }
+    if !matches!(runtime_id, "goose" | "buzz-agent") {
+        return false;
+    }
+    let effective =
+        resolve_effective_agent_env(record, personas, known_acp_runtime(&command), global);
+    let key = if runtime_id == "goose" {
+        "GOOSE_PROVIDER"
+    } else {
+        "BUZZ_AGENT_PROVIDER"
+    };
+    let provider = effective
+        .env
+        .get(key)
+        .map(String::as_str)
+        .or(global.provider.as_deref())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    matches!(provider.as_deref(), Some("openai" | "openai-compat"))
 }
 
 /// Pure predicate: should an agent be restarted given resolved readiness and

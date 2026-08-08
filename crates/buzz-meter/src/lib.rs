@@ -33,4 +33,7 @@ pub use buzz_meter_core::ParsedUsage;
 
 mod server;
 
-pub use server::{start_meter, CallCredential, MeterConfig, MeterError, MeterHandle, MeteredCall};
+pub use server::{
+    start_meter, CallCredential, MeterConfig, MeterError, MeterHandle, MeteredCall,
+    COLONY_CREDITS_STATUS_HEADER,
+};

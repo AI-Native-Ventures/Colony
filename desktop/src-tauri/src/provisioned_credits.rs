@@ -5,7 +5,12 @@
 //! the lifetime of the Tauri process.  Managed-agent spawn code consumes the
 //! lease at the existing `BUZZ_METER_OPENAI_*` seam.
 
-use std::{collections::HashMap, fmt, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use reqwest::Method;
@@ -13,28 +18,61 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    app_state::AppState,
-    managed_agents::ManagedAgentRuntimeKey,
-    relay::{build_nip98_auth_header, relay_http_base_url},
+    app_state::AppState, managed_agents::ManagedAgentRuntimeKey, relay::build_nip98_auth_header,
 };
 
-/// Gateway token lifetime requested by the desktop. The relay clamps this to
-/// its own supported range, so callers must still honor the returned expiry.
-pub const GATEWAY_TOKEN_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+/// Gateway token lifetime requested by the desktop. Short-lived leases bound
+/// the credential exposure window when a process exits before graceful drain.
+pub const GATEWAY_TOKEN_TTL_SECS: u64 = 24 * 60 * 60;
 /// Refresh lead time required by the Phase 1 lease contract.
 pub const GATEWAY_REFRESH_LEAD_SECS: i64 = 24 * 60 * 60;
 
-/// Normalize a relay URL to the HTTP origin used by gateway APIs.
-pub fn normalized_relay_http_origin(relay_url: &str) -> String {
-    relay_http_base_url(relay_url.trim())
-        .trim_end_matches('/')
-        .to_string()
+/// Canonicalize a relay URL to the HTTP origin used by gateway APIs.
+///
+/// Gateway leases are keyed by this value, so equivalent websocket URLs must
+/// produce one key. Paths and queries belong to the relay websocket endpoint,
+/// never to the gateway origin; credentials and fragments are rejected rather
+/// than silently changing the authenticated target.
+pub fn normalized_relay_http_origin(relay_url: &str) -> Result<String, String> {
+    let parsed =
+        url::Url::parse(relay_url.trim()).map_err(|error| format!("invalid relay URL: {error}"))?;
+    let scheme = match parsed.scheme().to_ascii_lowercase().as_str() {
+        "ws" | "http" => "http",
+        "wss" | "https" => "https",
+        other => return Err(format!("unsupported relay URL scheme `{other}`")),
+    };
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("relay URL credentials are not allowed".to_string());
+    }
+    if parsed.fragment().is_some() {
+        return Err("relay URL fragments are not allowed".to_string());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "relay URL host is missing".to_string())?
+        .to_ascii_lowercase();
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host
+    };
+    let default_port = (scheme == "http" && parsed.port() == Some(80))
+        || (scheme == "https" && parsed.port() == Some(443));
+    let port = parsed
+        .port()
+        .filter(|_| !default_port)
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Ok(format!("{scheme}://{host}{port}"))
 }
 
 /// Return the exact OpenAI-compatible gateway upstream used by the local
 /// meter. The meter appends paths such as `v1/chat/completions` itself.
-pub fn normalized_gateway_upstream(relay_url: &str) -> String {
-    format!("{}/gateway/openai", normalized_relay_http_origin(relay_url))
+pub fn normalized_gateway_upstream(relay_url: &str) -> Result<String, String> {
+    Ok(format!(
+        "{}/gateway/openai",
+        normalized_relay_http_origin(relay_url)?
+    ))
 }
 
 /// Account state returned by `GET /api/gateway/account`.
@@ -97,7 +135,7 @@ pub struct RedactedToken(String);
 
 impl RedactedToken {
     /// Construct an in-memory token from a successful mint response.
-    fn new(value: String) -> Result<Self, String> {
+    pub(crate) fn new(value: String) -> Result<Self, String> {
         if value.trim().is_empty() {
             return Err("gateway returned an empty token".to_string());
         }
@@ -128,10 +166,7 @@ pub struct GatewayLeaseKey {
 impl GatewayLeaseKey {
     /// Build a canonical cache key from a relay URL and owner public key.
     pub fn new(relay_url: &str, owner_pubkey: &str) -> Result<Self, String> {
-        let relay_origin = normalized_relay_http_origin(relay_url);
-        if relay_origin.is_empty() {
-            return Err("gateway relay origin is empty".to_string());
-        }
+        let relay_origin = normalized_relay_http_origin(relay_url)?;
         let owner_pubkey = owner_pubkey.trim().to_ascii_lowercase();
         if owner_pubkey.is_empty() {
             return Err("gateway owner public key is empty".to_string());
@@ -151,8 +186,16 @@ pub struct GatewayLease {
     pub key: GatewayLeaseKey,
     /// Opaque gateway token, redacted in debug output.
     pub token: RedactedToken,
+    /// Monotonic generation within the relay/owner cache key.
+    pub generation: u64,
     /// Relay-provided expiry.
     pub expires_at: DateTime<Utc>,
+    /// Cancellable proactive refresh deadline. For a lease whose total TTL is
+    /// at most the 24-hour lead, this is the midpoint of its actual lifetime;
+    /// otherwise it is the literal `expires_at - 24h` deadline. Keeping the
+    /// computed instant avoids an immediate refresh loop for the Phase 1
+    /// 24-hour lease while still refreshing before expiry.
+    pub(crate) refresh_at: DateTime<Utc>,
 }
 
 impl fmt::Debug for GatewayLease {
@@ -161,7 +204,9 @@ impl fmt::Debug for GatewayLease {
             .debug_struct("GatewayLease")
             .field("key", &self.key)
             .field("token", &self.token)
+            .field("generation", &self.generation)
             .field("expires_at", &self.expires_at)
+            .field("refresh_at", &self.refresh_at)
             .finish()
     }
 }
@@ -185,14 +230,32 @@ struct RetainedLease {
 #[derive(Default)]
 pub struct ProvisionedCreditsManager {
     leases: HashMap<GatewayLeaseKey, LeaseEntry>,
+    /// Per relay/owner singleflight gates. A gate is held while minting and
+    /// handing off one key, but the manager mutex itself is never held across
+    /// network or process I/O. Different keys therefore make progress in
+    /// parallel and same-key callers converge on one generation.
+    rotation_gates: HashMap<GatewayLeaseKey, Arc<Mutex<()>>>,
+    pending_revocations: Vec<GatewayLease>,
+    next_generation: HashMap<GatewayLeaseKey, u64>,
 }
 
 impl ProvisionedCreditsManager {
+    fn rotation_gate(&mut self, key: &GatewayLeaseKey) -> Arc<Mutex<()>> {
+        self.rotation_gates
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn reserve_generation(&mut self, key: &GatewayLeaseKey) -> u64 {
+        let generation = self.next_generation.entry(key.clone()).or_insert(0);
+        *generation = generation.saturating_add(1);
+        *generation
+    }
+
     fn cached(&self, key: &GatewayLeaseKey, force: bool) -> Option<GatewayLease> {
         let entry = self.leases.get(key)?;
-        let refresh_at =
-            entry.lease.expires_at - ChronoDuration::seconds(GATEWAY_REFRESH_LEAD_SECS);
-        if !force && Utc::now() < refresh_at && entry.lease.expires_at > Utc::now() {
+        if !force && Utc::now() < entry.lease.refresh_at && entry.lease.expires_at > Utc::now() {
             return Some(entry.lease.clone());
         }
         None
@@ -227,15 +290,62 @@ impl ProvisionedCreditsManager {
         ))
     }
 
-    fn is_current_generation(
-        &self,
-        key: &GatewayLeaseKey,
-        expires_at: DateTime<Utc>,
-        token: &RedactedToken,
-    ) -> bool {
-        self.leases.get(key).is_some_and(|entry| {
-            entry.lease.expires_at == expires_at && entry.lease.token == *token
-        })
+    fn is_current_generation(&self, key: &GatewayLeaseKey, generation: u64) -> bool {
+        self.leases
+            .get(key)
+            .is_some_and(|entry| entry.lease.generation == generation)
+    }
+
+    fn enqueue_revocation(&mut self, lease: GatewayLease) {
+        if self
+            .pending_revocations
+            .iter()
+            .any(|pending| pending.token == lease.token)
+        {
+            return;
+        }
+        self.pending_revocations.push(lease);
+    }
+
+    fn pending_snapshot(&self) -> Vec<GatewayLease> {
+        self.pending_revocations.clone()
+    }
+
+    fn remove_pending(&mut self, token: &RedactedToken) {
+        self.pending_revocations
+            .retain(|pending| pending.token != *token);
+    }
+
+    fn take_all_leases(&mut self) -> Vec<GatewayLease> {
+        let mut leases = Vec::new();
+        for (_, entry) in self.leases.drain() {
+            if let Some(task) = entry.refresh_task {
+                task.abort();
+            }
+            if !leases
+                .iter()
+                .any(|lease: &GatewayLease| lease.token == entry.lease.token)
+            {
+                leases.push(entry.lease);
+            }
+            if let Some(retained) = entry.retained_old {
+                if !leases
+                    .iter()
+                    .any(|lease: &GatewayLease| lease.token == retained.lease.token)
+                {
+                    leases.push(retained.lease);
+                }
+            }
+        }
+        for pending in self.pending_revocations.drain(..) {
+            if !leases
+                .iter()
+                .any(|lease: &GatewayLease| lease.token == pending.token)
+            {
+                leases.push(pending);
+            }
+        }
+        leases
     }
 
     fn update_retained_old(
@@ -271,9 +381,8 @@ impl ProvisionedCreditsManager {
 
     fn schedule_refresh(&mut self, app: &AppHandle, lease: &GatewayLease) {
         let key = lease.key.clone();
-        let expires_at = lease.expires_at;
-        let token = lease.token.clone();
-        let refresh_at = expires_at - ChronoDuration::seconds(GATEWAY_REFRESH_LEAD_SECS);
+        let generation = lease.generation;
+        let refresh_at = lease.refresh_at;
         let delay = (refresh_at - Utc::now())
             .to_std()
             .unwrap_or_else(|_| Duration::from_secs(0));
@@ -283,7 +392,7 @@ impl ProvisionedCreditsManager {
             tokio::time::sleep(delay).await;
             let app_for_refresh = app.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                let _ = refresh_lease_blocking(&app_for_refresh, &key_for_task, expires_at, token);
+                let _ = refresh_lease_blocking(&app_for_refresh, &key_for_task, generation);
             })
             .await;
         });
@@ -347,7 +456,11 @@ fn owner_pubkey(app: &AppHandle, explicit: Option<&str>) -> Result<String, Strin
     state.signing_keys().map(|keys| keys.public_key().to_hex())
 }
 
-fn mint_lease(app: &AppHandle, key: GatewayLeaseKey) -> Result<GatewayLease, String> {
+fn mint_lease(
+    app: &AppHandle,
+    key: GatewayLeaseKey,
+    generation: u64,
+) -> Result<GatewayLease, String> {
     let state = app.state::<AppState>();
     let url = format!("{}/api/gateway/tokens", key.relay_origin);
     let body = serde_json::to_vec(&serde_json::json!({
@@ -372,18 +485,47 @@ fn mint_lease(app: &AppHandle, key: GatewayLeaseKey) -> Result<GatewayLease, Str
     let payload = response
         .json::<MintTokenResponse>()
         .map_err(|_| "gateway returned malformed token response".to_string())?;
+    validate_lease_expiry(payload.expires_at)?;
+    let issued_at = Utc::now();
     let token = RedactedToken::new(payload.token)?;
     Ok(GatewayLease {
         key,
         token,
+        generation,
         expires_at: payload.expires_at,
+        refresh_at: lease_refresh_at(issued_at, payload.expires_at),
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct MintTokenResponse {
     token: String,
     expires_at: DateTime<Utc>,
+}
+
+fn validate_lease_expiry(expires_at: DateTime<Utc>) -> Result<(), String> {
+    let now = Utc::now();
+    if expires_at <= now {
+        return Err("gateway returned an expired token".to_string());
+    }
+    let max = now + ChronoDuration::seconds(GATEWAY_TOKEN_TTL_SECS as i64);
+    if expires_at > max + ChronoDuration::seconds(5) {
+        return Err("gateway returned a token longer than the desktop lease bound".to_string());
+    }
+    Ok(())
+}
+
+fn lease_refresh_at(issued_at: DateTime<Utc>, expires_at: DateTime<Utc>) -> DateTime<Utc> {
+    let t_minus_lead = expires_at - ChronoDuration::seconds(GATEWAY_REFRESH_LEAD_SECS);
+    if t_minus_lead > issued_at {
+        return t_minus_lead;
+    }
+    // Phase 1 leases are bounded to 24h, so `expires_at - 24h` would be at
+    // or before mint time and cause an immediate refresh loop. Refresh at the
+    // midpoint instead; a lease observed after this instant is still treated
+    // as overdue by the generation-aware ensure path and rotated immediately.
+    let lifetime_secs = (expires_at - issued_at).num_seconds().max(1);
+    issued_at + ChronoDuration::seconds(lifetime_secs / 2)
 }
 
 fn revoke_lease(app: &AppHandle, lease: &GatewayLease) -> Result<(), String> {
@@ -445,40 +587,93 @@ enum RotationReason {
 fn refresh_lease_blocking(
     app: &AppHandle,
     key: &GatewayLeaseKey,
-    expected_expires_at: DateTime<Utc>,
-    expected_token: RedactedToken,
+    expected_generation: u64,
 ) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let exists = {
-        let manager = state
-            .provisioned_credits
-            .lock()
-            .map_err(|error| error.to_string())?;
-        manager.is_current_generation(key, expected_expires_at, &expected_token)
-    };
-    if !exists {
-        return Ok(());
-    }
-    let _ = rotate_lease_blocking(app, key, true, RotationReason::ScheduledRefresh)?;
+    let _ = rotate_lease_blocking_with_expected(
+        app,
+        key,
+        true,
+        RotationReason::ScheduledRefresh,
+        Some(expected_generation),
+    )?;
     Ok(())
 }
 
-/// Mint and safely rotate a lease. The manager lock remains held through the
-/// replacement handoff so concurrent ensure/refresh calls cannot mint a
-/// second replacement for the same relay/owner pair. During a partial handoff
-/// the replacement is primary and the old generation is retained with the
-/// exact failed-pair keys until a later retry converges them.
+fn revoke_or_queue(app: &AppHandle, lease: GatewayLease) {
+    if revoke_lease(app, &lease).is_err() {
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Ok(mut manager) = state.provisioned_credits.lock() {
+                manager.enqueue_revocation(lease);
+            }
+        }
+    }
+}
+
+fn retry_pending_revocations(app: &AppHandle) {
+    let pending = app.try_state::<AppState>().and_then(|state| {
+        state
+            .provisioned_credits
+            .lock()
+            .ok()
+            .map(|m| m.pending_snapshot())
+    });
+    let Some(pending) = pending else { return };
+    for lease in pending {
+        if revoke_lease(app, &lease).is_ok() {
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Ok(mut manager) = state.provisioned_credits.lock() {
+                    manager.remove_pending(&lease.token);
+                }
+            }
+        }
+    }
+}
+
+/// Mint and safely rotate a lease. Only the per relay/owner singleflight gate
+/// is held across network/runtime work; the manager mutex is acquired only to
+/// snapshot or commit state. This prevents unrelated keys from stalling and
+/// removes the runtime-transition/lease-manager lock inversion.
 fn rotate_lease_blocking(
     app: &AppHandle,
     key: &GatewayLeaseKey,
     force: bool,
     reason: RotationReason,
 ) -> Result<GatewayLease, String> {
+    rotate_lease_blocking_with_expected(app, key, force, reason, None)
+}
+
+fn rotate_lease_blocking_with_expected(
+    app: &AppHandle,
+    key: &GatewayLeaseKey,
+    force: bool,
+    reason: RotationReason,
+    expected_generation: Option<u64>,
+) -> Result<GatewayLease, String> {
     let state = app.state::<AppState>();
+    let gate = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?
+        .rotation_gate(key);
+    let _singleflight = gate.lock().map_err(|error| error.to_string())?;
+    retry_pending_revocations(app);
+
     let mut manager = state
         .provisioned_credits
         .lock()
         .map_err(|error| error.to_string())?;
+    // The expected-generation check is deliberately inside the singleflight
+    // critical section. A stale scheduled callback cannot pass this check,
+    // drop the lock, and then rotate a newer manual generation.
+    if let Some(expected) = expected_generation {
+        if !manager.is_current_generation(key, expected) {
+            return manager
+                .leases
+                .get(key)
+                .map(|entry| entry.lease.clone())
+                .ok_or_else(|| "stale Colony Credits refresh ignored".to_string());
+        }
+    }
     if let Some(cached) = manager.cached(key, force) {
         return Ok(cached);
     }
@@ -489,18 +684,24 @@ fn rotate_lease_blocking(
     // reconnect first retries that exact subset rather than minting a third
     // generation. Scheduled refresh also converges the subset before minting
     // its next primary replacement.
-    if let Some((primary, _old, old_pair_keys)) = manager.retained_snapshot(key) {
+    if let Some((primary, old, old_pair_keys)) = manager.retained_snapshot(key) {
+        drop(manager);
         let handoff = crate::managed_agents::handoff_provisioned_credits_pairs(
             app,
             &primary,
             Some(&old_pair_keys),
+            Some(&old),
         );
+        manager = state
+            .provisioned_credits
+            .lock()
+            .map_err(|error| error.to_string())?;
         match handoff {
             Ok(outcome) if outcome.remaining_old_keys.is_empty() => {
                 let old_to_revoke = manager.take_retained_old(key);
                 drop(manager);
                 if let Some(old) = old_to_revoke {
-                    let _ = revoke_lease(app, &old);
+                    revoke_or_queue(app, old);
                 }
                 if matches!(reason, RotationReason::ManualReconnect) {
                     return Ok(primary);
@@ -526,7 +727,7 @@ fn rotate_lease_blocking(
                 };
                 drop(manager);
                 if let Some(old) = old_to_revoke {
-                    let _ = revoke_lease(app, &old);
+                    revoke_or_queue(app, old);
                 }
                 return Err(error.message);
             }
@@ -534,11 +735,22 @@ fn rotate_lease_blocking(
     }
 
     let old = manager.leases.get(key).map(|entry| entry.lease.clone());
-    let replacement = mint_lease(app, key.clone())?;
+    let generation = manager.reserve_generation(key);
+    drop(manager);
+    let replacement = mint_lease(app, key.clone(), generation)?;
     if let Some(old_primary) = old.clone() {
-        match crate::managed_agents::handoff_provisioned_credits_pairs(app, &replacement, None) {
+        match crate::managed_agents::handoff_provisioned_credits_pairs(
+            app,
+            &replacement,
+            None,
+            Some(&old_primary),
+        ) {
             Ok(outcome) if outcome.remaining_old_keys.is_empty() => {}
             Ok(outcome) => {
+                let mut manager = state
+                    .provisioned_credits
+                    .lock()
+                    .map_err(|error| error.to_string())?;
                 manager.replace_primary(
                     replacement.clone(),
                     Some(RetainedLease {
@@ -563,34 +775,45 @@ fn rotate_lease_blocking(
                         lease: old_primary,
                         pair_keys: error.remaining_old_keys.clone(),
                     });
+                    let mut manager = state
+                        .provisioned_credits
+                        .lock()
+                        .map_err(|error| error.to_string())?;
                     manager.replace_primary(replacement.clone(), retained_old);
                     manager.schedule_refresh(app, &replacement);
                     if error.remaining_old_keys.is_empty() {
                         let old_to_revoke = manager.take_retained_old(key);
                         drop(manager);
                         if let Some(old) = old_to_revoke {
-                            let _ = revoke_lease(app, &old);
+                            revoke_or_queue(app, old);
                         }
                     }
                 } else {
                     // No pair accepted the replacement, so the old lease remains
                     // the sole working credential and the unused mint is safe to
                     // revoke.
-                    let _ = revoke_lease(app, &replacement);
+                    revoke_or_queue(app, replacement.clone());
                 }
                 return Err(error.message);
             }
         }
+        let mut manager = state
+            .provisioned_credits
+            .lock()
+            .map_err(|error| error.to_string())?;
+        manager.replace_primary(replacement.clone(), None);
+        manager.schedule_refresh(app, &replacement);
+        drop(manager);
+        revoke_or_queue(app, old_primary);
+        return Ok(replacement);
     }
 
+    let mut manager = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?;
     manager.replace_primary(replacement.clone(), None);
     manager.schedule_refresh(app, &replacement);
-    drop(manager);
-    if let Some(old) = old {
-        // Revocation is best-effort after the handoff. A replacement that is
-        // already serving agents must not be rolled back for a cleanup error.
-        let _ = revoke_lease(app, &old);
-    }
     Ok(replacement)
 }
 
@@ -619,203 +842,63 @@ pub fn clear_lease(app: &AppHandle, key: &GatewayLeaseKey, revoke: bool) -> Resu
         .map_err(|error| error.to_string())?
         .leases
         .remove(key);
-    if let Some(entry) = entry {
-        if let Some(task) = entry.refresh_task {
-            task.abort();
-        }
-        if revoke {
-            let mut first_error = None;
-            for lease in std::iter::once(entry.lease).chain(
-                entry
-                    .retained_old
-                    .into_iter()
-                    .map(|retained| retained.lease),
-            ) {
-                if let Err(error) = revoke_lease(app, &lease) {
-                    first_error.get_or_insert(error);
-                }
-            }
-            if let Some(error) = first_error {
-                return Err(error);
-            }
-        }
+    let Some(entry) = entry else { return Ok(()) };
+    if let Some(task) = entry.refresh_task {
+        task.abort();
+    }
+    if !revoke {
+        return Ok(());
+    }
+    let leases = std::iter::once(entry.lease).chain(
+        entry
+            .retained_old
+            .into_iter()
+            .map(|retained| retained.lease),
+    );
+    for lease in leases {
+        revoke_or_queue(app, lease);
     }
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn gateway_upstream_uses_http_origin_and_path() {
-        assert_eq!(
-            normalized_gateway_upstream("wss://Relay.Example:443/"),
-            "https://Relay.Example:443/gateway/openai"
-        );
-        assert_eq!(
-            normalized_gateway_upstream("http://relay.example///"),
-            "http://relay.example/gateway/openai"
-        );
-    }
-
-    #[test]
-    fn balance_parser_is_signed_integer_safe() {
-        assert_eq!(parse_balance_nanousd("123456789"), Ok(123_456_789));
-        assert_eq!(parse_balance_nanousd("-1"), Ok(-1));
-        assert!(parse_balance_nanousd("1.25").is_err());
-        assert!(parse_balance_nanousd("999999999999999999999999999999999999999999999999").is_err());
-    }
-
-    #[test]
-    fn account_requires_usd_and_matching_status() {
-        let account: GatewayAccount = serde_json::from_value(serde_json::json!({
-            "balance_nanousd": "-1",
-            "currency": "USD",
-            "status": "depleted"
-        }))
-        .expect("account wire shape");
-        assert_eq!(account.balance_nanousd_i128(), Ok(-1));
-
-        let mismatch = GatewayAccount {
-            balance_nanousd: "0".to_string(),
-            currency: "USD".to_string(),
-            status: GatewayAccountStatus::Active,
-        };
-        assert!(mismatch.balance_nanousd_i128().is_err());
-    }
-
-    #[test]
-    fn token_debug_is_redacted_and_cache_keys_are_isolated() {
-        let token = RedactedToken::new("colony-gw-secret".to_string()).expect("token");
-        assert!(!format!("{token:?}").contains("colony-gw-secret"));
-        let first = GatewayLeaseKey::new("wss://relay.example/", &"aa".repeat(32)).unwrap();
-        let other_relay = GatewayLeaseKey::new("wss://other.example/", &"aa".repeat(32)).unwrap();
-        let other_owner = GatewayLeaseKey::new("wss://relay.example/", &"bb".repeat(32)).unwrap();
-        assert_ne!(first, other_relay);
-        assert_ne!(first, other_owner);
-        let mut manager = ProvisionedCreditsManager::default();
-        manager.replace_primary(
-            GatewayLease {
-                key: first.clone(),
-                token,
-                expires_at: Utc::now() + ChronoDuration::days(30),
-            },
-            None,
-        );
-        assert!(manager.contains(&first));
-    }
-
-    fn test_key(owner_byte: char) -> ManagedAgentRuntimeKey {
-        ManagedAgentRuntimeKey::new(owner_byte.to_string().repeat(64), "wss://relay.example")
-            .expect("test runtime key")
-    }
-
-    fn test_lease(key: &GatewayLeaseKey, token: &str) -> GatewayLease {
-        GatewayLease {
-            key: key.clone(),
-            token: RedactedToken::new(token.to_string()).expect("test token"),
-            expires_at: Utc::now() + ChronoDuration::days(30),
+/// Gracefully revoke every active and pending lease before process shutdown.
+/// Raw references remain in `pending_revocations` when the relay is
+/// unreachable, allowing a later reconnect to retry without minting a second
+/// generation. The bounded retry keeps shutdown from hanging indefinitely.
+pub fn drain_provisioned_credits_blocking(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let leases = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?
+        .take_all_leases();
+    let mut first_error = None;
+    for lease in leases {
+        let mut revoked = false;
+        for attempt in 0..3 {
+            match revoke_lease(app, &lease) {
+                Ok(()) => {
+                    revoked = true;
+                    break;
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    if attempt < 2 {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            }
+        }
+        if !revoked {
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Ok(mut manager) = state.provisioned_credits.lock() {
+                    manager.enqueue_revocation(lease);
+                }
+            }
         }
     }
-
-    #[test]
-    fn partial_handoff_keeps_replacement_primary_and_old_for_failed_pair() {
-        let cache_key =
-            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
-        let old_pair = test_key('b');
-        let successful_pair = test_key('c');
-        let old = test_lease(&cache_key, "old-generation");
-        let replacement = test_lease(&cache_key, "replacement-generation");
-        let mut manager = ProvisionedCreditsManager::default();
-        manager.replace_primary(
-            replacement.clone(),
-            Some(RetainedLease {
-                lease: old.clone(),
-                pair_keys: vec![old_pair.clone()],
-            }),
-        );
-
-        assert_eq!(
-            manager
-                .cached(&cache_key, false)
-                .expect("primary lease")
-                .token
-                .as_str(),
-            replacement.token.as_str()
-        );
-        assert_eq!(manager.retained_pair_keys(&cache_key), vec![old_pair]);
-        assert_eq!(
-            manager
-                .retained_snapshot(&cache_key)
-                .expect("retained generation")
-                .1
-                .token
-                .as_str(),
-            old.token.as_str()
-        );
-        assert!(!manager
-            .retained_pair_keys(&cache_key)
-            .contains(&successful_pair));
-    }
-
-    #[test]
-    fn retry_converges_retained_pairs_and_takes_old_once() {
-        let cache_key =
-            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
-        let old = test_lease(&cache_key, "old-generation");
-        let replacement = test_lease(&cache_key, "replacement-generation");
-        let mut manager = ProvisionedCreditsManager::default();
-        manager.replace_primary(
-            replacement,
-            Some(RetainedLease {
-                lease: old.clone(),
-                pair_keys: vec![test_key('b')],
-            }),
-        );
-
-        let old_to_revoke = manager.update_retained_old(&cache_key, vec![]);
-        assert_eq!(
-            old_to_revoke.as_ref().map(|lease| lease.token.as_str()),
-            Some(old.token.as_str())
-        );
-        assert!(manager.retained_pair_keys(&cache_key).is_empty());
-        assert!(manager.take_retained_old(&cache_key).is_none());
-    }
-
-    #[test]
-    fn new_spawn_after_partial_handoff_reads_replacement_primary() {
-        let cache_key =
-            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
-        let replacement = test_lease(&cache_key, "replacement-generation");
-        let mut manager = ProvisionedCreditsManager::default();
-        manager.replace_primary(
-            replacement.clone(),
-            Some(RetainedLease {
-                lease: test_lease(&cache_key, "old-generation"),
-                pair_keys: vec![test_key('b')],
-            }),
-        );
-
-        let spawn_lease = manager.cached(&cache_key, false).expect("spawn lease");
-        assert_eq!(spawn_lease.token.as_str(), replacement.token.as_str());
-    }
-
-    #[test]
-    fn replaced_primary_invalidates_the_prior_refresh_generation() {
-        let cache_key =
-            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
-        let old = test_lease(&cache_key, "old-generation");
-        let replacement = test_lease(&cache_key, "replacement-generation");
-        let mut manager = ProvisionedCreditsManager::default();
-        manager.replace_primary(old.clone(), None);
-        manager.replace_primary(replacement.clone(), None);
-
-        assert!(!manager.is_current_generation(&cache_key, old.expires_at, &old.token));
-        assert!(manager.is_current_generation(
-            &cache_key,
-            replacement.expires_at,
-            &replacement.token
-        ));
-    }
+    first_error.map_or(Ok(()), Err)
 }
+
+#[cfg(test)]
+mod tests;

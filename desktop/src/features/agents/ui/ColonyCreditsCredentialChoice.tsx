@@ -46,12 +46,17 @@ export function ColonyCreditsCredentialChoice({
     }
   }, []);
 
+  const provisionedSelected = config.credential_mode === "colony_credits";
+
   useEffect(() => {
-    if (supported) void refreshAccount();
-  }, [refreshAccount, supported]);
+    if (supported && provisionedSelected) void refreshAccount();
+    if (!provisionedSelected) {
+      setBalanceNanousd(null);
+      setAccountError(null);
+    }
+  }, [refreshAccount, provisionedSelected, supported]);
 
   const status = balanceNanousd ? getColonyCreditsStatus(balanceNanousd) : null;
-  const provisionedSelected = config.credential_mode === "colony_credits";
 
   async function handleReconnect() {
     setIsReconnecting(true);

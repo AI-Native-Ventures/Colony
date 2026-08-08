@@ -39,6 +39,19 @@ test("gateway authorization-expired copy remains actionable", () => {
   );
 });
 
+test("structured ACP Colony Credits denial remains actionable without gateway prefix", () => {
+  assert.deepEqual(
+    friendlyAgentLastError(
+      "⚠️ Colony Credits authorization expired — reconnect to resume this agent.",
+    ),
+    {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_RECONNECT_COPY,
+    },
+  );
+});
+
 test("gateway 402 offers depleted top-up copy without retry semantics", () => {
   assert.deepEqual(
     friendlyAgentLastError("gateway returned 402 Payment Required"),

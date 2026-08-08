@@ -7,15 +7,14 @@ use std::{
     },
 };
 
-use nostr::{Keys, ToBech32};
-use tauri::{AppHandle, Manager};
-#[cfg(feature = "mesh-llm")]
-use tokio::sync::Mutex as AsyncMutex;
-
 use crate::huddle::HuddleState;
 use crate::managed_agents::config_bridge::SessionConfigCache;
 use crate::managed_agents::{ManagedAgentPairRuntime, ManagedAgentRuntimeKey};
 use crate::provisioned_credits::ProvisionedCreditsManager;
+use nostr::{Keys, ToBech32};
+use tauri::{AppHandle, Manager};
+#[cfg(feature = "mesh-llm")]
+use tokio::sync::Mutex as AsyncMutex;
 pub struct AppState {
     pub keys: Mutex<Keys>,
     pub http_client: reqwest::Client,
@@ -40,9 +39,8 @@ pub struct AppState {
     pub managed_agent_profile_reconcile_enabled: AtomicBool,
     /// Shared shutdown signal checked by launch-time agent restoration.
     pub shutdown_started: AtomicBool,
-    /// Serializes every managed-runtime transition that changes the protected
-    /// PID set: spawn/register, adoption, stop, shutdown, and sweep snapshots.
-    /// Never perform network I/O while holding this lock.
+    /// Serializes managed-runtime transitions that change the protected PID
+    /// set; network I/O must happen after releasing this lock.
     pub managed_agent_runtime_transition: Mutex<()>,
     pub managed_agents_store_lock: Mutex<()>,
     pub channel_templates_store_lock: Mutex<()>,

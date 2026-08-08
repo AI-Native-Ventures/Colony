@@ -481,6 +481,10 @@ pub struct ManagedAgentProcess {
     pub adapter_availability: Option<AcpAvailabilityStatus>,
     /// Unpredictable identity shared only with this harness generation.
     pub start_nonce: String,
+    /// Spawn-time provisioned lease, consumed into the pair binding before
+    /// the process enters the runtime map. This is never persisted or exposed
+    /// to the webview; `GatewayLease` redacts its Debug representation.
+    pub provisioned_lease: Option<crate::provisioned_credits::GatewayLease>,
     /// Win32 Job Object owning the harness + its entire process tree. Closing
     /// the handle (via `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) kills the whole
     /// tree — the Windows mirror of the Unix process-group teardown. `None`

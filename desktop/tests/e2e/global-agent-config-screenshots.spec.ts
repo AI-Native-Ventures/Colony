@@ -219,6 +219,7 @@ test.describe("global agent config screenshots", () => {
 
     const choice = page.getByTestId("colony-credits-credential-choice");
     await expect(choice).toBeVisible();
+    await choice.getByRole("button", { name: /Colony Credits/ }).click();
     await expect(choice.getByTestId("colony-credits-balance")).toHaveText(
       "$0.12",
     );

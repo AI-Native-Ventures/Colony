@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::agent_env::build_buzz_agent_provider_defaults;
 
@@ -9,7 +9,7 @@ use crate::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
         spawn_key_refusal, CredentialMode, KnownAcpRuntime, ManagedAgentPairRuntime,
-        ManagedAgentRecord, ManagedAgentRuntimeKey, ManagedAgentSummary,
+        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentRuntimeKey, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -30,6 +30,38 @@ mod provisioned;
 pub(crate) use provisioned::{
     configure_runtime_cli, provisioned_spawn_env, spawn_agent_child_with_lease,
 };
+
+/// Verify that a provisioned lease is still owned by the current signing
+/// identity. Callers run this at the transition-lock commit point, after
+/// potentially blocking spawn work, so an identity switch cannot register a
+/// child carrying the previous owner's token.
+pub(crate) fn provisioned_lease_matches_current_identity(
+    app: &AppHandle,
+    lease: &crate::provisioned_credits::GatewayLease,
+) -> bool {
+    let state = app.state::<crate::app_state::AppState>();
+    state
+        .signing_keys()
+        .map(|keys| {
+            keys.public_key()
+                .to_hex()
+                .eq_ignore_ascii_case(&lease.key.owner_pubkey)
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn provisioned_process_matches_current_identity(
+    app: &AppHandle,
+    relay_url: &str,
+    process: &ManagedAgentProcess,
+) -> bool {
+    let Some(lease) = process.provisioned_lease.as_ref() else {
+        return true;
+    };
+    crate::provisioned_credits::normalized_relay_http_origin(relay_url)
+        .is_ok_and(|origin| origin == lease.key.relay_origin)
+        && provisioned_lease_matches_current_identity(app, lease)
+}
 
 mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
@@ -469,7 +501,7 @@ fn spawn_agent_child_inner(
     // from `personas`; a definition edit landing between a caller's snapshot
     // apply and this spawn could hand a fresh model/provider to a stale
     // prompt. This also folds in orphan refusal via `require_resolved`: every
-    // caller (interactive start, launch restore, `start_managed_agent_process`)
+    // caller (interactive start and launch restore)
     // inherits it — no caller can bypass this by reaching `spawn_agent_child`
     // directly. Checked before any side effect (log marker, log file, process
     // spawn) so a refused spawn leaves no trace.
@@ -510,6 +542,7 @@ fn spawn_agent_child_inner(
             lease_override,
         },
     )?;
+    let spawned_provisioned_lease = provisioned_lease.as_ref().map(|(lease, _)| lease.clone());
 
     let log_path = super::managed_agent_runtime_log_path(app, &runtime_key)?;
     append_log_marker(
@@ -863,6 +896,15 @@ fn spawn_agent_child_inner(
         .as_ref()
         .map(|(_, env)| env)
         .unwrap_or(&descriptor.env);
+    if provisioned_lease.is_some() {
+        // Never inherit the ambient ACP no-meter opt-out for a provisioned
+        // launch. The raw gateway token remains only in ACP's meter config;
+        // AcpClient scrubs it before spawning the underlying harness.
+        command.env_remove("BUZZ_ACP_NO_METER");
+        command.env("BUZZ_ACP_PROVISIONED", "true");
+    } else {
+        command.env_remove("BUZZ_ACP_PROVISIONED");
+    }
     for (key, value) in spawn_env {
         command.env(key, value);
     }
@@ -956,6 +998,7 @@ fn spawn_agent_child_inner(
         spawned_setup_mode,
         spawned_adapter_availability,
         start_nonce,
+        spawned_provisioned_lease,
         &record.name,
     ));
     #[cfg(not(windows))]
@@ -966,64 +1009,8 @@ fn spawn_agent_child_inner(
         setup_mode: spawned_setup_mode,
         adapter_availability: spawned_adapter_availability,
         start_nonce,
+        provisioned_lease: spawned_provisioned_lease,
     })
-}
-
-pub fn start_managed_agent_process(
-    app: &AppHandle,
-    record: &mut ManagedAgentRecord,
-    runtimes: &mut HashMap<ManagedAgentRuntimeKey, ManagedAgentPairRuntime>,
-    owner_hex: Option<&str>,
-) -> Result<(), String> {
-    let relay_url = {
-        use tauri::Manager;
-        let state = app.state::<crate::app_state::AppState>();
-        crate::relay::effective_agent_relay_url(
-            &record.relay_url,
-            &crate::relay::relay_ws_url_with_override(&state),
-        )
-    };
-    let key = ManagedAgentRuntimeKey::new(record.pubkey.clone(), &relay_url)?;
-    if let Some(runtime) = runtimes.get_mut(&key) {
-        if runtime
-            .child
-            .try_wait()
-            .map_err(|error| format!("failed to inspect running process: {error}"))?
-            .is_none()
-        {
-            return Ok(());
-        }
-
-        runtimes.remove(&key);
-        super::remove_agent_runtime_receipt(app, &key);
-    }
-
-    // Scalar PIDs are migration-only and never establish pair liveness.
-    record.runtime_pid = None;
-
-    let mut process = spawn_agent_child(app, record, &key.relay_url, false, owner_hex)?;
-    let now = now_iso();
-    let receipt = super::ManagedAgentRuntimeReceipt {
-        key: key.clone(),
-        pid: process.child.id(),
-        desktop_instance_id: current_instance_id(app),
-        started_at: now.clone(),
-    };
-    if let Err(error) = super::write_agent_runtime_receipt(app, &receipt) {
-        let _ = terminate_process(process.child.id());
-        let _ = process.child.wait();
-        return Err(error);
-    }
-
-    record.updated_at = now.clone();
-    record.last_started_at = Some(now);
-    record.last_stopped_at = None;
-    record.last_exit_code = None;
-    record.last_error = None;
-    record.last_error_code = None;
-
-    runtimes.insert(key, ManagedAgentPairRuntime::starting(process));
-    Ok(())
 }
 
 #[cfg(test)]
