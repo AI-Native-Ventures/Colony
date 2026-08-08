@@ -79,6 +79,16 @@ jobs:
               - 'deny.toml'
               - '.github/workflows/ci.yml'
               - 'scripts/run-tests.sh'
+              # Provisioning inputs for the Postgres-backed relay suites. The
+              # `Relay Suites` required check skips with this filter, so a
+              # change to any of these could break interrupt_gate,
+              # interrupt_runtime or e2e_interrupts while the gate stayed
+              # green: create-required-extensions.sql is what puts pgcrypto in
+              # CI's database, and start-relay-for-tests.sh supplies both the
+              # schema and the durable relay key e2e_interrupts requires.
+              - 'scripts/start-relay-for-tests.sh'
+              - 'scripts/create-required-extensions.sql'
+              - 'scripts/attach-schema-partitions.sql'
               - 'justfile'
             desktop:
               - 'scripts/check-file-sizes-core.mjs'
