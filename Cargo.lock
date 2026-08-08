@@ -1105,6 +1105,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "buzz-native"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "buzz-pair-relay"
 version = "0.1.0"
 dependencies = [

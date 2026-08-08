@@ -1,0 +1,17 @@
+[package]
+name = "buzz-native"
+description = "Shell-agnostic core for the Buzz desktop native layer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+# This crate exists to be free of the shell. Anything that reaches for tauri
+# belongs on the other side of the seam.
+unsafe_code = "forbid"

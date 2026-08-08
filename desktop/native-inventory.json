@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 320,
-    "rust_lines": 131314,
+    "rust_lines": 131334,
     "tauri_coupled": 132,
     "portable": 188,
     "portable_lines": 72699,
@@ -328,6 +328,9 @@
       "src-tauri/src/util.rs",
       "src-tauri/src/webkit_rendering.rs",
       "src-tauri/src/webkit_rendering/tests.rs"
+    ],
+    "seam_list": [
+      "src-tauri/src/host.rs"
     ]
   },
   "commands": {
@@ -344,16 +347,16 @@
     ]
   },
   "params": {
-    "AppHandle": 272,
-    "State": 213,
+    "AppHandle": 271,
+    "State": 214,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 3
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 272,
-      "State": 213,
+      "AppHandle": 271,
+      "State": 214,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 3
@@ -379,7 +382,7 @@
     ".opener()": 1,
     ".notification()": 0,
     ".updater()": 0,
-    ".get_webview_window(": 5,
+    ".get_webview_window(": 4,
     ".global_shortcut(": 1,
     ".request_restart(": 6,
     ".run_on_main_thread(": 2,
