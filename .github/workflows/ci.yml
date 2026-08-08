@@ -138,6 +138,15 @@ jobs:
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
         run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
+      - name: Schema drift check
+        # CI provisions Postgres from schema/schema.sql, not from migrations/,
+        # so a table added only to migrations/ is invisible here and surfaces
+        # later as an unrelated-looking product failure. Runs in this job
+        # because `Detect Changed Paths` is required and unconditional, so the
+        # guard cannot be skipped by a path filter.
+        run: |
+          node --test scripts/check-schema-drift.test.mjs
+          node scripts/check-schema-drift.mjs
 
   rust-lint:
     name: Rust Lint
