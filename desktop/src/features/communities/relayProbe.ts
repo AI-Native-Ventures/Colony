@@ -2,6 +2,42 @@
  * Normalize a relay URL to ws(s):// form and probe reachability.
  */
 
+/**
+ * Collapse every loopback spelling onto 127.0.0.1, preserving the port.
+ *
+ * The relay identifies a community by the request `Host`, and `localhost:3200`
+ * and `127.0.0.1:3200` are two different communities to it, by design:
+ * `verify_nip98_event` refuses to alias them because the `u`-tag host IS the
+ * community binding. Meanwhile `buzz_core::relay::normalize_relay_url`
+ * canonicalises loopback to 127.0.0.1 before the desktop injects
+ * BUZZ_RELAY_URL into a managed agent.
+ *
+ * So a user who typed `localhost` got an app bound to one community and agents
+ * bound to another, and every agent's WebSocket answered 404. Canonicalising
+ * here, at the point of entry, keeps the app on the same spelling its own
+ * agents will use. Non-loopback hosts are never rewritten.
+ */
+function canonicalizeLoopback(url: URL): URL {
+  const host = url.hostname.toLowerCase();
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "[::1]" ||
+    host === "::1"
+  ) {
+    url.hostname = "127.0.0.1";
+  }
+  return url;
+}
+
+function parsed(raw: string): string | null {
+  try {
+    return canonicalizeLoopback(new URL(raw)).toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
 /** Normalize a user-entered relay URL to ws(s):// form. Returns null if invalid. */
 export function normalizeRelayUrl(input: string): string | null {
   const trimmed = input.trim().replace(/\/+$/, "");
@@ -9,45 +45,22 @@ export function normalizeRelayUrl(input: string): string | null {
 
   // Already ws(s)://
   if (trimmed.startsWith("wss://") || trimmed.startsWith("ws://")) {
-    try {
-      new URL(trimmed);
-      return trimmed;
-    } catch {
-      return null;
-    }
+    return parsed(trimmed);
   }
 
   // Convert https → wss, http → ws
   if (trimmed.startsWith("https://")) {
-    const wsUrl = `wss://${trimmed.slice(8)}`;
-    try {
-      new URL(wsUrl);
-      return wsUrl;
-    } catch {
-      return null;
-    }
+    return parsed(`wss://${trimmed.slice(8)}`);
   }
   if (trimmed.startsWith("http://")) {
-    const wsUrl = `ws://${trimmed.slice(7)}`;
-    try {
-      new URL(wsUrl);
-      return wsUrl;
-    } catch {
-      return null;
-    }
+    return parsed(`ws://${trimmed.slice(7)}`);
   }
 
   // Match the legacy add/edit community forms: a scheme-less host is assumed
   // to be a secure relay. Validation still rejects whitespace and malformed
   // values instead of blindly persisting the prefixed string.
   if (!trimmed.includes("://")) {
-    const wsUrl = `wss://${trimmed}`;
-    try {
-      new URL(wsUrl);
-      return wsUrl;
-    } catch {
-      return null;
-    }
+    return parsed(`wss://${trimmed}`);
   }
 
   return null;
