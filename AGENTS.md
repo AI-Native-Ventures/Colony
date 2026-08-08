@@ -484,6 +484,39 @@ spending time on it, and say so rather than implying you fixed it.
 "committed", "run against a real relay", and "used by a person" are different
 claims. Say which one you mean. If part of a path was mocked, name it.
 
+## Never Take Over the Human's Machine
+
+You share this Mac with a person who is working on it. Agent convenience never
+outranks their ability to use their own computer.
+
+**Never force window focus.** No `osascript ... set frontmost`, no `activate`,
+no `open -a` to raise a window, and above all never any of those on a loop or a
+timer. A parity-trace agent left exactly this running for five hours; it stole
+focus every five seconds and made the machine unusable for real work:
+
+```zsh
+# NEVER DO THIS
+tmux new-session -d -s keepalive 'caffeinate -dims & while true; do
+  osascript -e "tell application \"System Events\" to set frontmost of first
+                process whose name is \"buzz-desktop\" to true"
+  sleep 5
+done'
+```
+
+A LaunchAgent (`ventures.colony.focus-guard`) kills any process matching
+`set frontmost of first process` within 15 seconds, so it will not work even if
+you try. If a run needs the app in the foreground, use the headless paths the
+repo already has: `just desktop-screenshot`, `pnpm test:e2e:smoke`, or
+Playwright with `installMockBridge`.
+
+**Never run `caffeinate`.** Whether the machine sleeps is the human's decision.
+Same for display, audio, Do Not Disturb, and Spaces.
+
+**Clean up what you spawn.** Long-lived `tmux` sessions, background relays, and
+keepalive loops get torn down when your task ends. Name tmux sessions after your
+task so the owner can tell whose they are, and list whatever is still running in
+your final report.
+
 ## Common Gotchas
 
 1. **Kind `39000` for channel metadata, not `41`** — kind 41 is NIP-01 (unused). All kinds defined in `buzz-core/src/kind.rs`.
