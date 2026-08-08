@@ -26,6 +26,10 @@ async function openPipeline(page: Page) {
   await page.getByTestId("discovery-top-tab-pipeline").click();
   await expect(page).toHaveURL(/#\/discovery\?surface=pipeline$/);
   await expect(page.getByTestId("pipeline-workspace")).toBeVisible();
+  // The tab must survive the navigation it just performed. Asserting it only
+  // before the click missed a regression where the trigger disappeared on the
+  // Pipeline surface, leaving the tab bar with nothing selected.
+  await expect(page.getByTestId("discovery-top-tab-pipeline")).toBeVisible();
 }
 
 async function capture(page: Page, filename: string) {

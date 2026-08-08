@@ -193,8 +193,10 @@ test("fixture updateLead wipes omitted fields the way the relay does", async () 
   const page = await source.getLeads({ scope: "global", page: 1, pageSize: 1 });
   const leadId = page.leads[0].id;
 
+  // No status on the seed. The fixture now enforces the relay's transition
+  // matrix, so naming a status here would couple this test to whichever
+  // funnel status the first fixture lead happens to start in.
   const seeded = await source.updateLead(leadId, {
-    status: "accepted",
     website: "https://seed.example",
     email: "seed@example.com",
     notes: "Warm intro",
@@ -217,7 +219,7 @@ test("fixture updateLead wipes omitted fields the way the relay does", async () 
   assert.equal(partial.owner, undefined, "an omitted owner must be cleared");
   assert.equal(
     partial.status,
-    "accepted",
+    seeded.status,
     "status is the one field the relay carries forward",
   );
 });

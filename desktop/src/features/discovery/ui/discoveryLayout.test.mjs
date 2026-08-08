@@ -14,6 +14,7 @@ import {
   fieldRolesSearch,
   peopleCampaignDetailSearch,
   roleCampaignsSearch,
+  showPipelineTab,
   sortByLeadCountDesc,
   verticalCampaignsSearch,
 } from "./discoveryLayout.ts";
@@ -28,6 +29,40 @@ test("leads surface maps to the Leads top tab and everything else to Discover", 
 test("the pipeline surface maps to its own top tab, not Discover", () => {
   assert.equal(discoveryTopTab("pipeline"), "pipeline");
   assert.equal(discoverySurface({ surface: "pipeline" }), "pipeline");
+});
+
+test("the Pipeline tab stays visible once the user is on the Pipeline", () => {
+  // The regression this guards: `routeNeedsLeads` does not load leads on the
+  // Pipeline surface, so leadTotal is 0 there, and `experience` is undefined
+  // for every fixture and demo user because only the relay source sets it.
+  // Without the surface clause the trigger vanished from under anyone who
+  // clicked it, leaving the Tabs value pointing at no trigger at all.
+  assert.equal(
+    showPipelineTab({ surface: "pipeline", leadTotal: 0 }),
+    true,
+    "being on the surface is reason enough to show its tab",
+  );
+  assert.equal(
+    showPipelineTab({ surface: "pipeline", experience: "demo", leadTotal: 0 }),
+    true,
+  );
+
+  // The other two arms, unchanged.
+  assert.equal(
+    showPipelineTab({ surface: "leads", experience: "live", leadTotal: 0 }),
+    true,
+    "live access shows the tab before any lead exists",
+  );
+  assert.equal(
+    showPipelineTab({ surface: "leads", leadTotal: 3 }),
+    true,
+    "a workspace with leads shows the tab",
+  );
+  assert.equal(
+    showPipelineTab({ surface: "leads", experience: "demo", leadTotal: 0 }),
+    false,
+    "an empty demo workspace has no funnel to show",
+  );
 });
 
 test("taxonomy grids sort by lead count descending, then name", () => {

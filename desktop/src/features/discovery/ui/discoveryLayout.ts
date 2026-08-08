@@ -109,6 +109,33 @@ export function discoveryTopTab(
   return "discover";
 }
 
+/**
+ * Whether the Pipeline trigger belongs in the tab bar.
+ *
+ * The rule is: show it on its own surface, when access is live, or when the
+ * workspace has Leads to put in the funnel.
+ *
+ * The first clause is not redundant. `routeNeedsLeads` deliberately does not
+ * load leads on the Pipeline surface, because the Pipeline fetches its own
+ * bounded per-column pages instead, so `leadTotal` is 0 there. And
+ * `experience` is optional on `DiscoveryEntitlement`: only the relay source
+ * ever sets it, and the fixture source never does. Without this clause a demo
+ * user clicks Pipeline, the trigger vanishes from under them, and because the
+ * Tabs value is still `pipeline` with no matching trigger, nothing renders as
+ * selected at all.
+ */
+export function showPipelineTab({
+  experience,
+  leadTotal,
+  surface,
+}: {
+  experience?: "demo" | "live";
+  leadTotal: number;
+  surface: NonNullable<DiscoverySearch["surface"]>;
+}): boolean {
+  return surface === "pipeline" || experience === "live" || leadTotal > 0;
+}
+
 /** Stable descending sort by lead count, then name, for taxonomy grids. */
 export function sortByLeadCountDesc<
   T extends { leadCount: number; name: string },
