@@ -825,6 +825,7 @@ dependencies = [
  "buzz-core",
  "buzz-db",
  "buzz-media",
+ "buzz-meter-core",
  "buzz-pubsub",
  "buzz-search",
  "buzz-workflow",
@@ -975,6 +976,7 @@ name = "buzz-db"
 version = "0.1.0"
 dependencies = [
  "buzz-core",
+ "buzz-meter-core",
  "buzz-sdk",
  "chrono",
  "hex",

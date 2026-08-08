@@ -21,7 +21,11 @@ use serde_json::Value;
 
 /// NanoUSD in one US dollar. Providers report money in dollars; the ledger
 /// stores integers.
-const NANOUSD_PER_USD: f64 = 1_000_000_000.0;
+///
+/// Single source of truth for the money unit: `buzz-db`'s credit ledger and
+/// `buzz-admin`'s CLI both import this constant rather than redefining it, so
+/// a dollar always means the same number of nanoUSD everywhere.
+pub const NANOUSD_PER_USD: f64 = 1_000_000_000.0;
 
 /// Read a dollar amount that must be a real, non-negative number.
 ///
@@ -38,7 +42,11 @@ fn usd_field(scope: &Value, key: &str) -> Option<f64> {
 /// "this call was free", so rounding a real sub-nanodollar charge down to it
 /// would state something the provider did not. One nanoUSD is the smallest
 /// amount the ledger can hold and is the honest floor.
-fn to_nanousd(usd: f64) -> Option<u64> {
+///
+/// `None` when the amount is not a real, non-negative number of nanoUSD.
+/// This is the one money conversion the ledger family uses; `buzz-admin`
+/// adapts its `u64` result to the CLI's range and error type.
+pub fn to_nanousd(usd: f64) -> Option<u64> {
     let nanos = (usd * NANOUSD_PER_USD).round();
     if !nanos.is_finite() || nanos < 0.0 || nanos > u64::MAX as f64 {
         return None;

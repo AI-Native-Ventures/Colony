@@ -26,8 +26,9 @@ use std::sync::Arc;
 use anyhow::{bail, Result};
 use buzz_core::kind::KIND_NIP43_MEMBERSHIP_LIST;
 use buzz_core::tenant::{relay_url_authority, TenantContext};
-use buzz_db::credits::{self, NANOUSD_PER_USD};
+use buzz_db::credits;
 use buzz_db::{Db, DbConfig};
+use buzz_meter_core::cost::{to_nanousd, NANOUSD_PER_USD};
 use buzz_pubsub::{EventTopic, PubSubManager};
 use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
@@ -717,18 +718,14 @@ async fn cmd_credits_reconcile(date_arg: &str, csv_path: &std::path::Path) -> Re
     Ok(0)
 }
 
-/// Convert a dollar amount to nanoUSD integers (rounding, sub-nano floor of
-/// 1, negatives rejected) — the same money semantics as
-/// `crates/buzz-meter-core/src/cost.rs::to_nanousd`.
+/// Convert a dollar amount to nanoUSD integers. The money math is
+/// `buzz_meter_core::cost::to_nanousd` (rounding, sub-nano floor of 1,
+/// negatives rejected); this wrapper only adapts its `Option<u64>` to the
+/// CLI's `Result<i64, String>` and i64 range.
 fn usd_to_nanousd(usd: f64) -> std::result::Result<i64, String> {
-    let nanos = (usd * NANOUSD_PER_USD).round();
-    if !nanos.is_finite() || nanos < 0.0 || nanos > i64::MAX as f64 {
-        return Err(format!("amount ${usd} cannot be represented in nanoUSD"));
-    }
-    if nanos == 0.0 && usd > 0.0 {
-        return Ok(1);
-    }
-    Ok(nanos as i64)
+    let nanos =
+        to_nanousd(usd).ok_or_else(|| format!("amount ${usd} cannot be represented in nanoUSD"))?;
+    i64::try_from(nanos).map_err(|_| format!("amount ${usd} cannot be represented in nanoUSD"))
 }
 
 /// Sum the cost column of a Vercel usage CSV export for one UTC day, in

@@ -19,9 +19,9 @@ use crate::error::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 
-/// NanoUSD in one US dollar. Mirrors `buzz-meter-core/src/cost.rs`; providers
-/// report money in dollars and the ledger stores integers.
-pub const NANOUSD_PER_USD: f64 = 1_000_000_000.0;
+/// Single source of truth for the nanoUSD unit, re-exported from
+/// `buzz-meter-core` so the definition cannot drift from the metering layer.
+pub use buzz_meter_core::cost::NANOUSD_PER_USD;
 
 /// A single append-only `credit_ledger` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,11 +143,16 @@ pub async fn debit_observed(
 /// Sum of `debit` observed costs for one UTC day (`[day 00:00, day+1 00:00)`).
 ///
 /// The daily reconciliation job compares this against the upstream (Vercel
-/// AI Gateway) usage export.
+/// AI Gateway) usage export. The window bounds are bound as `TIMESTAMPTZ`
+/// (UTC), never as bare `TIMESTAMP`: Postgres would otherwise coerce the
+/// latter using the session TimeZone, silently shifting the window — and a
+/// shifted window can mask real drift, which is what reconciliation exists
+/// to catch.
 pub async fn debits_on_day(pool: &PgPool, day: chrono::NaiveDate) -> Result<i64> {
     let midnight = |date: chrono::NaiveDate| {
         date.and_hms_opt(0, 0, 0)
             .ok_or_else(|| crate::error::DbError::InvalidData("midnight is a valid time".into()))
+            .map(|t| t.and_utc())
     };
     let start = midnight(day)?;
     let end = midnight(
@@ -263,6 +268,18 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
         None => {
             // Replayed ref: the conflicting row is committed (our insert
             // waited on it) — return the original entry, balance untouched.
+            //
+            // Why this is a no-op rather than a double debit: under READ
+            // COMMITTED (the pool default) the conflicting insert either
+            // committed before ours — ours then sees the row and this branch
+            // is taken — or it commits after ours, in which case ours won the
+            // conflict and never reaches here. Either way the account UPDATE
+            // runs exactly once. `apply_entry` opening its own transaction is
+            // what keeps callers from weakening this: the conflict resolution
+            // and the re-select share one transaction, and no caller-supplied
+            // transaction can widen the window. Under REPEATABLE READ the
+            // same race fails loudly with a serialization error instead of
+            // double-debiting — the dangerous direction always errors.
             let row = sqlx::query(
                 "SELECT id, pubkey, delta, kind, ref, model, observed_cost, request_id, created_at \
                  FROM credit_ledger WHERE pubkey = $1 AND ref = $2",
@@ -283,6 +300,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
 mod tests {
     use super::*;
     use nostr::Keys;
+    use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
 
     const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
@@ -520,6 +538,84 @@ mod tests {
             err.to_string().contains("positive amount"),
             "unexpected: {err}"
         );
+        drop_scratch(&admin, pool, &name).await;
+    }
+
+    /// Acceptance: `debits_on_day` is independent of the session TimeZone —
+    /// the day window is UTC by contract. Regression: `start`/`end` were
+    /// bound as `NaiveDateTime`, which sqlx sends as bare `TIMESTAMP`;
+    /// Postgres coerces that to `TIMESTAMPTZ` using the session TimeZone, so
+    /// under `Africa/Johannesburg` (UTC+2, no DST) the window shifted two
+    /// hours. A shifted window can mask real reconciliation drift — the exact
+    /// failure this query exists to catch.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn debits_on_day_window_is_independent_of_session_timezone() {
+        let admin = admin_pool().await;
+        let (pool, name) = scratch(&admin, "credits_tz").await;
+        let base = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| TEST_DB_URL.into());
+        let scratch_url = {
+            let idx = base.rfind('/').expect("db url has a path segment");
+            format!("{}/{}", &base[..idx], name)
+        };
+        // One connection so `SET TIME ZONE` deterministically applies to the
+        // queries that follow (a pool could route them to different sessions).
+        let single = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&scratch_url)
+            .await
+            .expect("connect scratch db single-connection");
+        let pubkey = random_pubkey();
+
+        // Direct inserts so `created_at` is exact. Johannesburg midnight is
+        // 22:00 UTC, so 21:59:59Z is still the previous JNB day and 22:00:00Z
+        // the next one — a 2h-shifted window returns a different row set for
+        // the same UTC day.
+        let rows: [(&str, i64, &str); 3] = [
+            ("2026-08-06 22:00:00+00", 100, "tz-a"),
+            ("2026-08-07 21:59:59+00", 200, "tz-b"),
+            ("2026-08-07 22:00:00+00", 400, "tz-c"),
+        ];
+        for (at, cost, reference) in rows {
+            sqlx::query(
+                "INSERT INTO credit_ledger \
+                    (pubkey, delta, kind, ref, observed_cost, created_at) \
+                 VALUES ($1, -$2, 'debit', $3, $2, $4::timestamptz)",
+            )
+            .bind(&pubkey)
+            .bind(cost)
+            .bind(reference)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .expect("insert boundary debit");
+        }
+
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 8, 7).expect("valid date");
+
+        sqlx::query("SET TIME ZONE 'UTC'")
+            .execute(&single)
+            .await
+            .expect("set session timezone to UTC");
+        let utc_total = debits_on_day(&single, day).await.expect("utc total");
+        assert_eq!(
+            utc_total, 600,
+            "UTC window [08-07 00:00, 08-08 00:00) covers the 21:59:59Z and \
+             22:00:00Z debits, not the previous day 22:00:00Z one"
+        );
+
+        sqlx::query("SET TIME ZONE 'Africa/Johannesburg'")
+            .execute(&single)
+            .await
+            .expect("set session timezone to Africa/Johannesburg");
+        let jnb_total = debits_on_day(&single, day).await.expect("jnb total");
+        assert_eq!(
+            jnb_total, utc_total,
+            "session TimeZone must not shift the UTC day window: got \
+             {jnb_total}, expected {utc_total}"
+        );
+
+        single.close().await;
         drop_scratch(&admin, pool, &name).await;
     }
 }
