@@ -135,6 +135,14 @@ enum CreditsCommand {
         #[arg(long)]
         vercel_csv: PathBuf,
     },
+    /// Resolve pending gateway settlement intents from an exact provider
+    /// export. The CSV must contain pubkey, reference, model, and
+    /// cost_nanousd columns; aggregate drift is never used as attribution.
+    ResolveGateway {
+        /// Path to the exact provider usage CSV export.
+        #[arg(long)]
+        provider_csv: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -635,6 +643,9 @@ async fn cmd_credits(command: CreditsCommand) -> Result<i32> {
         CreditsCommand::Reconcile { date, vercel_csv } => {
             cmd_credits_reconcile(&date, &vercel_csv).await
         }
+        CreditsCommand::ResolveGateway { provider_csv } => {
+            cmd_credits_resolve_gateway(&provider_csv).await
+        }
     }
 }
 
@@ -715,6 +726,63 @@ async fn cmd_credits_reconcile(date_arg: &str, csv_path: &std::path::Path) -> Re
         );
     }
     println!("drift {:.2}% — within the 1% threshold", drift * 100.0);
+    Ok(0)
+}
+
+async fn cmd_credits_resolve_gateway(csv_path: &std::path::Path) -> Result<i32> {
+    let mut rdr = csv::Reader::from_path(csv_path)
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", csv_path.display()))?;
+    let headers = rdr
+        .headers()
+        .map_err(|e| anyhow::anyhow!("cannot read headers from {}: {e}", csv_path.display()))?
+        .clone();
+    let column = |name: &str| {
+        headers
+            .iter()
+            .position(|header| header.eq_ignore_ascii_case(name))
+            .ok_or_else(|| anyhow::anyhow!("provider CSV is missing required column '{name}'"))
+    };
+    let pubkey_col = column("pubkey")?;
+    let reference_col = column("reference")?;
+    let model_col = column("model")?;
+    let cost_col = column("cost_nanousd")?;
+    let provider_id_col = headers
+        .iter()
+        .position(|header| header.eq_ignore_ascii_case("provider_request_id"));
+    let mut usages = Vec::new();
+    for row in rdr.records() {
+        let row = row.map_err(|e| anyhow::anyhow!("invalid provider CSV row: {e}"))?;
+        let pubkey = parse_pubkey_hex(row.get(pubkey_col).unwrap_or_default())
+            .map_err(anyhow::Error::msg)?;
+        let reference = row.get(reference_col).unwrap_or_default().trim();
+        let model = row.get(model_col).unwrap_or_default().trim();
+        let cost_nanousd = row
+            .get(cost_col)
+            .unwrap_or_default()
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| anyhow::anyhow!("invalid cost_nanousd: {e}"))?;
+        if reference.is_empty() || model.is_empty() {
+            bail!("provider CSV reference and model must not be blank");
+        }
+        usages.push(credits::GatewayProviderUsage {
+            pubkey: hex::decode(pubkey)?,
+            reference: reference.to_owned(),
+            model: model.to_owned(),
+            cost_nanousd,
+            provider_request_id: provider_id_col
+                .and_then(|index| row.get(index))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+        });
+    }
+    let db = connect_db().await?;
+    let resolved = credits::resolve_pending_gateway_settlements(db.pool(), &usages).await?;
+    println!(
+        "resolved {resolved} gateway settlement intents from {} exact provider rows",
+        usages.len()
+    );
     Ok(0)
 }
 

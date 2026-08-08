@@ -61,6 +61,7 @@ sqlx = { workspace = true }
 # `stream`: the price feed is read with a size ceiling rather than buffered
 # whole, so a hostile or broken host cannot spend the relay's memory.
 reqwest = { workspace = true, features = ["stream"] }
+async-compression = { version = "0.4.42", features = ["tokio", "gzip", "zlib", "brotli", "zstd"] }
 base64 = "0.22"
 buzz-sdk = { workspace = true }
 buzz-workflow = { workspace = true, features = ["reqwest"] }
@@ -84,7 +85,6 @@ metrics         = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 metrics-util    = { workspace = true }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
-async-compression = { version = "0.4.42", features = ["tokio", "gzip"] }
 
 [features]
 dev = ["buzz-auth/dev"]

@@ -10,9 +10,21 @@
 //! This is fully reversible at runtime: enabling applies the chosen material,
 //! disabling clears it. On non-macOS platforms the command is a no-op so the
 //! shared frontend can call it unconditionally.
+//!
+//! # Phase 1 note
+//!
+//! This is the first command converted to the `HostCtx` seam, and it was chosen
+//! as the proof case because `window_vibrancy::apply_vibrancy` needs the
+//! underlying `NSWindow`. Unlike everything else behind `ShellProxy`, this
+//! operation is not merely *convenient* to perform shell-side — it is impossible
+//! to perform anywhere else, so it is the strongest test of whether the seam can
+//! express what the app actually does. The native work now lives in
+//! `host::TauriShellProxy::set_window_vibrancy`; what remains here is the
+//! command's argument handling.
 
-#[cfg(target_os = "macos")]
-use tauri::Manager;
+use buzz_native::VibrancyMaterial;
+
+use crate::host::Ctx;
 
 /// Apply or clear macOS window vibrancy for the main window.
 ///
@@ -22,48 +34,51 @@ use tauri::Manager;
 /// `sidebar`.
 #[tauri::command]
 pub fn set_window_vibrancy(
-    #[allow(unused_variables)] enabled: bool,
-    #[allow(unused_variables)] material: Option<String>,
-    #[allow(unused_variables)] app_handle: tauri::AppHandle,
+    enabled: bool,
+    material: Option<String>,
+    ctx: tauri::State<'_, Ctx>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial};
+    // `enabled == false` clears, and the material is ignored in that case.
+    let material = enabled.then(|| VibrancyMaterial::from_wire(material.as_deref()));
 
-        let window = app_handle
-            .get_webview_window("main")
-            .ok_or_else(|| "main window not found".to_string())?;
+    ctx.shell()
+        .set_window_vibrancy("main", material)
+        .map_err(|error| error.to_string())
+}
 
-        if !enabled {
-            clear_vibrancy(&window).map_err(|e| e.to_string())?;
-            return Ok(());
-        }
+#[cfg(test)]
+mod tests {
+    use buzz_native::VibrancyMaterial;
 
-        let material = match material.as_deref() {
-            Some("hud-window") => NSVisualEffectMaterial::HudWindow,
-            Some("under-window-background") => NSVisualEffectMaterial::UnderWindowBackground,
-            Some("fullscreen-ui") => NSVisualEffectMaterial::FullScreenUI,
-            Some("header-view") => NSVisualEffectMaterial::HeaderView,
-            Some("popover") => NSVisualEffectMaterial::Popover,
-            Some("menu") => NSVisualEffectMaterial::Menu,
-            Some("titlebar") => NSVisualEffectMaterial::Titlebar,
-            _ => NSVisualEffectMaterial::Sidebar,
-        };
-
-        // `apply_vibrancy` appends a new tagged `NSVisualEffectView` each call,
-        // while `clear_vibrancy` only removes one. Repeated enables (theme
-        // switches, follow-system flips) would otherwise stack blur views and
-        // leave a stale one behind on the next non-Buzz theme. Clear any
-        // existing view first so exactly one material is ever installed. The
-        // clear is a no-op (returns `false`) when none is present.
-        let _ = clear_vibrancy(&window);
-
-        apply_vibrancy(&window, material, None, None).map_err(|e| e.to_string())?;
-        Ok(())
+    #[test]
+    fn disabling_ignores_the_material() {
+        // Mirrors the command body: the old code returned before parsing the
+        // material at all when `enabled` was false.
+        let enabled = false;
+        let material = Some("popover".to_string());
+        assert_eq!(
+            enabled.then(|| VibrancyMaterial::from_wire(material.as_deref())),
+            None,
+        );
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(())
+    #[test]
+    fn enabling_without_a_material_uses_sidebar() {
+        let enabled = true;
+        let material: Option<String> = None;
+        assert_eq!(
+            enabled.then(|| VibrancyMaterial::from_wire(material.as_deref())),
+            Some(VibrancyMaterial::Sidebar),
+        );
+    }
+
+    #[test]
+    fn enabling_with_an_unknown_material_uses_sidebar() {
+        let enabled = true;
+        let material = Some("chartreuse".to_string());
+        assert_eq!(
+            enabled.then(|| VibrancyMaterial::from_wire(material.as_deref())),
+            Some(VibrancyMaterial::Sidebar),
+        );
     }
 }

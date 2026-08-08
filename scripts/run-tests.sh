@@ -113,6 +113,12 @@ run_unit_tests() {
   run_test_step "buzz-acp unit tests" \
     cargo test -p buzz-acp --lib -- --nocapture
 
+  # buzz-native: the shell-agnostic core and the HostCtx seam. Infra-free. Both
+  # unit paths are explicit allowlists rather than workspace runs, so a new
+  # member's tests silently never execute until it is named here.
+  run_test_step "buzz-native unit tests" \
+    cargo test -p buzz-native --lib -- --nocapture
+
   # buzz-db migrator/lint unit tests (no infra): guard the embedded-migrator
   # invariant (exactly the consolidated 0001; cutover/backfill stays an operator
   # script, not startup state) and the tenant-scoping lints. The Postgres-backed

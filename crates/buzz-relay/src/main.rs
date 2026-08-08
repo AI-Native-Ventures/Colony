@@ -338,6 +338,30 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // A community with no owner is a legal state here: `bootstrap_owner`
+    // above only runs when `RELAY_OWNER_PUBKEY` is configured, and with
+    // membership enforcement off (the default, and every local dev relay)
+    // nothing else requires one. It is also a broken state for the interrupt
+    // ladder: `interrupt_runtime::find_unique_owner` resolves nothing, so an
+    // ask that has climbed to the executive can never be filed to a human and
+    // is re-deadlined indefinitely. That is logged only when an ask actually
+    // comes due, which can be days after the state was created and reads as a
+    // sweep problem rather than a provisioning one. Say it once, here, where
+    // it is decided.
+    if let Some(community) = deployment_community {
+        match db.list_relay_owners(community, 1).await {
+            Ok(owners) if owners.is_empty() => warn!(
+                community = %community,
+                "This community has no owner. Nothing can reach a human through the \
+                 interrupt ladder: an ask that climbs to the executive has no one left \
+                 to go to, and the relay will re-deadline it indefinitely. Set \
+                 RELAY_OWNER_PUBKEY, or assign one with `buzz-admin`."
+            ),
+            Ok(_) => {}
+            Err(e) => warn!("Could not check whether this community has an owner: {e}"),
+        }
+    }
+
     // NIP-33: backfill d_tag for any existing parameterized replaceable events
     // that predate the column addition. Idempotent — no-ops when fully populated.
     match db.backfill_d_tags().await {
@@ -463,7 +487,8 @@ async fn main() -> anyhow::Result<()> {
     // configured a Vercel AI Gateway key. An unset or blank key leaves the
     // OnceLock empty and the gateway routes answer 404.
     if let Some(gateway_config) = buzz_relay::gateway::config_from_env()? {
-        let gateway = buzz_relay::gateway::GatewayState::new(gateway_config)
+        let gateway = buzz_relay::gateway::GatewayState::new(gateway_config, app_state.db.pool())
+            .await
             .map_err(|e| anyhow::anyhow!("failed to initialize the credits gateway: {e}"))?;
         app_state
             .gateway
@@ -1295,6 +1320,13 @@ async fn main() -> anyhow::Result<()> {
     serve(router, health_router, Arc::clone(&state)).await?;
     discovery_shutdown.cancel();
     state.community_revalidator_cancel.cancel();
+
+    // The gateway owns relay-side settlement workers. Close admission and
+    // wait for every tracked drain before tearing down the database/telemetry
+    // workers so a graceful relay stop cannot strand provider attribution.
+    if let Some(gateway) = state.gateway.get() {
+        gateway.shutdown().await;
+    }
 
     // Signal the audit worker to stop accepting, flush buffered entries, and
     // exit. Uses a CancellationToken so it works regardless of how many

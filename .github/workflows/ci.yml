@@ -148,6 +148,15 @@ jobs:
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
         run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
+      - name: Schema drift check
+        # CI provisions Postgres from schema/schema.sql, not from migrations/,
+        # so a table added only to migrations/ is invisible here and surfaces
+        # later as an unrelated-looking product failure. Runs in this job
+        # because `Detect Changed Paths` is required and unconditional, so the
+        # guard cannot be skipped by a path filter.
+        run: |
+          node --test scripts/check-schema-drift.test.mjs
+          node scripts/check-schema-drift.mjs
 
   rust-lint:
     name: Rust Lint
@@ -1006,6 +1015,15 @@ jobs:
           # needs DATABASE_URL as well as RELAY_URL; start-relay-for-tests.sh
           # brings up the same docker postgres the relay is pointed at.
           cargo test -p buzz-test-client --test e2e_interrupts -- --ignored --nocapture
+          # The climb again, but with nothing invented: a relay-authored
+          # initiative and task built by walking the real activation ladder,
+          # a rank read from the employees row, and the ask constructed by
+          # buzz-cli's own builder. e2e_interrupts passes against made-up
+          # identifiers, so it cannot catch an agent having no initiative or
+          # task to name, the state in which zero asks had ever been raised.
+          # --test-threads 1 because both cases share the relay's own
+          # community (requests bind to it by Host) and seed employees in it.
+          cargo test -p buzz-test-client --test e2e_ask_chain -- --ignored --nocapture --test-threads 1
         env:
           RELAY_URL: ws://localhost:3000
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz

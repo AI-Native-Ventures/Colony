@@ -1157,17 +1157,18 @@ pub const DEFAULT_STALL_AFTER_SECS: i64 = 6 * 60 * 60;
 /// to go silently stalled since nobody deliberately organized it under an
 /// initiative. Skipping these would carve a hole in the stall guarantee.
 ///
-/// The Ask schema requires exactly one `initiative` tag
-/// (`buzz_core::interrupt::parse_ask`) and the `asks` projection's
-/// `initiative_id` column is `NOT NULL`, so a genuine `None` cannot flow
-/// through as-is without a schema change. This is NOT a real initiative id
-/// -- it is a reserved sentinel that only ever appears as the `initiative`
-/// tag on a stall ask filed under this exact condition. Dedupe stays exact
-/// even though every no-initiative task shares this same grouping value,
-/// because [`stall_need_key`] is already unique per task on its own; the
-/// composite `(initiative_id, need_key)` uniqueness the dedupe index
-/// enforces still lands on one open row per task.
-pub const NO_INITIATIVE_SENTINEL: &str = "no-initiative";
+/// Dedupe stays exact for stall asks even though every no-initiative task
+/// shares this grouping value, because [`stall_need_key`] is already unique
+/// per task on its own; the composite `(initiative_id, need_key)` uniqueness
+/// the dedupe index enforces still lands on one open row per task.
+///
+/// The same value is what an agent files against when its own work belongs to
+/// no initiative, so the definition lives in `buzz-core` alongside the parser
+/// that requires the tag -- one reserved value, read the same way by the
+/// relay's stall sweep, the CLI's `asks raise`, and any client grouping a
+/// Needs-Me surface by initiative. See [`buzz_core::interrupt::NO_INITIATIVE`]
+/// for why it is deliberately flat rather than scoped per task.
+pub use buzz_core::interrupt::NO_INITIATIVE as NO_INITIATIVE_SENTINEL;
 
 /// Upper bound on in-progress task heads scanned per [`run_stall_tick`] pass.
 /// Status filtering already happens in SQL before this cap is applied (see

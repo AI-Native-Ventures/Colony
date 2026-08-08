@@ -1064,6 +1064,7 @@ dependencies = [
  "buzz-agent",
  "buzz-core",
  "buzz-media",
+ "buzz-native",
  "buzz-persona",
  "buzz-sdk",
  "buzz-voice",
@@ -1167,6 +1168,15 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid",
+]
+
+[[package]]
+name = "buzz-native"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
