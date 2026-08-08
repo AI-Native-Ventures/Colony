@@ -2051,3 +2051,53 @@ CREATE UNIQUE INDEX IF NOT EXISTS asks_open_need_uniq
 -- give that cross-tenant scan a real range scan instead of a full scan.
 CREATE INDEX IF NOT EXISTS asks_due_idx ON asks (deadline_at) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS asks_audience_idx ON asks (community_id, audience_pubkey) WHERE status = 'open';
+
+-- Company employees (migration 0043): workspace-owned agent identities.
+--
+-- An employee is a role the company employs rather than a process a member
+-- runs. Its identity keypair is minted by the relay and held sealed here, so
+-- every member's machine can produce work as one colleague without a private
+-- key being copied between laptops.
+--
+-- `rank` is what the interrupt ladder reads to decide who may interrupt a
+-- human (crates/buzz-relay/src/interrupt_gate.rs::agent_tier), so a database
+-- provisioned from this file without the table leaves the gate unable to
+-- resolve any agent's rank at all -- it fails closed and refuses every gated
+-- write. That is why this table has to be here and not only in migrations.
+--
+-- The sealed key is AES-256-GCM under an operator-held KEK with the community
+-- id and employee pubkey bound in as associated data, so a dump without the
+-- KEK yields no ability to speak as anyone.
+CREATE TABLE IF NOT EXISTS employees (
+    community_id  UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    pubkey        BYTEA NOT NULL,
+    -- nonce || ciphertext from the sealer above. Never a bare secret key.
+    sealed_key    BYTEA NOT NULL,
+    role_id       TEXT NOT NULL,
+    display_name  TEXT NOT NULL,
+    rank          TEXT NOT NULL CHECK (rank IN ('worker','leader','executive')),
+    -- The owner who hired this employee, and the hire request that asked for
+    -- it. The request is owner-signed, so anyone can re-derive authority from
+    -- events alone rather than trusting this table.
+    hired_by      BYTEA NOT NULL,
+    hire_event    BYTEA NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+    created_at    BIGINT NOT NULL,
+    updated_at    BIGINT NOT NULL,
+    PRIMARY KEY (community_id, pubkey),
+    CHECK (LENGTH(pubkey) = 32),
+    CHECK (LENGTH(hired_by) = 32),
+    CHECK (LENGTH(hire_event) = 32)
+);
+
+-- Hiring is driven by a best-effort side effect, which may run more than once
+-- for the same request. One employee per hire request makes a repeat run a
+-- no-op instead of a second identity for the same role.
+CREATE UNIQUE INDEX IF NOT EXISTS employees_hire_event_uniq
+    ON employees (community_id, hire_event);
+
+-- One active employee per role: a workspace employs one Chief of Staff, not
+-- one per member who asked. Retired rows are excluded so a role can be
+-- refilled after its holder is retired.
+CREATE UNIQUE INDEX IF NOT EXISTS employees_active_role_uniq
+    ON employees (community_id, role_id) WHERE status = 'active';

@@ -76,23 +76,62 @@ fn direct_contact_denied(kind: u32, tier: AgentTier) -> String {
 /// not something this gate can absorb on every message it checks.
 const MAX_CANDIDATE_TIER_HEADS: i64 = 20;
 
-/// Resolve `pubkey`'s interrupt tier from its managed-agent head (kind
-/// 30177), scoped to `tenant`.
+/// Resolve `pubkey`'s interrupt tier, scoped to `tenant`, from the two places
+/// a rank can live -- the `employees` row first, the managed-agent head second.
 ///
-/// Scans the most recent [`MAX_CANDIDATE_TIER_HEADS`] heads at this `d` tag,
-/// newest first, and uses the first one whose author currently holds the
-/// community's `owner` role -- see [`MAX_CANDIDATE_TIER_HEADS`] for why an
-/// untrusted newer head must not simply shadow a legitimate older one.
+/// # Why the employees row comes first
 ///
-/// Returns `Ok(None)` when there is no managed-agent head for this pubkey at
-/// all (a human or an unmanaged client), when none of the scanned
-/// candidates were authored by a current owner, or when the trusted head's
-/// `tier` field is absent or unrecognized.
+/// Rank is decided when an owner hires: `employee_broker` mints the keypair,
+/// writes the `employees` row from the owner-signed hire request (kind 9045),
+/// and records `rank` there. That row is relay-written and community-scoped,
+/// so it needs no author-trust scan at all -- it cannot be published, shadowed
+/// or flooded by the agent it describes, which is precisely the attack
+/// [`MAX_CANDIDATE_TIER_HEADS`] exists to bound on the head path.
+///
+/// The head path remained the only source for a long time, and nothing in the
+/// product ever wrote `content.tier` onto a head (the desktop's
+/// `PersonaEventContent` has no such field). Every hired employee therefore
+/// resolved to `None`, which this gate treats as unrestricted -- so the agents
+/// the ladder exists to constrain could address owners freely, while
+/// `ask_broker::check_altitude` refused their asks for having no tier. Agents
+/// were told to escalate, refused when they did, and permitted when they
+/// interrupted instead.
+///
+/// Rank is read regardless of employment `status`. Retiring an employee stops
+/// it being given work; it must not silently strip its rank and thereby
+/// promote a still-running process to unrestricted owner contact.
+///
+/// Falls back to the managed-agent head (kind 30177) for pubkeys with no
+/// employees row: scans the most recent [`MAX_CANDIDATE_TIER_HEADS`] heads at
+/// this `d` tag, newest first, and uses the first one whose author currently
+/// holds the community's `owner` role -- see [`MAX_CANDIDATE_TIER_HEADS`] for
+/// why an untrusted newer head must not simply shadow a legitimate older one.
+///
+/// Returns `Ok(None)` when the pubkey is neither an employee nor described by
+/// an owner-authored head with a recognized `tier` -- a human or an unmanaged
+/// client. Callers must keep treating that as "unrestricted", or every human
+/// would be blocked.
 pub async fn agent_tier(
     tenant: &TenantContext,
     state: &AppState,
     pubkey: &PublicKey,
 ) -> Result<Option<AgentTier>, String> {
+    // Fail closed: a DB error resolving tier must not leave the signer
+    // treated as an unrestricted human.
+    let employee = state
+        .db
+        .find_employee(tenant.community(), &pubkey.to_bytes())
+        .await
+        .map_err(|error| format!("error: internal error loading employee record: {error}"))?;
+    if let Some(employee) = employee {
+        // An employed pubkey whose stored rank does not parse is a corrupt
+        // row, not an unmanaged human: fall closed to the most restricted
+        // rank rather than granting it a human's freedom.
+        return Ok(Some(
+            AgentTier::parse(&employee.rank).unwrap_or(AgentTier::Worker),
+        ));
+    }
+
     // Fail closed: a DB error resolving tier must not leave the signer
     // treated as an unrestricted human.
     let rows = state
