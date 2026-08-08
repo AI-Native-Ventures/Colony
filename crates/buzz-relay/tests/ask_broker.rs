@@ -28,7 +28,12 @@ async fn setup() -> (Db, PgPool) {
     let pool = PgPool::connect(&database_url)
         .await
         .expect("connect to test Postgres");
-    buzz_db::migration::run_migrations(&pool)
+    // Not `run_migrations`: CI's integration Postgres is provisioned by
+    // `pgschema apply --file schema/schema.sql` and never gets an
+    // `_sqlx_migrations` table, so replaying 0001 there aborts on the first
+    // `CREATE TYPE` (`42710 type "channel_type" already exists`). A
+    // developer's fresh `createdb` still runs the full migrator.
+    buzz_db::migration::run_migrations_unless_provisioned(&pool)
         .await
         .expect("apply migrations");
     (Db::from_pool(pool.clone()), pool)
@@ -49,7 +54,12 @@ async fn setup_with_max_connections(max_connections: u32) -> (Db, PgPool) {
         .connect(&database_url)
         .await
         .expect("connect to test Postgres");
-    buzz_db::migration::run_migrations(&pool)
+    // Not `run_migrations`: CI's integration Postgres is provisioned by
+    // `pgschema apply --file schema/schema.sql` and never gets an
+    // `_sqlx_migrations` table, so replaying 0001 there aborts on the first
+    // `CREATE TYPE` (`42710 type "channel_type" already exists`). A
+    // developer's fresh `createdb` still runs the full migrator.
+    buzz_db::migration::run_migrations_unless_provisioned(&pool)
         .await
         .expect("apply migrations");
     (Db::from_pool(pool.clone()), pool)

@@ -13,6 +13,7 @@
 //! because a relay write-rule cannot be skipped on a bad day the way a
 //! prompt can. See `docs/nips/NIP-IQ.md`.
 
+use buzz_core::employee::is_valid_role_slug;
 use buzz_core::interrupt::{parse_grant, AgentTier, ParsedDecisionLog, ParsedGrant};
 use buzz_core::kind::{
     KIND_DELEGATION_GRANT, KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_GIFT_WRAP, KIND_MANAGED_AGENT,
@@ -76,8 +77,14 @@ fn direct_contact_denied(kind: u32, tier: AgentTier) -> String {
 /// not something this gate can absorb on every message it checks.
 const MAX_CANDIDATE_TIER_HEADS: i64 = 20;
 
-/// Resolve `pubkey`'s interrupt tier, scoped to `tenant`, from the two places
-/// a rank can live -- the `employees` row first, the managed-agent head second.
+/// Resolve `pubkey`'s interrupt tier, scoped to `tenant`, in four steps:
+///
+/// 1. an `employees` row for this pubkey -> its `rank` (a hired employee);
+/// 2. else an owner-authored managed-agent head -> its `role_id` -> the
+///    active `employees` row filling that role -> that role's `rank`
+///    (a managed agent staffing an employed role);
+/// 3. else that same head's `content.tier` (the legacy path);
+/// 4. else `None` -- a human or an unmanaged client, unrestricted.
 ///
 /// # Why the employees row comes first
 ///
@@ -97,9 +104,13 @@ const MAX_CANDIDATE_TIER_HEADS: i64 = 20;
 /// were told to escalate, refused when they did, and permitted when they
 /// interrupted instead.
 ///
-/// Rank is read regardless of employment `status`. Retiring an employee stops
-/// it being given work; it must not silently strip its rank and thereby
-/// promote a still-running process to unrestricted owner contact.
+/// Rank is read regardless of employment `status` on step 1. Retiring an
+/// employee stops it being given work; it must not silently strip its rank and
+/// thereby promote a still-running process to unrestricted owner contact.
+/// Step 2 is the opposite and deliberately so: it reads only *active* rows,
+/// because there it is answering "who fills this role now" in order to grant
+/// that rank to a **different** pubkey. A vacated role must not keep handing
+/// out the authority its last holder had.
 ///
 /// Falls back to the managed-agent head (kind 30177) for pubkeys with no
 /// employees row: scans the most recent [`MAX_CANDIDATE_TIER_HEADS`] heads at
@@ -107,10 +118,28 @@ const MAX_CANDIDATE_TIER_HEADS: i64 = 20;
 /// holds the community's `owner` role -- see [`MAX_CANDIDATE_TIER_HEADS`] for
 /// why an untrusted newer head must not simply shadow a legitimate older one.
 ///
-/// Returns `Ok(None)` when the pubkey is neither an employee nor described by
-/// an owner-authored head with a recognized `tier` -- a human or an unmanaged
-/// client. Callers must keep treating that as "unrestricted", or every human
-/// would be blocked.
+/// # Why the role join exists
+///
+/// The agents that actually run are managed agents, not employees. The desktop
+/// generates their keys locally and never sends a hire request, so no managed
+/// agent has an `employees` row and step 1 never fires for one. `role_id` is
+/// the join that already exists between the two: the desktop publishes it on
+/// the head it already writes (`persona_events.rs`, set for every baseline
+/// roster role by `company/seed.rs`), and `employees.role_id` is unique per
+/// community among active rows. Reading rank through the role keeps
+/// `employees` the single source of it rather than writing a second copy onto
+/// the head, which is the two-sources-of-truth mistake that made the ladder
+/// inert in the first place.
+///
+/// This depends on the community having an owner: "owner-authored" is
+/// unsatisfiable otherwise, so step 2 and step 3 both go dark in a community
+/// with no `owner` relay-membership row. `buzz-relay`'s startup warns about
+/// exactly that state.
+///
+/// Returns `Ok(None)` when the pubkey is neither an employee, nor described by
+/// an owner-authored head naming a staffed role, nor one carrying a recognized
+/// `tier` -- a human or an unmanaged client. Callers must keep treating that as
+/// "unrestricted", or every human would be blocked.
 pub async fn agent_tier(
     tenant: &TenantContext,
     state: &AppState,
@@ -169,6 +198,41 @@ pub async fn agent_tier(
         let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
             return Ok(None);
         };
+
+        // The role this head claims, resolved to the rank of whoever
+        // currently fills it. Read only here, inside the owner-authorship
+        // check: this is the entire security boundary. `KIND_MANAGED_AGENT`
+        // is client-writable, so a worker can publish a head about itself
+        // claiming `role_id: "chief-of-staff"` -- the same forgery the
+        // `content.tier` path below has always been exposed to, and the same
+        // check refuses it. A self-authored head never reaches this line.
+        if let Some(role_id) = content
+            .get("role_id")
+            .and_then(|value| value.as_str())
+            .map(normalize_role_id)
+        {
+            if is_valid_role_slug(&role_id) {
+                // Fail closed: same reasoning as every other read here.
+                let employee = state
+                    .db
+                    .find_active_employee_by_role(tenant.community(), &role_id)
+                    .await
+                    .map_err(|error| {
+                        format!("error: internal error resolving an agent's role: {error}")
+                    })?;
+                if let Some(employee) = employee {
+                    // Corrupt stored rank falls closed to the most
+                    // restricted rank, exactly as the by-pubkey path does.
+                    return Ok(Some(
+                        AgentTier::parse(&employee.rank).unwrap_or(AgentTier::Worker),
+                    ));
+                }
+                // A role nobody currently fills is not an error and not a
+                // guess: it is a head naming a vacancy. Fall through to
+                // `tier` rather than inventing a rank for an unstaffed role.
+            }
+        }
+
         return Ok(content
             .get("tier")
             .and_then(|value| value.as_str())
@@ -176,6 +240,18 @@ pub async fn agent_tier(
     }
 
     Ok(None)
+}
+
+/// Bring a `role_id` read off event content into the form `employees.role_id`
+/// is stored in.
+///
+/// `employee_broker` writes the role from an owner-signed hire request after
+/// `buzz_core::employee::role_and_name` has trimmed and lowercased it, so a
+/// role read from anywhere else has to be put through the same two steps or
+/// an owner who typed `Chief-Of-Staff` into one surface and `chief-of-staff`
+/// into the other would silently fail to join.
+fn normalize_role_id(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
 }
 
 /// Reject writes where a `Worker` or `Leader` agent addresses a community

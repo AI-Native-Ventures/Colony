@@ -19,7 +19,7 @@
 //!   queries** (`{"kinds":[44300],"#p":[owner]}`, then 44301/44302 by `#e`),
 //!   with no privileged access to the relay's internal `asks` table.
 //!
-//! Two scenarios, because they fail for different reasons:
+//! Three scenarios, because they fail for different reasons:
 //!
 //! 1. `an_employed_worker_raises_an_ask_that_reaches_the_owner` -- work
 //!    organized under an initiative, climbing worker -> leader -> executive
@@ -29,6 +29,11 @@
 //!    (`buzz_sdk::implicit_task`), and `--initiative` used to be required, so
 //!    an agent doing the most common kind of work could not construct an ask
 //!    at all.
+//! 3. `a_managed_agent_that_is_not_an_employee_raises_an_ask_to_the_owner`
+//!    -- the agent shape that actually runs. Buzz Desktop generates a managed
+//!    agent's key locally and never sends a hire request, so no running agent
+//!    has an `employees` row; its rank comes from the role its owner-authored
+//!    head names.
 //!
 //! # Running
 //!
@@ -57,7 +62,7 @@ use buzz_core::company::{
 use buzz_core::interrupt::NO_INITIATIVE;
 use buzz_core::kind::{
     KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT,
-    KIND_INITIATIVE, KIND_TASK, KIND_TEAM,
+    KIND_INITIATIVE, KIND_MANAGED_AGENT, KIND_TASK, KIND_TEAM,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
@@ -210,6 +215,35 @@ async fn employ_ladder(
         "executive",
     )
     .await;
+}
+
+/// Publish the owner-authored managed-agent head (kind 30177) that says which
+/// workspace role `agent` fills.
+///
+/// Exactly the shape Buzz Desktop writes: a `role_id` and no `tier`, because
+/// no product code path has ever written a `tier`. Owner-signed, because
+/// `interrupt_gate::agent_tier` only trusts a head whose author currently
+/// holds the community's `owner` role -- a self-signed one confers nothing.
+async fn publish_role_head(
+    owner_ws: &mut BuzzTestClient,
+    owner: &Keys,
+    agent: &Keys,
+    role_id: &str,
+) {
+    let event = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        serde_json::json!({ "display_name": "Ada", "role_id": role_id }).to_string(),
+    )
+    .tags(vec![
+        Tag::parse(["d", &agent.public_key().to_hex()]).expect("d tag")
+    ])
+    .sign_with_keys(owner)
+    .expect("sign managed-agent head");
+    let ok = owner_ws
+        .send_event(event)
+        .await
+        .expect("publish managed-agent head");
+    assert!(ok.accepted, "managed-agent head rejected: {}", ok.message);
 }
 
 fn sub_id(name: &str) -> String {
@@ -622,7 +656,7 @@ async fn raise(
     let ok = filer_ws.send_event(event).await.expect("send ask");
     assert!(
         ok.accepted,
-        "an employed filer's ask to the tier above it must be accepted, got: {}",
+        "a filer ranked one tier below its audience must be accepted, got: {}",
         ok.message
     );
     ask_id
@@ -872,6 +906,145 @@ async fn an_ask_about_chat_derived_work_with_no_initiative_still_reaches_the_own
     assert!(
         closed.is_empty(),
         "an unanswered ask must read as open, got {closed:#?}"
+    );
+
+    owner_ws.disconnect().await.ok();
+    worker_ws.disconnect().await.ok();
+    leader_ws.disconnect().await.ok();
+    executive_ws.disconnect().await.ok();
+}
+
+/// The shape that actually runs: agents with no `employees` row at all.
+///
+/// Every other case here, and every case in `e2e_interrupts.rs`, gives the
+/// filer an `employees` row. No agent Buzz Desktop launches has one: it
+/// generates the key locally (`record.private_key_nsec`) and never sends a
+/// hire request, so the by-pubkey rank lookup never fires for a real agent.
+/// What it does have is an owner-authored head naming the workspace role it
+/// fills, and that role is employed. This is the first proof that the kind of
+/// agent the product actually spawns can raise an ask at all.
+///
+/// The employees rows here are the *roles*, filled by relay-held identities
+/// nobody signs with. The pubkeys that sign are the agents.
+#[tokio::test]
+#[ignore = "requires a running relay and Postgres"]
+async fn a_managed_agent_that_is_not_an_employee_raises_an_ask_to_the_owner() {
+    let community_id = ensure_test_community(&relay_host()).await;
+
+    let owner = Keys::generate();
+    seed_relay_owner(community_id, &owner).await;
+
+    let mut owner_ws = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("owner connect");
+    let ws = workspace(&mut owner_ws, owner.clone()).await;
+    let task_id = create_chat_task(&mut owner_ws, &ws).await;
+
+    // The payroll: three roles at three ranks. Unique per run because
+    // `employees` is uniquely indexed on `(community, role_id)` among active
+    // rows and every case here shares the relay's own community.
+    let run = Uuid::new_v4().simple().to_string();
+    let run = &run[..8];
+    let engineer_role = format!("frontend-engineer-{run}");
+    let lead_role = format!("cto-{run}");
+    let chief_role = format!("chief-of-staff-{run}");
+    for (role, rank) in [
+        (&engineer_role, "worker"),
+        (&lead_role, "leader"),
+        (&chief_role, "executive"),
+    ] {
+        employ(community_id, &owner, &Keys::generate(), role, rank).await;
+    }
+
+    // The processes: their own keys, no employees rows, owner-authored heads
+    // naming the roles they fill.
+    let worker_agent = Keys::generate();
+    let leader_agent = Keys::generate();
+    let executive_agent = Keys::generate();
+    publish_role_head(&mut owner_ws, &owner, &worker_agent, &engineer_role).await;
+    publish_role_head(&mut owner_ws, &owner, &leader_agent, &lead_role).await;
+    publish_role_head(&mut owner_ws, &owner, &executive_agent, &chief_role).await;
+
+    let mut worker_ws = BuzzTestClient::connect(&relay_url(), &worker_agent)
+        .await
+        .expect("worker connect");
+    let mut leader_ws = BuzzTestClient::connect(&relay_url(), &leader_agent)
+        .await
+        .expect("leader connect");
+    let mut executive_ws = BuzzTestClient::connect(&relay_url(), &executive_agent)
+        .await
+        .expect("executive connect");
+
+    let need = format!("vendor-key-{run}");
+
+    let raised = raise(
+        &mut worker_ws,
+        &worker_agent,
+        &leader_agent.public_key().to_hex(),
+        None,
+        &task_id,
+        &need,
+        "Need the vendor API key",
+        None,
+    )
+    .await;
+    let escalated = raise(
+        &mut leader_ws,
+        &leader_agent,
+        &executive_agent.public_key().to_hex(),
+        None,
+        &task_id,
+        &format!("{need}-esc"),
+        "Lead cannot provision the vendor API key",
+        Some(&raised),
+    )
+    .await;
+    let filed = raise(
+        &mut executive_ws,
+        &executive_agent,
+        &owner.public_key().to_hex(),
+        None,
+        &task_id,
+        &format!("{need}-filed"),
+        "Only you can provision the vendor API key",
+        Some(&escalated),
+    )
+    .await;
+
+    let mine = asks_addressed_to(&owner).await;
+    let found = mine
+        .iter()
+        .find(|event| event["id"].as_str() == Some(filed.as_str()))
+        .expect("an ask raised by the agents the product actually runs must reach the owner");
+    assert_eq!(tag_value(found, "task"), task_id);
+    assert_eq!(tag_value(found, "prior"), escalated);
+
+    // And the wall still holds for the same identities: a worker whose rank
+    // comes from its role is as restricted as one whose rank comes from its
+    // own employment. Granting rank through a role must not be a way around
+    // the gate it exists to feed.
+    let direct = EventBuilder::new(
+        Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16),
+        "hey owner, got a sec?",
+    )
+    .tags(vec![
+        Tag::parse(["h", &Uuid::new_v4().to_string()]).expect("h tag"),
+        Tag::parse(["p", &owner.public_key().to_hex()]).expect("p tag"),
+    ])
+    .sign_with_keys(&worker_agent)
+    .expect("sign direct message");
+    let wall = worker_ws
+        .send_event(direct)
+        .await
+        .expect("the relay answers the probe");
+    assert!(
+        !wall.accepted,
+        "a worker-ranked managed agent must not address the owner directly"
+    );
+    assert!(
+        wall.message.contains("cannot address an owner"),
+        "unexpected wall-probe rejection: {}",
+        wall.message
     );
 
     owner_ws.disconnect().await.ok();

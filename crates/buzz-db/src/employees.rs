@@ -158,6 +158,37 @@ pub async fn find_employee(
     row.map(row_to_employee).transpose()
 }
 
+/// The one employee currently filling `role_id`, if any.
+///
+/// Scoped to `status = 'active'` because that is what the role means: the
+/// `employees_active_role_uniq` index admits exactly one active row per
+/// `(community, role_id)` and deliberately excludes retired rows so a role
+/// can be refilled. Reading retired rows here would make a role resolve to
+/// whoever last held it, which is a different question from who holds it now
+/// -- and the caller (`interrupt_gate::agent_tier`) uses this to decide the
+/// authority of a *different* pubkey than the employee's own, so answering
+/// with a vacated role would hand out rank nobody currently carries.
+///
+/// `role_id` is compared as stored: `employee_broker` lowercases and trims it
+/// off the owner-signed hire request before insert, so callers reading a role
+/// from anywhere else must normalize the same way first.
+pub async fn find_active_employee_by_role(
+    pool: &PgPool,
+    community: CommunityId,
+    role_id: &str,
+) -> Result<Option<EmployeeRow>> {
+    let row = sqlx::query(
+        "SELECT pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, status, created_at, updated_at \
+         FROM employees WHERE community_id = $1 AND role_id = $2 AND status = 'active'",
+    )
+    .bind(community.as_uuid())
+    .bind(role_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_employee).transpose()
+}
+
 /// Every active employee of a community, oldest first.
 pub async fn list_active_employees(
     pool: &PgPool,

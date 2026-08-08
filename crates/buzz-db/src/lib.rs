@@ -5730,6 +5730,16 @@ impl Db {
         employees::find_employee(&self.pool, community, pubkey).await
     }
 
+    /// The employee currently filling a role (see
+    /// [`employees::find_active_employee_by_role`]).
+    pub async fn find_active_employee_by_role(
+        &self,
+        community: CommunityId,
+        role_id: &str,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::find_active_employee_by_role(&self.pool, community, role_id).await
+    }
+
     /// Every active employee of a community (see [`employees::list_active_employees`]).
     pub async fn list_active_employees(
         &self,
