@@ -525,6 +525,11 @@ jobs:
           PGSCHEMA_PLAN_PASSWORD: buzz_dev
         run: |
           ./bin/pgschema apply --file schema/schema.sql --auto-approve
+          # pgschema does not manage extensions, so schema.sql's CREATE
+          # EXTENSION line is silently ignored and the relay's digest()-based
+          # queries fail. See scripts/create-required-extensions.sql.
+          docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
+            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
           docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
@@ -801,6 +806,11 @@ jobs:
           PGSCHEMA_PLAN_PASSWORD: buzz_dev
         run: |
           ./bin/pgschema apply --file schema/schema.sql --auto-approve
+          # pgschema does not manage extensions, so schema.sql's CREATE
+          # EXTENSION line is silently ignored and the relay's digest()-based
+          # queries fail. See scripts/create-required-extensions.sql.
+          docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
+            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
           docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
@@ -876,11 +886,19 @@ jobs:
         # team-lead mapping the workflow owner-mention routing resolves
         # against. Another integration target in tests/, so it was outside the
         # archive and had never run in CI either.
+        #
+        # --test-threads 1 is required, unlike the sibling steps: a sweep tick
+        # processes every due ask in the database, not just the rows the
+        # calling test created, so two concurrent ticks consume each other's
+        # fixtures. Measured, not assumed — this suite goes 33/37 run
+        # concurrently and 37/37 serialized, while interrupt_gate (17/17) and
+        # the sink tests (6/6) are clean in parallel and are left alone.
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
             -E 'binary(interrupt_runtime)' \
-            --run-ignored ignored-only
+            --run-ignored ignored-only \
+            --test-threads 1
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
       - name: Workflow owner-contact routing tests
