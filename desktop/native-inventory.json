@@ -1,17 +1,17 @@
 {
-  "commit": "0a97abfa65851091479623149a800787f19fff05",
+  "commit": "99766821546eefb5936d4ea035c0d37dd6fdd045",
   "files": {
-    "rust_total": 313,
-    "rust_lines": 129437,
-    "tauri_coupled": 137,
-    "portable": 176,
-    "portable_lines": 64629
+    "rust_total": 320,
+    "rust_lines": 131287,
+    "tauri_coupled": 143,
+    "portable": 177,
+    "portable_lines": 64638
   },
   "commands": {
-    "registered": 271,
-    "defined": 271,
+    "registered": 280,
+    "defined": 280,
     "by_reach": {
-      "frontend": 265,
+      "frontend": 274,
       "NO CALLER FOUND": 3,
       "frontend-plugin-prefixed": 2,
       "test-only": 1
@@ -23,16 +23,16 @@
     ]
   },
   "params": {
-    "AppHandle": 258,
-    "State": 203,
+    "AppHandle": 272,
+    "State": 212,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 3
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 258,
-      "State": 203,
+      "AppHandle": 272,
+      "State": 212,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 3
@@ -50,15 +50,15 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 84,
-    ".emit(": 28,
+    ".state::<": 85,
+    ".emit(": 34,
     ".emit_to(": 0,
     ".dialog()": 4,
     ".shell()": 0,
     ".opener()": 1,
     ".notification()": 0,
     ".updater()": 0,
-    ".get_webview_window(": 3,
+    ".get_webview_window(": 5,
     ".global_shortcut(": 1,
     ".request_restart(": 6,
     ".run_on_main_thread(": 2,
@@ -68,8 +68,8 @@
     ".exit(": 0
   },
   "events": {
-    "distinct": 18,
-    "emit_sites": 25,
+    "distinct": 21,
+    "emit_sites": 29,
     "names": [
       "agents-data-changed",
       "deep-link-add-community",
@@ -79,7 +79,10 @@
       "deep-link-nostr-bind",
       "huddle-active-speakers",
       "huddle-audio-disconnected",
+      "huddle-companion-returned",
+      "huddle-speaker-levels",
       "huddle-state-changed",
+      "huddle-tts-speaker-level",
       "legacy-nest-migrated",
       "media-upload-progress",
       "pairing-aborted",
@@ -122,11 +125,14 @@
     "src-tauri/src/discovery_credentials.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
+    "src-tauri/src/huddle/agent_voice.rs": 3,
     "src-tauri/src/huddle/audio_output.rs": 3,
+    "src-tauri/src/huddle/commands.rs": 3,
     "src-tauri/src/commands/ledger.rs": 3,
     "src-tauri/src/commands/agent_settings.rs": 3,
     "src-tauri/src/deep_link.rs": 2,
     "src-tauri/src/commands/initiative.rs": 2,
+    "src-tauri/src/huddle/window.rs": 2,
     "src-tauri/src/commands/company_blueprint.rs": 2,
     "src-tauri/src/commands/personas/snapshot/import.rs": 2,
     "src-tauri/src/commands/agent_auth.rs": 2,
@@ -165,6 +171,7 @@
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
+    "src-tauri/src/huddle/agents.rs": 1,
     "src-tauri/src/commands/personas/update.rs": 1
   },
   "detail": {
@@ -183,7 +190,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:612"
+        "src/features/huddle/components/HuddleBar.tsx:627"
       ]
     },
     "add_channel_members": {
@@ -325,7 +332,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:546"
+        "src/features/huddle/HuddleContext.tsx:785"
       ]
     },
     "clone_project_repository": {
@@ -335,6 +342,15 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/projectGit.ts:433"
+      ]
+    },
+    "close_huddle_companion": {
+      "defining_file": "src-tauri/src/huddle/window.rs",
+      "module": "window",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/huddle/components/HuddleBar.tsx:550"
       ]
     },
     "colony_check_community_name": {
@@ -389,7 +405,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:427"
+        "src/features/huddle/HuddleContext.tsx:615"
       ]
     },
     "confirm_pairing_sas": {
@@ -811,7 +827,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:323"
+        "src/features/huddle/HuddleContext.tsx:511"
       ]
     },
     "ensure_chat_task": {
@@ -821,6 +837,15 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/initiative.ts:70"
+      ]
+    },
+    "ensure_huddle_agent_voice_settings": {
+      "defining_file": "src-tauri/src/huddle/agent_voice.rs",
+      "module": "agent_voice",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/huddle/components/ParticipantList.tsx:181"
       ]
     },
     "ensure_starter_channels": {
@@ -963,7 +988,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:163"
+        "src/features/huddle/HuddleContext.tsx:214"
       ]
     },
     "get_baked_build_env": {
@@ -1158,7 +1183,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/lib/useTtsSubscription.ts:128"
+        "src/features/huddle/lib/useTtsSubscription.ts:190"
       ]
     },
     "get_huddle_state": {
@@ -1167,9 +1192,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:225",
-        "src/features/huddle/components/HuddleBar.tsx:526",
-        "src/features/huddle/components/HuddleBar.tsx:616"
+        "src/app/useHuddlePresentation.ts:67",
+        "src/app/useHuddlePresentation.ts:234",
+        "src/app/useHuddlePresentation.ts:359"
       ]
     },
     "get_identity": {
@@ -1178,7 +1203,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:377",
+        "src/features/huddle/HuddleContext.tsx:565",
         "src/shared/api/tauriIdentity.ts:23"
       ]
     },
@@ -1454,7 +1479,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:188"
+        "src/features/huddle/lib/useHuddlePttState.ts:20"
       ]
     },
     "get_workflow": {
@@ -1542,6 +1567,15 @@
         "src/shared/api/tauri.ts:996"
       ]
     },
+    "interrupt_huddle_speech": {
+      "defining_file": "src-tauri/src/huddle/commands.rs",
+      "module": "commands",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/huddle/HuddleContext.tsx:69"
+      ]
+    },
     "is_auto_update_supported": {
       "defining_file": "src-tauri/src/commands/updater.rs",
       "module": "updater",
@@ -1577,8 +1611,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:105",
-        "src/features/huddle/HuddleContext.tsx:504"
+        "src/features/huddle/HuddleContext.tsx:97",
+        "src/features/huddle/HuddleContext.tsx:724"
       ]
     },
     "leave_channel": {
@@ -1597,9 +1631,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:293",
-        "src/features/huddle/HuddleContext.tsx:295",
-        "src/features/huddle/HuddleContext.tsx:327"
+        "src/features/huddle/HuddleContext.tsx:481",
+        "src/features/huddle/HuddleContext.tsx:483",
+        "src/features/huddle/HuddleContext.tsx:515"
       ]
     },
     "ledger_add_price": {
@@ -1644,7 +1678,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:155"
+        "src/features/huddle/HuddleContext.tsx:206"
       ]
     },
     "list_channel_templates": {
@@ -1671,7 +1705,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/AddAgentDialog.tsx:44",
+        "src/features/huddle/components/AddAgentDialog.tsx:52",
         "src/shared/api/tauri.ts:864"
       ]
     },
@@ -1699,7 +1733,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/hooks.ts:329",
+        "src/features/agents/hooks.ts:330",
         "src/shared/api/tauri.ts:858"
       ]
     },
@@ -1737,6 +1771,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/huddle/components/ParticipantList.tsx:183",
         "src/features/settings/ui/VoiceSettingsCard.tsx:58"
       ]
     },
@@ -1849,6 +1884,17 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:100",
         "src/shared/api/tauriChannels.ts:126"
+      ]
+    },
+    "open_huddle_window": {
+      "defining_file": "src-tauri/src/huddle/window.rs",
+      "module": "window",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/app/useHuddlePresentation.ts:267",
+        "src/features/huddle/components/HuddleBar.tsx:540",
+        "src/features/huddle/components/HuddleProfileControl.tsx:112"
       ]
     },
     "open_project_merge_recovery_terminal": {
@@ -1977,8 +2023,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/lib/audioWorklet.ts:40",
-        "src/features/huddle/lib/audioWorklet.ts:92"
+        "src/features/huddle/lib/audioWorklet.ts:39",
+        "src/features/huddle/lib/audioWorklet.ts:99"
       ]
     },
     "push_project_local_repository": {
@@ -2059,7 +2105,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:661"
+        "src/features/huddle/HuddleContext.tsx:925"
       ]
     },
     "relay_reconnect_hook": {
@@ -2089,6 +2135,16 @@
         "src/shared/api/relayMembers.ts:131"
       ]
     },
+    "remove_agent_from_huddle": {
+      "defining_file": "src-tauri/src/huddle/commands.rs",
+      "module": "commands",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/huddle/components/HuddleBar.tsx:705",
+        "src/features/huddle/components/HuddleRoomHeader.tsx:55"
+      ]
+    },
     "remove_channel_member": {
       "defining_file": "src-tauri/src/commands/channels.rs",
       "module": "channels",
@@ -2096,7 +2152,6 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:109",
-        "src/features/huddle/components/HuddleBar.tsx:698",
         "src/shared/api/tauri.ts:399"
       ]
     },
@@ -2182,7 +2237,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "test-only",
       "example_sites": [
-        "src/testing/e2eBridge.ts:12485"
+        "src/testing/e2eBridge.ts:12830"
       ]
     },
     "search_messages": {
@@ -2247,7 +2302,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:146"
+        "src/features/huddle/HuddleContext.tsx:197"
       ]
     },
     "set_canvas": {
@@ -2302,13 +2357,43 @@
         "src/features/agents/ui/OpenRouterConnectField.tsx:71"
       ]
     },
+    "set_huddle_agent_tts_enabled": {
+      "defining_file": "src-tauri/src/huddle/agent_voice.rs",
+      "module": "agent_voice",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/huddle/components/AgentVoiceMenu.tsx:61",
+        "src/features/huddle/components/AgentVoiceMenu.tsx:121"
+      ]
+    },
+    "set_huddle_agent_voice": {
+      "defining_file": "src-tauri/src/huddle/agent_voice.rs",
+      "module": "agent_voice",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/huddle/components/AgentVoiceMenu.tsx:61",
+        "src/features/huddle/components/AgentVoiceMenu.tsx:152"
+      ]
+    },
+    "set_huddle_manual_mic_unmuted": {
+      "defining_file": "src-tauri/src/huddle/commands.rs",
+      "module": "commands",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/huddle/HuddleContext.tsx:292",
+        "src/features/huddle/HuddleContext.tsx:367"
+      ]
+    },
     "set_huddle_transcription_enabled": {
       "defining_file": "src-tauri/src/huddle/transcription.rs",
       "module": "transcription",
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:523"
+        "src/features/huddle/components/HuddleBar.tsx:526"
       ]
     },
     "set_managed_agent_auto_restart": {
@@ -2371,7 +2456,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:654",
+        "src/features/huddle/components/HuddleBar.tsx:669",
         "src/features/settings/ui/VoiceSettingsCard.tsx:84"
       ]
     },
@@ -2381,7 +2466,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:261"
+        "src/features/huddle/HuddleContext.tsx:239"
       ]
     },
     "set_window_vibrancy": {
@@ -2455,8 +2540,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/lib/useTtsSubscription.ts:25",
-        "src/features/huddle/lib/useTtsSubscription.ts:60"
+        "src/features/huddle/lib/useTtsSubscription.ts:28",
+        "src/features/huddle/lib/useTtsSubscription.ts:64"
       ]
     },
     "start_huddle": {
@@ -2465,8 +2550,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:105",
-        "src/features/huddle/HuddleContext.tsx:458"
+        "src/features/huddle/HuddleContext.tsx:97",
+        "src/features/huddle/HuddleContext.tsx:649"
       ]
     },
     "start_managed_agent": {
@@ -2475,6 +2560,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/huddle/components/AddAgentDialog.tsx:89",
+        "src/features/huddle/components/AddAgentDialog.tsx:95",
         "src/shared/api/tauriManagedAgents.ts:12"
       ]
     },
@@ -2509,6 +2596,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/huddle/components/AddAgentDialog.tsx:118",
         "src/shared/api/tauriManagedAgents.ts:19"
       ]
     },
@@ -2519,6 +2607,17 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriManagedAgents.ts:72"
+      ]
+    },
+    "sync_agents_to_active_huddle": {
+      "defining_file": "src-tauri/src/huddle/agents.rs",
+      "module": "agents",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/agents/hooks.ts:651",
+        "src/features/channels/hooks.ts:528",
+        "src/features/messages/ui/useMentionSendFlow.ts:509"
       ]
     },
     "take_pending_community_deep_link": {
