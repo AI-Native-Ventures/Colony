@@ -18,6 +18,7 @@ import type {
   LeadFunnelStatus,
   LeadCounts,
   LeadPage,
+  PipelineColumn,
   LeadScope,
   LeadUpdateInput,
   OutreachDraft,
@@ -28,6 +29,7 @@ import type {
   Vertical,
   VerticalDetail,
 } from "../types";
+import { PIPELINE_COLUMN_STATUSES } from "../types";
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
 import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
@@ -319,6 +321,41 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
       pageSize,
       hasNextPage: start + pageSize < leads.length,
     };
+  }
+
+  /**
+   * The Pipeline's column data: one bounded, status-filtered `list_leads`
+   * call per column, returning the relay's `total`.
+   *
+   * This deliberately does not use `getLeads` or `listLeadProjections`:
+   * those loop to exhaustion and slice client-side, which is right for the
+   * searchable workspace but would pull every lead for six columns. Each
+   * column here is capped at one page and reports the relay total, so a
+   * large funnel stays cheap to render.
+   */
+  async getPipelineColumns(): Promise<PipelineColumn[]> {
+    if (!(await this.live())) return this.demo.getPipelineColumns();
+    return Promise.all(
+      PIPELINE_COLUMN_STATUSES.map(async (status) => {
+        const result = await this.broker.workspace("list_leads", {
+          operation: "list_leads",
+          request: {
+            campaign_id: null,
+            industry_id: null,
+            vertical_id: null,
+            status,
+            offset: 0,
+            limit: 100,
+          },
+        });
+        if (result.result !== "leads") throw new Error("Lead list failed.");
+        return {
+          status,
+          total: result.page.total,
+          leads: result.page.leads.map(mapLead),
+        };
+      }),
+    );
   }
 
   async getOutreach(campaignId: string): Promise<OutreachDraft[]> {

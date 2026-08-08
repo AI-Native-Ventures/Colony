@@ -18,7 +18,7 @@ import {
 import { LeadDetailDrawer } from "./LeadDetailDrawer";
 import { DiscoveryTopTabs } from "./DiscoveryTopTabs";
 import { DISCOVERY_LIGHT_SURFACE_STYLE } from "./discoverySurfaceStyle";
-import { discoverySurface } from "./discoveryLayout";
+import { discoverySurface, showPipelineTab } from "./discoveryLayout";
 
 type DiscoveryRouteScreenProps = {
   search: DiscoverySearch;
@@ -232,7 +232,14 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
       className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background text-foreground"
       style={DISCOVERY_LIGHT_SURFACE_STYLE}
     >
-      <DiscoveryTopTabs surface={discoverySurface(search)} />
+      <DiscoveryTopTabs
+        showPipeline={showPipelineTab({
+          experience: state.entitlement?.experience,
+          leadTotal: state.readModel?.leads?.total ?? 0,
+          surface: discoverySurface(search),
+        })}
+        surface={discoverySurface(search)}
+      />
       <DiscoveryWorkspace
         dataSource={dataSource}
         entitlement={state.entitlement}

@@ -3,7 +3,8 @@ export type DiscoverySurface =
   | "verticals"
   | "campaigns"
   | "campaign"
-  | "leads";
+  | "leads"
+  | "pipeline";
 
 export type DiscoveryTab =
   | "overview"
@@ -33,6 +34,7 @@ const DISCOVERY_SURFACES: readonly DiscoverySurface[] = [
   "campaigns",
   "campaign",
   "leads",
+  "pipeline",
 ];
 
 const DISCOVERY_TABS: readonly DiscoveryTab[] = [

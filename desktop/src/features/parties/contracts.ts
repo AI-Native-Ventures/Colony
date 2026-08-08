@@ -63,6 +63,29 @@ const STATUSES_BY_VIEW: Record<RelationshipKind, readonly string[]> = {
   client: ["active", "paused", "former"],
 };
 
+/**
+ * Which statuses a Lead relationship can move to directly.
+ *
+ * Mirrors `is_relationship_transition_allowed` for `RelationshipKind::Lead`
+ * (same-status included; `disqualified` is terminal). Presentation only: the
+ * relay decides legality and stays the authority. Client-only statuses map to
+ * themselves so the record stays total, which is exactly the settled truth:
+ * a Lead can never move into `active`.
+ */
+export const LEAD_STATUS_TRANSITIONS: Record<
+  RelationshipStatus,
+  readonly RelationshipStatus[]
+> = {
+  candidate: ["candidate", "accepted", "disqualified"],
+  accepted: ["accepted", "qualified", "dormant", "disqualified"],
+  qualified: ["qualified", "dormant", "disqualified"],
+  dormant: ["dormant", "qualified", "disqualified"],
+  disqualified: ["disqualified"],
+  active: ["active"],
+  paused: ["paused"],
+  former: ["former"],
+};
+
 export type PartyIdentifier = {
   scheme: IdentifierScheme;
   value: string;

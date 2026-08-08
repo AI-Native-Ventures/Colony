@@ -8,6 +8,7 @@ import type {
   LeadDetail,
   LeadCounts,
   LeadPage,
+  PipelineColumn,
   LeadScope,
   LeadUpdateInput,
   OutreachDraft,
@@ -30,6 +31,7 @@ export interface DiscoveryDataSource {
   getRole(fieldId: string, roleId: string): Promise<ProfessionalRoleDetail>;
   getCampaign(campaignId: string): Promise<CampaignDetail>;
   getLeads(scope: LeadScope): Promise<LeadPage>;
+  getPipelineColumns(): Promise<PipelineColumn[]>;
   getLeadCounts(): Promise<LeadCounts>;
   getLead(leadId: string): Promise<LeadDetail>;
   updateLead(leadId: string, input: LeadUpdateInput): Promise<LeadDetail>;
