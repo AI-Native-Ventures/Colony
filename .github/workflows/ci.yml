@@ -1192,18 +1192,40 @@ jobs:
       - name: Install desktop dependencies
         run: just desktop-install-ci
       - name: Start Docker (colima) for relay backing services
+        id: backend
+        # GitHub's hosted macOS runners do not reliably provide the nested
+        # virtualisation Lima needs, so `colima start` can fail outright:
+        #   level=fatal msg="error starting vm: error at 'creating and starting'"
+        # That is an environment limit, not a harness defect. Treat it as a
+        # loud skip rather than a failure, so a red X never means "the shell
+        # is broken" when it actually means "this runner has no Docker".
         run: |
-          if ! docker info >/dev/null 2>&1; then
-            brew install --quiet colima docker docker-compose
-            colima start --cpu 2 --memory 4
+          set -u
+          if docker info >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif brew install --quiet colima docker docker-compose \
+               && colima start --cpu 2 --memory 4; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
           fi
           if ! docker compose version >/dev/null 2>&1; then
             mkdir -p "$HOME/.docker/cli-plugins"
             ln -sfn "$(brew --prefix)/opt/docker-compose/libexec/docker/cli-plugins/docker-compose" \
-              "$HOME/.docker/cli-plugins/docker-compose"
+              "$HOME/.docker/cli-plugins/docker-compose" || true
           fi
       - name: Run real-shell E2E suite
+        if: steps.backend.outputs.available == 'true'
         run: ./scripts/run-real-shell-e2e.sh
+      - name: Record backend-unavailable skip
+        if: steps.backend.outputs.available != 'true'
+        # Write a ledger entry so the skip is an artifact, not just a log line.
+        # A silently skipped suite reads as coverage; this one cannot.
+        run: |
+          mkdir -p desktop/e2e-real-shell/results
+          printf '%s\n' '{"flow":"ALL","status":"skip","detail":"backend unavailable: Docker/Colima could not start on this GitHub-hosted macOS runner; no flow was executed"}' \
+            > desktop/e2e-real-shell/results/ledger.jsonl
+          echo "::warning title=Real-shell E2E skipped::Docker/Colima could not start on this GitHub-hosted macOS runner. No flow ran. This job proves nothing about the shell until it runs on a macOS runner with Docker. See desktop/e2e-real-shell/README.md."
       - name: Upload real-shell E2E results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

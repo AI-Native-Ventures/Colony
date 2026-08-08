@@ -156,3 +156,28 @@ history.
   embedded store.
 - The 136 Playwright specs are untouched and keep testing the frontend
   against the mock — this suite is deliberately not a port of them.
+
+## Known gap: CI has no backend on GitHub-hosted macOS runners
+
+The `Real-shell E2E (macOS)` job stands up the isolated relay stack with Docker
+via Colima. GitHub's hosted macOS runners do not reliably provide the nested
+virtualisation Lima needs, so `colima start` fails outright:
+
+```
+level=fatal msg="error starting vm: error at 'creating and starting': exit status 1"
+```
+
+The job detects this and records a loud skip (a `status:"skip"` ledger entry plus
+a workflow warning) instead of failing, because a red X there would mean "this
+runner has no Docker", not "the shell is broken". The job is also
+`continue-on-error: true`, so it cannot gate the repo while this stands.
+
+**What would make it gating**, in preference order:
+
+1. A self-hosted macOS runner with Docker already installed. Closest to the
+   local setup this harness was built and proven against.
+2. A long-lived hosted relay the job points at instead of standing one up.
+   Removes Docker from the job entirely, at the cost of test isolation.
+
+Until one of those exists, this job proves nothing about the shell in CI. Run it
+locally against a packaged build; that path is green and is what Phase 0 relies on.
