@@ -186,13 +186,13 @@ function CampaignLeads({
     return subscribeLeadUpdates(() => setLeadUpdateTick((tick) => tick + 1));
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recentLeadDetail reads a module-level cache, so the memo must re-run when a receipt lands.
   const leads = React.useMemo(
     () =>
       (page?.leads ?? []).map((row) => {
         const updated = recentLeadDetail(row.id);
         return updated ? { ...row, ...leadUpdateFields(updated) } : row;
       }),
-    // leadUpdateTick re-runs the merge when an update receipt lands.
     [leadUpdateTick, page],
   );
   const visibleLeads = filterLeads(leads, filters);
@@ -294,13 +294,13 @@ function GlobalLeads({
     return subscribeLeadUpdates(() => setLeadUpdateTick((tick) => tick + 1));
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recentLeadDetail reads a module-level cache, so the memo must re-run when a receipt lands.
   const leads = React.useMemo(
     () =>
       (page?.leads ?? []).map((row) => {
         const updated = recentLeadDetail(row.id);
         return updated ? { ...row, ...leadUpdateFields(updated) } : row;
       }),
-    // leadUpdateTick re-runs the merge when an update receipt lands.
     [leadUpdateTick, page],
   );
   const modeLeads = leads.filter((lead) =>

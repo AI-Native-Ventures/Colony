@@ -1,5 +1,5 @@
 {
-  "commit": "99766821546eefb5936d4ea035c0d37dd6fdd045",
+  "commit": "06e7bba9efd23a48ace01427f7ea2833a2dc2716",
   "files": {
     "rust_total": 320,
     "rust_lines": 131287,
@@ -247,7 +247,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:231",
+        "src/features/communities/useCommunityInit.ts:233",
         "src/features/communities/useNestNotifications.ts:12",
         "src/features/communities/useNestNotifications.ts:21"
       ]
@@ -1536,7 +1536,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/communities/communityStorage.ts:62",
-        "src/features/communities/useCommunityInit.ts:217",
+        "src/features/communities/useCommunityInit.ts:219",
         "src/shared/api/tauriIdentity.ts:32"
       ]
     },
