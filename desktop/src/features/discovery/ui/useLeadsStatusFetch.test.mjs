@@ -354,3 +354,57 @@ test("a global workspace fetch carries the status with the global page size", as
     await act(async () => root.unmount());
   }
 });
+
+test("a status selected on an individual-target campaign carries targetType into the fetch", async () => {
+  const dataSource = recordingDataSource();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const initialLeads = {
+    leads: [],
+    total: 0,
+    page: 1,
+    pageSize: 100,
+    hasNextPage: false,
+  };
+
+  function Harness(props) {
+    useLeadsStatusFetch(props);
+    return null;
+  }
+
+  const base = {
+    campaignId: "marketing-directors-united-states",
+    dataSource,
+    initialLeads,
+    scope: "campaign",
+    targetType: "individual",
+  };
+  try {
+    await act(async () => {
+      root.render(React.createElement(Harness, base));
+    });
+    assert.equal(
+      dataSource.scopes.length,
+      0,
+      "unfiltered individual campaign must short-circuit on initialLeads",
+    );
+
+    await act(async () => {
+      root.render(
+        React.createElement(Harness, {
+          ...base,
+          status: "candidate",
+        }),
+      );
+    });
+    assert.equal(dataSource.scopes.length, 1);
+    assert.equal(dataSource.scopes[0].status, "candidate");
+    assert.equal(
+      dataSource.scopes[0].targetType,
+      "individual",
+      "the fetch must keep the campaign's target type so a people campaign does not swap to company rows",
+    );
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

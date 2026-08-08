@@ -163,6 +163,7 @@ function CampaignLeads({
     initialLeads,
     scope: "campaign",
     status: selectedLeadStatus(filters),
+    targetType: campaign.targetType,
   });
 
   const leads = page?.leads ?? [];

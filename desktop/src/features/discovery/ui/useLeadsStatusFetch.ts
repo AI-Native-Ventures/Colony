@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
-import type { LeadFunnelStatus, LeadPage } from "../types";
+import type { DiscoveryTargetType, LeadFunnelStatus, LeadPage } from "../types";
 
 /**
  * The leads fetch for a workspace, driven by the selected funnel status.
@@ -20,12 +20,14 @@ export function useLeadsStatusFetch({
   initialLeads,
   scope,
   status,
+  targetType,
 }: {
   campaignId?: string;
   dataSource: DiscoveryDataSource;
   initialLeads: LeadPage | null | undefined;
   scope: "campaign" | "global";
   status: LeadFunnelStatus | undefined;
+  targetType?: DiscoveryTargetType;
 }) {
   const pageSize = scope === "campaign" ? 100 : 500;
   const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
@@ -45,6 +47,7 @@ export function useLeadsStatusFetch({
       .getLeads({
         scope,
         ...(campaignId ? { campaignId } : {}),
+        ...(targetType ? { targetType } : {}),
         ...(status ? { status } : {}),
         page: 1,
         pageSize,
@@ -69,7 +72,15 @@ export function useLeadsStatusFetch({
     return () => {
       cancelled = true;
     };
-  }, [campaignId, dataSource, initialLeads, pageSize, scope, status]);
+  }, [
+    campaignId,
+    dataSource,
+    initialLeads,
+    pageSize,
+    scope,
+    status,
+    targetType,
+  ]);
 
   return { isLoading, page };
 }
