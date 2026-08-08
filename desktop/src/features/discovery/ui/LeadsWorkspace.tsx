@@ -20,6 +20,7 @@ import type { CampaignDetail, LeadPage } from "../types";
 import {
   EMPTY_LEAD_FILTERS,
   filterLeads,
+  selectedLeadStatus,
   type LeadFilterState,
   type LeadMode,
 } from "./LeadFilters";
@@ -28,6 +29,7 @@ import { LeadTable, type LeadTableView } from "./LeadTable";
 import { PeopleLeadTable } from "./PeopleLeadTable";
 import { CampaignLeadStatsRow, GlobalLeadStatsRow } from "./LeadsStats";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import { useLeadsStatusFetch } from "./useLeadsStatusFetch";
 
 export type LeadsWorkspaceProps = {
   dataSource: DiscoveryDataSource;
@@ -151,51 +153,17 @@ function CampaignLeads({
   initialLeads: LeadPage | null | undefined;
   search: DiscoverySearch;
 }) {
-  const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
-  const [isLoading, setIsLoading] = React.useState(!initialLeads);
   const [filters, setFilters] =
     React.useState<LeadFilterState>(EMPTY_LEAD_FILTERS);
   const [view, setView] = React.useState<LeadTableView>("list");
   const [message, setMessage] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    if (initialLeads) {
-      setPage(initialLeads);
-      setIsLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-    setIsLoading(true);
-    void dataSource
-      .getLeads({
-        scope: "campaign",
-        campaignId: campaign.id,
-        page: 1,
-        pageSize: 100,
-      })
-      .then((nextPage) => {
-        if (cancelled) return;
-        setPage(nextPage);
-        setIsLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPage({
-            leads: [],
-            total: 0,
-            page: 1,
-            pageSize: 100,
-            hasNextPage: false,
-          });
-          setIsLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaign.id, dataSource, initialLeads]);
+  const { page, isLoading } = useLeadsStatusFetch({
+    campaignId: campaign.id,
+    dataSource,
+    initialLeads,
+    scope: "campaign",
+    status: selectedLeadStatus(filters),
+  });
 
   const leads = page?.leads ?? [];
   const visibleLeads = filterLeads(leads, filters);
@@ -277,50 +245,20 @@ function GlobalLeads({
   initialMode: LeadMode;
   search: DiscoverySearch;
 }) {
-  const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
-  const [isLoading, setIsLoading] = React.useState(!initialLeads);
   const [filters, setFilters] =
     React.useState<LeadFilterState>(EMPTY_LEAD_FILTERS);
   const [mode, setMode] = React.useState<LeadMode>(initialMode);
   const [view, setView] = React.useState<LeadTableView>("list");
   const [message, setMessage] = React.useState<string | null>(null);
   const { goDiscovery } = useAppNavigation();
+  const { page, isLoading } = useLeadsStatusFetch({
+    dataSource,
+    initialLeads,
+    scope: "global",
+    status: selectedLeadStatus(filters),
+  });
 
   React.useEffect(() => setMode(initialMode), [initialMode]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    if (initialLeads) {
-      setPage(initialLeads);
-      setIsLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-    setIsLoading(true);
-    void dataSource
-      .getLeads({ scope: "global", page: 1, pageSize: 500 })
-      .then((nextPage) => {
-        if (cancelled) return;
-        setPage(nextPage);
-        setIsLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPage({
-            leads: [],
-            total: 0,
-            page: 1,
-            pageSize: 100,
-            hasNextPage: false,
-          });
-          setIsLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dataSource, initialLeads]);
 
   const leads = page?.leads ?? [];
   const modeLeads = leads.filter((lead) =>

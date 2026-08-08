@@ -2,6 +2,7 @@ import { Building2, Database, Mail, MapPin, Users } from "lucide-react";
 
 import { Card } from "@/shared/ui/card";
 import type { Lead } from "../types";
+import { HIGH_QUALITY_SCORE_THRESHOLD } from "./LeadFilters";
 import { MetricCard } from "./MetricCard";
 
 export type CampaignLeadStats = {
@@ -13,7 +14,7 @@ export type CampaignLeadStats = {
 
 export type GlobalLeadStats = {
   totalLeads: number;
-  enrichedLeads: number;
+  highQualityLeads: number;
   newThisWeek: number;
   topIndustry: string;
 };
@@ -49,7 +50,9 @@ export function globalLeadStats(
   )[0]?.[0];
   return {
     totalLeads: leads.length,
-    enrichedLeads: leads.filter((lead) => lead.status === "enriched").length,
+    highQualityLeads: leads.filter(
+      (lead) => lead.score >= HIGH_QUALITY_SCORE_THRESHOLD,
+    ).length,
     newThisWeek: leads.filter((lead) => {
       const added = new Date(lead.addedAt).getTime();
       return (
@@ -117,9 +120,9 @@ export function GlobalLeadStatsRow({
       />
       <MetricCard
         icon={<Database aria-hidden="true" />}
-        label="Enriched Leads"
-        value={stats.enrichedLeads}
-        hint={`${stats.totalLeads ? Math.round((stats.enrichedLeads / stats.totalLeads) * 100) : 0}% enriched`}
+        label="High Quality"
+        value={stats.highQualityLeads}
+        hint={`${stats.totalLeads ? Math.round((stats.highQualityLeads / stats.totalLeads) * 100) : 0}% high quality`}
       />
       <MetricCard
         icon={<Building2 aria-hidden="true" />}

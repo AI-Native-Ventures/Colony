@@ -711,6 +711,31 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
   assert.equal(page.leads[0].sourceLabel, "Brave Web Search");
 });
 
+test("getLeads forwards the funnel status to the relay payload", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+
+  await source.getLeads({
+    scope: "global",
+    status: "dormant",
+    page: 1,
+    pageSize: 25,
+  });
+
+  const listEvent = live.publishedEvents.find(
+    (event) =>
+      event.kind === 40021 &&
+      JSON.parse(event.content).request.payload.operation === "list_leads",
+  );
+  assert.ok(listEvent, "a list_leads workspace action must be published");
+  const listRequest = JSON.parse(listEvent.content).request.payload.request;
+  assert.equal(
+    listRequest.status,
+    "dormant",
+    "the selected status must travel in the relay request, not a client-side filter",
+  );
+});
+
 test("a released V1 worker receipt still wakes the V2 desktop run loop", async () => {
   const live = harness(true, RELAY_SECRET, {}, "1");
   const source = new RelayDiscoveryDataSource(live.dependencies);
