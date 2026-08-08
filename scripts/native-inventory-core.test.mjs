@@ -226,6 +226,54 @@ test("receiver-scoped .path(): DirEntry::path is not AppHandle usage", async () 
   }
 });
 
+test("coupling is classified on stripped source, and the lists are emitted", async () => {
+  const desktop = await makeFixture();
+  try {
+    // A file whose ONLY match is a doc comment asserting the absence of a
+    // Tauri dependency. Real example: managed_agents/readiness.rs says
+    // "no `AppHandle` dependency so it is fully unit-testable".
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "comment_only.rs"),
+      [
+        "//! Pure logic. Does NOT require an `AppHandle`, so it is",
+        "//! fully unit-testable without tauri::Manager.",
+        "pub fn add(a: u32, b: u32) -> u32 {",
+        "    a + b",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const data = await buildInventory(desktop);
+    const { portable_list: portable, tauri_coupled_list: coupled } = data.files;
+
+    assert.ok(
+      portable.some((f) => f.endsWith("comment_only.rs")),
+      "a comment-only AppHandle mention must not make a file coupled",
+    );
+    assert.ok(
+      !coupled.some((f) => f.endsWith("comment_only.rs")),
+      "comment_only.rs must not appear in the coupled list",
+    );
+
+    // The lists are the scope source for Phase 1, so they must reconcile with
+    // the counts they are reported alongside.
+    assert.equal(coupled.length, data.files.tauri_coupled);
+    assert.equal(portable.length, data.files.portable);
+    assert.equal(coupled.length + portable.length, data.files.rust_total);
+    assert.equal(
+      new Set([...coupled, ...portable]).size,
+      data.files.rust_total,
+      "no file may be both coupled and portable",
+    );
+    assert.deepEqual(coupled, [...coupled].sort(), "coupled list is sorted");
+    assert.deepEqual(portable, [...portable].sort(), "portable list is sorted");
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
 test("drift check: renaming a registered command makes the inventory stale", async () => {
   const desktop = await makeFixture();
   try {

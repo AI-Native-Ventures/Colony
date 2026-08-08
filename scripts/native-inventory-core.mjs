@@ -335,8 +335,16 @@ function countSignatureParams(src, testFile) {
   return counts;
 }
 
-function tauriCoupling(text) {
-  return /tauri::|AppHandle|State<|WebviewWindow|Emitter|Manager/.test(text);
+// Callers must pass comment-stripped source. Doc comments routinely say things
+// like "no `AppHandle` dependency so it is fully unit-testable", and matching
+// raw text counted those files as coupled — 11 of them, including
+// managed_agents/readiness.rs, whose only matches were comments asserting the
+// opposite. That inflated tauri_coupled and shrank the portable set that
+// Phase 1's move ticket is scoped from.
+function tauriCoupling(strippedText) {
+  return /tauri::|AppHandle|State<|WebviewWindow|Emitter|Manager/.test(
+    strippedText,
+  );
 }
 
 const EMIT_EVENT = /\.emit(?:_to|_filter)?\s*\(\s*(?:[A-Za-z0-9_"'.&]+\s*,\s*)?"([a-z0-9:_-]+)"/g;
@@ -463,13 +471,15 @@ export async function buildInventory(projectRoot) {
     const text = await fs.readFile(filePath, "utf8");
     const lineCount = countLines(text);
     totalLines += lineCount;
-    if (tauriCoupling(text)) {
+    if (tauriCoupling(stripComments(text))) {
       coupled.push(rel);
     } else {
       portable.push(rel);
       portableLines += lineCount;
     }
   }
+  coupled.sort();
+  portable.sort();
 
   const paramCounts = { prod: {}, test: {}, axumExtractor: {} };
   for (const filePath of files) {
@@ -518,6 +528,12 @@ export async function buildInventory(projectRoot) {
       tauri_coupled: coupled.length,
       portable: portable.length,
       portable_lines: portableLines,
+      // The lists themselves, not just the counts. Phase 1's move ticket is
+      // scoped from `portable_list`, and its per-file ticket allocation from
+      // `tauri_coupled_list`. Both were previously hand-grepped, which is how
+      // a comment-only match got treated as a real Tauri dependency.
+      tauri_coupled_list: coupled,
+      portable_list: portable,
     },
     commands: {
       registered: registered.size,
