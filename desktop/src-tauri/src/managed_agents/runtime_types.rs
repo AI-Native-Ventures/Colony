@@ -132,6 +132,8 @@ mod tests {
     use super::ManagedAgentLeaseBinding;
     use crate::provisioned_credits::{GatewayLease, GatewayLeaseKey, RedactedToken};
     use chrono::{Duration, Utc};
+    use nostr::Keys;
+    use std::sync::Arc;
 
     #[test]
     fn lease_binding_requires_origin_owner_and_generation() {
@@ -142,6 +144,7 @@ mod tests {
             generation: 7,
             expires_at: Utc::now() + Duration::hours(1),
             refresh_at: Utc::now() + Duration::minutes(30),
+            signer: Arc::new(Keys::generate()),
         };
         let binding = ManagedAgentLeaseBinding::from_lease(&lease);
         assert!(binding.matches(&lease));

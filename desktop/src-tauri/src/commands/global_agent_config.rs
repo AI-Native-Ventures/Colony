@@ -73,6 +73,7 @@ pub async fn set_global_agent_config(
     let app_for_write = app.clone();
     let phase1 = tokio::task::spawn_blocking(move || {
         validate_global_config(&config)?;
+        validate_provisioned_mode_eligibility(&config)?;
 
         let old_global = load_global_agent_config(&app_for_write)?;
 
@@ -206,16 +207,6 @@ fn collect_restart_candidates(
             }
             let provisioned_supported =
                 provisioned_runtime_supported(record, &all_personas, new_global);
-            if !should_restart_for_credential_mode(
-                old_global.credential_mode,
-                new_global.credential_mode,
-                provisioned_supported,
-                has_provisioned_runtime,
-            ) {
-                // Unsupported pairs, and pairs that were already BYOK while
-                // unselecting Colony Credits, remain untouched.
-                return false;
-            }
             let effective_cmd = record_agent_command(record, &all_personas);
             let runtime_meta = known_acp_runtime(&effective_cmd);
             let old_effective =
@@ -229,10 +220,20 @@ fn collect_restart_candidates(
             // restart for a process that already exited between the pre-filter
             // scan and Phase 2.  NotReady→Ready bypasses the alive check
             // because Phase 2 will stop-then-start unconditionally.
-            let env_changed = old_ready && old_effective.env != new_effective.env
-                || old_global.credential_mode != new_global.credential_mode;
-
-            should_restart_on_config_change(old_ready, new_ready, env_changed)
+            let effective_env_changed = old_effective.env != new_effective.env;
+            let mode_changed = old_global.credential_mode != new_global.credential_mode;
+            let mode_restart_allowed = should_restart_for_credential_mode(
+                old_global.credential_mode,
+                new_global.credential_mode,
+                provisioned_supported,
+                has_provisioned_runtime,
+                mode_changed,
+            );
+            should_restart_on_config_change(
+                old_ready,
+                new_ready,
+                old_ready && effective_env_changed,
+            ) || (mode_changed && mode_restart_allowed)
         })
         .map(|r| r.pubkey.clone())
         .collect();
@@ -326,17 +327,6 @@ async fn restart_local_agent_on_config_change(
         });
         let provisioned_supported =
             provisioned_runtime_supported(record, &personas_owned, &new_global_clone);
-        if !should_restart_for_credential_mode(
-            old_global_clone.credential_mode,
-            new_global_clone.credential_mode,
-            provisioned_supported,
-            has_provisioned_runtime,
-        ) {
-            return Err(format!(
-                "agent {pubkey_owned} is not eligible for the selected credential mode"
-            ));
-        }
-
         // Re-check the eligibility predicate under lock:
         //   (old NotReady && new Ready)  OR  (old Ready && env changed)
         // TODO: busy/mid-turn deferral would slot in here
@@ -352,9 +342,21 @@ async fn restart_local_agent_on_config_change(
         let old_ready = matches!(agent_readiness(&old_effective), AgentReadiness::Ready);
         let new_ready = matches!(agent_readiness(&new_effective), AgentReadiness::Ready);
         // Under lock, the alive check was already done above via process_is_running.
-        let env_changed = old_ready && old_effective.env != new_effective.env
-            || old_global_clone.credential_mode != new_global_clone.credential_mode;
-        if !should_restart_on_config_change(old_ready, new_ready, env_changed) {
+        let effective_env_changed = old_effective.env != new_effective.env;
+        let mode_changed = old_global_clone.credential_mode != new_global_clone.credential_mode;
+        let mode_restart_allowed = should_restart_for_credential_mode(
+            old_global_clone.credential_mode,
+            new_global_clone.credential_mode,
+            provisioned_supported,
+            has_provisioned_runtime,
+            mode_changed,
+        );
+        if !(should_restart_on_config_change(
+            old_ready,
+            new_ready,
+            old_ready && effective_env_changed,
+        ) || mode_changed && mode_restart_allowed)
+        {
             return Err(format!(
                 "agent {pubkey_owned} restart condition no longer valid under lock"
             ));
@@ -461,16 +463,61 @@ fn provisioned_runtime_supported(
     matches!(provider.as_deref(), Some("openai" | "openai-compat"))
 }
 
+/// Reject a saved global Colony Credits mode when its explicit preferred
+/// runtime can never consume the OpenAI-compatible meter. This mirrors the UI
+/// handle's provider-aware disabled state and prevents a mode that would only
+/// fail later at spawn from being persisted. A missing preferred runtime keeps
+/// the existing default (Codex) behavior.
+fn validate_provisioned_mode_eligibility(config: &GlobalAgentConfig) -> Result<(), String> {
+    if config.credential_mode != CredentialMode::ColonyCredits {
+        return Ok(());
+    }
+    let Some(runtime_id) = config.preferred_runtime.as_deref() else {
+        return Ok(());
+    };
+    if runtime_id == "codex" {
+        return Ok(());
+    }
+    let provider_key = match runtime_id {
+        "goose" => "GOOSE_PROVIDER",
+        "buzz-agent" => "BUZZ_AGENT_PROVIDER",
+        _ => {
+            return Err(format!(
+                "Colony Credits is unavailable for the {runtime_id} harness; choose BYOK"
+            ));
+        }
+    };
+    let provider = config
+        .env_vars
+        .get(provider_key)
+        .map(String::as_str)
+        .or(config.provider.as_deref())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    if matches!(provider.as_deref(), Some("openai" | "openai-compat")) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Colony Credits requires an OpenAI or OpenAI-compatible provider for {runtime_id}; choose BYOK"
+        ))
+    }
+}
+
 /// Whether a live record may be restarted for a global credential-mode change.
-/// Unsupported pairs are never stopped when selecting Colony Credits, and a
-/// pair that was already BYOK must not be bounced when selecting BYOK again.
+/// Unsupported pairs remain untouched for either direction of a mode-only
+/// change; their own provider/model/env changes still use the normal restart
+/// predicate below.
 fn should_restart_for_credential_mode(
     old_mode: CredentialMode,
     new_mode: CredentialMode,
     provisioned_supported: bool,
     has_provisioned_runtime: bool,
+    mode_changed: bool,
 ) -> bool {
-    if new_mode == CredentialMode::ColonyCredits && !provisioned_supported {
+    if !mode_changed {
+        return true;
+    }
+    if !provisioned_supported {
         return false;
     }
     if old_mode == CredentialMode::ColonyCredits
@@ -510,8 +557,13 @@ fn should_restart_on_config_change(old_ready: bool, new_ready: bool, env_changed
 
 #[cfg(test)]
 mod tests {
-    use super::{should_restart_for_credential_mode, should_restart_on_config_change};
+    use super::{
+        should_restart_for_credential_mode, should_restart_on_config_change,
+        validate_provisioned_mode_eligibility,
+    };
     use crate::managed_agents::CredentialMode;
+    use crate::managed_agents::GlobalAgentConfig;
+    use std::collections::BTreeMap;
 
     #[test]
     fn mixed_fleet_mode_change_leaves_unsupported_byok_pairs_running() {
@@ -520,12 +572,14 @@ mod tests {
             CredentialMode::ColonyCredits,
             false,
             false,
+            true,
         ));
         assert!(!should_restart_for_credential_mode(
             CredentialMode::ColonyCredits,
             CredentialMode::Byok,
             false,
             false,
+            true,
         ));
     }
 
@@ -536,7 +590,36 @@ mod tests {
             CredentialMode::Byok,
             true,
             true,
+            true,
         ));
+    }
+
+    #[test]
+    fn same_mode_does_not_apply_mode_eligibility_guard() {
+        assert!(should_restart_for_credential_mode(
+            CredentialMode::ColonyCredits,
+            CredentialMode::ColonyCredits,
+            false,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn provisioned_mode_rejects_unsupported_preferred_provider() {
+        let config = GlobalAgentConfig {
+            credential_mode: CredentialMode::ColonyCredits,
+            env_vars: BTreeMap::new(),
+            provider: Some("anthropic".to_string()),
+            model: None,
+            preferred_runtime: Some("goose".to_string()),
+        };
+        assert!(validate_provisioned_mode_eligibility(&config).is_err());
+        let supported = GlobalAgentConfig {
+            provider: Some("openai-compat".to_string()),
+            ..config
+        };
+        assert!(validate_provisioned_mode_eligibility(&supported).is_ok());
     }
 
     /// Running agent (Ready) whose effective env changed → restart candidate.

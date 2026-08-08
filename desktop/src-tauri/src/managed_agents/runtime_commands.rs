@@ -51,6 +51,18 @@ pub(crate) fn isolate_provisioned_credits_owner(
     app: &AppHandle,
     owner_pubkey: &str,
 ) -> Result<(), String> {
+    crate::provisioned_credits::begin_identity_transition(app, owner_pubkey)?;
+    let result = isolate_provisioned_credits_runtime_owner(app, owner_pubkey);
+    if result.is_err() {
+        let _ = crate::provisioned_credits::finish_identity_transition(app);
+    }
+    result
+}
+
+fn isolate_provisioned_credits_runtime_owner(
+    app: &AppHandle,
+    owner_pubkey: &str,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let _transition = state
         .managed_agent_runtime_transition

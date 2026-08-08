@@ -185,7 +185,17 @@ async fn gateway_denials_preserve_status_and_emit_one_observed_call() {
                 .and_then(|value| value.to_str().ok()),
             Some(marker)
         );
-        let _ = response.bytes().await.expect("drain denial body");
+        let body = response.bytes().await.expect("drain denial body");
+        assert!(
+            std::str::from_utf8(&body)
+                .expect("canonical denial JSON")
+                .contains(if status == StatusCode::UNAUTHORIZED {
+                    buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_401_MARKER
+                } else {
+                    buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_402_MARKER
+                }),
+            "meter must carry an exact denial marker through the adapter body"
+        );
         let call = next_call(&mut rx).await;
         assert_eq!(call.http_status, status.as_u16());
         assert_eq!(call.tokens, None);

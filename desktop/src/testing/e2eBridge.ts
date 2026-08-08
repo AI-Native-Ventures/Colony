@@ -536,6 +536,8 @@ type E2eConfig = {
       currency: "USD";
       status: "active" | "depleted";
     };
+    /** Reject the explicit Colony Credits reconnect action with this message. */
+    colonyCreditsReconnectError?: string;
     /** File-layer config returned by runtime id. */
     runtimeFileConfigs?: Record<string, RuntimeFileConfigSubset | null>;
     /** Baked build env returned by the display and key-name Tauri commands. */
@@ -12900,6 +12902,9 @@ export function maybeInstallE2eTauriMocks() {
         return mockColonyCreditsAccount;
       }
       case "reconnect_colony_credits": {
+        if (activeConfig?.mock?.colonyCreditsReconnectError) {
+          throw new Error(activeConfig.mock.colonyCreditsReconnectError);
+        }
         return null;
       }
       case "set_global_agent_config": {

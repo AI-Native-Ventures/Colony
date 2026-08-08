@@ -10,14 +10,13 @@ import {
 } from "@/shared/api/tauriProvisionedCredits";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
+import { isColonyCreditsEligible } from "./colonyCreditsEligibility";
 
 type ColonyCreditsCredentialChoiceProps = {
   config: GlobalAgentConfig;
   runtimeId: string;
   onConfigChange: (next: GlobalAgentConfig) => void;
 };
-
-const SUPPORTED_RUNTIME_IDS = new Set(["codex", "goose", "buzz-agent"]);
 
 /** Minimal global credential choice for the Phase 1 Colony Credits handle. */
 export function ColonyCreditsCredentialChoice({
@@ -29,7 +28,10 @@ export function ColonyCreditsCredentialChoice({
   const [accountError, setAccountError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
-  const supported = SUPPORTED_RUNTIME_IDS.has(runtimeId);
+  const providerEnvVar =
+    runtimeId === "goose" ? "GOOSE_PROVIDER" : "BUZZ_AGENT_PROVIDER";
+  const effectiveProvider = config.env_vars[providerEnvVar] ?? config.provider;
+  const supported = isColonyCreditsEligible(runtimeId, effectiveProvider);
 
   const refreshAccount = useCallback(async () => {
     setIsLoading(true);
@@ -126,7 +128,9 @@ export function ColonyCreditsCredentialChoice({
               ? "Agents pause at $0.00."
               : runtimeId === "claude"
                 ? "Unavailable for Claude/Anthropic subscription agents."
-                : "Unavailable for this harness."}
+                : runtimeId === "goose" || runtimeId === "buzz-agent"
+                  ? "Select an OpenAI or OpenAI-compatible provider first."
+                  : "Unavailable for this harness."}
           </span>
         </button>
       </div>

@@ -9,7 +9,11 @@ import {
 
 const AGENT = "a".repeat(64);
 
-function event(overrides = {}) {
+function event(status = 401, overrides = {}) {
+  const marker =
+    status === 402
+      ? "COLONY_CREDITS_GATEWAY_STATUS_402"
+      : "COLONY_CREDITS_GATEWAY_STATUS_401";
   return {
     seq: 1,
     timestamp: "2026-01-01T00:00:01.000Z",
@@ -19,9 +23,10 @@ function event(overrides = {}) {
     sessionId: "session-1",
     turnId: "turn-1",
     payload: {
-      gateway_status: 401,
+      gateway_status: status,
+      gateway_marker: marker,
       action: "reconnect",
-      error: "upstream returned 401",
+      error: `meter marker ${marker}`,
     },
     ...overrides,
   };
@@ -31,7 +36,7 @@ describe("observerRelayStore Colony Credits recovery", () => {
   beforeEach(() => resetAgentObserverStore());
 
   it("keeps a live 401 denial available to the managed-agent row", () => {
-    injectObserverEventsForE2E(AGENT, [event()]);
+    injectObserverEventsForE2E(AGENT, [event(401)]);
     assert.equal(
       getLatestColonyCreditsDenial(AGENT)?.payload.gateway_status,
       401,
@@ -40,12 +45,33 @@ describe("observerRelayStore Colony Credits recovery", () => {
 
   it("clears a denial when a later turn starts", () => {
     injectObserverEventsForE2E(AGENT, [
-      event(),
-      event({
+      event(401),
+      event(401, {
         seq: 2,
         timestamp: "2026-01-01T00:00:02.000Z",
         kind: "turn_started",
         payload: null,
+      }),
+    ]);
+    assert.equal(getLatestColonyCreditsDenial(AGENT), null);
+  });
+
+  it("keeps an exact 402 depleted marker actionable", () => {
+    injectObserverEventsForE2E(AGENT, [event(402)]);
+    assert.equal(
+      getLatestColonyCreditsDenial(AGENT)?.payload.gateway_status,
+      402,
+    );
+  });
+
+  it("ignores a status without the canonical meter marker", () => {
+    injectObserverEventsForE2E(AGENT, [
+      event(401, {
+        payload: {
+          gateway_status: 401,
+          gateway_marker: "adapter mentioned 401",
+          action: "reconnect",
+        },
       }),
     ]);
     assert.equal(getLatestColonyCreditsDenial(AGENT), null);

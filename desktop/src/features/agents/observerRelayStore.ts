@@ -574,8 +574,19 @@ export function getLatestColonyCreditsDenial(
     const status = Number(
       (payload as { gateway_status?: unknown }).gateway_status,
     );
+    const marker = (payload as { gateway_marker?: unknown }).gateway_marker;
     const action = (payload as { action?: unknown }).action;
-    if ((status === 401 || status === 402) && action === "reconnect") {
+    const expectedMarker =
+      status === 401
+        ? "COLONY_CREDITS_GATEWAY_STATUS_401"
+        : status === 402
+          ? "COLONY_CREDITS_GATEWAY_STATUS_402"
+          : null;
+    if (
+      expectedMarker !== null &&
+      marker === expectedMarker &&
+      action === "reconnect"
+    ) {
       denial = event;
     }
   }

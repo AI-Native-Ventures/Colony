@@ -23,7 +23,11 @@ import type {
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { AgentConfigPanel } from "./AgentConfigPanel";
-import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
+import {
+  COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+  COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+  friendlyAgentLastError,
+} from "@/features/agents/lib/friendlyAgentLastError";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { PubKey } from "@/shared/ui/PubKey";
 import { SubsectionLabel } from "@/shared/ui/PageHeader";
@@ -81,6 +85,9 @@ export function ManagedAgentRow({
   );
   const isWorking = activeWorkingChannels.length > 0;
   const [isReconnecting, setIsReconnecting] = React.useState(false);
+  const [reconnectError, setReconnectError] = React.useState<string | null>(
+    null,
+  );
   const liveDenial = React.useSyncExternalStore(
     subscribeAgentObserverStore,
     () => getLatestColonyCreditsDenial(agent.pubkey),
@@ -118,7 +125,11 @@ export function ManagedAgentRow({
           const status = String(payload.gateway_status ?? "401");
           const detail =
             typeof payload.error === "string" ? `: ${payload.error}` : "";
-          return `Colony Credits gateway returned ${status}${detail}`;
+          const marker =
+            status === "402"
+              ? COLONY_CREDITS_GATEWAY_STATUS_402_MARKER
+              : COLONY_CREDITS_GATEWAY_STATUS_401_MARKER;
+          return `${marker}${detail}`;
         })(),
       )
     : null;
@@ -156,6 +167,7 @@ export function ManagedAgentRow({
               </button>
               <StatusBlock
                 friendlyError={friendlyError}
+                reconnectError={reconnectError}
                 isWorking={isWorking}
                 isReconnecting={isReconnecting}
                 presenceLoaded={presenceLoaded}
@@ -165,8 +177,15 @@ export function ManagedAgentRow({
                 onReconnect={async () => {
                   if (isReconnecting) return;
                   setIsReconnecting(true);
+                  setReconnectError(null);
                   try {
                     await reconnectColonyCredits();
+                  } catch (error) {
+                    setReconnectError(
+                      typeof error === "string"
+                        ? error
+                        : "Reconnect failed — try again.",
+                    );
                   } finally {
                     setIsReconnecting(false);
                   }
@@ -189,6 +208,7 @@ export function ManagedAgentRow({
               />
               <StatusBlock
                 friendlyError={friendlyError}
+                reconnectError={reconnectError}
                 isWorking={isWorking}
                 isReconnecting={isReconnecting}
                 presenceLoaded={presenceLoaded}
@@ -198,8 +218,15 @@ export function ManagedAgentRow({
                 onReconnect={async () => {
                   if (isReconnecting) return;
                   setIsReconnecting(true);
+                  setReconnectError(null);
                   try {
                     await reconnectColonyCredits();
+                  } catch (error) {
+                    setReconnectError(
+                      typeof error === "string"
+                        ? error
+                        : "Reconnect failed — try again.",
+                    );
                   } finally {
                     setIsReconnecting(false);
                   }
@@ -406,6 +433,7 @@ function WorkingBadge({
 
 function StatusBlock({
   friendlyError,
+  reconnectError,
   isReconnecting,
   isWorking,
   presenceLoaded,
@@ -415,6 +443,7 @@ function StatusBlock({
   onReconnect,
 }: {
   friendlyError: ReturnType<typeof friendlyAgentLastError>;
+  reconnectError: string | null;
   isReconnecting: boolean;
   isWorking: boolean;
   presenceLoaded: boolean;
@@ -464,6 +493,14 @@ function StatusBlock({
             </Button>
           ) : null}
         </div>
+      ) : null}
+      {reconnectError ? (
+        <p
+          className="text-xs text-destructive"
+          data-testid="managed-agent-colony-credits-reconnect-error"
+        >
+          {reconnectError}
+        </p>
       ) : null}
     </div>
   );

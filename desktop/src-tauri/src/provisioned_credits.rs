@@ -12,13 +12,15 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Utc};
+use nostr::Keys;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    app_state::AppState, managed_agents::ManagedAgentRuntimeKey, relay::build_nip98_auth_header,
+    app_state::AppState, managed_agents::ManagedAgentRuntimeKey,
+    relay::build_nip98_auth_header_for_keys,
 };
 
 /// Gateway token lifetime requested by the desktop. Short-lived leases bound
@@ -180,7 +182,7 @@ impl GatewayLeaseKey {
 
 /// An in-memory gateway lease. The token is deliberately omitted from its
 /// serialized/debug representation; only `as_str()` can access it.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct GatewayLease {
     /// Relay/owner identity this token is bound to.
     pub key: GatewayLeaseKey,
@@ -196,7 +198,23 @@ pub struct GatewayLease {
     /// computed instant avoids an immediate refresh loop for the Phase 1
     /// 24-hour lease while still refreshing before expiry.
     pub(crate) refresh_at: DateTime<Utc>,
+    /// Exact signer captured when this lease was minted. It is never read
+    /// from mutable AppState during revoke or refresh, so an identity swap
+    /// cannot cross-wire an owner-A cache entry with owner-B credentials.
+    pub(crate) signer: Arc<Keys>,
 }
+
+impl PartialEq for GatewayLease {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.token == other.token
+            && self.generation == other.generation
+            && self.expires_at == other.expires_at
+            && self.refresh_at == other.refresh_at
+    }
+}
+
+impl Eq for GatewayLease {}
 
 impl fmt::Debug for GatewayLease {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -237,6 +255,12 @@ pub struct ProvisionedCreditsManager {
     rotation_gates: HashMap<GatewayLeaseKey, Arc<Mutex<()>>>,
     pending_revocations: Vec<GatewayLease>,
     next_generation: HashMap<GatewayLeaseKey, u64>,
+    /// Once closed, no rotation may mint, install, or schedule a lease.
+    closed: bool,
+    /// Identity replacement drains all old-owner gates before the new keys
+    /// become visible to spawn/refresh. This flag closes the race window while
+    /// the captured old signers are being revoked.
+    identity_transitioning: bool,
 }
 
 impl ProvisionedCreditsManager {
@@ -245,6 +269,63 @@ impl ProvisionedCreditsManager {
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
+    }
+
+    fn begin_shutdown(&mut self) -> Vec<Arc<Mutex<()>>> {
+        self.closed = true;
+        self.rotation_gates.values().cloned().collect()
+    }
+
+    fn begin_identity_transition(&mut self) -> Vec<Arc<Mutex<()>>> {
+        self.identity_transitioning = true;
+        self.rotation_gates.values().cloned().collect()
+    }
+
+    fn finish_identity_transition(&mut self) {
+        self.identity_transitioning = false;
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    fn is_identity_transitioning(&self) -> bool {
+        self.identity_transitioning
+    }
+
+    fn remove_owner_entries(&mut self, owner_pubkey: &str) -> Vec<GatewayLease> {
+        let owner_pubkey = owner_pubkey.to_ascii_lowercase();
+        let keys: Vec<_> = self
+            .leases
+            .keys()
+            .filter(|key| key.owner_pubkey != owner_pubkey)
+            .cloned()
+            .collect();
+        let mut removed = Vec::new();
+        for key in keys {
+            if let Some(entry) = self.leases.remove(&key) {
+                if let Some(task) = entry.refresh_task {
+                    task.abort();
+                }
+                removed.push(entry.lease);
+                if let Some(retained) = entry.retained_old {
+                    removed.push(retained.lease);
+                }
+            }
+            self.next_generation.remove(&key);
+        }
+        self.rotation_gates
+            .retain(|key, _| key.owner_pubkey == owner_pubkey);
+        let pending = std::mem::take(&mut self.pending_revocations);
+        for lease in pending {
+            if lease.key.owner_pubkey != owner_pubkey {
+                removed.push(lease);
+            } else {
+                self.pending_revocations.push(lease);
+            }
+        }
+        deduplicate_leases(&mut removed);
+        removed
     }
 
     fn reserve_generation(&mut self, key: &GatewayLeaseKey) -> u64 {
@@ -380,6 +461,9 @@ impl ProvisionedCreditsManager {
     }
 
     fn schedule_refresh(&mut self, app: &AppHandle, lease: &GatewayLease) {
+        if self.closed || self.identity_transitioning {
+            return;
+        }
         let key = lease.key.clone();
         let generation = lease.generation;
         let refresh_at = lease.refresh_at;
@@ -411,148 +495,7 @@ impl ProvisionedCreditsManager {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GatewayHttpErrorKind {
-    Unauthorized,
-    Depleted,
-    NotFound,
-}
-
-fn gateway_http_error(status: reqwest::StatusCode) -> Result<(), GatewayHttpErrorKind> {
-    match status {
-        reqwest::StatusCode::UNAUTHORIZED => Err(GatewayHttpErrorKind::Unauthorized),
-        reqwest::StatusCode::PAYMENT_REQUIRED => Err(GatewayHttpErrorKind::Depleted),
-        reqwest::StatusCode::NOT_FOUND => Err(GatewayHttpErrorKind::NotFound),
-        _ => Ok(()),
-    }
-}
-
-fn stable_http_error(kind: GatewayHttpErrorKind) -> String {
-    match kind {
-        GatewayHttpErrorKind::Unauthorized => {
-            "Colony Credits gateway authorization expired — reconnect".to_string()
-        }
-        GatewayHttpErrorKind::Depleted => {
-            "Colony Credits depleted — top up, then reconnect".to_string()
-        }
-        GatewayHttpErrorKind::NotFound => {
-            "Colony Credits gateway is unavailable on this relay".to_string()
-        }
-    }
-}
-
-fn blocking_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| format!("gateway client setup failed: {error}"))
-}
-
-fn owner_pubkey(app: &AppHandle, explicit: Option<&str>) -> Result<String, String> {
-    if let Some(owner) = explicit.map(str::trim).filter(|owner| !owner.is_empty()) {
-        return Ok(owner.to_ascii_lowercase());
-    }
-    let state = app.state::<AppState>();
-    state.signing_keys().map(|keys| keys.public_key().to_hex())
-}
-
-fn mint_lease(
-    app: &AppHandle,
-    key: GatewayLeaseKey,
-    generation: u64,
-) -> Result<GatewayLease, String> {
-    let state = app.state::<AppState>();
-    let url = format!("{}/api/gateway/tokens", key.relay_origin);
-    let body = serde_json::to_vec(&serde_json::json!({
-        "ttl_secs": GATEWAY_TOKEN_TTL_SECS,
-    }))
-    .map_err(|error| format!("gateway request serialization failed: {error}"))?;
-    let auth = build_nip98_auth_header(&Method::POST, &url, &body, &state)?;
-    let response = blocking_client()?
-        .post(&url)
-        .header("Authorization", auth)
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .map_err(|error| format!("gateway unreachable: {error}"))?;
-    let status = response.status();
-    if let Err(kind) = gateway_http_error(status) {
-        return Err(stable_http_error(kind));
-    }
-    if !status.is_success() {
-        return Err(format!("gateway returned HTTP {status}"));
-    }
-    let payload = response
-        .json::<MintTokenResponse>()
-        .map_err(|_| "gateway returned malformed token response".to_string())?;
-    validate_lease_expiry(payload.expires_at)?;
-    let issued_at = Utc::now();
-    let token = RedactedToken::new(payload.token)?;
-    Ok(GatewayLease {
-        key,
-        token,
-        generation,
-        expires_at: payload.expires_at,
-        refresh_at: lease_refresh_at(issued_at, payload.expires_at),
-    })
-}
-
-#[derive(Deserialize)]
-struct MintTokenResponse {
-    token: String,
-    expires_at: DateTime<Utc>,
-}
-
-fn validate_lease_expiry(expires_at: DateTime<Utc>) -> Result<(), String> {
-    let now = Utc::now();
-    if expires_at <= now {
-        return Err("gateway returned an expired token".to_string());
-    }
-    let max = now + ChronoDuration::seconds(GATEWAY_TOKEN_TTL_SECS as i64);
-    if expires_at > max + ChronoDuration::seconds(5) {
-        return Err("gateway returned a token longer than the desktop lease bound".to_string());
-    }
-    Ok(())
-}
-
-fn lease_refresh_at(issued_at: DateTime<Utc>, expires_at: DateTime<Utc>) -> DateTime<Utc> {
-    let t_minus_lead = expires_at - ChronoDuration::seconds(GATEWAY_REFRESH_LEAD_SECS);
-    if t_minus_lead > issued_at {
-        return t_minus_lead;
-    }
-    // Phase 1 leases are bounded to 24h, so `expires_at - 24h` would be at
-    // or before mint time and cause an immediate refresh loop. Refresh at the
-    // midpoint instead; a lease observed after this instant is still treated
-    // as overdue by the generation-aware ensure path and rotated immediately.
-    let lifetime_secs = (expires_at - issued_at).num_seconds().max(1);
-    issued_at + ChronoDuration::seconds(lifetime_secs / 2)
-}
-
-fn revoke_lease(app: &AppHandle, lease: &GatewayLease) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let url = format!("{}/api/gateway/tokens", lease.key.relay_origin);
-    let body = serde_json::to_vec(&serde_json::json!({"token": lease.token.as_str()}))
-        .map_err(|error| format!("gateway request serialization failed: {error}"))?;
-    let auth = build_nip98_auth_header(&Method::DELETE, &url, &body, &state)?;
-    let response = blocking_client()?
-        .delete(&url)
-        .header("Authorization", auth)
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .map_err(|error| format!("gateway unreachable: {error}"))?;
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::NO_CONTENT {
-        return Ok(());
-    }
-    if let Err(kind) = gateway_http_error(status) {
-        return Err(stable_http_error(kind));
-    }
-    if !status.is_success() {
-        return Err(format!("gateway returned HTTP {status}"));
-    }
-    Ok(())
-}
+include!("provisioned_credits/lease_http.rs");
 
 /// Ensure a lease for a managed-agent spawn. This is synchronous because the
 /// existing spawn boundary is synchronous; callers invoke it from the same
@@ -563,7 +506,7 @@ pub fn ensure_lease_blocking(
     explicit_owner: Option<&str>,
     force: bool,
 ) -> Result<GatewayLease, String> {
-    let owner = owner_pubkey(app, explicit_owner)?;
+    let (owner, _) = capture_owner_signer(app, explicit_owner)?;
     let key = GatewayLeaseKey::new(relay_url, &owner)?;
     rotate_lease_blocking(
         app,
@@ -629,6 +572,68 @@ fn retry_pending_revocations(app: &AppHandle) {
     }
 }
 
+/// Close the lease manager for an owner transition, wait for every in-flight
+/// operation on the old keys, remove their cache/timers, and revoke using each
+/// lease's captured signer. The manager remains closed to rotations until the
+/// caller has installed the replacement identity and calls
+/// [`finish_identity_transition`].
+pub(crate) fn begin_identity_transition(
+    app: &AppHandle,
+    new_owner_pubkey: &str,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let gates = {
+        let mut manager = state
+            .provisioned_credits
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if manager.is_closed() {
+            return Err("desktop shutdown has started; identity transition refused".to_string());
+        }
+        manager.begin_identity_transition()
+    };
+    for gate in gates {
+        let _drain = gate.lock().map_err(|error| error.to_string())?;
+    }
+    let old_leases = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove_owner_entries(new_owner_pubkey);
+    for lease in old_leases {
+        revoke_or_queue(app, lease);
+    }
+    Ok(())
+}
+
+/// Re-open lease operations after the caller has atomically installed the new
+/// signing identity. A failed transition must also call this so the desktop
+/// does not remain permanently unable to spawn provisioned agents.
+pub(crate) fn finish_identity_transition(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?
+        .finish_identity_transition();
+    Ok(())
+}
+
+/// Close all future rotations and wait for any current per-key operation to
+/// finish before the shutdown drain takes its single lease snapshot.
+pub(crate) fn prepare_provisioned_credits_shutdown(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let gates = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?
+        .begin_shutdown();
+    for gate in gates {
+        let _drain = gate.lock().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Mint and safely rotate a lease. Only the per relay/owner singleflight gate
 /// is held across network/runtime work; the manager mutex is acquired only to
 /// snapshot or commit state. This prevents unrelated keys from stalling and
@@ -656,12 +661,43 @@ fn rotate_lease_blocking_with_expected(
         .map_err(|error| error.to_string())?
         .rotation_gate(key);
     let _singleflight = gate.lock().map_err(|error| error.to_string())?;
+    let manager = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if manager.is_closed() {
+        return Err("desktop shutdown has started; Colony Credits rotation refused".to_string());
+    }
+    if manager.is_identity_transitioning() {
+        return Err(
+            "Colony Credits identity transition in progress; retry after reconnect".to_string(),
+        );
+    }
+    // Capture the signer while the per-key gate is held. Identity replacement
+    // sets the transition flag before changing AppState keys and waits for
+    // this gate, so this signer remains bound to the whole operation.
+    let signer = Arc::new(state.signing_keys()?);
+    if !signer
+        .public_key()
+        .to_hex()
+        .eq_ignore_ascii_case(&key.owner_pubkey)
+    {
+        return Err("Colony Credits owner changed; reconnect the active identity".to_string());
+    }
+    drop(manager);
     retry_pending_revocations(app);
-
     let mut manager = state
         .provisioned_credits
         .lock()
         .map_err(|error| error.to_string())?;
+    if manager.is_closed() {
+        return Err("desktop shutdown has started; Colony Credits rotation refused".to_string());
+    }
+    if manager.is_identity_transitioning() {
+        return Err(
+            "Colony Credits identity transition in progress; retry after reconnect".to_string(),
+        );
+    }
     // The expected-generation check is deliberately inside the singleflight
     // critical section. A stale scheduled callback cannot pass this check,
     // drop the lock, and then rotate a newer manual generation.
@@ -696,6 +732,10 @@ fn rotate_lease_blocking_with_expected(
             .provisioned_credits
             .lock()
             .map_err(|error| error.to_string())?;
+        if manager.is_closed() {
+            manager.enqueue_revocation(primary);
+            return Err("desktop shutdown started during Colony Credits handoff".to_string());
+        }
         match handoff {
             Ok(outcome) if outcome.remaining_old_keys.is_empty() => {
                 let old_to_revoke = manager.take_retained_old(key);
@@ -737,7 +777,30 @@ fn rotate_lease_blocking_with_expected(
     let old = manager.leases.get(key).map(|entry| entry.lease.clone());
     let generation = manager.reserve_generation(key);
     drop(manager);
-    let replacement = mint_lease(app, key.clone(), generation)?;
+    let replacement = mint_lease(app, key.clone(), generation, signer)?;
+    // Identity transition may have started while the HTTP request was in
+    // flight. Do not hand the replacement to any process in that case; the
+    // captured signer can safely revoke it without consulting mutable keys.
+    let rotation_closed = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?
+        .is_closed();
+    if rotation_closed {
+        if let Ok(mut manager) = state.provisioned_credits.lock() {
+            manager.enqueue_revocation(replacement.clone());
+        }
+        return Err("desktop shutdown started during Colony Credits mint".to_string());
+    }
+    let identity_transitioning = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?
+        .is_identity_transitioning();
+    if identity_transitioning {
+        revoke_or_queue(app, replacement.clone());
+        return Err("Colony Credits identity changed during rotation; retry reconnect".to_string());
+    }
     if let Some(old_primary) = old.clone() {
         match crate::managed_agents::handoff_provisioned_credits_pairs(
             app,
@@ -751,6 +814,12 @@ fn rotate_lease_blocking_with_expected(
                     .provisioned_credits
                     .lock()
                     .map_err(|error| error.to_string())?;
+                if manager.is_closed() {
+                    manager.enqueue_revocation(replacement);
+                    return Err(
+                        "desktop shutdown started during Colony Credits handoff".to_string()
+                    );
+                }
                 manager.replace_primary(
                     replacement.clone(),
                     Some(RetainedLease {
@@ -779,6 +848,12 @@ fn rotate_lease_blocking_with_expected(
                         .provisioned_credits
                         .lock()
                         .map_err(|error| error.to_string())?;
+                    if manager.is_closed() {
+                        manager.enqueue_revocation(replacement);
+                        return Err(
+                            "desktop shutdown started during Colony Credits handoff".to_string()
+                        );
+                    }
                     manager.replace_primary(replacement.clone(), retained_old);
                     manager.schedule_refresh(app, &replacement);
                     if error.remaining_old_keys.is_empty() {
@@ -801,6 +876,10 @@ fn rotate_lease_blocking_with_expected(
             .provisioned_credits
             .lock()
             .map_err(|error| error.to_string())?;
+        if manager.is_closed() {
+            manager.enqueue_revocation(replacement);
+            return Err("desktop shutdown started during Colony Credits handoff".to_string());
+        }
         manager.replace_primary(replacement.clone(), None);
         manager.schedule_refresh(app, &replacement);
         drop(manager);
@@ -812,6 +891,10 @@ fn rotate_lease_blocking_with_expected(
         .provisioned_credits
         .lock()
         .map_err(|error| error.to_string())?;
+    if manager.is_closed() {
+        manager.enqueue_revocation(replacement);
+        return Err("desktop shutdown started during Colony Credits mint".to_string());
+    }
     manager.replace_primary(replacement.clone(), None);
     manager.schedule_refresh(app, &replacement);
     Ok(replacement)
@@ -825,7 +908,7 @@ pub fn force_reconnect_blocking(
     relay_url: &str,
     explicit_owner: Option<&str>,
 ) -> Result<(), String> {
-    let owner = owner_pubkey(app, explicit_owner)?;
+    let (owner, _) = capture_owner_signer(app, explicit_owner)?;
     let key = GatewayLeaseKey::new(relay_url, &owner)?;
     let _ = rotate_lease_blocking(app, &key, true, RotationReason::ManualReconnect)?;
     Ok(())
@@ -862,10 +945,12 @@ pub fn clear_lease(app: &AppHandle, key: &GatewayLeaseKey, revoke: bool) -> Resu
 }
 
 /// Gracefully revoke every active and pending lease before process shutdown.
-/// Raw references remain in `pending_revocations` when the relay is
-/// unreachable, allowing a later reconnect to retry without minting a second
-/// generation. The bounded retry keeps shutdown from hanging indefinitely.
+/// The bounded retry keeps shutdown from hanging indefinitely. If the relay is
+/// still unreachable, the process-local raw reference is intentionally
+/// discarded with an explicit <=24h residual-exposure error; there is no
+/// in-memory reconnect after process exit.
 pub fn drain_provisioned_credits_blocking(app: &AppHandle) -> Result<(), String> {
+    prepare_provisioned_credits_shutdown(app)?;
     let state = app.state::<AppState>();
     let leases = state
         .provisioned_credits
@@ -889,12 +974,15 @@ pub fn drain_provisioned_credits_blocking(app: &AppHandle) -> Result<(), String>
                 }
             }
         }
+        // The process is exiting, so retaining a retry reference in a
+        // process-local queue would be misleading: there is no later in-memory
+        // reconnect. Expiry validation bounds the residual exposure to <=24h.
         if !revoked {
-            if let Some(state) = app.try_state::<AppState>() {
-                if let Ok(mut manager) = state.provisioned_credits.lock() {
-                    manager.enqueue_revocation(lease);
-                }
-            }
+            let residual = "Colony Credits revoke remained unreachable; the token is bounded by its <=24h expiry and will not be retried after shutdown";
+            first_error = Some(match first_error.take() {
+                Some(error) => format!("{error}; {residual}"),
+                None => residual.to_string(),
+            });
         }
     }
     first_error.map_or(Ok(()), Err)

@@ -234,12 +234,24 @@ pub async fn import_identity(
         let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
         crate::app_state::persist_imported_identity(store, &keys, &key_path, &data_dir)?;
 
-        // Update in-memory keys BEFORE clearing recovery flags. The Release
+        // Drain and revoke the old-owner lease generation while the old signer
+        // is still current. The transition flag blocks refresh/spawn until the
+        // replacement identity has been installed and explicitly reopened.
+        let pubkey = keys.public_key();
+        crate::managed_agents::isolate_provisioned_credits_owner(&app_handle, &pubkey.to_hex())?;
+        // Update in-memory keys before clearing recovery flags. The Release
         // stores below pair with Acquire loads in get_identity: a reader
         // observing false is guaranteed to see the updated keys.
-        let pubkey = keys.public_key();
-        *state.keys.lock().map_err(|e| e.to_string())? = keys;
-        crate::managed_agents::isolate_provisioned_credits_owner(&app_handle, &pubkey.to_hex())?;
+        if let Err(error) = state
+            .keys
+            .lock()
+            .map_err(|e| e.to_string())
+            .map(|mut guard| *guard = keys)
+        {
+            let _ = crate::provisioned_credits::finish_identity_transition(&app_handle);
+            return Err(error);
+        }
+        crate::provisioned_credits::finish_identity_transition(&app_handle)?;
 
         // Clear both recovery flags — an import is valid in either lost or
         // keyring-locked state and resolves both. In the locked case the

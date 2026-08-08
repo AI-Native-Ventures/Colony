@@ -51,6 +51,12 @@ export const COLONY_CREDITS_RECONNECT_COPY =
 export const COLONY_CREDITS_DEPLETED_COPY =
   "Colony Credits depleted — top up, then reconnect.";
 
+/** Exact denial markers emitted by the local Colony Credits meter. */
+export const COLONY_CREDITS_GATEWAY_STATUS_401_MARKER =
+  "COLONY_CREDITS_GATEWAY_STATUS_401";
+export const COLONY_CREDITS_GATEWAY_STATUS_402_MARKER =
+  "COLONY_CREDITS_GATEWAY_STATUS_402";
+
 const EMBEDDED_CODE_RE = /^Agent reported error \(code (-?\d+)\): /;
 /** Bare form of the standard JSON-RPC -32603 message (after stripping the ACP wrapper prefix). */
 const BARE_INTERNAL_ERROR = "Internal error";
@@ -75,15 +81,15 @@ export function friendlyAgentLastError(
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
 
-  // Gateway HTTP statuses are preserved in the supervisor error text. Keep
-  // these separate from generic auth failures so the UI can offer one
-  // explicit reconnect action and never schedule an automatic retry loop.
-  const lower = trimmed.toLowerCase();
+  // Only the exact body markers emitted by the local meter can become a
+  // Colony Credits denial. Ordinary adapter text containing 401/402 (or
+  // words such as "depleted") must remain generic so a provider error cannot
+  // accidentally offer the destructive reconnect action.
   if (
-    (lower.includes("gateway") || lower.includes("colony credits")) &&
-    (lower.includes("401") ||
-      lower.includes("unauthorized") ||
-      lower.includes("authorization expired"))
+    containsExactColonyCreditsMarker(
+      trimmed,
+      COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+    )
   ) {
     return {
       severity: "actionable",
@@ -92,10 +98,10 @@ export function friendlyAgentLastError(
     };
   }
   if (
-    (lower.includes("gateway") || lower.includes("colony credits")) &&
-    (lower.includes("402") ||
-      lower.includes("payment required") ||
-      lower.includes("depleted"))
+    containsExactColonyCreditsMarker(
+      trimmed,
+      COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+    )
   ) {
     return {
       severity: "actionable",
@@ -149,6 +155,19 @@ export function friendlyAgentLastError(
   }
 
   return { severity: "generic", copy: trimmed };
+}
+
+function containsExactColonyCreditsMarker(
+  raw: string,
+  marker: string,
+): boolean {
+  const offset = raw.indexOf(marker);
+  if (offset < 0) return false;
+  const before = raw[offset - 1];
+  const after = raw[offset + marker.length];
+  const isMarkerBoundary = (character: string | undefined) =>
+    character === undefined || !/[A-Za-z0-9_]/.test(character);
+  return isMarkerBoundary(before) && isMarkerBoundary(after);
 }
 
 /**

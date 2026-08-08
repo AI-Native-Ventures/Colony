@@ -189,6 +189,29 @@ mod tests {
         assert_eq!(records[0].payload.http_status, Some(200));
     }
 
+    #[tokio::test]
+    async fn observed_meter_cost_survives_the_existing_desktop_reader() {
+        let keys = nostr::Keys::generate();
+        let mut payload = usage_record_payload("openai", "gpt-test", 200);
+        payload.observed_cost_nanousd = Some(12_345_678);
+        let event = self_usage_record_event(&keys, &payload);
+        let mine = keys.public_key().to_hex();
+        let (records, unreadable_records) = read_usage_records(
+            |_filters: Vec<serde_json::Value>| {
+                let event = event.clone();
+                async move { Ok(vec![event]) }
+            },
+            &mine,
+            &keys,
+        )
+        .await
+        .expect("the existing ledger reader must accept the usage event");
+
+        assert_eq!(unreadable_records, 0);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].payload.observed_cost_nanousd, Some(12_345_678));
+    }
+
     /// The same event can match both query shapes: someone else `p`-tags
     /// this identity on a record this identity also authored. Dedupe is on
     /// event id, never on payload contents, and unreadable duplicates count

@@ -3219,8 +3219,8 @@ fn is_auth_error(error: &acp::AcpError) -> bool {
 }
 
 /// Stable, non-retryable denial contract emitted by the provisioned meter
-/// boundary. The upstream body remains available for diagnostics, while this
-/// classifier gives the queue/pool and desktop observer a typed status.
+/// boundary. Only the exact canonical body marker is accepted; adapter text
+/// and unrelated HTTP status mentions never change queue/pool fate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProvisionedCreditsDenial {
     Unauthorized,
@@ -3231,23 +3231,28 @@ fn provisioned_credits_denial(error: &acp::AcpError) -> Option<ProvisionedCredit
     let acp::AcpError::AgentError { message, .. } = error else {
         return None;
     };
-    let lower = message.to_ascii_lowercase();
-    // The meter preserves the upstream status line, but adapters do not all
-    // preserve the same prefix (`gateway`, `API Error`, or `llm`).  In
-    // provisioned mode any LLM 401/402 is therefore a terminal gateway
-    // decision; transport errors never contain an HTTP status and continue
-    // through the ordinary retry/respawn path.
-    if lower.contains("colony_credits_gateway_status=401") || lower.contains("401") {
+    if contains_exact_gateway_marker(
+        message,
+        buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+    ) {
         return Some(ProvisionedCreditsDenial::Unauthorized);
     }
-    if lower.contains("colony_credits_gateway_status=402")
-        || lower.contains("402")
-        || lower.contains("payment required")
-        || lower.contains("depleted")
-    {
+    if contains_exact_gateway_marker(
+        message,
+        buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+    ) {
         return Some(ProvisionedCreditsDenial::Depleted);
     }
     None
+}
+
+fn contains_exact_gateway_marker(message: &str, marker: &str) -> bool {
+    message.match_indices(marker).any(|(offset, _)| {
+        let before = message[..offset].chars().next_back();
+        let after = message[offset + marker.len()..].chars().next();
+        before.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+            && after.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+    })
 }
 
 fn provisioned_credits_copy(denial: ProvisionedCreditsDenial) -> &'static str {
@@ -3258,6 +3263,15 @@ fn provisioned_credits_copy(denial: ProvisionedCreditsDenial) -> &'static str {
         ProvisionedCreditsDenial::Depleted => {
             "⚠️ Colony Credits depleted — top up, then reconnect."
         }
+    }
+}
+
+fn provisioned_credits_marker(denial: ProvisionedCreditsDenial) -> &'static str {
+    match denial {
+        ProvisionedCreditsDenial::Unauthorized => {
+            buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_401_MARKER
+        }
+        ProvisionedCreditsDenial::Depleted => buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
     }
 }
 
@@ -3502,6 +3516,7 @@ fn handle_prompt_result(
                     ProvisionedCreditsDenial::Unauthorized => 401,
                     ProvisionedCreditsDenial::Depleted => 402,
                 });
+                payload["gateway_marker"] = serde_json::json!(provisioned_credits_marker(denial));
                 payload["action"] = serde_json::json!("reconnect");
             }
             observer.emit(
@@ -6792,12 +6807,10 @@ mod error_outcome_emission_tests {
     }
 
     #[test]
-    fn provisioned_credits_denial_accepts_adapter_status_variants() {
+    fn provisioned_credits_denial_accepts_only_canonical_meter_markers() {
         let unauthorized_messages = [
-            "llm auth: upstream returned 401",
-            "API Error: 401 Unauthorized",
-            "colony_credits_gateway_status=401",
-            "401",
+            "adapter error: COLONY_CREDITS_GATEWAY_STATUS_401",
+            buzz_meter::colony_credits_gateway_denial_body(401).expect("meter canonical 401 body"),
         ];
         for message in unauthorized_messages {
             let error = acp::AcpError::AgentError {
@@ -6812,10 +6825,8 @@ mod error_outcome_emission_tests {
         }
 
         let depleted_messages = [
-            "llm: 402 Payment Required",
-            "gateway returned 402",
-            "Colony Credits depleted (colony_credits_gateway_status=402)",
-            "payment required",
+            "adapter error: COLONY_CREDITS_GATEWAY_STATUS_402",
+            buzz_meter::colony_credits_gateway_denial_body(402).expect("meter canonical 402 body"),
         ];
         for message in depleted_messages {
             let error = acp::AcpError::AgentError {
@@ -6839,6 +6850,22 @@ mod error_outcome_emission_tests {
             message: "upstream returned 500 Internal Server Error".to_string(),
         };
         assert_eq!(provisioned_credits_denial(&unrelated), None);
+        for message in [
+            "llm auth: upstream returned 401",
+            "API Error: 402 Payment Required",
+            "Colony Credits depleted",
+            "COLONY_CREDITS_GATEWAY_STATUS_4012",
+        ] {
+            let error = acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                provisioned_credits_denial(&error),
+                None,
+                "non-canonical adapter text must remain retryable: {message}"
+            );
+        }
     }
 
     async fn provisioned_denial_fate(message: &str) -> (usize, usize) {
@@ -6912,7 +6939,7 @@ mod error_outcome_emission_tests {
     #[tokio::test]
     async fn provisioned_401_dead_letters_once_and_returns_agent_to_pool() {
         let (pending_channels, live_agents) =
-            provisioned_denial_fate("llm auth: upstream returned 401").await;
+            provisioned_denial_fate("COLONY_CREDITS_GATEWAY_STATUS_401").await;
         assert_eq!(pending_channels, 0, "401 must not be requeued");
         assert_eq!(
             live_agents, 1,
@@ -6923,7 +6950,7 @@ mod error_outcome_emission_tests {
     #[tokio::test]
     async fn provisioned_402_dead_letters_once_and_returns_agent_to_pool() {
         let (pending_channels, live_agents) =
-            provisioned_denial_fate("llm: 402 Payment Required").await;
+            provisioned_denial_fate("COLONY_CREDITS_GATEWAY_STATUS_402").await;
         assert_eq!(pending_channels, 0, "402 must not be requeued");
         assert_eq!(
             live_agents, 1,

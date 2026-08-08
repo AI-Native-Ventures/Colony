@@ -1,6 +1,15 @@
 use super::*;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use chrono::Duration as ChronoDuration;
+use nostr::Keys;
+use nostr::{Event, JsonUtil};
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::sync::Barrier;
+use std::thread;
+use std::time::Duration;
 
 #[test]
 fn gateway_upstream_uses_http_origin_and_path() {
@@ -81,6 +90,7 @@ fn token_debug_is_redacted_and_cache_keys_are_isolated() {
             generation: 1,
             expires_at: Utc::now() + ChronoDuration::days(30),
             refresh_at: Utc::now() + ChronoDuration::days(15),
+            signer: Arc::new(Keys::generate()),
         },
         None,
     );
@@ -99,6 +109,7 @@ fn test_lease(key: &GatewayLeaseKey, token: &str) -> GatewayLease {
         generation: 1,
         expires_at: Utc::now() + ChronoDuration::days(30),
         refresh_at: Utc::now() + ChronoDuration::days(15),
+        signer: Arc::new(Keys::generate()),
     }
 }
 
@@ -253,6 +264,49 @@ fn per_key_rotation_gate_singleflights_without_manager_lock() {
 }
 
 #[test]
+fn shutdown_waits_for_an_inflight_rotation_gate_before_drain_snapshot() {
+    let key = GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).unwrap();
+    let gate = {
+        let mut manager = ProvisionedCreditsManager::default();
+        manager.rotation_gate(&key)
+    };
+    let entered = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_gate = Arc::clone(&gate);
+    let worker = thread::spawn(move || {
+        let _rotation = worker_gate.lock().expect("rotation gate");
+        entered.0.send(()).expect("signal rotation entry");
+        release_rx.recv().expect("shutdown releases rotation");
+    });
+    entered
+        .1
+        .recv_timeout(Duration::from_secs(1))
+        .expect("rotation entered before shutdown");
+
+    let mut manager = ProvisionedCreditsManager::default();
+    manager.rotation_gates.insert(key, gate);
+    let gates = manager.begin_shutdown();
+    assert!(manager.is_closed(), "shutdown closes new rotations first");
+    let (drained_tx, drained_rx) = std::sync::mpsc::channel();
+    let drainer = thread::spawn(move || {
+        for gate in gates {
+            let _rotation = gate.lock().expect("drain gate");
+        }
+        drained_tx.send(()).expect("signal drain completion");
+    });
+    assert!(
+        drained_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "the drain snapshot must wait for the in-flight rotation"
+    );
+    release_tx.send(()).expect("release rotation");
+    drained_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("drain proceeds after rotation");
+    worker.join().expect("rotation worker exits");
+    drainer.join().expect("drainer exits");
+}
+
+#[test]
 fn replaced_primary_invalidates_the_prior_refresh_generation() {
     let cache_key =
         GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
@@ -265,4 +319,176 @@ fn replaced_primary_invalidates_the_prior_refresh_generation() {
 
     assert!(!manager.is_current_generation(&cache_key, old.generation));
     assert!(manager.is_current_generation(&cache_key, replacement.generation));
+}
+
+#[test]
+fn stale_refresh_rechecks_generation_after_waiting_for_the_singleflight_gate() {
+    let cache_key =
+        GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
+    let old = test_lease(&cache_key, "old-generation");
+    let mut replacement = test_lease(&cache_key, "replacement-generation");
+    replacement.generation = 2;
+    let manager = Arc::new(Mutex::new(ProvisionedCreditsManager::default()));
+    manager.lock().expect("manager").replace_primary(old, None);
+    let gate = manager.lock().expect("manager").rotation_gate(&cache_key);
+    let held = gate.lock().expect("hold generation gate");
+    let waiting_manager = Arc::clone(&manager);
+    let waiting_gate = Arc::clone(&gate);
+    let stale = thread::spawn(move || {
+        let _singleflight = waiting_gate.lock().expect("stale refresh gate");
+        waiting_manager
+            .lock()
+            .expect("manager after gate")
+            .is_current_generation(&cache_key, 1)
+    });
+
+    manager
+        .lock()
+        .expect("manager")
+        .replace_primary(replacement, None);
+    drop(held);
+    assert!(
+        !stale.join().expect("stale refresh exits"),
+        "a callback that waited behind manual rotation must not mint a third generation"
+    );
+}
+
+#[test]
+fn identity_transition_removes_old_owner_generations_and_shutdown_closes_rotations() {
+    let old_key = GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).unwrap();
+    let new_key = GatewayLeaseKey::new("wss://relay.example", &"bb".repeat(32)).unwrap();
+    let mut manager = ProvisionedCreditsManager::default();
+    manager.replace_primary(test_lease(&old_key, "old"), None);
+    manager.replace_primary(test_lease(&new_key, "new"), None);
+    manager.enqueue_revocation(test_lease(&old_key, "old-pending"));
+
+    let _gates = manager.begin_identity_transition();
+    assert!(manager.is_identity_transitioning());
+    let removed = manager.remove_owner_entries(&new_key.owner_pubkey);
+    assert!(removed
+        .iter()
+        .all(|lease| lease.key.owner_pubkey == old_key.owner_pubkey));
+    assert!(!manager.contains(&old_key));
+    assert!(manager.contains(&new_key));
+    manager.finish_identity_transition();
+    assert!(!manager.is_identity_transitioning());
+
+    let _shutdown_gates = manager.begin_shutdown();
+    assert!(manager.is_closed());
+}
+
+#[test]
+fn stale_generation_is_rejected_after_identity_cache_drain() {
+    let key = GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).unwrap();
+    let mut manager = ProvisionedCreditsManager::default();
+    manager.replace_primary(test_lease(&key, "old"), None);
+    let generation = manager.leases.get(&key).expect("lease").lease.generation;
+    manager.begin_identity_transition();
+    let _ = manager.remove_owner_entries(&"bb".repeat(32));
+    assert!(!manager.is_current_generation(&key, generation));
+}
+
+fn test_http_server(status: &str, body: &str) -> (String, thread::JoinHandle<Vec<u8>>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test gateway");
+    let address = listener.local_addr().expect("gateway address");
+    let status = status.to_string();
+    let body = body.as_bytes().to_vec();
+    let thread = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept gateway request");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        let header_end = loop {
+            let count = stream.read(&mut chunk).expect("read gateway request");
+            if count == 0 {
+                break None;
+            }
+            request.extend_from_slice(&chunk[..count]);
+            if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break Some(index + 4);
+            }
+        };
+        if let Some(header_end) = header_end {
+            let header = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = header
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("Content-Length:")?
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let count = stream.read(&mut chunk).expect("read gateway body");
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..count]);
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).expect("write status");
+        stream.write_all(&body).expect("write body");
+        request
+    });
+    (format!("http://{address}"), thread)
+}
+
+fn request_author_pubkey(request: &[u8]) -> String {
+    let text = String::from_utf8_lossy(request);
+    let auth = text
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name.eq_ignore_ascii_case("authorization"))
+                .then(|| value.trim().strip_prefix("Nostr "))
+                .flatten()
+        })
+        .expect("NIP-98 authorization");
+    let event_json =
+        String::from_utf8(BASE64.decode(auth).expect("NIP-98 base64")).expect("NIP-98 JSON");
+    let event = Event::from_json(event_json).expect("NIP-98 event");
+    assert!(event.verify_signature(), "NIP-98 event signature");
+    event.pubkey.to_hex()
+}
+
+#[test]
+fn production_http_helpers_mint_and_revoke_with_captured_owner_signer() {
+    let signer = Arc::new(Keys::generate());
+    let owner = signer.public_key().to_hex();
+    let (origin, mint_thread) = test_http_server(
+        "200 OK",
+        &format!(
+            "{{\"token\":\"test-gateway-token\",\"expires_at\":\"{}\"}}",
+            (Utc::now() + ChronoDuration::hours(1)).to_rfc3339()
+        ),
+    );
+    let key = GatewayLeaseKey::new(&origin, &owner).expect("lease key");
+    let client = blocking_client().expect("blocking client");
+    let lease =
+        mint_lease_with_client(&client, key.clone(), 1, Arc::clone(&signer)).expect("mint lease");
+    let mint_request = mint_thread.join().expect("mint server");
+    assert_eq!(request_author_pubkey(&mint_request), owner);
+    assert!(String::from_utf8_lossy(&mint_request).contains("\"ttl_secs\":86400"));
+
+    let (revoke_origin, revoke_thread) = test_http_server("204 No Content", "");
+    let revoke_key = GatewayLeaseKey::new(&revoke_origin, &owner).expect("revoke key");
+    let revoke_lease = GatewayLease {
+        key: revoke_key,
+        token: lease.token,
+        generation: lease.generation,
+        expires_at: lease.expires_at,
+        refresh_at: lease.refresh_at,
+        signer,
+    };
+    revoke_lease_with_client(&client, &revoke_lease).expect("revoke lease");
+    let revoke_request = revoke_thread.join().expect("revoke server");
+    assert_eq!(request_author_pubkey(&revoke_request), owner);
+    assert!(String::from_utf8_lossy(&revoke_request).contains("test-gateway-token"));
 }
