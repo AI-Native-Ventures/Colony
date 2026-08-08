@@ -1,20 +1,19 @@
 // site/src/sections/Jobs.tsx
 // Three jobs, three real screenshots. The funnel arc: find customers, reach
 // them safely, deliver the work. Every image is a seeded, regenerable
-// capture (see desktop/tests/e2e/site-feature-screenshots.spec.ts) inside
-// the same near-black frame the hero product shot established.
+// full-window capture (see desktop/tests/e2e/site-feature-screenshots.spec.ts)
+// in the shared AppWindow desktop chrome.
 import pipelineShot from "@/assets/discovery-pipeline.png";
 import outreachShot from "@/assets/outreach-approval.png";
 import deliveredShot from "@/assets/work-delivered.png";
-
-const FRAME = "#211f1f";
+import { AppWindow } from "@/sections/AppWindow";
 
 const JOBS = [
   {
     heading: "Wake up to a full pipeline",
     body: "Your agents search your market, qualify who fits, and score every lead. New customers, found for you, every day.",
     image: pipelineShot,
-    alt: "A Colony campaign for auto repair shops: a table of scored leads with owners, statuses, and contact details.",
+    alt: "A Colony campaign for auto repair shops: cards of scored leads with owners, statuses, and contact details.",
   },
   {
     heading: "Nothing goes out without your OK",
@@ -47,17 +46,14 @@ export function Jobs() {
                 {job.body}
               </p>
             </div>
-            <div
-              className="rounded-3xl p-3 shadow-xl shadow-colony-ink/15 sm:p-6"
-              style={{ backgroundColor: FRAME }}
-            >
+            <AppWindow>
               <img
                 src={job.image}
                 alt={job.alt}
-                className="w-full rounded-xl"
+                className="w-full"
                 loading="lazy"
               />
-            </div>
+            </AppWindow>
           </div>
         ))}
       </div>

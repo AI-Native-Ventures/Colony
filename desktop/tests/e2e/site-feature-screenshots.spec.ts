@@ -467,9 +467,7 @@ test("capture: git built in", async ({ page }) => {
 test("capture: discovery pipeline", async ({ page }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
-  // 1800 wide: at 1600 the lead table still ran past the panel and sliced
-  // the STATUS pills mid-word. 1000 tall for a full run of scored rows.
-  await page.setViewportSize({ width: 1800, height: 1000 });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(
     "/#/discovery?surface=campaign&industryId=automotive" +
       "&verticalId=auto-repair&campaignId=auto-repair-johannesburg&tab=leads",
@@ -486,34 +484,15 @@ test("capture: discovery pipeline", async ({ page }) => {
     page.locator('[data-testid^="lead-card-"]').first(),
   ).toBeVisible();
   await waitForAnimations(page);
-  // Clip to the campaign panel content, skipping the app sidebar: it
-  // repeats context the hero shot already gives the page, its width varies
-  // run to run (a fixed-x clip leaked a lavender sliver), and the mock
-  // identity chip at its foot ("E2E Test") has no place in marketing
-  // imagery. Anchor on the Back link (panel's left content edge) and the
-  // Run Discovery button (its right content edge) instead.
-  const back = await page.getByText("Back to Auto Repair").boundingBox();
-  const run = await page
-    .getByRole("button", { name: "Run Discovery" })
-    .boundingBox();
-  if (!back || !run) throw new Error("could not measure the campaign panel");
-  const left = back.x - 32;
-  const top = back.y - 20;
-  await page.screenshot({
-    path: `${SHOTS}/discovery-pipeline.png`,
-    clip: {
-      x: left,
-      y: top,
-      width: run.x + run.width + 32 - left,
-      height: 976 - top,
-    },
-  });
+  // Full window, sidebar included: the client's call. The shot shows the
+  // whole product surface, not a crop of one panel.
+  await page.screenshot({ path: `${SHOTS}/discovery-pipeline.png` });
 });
 
 test("capture: outreach approval queue", async ({ page }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
-  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(
     "/#/discovery?surface=campaign&entity=people&fieldId=marketing" +
       "&roleId=marketing-director&campaignId=marketing-directors-united-states" +
@@ -525,9 +504,9 @@ test("capture: outreach approval queue", async ({ page }) => {
   ).toBeVisible();
   // The seeded queue lists Approved and Scheduled cards first, which pushes
   // every card with an Approve button below the fold. The WhatsApp channel
-  // filter isolates the one WhatsApp draft, so the frame holds the metric
-  // strip ("Drafts Ready / Awaiting approval") and a Draft card with its
-  // Approve button together: the whole claim in one screen.
+  // filter isolates the one WhatsApp draft, so the full window holds the
+  // metric strip ("Drafts Ready / Awaiting approval") and a Draft card with
+  // its Approve button together: the whole claim in one screen.
   await page.getByRole("button", { name: "WhatsApp", exact: true }).click();
   const draftCard = page
     .locator('[data-testid^="outreach-draft-"]')
@@ -535,29 +514,8 @@ test("capture: outreach approval queue", async ({ page }) => {
     .first();
   await expect(draftCard).toBeVisible();
   await waitForAnimations(page);
-  const heading = await page
-    .getByRole("heading", { name: "Outreach", exact: true })
-    .boundingBox();
-  const card = await draftCard.boundingBox();
-  // Same anchor trick as the pipeline shot: the sidebar width varies run
-  // to run, so derive the left edge from the panel's own content.
-  const create = await page
-    .getByRole("button", { name: "Create outreach" })
-    .boundingBox();
-  if (!heading || !card || !create) {
-    throw new Error("could not measure the outreach frame");
-  }
-  const left = heading.x - 32;
-  const top = Math.max(0, heading.y - 16);
-  await page.screenshot({
-    path: `${SHOTS}/outreach-approval.png`,
-    clip: {
-      x: left,
-      y: top,
-      width: create.x + create.width + 32 - left,
-      height: card.y + card.height + 24 - top,
-    },
-  });
+  // Full window, sidebar included: the client's call.
+  await page.screenshot({ path: `${SHOTS}/outreach-approval.png` });
 });
 
 // The delivered-work shot reuses the hero-shot channel machinery: build a
@@ -584,7 +542,9 @@ test("capture: work delivered in a channel", async ({ page }) => {
       },
     ],
   });
-  await page.setViewportSize({ width: 1280, height: 900 });
+  // 1280x820, same as the hero shot: with the seeded history this fills the
+  // scrollback and keeps the empty-channel onboarding cards out of frame.
+  await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () =>
@@ -629,6 +589,58 @@ test("capture: work delivered in a channel", async ({ page }) => {
           ) => void;
         }
       ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      // Three earlier messages so the seeded history fills the viewport:
+      // with only the delivery exchange, the empty-channel "Create agent" /
+      // "Add people" onboarding cards and the channel intro sit in the top
+      // half of the frame (the hero-shot spec hit the same thing).
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 3100,
+        content:
+          "Quick one: can we add a WhatsApp button next to the phone number?",
+      });
+      emit({
+        channelName: "website",
+        pubkey: tender,
+        createdAt: t0 - 2900,
+        content: "Yes. I'll add it when I do the refresh.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 2600,
+        content:
+          "Renewal for the domain went through, so we're set for the year.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: aisha,
+        createdAt: t0 - 2400,
+        content:
+          "Good. And the new booking calendar is connected, so link it wherever it makes sense.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: aisha,
+        createdAt: t0 - 2100,
+        content:
+          "New price list is final. Three packages, same names as before.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: tender,
+        createdAt: t0 - 1900,
+        content:
+          "Got it. I'll fold the new prices into the services page when I do the refresh.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 1600,
+        content:
+          "Also swap the hero photo. The workshop floor one from Tuesday is much better.",
+      });
       emit({
         channelName: "website",
         pubkey: maya,
@@ -706,18 +718,7 @@ test("capture: work delivered in a channel", async ({ page }) => {
   ).toBeVisible();
   await waitForAnimations(page);
 
-  // Frame from the owner's request down to the composer floor, minus the
-  // sidebar: the story is the delivery, not the channel list. The sticky
-  // day-divider pill pins itself to the top of the scroll area, so the
-  // clip starts just under its measured bottom edge; padding relative to
-  // the opener row kept slicing it (two takes running).
-  const pill = await page
-    .getByText("Saturday, August 1st", { exact: true })
-    .boundingBox();
-  if (!pill) throw new Error("could not measure the day-divider pill");
-  const top = pill.y + pill.height + 6;
-  await page.screenshot({
-    path: `${SHOTS}/work-delivered.png`,
-    clip: { x: 290, y: top, width: 990, height: 552 },
-  });
+  // Full window, sidebar included: the client's call. Same framing as the
+  // hero product shot, just a different channel and story.
+  await page.screenshot({ path: `${SHOTS}/work-delivered.png` });
 });

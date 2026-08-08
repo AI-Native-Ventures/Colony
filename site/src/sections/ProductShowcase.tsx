@@ -9,19 +9,12 @@
 // app via the E2E screenshot pipeline (just desktop-screenshot), not staged
 // or drawn.
 //
-// The screenshot sits inside a near-black frame with deep padding, and that
-// frame is the whole point of this section. Before it, the shot was a
-// thin-bordered image on the page's palest tint: the app's own white chrome
-// against a near-white background, so the most important thing on the page
-// receded into it. Dark surround gives the white chrome an edge to push
-// against, and the padding reads as a device rather than a pasted image.
-//
-// #211f1f, not colony-ink (#171717): a frame at pure ink matched the body
-// text's own colour and flattened against the footer's dark band. Lifting it
-// a few points keeps it reading as a surface.
+// The screenshot sits in the shared AppWindow desktop chrome. It replaced a
+// near-black padded slab: the dark surround gave the white app an edge to
+// push against, but at this size the owner read it as a fake tablet, and
+// window chrome tells the truer story (Colony is a desktop app you download).
 import productShotUrl from "@/assets/product-channel.png";
-
-const FRAME = "#211f1f";
+import { AppWindow } from "@/sections/AppWindow";
 
 // Regenerating product-channel.png:
 //
@@ -44,19 +37,16 @@ export function ProductShowcase() {
           Inside a Colony channel
         </p>
 
-        <div
-          // Padding scales with the viewport: at phone widths a 4rem inset
-          // would leave the screenshot narrower than the text above it.
-          className="mt-8 rounded-3xl p-4 shadow-2xl shadow-colony-ink/20 sm:p-10 lg:p-16"
-          style={{ backgroundColor: FRAME }}
-        >
-          <img
-            src={productShotUrl}
-            alt="A Colony growth channel: Maya Chen sets fit over volume, the agent Scout posts a ranked table of twenty target companies with named decision makers, Daniel Okafor tells it to drop numbers that don't work, the agent Forager reports twenty drafted emails queued for approval with reactions and a reply, and Aisha Bello approves the first ten."
-            width={2560}
-            height={1640}
-            className="w-full rounded-xl"
-          />
+        <div className="mt-8">
+          <AppWindow>
+            <img
+              src={productShotUrl}
+              alt="A Colony growth channel: Maya Chen sets fit over volume, the agent Scout posts a ranked table of twenty target companies with named decision makers, Daniel Okafor tells it to drop numbers that don't work, the agent Forager reports twenty drafted emails queued for approval with reactions and a reply, and Aisha Bello approves the first ten."
+              width={2560}
+              height={1640}
+              className="w-full"
+            />
+          </AppWindow>
         </div>
 
         <p className="mx-auto mt-8 max-w-2xl text-center text-sm leading-relaxed text-colony-ink/60 sm:text-base">
