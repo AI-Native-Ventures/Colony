@@ -241,6 +241,17 @@ type E2eConfig = {
       archived_at?: string | null;
     }>;
     /**
+     * What `colony_provisioning_config` should answer with. Override to
+     * exercise a relay that does not provision (`self_serve: false`) or one on
+     * a different domain; the default mirrors the production deployment.
+     */
+    colonyProvisioningConfig?: {
+      self_serve?: boolean;
+      domain?: string | null;
+      public?: boolean;
+      max_per_owner?: number;
+    };
+    /**
      * A `ledger_report` response. Money is decimal strings here, matching the
      * real command: a fixture using numbers would let a rounding bug pass.
      */
@@ -11530,6 +11541,15 @@ export function maybeInstallE2eTauriMocks() {
         );
         return "missing";
       }
+      case "colony_provisioning_config":
+        return (
+          activeConfig?.mock?.colonyProvisioningConfig ?? {
+            self_serve: true,
+            domain: "colony.ainative.ventures",
+            public: false,
+            max_per_owner: 3,
+          }
+        );
       case "colony_check_community_name":
         return {
           name: (payload as { name?: string })?.name ?? "community",

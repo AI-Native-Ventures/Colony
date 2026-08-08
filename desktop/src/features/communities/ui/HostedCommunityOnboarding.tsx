@@ -5,13 +5,12 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   checkColonyCommunityName,
   createColonyCommunity,
-  HOSTED_COMMUNITY_LIMIT,
-  HOSTED_COMMUNITY_SUFFIX,
   hostedCommunityRelayUrl,
   type HostedCommunity,
   listColonyCommunities,
   VALID_HOSTED_COMMUNITY_NAME,
 } from "@/features/communities/hostedCommunityApi";
+import { useColonyProvisioning } from "@/features/communities/useColonyProvisioning";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
@@ -47,6 +46,7 @@ export function HostedCommunityOnboarding({
   onBack,
 }: HostedCommunityOnboardingProps) {
   const onboarding = useCommunityOnboarding();
+  const provisioning = useColonyProvisioning();
   const shouldReduceMotion = useReducedMotion();
   const [communities, setCommunities] = React.useState<HostedCommunity[]>([]);
   const [showCreate, setShowCreate] = React.useState(false);
@@ -95,11 +95,15 @@ export function HostedCommunityOnboarding({
   const validName =
     normalizedName.length <= 63 &&
     VALID_HOSTED_COMMUNITY_NAME.test(normalizedName);
-  const atCommunityLimit = communities.length >= HOSTED_COMMUNITY_LIMIT;
+  const atCommunityLimit = communities.length >= provisioning.maxPerOwner;
   const hasCommunities = activeCommunities.length > 0;
+  // A relay with no provisioning domain rejects every create. Block the form
+  // rather than offering an address it cannot mint.
+  const canCreate = provisioning.selfServe;
 
   React.useEffect(() => {
-    if (!normalizedName || !validName) {
+    // A relay that cannot provision 404s this per keystroke; do not ask.
+    if (!canCreate || !normalizedName || !validName) {
       setCheckingName(false);
       return;
     }
@@ -121,7 +125,7 @@ export function HostedCommunityOnboarding({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [normalizedName, validName]);
+  }, [canCreate, normalizedName, validName]);
 
   const connect = (community: HostedCommunity, created = false) => {
     const relayUrl = hostedCommunityRelayUrl(community);
@@ -147,7 +151,7 @@ export function HostedCommunityOnboarding({
 
   const create = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!validName || atCommunityLimit) return;
+    if (!canCreate || !validName || atCommunityLimit) return;
     void run("Creating community…", async () => {
       try {
         const response = await createColonyCommunity(normalizedName);
@@ -179,17 +183,27 @@ export function HostedCommunityOnboarding({
     </div>
   ) : null;
 
-  const creationFeedback = atCommunityLimit
-    ? `You’ve reached the limit of ${HOSTED_COMMUNITY_LIMIT} hosted communities.`
-    : name && !validName
-      ? "Use lowercase letters, numbers, and single hyphens."
-      : checkingName
-        ? "Checking availability…"
-        : availability === false
-          ? "That address is already taken."
-          : availability === true
-            ? "That address is available."
-            : null;
+  const creationFeedback = provisioning.loading
+    ? "Asking the relay for its community address…"
+    : provisioning.unreachable
+      ? "Could not reach the relay to check how it creates communities."
+      : !canCreate
+        ? "This relay does not offer self-serve community creation. Join one with an invite or community URL instead."
+        : atCommunityLimit
+          ? `You’ve reached the limit of ${provisioning.maxPerOwner} hosted communities.`
+          : name && !validName
+            ? "Use lowercase letters, numbers, and single hyphens."
+            : checkingName
+              ? "Checking availability…"
+              : availability === false
+                ? "That address is already taken."
+                : availability === true
+                  ? "That address is available."
+                  : null;
+
+  // Rendered only once the relay has named its domain; until then there is no
+  // suffix to print, so the line is just the name field.
+  const suffix = provisioning.domain;
 
   // The composed `<name>.<suffix>` line renders at text-4xl, but a valid name
   // can be up to 63 chars and the suffix adds another 21 — far wider than the
@@ -199,8 +213,7 @@ export function HostedCommunityOnboarding({
   // overflowing the surface.
   const composedAddressLength =
     (name ? name.length : "your-community".length) +
-    HOSTED_COMMUNITY_SUFFIX.length +
-    1; // leading dot before the suffix
+    (suffix ? suffix.length + 1 : 0); // leading dot before the suffix
   // ~0.62em is the monospace glyph advance; 90cqw leaves a safety margin so the
   // glyphs never touch the card edge.
   const addressFontSize = `min(2.25rem, calc(90cqw / ${(
@@ -219,7 +232,7 @@ export function HostedCommunityOnboarding({
           ? "h-[2.375rem] w-[16.5rem] rounded-full border border-[color:var(--buzz-onboarding-backup-ink)]/25 bg-[rgb(var(--buzz-hosted-community-input-bg)/0.6)] px-6 text-center text-sm shadow-none placeholder:text-foreground/30 focus-visible:ring-1 focus-visible:ring-[color:var(--buzz-onboarding-backup-ink)]/40"
           : "h-auto min-w-0 flex-none rounded-none border-0 bg-transparent p-0 text-right font-mono !text-[rgb(var(--buzz-hosted-community-surface-fg))] shadow-none placeholder:!text-[rgb(var(--buzz-hosted-community-surface-fg))] placeholder:opacity-20 focus-visible:ring-0"
       }
-      disabled={busy || atCommunityLimit}
+      disabled={busy || atCommunityLimit || !canCreate}
       id="hosted-community-address"
       data-testid={!inline ? "hosted-community-address-input" : undefined}
       maxLength={63}
@@ -269,13 +282,16 @@ export function HostedCommunityOnboarding({
             style={{ containerType: "inline-size" }}
           >
             {creationInput(false)}
-            <span
-              className="shrink-0 font-mono !text-[rgb(var(--buzz-hosted-community-surface-fg))]"
-              id="hosted-community-suffix"
-              style={{ fontSize: addressFontSize }}
-            >
-              .{HOSTED_COMMUNITY_SUFFIX}
-            </span>
+            {suffix ? (
+              <span
+                className="shrink-0 font-mono !text-[rgb(var(--buzz-hosted-community-surface-fg))]"
+                data-testid="hosted-community-suffix"
+                id="hosted-community-suffix"
+                style={{ fontSize: addressFontSize }}
+              >
+                .{suffix}
+              </span>
+            ) : null}
           </div>
         </form>
       </Card>
@@ -291,11 +307,19 @@ export function HostedCommunityOnboarding({
       <p className="mx-auto mt-2 max-w-[560px] text-sm leading-6 text-foreground">
         {hasCommunities
           ? "Connect one you own, or start something new."
-          : "Claim a Colony address to get started."}
+          : provisioning.loading
+            ? "Checking what this relay offers…"
+            : canCreate
+              ? `Claim an address on ${suffix} to get started.`
+              : "This relay does not create communities for you."}
       </p>
 
       <div className="flex w-full flex-1 flex-col justify-center text-left">
-        {loading ? (
+        {/* Hold the form until the relay has named its domain. Rendering the
+            address line first and letting the suffix pop in afterwards shifts
+            the composed `<name>.<suffix>` layout under the user (and under the
+            onboarding layout specs, which measure it). */}
+        {loading || provisioning.loading ? (
           <div className="flex justify-center py-10" role="status">
             <LoaderCircle className="h-6 w-6 animate-spin" />
             <span className="sr-only">Checking sign-in</span>
@@ -373,7 +397,7 @@ export function HostedCommunityOnboarding({
                           </p>
                           <Button
                             className={COMMUNITY_ACTION_CLASS}
-                            disabled={busy || atCommunityLimit}
+                            disabled={busy || atCommunityLimit || !canCreate}
                             onClick={() => setShowCreate(true)}
                             size="sm"
                             type="button"
@@ -445,6 +469,7 @@ export function HostedCommunityOnboarding({
         <Button
           className={PAGE_CTA_CLASS}
           disabled={
+            !canCreate ||
             !validName ||
             availability === false ||
             checkingName ||

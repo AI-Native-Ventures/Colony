@@ -7,6 +7,9 @@
 //! communities directly, without a separate provisioning service holding an
 //! operator key:
 //!
+//! - `GET /api/communities/config` — whether this relay provisions at all,
+//!   and on which domain. No auth; always `200` so a client can render the
+//!   disabled state instead of hardcoding a domain suffix.
 //! - `GET /api/communities/availability?name=<slug>` — name check, no auth.
 //! - `POST /api/communities` `{ "name": "<slug>" }` — NIP-98 signed by the
 //!   requester's own key; the requester must already be a relay member of
@@ -265,6 +268,36 @@ fn public_create_rate_limited(state: &AppState, client_ip: Option<IpAddr>) -> Op
     None
 }
 
+/// `GET /api/communities/config` — public description of this relay's
+/// self-serve provisioning surface.
+///
+/// Unauthenticated and always `200`, including when provisioning is disabled:
+/// a client needs to render the disabled state, and the fields here reveal
+/// nothing the routes below do not already leak (the domain appears in every
+/// availability response, and the cap in every limit-reached error).
+///
+/// Exists because clients otherwise have to hardcode the domain suffix, which
+/// makes the create form print a production address on every relay it is
+/// pointed at — including a local dev relay that cannot provision at all.
+pub async fn provisioning_config(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(provisioning_config_body(
+        state.config.self_provision_domain.as_deref(),
+        state.config.self_provision_public,
+        buzz_db::relay_members::max_communities_per_owner(),
+    ))
+}
+
+/// Body of [`provisioning_config`], split out so the shape is unit-testable
+/// without standing up an [`AppState`].
+fn provisioning_config_body(domain: Option<&str>, public: bool, max_per_owner: i64) -> Value {
+    serde_json::json!({
+        "self_serve": domain.is_some(),
+        "domain": domain,
+        "public": public,
+        "max_per_owner": max_per_owner,
+    })
+}
+
 /// `GET /api/communities/availability?name=<slug>` — public name check.
 ///
 /// Unauthenticated by design (it reveals only whether a host row exists,
@@ -402,6 +435,35 @@ pub async fn list_my_communities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_names_the_domain_when_provisioning_is_enabled() {
+        let body = provisioning_config_body(Some("colony.ainative.ventures"), false, 3);
+        assert_eq!(body["self_serve"], serde_json::json!(true));
+        assert_eq!(
+            body["domain"],
+            serde_json::json!("colony.ainative.ventures")
+        );
+        assert_eq!(body["public"], serde_json::json!(false));
+        assert_eq!(body["max_per_owner"], serde_json::json!(3));
+    }
+
+    #[test]
+    fn config_reports_disabled_without_a_domain() {
+        // The client must be able to tell "no self-serve here" apart from a
+        // transport failure, so this is a 200 with a null domain rather than
+        // the 404 the create routes return.
+        let body = provisioning_config_body(None, false, 3);
+        assert_eq!(body["self_serve"], serde_json::json!(false));
+        assert_eq!(body["domain"], Value::Null);
+    }
+
+    #[test]
+    fn config_reports_the_operator_raised_cap() {
+        let body = provisioning_config_body(Some("example.test"), true, 25);
+        assert_eq!(body["max_per_owner"], serde_json::json!(25));
+        assert_eq!(body["public"], serde_json::json!(true));
+    }
 
     #[test]
     fn accepts_simple_and_hyphenated_slugs() {

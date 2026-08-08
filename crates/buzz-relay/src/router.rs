@@ -105,6 +105,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/communities/availability",
             get(api::self_provisioning::community_availability),
         )
+        .route(
+            "/api/communities/config",
+            get(api::self_provisioning::provisioning_config),
+        )
         .route("/api/invites", post(api::invites::mint_invite))
         .route("/api/join-policy", get(api::invites::join_policy))
         // Policy documents as standalone pages — desktop opens these in the
