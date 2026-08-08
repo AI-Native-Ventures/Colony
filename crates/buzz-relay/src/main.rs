@@ -463,7 +463,8 @@ async fn main() -> anyhow::Result<()> {
     // configured a Vercel AI Gateway key. An unset or blank key leaves the
     // OnceLock empty and the gateway routes answer 404.
     if let Some(gateway_config) = buzz_relay::gateway::config_from_env()? {
-        let gateway = buzz_relay::gateway::GatewayState::new(gateway_config)
+        let gateway = buzz_relay::gateway::GatewayState::new(gateway_config, app_state.db.pool())
+            .await
             .map_err(|e| anyhow::anyhow!("failed to initialize the credits gateway: {e}"))?;
         app_state
             .gateway

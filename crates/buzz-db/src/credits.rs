@@ -50,6 +50,43 @@ pub struct LedgerEntry {
     pub created_at: DateTime<Utc>,
 }
 
+/// Account balance plus optional per-account gateway admission overrides.
+///
+/// `None` on an override means the relay must use its deployment-global
+/// configured default. A missing account reads exactly like a zero-balance
+/// account with no overrides and is never created by this lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmissionAccount {
+    /// Current signed nanoUSD balance.
+    pub balance: i64,
+    /// Typical call cost override, in nanoUSD.
+    pub typical_call_cost_nanousd: Option<i64>,
+    /// Concurrent gateway call limit override.
+    pub max_in_flight: Option<i16>,
+    /// Rolling one-hour spend cap override, in nanoUSD.
+    pub hourly_burn_cap_nanousd: Option<i64>,
+}
+
+/// One debit used to rebuild the relay's last-hour spend cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentDebit {
+    /// Account the debit belongs to.
+    pub pubkey: Vec<u8>,
+    /// Debited provider cost in nanoUSD.
+    pub cost_nanousd: i64,
+    /// Durable ledger timestamp.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Result of applying an idempotent ledger entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedLedgerEntry {
+    /// The new entry, or the durable winner when the reference was replayed.
+    pub entry: LedgerEntry,
+    /// True only when this call inserted the entry and changed the balance.
+    pub applied: bool,
+}
+
 /// Return the account's current balance in nanoUSD. Accounts that have never
 /// been seen have a balance of zero (their row is created on first activity).
 pub async fn balance(pool: &PgPool, pubkey: &[u8]) -> Result<i64> {
@@ -61,6 +98,58 @@ pub async fn balance(pool: &PgPool, pubkey: &[u8]) -> Result<i64> {
         Some(row) => row.try_get("balance")?,
         None => 0,
     })
+}
+
+/// Read the account state used by gateway admission.
+///
+/// Missing accounts return zero balance and no overrides without inserting an
+/// account row. The relay combines the optional overrides with its configured
+/// global defaults while holding the account's in-process admission gate.
+pub async fn admission_account(pool: &PgPool, pubkey: &[u8]) -> Result<AdmissionAccount> {
+    let row = sqlx::query(
+        "SELECT balance, typical_call_cost_nanousd, max_in_flight, \
+                hourly_burn_cap_nanousd \
+         FROM accounts WHERE pubkey = $1",
+    )
+    .bind(pubkey)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        Some(row) => Ok(AdmissionAccount {
+            balance: row.try_get("balance")?,
+            typical_call_cost_nanousd: row.try_get("typical_call_cost_nanousd")?,
+            max_in_flight: row.try_get("max_in_flight")?,
+            hourly_burn_cap_nanousd: row.try_get("hourly_burn_cap_nanousd")?,
+        }),
+        None => Ok(AdmissionAccount {
+            balance: 0,
+            typical_call_cost_nanousd: None,
+            max_in_flight: None,
+            hourly_burn_cap_nanousd: None,
+        }),
+    }
+}
+
+/// Read every positive debit at or after `since`, ordered for deterministic
+/// reconstruction of the relay's rolling spend cache.
+pub async fn recent_debits(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<RecentDebit>> {
+    let rows = sqlx::query(
+        "SELECT pubkey, observed_cost, created_at FROM credit_ledger \
+         WHERE kind = 'debit' AND observed_cost > 0 AND created_at >= $1 \
+         ORDER BY pubkey, created_at, id",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(RecentDebit {
+                pubkey: row.try_get("pubkey")?,
+                cost_nanousd: row.try_get("observed_cost")?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect()
 }
 
 /// Credit an account (positive nanoUSD `delta`), idempotent on `reference`.
@@ -129,6 +218,21 @@ pub async fn debit_observed(
     model: Option<&str>,
     request_id: Option<&str>,
 ) -> Result<LedgerEntry> {
+    debit_observed_applied(pool, pubkey, cost, reference, model, request_id)
+        .await
+        .map(|result| result.entry)
+}
+
+/// Debit an observed provider cost and report whether this invocation applied
+/// the idempotent ledger entry or replayed an existing reference.
+pub async fn debit_observed_applied(
+    pool: &PgPool,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: Option<&str>,
+    request_id: Option<&str>,
+) -> Result<AppliedLedgerEntry> {
     debit_internal(
         pool,
         pubkey,
@@ -156,6 +260,21 @@ pub async fn debit_estimated(
     model: Option<&str>,
     request_id: Option<&str>,
 ) -> Result<LedgerEntry> {
+    debit_estimated_applied(pool, pubkey, cost, reference, model, request_id)
+        .await
+        .map(|result| result.entry)
+}
+
+/// Debit a price-book estimate and report whether this invocation applied the
+/// idempotent ledger entry or replayed an existing reference.
+pub async fn debit_estimated_applied(
+    pool: &PgPool,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: Option<&str>,
+    request_id: Option<&str>,
+) -> Result<AppliedLedgerEntry> {
     debit_internal(
         pool,
         pubkey,
@@ -176,10 +295,10 @@ async fn debit_internal(
     model: Option<&str>,
     request_id: Option<&str>,
     settle_basis: Option<&str>,
-) -> Result<LedgerEntry> {
+) -> Result<AppliedLedgerEntry> {
     let cost = i64::try_from(cost)
         .map_err(|_| crate::error::DbError::InvalidAmount(format!("cost {cost} exceeds i64")))?;
-    apply_entry(
+    apply_entry_applied(
         pool,
         EntryParams {
             pubkey,
@@ -253,6 +372,12 @@ struct EntryParams<'a> {
 }
 
 async fn apply_entry(pool: &PgPool, params: EntryParams<'_>) -> Result<LedgerEntry> {
+    apply_entry_applied(pool, params)
+        .await
+        .map(|result| result.entry)
+}
+
+async fn apply_entry_applied(pool: &PgPool, params: EntryParams<'_>) -> Result<AppliedLedgerEntry> {
     if params.kind == "credit" || params.kind == "seed" {
         if params.delta <= 0 {
             return Err(crate::error::DbError::InvalidAmount(format!(
@@ -277,7 +402,7 @@ async fn apply_entry(pool: &PgPool, params: EntryParams<'_>) -> Result<LedgerEnt
 /// - The balance update is a single atomic `UPDATE accounts SET balance =
 ///   balance + delta`; the row lock serializes concurrent distinct-ref
 ///   settles, so no update is ever lost.
-async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<LedgerEntry> {
+async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<AppliedLedgerEntry> {
     let pubkey = params.pubkey;
     let delta = params.delta;
     let kind = params.kind;
@@ -312,7 +437,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
     .fetch_optional(&mut *tx)
     .await?;
 
-    let entry = match row {
+    let (entry, applied) = match row {
         Some(row) => {
             // Fresh entry: apply the balance change atomically. The row lock
             // on `accounts` serializes concurrent distinct-ref settles.
@@ -324,7 +449,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
             .bind(pubkey)
             .execute(&mut *tx)
             .await?;
-            row_to_entry(&row)?
+            (row_to_entry(&row)?, true)
         }
         None => {
             // Replayed ref: the conflicting row is committed (our insert
@@ -350,12 +475,12 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
             .bind(reference)
             .fetch_one(&mut *tx)
             .await?;
-            row_to_entry(&row)?
+            (row_to_entry(&row)?, false)
         }
     };
 
     tx.commit().await?;
-    Ok(entry)
+    Ok(AppliedLedgerEntry { entry, applied })
 }
 
 #[cfg(test)]

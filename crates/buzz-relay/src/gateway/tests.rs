@@ -32,6 +32,7 @@ use axum::Router;
 use base64::Engine;
 use buzz_core::ledger::prices::PriceBook;
 use chrono::Utc;
+use futures_util::future::join_all;
 use futures_util::stream;
 use nostr::{EventBuilder, Keys, Tag};
 use serde_json::{json, Value};
@@ -39,7 +40,7 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use tower::ServiceExt;
 
-use super::{GatewayConfig, GatewayState, SettleJob};
+use super::{GatewayClock, GatewayConfig, GatewayState, SettleJob};
 use crate::gateway::settle_one;
 use crate::router::build_router;
 
@@ -71,6 +72,12 @@ enum ScriptedResponse {
     KillMidStream,
     /// A successful stream whose terminal chunk carries tokens but no cost.
     NoCostStream,
+    /// A successful SSE body held behind a semaphore so concurrent requests
+    /// remain in flight until the test deliberately releases them.
+    SlowSse {
+        body: String,
+        gate: Arc<tokio::sync::Semaphore>,
+    },
 }
 
 /// The mock upstream: records every request, answers from a script.
@@ -78,6 +85,29 @@ enum ScriptedResponse {
 struct MockUpstream {
     seen: Arc<Mutex<Vec<Captured>>>,
     script: Arc<Mutex<Vec<ScriptedResponse>>>,
+}
+
+struct ManualClock {
+    now: Mutex<chrono::DateTime<Utc>>,
+}
+
+impl ManualClock {
+    fn new(now: chrono::DateTime<Utc>) -> Self {
+        Self {
+            now: Mutex::new(now),
+        }
+    }
+
+    fn advance(&self, duration: chrono::Duration) {
+        let mut now = self.now.lock().unwrap();
+        *now += duration;
+    }
+}
+
+impl GatewayClock for ManualClock {
+    fn now(&self) -> chrono::DateTime<Utc> {
+        *self.now.lock().unwrap()
+    }
 }
 
 impl MockUpstream {
@@ -185,8 +215,32 @@ impl MockUpstream {
                 )
                     .into_response()
             }
+            ScriptedResponse::SlowSse { body, gate } => {
+                let chunks = stream::once(async move {
+                    let permit = gate
+                        .acquire_owned()
+                        .await
+                        .map_err(|error| std::io::Error::other(error.to_string()))?;
+                    permit.forget();
+                    Ok::<_, std::io::Error>(Bytes::from(body))
+                });
+                (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    Body::from_stream(chunks),
+                )
+                    .into_response()
+            }
         }
     }
+}
+
+fn observed_cost_sse(request_id: &str, cost_usd: &str) -> String {
+    format!(
+        "data: {{\"id\":\"{request_id}\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"hi\"}},\"finish_reason\":null}}]}}\n\n\
+         data: {{\"id\":\"{request_id}\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[],\"usage\":{{\"prompt_tokens\":10,\"completion_tokens\":10,\"total_tokens\":20,\"cost\":{cost_usd}}}}}\n\n\
+         data: [DONE]\n\n"
+    )
 }
 
 /// Build the full relay router with the gateway pointed at the mock.
@@ -201,6 +255,23 @@ async fn build_router_with_gateway_and_redis(
     mock: &MockUpstream,
     redis_url: &str,
 ) -> (Arc<crate::state::AppState>, Router) {
+    build_router_with_gateway_clock(mock, redis_url, None).await
+}
+
+async fn build_router_with_gateway_clock(
+    mock: &MockUpstream,
+    redis_url: &str,
+    clock: Option<Arc<dyn GatewayClock>>,
+) -> (Arc<crate::state::AppState>, Router) {
+    build_router_with_gateway_clock_and_ledger(mock, redis_url, clock, false).await
+}
+
+async fn build_router_with_gateway_clock_and_ledger(
+    mock: &MockUpstream,
+    redis_url: &str,
+    clock: Option<Arc<dyn GatewayClock>>,
+    preserve_ledger: bool,
+) -> (Arc<crate::state::AppState>, Router) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind mock upstream");
@@ -212,10 +283,24 @@ async fn build_router_with_gateway_and_redis(
     });
 
     let state = crate::state::tests::test_state_with_redis(redis_url).await;
-    let gateway = GatewayState::new(GatewayConfig {
+    if !preserve_ledger {
+        sqlx::query("DELETE FROM credit_ledger WHERE pubkey = $1")
+            .bind(&TEST_PUBKEY[..])
+            .execute(state.db.pool())
+            .await
+            .expect("clear ledger before admission rebuild");
+    }
+    let config = GatewayConfig {
         api_key: SERVER_KEY.to_string(),
         base_url: format!("http://{addr}"),
-    })
+        default_typical_call_cost_nanousd: 50_000_000,
+        default_max_in_flight: 4,
+        default_hourly_burn_cap_nanousd: 5_000_000_000,
+    };
+    let gateway = match clock {
+        Some(clock) => GatewayState::new_with_clock(config, state.db.pool(), clock).await,
+        None => GatewayState::new(config, state.db.pool()).await,
+    }
     .expect("gateway state");
     state
         .gateway
@@ -242,7 +327,9 @@ async fn seed(pool: &sqlx::PgPool) {
         .expect("clear ledger");
     sqlx::query(
         "INSERT INTO accounts (pubkey, balance) VALUES ($1, $2) \
-         ON CONFLICT (pubkey) DO UPDATE SET balance = EXCLUDED.balance",
+         ON CONFLICT (pubkey) DO UPDATE SET balance = EXCLUDED.balance, \
+         typical_call_cost_nanousd = NULL, max_in_flight = NULL, \
+         hourly_burn_cap_nanousd = NULL",
     )
     .bind(&TEST_PUBKEY[..])
     .bind(1_000_000_000i64)
@@ -346,6 +433,293 @@ async fn body_text(response: Response) -> (StatusCode, String) {
         .await
         .expect("body");
     (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+async fn await_in_flight(state: &crate::state::AppState, expected: u32) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let current = state
+            .gateway
+            .get()
+            .expect("gateway configured")
+            .in_flight_for(&TEST_PUBKEY);
+        if current == expected {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "in-flight count did not reach {expected}; current {current}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Admission-control regression: the current balance-only stub admits every
+/// request that arrives before the first slow stream settles. This test was
+/// added first and proven RED against that stub (20 upstream calls admitted).
+#[tokio::test(flavor = "multi_thread")]
+async fn twenty_parallel_slow_streams_are_bounded_before_upstream_spend() {
+    const BURST: usize = 20;
+    const TYPICAL_CALL_COST: i64 = 25_000_000;
+
+    let mock = MockUpstream::default();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    for index in 0..BURST {
+        mock.push(ScriptedResponse::SlowSse {
+            body: observed_cost_sse(&format!("gen_burst_{index}"), "0.05"),
+            gate: Arc::clone(&gate),
+        });
+    }
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    sqlx::query(
+        "UPDATE accounts SET balance = $1, typical_call_cost_nanousd = $2 \
+         WHERE pubkey = $3",
+    )
+    .bind(100_000_000i64)
+    .bind(TYPICAL_CALL_COST)
+    .bind(&TEST_PUBKEY[..])
+    .execute(&pool)
+    .await
+    .expect("set burst balance");
+
+    let responses = join_all((0..BURST).map(|_| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(chat_request(
+                    TEST_TOKEN,
+                    json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "slow"}]}),
+                ))
+                .await
+                .expect("burst request")
+        }
+    }))
+    .await;
+
+    let admitted = responses
+        .iter()
+        .filter(|response| response.status() == StatusCode::OK)
+        .count();
+    assert!(
+        admitted <= 4,
+        "at most four calls may reach the slow upstream, admitted {admitted}"
+    );
+    assert_eq!(admitted, 4, "the configured four-call allowance is usable");
+    assert_eq!(
+        mock.requests().len(),
+        admitted,
+        "rejected calls must spend nothing upstream"
+    );
+
+    gate.add_permits(admitted);
+    for response in responses {
+        let _ = body_text(response).await;
+    }
+    let rows = await_ledger_rows(&pool, admitted).await;
+    assert_eq!(rows.len(), admitted, "every admitted call settles once");
+    let final_balance = balance(&pool).await;
+    let overdraft = final_balance.saturating_neg().max(0);
+    assert!(
+        overdraft <= 4 * TYPICAL_CALL_COST,
+        "overdraft {overdraft} exceeds four typical calls"
+    );
+}
+
+/// Acceptance 2: a downstream client may abandon the response body at any
+/// point. The lifecycle-owned permit must return the account to zero every
+/// time, and the per-account concurrency override remains usable afterward.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_client_disconnects_never_leak_in_flight_state() {
+    const REPETITIONS: usize = 20;
+
+    let mock = MockUpstream::default();
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    sqlx::query("UPDATE accounts SET max_in_flight = 1 WHERE pubkey = $1")
+        .bind(&TEST_PUBKEY[..])
+        .execute(&pool)
+        .await
+        .expect("set one-call override");
+
+    for index in 0..REPETITIONS {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        mock.push(ScriptedResponse::SlowSse {
+            body: observed_cost_sse(&format!("gen_disconnect_{index}"), "0.05"),
+            gate,
+        });
+        let response = router
+            .clone()
+            .oneshot(chat_request(
+                TEST_TOKEN,
+                json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "disconnect"}]}),
+            ))
+            .await
+            .expect("disconnect request");
+        assert_eq!(response.status(), StatusCode::OK);
+        await_in_flight(&state, 1).await;
+
+        let capped = router
+            .clone()
+            .oneshot(chat_request(
+                TEST_TOKEN,
+                json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "must wait"}]}),
+            ))
+            .await
+            .expect("capped request");
+        assert_eq!(capped.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            capped
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+        drop(capped);
+
+        // Dropping without polling the body is the abrupt downstream
+        // disconnect. The tee's Drop path owns both best-effort settle and
+        // admission release.
+        drop(response);
+        await_in_flight(&state, 0).await;
+    }
+    assert_eq!(
+        mock.requests().len(),
+        REPETITIONS,
+        "the capped probe in each round must never reach upstream"
+    );
+}
+
+/// Acceptance 3: a settled debit at the account's hourly cap blocks the next
+/// call with Retry-After, then the in-process window drains as time advances
+/// and admits again without rebuilding gateway state.
+#[tokio::test(flavor = "multi_thread")]
+async fn hourly_burn_cap_returns_429_then_drains_without_restart() {
+    let clock = Arc::new(ManualClock::new(Utc::now()));
+    let mock = MockUpstream::default();
+    mock.push(ScriptedResponse::Sse(observed_cost_sse(
+        "gen_burn_first",
+        "0.05",
+    )));
+    let (state, router) =
+        build_router_with_gateway_clock(&mock, "redis://127.0.0.1:1", Some(clock.clone())).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    sqlx::query(
+        "UPDATE accounts SET hourly_burn_cap_nanousd = 50000000, \
+         typical_call_cost_nanousd = 1000000 WHERE pubkey = $1",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .execute(&pool)
+    .await
+    .expect("set burn override");
+
+    let first = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "burn"}]}),
+        ))
+        .await
+        .expect("first burn request");
+    assert_eq!(body_text(first).await.0, StatusCode::OK);
+
+    let blocked = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "blocked"}]}),
+        ))
+        .await
+        .expect("burn-blocked request");
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after = blocked
+        .headers()
+        .get(axum::http::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("numeric Retry-After");
+    assert!((1..=3601).contains(&retry_after));
+    let (_, body) = body_text(blocked).await;
+    assert!(body.contains("hourly spend"), "burn-cap body: {body}");
+    assert_eq!(mock.requests().len(), 1, "429 spends nothing upstream");
+
+    clock.advance(chrono::Duration::hours(1) + chrono::Duration::seconds(1));
+    mock.push(ScriptedResponse::Sse(observed_cost_sse(
+        "gen_burn_after_drain",
+        "0.01",
+    )));
+    let resumed = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "resumed"}]}),
+        ))
+        .await
+        .expect("post-drain request");
+    assert_eq!(body_text(resumed).await.0, StatusCode::OK);
+    assert_eq!(mock.requests().len(), 2, "window drained without restart");
+}
+
+/// Acceptance 4: rebuilding the gateway process state from the same database
+/// restores the last-hour debit. A restart never grants a fresh burn window.
+#[tokio::test(flavor = "multi_thread")]
+async fn gateway_restart_rebuilds_hourly_spend_from_durable_ledger() {
+    let clock = Arc::new(ManualClock::new(Utc::now()));
+    let first_mock = MockUpstream::default();
+    first_mock.push(ScriptedResponse::Sse(observed_cost_sse(
+        "gen_restart_spend",
+        "0.05",
+    )));
+    let (first_state, first_router) =
+        build_router_with_gateway_clock(&first_mock, "redis://127.0.0.1:1", Some(clock.clone()))
+            .await;
+    let pool = first_state.db.pool().clone();
+    seed(&pool).await;
+    sqlx::query(
+        "UPDATE accounts SET hourly_burn_cap_nanousd = 50000000, \
+         typical_call_cost_nanousd = 1000000 WHERE pubkey = $1",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .execute(&pool)
+    .await
+    .expect("set restart burn override");
+    let first = first_router
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "before restart"}]}),
+        ))
+        .await
+        .expect("pre-restart request");
+    assert_eq!(body_text(first).await.0, StatusCode::OK);
+    assert_eq!(ledger_rows(&pool).await.len(), 1, "durable debit exists");
+    drop(first_state);
+
+    let restarted_mock = MockUpstream::default();
+    let (_restarted_state, restarted_router) = build_router_with_gateway_clock_and_ledger(
+        &restarted_mock,
+        "redis://127.0.0.1:1",
+        Some(clock),
+        true,
+    )
+    .await;
+    let blocked = restarted_router
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "after restart"}]}),
+        ))
+        .await
+        .expect("post-restart request");
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(blocked
+        .headers()
+        .contains_key(axum::http::header::RETRY_AFTER));
+    assert!(
+        restarted_mock.requests().is_empty(),
+        "rebuilt burn cap blocks before upstream"
+    );
 }
 
 /// Acceptance 1: a streamed completion settles exactly one ledger debit
@@ -641,6 +1015,11 @@ async fn balance_below_floor_is_402_with_topup_body() {
         body.to_lowercase().contains("top up"),
         "the 402 body must name the top-up action: {body}"
     );
+    let parsed: Value = serde_json::from_str(&body).expect("402 json");
+    assert_eq!(
+        parsed["top_up"], "buzz://settings/credits",
+        "402 must carry a stable top-up pointer"
+    );
     assert!(
         mock.requests().is_empty(),
         "no upstream call for a rejected balance"
@@ -840,6 +1219,21 @@ async fn gateway_routes_404_when_not_configured() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = body_text(
+        router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/gateway/account")
+                    .body(Body::empty())
+                    .expect("account request"),
+            )
+            .await
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 /// Mint + revoke: a NIP-98 signed session mints a token bound to the caller's
@@ -954,6 +1348,194 @@ async fn mint_and_revoke_a_gateway_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "revoked token is dead");
 }
 
+/// Cross-ticket seam: the prepaid-account read is NIP-98 signer-bound, uses
+/// exact signed decimal nanoUSD, leaks no other identity, and does not create a
+/// missing account. Invalid or absent auth is uniformly 401.
+#[tokio::test(flavor = "multi_thread")]
+async fn account_read_is_exact_signer_bound_and_non_mutating() {
+    let mock = MockUpstream::default();
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6511".to_string());
+    let (state, router) = build_router_with_gateway_and_redis(&mock, &redis_url).await;
+    let pool = state.db.pool().clone();
+    sqlx::query(
+        "INSERT INTO communities (id, host) VALUES (gen_random_uuid(), 'localhost:3000') \
+         ON CONFLICT DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .expect("community row");
+
+    let (status, _) = body_text(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/gateway/account")
+                    .header("host", "localhost:3000")
+                    .body(Body::empty())
+                    .expect("unauthenticated account request"),
+            )
+            .await
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let owner = Keys::parse("2c0ffee52c0ffee52c0ffee52c0ffee52c0ffee52c0ffee52c0ffee52c0ffee5")
+        .expect("owner key");
+    let exact = 9_007_199_254_740_993i64;
+    sqlx::query(
+        "INSERT INTO accounts (pubkey, balance) VALUES ($1, $2) \
+         ON CONFLICT (pubkey) DO UPDATE SET balance = EXCLUDED.balance",
+    )
+    .bind(owner.public_key().to_bytes().to_vec())
+    .bind(exact)
+    .execute(&pool)
+    .await
+    .expect("exact owner balance");
+    // A different account carries the opposite value; a selector-free read
+    // must never accidentally return it.
+    sqlx::query(
+        "INSERT INTO accounts (pubkey, balance) VALUES ($1, $2) \
+         ON CONFLICT (pubkey) DO UPDATE SET balance = EXCLUDED.balance",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .bind(-exact)
+    .execute(&pool)
+    .await
+    .expect("other account balance");
+
+    let url = "http://localhost:3000/api/gateway/account";
+    let auth = nip98_header(&owner, url, "GET", &[]);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/gateway/account")
+                .header("host", "localhost:3000")
+                .header("authorization", auth)
+                .body(Body::empty())
+                .expect("positive account request"),
+        )
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    let (_, body) = body_text(response).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).expect("account json"),
+        json!({
+            "balance_nanousd": exact.to_string(),
+            "currency": "USD",
+            "status": "active",
+        })
+    );
+
+    sqlx::query("UPDATE accounts SET balance = $1 WHERE pubkey = $2")
+        .bind(-exact)
+        .bind(owner.public_key().to_bytes().to_vec())
+        .execute(&pool)
+        .await
+        .expect("negative owner balance");
+    let auth = nip98_header(&owner, url, "GET", &[]);
+    let (_, body) = body_text(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/gateway/account")
+                    .header("host", "localhost:3000")
+                    .header("authorization", auth)
+                    .body(Body::empty())
+                    .expect("negative account request"),
+            )
+            .await
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).expect("negative json"),
+        json!({
+            "balance_nanousd": (-exact).to_string(),
+            "currency": "USD",
+            "status": "depleted",
+        })
+    );
+
+    let missing = Keys::parse("3c0ffee53c0ffee53c0ffee53c0ffee53c0ffee53c0ffee53c0ffee53c0ffee5")
+        .expect("missing key");
+    let rows_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
+        .fetch_one(&pool)
+        .await
+        .expect("account count before");
+    let auth = nip98_header(&missing, url, "GET", &[]);
+    let (_, body) = body_text(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/gateway/account")
+                    .header("host", "localhost:3000")
+                    .header("authorization", auth)
+                    .body(Body::empty())
+                    .expect("missing account request"),
+            )
+            .await
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).expect("missing json"),
+        json!({
+            "balance_nanousd": "0",
+            "currency": "USD",
+            "status": "depleted",
+        })
+    );
+    let rows_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
+        .fetch_one(&pool)
+        .await
+        .expect("account count after");
+    assert_eq!(
+        rows_after, rows_before,
+        "missing read must not create a row"
+    );
+
+    let wrong_auth = nip98_header(
+        &owner,
+        "http://localhost:3000/api/gateway/not-account",
+        "GET",
+        &[],
+    );
+    let (status, _) = body_text(
+        router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/gateway/account")
+                    .header("host", "localhost:3000")
+                    .header("authorization", wrong_auth)
+                    .body(Body::empty())
+                    .expect("invalid auth request"),
+            )
+            .await
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
 /// Sign a NIP-98 `Authorization` header, mirroring the test-client helper.
 fn nip98_header(keys: &Keys, url: &str, method: &str, body: &[u8]) -> String {
     let event = EventBuilder::new(nostr::Kind::Custom(27235), "")
@@ -973,6 +1555,91 @@ fn nip98_header(keys: &Keys, url: &str, method: &str, body: &[u8]) -> String {
                 .as_bytes()
         )
     )
+}
+
+/// Settlement and admission share one per-account gate. While a debit is
+/// blocked on the account row, a following call must wait; after the debit
+/// commits it observes the refreshed hourly window and is rejected before
+/// upstream spend.
+#[tokio::test(flavor = "multi_thread")]
+async fn settle_and_burn_cache_update_are_atomic_with_next_admission() {
+    let mock = MockUpstream::default();
+    // This would be consumed only by an admission racing the blocked settle.
+    // Mock scripts are popped from the back, so queue the fallback first.
+    mock.push(ScriptedResponse::Sse(observed_cost_sse(
+        "gen_should_not_reach_upstream",
+        "0.01",
+    )));
+    mock.push(ScriptedResponse::Sse(observed_cost_sse(
+        "gen_serialized_settle",
+        "0.05",
+    )));
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    sqlx::query(
+        "UPDATE accounts SET hourly_burn_cap_nanousd = 50000000, \
+         typical_call_cost_nanousd = 1000000 WHERE pubkey = $1",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .execute(&pool)
+    .await
+    .expect("set serialized-settle policy");
+
+    let first = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "first"}]}),
+        ))
+        .await
+        .expect("first request");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let mut lock_tx = pool.begin().await.expect("begin account lock");
+    sqlx::query("SELECT balance FROM accounts WHERE pubkey = $1 FOR UPDATE")
+        .bind(&TEST_PUBKEY[..])
+        .fetch_one(&mut *lock_tx)
+        .await
+        .expect("lock account");
+
+    let first_body = tokio::spawn(body_text(first));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !first_body.is_finished(),
+        "settle should be waiting on row lock"
+    );
+
+    let second_router = router.clone();
+    let mut second = tokio::spawn(async move {
+        second_router
+            .oneshot(chat_request(
+                TEST_TOKEN,
+                json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "second"}]}),
+            ))
+            .await
+            .expect("second request")
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), &mut second)
+            .await
+            .is_err(),
+        "next admission must wait behind the unsettled debit"
+    );
+    assert_eq!(
+        mock.requests().len(),
+        1,
+        "racing call spent nothing upstream"
+    );
+
+    lock_tx.commit().await.expect("release account lock");
+    assert_eq!(first_body.await.expect("first body task").0, StatusCode::OK);
+    let blocked = second.await.expect("second task");
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(blocked
+        .headers()
+        .contains_key(axum::http::header::RETRY_AFTER));
+    assert_eq!(mock.requests().len(), 1, "burn-cap rejection stayed local");
 }
 
 /// Coordinator decision (2026-08-08): settle synchronously, before the

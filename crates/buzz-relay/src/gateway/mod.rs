@@ -28,8 +28,10 @@
 //! dollars alongside integer token counts, in the body only (never a header),
 //! and the streaming terminal chunk carries it without `stream_options`.
 
+use std::collections::VecDeque;
+use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::{Body, Bytes};
 use axum::extract::State;
@@ -42,6 +44,7 @@ use buzz_core::ledger::prices::PriceBook;
 use buzz_meter_core::openai;
 use buzz_meter_core::ParsedUsage;
 use chrono::Utc;
+use dashmap::DashMap;
 use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
@@ -62,6 +65,18 @@ const TOKEN_PREFIX: &str = "colony-gw-";
 /// admission control. Worst case overdraft is one call on an account that
 /// already paid.
 const ADMISSION_FLOOR_NANOUSD: i64 = 50_000_000;
+
+/// Default cost used by the no-reservation balance guard: $0.05.
+const DEFAULT_TYPICAL_CALL_COST_NANOUSD: i64 = 50_000_000;
+
+/// Default maximum concurrent provisioned calls per account.
+const DEFAULT_MAX_IN_FLIGHT: u32 = 4;
+
+/// Default rolling one-hour spend cap per account: $5.
+const DEFAULT_HOURLY_BURN_CAP_NANOUSD: i64 = 5_000_000_000;
+
+/// The durable/cache admission spend window.
+const BURN_WINDOW: chrono::Duration = chrono::Duration::hours(1);
 
 /// How many times a settle is attempted inline before giving up. A transient
 /// DB error (connection drop, lock timeout) should not turn one failed write
@@ -98,6 +113,12 @@ pub struct GatewayConfig {
     pub api_key: String,
     /// Upstream base URL (`/v1/chat/completions` is appended).
     pub base_url: String,
+    /// Deployment default typical call cost, in nanoUSD.
+    pub default_typical_call_cost_nanousd: i64,
+    /// Deployment default concurrent call limit per account.
+    pub default_max_in_flight: u32,
+    /// Deployment default rolling one-hour spend cap, in nanoUSD.
+    pub default_hourly_burn_cap_nanousd: i64,
 }
 
 /// Read gateway config from the environment.
@@ -116,7 +137,49 @@ pub fn config_from_env() -> anyhow::Result<Option<GatewayConfig>> {
     if base_url.trim().is_empty() {
         anyhow::bail!("VERCEL_AI_GATEWAY_BASE_URL must not be blank when the gateway is enabled");
     }
-    Ok(Some(GatewayConfig { api_key, base_url }))
+    let default_typical_call_cost_nanousd = positive_i64_env(
+        "BUZZ_GATEWAY_DEFAULT_TYPICAL_CALL_COST_NANOUSD",
+        DEFAULT_TYPICAL_CALL_COST_NANOUSD,
+    )?;
+    let default_max_in_flight =
+        positive_u32_env("BUZZ_GATEWAY_DEFAULT_MAX_IN_FLIGHT", DEFAULT_MAX_IN_FLIGHT)?;
+    let default_hourly_burn_cap_nanousd = positive_i64_env(
+        "BUZZ_GATEWAY_DEFAULT_HOURLY_BURN_CAP_NANOUSD",
+        DEFAULT_HOURLY_BURN_CAP_NANOUSD,
+    )?;
+    Ok(Some(GatewayConfig {
+        api_key,
+        base_url,
+        default_typical_call_cost_nanousd,
+        default_max_in_flight,
+        default_hourly_burn_cap_nanousd,
+    }))
+}
+
+fn positive_i64_env(name: &str, default: i64) -> anyhow::Result<i64> {
+    match std::env::var(name) {
+        Ok(raw) => raw
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow::anyhow!("{name} must be a positive integer")),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(anyhow::anyhow!("could not read {name}: {error}")),
+    }
+}
+
+fn positive_u32_env(name: &str, default: u32) -> anyhow::Result<u32> {
+    match std::env::var(name) {
+        Ok(raw) => raw
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow::anyhow!("{name} must be a positive integer")),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(anyhow::anyhow!("could not read {name}: {error}")),
+    }
 }
 
 /// Everything the gateway needs beyond the relay's `AppState`.
@@ -126,6 +189,10 @@ pub struct GatewayState {
     /// Price book snapshot, shared with every response tee so the settle
     /// step can price a call the provider did not state a cost for.
     price_book: Arc<PriceBook>,
+    /// Single-instance admission authority. This deliberately is not
+    /// distributed: Fly currently runs one relay process. A multi-instance
+    /// deployment must replace this with shared state before it is safe.
+    admission: Arc<AdmissionController>,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -144,7 +211,15 @@ impl GatewayState {
     ///
     /// Fails when the upstream HTTP client cannot be built or the effective
     /// price catalog is invalid.
-    pub fn new(config: GatewayConfig) -> anyhow::Result<Self> {
+    pub async fn new(config: GatewayConfig, pool: &sqlx::PgPool) -> anyhow::Result<Self> {
+        Self::new_with_clock(config, pool, Arc::new(SystemGatewayClock)).await
+    }
+
+    async fn new_with_clock(
+        config: GatewayConfig,
+        pool: &sqlx::PgPool,
+        clock: Arc<dyn GatewayClock>,
+    ) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
@@ -152,11 +227,307 @@ impl GatewayState {
         let entries = crate::price_feed::effective_catalog()
             .map_err(|error| anyhow::anyhow!("gateway price book: {error}"))?;
         let price_book = Arc::new(PriceBook { entries });
+        let since = clock.now() - BURN_WINDOW;
+        let recent = buzz_db::credits::recent_debits(pool, since)
+            .await
+            .map_err(|error| anyhow::anyhow!("gateway admission rebuild: {error}"))?;
+        let admission = Arc::new(AdmissionController::new(
+            AdmissionDefaults {
+                typical_call_cost_nanousd: config.default_typical_call_cost_nanousd,
+                max_in_flight: config.default_max_in_flight,
+                hourly_burn_cap_nanousd: config.default_hourly_burn_cap_nanousd,
+            },
+            clock,
+            recent,
+        ));
         Ok(Self {
             config,
             client,
             price_book,
+            admission,
         })
+    }
+
+    #[cfg(test)]
+    fn in_flight_for(&self, pubkey: &[u8]) -> u32 {
+        self.admission.in_flight_for(pubkey)
+    }
+}
+
+trait GatewayClock: Send + Sync {
+    fn now(&self) -> chrono::DateTime<Utc>;
+}
+
+struct SystemGatewayClock;
+
+impl GatewayClock for SystemGatewayClock {
+    fn now(&self) -> chrono::DateTime<Utc> {
+        Utc::now()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AdmissionDefaults {
+    typical_call_cost_nanousd: i64,
+    max_in_flight: u32,
+    hourly_burn_cap_nanousd: i64,
+}
+
+#[derive(Debug, Clone)]
+struct SpendPoint {
+    at: chrono::DateTime<Utc>,
+    cost_nanousd: i64,
+}
+
+#[derive(Debug, Default)]
+struct AccountRuntime {
+    in_flight: u32,
+    spend_nanousd: i64,
+    spend: VecDeque<SpendPoint>,
+}
+
+impl AccountRuntime {
+    fn prune(&mut self, now: chrono::DateTime<Utc>) {
+        let cutoff = now - BURN_WINDOW;
+        while self.spend.front().is_some_and(|point| point.at <= cutoff) {
+            if let Some(point) = self.spend.pop_front() {
+                self.spend_nanousd = self.spend_nanousd.saturating_sub(point.cost_nanousd);
+            }
+        }
+    }
+
+    fn push_spend(&mut self, point: SpendPoint) {
+        if point.cost_nanousd <= 0 {
+            return;
+        }
+        self.spend_nanousd = self.spend_nanousd.saturating_add(point.cost_nanousd);
+        // Concurrent settles can acquire the account row lock in a different
+        // order from their transaction timestamps. Keep the ring ordered by
+        // durable ledger time so front-pruning and Retry-After stay exact.
+        match self.spend.iter().position(|current| current.at > point.at) {
+            Some(index) => self.spend.insert(index, point),
+            None => self.spend.push_back(point),
+        }
+    }
+
+    fn retry_after_secs(&self, cap_nanousd: i64, now: chrono::DateTime<Utc>) -> u64 {
+        let mut remaining = self.spend_nanousd;
+        for point in &self.spend {
+            remaining = remaining.saturating_sub(point.cost_nanousd);
+            if remaining < cap_nanousd {
+                let millis = (point.at + BURN_WINDOW - now).num_milliseconds().max(1);
+                return u64::try_from((millis + 999) / 1000).unwrap_or(1).max(1);
+            }
+        }
+        1
+    }
+}
+
+struct AccountAdmissionEntry {
+    /// Serializes balance reads/admission with settle-and-release for one
+    /// account, closing the stale-balance window around a completed debit.
+    gate: tokio::sync::Mutex<()>,
+    runtime: Mutex<AccountRuntime>,
+}
+
+impl Default for AccountAdmissionEntry {
+    fn default() -> Self {
+        Self {
+            gate: tokio::sync::Mutex::new(()),
+            runtime: Mutex::new(AccountRuntime::default()),
+        }
+    }
+}
+
+struct AdmissionController {
+    entries: DashMap<Vec<u8>, Arc<AccountAdmissionEntry>>,
+    defaults: AdmissionDefaults,
+    clock: Arc<dyn GatewayClock>,
+}
+
+impl AdmissionController {
+    fn new(
+        defaults: AdmissionDefaults,
+        clock: Arc<dyn GatewayClock>,
+        recent: Vec<buzz_db::credits::RecentDebit>,
+    ) -> Self {
+        let controller = Self {
+            entries: DashMap::new(),
+            defaults,
+            clock,
+        };
+        for debit in recent {
+            let entry = controller.entry(&debit.pubkey);
+            let mut runtime = lock_runtime(&entry);
+            runtime.push_spend(SpendPoint {
+                at: debit.created_at,
+                cost_nanousd: debit.cost_nanousd,
+            });
+        }
+        controller
+    }
+
+    fn entry(&self, pubkey: &[u8]) -> Arc<AccountAdmissionEntry> {
+        self.entries
+            .entry(pubkey.to_vec())
+            .or_insert_with(|| Arc::new(AccountAdmissionEntry::default()))
+            .clone()
+    }
+
+    async fn admit(
+        &self,
+        pool: &sqlx::PgPool,
+        pubkey: &[u8],
+    ) -> Result<AdmissionPermit, AdmissionError> {
+        let entry = self.entry(pubkey);
+        let _gate = entry.gate.lock().await;
+        let account = buzz_db::credits::admission_account(pool, pubkey)
+            .await
+            .map_err(|error| AdmissionError::Database(error.to_string()))?;
+        let now = self.clock.now();
+        let mut runtime = lock_runtime(&entry);
+        runtime.prune(now);
+
+        let typical = account
+            .typical_call_cost_nanousd
+            .unwrap_or(self.defaults.typical_call_cost_nanousd);
+        let max_in_flight = account
+            .max_in_flight
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(self.defaults.max_in_flight);
+        let burn_cap = account
+            .hourly_burn_cap_nanousd
+            .unwrap_or(self.defaults.hourly_burn_cap_nanousd);
+        let balance_guard = i64::from(runtime.in_flight)
+            .saturating_mul(typical)
+            .max(ADMISSION_FLOOR_NANOUSD);
+        if account.balance < balance_guard {
+            return Err(AdmissionError::Payment {
+                balance_nanousd: account.balance,
+                required_nanousd: balance_guard,
+            });
+        }
+        if runtime.in_flight >= max_in_flight {
+            return Err(AdmissionError::Rate {
+                message: "gateway concurrency limit reached",
+                retry_after_secs: 1,
+            });
+        }
+        if runtime.spend_nanousd >= burn_cap {
+            return Err(AdmissionError::Rate {
+                message: "gateway hourly spend limit reached",
+                retry_after_secs: runtime.retry_after_secs(burn_cap, now),
+            });
+        }
+
+        runtime.in_flight = runtime.in_flight.saturating_add(1);
+        drop(runtime);
+        drop(_gate);
+        Ok(AdmissionPermit {
+            entry,
+            pubkey: pubkey.to_vec(),
+            released: false,
+        })
+    }
+
+    #[cfg(test)]
+    fn in_flight_for(&self, pubkey: &[u8]) -> u32 {
+        self.entries
+            .get(pubkey)
+            .map(|entry| lock_runtime(&entry).in_flight)
+            .unwrap_or(0)
+    }
+}
+
+enum AdmissionError {
+    Payment {
+        balance_nanousd: i64,
+        required_nanousd: i64,
+    },
+    Rate {
+        message: &'static str,
+        retry_after_secs: u64,
+    },
+    Database(String),
+}
+
+struct AdmissionPermit {
+    entry: Arc<AccountAdmissionEntry>,
+    pubkey: Vec<u8>,
+    released: bool,
+}
+
+impl AdmissionPermit {
+    async fn finish(self, settled: Option<SettledDebit>) {
+        self.finish_with(async move { settled }).await;
+    }
+
+    /// Run the final settle operation while holding the account admission
+    /// gate, then update cached spend and release the in-flight slot as one
+    /// serialized lifecycle. This closes both stale-balance and stale-burn
+    /// windows between a durable debit and the next admission.
+    async fn finish_with<F>(mut self, operation: F)
+    where
+        F: Future<Output = Option<SettledDebit>>,
+    {
+        let entry = Arc::clone(&self.entry);
+        let _gate = entry.gate.lock().await;
+        let settled = operation.await;
+        let mut runtime = lock_runtime(&entry);
+        if let Some(settled) = settled.filter(|settled| settled.applied) {
+            runtime.push_spend(SpendPoint {
+                at: settled.created_at,
+                cost_nanousd: settled.cost_nanousd,
+            });
+        }
+        release_runtime(&mut runtime, &self.pubkey);
+        self.released = true;
+    }
+}
+
+impl Drop for AdmissionPermit {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        let entry = Arc::clone(&self.entry);
+        let pubkey = self.pubkey.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    let _gate = entry.gate.lock().await;
+                    let mut runtime = lock_runtime(&entry);
+                    release_runtime(&mut runtime, &pubkey);
+                });
+            }
+            Err(_) => {
+                tracing::error!(
+                    pubkey = %hex::encode(&pubkey),
+                    "gateway: admission permit dropped outside a runtime"
+                );
+                let mut runtime = lock_runtime(&entry);
+                release_runtime(&mut runtime, &pubkey);
+            }
+        }
+    }
+}
+
+fn lock_runtime(entry: &AccountAdmissionEntry) -> std::sync::MutexGuard<'_, AccountRuntime> {
+    entry
+        .runtime
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn release_runtime(runtime: &mut AccountRuntime, pubkey: &[u8]) {
+    if runtime.in_flight == 0 {
+        tracing::error!(
+            pubkey = %hex::encode(pubkey),
+            "gateway: admission in-flight release underflow"
+        );
+    } else {
+        runtime.in_flight -= 1;
     }
 }
 
@@ -178,6 +549,7 @@ pub fn router(app: Arc<crate::state::AppState>, upstream: Arc<GatewayState>) -> 
         )
         .route("/gateway/openai/v1/models", get(list_models))
         .route("/api/gateway/tokens", post(mint_token).delete(revoke_token))
+        .route("/api/gateway/account", get(account))
         .route_layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
 }
@@ -207,8 +579,15 @@ pub(crate) async fn mint_token(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<axum::Json<Value>, (StatusCode, axum::Json<Value>)> {
-    let (tenant, pubkey) =
-        authenticate(&state.app, &headers, "POST", "/api/gateway/tokens", &body).await?;
+    let (tenant, pubkey) = authenticate(
+        &state.app,
+        &headers,
+        "POST",
+        "/api/gateway/tokens",
+        Some(&body),
+        true,
+    )
+    .await?;
 
     let request: MintTokenRequest = serde_json::from_slice(&body)
         .map_err(|_| crate::api::api_error(StatusCode::BAD_REQUEST, "invalid JSON body"))?;
@@ -255,8 +634,15 @@ pub(crate) async fn revoke_token(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, axum::Json<Value>)> {
-    let (_tenant, _pubkey) =
-        authenticate(&state.app, &headers, "DELETE", "/api/gateway/tokens", &body).await?;
+    let (_tenant, _pubkey) = authenticate(
+        &state.app,
+        &headers,
+        "DELETE",
+        "/api/gateway/tokens",
+        Some(&body),
+        true,
+    )
+    .await?;
 
     let request: RevokeTokenRequest = serde_json::from_slice(&body)
         .map_err(|_| crate::api::api_error(StatusCode::BAD_REQUEST, "invalid JSON body"))?;
@@ -274,6 +660,44 @@ pub(crate) async fn revoke_token(
         ));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Read the NIP-98 signer's prepaid account — `GET /api/gateway/account`.
+///
+/// There is intentionally no pubkey selector and no ledger data. A missing
+/// account reads as zero/depleted without creating a row; signed nanoUSD is a
+/// decimal string so JavaScript never rounds a 64-bit balance.
+pub(crate) async fn account(
+    State(state): State<GatewayApiState>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, axum::Json<Value>)> {
+    let (_tenant, pubkey) = authenticate(
+        &state.app,
+        &headers,
+        "GET",
+        "/api/gateway/account",
+        None,
+        false,
+    )
+    .await?;
+    let balance = buzz_db::credits::balance(state.app.db.pool(), &pubkey.to_bytes())
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "gateway: account balance read failed");
+            crate::api::internal_error("gateway account balance read failed")
+        })?;
+    let status = if balance > 0 { "active" } else { "depleted" };
+    let mut response = axum::Json(serde_json::json!({
+        "balance_nanousd": balance.to_string(),
+        "currency": "USD",
+        "status": status,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 /// `GET /gateway/openai/v1/models` — the enabled catalog, OpenAI-list shaped.
@@ -347,24 +771,6 @@ pub(crate) async fn chat_completions(
     };
     let vercel_slug = catalog.vercel_slug.clone();
 
-    // Admission stub (this ticket only): refuse below the floor. The balance
-    // query happens before any upstream spend, so an empty account is 402,
-    // not a free call.
-    let balance = match buzz_db::credits::balance(state.app.db.pool(), &pubkey).await {
-        Ok(balance) => balance,
-        Err(error) => {
-            tracing::error!(%error, "gateway: balance lookup failed");
-            return crate::api::internal_error("gateway balance lookup failed").into_response();
-        }
-    };
-    if balance < ADMISSION_FLOOR_NANOUSD {
-        return crate::api::api_error(
-            StatusCode::PAYMENT_REQUIRED,
-            "insufficient balance: top up credits to continue",
-        )
-        .into_response();
-    }
-
     // Rewrite the model to the Vercel slug, then apply the one permitted
     // streaming rewrite (ask for the usage block on the terminal chunk).
     let mut outbound = request;
@@ -384,6 +790,31 @@ pub(crate) async fn chat_completions(
         state.upstream.config.base_url.trim_end_matches('/')
     );
 
+    // The per-account gate is acquired immediately before upstream spend and
+    // moved into the response body. Its Drop path covers abrupt downstream
+    // disconnects; natural completion releases it only after settle/cache
+    // update, so a completed debit and the next admission cannot cross.
+    let permit = match state
+        .upstream
+        .admission
+        .admit(state.app.db.pool(), &pubkey)
+        .await
+    {
+        Ok(permit) => permit,
+        Err(AdmissionError::Payment {
+            balance_nanousd,
+            required_nanousd,
+        }) => return payment_required_response(balance_nanousd, required_nanousd),
+        Err(AdmissionError::Rate {
+            message,
+            retry_after_secs,
+        }) => return rate_limited_response(message, retry_after_secs),
+        Err(AdmissionError::Database(error)) => {
+            tracing::error!(%error, "gateway: admission account lookup failed");
+            return crate::api::internal_error("gateway admission failed").into_response();
+        }
+    };
+
     let sent = state
         .upstream
         .client
@@ -396,6 +827,7 @@ pub(crate) async fn chat_completions(
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "gateway: upstream request failed");
+            permit.finish(None).await;
             return crate::api::api_error(
                 StatusCode::BAD_GATEWAY,
                 "gateway upstream request failed",
@@ -429,6 +861,7 @@ pub(crate) async fn chat_completions(
         meta,
         state.app.db.pool().clone(),
         Arc::clone(&state.upstream.price_book),
+        permit,
     );
 
     let mut builder = Response::builder().status(status);
@@ -446,6 +879,34 @@ pub(crate) async fn chat_completions(
                 .into_response()
         }
     }
+}
+
+fn payment_required_response(balance_nanousd: i64, required_nanousd: i64) -> Response {
+    (
+        StatusCode::PAYMENT_REQUIRED,
+        axum::Json(serde_json::json!({
+            "error": "insufficient_credits",
+            "message": "insufficient balance: top up credits to continue",
+            "balance_nanousd": balance_nanousd.to_string(),
+            "required_nanousd": required_nanousd.to_string(),
+            "top_up": "buzz://settings/credits",
+        })),
+    )
+        .into_response()
+}
+
+fn rate_limited_response(message: &str, retry_after_secs: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        axum::Json(serde_json::json!({ "error": message })),
+    )
+        .into_response();
+    let retry_after = HeaderValue::from_str(&retry_after_secs.max(1).to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("1"));
+    response
+        .headers_mut()
+        .insert(axum::http::header::RETRY_AFTER, retry_after);
+    response
 }
 
 /// Authenticate a gateway call: bearer Colony token -> hash -> live row.
@@ -491,7 +952,8 @@ async fn authenticate(
     headers: &HeaderMap,
     method: &str,
     path: &str,
-    body: &[u8],
+    body: Option<&[u8]>,
+    require_payload: bool,
 ) -> Result<(buzz_core::TenantContext, nostr::PublicKey), (StatusCode, axum::Json<Value>)> {
     let raw_host = headers
         .get(axum::http::header::HOST)
@@ -511,9 +973,9 @@ async fn authenticate(
         headers,
         method,
         &url,
-        Some(body),
+        body,
         true,
-        true,
+        require_payload,
     )?;
     crate::api::bridge::check_nip98_replay(state, &tenant, event_id_bytes).await?;
     Ok((tenant, pubkey))
@@ -636,6 +1098,13 @@ struct SettleJob {
     http_status: StatusCode,
 }
 
+/// A durable debit that may be added to the in-process rolling spend cache.
+struct SettledDebit {
+    cost_nanousd: i64,
+    created_at: chrono::DateTime<Utc>,
+    applied: bool,
+}
+
 type UpstreamStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>;
 
 /// Forwards the upstream body chunk by chunk while keeping a bounded copy
@@ -658,6 +1127,7 @@ struct SettleTee {
     meta: Option<SettleMeta>,
     pool: sqlx::PgPool,
     price_book: Arc<PriceBook>,
+    permit: Option<AdmissionPermit>,
 }
 
 impl SettleTee {
@@ -666,6 +1136,7 @@ impl SettleTee {
         meta: SettleMeta,
         pool: sqlx::PgPool,
         price_book: Arc<PriceBook>,
+        permit: AdmissionPermit,
     ) -> Self {
         Self {
             upstream,
@@ -677,6 +1148,7 @@ impl SettleTee {
             meta: Some(meta),
             pool,
             price_book,
+            permit: Some(permit),
         }
     }
 
@@ -728,17 +1200,16 @@ impl SettleTee {
     /// the chunk, but is logged loudly with the call's identifiers —
     /// reconciliation is the only honest backstop left.
     async fn settle_inline(&mut self) {
-        let Some(job) = self.take_job() else {
-            return;
-        };
-        if let Err(error) = settle_with_retry(&self.pool, &self.price_book, &job).await {
-            tracing::error!(
-                %error,
-                pubkey = %hex::encode(&job.pubkey),
-                model = %job.model_id,
-                request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                "gateway: settle failed after retries — this call must be found by reconciliation"
-            );
+        let job = self.take_job();
+        match self.permit.take() {
+            Some(permit) => {
+                permit
+                    .finish_with(settle_job(&self.pool, &self.price_book, job))
+                    .await;
+            }
+            None => {
+                settle_job(&self.pool, &self.price_book, job).await;
+            }
         }
     }
 
@@ -747,32 +1218,38 @@ impl SettleTee {
     /// retry; if no runtime is available, the call is logged for
     /// reconciliation instead.
     fn settle_best_effort(&mut self) {
-        let Some(job) = self.take_job() else {
+        let job = self.take_job();
+        let permit = self.permit.take();
+        if job.is_none() && permit.is_none() {
             return;
-        };
+        }
         let pool = self.pool.clone();
         let price_book = Arc::clone(&self.price_book);
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 handle.spawn(async move {
-                    if let Err(error) = settle_with_retry(&pool, &price_book, &job).await {
-                        tracing::error!(
-                            %error,
-                            pubkey = %hex::encode(&job.pubkey),
-                            model = %job.model_id,
-                            request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                            "gateway: settle failed after retries — this call must be found by reconciliation"
-                        );
+                    match permit {
+                        Some(permit) => {
+                            permit
+                                .finish_with(settle_job(&pool, &price_book, job))
+                                .await;
+                        }
+                        None => {
+                            settle_job(&pool, &price_book, job).await;
+                        }
                     }
                 });
             }
             Err(_) => {
-                tracing::error!(
-                    pubkey = %hex::encode(&job.pubkey),
-                    model = %job.model_id,
-                    request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
-                    "gateway: dropped a settle outside a runtime — this call must be found by reconciliation"
-                );
+                if let Some(job) = job {
+                    tracing::error!(
+                        pubkey = %hex::encode(&job.pubkey),
+                        model = %job.model_id,
+                        request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                        "gateway: dropped a settle outside a runtime — this call must be found by reconciliation"
+                    );
+                }
+                drop(permit);
             }
         }
     }
@@ -837,6 +1314,27 @@ impl SettleTee {
     }
 }
 
+async fn settle_job(
+    pool: &sqlx::PgPool,
+    price_book: &PriceBook,
+    job: Option<SettleJob>,
+) -> Option<SettledDebit> {
+    let job = job?;
+    match settle_with_retry(pool, price_book, &job).await {
+        Ok(settled) => settled,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                pubkey = %hex::encode(&job.pubkey),
+                model = %job.model_id,
+                request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                "gateway: settle failed after retries — this call must be found by reconciliation"
+            );
+            None
+        }
+    }
+}
+
 impl Drop for SettleTee {
     /// A client that hangs up mid-stream drops the body without the stream
     /// ever completing. The call still happened and still costs money, so it
@@ -855,11 +1353,11 @@ async fn settle_with_retry(
     pool: &sqlx::PgPool,
     price_book: &PriceBook,
     job: &SettleJob,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<SettledDebit>> {
     let mut last_error = None;
     for attempt in 0..SETTLE_MAX_ATTEMPTS {
         match settle_one(pool, price_book, job).await {
-            Ok(()) => return Ok(()),
+            Ok(settled) => return Ok(settled),
             Err(error) => {
                 tracing::warn!(
                     %error,
@@ -898,10 +1396,10 @@ async fn settle_one(
     pool: &sqlx::PgPool,
     price_book: &PriceBook,
     job: &SettleJob,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<SettledDebit>> {
     if !job.http_status.is_success() {
         // A failed call is not billed by the provider; nothing to settle.
-        return Ok(());
+        return Ok(None);
     }
 
     let reference = match job.parsed.request_id.as_deref().filter(|id| !id.is_empty()) {
@@ -920,7 +1418,7 @@ async fn settle_one(
 
     match job.parsed.observed_cost_nanousd {
         Some(cost) => {
-            buzz_db::credits::debit_observed(
+            let result = buzz_db::credits::debit_observed_applied(
                 pool,
                 &job.pubkey,
                 cost,
@@ -937,6 +1435,13 @@ async fn settle_one(
                 reference = %reference,
                 "gateway: settled observed cost"
             );
+            return Ok(Some(SettledDebit {
+                cost_nanousd: result.entry.observed_cost.ok_or_else(|| {
+                    anyhow::anyhow!("observed debit returned without observed_cost")
+                })?,
+                created_at: result.entry.created_at,
+                applied: result.applied,
+            }));
         }
         None => match job.parsed.tokens {
             Some(tokens) => {
@@ -945,7 +1450,7 @@ async fn settle_one(
                     Some(cost) => {
                         let cost = u64::try_from(cost)
                             .map_err(|_| anyhow::anyhow!("estimated cost {cost} exceeds u64"))?;
-                        buzz_db::credits::debit_estimated(
+                        let result = buzz_db::credits::debit_estimated_applied(
                             pool,
                             &job.pubkey,
                             cost,
@@ -962,6 +1467,13 @@ async fn settle_one(
                             reference = %reference,
                             "gateway: provider stated no cost — settled price-book estimate"
                         );
+                        return Ok(Some(SettledDebit {
+                            cost_nanousd: result.entry.observed_cost.ok_or_else(|| {
+                                anyhow::anyhow!("estimated debit returned without observed_cost")
+                            })?,
+                            created_at: result.entry.created_at,
+                            applied: result.applied,
+                        }));
                     }
                     None => {
                         tracing::error!(
@@ -984,7 +1496,7 @@ async fn settle_one(
             }
         },
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]
