@@ -144,11 +144,11 @@ impl<S> std::fmt::Debug for HostCtx<S> {
 mod tests {
     use super::*;
     use crate::events::{EventSinkExt, RecordingEventSink};
-    use crate::state::ArcState;
     use crate::shell::{
         DialogCallback, DialogPath, FileDialogRequest, MainThreadTask, ShellError, ShellProxy,
         VibrancyMaterial, WindowOp,
     };
+    use crate::state::ArcState;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -249,8 +249,9 @@ mod tests {
     #[test]
     fn with_state_swaps_state_and_keeps_the_host() {
         let (ctx, events, _shell) = ctx();
-        let swapped =
-            ctx.with_state(Arc::new(ArcState::new(Arc::new(TestState { name: "other" }))));
+        let swapped = ctx.with_state(Arc::new(ArcState::new(Arc::new(TestState {
+            name: "other",
+        }))));
 
         assert_eq!(swapped.state().name, "other");
         swapped.events().emit("ptt-state", true).unwrap();

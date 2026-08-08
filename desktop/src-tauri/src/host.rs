@@ -198,9 +198,7 @@ impl ShellProxy for TauriShellProxy {
         // `MainThreadTask` is a boxed FnOnce, which is itself FnOnce, so it
         // passes straight through. Wrapping it in `move || task()` is a
         // redundant closure, which clippy denies under `-D warnings`.
-        self.app
-            .run_on_main_thread(task)
-            .map_err(ShellError::new)
+        self.app.run_on_main_thread(task).map_err(ShellError::new)
     }
 
     fn open_external(&self, url: &str) -> Result<(), ShellError> {
@@ -215,9 +213,7 @@ impl ShellProxy for TauriShellProxy {
     fn set_push_to_talk_shortcut(&self, enabled: bool) -> Result<(), ShellError> {
         #[cfg(not(test))]
         {
-            use tauri_plugin_global_shortcut::{
-                Code, GlobalShortcutExt, Modifiers, Shortcut,
-            };
+            use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
             let manager = self.app.global_shortcut();

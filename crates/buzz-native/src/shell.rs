@@ -115,11 +115,7 @@ impl FileDialogRequest {
         Self::default()
     }
 
-    pub fn with_filter(
-        mut self,
-        label: impl Into<String>,
-        extensions: &[&str],
-    ) -> Self {
+    pub fn with_filter(mut self, label: impl Into<String>, extensions: &[&str]) -> Self {
         self.filters.push((
             label.into(),
             extensions.iter().map(|e| (*e).to_string()).collect(),
@@ -248,7 +244,10 @@ mod tests {
     fn every_wire_material_round_trips() {
         for (wire, expected) in [
             ("hud-window", VibrancyMaterial::HudWindow),
-            ("under-window-background", VibrancyMaterial::UnderWindowBackground),
+            (
+                "under-window-background",
+                VibrancyMaterial::UnderWindowBackground,
+            ),
             ("fullscreen-ui", VibrancyMaterial::FullScreenUi),
             ("header-view", VibrancyMaterial::HeaderView),
             ("popover", VibrancyMaterial::Popover),
@@ -278,7 +277,10 @@ mod tests {
             .with_file_name("voice.wav");
         assert_eq!(
             request.filters,
-            vec![("Audio".to_string(), vec!["wav".to_string(), "mp3".to_string()])]
+            vec![(
+                "Audio".to_string(),
+                vec!["wav".to_string(), "mp3".to_string()]
+            )]
         );
         assert_eq!(request.suggested_file_name.as_deref(), Some("voice.wav"));
     }

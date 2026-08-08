@@ -108,14 +108,14 @@ impl RecordingEventSink {
 
     /// Every `(event, payload)` in emit order.
     pub fn emitted(&self) -> Vec<(String, serde_json::Value)> {
-        self.emitted.lock().expect("recording sink poisoned").clone()
+        self.emitted
+            .lock()
+            .expect("recording sink poisoned")
+            .clone()
     }
 
     pub fn names(&self) -> Vec<String> {
-        self.emitted()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect()
+        self.emitted().into_iter().map(|(name, _)| name).collect()
     }
 }
 
@@ -285,7 +285,11 @@ mod tests {
             vec![("huddle-state-changed".to_string(), serde_json::json!(2))],
             "only the post-setup emit is delivered; the dropped one is not replayed"
         );
-        assert_eq!(deferred.dropped_count(), 1, "count does not grow once ready");
+        assert_eq!(
+            deferred.dropped_count(),
+            1,
+            "count does not grow once ready"
+        );
     }
 
     #[test]

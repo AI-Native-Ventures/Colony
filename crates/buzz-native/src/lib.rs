@@ -87,13 +87,13 @@ mod ctx;
 
 pub use ctx::HostCtx;
 pub use events::{
-    DeferredEventSink, EmitError, EventSink, EventSinkExt, NullEventSink,
-    RecordingEventSink, EVENT_NAMES,
+    DeferredEventSink, EmitError, EventSink, EventSinkExt, NullEventSink, RecordingEventSink,
+    EVENT_NAMES,
 };
 pub use info::HostInfo;
 pub use paths::AppPaths;
-pub use state::{ArcState, StateProvider};
 pub use shell::{
     DialogCallback, DialogPath, FileDialogRequest, MainThreadTask, ShellError, ShellProxy,
     VibrancyMaterial, WindowOp,
 };
+pub use state::{ArcState, StateProvider};
