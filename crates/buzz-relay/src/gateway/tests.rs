@@ -42,8 +42,8 @@ use sqlx::Row;
 use tower::ServiceExt;
 
 use super::{
-    lock_runtime, AccountRuntime, AdmissionController, AdmissionDefaults, GatewayClock,
-    GatewayConfig, GatewayState, SettleJob, SpendPoint, TaskTracker,
+    lock_runtime, with_registered_gate, AccountRuntime, AdmissionController, AdmissionDefaults,
+    GatewayClock, GatewayConfig, GatewayState, SettleJob, SpendPoint, TaskTracker,
 };
 use crate::gateway::settle_one;
 use crate::router::build_router;
@@ -351,6 +351,7 @@ async fn seed(pool: &sqlx::PgPool) {
     // leftovers first: the next test must not inherit failure injection.
     drop_always_fail_trigger(pool).await;
     drop_fail_once_trigger(pool).await;
+    drop_outcome_fail_trigger(pool).await;
     // The harness Postgres is persistent across runs and tests share the
     // fixed pubkey, so each test starts from an empty ledger for it.
     sqlx::query("DELETE FROM credit_ledger WHERE pubkey = $1")
@@ -363,6 +364,11 @@ async fn seed(pool: &sqlx::PgPool) {
         .execute(pool)
         .await
         .expect("clear reconciliation outcomes");
+    sqlx::query("DELETE FROM gateway_settlement_intents WHERE pubkey = $1")
+        .bind(&TEST_PUBKEY[..])
+        .execute(pool)
+        .await
+        .expect("clear settlement intents");
     sqlx::query(
         "INSERT INTO accounts (pubkey, balance) VALUES ($1, $2) \
          ON CONFLICT (pubkey) DO UPDATE SET balance = EXCLUDED.balance, \
@@ -537,7 +543,7 @@ fn cache_replay_is_idempotent_by_durable_ledger_identity() {
 #[test]
 fn admission_hard_caps_global_default_and_evicts_idle_entries() {
     let clock = Arc::new(ManualClock::new(Utc::now()));
-    let controller = AdmissionController::new(
+    let controller = AdmissionController::try_new(
         AdmissionDefaults {
             typical_call_cost_nanousd: 50_000_000,
             max_in_flight: 99,
@@ -546,13 +552,15 @@ fn admission_hard_caps_global_default_and_evicts_idle_entries() {
         clock.clone(),
         vec![],
         TaskTracker::new(),
-    );
+    )
+    .expect("admission controller");
     assert_eq!(controller.defaults.max_in_flight, 4);
 
     let fresh = clock.now();
-    for index in 0..(super::MAX_ADMISSION_ENTRIES + 32) {
-        let pubkey = vec![index as u8; 32];
-        let entry = controller.entry(&pubkey);
+    for index in 0..super::MAX_ADMISSION_ENTRIES {
+        let mut pubkey = [0u8; 32];
+        pubkey[..8].copy_from_slice(&(index as u64).to_be_bytes());
+        let entry = controller.entry_unchecked(&pubkey);
         let mut runtime = lock_runtime(&entry);
         runtime.touch(fresh);
         runtime.push_spend(SpendPoint {
@@ -562,10 +570,7 @@ fn admission_hard_caps_global_default_and_evicts_idle_entries() {
             cost_nanousd: 1,
         });
     }
-    assert!(
-        controller.entry_count() <= super::MAX_ADMISSION_ENTRIES,
-        "admission cardinality is capped"
-    );
+    assert_eq!(controller.entry_count(), super::MAX_ADMISSION_ENTRIES);
     clock.advance(chrono::Duration::hours(2));
     controller.evict_idle(clock.now());
     assert_eq!(
@@ -573,6 +578,188 @@ fn admission_hard_caps_global_default_and_evicts_idle_entries() {
         0,
         "expired idle entries are evicted"
     );
+}
+
+#[tokio::test]
+async fn admission_capacity_is_full_width_atomic_and_rejects_new_identity() {
+    let clock = Arc::new(ManualClock::new(Utc::now()));
+    let controller = Arc::new(
+        AdmissionController::try_new(
+            AdmissionDefaults {
+                typical_call_cost_nanousd: 50_000_000,
+                max_in_flight: 4,
+                hourly_burn_cap_nanousd: 5_000_000_000,
+            },
+            clock.clone(),
+            vec![],
+            TaskTracker::new(),
+        )
+        .expect("admission controller"),
+    );
+
+    for index in 0..super::MAX_ADMISSION_ENTRIES {
+        let mut pubkey = [0u8; 32];
+        pubkey[..8].copy_from_slice(&(index as u64).to_be_bytes());
+        let entry = controller
+            .entry_for_admission(&pubkey)
+            .expect("identity fits before the cap");
+        with_registered_gate(entry.clone(), async {}).await;
+        let mut runtime = lock_runtime(&entry);
+        runtime.touch(clock.now());
+        runtime.push_spend(SpendPoint {
+            ledger_id: index as i64 + 1,
+            reference: format!("full-{index}"),
+            at: clock.now(),
+            cost_nanousd: 1,
+        });
+    }
+    assert_eq!(controller.entry_count(), super::MAX_ADMISSION_ENTRIES);
+
+    // A held/waiting gate remains the exact Arc even while the map is full;
+    // no second authority can be created for the same pubkey.
+    let mut held_key = [0u8; 32];
+    held_key[..8].copy_from_slice(&0u64.to_be_bytes());
+    let held = controller
+        .entry_for_admission(&held_key)
+        .expect("existing identity is admitted at capacity");
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(with_registered_gate(held.clone(), async move {
+        let _ = started_tx.send(());
+        let _ = release_rx.await;
+    }));
+    started_rx.await.expect("held gate started");
+    let same = controller.entry_unchecked(&held_key);
+    assert!(
+        Arc::ptr_eq(&held, &same),
+        "map lookup must preserve one Arc"
+    );
+    release_tx.send(()).expect("release held gate");
+    worker.await.expect("held gate worker");
+
+    let new_key = [0xffu8; 32];
+    let rejected = match controller.entry_for_admission(&new_key) {
+        Ok(_) => panic!("new identity must be rejected at capacity"),
+        Err(error) => error,
+    };
+    assert!(matches!(rejected, super::AdmissionError::Rate { .. }));
+    assert_eq!(controller.entry_count(), super::MAX_ADMISSION_ENTRIES);
+}
+
+#[test]
+fn admission_restart_rejects_more_than_full_width_capacity() {
+    let now = Utc::now();
+    let recent = (0..=super::MAX_ADMISSION_ENTRIES)
+        .map(|index| {
+            let mut pubkey = vec![0u8; 32];
+            pubkey[..8].copy_from_slice(&(index as u64).to_be_bytes());
+            buzz_db::credits::RecentDebit {
+                id: index as i64 + 1,
+                reference: format!("restart-{index}"),
+                pubkey,
+                cost_nanousd: 1,
+                created_at: now,
+            }
+        })
+        .collect();
+    let result = AdmissionController::try_new(
+        AdmissionDefaults {
+            typical_call_cost_nanousd: 50_000_000,
+            max_in_flight: 4,
+            hourly_burn_cap_nanousd: 5_000_000_000,
+        },
+        Arc::new(ManualClock::new(now)),
+        recent,
+        TaskTracker::new(),
+    );
+    assert!(
+        result.is_err(),
+        "startup must not silently drop active windows"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_gateway_intent_resolver_requires_exact_identity_and_is_idempotent() {
+    let mock = MockUpstream::default();
+    let (state, _router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    let intent = buzz_db::credits::create_gateway_settlement_intent(
+        &pool,
+        &TEST_PUBKEY,
+        "gateway:export-correlation",
+        "deepseek-v4-flash",
+    )
+    .await
+    .expect("create intent");
+    buzz_db::credits::mark_gateway_provider_completed(
+        &pool,
+        intent.id,
+        Some("provider-export-1"),
+        Some(125_000_000),
+        200,
+    )
+    .await
+    .expect("provider completion");
+    buzz_db::credits::mark_gateway_intent_reconciliation(
+        &pool,
+        intent.id,
+        "database_outage",
+        Some("provider-export-1"),
+        Some(125_000_000),
+        200,
+    )
+    .await
+    .expect("reconciliation state");
+
+    let wrong = buzz_db::credits::GatewayProviderUsage {
+        pubkey: vec![8u8; 32],
+        reference: intent.reference.clone(),
+        model: "deepseek-v4-flash".to_string(),
+        cost_nanousd: 125_000_000,
+        provider_request_id: Some("provider-export-1".to_string()),
+    };
+    assert_eq!(
+        buzz_db::credits::resolve_pending_gateway_settlements(&pool, &[wrong])
+            .await
+            .expect("wrong export is ignored"),
+        0
+    );
+    let usage = buzz_db::credits::GatewayProviderUsage {
+        pubkey: TEST_PUBKEY.to_vec(),
+        reference: intent.reference.clone(),
+        model: "deepseek-v4-flash".to_string(),
+        cost_nanousd: 125_000_000,
+        provider_request_id: Some("provider-export-1".to_string()),
+    };
+    assert_eq!(
+        buzz_db::credits::resolve_pending_gateway_settlements(&pool, std::slice::from_ref(&usage),)
+            .await
+            .expect("resolve exact export"),
+        1
+    );
+    assert_eq!(
+        buzz_db::credits::resolve_pending_gateway_settlements(&pool, &[usage])
+            .await
+            .expect("replay exact export"),
+        0
+    );
+    assert_eq!(balance(&pool).await, 875_000_000);
+    let state_name: String =
+        sqlx::query_scalar("SELECT state FROM gateway_settlement_intents WHERE id = $1")
+            .bind(intent.id)
+            .fetch_one(&pool)
+            .await
+            .expect("intent state");
+    assert_eq!(state_name, "resolved");
+    let resolved_at: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT resolved_at FROM gateway_reconciliation_outcomes WHERE intent_id = $1",
+    )
+    .bind(intent.id)
+    .fetch_one(&pool)
+    .await
+    .expect("outcome state");
+    assert!(resolved_at.is_some(), "outcome is closed by the resolver");
 }
 
 #[test]
@@ -584,6 +771,8 @@ fn missing_id_settle_job_reuses_one_fallback_reference() {
     let first = SettleJob {
         pubkey: TEST_PUBKEY.to_vec(),
         model_id: "m".to_string(),
+        intent_id: 1,
+        intent_reference: "gateway:fallback-once".to_string(),
         parsed: parsed.clone(),
         http_status: StatusCode::OK,
         parseable: true,
@@ -613,6 +802,30 @@ async fn second_gateway_authority_is_rejected_loudly() {
     let error = second.expect_err("a second relay authority must fail closed");
     assert!(error.to_string().contains("authority already held"));
     drop(first);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gateway_shutdown_closes_admission_and_waits_for_settlement_tasks() {
+    let mock = MockUpstream::default();
+    let (state, _router) = build_router_with_gateway(&mock).await;
+    seed(state.db.pool()).await;
+    let gateway = state.gateway.get().expect("gateway configured").clone();
+    let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let marker = Arc::clone(&completed);
+    gateway.settlement_tasks.spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        marker.store(true, std::sync::atomic::Ordering::Release);
+    });
+    gateway.shutdown().await;
+    assert!(completed.load(std::sync::atomic::Ordering::Acquire));
+    let result = gateway.admission.admit(state.db.pool(), &TEST_PUBKEY).await;
+    assert!(matches!(
+        result,
+        Err(super::AdmissionError::Rate {
+            message: "gateway is shutting down",
+            ..
+        })
+    ));
 }
 
 /// Admission-control regression: the current balance-only stub admits every
@@ -920,6 +1133,16 @@ async fn streamed_completion_settles_observed_cost_exactly_once() {
     assert_eq!(rows[0]["request_id"], "gen_01KZFF6DB8EX0T65CB94WB45KP");
     assert_eq!(rows[0]["model"], "deepseek-v4-flash");
     assert_eq!(balance(&pool).await, 1_000_000_000 - 3_720);
+    let intent = sqlx::query(
+        "SELECT id, reference FROM gateway_settlement_intents \
+         WHERE pubkey = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .fetch_one(&pool)
+    .await
+    .expect("settlement intent");
+    let intent_id: i64 = intent.try_get("id").expect("intent id");
+    let intent_reference: String = intent.try_get("reference").expect("intent reference");
 
     // Replaying the settle with the same parsed usage (a retried settle after
     // a crash) must be a no-op: same idempotency ref, no second debit.
@@ -930,6 +1153,8 @@ async fn streamed_completion_settles_observed_cost_exactly_once() {
         &SettleJob {
             pubkey: TEST_PUBKEY.to_vec(),
             model_id: "deepseek-v4-flash".to_string(),
+            intent_id,
+            intent_reference,
             parsed,
             http_status: StatusCode::OK,
             parseable: true,
@@ -1053,7 +1278,9 @@ async fn unsupported_success_encoding_records_reconciliation_outcome() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["reference"], "gen_opaque");
+    assert!(rows[0]["reference"]
+        .as_str()
+        .is_some_and(|reference| reference.starts_with("gateway:")));
     assert_eq!(rows[0]["reason"], "unsupported_content_encoding");
     assert!(
         ledger_rows(&pool).await.is_empty(),
@@ -1088,6 +1315,16 @@ async fn missing_request_id_replay_uses_one_stable_fallback_reference() {
         .expect("fallback reference")
         .to_string();
     assert!(reference.starts_with("gateway:"));
+    let intent = sqlx::query(
+        "SELECT id, reference FROM gateway_settlement_intents \
+         WHERE pubkey = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .fetch_one(&pool)
+    .await
+    .expect("settlement intent");
+    let intent_id: i64 = intent.try_get("id").expect("intent id");
+    let intent_reference: String = intent.try_get("reference").expect("intent reference");
 
     let parsed = buzz_meter_core::openai::parse_json_response(
         br#"{"model":"m","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20,"cost":0.05}}"#,
@@ -1095,6 +1332,8 @@ async fn missing_request_id_replay_uses_one_stable_fallback_reference() {
     let job = SettleJob {
         pubkey: TEST_PUBKEY.to_vec(),
         model_id: "deepseek-v4-flash".to_string(),
+        intent_id,
+        intent_reference,
         parsed,
         http_status: StatusCode::OK,
         parseable: true,
@@ -1918,6 +2157,13 @@ async fn settle_and_burn_cache_update_are_atomic_with_next_admission() {
     .await
     .expect("set serialized-settle policy");
 
+    let mut lock_tx = pool.begin().await.expect("begin account lock");
+    sqlx::query("SELECT balance FROM accounts WHERE pubkey = $1 FOR UPDATE")
+        .bind(&TEST_PUBKEY[..])
+        .fetch_one(&mut *lock_tx)
+        .await
+        .expect("lock account");
+
     let first = router
         .clone()
         .oneshot(chat_request(
@@ -1927,13 +2173,6 @@ async fn settle_and_burn_cache_update_are_atomic_with_next_admission() {
         .await
         .expect("first request");
     assert_eq!(first.status(), StatusCode::OK);
-
-    let mut lock_tx = pool.begin().await.expect("begin account lock");
-    sqlx::query("SELECT balance FROM accounts WHERE pubkey = $1 FOR UPDATE")
-        .bind(&TEST_PUBKEY[..])
-        .fetch_one(&mut *lock_tx)
-        .await
-        .expect("lock account");
 
     let first_body = tokio::spawn(body_text(first));
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2239,6 +2478,61 @@ fn settle_failure_after_retries_logs_loudly_and_still_delivers_the_stream() {
     let _captured = String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn simultaneous_ledger_and_outcome_failure_keeps_intent_resolvable() {
+    let mock = MockUpstream::default();
+    mock.push(ScriptedResponse::Sse(VERCELL_SSE.to_string()));
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    install_always_fail_trigger(&pool).await;
+    install_outcome_fail_trigger(&pool).await;
+
+    let response = router
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "fault"}]}),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await.1;
+    assert!(body.contains("gen_01KZFF6DB8EX0T65CB94WB45KP"));
+    assert!(ledger_rows(&pool).await.is_empty());
+    let intent = sqlx::query(
+        "SELECT id, reference, state FROM gateway_settlement_intents \
+         WHERE pubkey = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&TEST_PUBKEY[..])
+    .fetch_one(&pool)
+    .await
+    .expect("durable intent");
+    let intent_id: i64 = intent.try_get("id").expect("intent id");
+    let intent_reference: String = intent.try_get("reference").expect("intent ref");
+    let intent_state: String = intent.try_get("state").expect("intent state");
+    assert_eq!(intent_state, "provider_completed");
+
+    drop_outcome_fail_trigger(&pool).await;
+    drop_always_fail_trigger(&pool).await;
+    let resolved = buzz_db::credits::resolve_gateway_settlement_intent(
+        &pool,
+        intent_id,
+        &buzz_db::credits::GatewayProviderUsage {
+            pubkey: TEST_PUBKEY.to_vec(),
+            reference: intent_reference,
+            model: "deepseek-v4-flash".to_string(),
+            cost_nanousd: 3_720,
+            provider_request_id: Some("gen_01KZFF6DB8EX0T65CB94WB45KP".to_string()),
+        },
+    )
+    .await
+    .expect("resolve after database recovery")
+    .expect("intent exists");
+    assert_eq!(resolved.state, "resolved");
+    assert_eq!(ledger_rows(&pool).await.len(), 1);
+    assert_eq!(balance(&pool).await, 1_000_000_000 - 3_720);
+}
+
 /// A `BEFORE INSERT` trigger on `credit_ledger` that raises once (sequence-
 /// gated; `nextval` is not rolled back with the aborted transaction) for the
 /// fixed test pubkey, then passes. Simulates a transient DB failure on the
@@ -2327,6 +2621,40 @@ async fn drop_always_fail_trigger(pool: &sqlx::PgPool) {
         .execute(pool)
         .await
         .expect("drop always-fail function");
+}
+
+async fn install_outcome_fail_trigger(pool: &sqlx::PgPool) {
+    drop_outcome_fail_trigger(pool).await;
+    sqlx::query(
+        "CREATE FUNCTION gateway_test_outcome_fail_fn() RETURNS trigger AS $$
+         BEGIN
+             RAISE EXCEPTION 'gateway test: injected reconciliation outcome failure';
+         END;
+         $$ LANGUAGE plpgsql",
+    )
+    .execute(pool)
+    .await
+    .expect("outcome-fail function");
+    sqlx::query(
+        "CREATE TRIGGER gateway_test_outcome_fail_trg BEFORE INSERT ON gateway_reconciliation_outcomes \
+         FOR EACH ROW EXECUTE FUNCTION gateway_test_outcome_fail_fn()",
+    )
+    .execute(pool)
+    .await
+    .expect("outcome-fail trigger");
+}
+
+async fn drop_outcome_fail_trigger(pool: &sqlx::PgPool) {
+    sqlx::query(
+        "DROP TRIGGER IF EXISTS gateway_test_outcome_fail_trg ON gateway_reconciliation_outcomes",
+    )
+    .execute(pool)
+    .await
+    .expect("drop outcome-fail trigger");
+    sqlx::query("DROP FUNCTION IF EXISTS gateway_test_outcome_fail_fn()")
+        .execute(pool)
+        .await
+        .expect("drop outcome-fail function");
 }
 
 /// Capturing writer for the loud-log test, mirroring the bridge test

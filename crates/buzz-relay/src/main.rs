@@ -1297,6 +1297,13 @@ async fn main() -> anyhow::Result<()> {
     discovery_shutdown.cancel();
     state.community_revalidator_cancel.cancel();
 
+    // The gateway owns relay-side settlement workers. Close admission and
+    // wait for every tracked drain before tearing down the database/telemetry
+    // workers so a graceful relay stop cannot strand provider attribution.
+    if let Some(gateway) = state.gateway.get() {
+        gateway.shutdown().await;
+    }
+
     // Signal the audit worker to stop accepting, flush buffered entries, and
     // exit. Uses a CancellationToken so it works regardless of how many
     // Arc<AppState> clones are still alive in background tasks.

@@ -792,7 +792,8 @@ INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('credit_ledger',          'append-only money journal is identity-global, not community-scoped'),
     ('gateway_tokens',         'provisioned-mode tokens are identity-global, not community-scoped'),
     ('model_catalog',          'model allowlist is deployment-global'),
-    ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable daily reconciliation');
+    ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable attribution/reconciliation'),
+    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement');
 
 -- Colony Credits gateway tables. Keep the schema snapshot aligned with the
 -- migration path so a fresh isolated harness has the same money/admission
@@ -862,6 +863,33 @@ CREATE TABLE gateway_reconciliation_outcomes (
 CREATE INDEX gateway_reconciliation_outcomes_pending_idx
     ON gateway_reconciliation_outcomes (created_at)
     WHERE resolved_at IS NULL;
+
+CREATE TABLE gateway_settlement_intents (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    reference TEXT NOT NULL,
+    model TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'admitted'
+        CHECK (state IN ('admitted', 'provider_completed', 'debited', 'reconciliation', 'resolved')),
+    provider_request_id TEXT,
+    observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
+    provider_status SMALLINT,
+    reason TEXT,
+    correction_ref TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMPTZ,
+    UNIQUE (pubkey, reference)
+);
+CREATE INDEX gateway_settlement_intents_pending_idx
+    ON gateway_settlement_intents (updated_at)
+    WHERE state <> 'resolved';
+
+ALTER TABLE gateway_reconciliation_outcomes
+    ADD COLUMN intent_id BIGINT REFERENCES gateway_settlement_intents(id),
+    ADD COLUMN provider_request_id TEXT,
+    ADD COLUMN observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
+    ADD COLUMN correction_ref TEXT;
 -- NIP-PL effective lease state and durable wake outbox. Every key is led by
 -- community_id: client-provided origin is confirmation only, never routing.
 CREATE TABLE push_leases (

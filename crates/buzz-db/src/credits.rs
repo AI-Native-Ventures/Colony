@@ -83,6 +83,55 @@ pub struct RecentDebit {
     pub created_at: DateTime<Utc>,
 }
 
+/// Durable identity for one admitted hosted-gateway call. An intent records
+/// attribution before provider spend; it never reserves or mutates balance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySettlementIntent {
+    /// Durable intent id.
+    pub id: i64,
+    /// Account the provider call belongs to.
+    pub pubkey: Vec<u8>,
+    /// Stable relay-generated reference used for export correlation.
+    pub reference: String,
+    /// Colony model id.
+    pub model: String,
+    /// Idempotent lifecycle state.
+    pub state: String,
+    /// Provider request id, if observed.
+    pub provider_request_id: Option<String>,
+    /// Cost observed in the provider export/wire, when known.
+    pub observed_cost: Option<i64>,
+    /// Provider HTTP status, when known.
+    pub provider_status: Option<i16>,
+    /// Why the call needs reconciliation, when applicable.
+    pub reason: Option<String>,
+    /// Ledger reference used for an exact correction.
+    pub correction_ref: Option<String>,
+    /// Creation time.
+    pub created_at: DateTime<Utc>,
+    /// Last lifecycle update.
+    pub updated_at: DateTime<Utc>,
+    /// Resolution time, if complete.
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// One exact provider-export row used by the pending-intent resolver. The
+/// resolver intentionally requires the account pubkey and stable relay ref;
+/// aggregate drift alone cannot identify the account to correct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayProviderUsage {
+    /// Account pubkey from the authenticated request/export correlation.
+    pub pubkey: Vec<u8>,
+    /// Stable relay intent reference.
+    pub reference: String,
+    /// Provider model identifier.
+    pub model: String,
+    /// Observed provider cost in nanoUSD.
+    pub cost_nanousd: u64,
+    /// Provider request id, when supplied by the export.
+    pub provider_request_id: Option<String>,
+}
+
 /// Result of applying an idempotent ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedLedgerEntry {
@@ -159,9 +208,9 @@ pub async fn recent_debits(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<Re
         .collect()
 }
 
-/// Record a successful gateway call whose provider usage could not be billed
-/// inline. This is a durable reconciliation outcome, not a balance mutation;
-/// the daily provider-export reconciliation owns the eventual correction.
+/// Record a legacy reconciliation outcome. New hosted-gateway paths should
+/// use the linked settlement-intent transitions below so an exact resolver can
+/// apply a per-account correction; this helper remains for upgrade compatibility.
 pub async fn record_gateway_reconciliation(
     pool: &PgPool,
     pubkey: &[u8],
@@ -184,6 +233,303 @@ pub async fn record_gateway_reconciliation(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+fn row_to_gateway_intent(row: &sqlx::postgres::PgRow) -> Result<GatewaySettlementIntent> {
+    Ok(GatewaySettlementIntent {
+        id: row.try_get("id")?,
+        pubkey: row.try_get("pubkey")?,
+        reference: row.try_get("reference")?,
+        model: row.try_get("model")?,
+        state: row.try_get("state")?,
+        provider_request_id: row.try_get("provider_request_id")?,
+        observed_cost: row.try_get("observed_cost")?,
+        provider_status: row.try_get("provider_status")?,
+        reason: row.try_get("reason")?,
+        correction_ref: row.try_get("correction_ref")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+        resolved_at: row.try_get("resolved_at")?,
+    })
+}
+
+const GATEWAY_INTENT_COLUMNS: &str =
+    "id, pubkey, reference, model, state, provider_request_id, observed_cost, \
+     provider_status, reason, correction_ref, created_at, updated_at, resolved_at";
+
+/// Create (or replay) the durable attribution intent before a provider call.
+/// Replays return the existing row without resetting a later lifecycle state.
+pub async fn create_gateway_settlement_intent(
+    pool: &PgPool,
+    pubkey: &[u8],
+    reference: &str,
+    model: &str,
+) -> Result<GatewaySettlementIntent> {
+    let query = format!(
+        "INSERT INTO gateway_settlement_intents (pubkey, reference, model) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (pubkey, reference) DO UPDATE SET updated_at = now() \
+         RETURNING {GATEWAY_INTENT_COLUMNS}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(pubkey)
+        .bind(reference)
+        .bind(model)
+        .fetch_one(pool)
+        .await?;
+    row_to_gateway_intent(&row)
+}
+
+/// Mark that provider usage was observed. Replays never move a later
+/// `debited`/`resolved` intent backwards.
+pub async fn mark_gateway_provider_completed(
+    pool: &PgPool,
+    intent_id: i64,
+    provider_request_id: Option<&str>,
+    observed_cost: Option<i64>,
+    provider_status: i16,
+) -> Result<GatewaySettlementIntent> {
+    let query = format!(
+        "UPDATE gateway_settlement_intents SET \
+           state = CASE WHEN state IN ('debited', 'resolved') THEN state ELSE 'provider_completed' END, \
+           provider_request_id = COALESCE($2, provider_request_id), \
+           observed_cost = COALESCE($3, observed_cost), provider_status = $4, updated_at = now() \
+         WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(intent_id)
+        .bind(provider_request_id)
+        .bind(observed_cost)
+        .bind(provider_status)
+        .fetch_one(pool)
+        .await?;
+    row_to_gateway_intent(&row)
+}
+
+/// Mark a provider call debited. This transition is idempotent and preserves
+/// a resolved intent if a late acknowledgement is replayed.
+pub async fn mark_gateway_intent_debited(
+    pool: &PgPool,
+    intent_id: i64,
+) -> Result<GatewaySettlementIntent> {
+    let query = format!(
+        "UPDATE gateway_settlement_intents SET \
+           state = CASE WHEN state = 'resolved' THEN state ELSE 'debited' END, \
+           updated_at = now() WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(intent_id)
+        .fetch_one(pool)
+        .await?;
+    row_to_gateway_intent(&row)
+}
+
+/// Close an intent with no charge when the provider returned a non-success
+/// response. This prevents rejected upstream calls from accumulating in the
+/// pending resolver while preserving the pre-spend audit identity.
+pub async fn resolve_gateway_intent_no_charge(
+    pool: &PgPool,
+    intent_id: i64,
+    provider_status: i16,
+) -> Result<GatewaySettlementIntent> {
+    let query = format!(
+        "UPDATE gateway_settlement_intents SET state = 'resolved', observed_cost = COALESCE(observed_cost, 0), \
+           provider_status = $2, reason = COALESCE(reason, 'provider_non_success'), \
+           resolved_at = COALESCE(resolved_at, now()), updated_at = now() \
+         WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(intent_id)
+        .bind(provider_status)
+        .fetch_one(pool)
+        .await?;
+    row_to_gateway_intent(&row)
+}
+
+/// Persist a reconciliation state and its linked outcome. If the outcome
+/// insert fails the transaction rolls back, leaving the pre-spend intent
+/// queryable for the exact export resolver.
+pub async fn mark_gateway_intent_reconciliation(
+    pool: &PgPool,
+    intent_id: i64,
+    reason: &str,
+    provider_request_id: Option<&str>,
+    observed_cost: Option<i64>,
+    provider_status: i16,
+) -> Result<GatewaySettlementIntent> {
+    let mut tx = pool.begin().await?;
+    let query = format!(
+        "UPDATE gateway_settlement_intents SET \
+           state = CASE WHEN state = 'resolved' THEN state ELSE 'reconciliation' END, \
+           reason = $2, provider_request_id = COALESCE($3, provider_request_id), \
+           observed_cost = COALESCE($4, observed_cost), provider_status = $5, updated_at = now() \
+         WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(intent_id)
+        .bind(reason)
+        .bind(provider_request_id)
+        .bind(observed_cost)
+        .bind(provider_status)
+        .fetch_one(&mut *tx)
+        .await?;
+    let intent = row_to_gateway_intent(&row)?;
+    sqlx::query(
+        "INSERT INTO gateway_reconciliation_outcomes \
+           (pubkey, reference, model, http_status, reason, intent_id, provider_request_id, observed_cost) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         ON CONFLICT (pubkey, reference) DO UPDATE SET \
+           intent_id = COALESCE(gateway_reconciliation_outcomes.intent_id, EXCLUDED.intent_id), \
+           provider_request_id = COALESCE(gateway_reconciliation_outcomes.provider_request_id, EXCLUDED.provider_request_id), \
+           observed_cost = COALESCE(gateway_reconciliation_outcomes.observed_cost, EXCLUDED.observed_cost), \
+           reason = EXCLUDED.reason",
+    )
+    .bind(&intent.pubkey)
+    .bind(&intent.reference)
+    .bind(&intent.model)
+    .bind(provider_status)
+    .bind(reason)
+    .bind(intent.id)
+    .bind(provider_request_id)
+    .bind(observed_cost)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(intent)
+}
+
+/// Return all non-resolved intents for a restart/reconciliation worker.
+pub async fn pending_gateway_settlement_intents(
+    pool: &PgPool,
+) -> Result<Vec<GatewaySettlementIntent>> {
+    let query = format!(
+        "SELECT {GATEWAY_INTENT_COLUMNS} FROM gateway_settlement_intents \
+         WHERE state <> 'resolved' ORDER BY id"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(query))
+        .fetch_all(pool)
+        .await?;
+    rows.iter().map(row_to_gateway_intent).collect()
+}
+
+/// Resolve one pending intent from an exact provider-export row. The ledger
+/// correction reference is deterministic, so a debit that commits before a
+/// process crash is safely replayed and the intent can still be marked
+/// resolved later.
+pub async fn resolve_gateway_settlement_intent(
+    pool: &PgPool,
+    intent_id: i64,
+    usage: &GatewayProviderUsage,
+) -> Result<Option<GatewaySettlementIntent>> {
+    let query =
+        format!("SELECT {GATEWAY_INTENT_COLUMNS} FROM gateway_settlement_intents WHERE id = $1");
+    let Some(row) = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(intent_id)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let intent = row_to_gateway_intent(&row)?;
+    if intent.state == "resolved" {
+        return Ok(Some(intent));
+    }
+    if intent.pubkey != usage.pubkey
+        || intent.reference != usage.reference
+        || intent.model != usage.model
+    {
+        return Err(crate::error::DbError::InvalidData(
+            "provider usage does not match settlement intent identity/model".into(),
+        ));
+    }
+    // A normal settle may already have committed its ledger row while the
+    // intent-state acknowledgement was lost. Correlate that exact provider
+    // request first so recovery does not append a second correction.
+    let existing_reference = if let Some(provider_request_id) = usage.provider_request_id.as_deref()
+    {
+        sqlx::query_scalar::<_, String>(
+            "SELECT ref FROM credit_ledger WHERE pubkey = $1 AND request_id = $2 \
+             AND kind = 'debit' AND observed_cost = $3 LIMIT 1",
+        )
+        .bind(&intent.pubkey)
+        .bind(provider_request_id)
+        .bind(i64::try_from(usage.cost_nanousd).map_err(|_| {
+            crate::error::DbError::InvalidAmount("provider cost exceeds BIGINT".into())
+        })?)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        None
+    };
+    let correction_ref = existing_reference
+        .or_else(|| intent.correction_ref.clone())
+        .unwrap_or_else(|| format!("gateway-intent:{}", intent.id));
+    if correction_ref.starts_with("gateway-intent:") {
+        debit_observed_applied(
+            pool,
+            &intent.pubkey,
+            usage.cost_nanousd,
+            &correction_ref,
+            Some(&usage.model),
+            usage.provider_request_id.as_deref(),
+        )
+        .await?;
+    }
+    let updated_query = format!(
+        "UPDATE gateway_settlement_intents SET state = 'resolved', \
+           provider_request_id = COALESCE($2, provider_request_id), observed_cost = $3, \
+           correction_ref = $4, resolved_at = COALESCE(resolved_at, now()), updated_at = now() \
+         WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(updated_query))
+        .bind(intent.id)
+        .bind(usage.provider_request_id.as_deref())
+        .bind(i64::try_from(usage.cost_nanousd).map_err(|_| {
+            crate::error::DbError::InvalidAmount("provider cost exceeds BIGINT".into())
+        })?)
+        .bind(&correction_ref)
+        .fetch_one(pool)
+        .await?;
+    sqlx::query(
+        "UPDATE gateway_reconciliation_outcomes SET resolved_at = COALESCE(resolved_at, now()), \
+           correction_ref = COALESCE(correction_ref, $2), observed_cost = COALESCE(observed_cost, $3) \
+         WHERE intent_id = $1 OR (pubkey = $4 AND reference = $5)",
+    )
+    .bind(intent.id)
+    .bind(&correction_ref)
+    .bind(i64::try_from(usage.cost_nanousd).map_err(|_| {
+        crate::error::DbError::InvalidAmount("provider cost exceeds BIGINT".into())
+    })?)
+    .bind(&intent.pubkey)
+    .bind(&intent.reference)
+    .execute(pool)
+    .await?;
+    Ok(Some(row_to_gateway_intent(&row)?))
+}
+
+/// Resolve pending intents only when the provider export supplies an exact
+/// `(pubkey, reference)` match. Returns the number of intents resolved; rows
+/// without an exact match remain pending for a later export.
+pub async fn resolve_pending_gateway_settlements(
+    pool: &PgPool,
+    usages: &[GatewayProviderUsage],
+) -> Result<usize> {
+    let pending = pending_gateway_settlement_intents(pool).await?;
+    let mut resolved = 0;
+    for intent in pending {
+        if let Some(usage) = usages
+            .iter()
+            .find(|usage| usage.pubkey == intent.pubkey && usage.reference == intent.reference)
+        {
+            if resolve_gateway_settlement_intent(pool, intent.id, usage)
+                .await?
+                .is_some_and(|resolved| resolved.state == "resolved")
+            {
+                resolved += 1;
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 /// Credit an account (positive nanoUSD `delta`), idempotent on `reference`.
@@ -350,8 +696,10 @@ async fn debit_internal(
 
 /// Sum of `debit` observed costs for one UTC day (`[day 00:00, day+1 00:00)`).
 ///
-/// The daily reconciliation job compares this against the upstream (Vercel
-/// AI Gateway) usage export. The window bounds are bound as `TIMESTAMPTZ`
+/// The aggregate report may compare this against the upstream (Vercel AI
+/// Gateway) usage export, but it cannot resolve a pending account by itself.
+/// Exact corrections use [`resolve_pending_gateway_settlements`]. The window
+/// bounds are bound as `TIMESTAMPTZ`
 /// (UTC), never as bare `TIMESTAMP`: Postgres would otherwise coerce the
 /// latter using the session TimeZone, silently shifting the window — and a
 /// shifted window can mask real drift, which is what reconciliation exists

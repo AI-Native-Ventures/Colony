@@ -1,7 +1,7 @@
--- Durable backstop for successful provider responses that the relay cannot
--- parse (unsupported content encoding, malformed usage, or a settle failure).
--- The row is an outcome, not a reservation or a balance mutation; daily
--- reconciliation resolves it against the provider export.
+-- Durable outcome linked to a settlement intent when a successful provider
+-- response cannot be billed inline (unsupported encoding, malformed usage, or
+-- a settle failure). It is not a reservation or balance mutation; the exact
+-- provider-export resolver closes it against the intent.
 CREATE TABLE gateway_reconciliation_outcomes (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
@@ -19,4 +19,4 @@ CREATE INDEX gateway_reconciliation_outcomes_pending_idx
     WHERE resolved_at IS NULL;
 
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
-    ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable daily reconciliation');
+    ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable attribution/reconciliation');
