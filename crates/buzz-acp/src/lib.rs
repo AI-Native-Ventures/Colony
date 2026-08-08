@@ -1315,14 +1315,6 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
-    let mut pool = if config.lazy_pool {
-        AgentPool::from_slots((0..config.agents).map(|_| None).collect())
-    } else {
-        initialize_agent_pool(&PoolStartup::from_config(&config, observer.clone()), None).await?
-    };
-    let mut pool_ready = !config.lazy_pool;
-    let mut pool_lifecycle: PoolLifecycle<AgentPool> = PoolLifecycle::listening();
-
     // Capture a startup watermark BEFORE connecting to the relay. This timestamp
     // is used for membership notification replay (via startup_watermark) and as
     // the initial subscribe_since for channels discovered at startup. The Subscribe
@@ -1375,6 +1367,16 @@ async fn tokio_main() -> Result<()> {
     {
         return Err(anyhow::anyhow!(
             "provisioned Colony Credits requires a valid owner pubkey before metering can start"
+        ));
+    }
+    if config.provisioned
+        && !config
+            .meter_openai_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+    {
+        return Err(anyhow::anyhow!(
+            "provisioned Colony Credits requires a gateway meter credential"
         ));
     }
     if let Some(ref owner) = startup_owner {
@@ -1456,13 +1458,16 @@ async fn tokio_main() -> Result<()> {
         };
         match buzz_meter::start_meter(meter_config).await {
             Ok((port, mut calls, handle)) => {
-                if meter_env::set_active_meter(meter_env::ActiveMeter {
+                if let Err(_meter) = meter_env::set_active_meter(meter_env::ActiveMeter {
                     port,
                     handle,
                     metered: metered_providers,
-                })
-                .is_err()
-                {
+                }) {
+                    if config.provisioned {
+                        return Err(anyhow::anyhow!(
+                            "provisioned Colony Credits could not install its metering checkpoint"
+                        ));
+                    }
                     tracing::error!("metering checkpoint was already installed");
                 }
                 if metered_providers.none_configured() {
@@ -1523,6 +1528,11 @@ async fn tokio_main() -> Result<()> {
             }
             Err(error) => {
                 tracing::error!("metering checkpoint failed to start: {error}");
+                if config.provisioned {
+                    return Err(anyhow::anyhow!(
+                        "provisioned Colony Credits metering checkpoint failed to start"
+                    ));
+                }
                 None
             }
         }
@@ -1532,6 +1542,18 @@ async fn tokio_main() -> Result<()> {
         );
         None
     };
+
+    // The local checkpoint must be live before any underlying ACP child is
+    // spawned. Provisioned launches carry a relay token in the parent env, so
+    // initializing the pool before this point would let a child bypass the
+    // ledger when `start_meter` failed or had not run yet.
+    let mut pool = if config.lazy_pool {
+        AgentPool::from_slots((0..config.agents).map(|_| None).collect())
+    } else {
+        initialize_agent_pool(&PoolStartup::from_config(&config, observer.clone()), None).await?
+    };
+    let mut pool_ready = !config.lazy_pool;
+    let mut pool_lifecycle: PoolLifecycle<AgentPool> = PoolLifecycle::listening();
 
     let mut relay_observer_control_rx = None;
     let mut relay_observer_publisher_task = None;

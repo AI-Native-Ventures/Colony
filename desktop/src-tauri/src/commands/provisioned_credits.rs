@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 use crate::{
     app_state::AppState,
     managed_agents::{load_global_agent_config, CredentialMode},
-    provisioned_credits::{force_reconnect_blocking, GatewayAccount},
+    provisioned_credits::{force_reconnect_blocking, normalized_relay_http_origin, GatewayAccount},
     relay::{build_nip98_auth_header, classify_request_error, relay_api_base_url_with_override},
 };
 
@@ -42,7 +42,7 @@ pub async fn get_colony_credits_account(app: AppHandle) -> Result<GatewayAccount
         );
     }
     let state = app.state::<AppState>();
-    let base = relay_api_base_url_with_override(&state);
+    let base = normalized_relay_http_origin(&relay_api_base_url_with_override(&state))?;
     let url = format!("{base}/api/gateway/account");
     let auth = build_nip98_auth_header(&Method::GET, &url, &[], &state)?;
     let response = state

@@ -703,7 +703,7 @@ fn rotate_lease_blocking_with_expected(
                 if let Some(old) = old_to_revoke {
                     revoke_or_queue(app, old);
                 }
-                if matches!(reason, RotationReason::ManualReconnect) {
+                if !matches!(reason, RotationReason::ScheduledRefresh) {
                     return Ok(primary);
                 }
                 manager = state

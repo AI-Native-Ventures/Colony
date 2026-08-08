@@ -191,18 +191,29 @@ fn collect_restart_candidates(
             if record.backend != BackendKind::Local {
                 return false;
             }
-            if new_global.credential_mode == CredentialMode::ColonyCredits
-                && !provisioned_runtime_supported(record, &all_personas, new_global)
-            {
-                // Unsupported Claude/custom/Anthropic pairs remain untouched
-                // when Colony Credits is selected globally.
+            let mut has_live_runtime = false;
+            let mut has_provisioned_runtime = false;
+            for (key, runtime) in runtimes.iter_mut() {
+                if key.pubkey.eq_ignore_ascii_case(&record.pubkey)
+                    && runtime.child.try_wait().ok().flatten().is_none()
+                {
+                    has_live_runtime = true;
+                    has_provisioned_runtime |= runtime.provisioned_lease.is_some();
+                }
+            }
+            if !has_live_runtime {
                 return false;
             }
-            let has_live_runtime = runtimes.iter_mut().any(|(key, runtime)| {
-                key.pubkey.eq_ignore_ascii_case(&record.pubkey)
-                    && runtime.child.try_wait().ok().flatten().is_none()
-            });
-            if !has_live_runtime {
+            let provisioned_supported =
+                provisioned_runtime_supported(record, &all_personas, new_global);
+            if !should_restart_for_credential_mode(
+                old_global.credential_mode,
+                new_global.credential_mode,
+                provisioned_supported,
+                has_provisioned_runtime,
+            ) {
+                // Unsupported pairs, and pairs that were already BYOK while
+                // unselecting Colony Credits, remain untouched.
                 return false;
             }
             let effective_cmd = record_agent_command(record, &all_personas);
@@ -300,18 +311,29 @@ async fn restart_local_agent_on_config_change(
         if record.backend != BackendKind::Local {
             return Err(format!("agent {pubkey_owned} is no longer a local agent"));
         }
-        if new_global_clone.credential_mode == CredentialMode::ColonyCredits
-            && !provisioned_runtime_supported(record, &personas_owned, &new_global_clone)
-        {
-            return Err(format!(
-                "agent {pubkey_owned} uses a runtime unsupported by Colony Credits"
-            ));
-        }
         let runtime_keys =
             crate::managed_agents::managed_agent_runtime_keys(&runtimes, &pubkey_owned);
         if runtime_keys.is_empty() {
             return Err(format!(
                 "agent {pubkey_owned} no longer has a live pair runtime after sync"
+            ));
+        }
+        let has_provisioned_runtime = runtime_keys.iter().any(|key| {
+            runtimes
+                .get(key)
+                .and_then(|runtime| runtime.provisioned_lease.as_ref())
+                .is_some()
+        });
+        let provisioned_supported =
+            provisioned_runtime_supported(record, &personas_owned, &new_global_clone);
+        if !should_restart_for_credential_mode(
+            old_global_clone.credential_mode,
+            new_global_clone.credential_mode,
+            provisioned_supported,
+            has_provisioned_runtime,
+        ) {
+            return Err(format!(
+                "agent {pubkey_owned} is not eligible for the selected credential mode"
             ));
         }
 
@@ -439,6 +461,27 @@ fn provisioned_runtime_supported(
     matches!(provider.as_deref(), Some("openai" | "openai-compat"))
 }
 
+/// Whether a live record may be restarted for a global credential-mode change.
+/// Unsupported pairs are never stopped when selecting Colony Credits, and a
+/// pair that was already BYOK must not be bounced when selecting BYOK again.
+fn should_restart_for_credential_mode(
+    old_mode: CredentialMode,
+    new_mode: CredentialMode,
+    provisioned_supported: bool,
+    has_provisioned_runtime: bool,
+) -> bool {
+    if new_mode == CredentialMode::ColonyCredits && !provisioned_supported {
+        return false;
+    }
+    if old_mode == CredentialMode::ColonyCredits
+        && new_mode == CredentialMode::Byok
+        && !has_provisioned_runtime
+    {
+        return false;
+    }
+    true
+}
+
 /// Pure predicate: should an agent be restarted given resolved readiness and
 /// effective-env snapshots?
 ///
@@ -467,7 +510,34 @@ fn should_restart_on_config_change(old_ready: bool, new_ready: bool, env_changed
 
 #[cfg(test)]
 mod tests {
-    use super::should_restart_on_config_change;
+    use super::{should_restart_for_credential_mode, should_restart_on_config_change};
+    use crate::managed_agents::CredentialMode;
+
+    #[test]
+    fn mixed_fleet_mode_change_leaves_unsupported_byok_pairs_running() {
+        assert!(!should_restart_for_credential_mode(
+            CredentialMode::Byok,
+            CredentialMode::ColonyCredits,
+            false,
+            false,
+        ));
+        assert!(!should_restart_for_credential_mode(
+            CredentialMode::ColonyCredits,
+            CredentialMode::Byok,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn provisioned_pair_can_return_to_byok() {
+        assert!(should_restart_for_credential_mode(
+            CredentialMode::ColonyCredits,
+            CredentialMode::Byok,
+            true,
+            true,
+        ));
+    }
 
     /// Running agent (Ready) whose effective env changed → restart candidate.
     #[test]
