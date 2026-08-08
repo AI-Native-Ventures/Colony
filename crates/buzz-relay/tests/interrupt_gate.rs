@@ -28,7 +28,10 @@ async fn setup() -> (Db, PgPool) {
     let pool = PgPool::connect(&database_url)
         .await
         .expect("connect to test Postgres");
-    buzz_db::migration::run_migrations(&pool)
+    // A developer's fresh `createdb` needs the migrator; CI's integration
+    // Postgres is provisioned from schema/schema.sql by pgschema and must
+    // skip it (replaying 0001 there aborts on the first existing object).
+    buzz_db::migration::run_migrations_unless_provisioned(&pool)
         .await
         .expect("apply migrations");
     (Db::from_pool(pool.clone()), pool)
@@ -351,6 +354,100 @@ async fn worker_replying_in_thread_owner_never_touched_is_rejected() {
         error.starts_with("restricted:"),
         "unexpected message: {error}"
     );
+}
+
+/// The all-owners property: `enforce_owner_contact` loops EVERY owner in the
+/// p-tags and rejects on the first one the thread exemption does not cover.
+/// One exempt owner must never carry a second, unexempt one through.
+///
+/// This exists because mutation testing found the property untested: rewriting
+/// the loop to `if permitted { return Ok(()); }` (short-circuit on the first
+/// exempt owner) left all sixteen existing tests green, since every one of
+/// them p-tags exactly one owner. Both tag orders are asserted so the test
+/// bites regardless of which owner the loop happens to reach first.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn worker_replying_to_two_owners_is_rejected_when_one_is_unexempt() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    // Two distinct owners. `exempt_owner` authors the thread root, so rule (a)
+    // of the exemption covers it. `bystander_owner` never touches the thread.
+    let exempt_owner = Keys::generate();
+    let exempt_owner_hex = exempt_owner.public_key().to_hex();
+    add_owner(&pool, community, &exempt_owner_hex).await;
+
+    let bystander_owner = Keys::generate();
+    let bystander_owner_hex = bystander_owner.public_key().to_hex();
+    add_owner(&pool, community, &bystander_owner_hex).await;
+
+    let worker = Keys::generate();
+    set_tier(&db, community, &exempt_owner, &worker, "worker").await;
+
+    let root = store_root(
+        &db,
+        community,
+        channel_id,
+        &exempt_owner,
+        vec![],
+        "can someone look into the pricing page?",
+    )
+    .await;
+
+    // Sanity floor: replying to the exempt owner ALONE is accepted, so a
+    // rejection below is attributable to the second owner and not to a broken
+    // fixture (a thread the exemption never covered would reject either way).
+    let single = stream_message(
+        &worker,
+        vec![
+            tag(&["p", &exempt_owner_hex]),
+            tag(&["e", &root.id.to_hex(), "", "root"]),
+        ],
+        "on it",
+    );
+    enforce_owner_contact(&tenant, &state, &single, &single.pubkey)
+        .await
+        .expect("the exempt owner alone must still be accepted");
+
+    for (label, first, second) in [
+        (
+            "exempt owner first",
+            &exempt_owner_hex,
+            &bystander_owner_hex,
+        ),
+        (
+            "exempt owner second",
+            &bystander_owner_hex,
+            &exempt_owner_hex,
+        ),
+    ] {
+        let reply = stream_message(
+            &worker,
+            vec![
+                tag(&["p", first]),
+                tag(&["p", second]),
+                tag(&["e", &root.id.to_hex(), "", "root"]),
+            ],
+            "on it, done",
+        );
+
+        let error = enforce_owner_contact(&tenant, &state, &reply, &reply.pubkey)
+            .await
+            .expect_err(&format!(
+                "{label}: one exempt owner must not carry an unexempt owner through"
+            ));
+        assert!(
+            error.starts_with("restricted:"),
+            "{label}: unexpected rejection message: {error}"
+        );
+        assert!(
+            error.contains("cannot address an owner"),
+            "{label}: unexpected rejection message: {error}"
+        );
+    }
 }
 
 #[tokio::test]
