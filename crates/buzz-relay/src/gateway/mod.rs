@@ -9,6 +9,17 @@
 //! account is debited exactly once using the upstream response id as the
 //! idempotency reference.
 //!
+//! Settling is **synchronous and awaited before the terminal chunk is
+//! forwarded** (decision 2026-08-08): the client cannot see the end of the
+//! response until the debit has committed, so "the call happened" and "the
+//! ledger says so" are the same instant. The final chunk is held back one
+//! position; when the upstream stream ends, the settle runs inline (with a
+//! small bounded retry for transient DB errors) and only then is the held
+//! chunk released. The residual window is a crash inside the settle itself,
+//! bounded to one call, which is what daily reconciliation is for. A client
+//! that hangs up mid-stream drops the tee; that path settles best-effort
+//! from whatever the wire said.
+//!
 //! Everything here is mounted only when `VERCEL_AI_GATEWAY_KEY` is
 //! configured; without it the routes do not exist and return 404.
 //!
@@ -35,7 +46,6 @@ use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::mpsc;
 
 /// The upstream this gateway fronts. Vercel AI Gateway is the default; the
 /// relay's existing credential seam style means swapping the hop later is an
@@ -53,10 +63,15 @@ const TOKEN_PREFIX: &str = "colony-gw-";
 /// already paid.
 const ADMISSION_FLOOR_NANOUSD: i64 = 50_000_000;
 
-/// Bound on the channel of pending settles. The data path never blocks on
-/// it: a full channel drops the settle with a loud error rather than
-/// stalling the agent's response. Reconciliation is the backstop.
-const SETTLE_CHANNEL_CAPACITY: usize = 4096;
+/// How many times a settle is attempted inline before giving up. A transient
+/// DB error (connection drop, lock timeout) should not turn one failed write
+/// into a permanently unbilled call; the retry replays the same idempotency
+/// ref, so `UNIQUE (pubkey, ref)` keeps it exactly-once.
+const SETTLE_MAX_ATTEMPTS: usize = 3;
+
+/// Backoff between settle attempts, milliseconds. Doubles per attempt, so
+/// the worst-case tail is 50ms + 100ms before the terminal chunk is released.
+const SETTLE_RETRY_BACKOFF_MS: u64 = 50;
 
 /// How much of a response body is kept for parsing. Past this, the body keeps
 /// streaming to the client but the copy is abandoned (no settle for that
@@ -108,11 +123,9 @@ pub fn config_from_env() -> anyhow::Result<Option<GatewayConfig>> {
 pub struct GatewayState {
     config: GatewayConfig,
     client: reqwest::Client,
-    /// Pending settles, drained by the background worker so the response
-    /// stream never blocks on a database write.
-    settle_tx: mpsc::Sender<SettleJob>,
-    /// Spawned settle worker, kept alive for the state's lifetime.
-    _worker: tokio::task::JoinHandle<()>,
+    /// Price book snapshot, shared with every response tee so the settle
+    /// step can price a call the provider did not state a cost for.
+    price_book: Arc<PriceBook>,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -125,13 +138,13 @@ impl std::fmt::Debug for GatewayState {
 }
 
 impl GatewayState {
-    /// Build the gateway state and start its settle worker.
+    /// Build the gateway state.
     ///
     /// # Errors
     ///
     /// Fails when the upstream HTTP client cannot be built or the effective
     /// price catalog is invalid.
-    pub fn new(config: GatewayConfig, pool: sqlx::PgPool) -> anyhow::Result<Self> {
+    pub fn new(config: GatewayConfig) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
@@ -139,13 +152,10 @@ impl GatewayState {
         let entries = crate::price_feed::effective_catalog()
             .map_err(|error| anyhow::anyhow!("gateway price book: {error}"))?;
         let price_book = Arc::new(PriceBook { entries });
-        let (settle_tx, settle_rx) = mpsc::channel(SETTLE_CHANNEL_CAPACITY);
-        let worker = tokio::spawn(settle_worker(pool, Arc::clone(&price_book), settle_rx));
         Ok(Self {
             config,
             client,
-            settle_tx,
-            _worker: worker,
+            price_book,
         })
     }
 }
@@ -168,7 +178,7 @@ pub fn router(app: Arc<crate::state::AppState>, upstream: Arc<GatewayState>) -> 
         )
         .route("/gateway/openai/v1/models", get(list_models))
         .route("/api/gateway/tokens", post(mint_token).delete(revoke_token))
-        .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
+        .route_layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
 }
 
@@ -417,7 +427,8 @@ pub(crate) async fn chat_completions(
     let tee = SettleTee::new(
         Box::pin(response.bytes_stream()),
         meta,
-        state.upstream.settle_tx.clone(),
+        state.app.db.pool().clone(),
+        Arc::clone(&state.upstream.price_book),
     );
 
     let mut builder = Response::builder().status(status);
@@ -617,7 +628,7 @@ struct SettleMeta {
     http_status: StatusCode,
 }
 
-/// One pending settlement, drained by the background worker.
+/// One settled call, as computed from the wire.
 struct SettleJob {
     pubkey: Vec<u8>,
     model_id: String,
@@ -629,24 +640,43 @@ type UpstreamStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>
 
 /// Forwards the upstream body chunk by chunk while keeping a bounded copy
 /// for usage parsing. The forwarded bytes are never touched.
+///
+/// The last chunk is held back one position: when the upstream stream ends,
+/// the settle runs inline (awaited, with retries) and only then is the held
+/// terminal chunk released to the client. `Drop` is the safety net for a
+/// client that hangs up mid-stream — it settles best-effort from whatever
+/// the wire said, because the call still happened and still cost money.
 struct SettleTee {
     upstream: UpstreamStream,
     buffer: Vec<u8>,
     truncated: bool,
     finished: bool,
+    /// The chunk held back so it can be released only after the settle.
+    pending: Option<Bytes>,
+    /// Deferred upstream error, delivered after the held chunk.
+    error_pending: Option<std::io::Error>,
     meta: Option<SettleMeta>,
-    settle_tx: mpsc::Sender<SettleJob>,
+    pool: sqlx::PgPool,
+    price_book: Arc<PriceBook>,
 }
 
 impl SettleTee {
-    fn new(upstream: UpstreamStream, meta: SettleMeta, settle_tx: mpsc::Sender<SettleJob>) -> Self {
+    fn new(
+        upstream: UpstreamStream,
+        meta: SettleMeta,
+        pool: sqlx::PgPool,
+        price_book: Arc<PriceBook>,
+    ) -> Self {
         Self {
             upstream,
             buffer: Vec::new(),
             truncated: false,
             finished: false,
+            pending: None,
+            error_pending: None,
             meta: Some(meta),
-            settle_tx,
+            pool,
+            price_book,
         }
     }
 
@@ -655,7 +685,13 @@ impl SettleTee {
             return;
         }
         if self.buffer.len().saturating_add(chunk.len()) > MAX_TEE_BYTES {
+            let (pubkey, model_id) = match self.meta.as_ref() {
+                Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
+                None => (String::from("<unknown>"), "<unknown>"),
+            };
             tracing::warn!(
+                pubkey = %pubkey,
+                model = %model_id,
                 cap_bytes = MAX_TEE_BYTES,
                 "gateway: response exceeded the parse cap, still forwarding but no usage capture"
             );
@@ -666,13 +702,11 @@ impl SettleTee {
         self.buffer.extend_from_slice(chunk);
     }
 
-    /// Queue the settle. Idempotent: the metadata is consumed on the first
-    /// call, so the explicit end-of-stream path and the `Drop` safety net
-    /// between them produce exactly one settle per forwarded request.
-    fn emit(&mut self) {
-        let Some(meta) = self.meta.take() else {
-            return;
-        };
+    /// Build the settle job from the metadata and whatever the wire said.
+    /// Consumes the metadata, so exactly one settle is produced per
+    /// forwarded request no matter how many end paths fire.
+    fn take_job(&mut self) -> Option<SettleJob> {
+        let meta = self.meta.take()?;
         let parsed = if self.truncated || !meta.parseable || !meta.http_status.is_success() {
             ParsedUsage::default()
         } else if meta.is_sse {
@@ -681,41 +715,122 @@ impl SettleTee {
             openai::parse_json_response(&self.buffer)
         };
         self.buffer = Vec::new();
-
-        let job = SettleJob {
+        Some(SettleJob {
             pubkey: meta.pubkey,
             model_id: meta.model_id,
             parsed,
             http_status: meta.http_status,
+        })
+    }
+
+    /// Settle inline and awaited: the terminal chunk is released only after
+    /// the debit commits. A failure after the bounded retries still releases
+    /// the chunk, but is logged loudly with the call's identifiers —
+    /// reconciliation is the only honest backstop left.
+    async fn settle_inline(&mut self) {
+        let Some(job) = self.take_job() else {
+            return;
         };
-        if let Err(error) = self.settle_tx.try_send(job) {
+        if let Err(error) = settle_with_retry(&self.pool, &self.price_book, &job).await {
             tracing::error!(
                 %error,
-                "gateway: dropped a settle, the queue is full — this call must be found by reconciliation"
+                pubkey = %hex::encode(&job.pubkey),
+                model = %job.model_id,
+                request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                "gateway: settle failed after retries — this call must be found by reconciliation"
             );
+        }
+    }
+
+    /// Best-effort settle for the `Drop` path (client hung up mid-stream).
+    /// Cannot await inside `Drop`, so the settle is spawned with a bounded
+    /// retry; if no runtime is available, the call is logged for
+    /// reconciliation instead.
+    fn settle_best_effort(&mut self) {
+        let Some(job) = self.take_job() else {
+            return;
+        };
+        let pool = self.pool.clone();
+        let price_book = Arc::clone(&self.price_book);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if let Err(error) = settle_with_retry(&pool, &price_book, &job).await {
+                        tracing::error!(
+                            %error,
+                            pubkey = %hex::encode(&job.pubkey),
+                            model = %job.model_id,
+                            request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                            "gateway: settle failed after retries — this call must be found by reconciliation"
+                        );
+                    }
+                });
+            }
+            Err(_) => {
+                tracing::error!(
+                    pubkey = %hex::encode(&job.pubkey),
+                    model = %job.model_id,
+                    request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                    "gateway: dropped a settle outside a runtime — this call must be found by reconciliation"
+                );
+            }
         }
     }
 
     fn into_stream(self) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
         futures_util::stream::unfold(self, |mut tee| async move {
-            if tee.finished {
-                return None;
-            }
-            match tee.upstream.next().await {
-                Some(Ok(chunk)) => {
-                    tee.accumulate(&chunk);
-                    Some((Ok(chunk), tee))
+            loop {
+                if tee.finished {
+                    return None;
                 }
-                Some(Err(error)) => {
-                    tracing::warn!(%error, "gateway: upstream body ended early");
+                if let Some(error) = tee.error_pending.take() {
                     tee.finished = true;
-                    tee.emit();
-                    Some((Err(std::io::Error::other(error.to_string())), tee))
+                    return Some((Err(error), tee));
                 }
-                None => {
-                    tee.finished = true;
-                    tee.emit();
-                    None
+                match tee.upstream.next().await {
+                    Some(Ok(chunk)) => {
+                        tee.accumulate(&chunk);
+                        // Hold the previous chunk; the one in hand becomes
+                        // the new hold. This is what makes the terminal
+                        // chunk releasable only after the settle commits.
+                        if let Some(previous) = tee.pending.replace(chunk) {
+                            return Some((Ok(previous), tee));
+                        }
+                    }
+                    Some(Err(error)) => {
+                        let (pubkey, model_id) = match tee.meta.as_ref() {
+                            Some(meta) => (hex::encode(&meta.pubkey), meta.model_id.as_str()),
+                            None => (String::from("<unknown>"), "<unknown>"),
+                        };
+                        tracing::warn!(
+                            %error,
+                            pubkey = %pubkey,
+                            model = %model_id,
+                            "gateway: upstream body ended early"
+                        );
+                        // Settle whatever the wire said before the client
+                        // sees the end of the stream; for a mid-stream kill
+                        // the terminal usage never arrived, so this is
+                        // normally a no-op.
+                        tee.settle_inline().await;
+                        if let Some(chunk) = tee.pending.take() {
+                            tee.error_pending = Some(std::io::Error::other(error.to_string()));
+                            return Some((Ok(chunk), tee));
+                        }
+                        tee.finished = true;
+                        return Some((Err(std::io::Error::other(error.to_string())), tee));
+                    }
+                    None => {
+                        // Natural end: the observed cost is only knowable
+                        // here, so the debit commits before the held
+                        // terminal chunk is released.
+                        tee.settle_inline().await;
+                        if let Some(terminal) = tee.pending.take() {
+                            tee.finished = true;
+                            return Some((Ok(terminal), tee));
+                        }
+                        return None;
+                    }
                 }
             }
         })
@@ -725,37 +840,60 @@ impl SettleTee {
 impl Drop for SettleTee {
     /// A client that hangs up mid-stream drops the body without the stream
     /// ever completing. The call still happened and still costs money, so it
-    /// is settled with whatever the wire said.
+    /// is settled best-effort with whatever the wire said.
     fn drop(&mut self) {
-        self.emit();
+        self.settle_best_effort();
     }
 }
 
-/// Drain the settle queue. Runs for the lifetime of the gateway state.
-async fn settle_worker(
-    pool: sqlx::PgPool,
-    price_book: Arc<PriceBook>,
-    mut rx: mpsc::Receiver<SettleJob>,
-) {
-    while let Some(job) = rx.recv().await {
-        if let Err(error) = settle_one(&pool, &price_book, &job).await {
-            tracing::error!(
-                %error,
-                model = %job.model_id,
-                "gateway: settle failed — this call must be found by reconciliation"
-            );
+/// Settle one call, retrying transient failures a bounded number of times.
+///
+/// The retry replays the exact same idempotency reference, so the ledger's
+/// `UNIQUE (pubkey, ref)` keeps it exactly-once: a retry after a commit that
+/// lost its response is a no-op that returns the original entry.
+async fn settle_with_retry(
+    pool: &sqlx::PgPool,
+    price_book: &PriceBook,
+    job: &SettleJob,
+) -> anyhow::Result<()> {
+    let mut last_error = None;
+    for attempt in 0..SETTLE_MAX_ATTEMPTS {
+        match settle_one(pool, price_book, job).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    attempt = attempt + 1,
+                    max_attempts = SETTLE_MAX_ATTEMPTS,
+                    pubkey = %hex::encode(&job.pubkey),
+                    model = %job.model_id,
+                    request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                    "gateway: settle attempt failed, retrying"
+                );
+                last_error = Some(error);
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    SETTLE_RETRY_BACKOFF_MS * (1 << attempt),
+                ))
+                .await;
+            }
         }
     }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("settle failed")))
 }
 
-/// Settle one call: observed cost when the provider stated one, price-book
-/// estimate when it did not, and nothing when there is no usage to settle.
+/// Settle one call: the provider's stated cost when one is present — even
+/// under an unfamiliar usage shape — otherwise the price-book estimate for
+/// the observed tokens (basis `estimated`). A call only goes unsettled when
+/// there is neither a stated cost nor a priceable token count, and that is
+/// logged loudly with the call's identifiers.
 ///
 /// Exactly-once comes from the idempotency reference: the upstream response
-/// id. A retried settle (crash between stream end and commit, worker retry)
-/// replays the same ref and the ledger's `UNIQUE (pubkey, ref)` makes it a
-/// no-op. A call never settles at zero because its shape was unfamiliar:
-/// unrecognized usage settles nothing and logs loudly instead.
+/// id when the provider supplies one, and a server-generated ref when it
+/// does not. A retried settle (inline retry after a transient DB error, or
+/// a replayed settle) replays the same ref and the ledger's
+/// `UNIQUE (pubkey, ref)` makes it a no-op. A server-generated ref cannot
+/// dedupe an upstream retry the way the upstream id can, but billing must
+/// not hinge on a field the gateway provider controls.
 async fn settle_one(
     pool: &sqlx::PgPool,
     price_book: &PriceBook,
@@ -766,13 +904,18 @@ async fn settle_one(
         return Ok(());
     }
 
-    let Some(request_id) = job.parsed.request_id.as_deref().filter(|id| !id.is_empty()) else {
-        tracing::error!(
-            model = %job.model_id,
-            "gateway: successful call carried no request id — cannot settle idempotently, \
-             this call must be found by reconciliation"
-        );
-        return Ok(());
+    let reference = match job.parsed.request_id.as_deref().filter(|id| !id.is_empty()) {
+        Some(request_id) => std::borrow::Cow::Borrowed(request_id),
+        None => {
+            let generated = format!("gateway:{}", uuid::Uuid::new_v4());
+            tracing::warn!(
+                pubkey = %hex::encode(&job.pubkey),
+                model = %job.model_id,
+                reference = %generated,
+                "gateway: successful call carried no upstream request id — settling under a server-generated ref"
+            );
+            std::borrow::Cow::Owned(generated)
+        }
     };
 
     match job.parsed.observed_cost_nanousd {
@@ -781,15 +924,17 @@ async fn settle_one(
                 pool,
                 &job.pubkey,
                 cost,
-                request_id,
+                &reference,
                 Some(&job.model_id),
-                Some(request_id),
+                job.parsed.request_id.as_deref(),
             )
             .await?;
             tracing::info!(
                 cost_nanousd = cost,
+                pubkey = %hex::encode(&job.pubkey),
                 model = %job.model_id,
-                request_id,
+                request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                reference = %reference,
                 "gateway: settled observed cost"
             );
         }
@@ -804,22 +949,25 @@ async fn settle_one(
                             pool,
                             &job.pubkey,
                             cost,
-                            request_id,
+                            &reference,
                             Some(&job.model_id),
-                            Some(request_id),
+                            job.parsed.request_id.as_deref(),
                         )
                         .await?;
                         tracing::warn!(
                             cost_nanousd = cost,
+                            pubkey = %hex::encode(&job.pubkey),
                             model = %job.model_id,
-                            request_id,
+                            request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
+                            reference = %reference,
                             "gateway: provider stated no cost — settled price-book estimate"
                         );
                     }
                     None => {
                         tracing::error!(
+                            pubkey = %hex::encode(&job.pubkey),
                             model = %job.model_id,
-                            request_id,
+                            request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
                             "gateway: provider stated no cost and the model is unpriced — \
                              no settle recorded, this call must be found by reconciliation"
                         );
@@ -828,8 +976,9 @@ async fn settle_one(
             }
             None => {
                 tracing::warn!(
+                    pubkey = %hex::encode(&job.pubkey),
                     model = %job.model_id,
-                    request_id,
+                    request_id = job.parsed.request_id.as_deref().unwrap_or("<none>"),
                     "gateway: no usage in the response — nothing to settle"
                 );
             }

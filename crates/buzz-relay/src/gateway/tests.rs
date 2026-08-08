@@ -212,13 +212,10 @@ async fn build_router_with_gateway_and_redis(
     });
 
     let state = crate::state::tests::test_state_with_redis(redis_url).await;
-    let gateway = GatewayState::new(
-        GatewayConfig {
-            api_key: SERVER_KEY.to_string(),
-            base_url: format!("http://{addr}"),
-        },
-        state.db.pool().clone(),
-    )
+    let gateway = GatewayState::new(GatewayConfig {
+        api_key: SERVER_KEY.to_string(),
+        base_url: format!("http://{addr}"),
+    })
     .expect("gateway state");
     state
         .gateway
@@ -230,6 +227,12 @@ async fn build_router_with_gateway_and_redis(
 
 /// Seed the fixed test account, token, and catalog rows.
 async fn seed(pool: &sqlx::PgPool) {
+    // The harness Postgres is persistent across runs and tests share the
+    // fixed pubkey, so each test starts from an empty ledger for it. A
+    // panicked trigger test can leave its trigger behind, so drop any
+    // leftovers first: the next test must not inherit failure injection.
+    drop_always_fail_trigger(pool).await;
+    drop_fail_once_trigger(pool).await;
     // The harness Postgres is persistent across runs and tests share the
     // fixed pubkey, so each test starts from an empty ledger for it.
     sqlx::query("DELETE FROM credit_ledger WHERE pubkey = $1")
@@ -970,4 +973,387 @@ fn nip98_header(keys: &Keys, url: &str, method: &str, body: &[u8]) -> String {
                 .as_bytes()
         )
     )
+}
+
+/// Coordinator decision (2026-08-08): settle synchronously, before the
+/// terminal chunk is forwarded. This test pins the ordering property: at the
+/// moment the client receives the terminal chunk, the debit is already
+/// committed. It is proven to FAIL against the previous async-settle design
+/// (the chunk arrived while the settle was still in flight).
+#[tokio::test(flavor = "multi_thread")]
+async fn terminal_chunk_is_not_forwarded_until_the_debit_commits() {
+    let mock = MockUpstream::default();
+    mock.push(ScriptedResponse::Sse(VERCELL_SSE.to_string()));
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+
+    // Park the settle deterministically: hold a row lock on the account so
+    // any debit transaction blocks until the lock is released. A separate
+    // task releases it after 400ms, so the client read can only complete
+    // once the settle has been able to run.
+    let locker = pool.clone();
+    let mut lock_tx = locker.begin().await.expect("begin lock transaction");
+    sqlx::query("SELECT balance FROM accounts WHERE pubkey = $1 FOR UPDATE")
+        .bind(&TEST_PUBKEY[..])
+        .fetch_one(&mut *lock_tx)
+        .await
+        .expect("lock account row");
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        lock_tx.commit().await.expect("release the account lock");
+    });
+
+    let response = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "fixture"}]}),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await.1;
+    assert!(
+        body.contains("gen_01KZFF6DB8EX0T65CB94WB45KP"),
+        "precondition: the terminal chunk must have been delivered"
+    );
+
+    // The stream is fully delivered; the debit must already be committed.
+    let rows = ledger_rows(&pool).await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "the terminal chunk must not be forwarded before the debit commits"
+    );
+    assert_eq!(rows[0]["ref"], "gen_01KZFF6DB8EX0T65CB94WB45KP");
+    assert_eq!(balance(&pool).await, 1_000_000_000 - 3_720);
+    release.await.expect("release task");
+}
+
+/// Cold review, Fix A: a 200 whose `usage` block carries a stated cost but an
+/// unfamiliar token shape (float token counts) must still settle the stated
+/// cost. The shared parser's recognized-shape gate used to drop the whole
+/// usage block — including `cost` — and the call settled nothing. Proven RED
+/// before the parser fix (ledger stayed empty).
+#[tokio::test(flavor = "multi_thread")]
+async fn float_token_counts_keep_the_stated_cost() {
+    let mock = MockUpstream::default();
+    mock.push(ScriptedResponse::Json {
+        status: 200,
+        body: r#"{
+            "id": "gen_float_tokens",
+            "object": "chat.completion",
+            "model": "deepseek-v4-flash",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": 15.0, "completion_tokens": 8.0,
+                      "total_tokens": 23.0, "cost": 0.05}
+        }"#
+        .to_string(),
+    });
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+
+    let response = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": false, "messages": [{"role": "user", "content": "fixture"}]}),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let (_, body) = body_text(response).await;
+    assert!(
+        body.contains("gen_float_tokens"),
+        "precondition: 200 with the fixture id"
+    );
+
+    let rows = ledger_rows(&pool).await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "a stated cost must never be dropped because the token shape was unfamiliar"
+    );
+    assert_eq!(rows[0]["ref"], "gen_float_tokens");
+    assert_eq!(rows[0]["observed_cost"], 50_000_000i64);
+    assert_eq!(rows[0]["settle_basis"], "observed");
+    assert_eq!(balance(&pool).await, 1_000_000_000 - 50_000_000);
+}
+
+/// Cold review, Fix B: a successful 200 that omits the upstream response id
+/// must still settle. Billing must not hinge on a field Vercel controls; the
+/// debit falls back to a server-generated idempotency ref so the call is not
+/// free. Proven RED before the fix (the settle skipped the call entirely).
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_upstream_id_settles_with_a_server_generated_ref() {
+    let mock = MockUpstream::default();
+    mock.push(ScriptedResponse::Json {
+        status: 200,
+        body: r#"{
+            "object": "chat.completion",
+            "model": "deepseek-v4-flash",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": 15, "completion_tokens": 8,
+                      "total_tokens": 23, "cost": 0.05}
+        }"#
+        .to_string(),
+    });
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+
+    let response = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": false, "messages": [{"role": "user", "content": "fixture"}]}),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let (_, body) = body_text(response).await;
+    assert!(
+        body.contains("chat.completion"),
+        "precondition: 200 without an id"
+    );
+
+    let rows = ledger_rows(&pool).await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "a successful call without an upstream id must still be settled"
+    );
+    let reference = rows[0]["ref"].as_str().expect("ref is a string");
+    assert!(
+        !reference.is_empty(),
+        "the server-generated ref must be usable for idempotency"
+    );
+    assert_eq!(rows[0]["request_id"], serde_json::Value::Null);
+    assert_eq!(rows[0]["observed_cost"], 50_000_000i64);
+    assert_eq!(rows[0]["settle_basis"], "observed");
+    assert_eq!(balance(&pool).await, 1_000_000_000 - 50_000_000);
+}
+
+/// Coordinator decision: a transient DB failure on the first settle attempt
+/// is retried (bounded inline retry), and the debit still lands exactly
+/// once — the `UNIQUE (pubkey, ref)` guarantee must hold across retries.
+/// Proven to FAIL against the previous async-settle design (no retry at
+/// all: the first failure consumed the job and nothing ever landed).
+#[tokio::test(flavor = "multi_thread")]
+async fn transient_db_failure_is_retried_and_settles_exactly_once() {
+    let mock = MockUpstream::default();
+    mock.push(ScriptedResponse::Sse(VERCELL_SSE.to_string()));
+    let (state, router) = build_router_with_gateway(&mock).await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+
+    install_fail_once_trigger(&pool).await;
+
+    let response = router
+        .clone()
+        .oneshot(chat_request(
+            TEST_TOKEN,
+            json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "fixture"}]}),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(body_text(response).await.0, StatusCode::OK);
+
+    // The first attempt raised (trigger); the retry must land exactly one
+    // debit, with the same ref and cost as if nothing had failed.
+    let rows = ledger_rows(&pool).await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "a transient failure must be retried to exactly one debit"
+    );
+    assert_eq!(rows[0]["ref"], "gen_01KZFF6DB8EX0T65CB94WB45KP");
+    assert_eq!(rows[0]["settle_basis"], "observed");
+    assert_eq!(balance(&pool).await, 1_000_000_000 - 3_720);
+
+    drop_fail_once_trigger(&pool).await;
+}
+
+/// The coordinator's "not without a loud log" clause: when the settle still
+/// fails after the bounded retries, the client still gets the full stream,
+/// the ledger stays empty, and the failure is logged loudly so
+/// reconciliation can find the call. (Not a discriminating test against the
+/// async design — the async worker logged loudly too — it pins the required
+/// behaviour of the synchronous path.)
+#[test]
+fn settle_failure_after_retries_logs_loudly_and_still_delivers_the_stream() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("multi_thread runtime");
+
+    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let make_writer = CapturingMakeWriter {
+        buf: std::sync::Arc::clone(&buf),
+    };
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(make_writer)
+        .with_ansi(false)
+        .finish();
+
+    tracing::subscriber::with_default(subscriber, || {
+        rt.block_on(async {
+            let mock = MockUpstream::default();
+            mock.push(ScriptedResponse::Sse(VERCELL_SSE.to_string()));
+            let (state, router) = build_router_with_gateway(&mock).await;
+            let pool = state.db.pool().clone();
+            seed(&pool).await;
+            install_always_fail_trigger(&pool).await;
+
+            let response = router
+                .clone()
+                .oneshot(chat_request(
+                    TEST_TOKEN,
+                    json!({"model": "deepseek-v4-flash", "stream": true, "messages": [{"role": "user", "content": "fixture"}]}),
+                ))
+                .await
+                .expect("request");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_text(response).await.1;
+            assert!(
+                body.contains("gen_01KZFF6DB8EX0T65CB94WB45KP"),
+                "the client must still get the full stream"
+            );
+            assert!(
+                ledger_rows(&pool).await.is_empty(),
+                "a settle that failed after retries must not leave a ledger row"
+            );
+            assert_eq!(balance(&pool).await, 1_000_000_000);
+
+            drop_always_fail_trigger(&pool).await;
+        });
+    });
+    let captured = String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default();
+
+    assert!(
+        captured.contains("settle failed"),
+        "a failed settle must log loudly for reconciliation; captured: {captured}"
+    );
+}
+
+/// A `BEFORE INSERT` trigger on `credit_ledger` that raises once (sequence-
+/// gated; `nextval` is not rolled back with the aborted transaction) for the
+/// fixed test pubkey, then passes. Simulates a transient DB failure on the
+/// first settle attempt.
+async fn install_fail_once_trigger(pool: &sqlx::PgPool) {
+    drop_fail_once_trigger(pool).await;
+    sqlx::query("CREATE SEQUENCE gateway_test_fail_once_seq")
+        .execute(pool)
+        .await
+        .expect("fail-once sequence");
+    sqlx::query("SELECT setval('gateway_test_fail_once_seq', 1, false)")
+        .execute(pool)
+        .await
+        .expect("arm fail-once sequence");
+    sqlx::query(
+        "CREATE FUNCTION gateway_test_fail_once_fn() RETURNS trigger AS $$
+         BEGIN
+             IF NEW.pubkey = decode('0707070707070707070707070707070707070707070707070707070707070707', 'hex') THEN
+                 IF nextval('gateway_test_fail_once_seq') = 1 THEN
+                     RAISE EXCEPTION 'gateway test: injected transient DB failure';
+                 END IF;
+             END IF;
+             RETURN NEW;
+         END;
+         $$ LANGUAGE plpgsql",
+    )
+    .execute(pool)
+    .await
+    .expect("fail-once function");
+    sqlx::query(
+        "CREATE TRIGGER gateway_test_fail_once_trg BEFORE INSERT ON credit_ledger \
+         FOR EACH ROW EXECUTE FUNCTION gateway_test_fail_once_fn()",
+    )
+    .execute(pool)
+    .await
+    .expect("fail-once trigger");
+}
+
+async fn drop_fail_once_trigger(pool: &sqlx::PgPool) {
+    sqlx::query("DROP TRIGGER IF EXISTS gateway_test_fail_once_trg ON credit_ledger")
+        .execute(pool)
+        .await
+        .expect("drop fail-once trigger");
+    sqlx::query("DROP FUNCTION IF EXISTS gateway_test_fail_once_fn()")
+        .execute(pool)
+        .await
+        .expect("drop fail-once function");
+    sqlx::query("DROP SEQUENCE IF EXISTS gateway_test_fail_once_seq")
+        .execute(pool)
+        .await
+        .expect("drop fail-once sequence");
+}
+
+/// Like [`install_fail_once_trigger`] but raises for every insert of the
+/// fixed test pubkey — the settle must exhaust its retries.
+async fn install_always_fail_trigger(pool: &sqlx::PgPool) {
+    drop_always_fail_trigger(pool).await;
+    sqlx::query(
+        "CREATE FUNCTION gateway_test_always_fail_fn() RETURNS trigger AS $$
+         BEGIN
+             IF NEW.pubkey = decode('0707070707070707070707070707070707070707070707070707070707070707', 'hex') THEN
+                 RAISE EXCEPTION 'gateway test: injected persistent DB failure';
+             END IF;
+             RETURN NEW;
+         END;
+         $$ LANGUAGE plpgsql",
+    )
+    .execute(pool)
+    .await
+    .expect("always-fail function");
+    sqlx::query(
+        "CREATE TRIGGER gateway_test_always_fail_trg BEFORE INSERT ON credit_ledger \
+         FOR EACH ROW EXECUTE FUNCTION gateway_test_always_fail_fn()",
+    )
+    .execute(pool)
+    .await
+    .expect("always-fail trigger");
+}
+
+async fn drop_always_fail_trigger(pool: &sqlx::PgPool) {
+    sqlx::query("DROP TRIGGER IF EXISTS gateway_test_always_fail_trg ON credit_ledger")
+        .execute(pool)
+        .await
+        .expect("drop always-fail trigger");
+    sqlx::query("DROP FUNCTION IF EXISTS gateway_test_always_fail_fn()")
+        .execute(pool)
+        .await
+        .expect("drop always-fail function");
+}
+
+/// Capturing writer for the loud-log test, mirroring the bridge test
+/// pattern (`api/bridge.rs`).
+#[derive(Clone)]
+struct CapturingMakeWriter {
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+struct CapturingWriter {
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for CapturingWriter {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.buf.lock().unwrap().extend_from_slice(data);
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturingMakeWriter {
+    type Writer = CapturingWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        CapturingWriter {
+            buf: std::sync::Arc::clone(&self.buf),
+        }
+    }
 }
