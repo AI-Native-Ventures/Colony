@@ -53,6 +53,11 @@ export type FixtureDiscoveryDataSourceOptions = {
   scenario?: FixtureScenario;
   /** Return an empty global Leads page so the empty state is browser-testable. */
   emptyLeads?: boolean;
+  /**
+   * Make `updateLead` reject with this message, simulating a relay refusal
+   * so the drawer's inline rejection path is browser-testable in demo mode.
+   */
+  updateLeadReject?: string;
 };
 
 export type CreateFixtureDiscoveryDataSourceOptions =
@@ -193,6 +198,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   >();
   private readonly leadProfiles = new Map<string, Partial<LeadDetail>>();
   private readonly emptyLeads: boolean;
+  private readonly updateLeadReject?: string;
   private nextCampaignNumber = 1;
   private nextRunToken = 1;
 
@@ -200,6 +206,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     this.entitlement = normalizeEntitlement(options.entitlement);
     this.defaultScenario = options.scenario ?? "concurrent";
     this.emptyLeads = options.emptyLeads ?? false;
+    this.updateLeadReject = options.updateLeadReject;
 
     const fixtureCampaign = clone(CAMPAIGN_FIXTURE);
     fixtureCampaign.run = createIdleDiscoveryRun(fixtureCampaign);
@@ -293,6 +300,9 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     leadId: string,
     input: LeadUpdateInput,
   ): Promise<LeadDetail> {
+    if (this.updateLeadReject) {
+      throw new Error(this.updateLeadReject);
+    }
     await this.getLead(leadId);
     const current = this.leadProfiles.get(leadId) ?? {};
     this.leadProfiles.set(leadId, {

@@ -12,6 +12,10 @@ import {
   RelayDiscoveryDataSource,
 } from "./RelayDiscoveryDataSource.ts";
 import { mapCampaign } from "./relayDiscoveryModels.ts";
+import {
+  buildLeadUpdateInput,
+  createLeadEditDraft,
+} from "../ui/leadEditForm.ts";
 
 const ACTOR_SECRET = generateSecretKey();
 const RELAY_SECRET = generateSecretKey();
@@ -299,16 +303,21 @@ function harness(
           leadStatus = input.status ?? leadStatus ?? "candidate";
           lead = {
             ...lead,
-            website: input.website ?? lead.website,
-            phone: input.phone ?? lead.phone,
+            website: input.website ?? null,
+            email: input.email ?? null,
+            phone: input.phone ?? null,
+            linkedin_url: input.linkedin_url ?? null,
+            contact_name: input.contact_name ?? null,
+            contact_title: input.contact_title ?? null,
+            notes: input.notes ?? null,
+            score: input.score ?? null,
+            owner_persona_id: input.owner_persona_id ?? null,
           };
           result = {
             result: "lead",
             lead: {
               ...lead,
               status: leadStatus,
-              owner: input.owner_persona_id ?? null,
-              notes: input.notes ?? null,
               updatedAt: NOW,
             },
           };
@@ -789,4 +798,60 @@ test("live lead get and update round-trip through the workspace ops", async () =
   assert.equal(updated.notes, "Warm intro");
   assert.ok(live.operations.includes("get_lead"));
   assert.ok(live.operations.includes("update_lead"));
+});
+
+test("a field-only lead edit still submits the complete profile", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const detail = await source.getLead("b53e6fb2-2a91-45bc-a382-60feb217767a");
+
+  const seedDraft = createLeadEditDraft(detail);
+  seedDraft.owner = "Chief of Staff";
+  seedDraft.email = "hello@example.com";
+  seedDraft.notes = "Warm intro";
+  const seeded = await source.updateLead(
+    detail.id,
+    buildLeadUpdateInput(seedDraft),
+  );
+  assert.equal(seeded.owner, "Chief of Staff");
+  assert.equal(seeded.notes, "Warm intro");
+
+  const editDraft = createLeadEditDraft(seeded);
+  editDraft.website = "https://new.example";
+  const updated = await source.updateLead(
+    seeded.id,
+    buildLeadUpdateInput(editDraft),
+  );
+  assert.equal(updated.website, "https://new.example");
+  assert.equal(updated.owner, "Chief of Staff");
+  assert.equal(updated.email, "hello@example.com");
+  assert.equal(updated.notes, "Warm intro");
+
+  const updateInputs = live.publishedEvents
+    .filter((event) => event.kind === 40021)
+    .map((event) => JSON.parse(event.content).request.payload)
+    .filter((payload) => payload.operation === "update_lead")
+    .map((payload) => payload.input);
+  assert.equal(updateInputs.length, 2);
+  const secondInput = updateInputs[1];
+  assert.equal(
+    secondInput.website,
+    "https://new.example",
+    "the changed field is on the wire",
+  );
+  assert.equal(
+    secondInput.owner_persona_id,
+    "Chief of Staff",
+    "owner must survive a website-only edit",
+  );
+  assert.equal(
+    secondInput.email,
+    "hello@example.com",
+    "email must survive a website-only edit",
+  );
+  assert.equal(
+    secondInput.notes,
+    "Warm intro",
+    "notes must survive a website-only edit",
+  );
 });

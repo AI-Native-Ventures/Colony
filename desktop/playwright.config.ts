@@ -138,6 +138,7 @@ export default defineConfig({
         "**/discovery-scroll.spec.ts",
         "**/discovery-settings.spec.ts",
         "**/discovery-lead-detail.spec.ts",
+        "**/discovery-lead-edit.spec.ts",
         "**/huddle-transcription.spec.ts",
       ],
       use: {
