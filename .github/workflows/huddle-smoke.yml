@@ -1,0 +1,140 @@
+name: Huddle companion window smoke (scratch)
+
+# SCRATCH gate for the huddle multi-window restructure (PR 2). Runs the
+# packaged-style debug binary on real hosted runners and asserts the
+# companion window lifecycle through the REAL commands: open_huddle_window,
+# close_huddle_companion, and the huddle- CloseRequested arm in lib.rs.
+# Gate env: BUZZ_HUDDLE_SMOKE=1 (debug_assertions builds only). Deleted with
+# the huddle-window-smoke scratch branch once both platforms pass.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  macos:
+    name: Huddle smoke macOS
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      # Tauri validates externalBin at compile time; empty host-triple stubs
+      # satisfy it (nothing executes them in the smoke).
+      - name: Create sidecar placeholders
+        run: |
+          TARGET=$(rustc -vV | sed -n 's|host: ||p')
+          mkdir -p desktop/src-tauri/binaries
+          for bin in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+            touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
+          done
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          key: huddle-smoke-macos
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.4.0
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend assets
+        run: cd desktop && pnpm build
+
+      - name: Build debug binary (packaged-style, assets embedded)
+        run: cd desktop/src-tauri && cargo build
+
+      - name: Run huddle window smoke
+        run: |
+          cd desktop/src-tauri
+          BUZZ_HUDDLE_SMOKE=1 ./target/debug/buzz-desktop 2>&1 | tee smoke.log
+          grep -q "HUDDLE-SMOKE: PASS" smoke.log
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: huddle-smoke-macos-log
+          path: desktop/src-tauri/smoke.log
+          if-no-files-found: ignore
+          retention-days: 3
+
+  windows:
+    name: Huddle smoke Windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      # Windows naming: binaries/<bin>-<triple>.exe (mirrors ci.yml
+      # windows-rust). MSVC comes from the runner's preinstalled rustup;
+      # rust-toolchain.toml pins the channel.
+      - name: Create sidecar placeholders
+        run: |
+          TARGET=$(rustc -vV | sed -n 's|host: ||p')
+          mkdir -p desktop/src-tauri/binaries
+          for bin in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+            touch "desktop/src-tauri/binaries/${bin}-${TARGET}.exe"
+          done
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          key: huddle-smoke-windows
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.4.0
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend assets
+        run: cd desktop && pnpm build
+
+      - name: Build debug binary (packaged-style, assets embedded)
+        run: cd desktop/src-tauri && cargo build
+
+      - name: Run huddle window smoke
+        run: |
+          cd desktop/src-tauri
+          BUZZ_HUDDLE_SMOKE=1 ./target/debug/buzz-desktop.exe 2>&1 | tee smoke.log
+          grep -q "HUDDLE-SMOKE: PASS" smoke.log
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: huddle-smoke-windows-log
+          path: desktop/src-tauri/smoke.log
+          if-no-files-found: ignore
+          retention-days: 3
