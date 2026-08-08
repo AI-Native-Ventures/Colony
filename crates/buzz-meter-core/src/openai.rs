@@ -453,4 +453,84 @@ mod tests {
         assert_eq!(ensure_stream_usage(b"not json at all"), None);
         assert_eq!(ensure_stream_usage(b"[1,2,3]"), None);
     }
+
+    /// A real Vercel AI Gateway response, captured verbatim on 2026-08-08
+    /// against `https://ai-gateway.vercel.sh/v1/chat/completions` with a
+    /// project-scoped gateway key (model `alibaba/qwen-3-14b`, served by
+    /// DeepInfra under Vercel system credentials).
+    ///
+    /// This is the fixture the hosted gateway's billing claims rest on.
+    /// What the capture shows: Vercel injects its own enriched `usage`
+    /// object rather than passing the provider's through — `cost`,
+    /// `market_cost`, `gateway_cost`, `is_byok`, and cache fields are all
+    /// Vercel's. The cost appears **in the body only**; no response header
+    /// carries a cost. The token counts are integers in the same object as
+    /// the float `cost`, so the recognized-shape gate passes and the stated
+    /// cost is kept.
+    #[test]
+    fn vercel_gateway_json_reports_cost_and_counts_off_a_real_body() {
+        let body = include_str!("../tests/fixtures/vercel/chat_completions_nonstream.json");
+        let parsed = parse_json_response(body.as_bytes());
+
+        // "cost": 3.72e-06 dollars, is_byok false -> the full charge.
+        assert_eq!(parsed.observed_cost_nanousd, Some(3_720));
+        assert_eq!(
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 15,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 8,
+            })
+        );
+        assert_eq!(parsed.model.as_deref(), Some("alibaba/qwen-3-14b"));
+        assert_eq!(
+            parsed.request_id.as_deref(),
+            Some("gen_01KZFF63YNC978ZF8761GQ83D7")
+        );
+    }
+
+    /// The streaming twin of the capture above: the terminal chunk carries
+    /// the same enriched usage object, cost included, without any
+    /// `stream_options` having been requested.
+    #[test]
+    fn vercel_gateway_stream_reads_cost_from_the_terminal_chunk() {
+        let sse = include_str!("../tests/fixtures/vercel/chat_completions_stream.sse");
+        let parsed = parse_sse_response(sse.as_bytes());
+
+        assert_eq!(parsed.observed_cost_nanousd, Some(3_720));
+        assert_eq!(
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 15,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 8,
+            })
+        );
+        assert_eq!(parsed.model.as_deref(), Some("alibaba/qwen-3-14b"));
+    }
+
+    /// A second provider through the same gateway (OpenAI, model
+    /// `openai/gpt-4o-mini`): same injected shape, so the cost contract is
+    /// the gateway's, not any one provider's.
+    #[test]
+    fn vercel_gateway_shape_holds_across_providers() {
+        let sse = include_str!("../tests/fixtures/vercel/chat_completions_stream_gpt4o_mini.sse");
+        let parsed = parse_sse_response(sse.as_bytes());
+
+        assert_eq!(parsed.observed_cost_nanousd, Some(3_300));
+        assert_eq!(
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 14,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 2,
+            })
+        );
+    }
 }
