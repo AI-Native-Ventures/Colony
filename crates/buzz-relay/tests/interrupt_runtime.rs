@@ -153,6 +153,47 @@ async fn set_tier(db: &Db, community: CommunityId, author: &Keys, agent: &Keys, 
     assert!(inserted);
 }
 
+/// Publish the owner-authored managed-agent head Buzz Desktop actually
+/// writes: a `role_id`, and no `tier` at all.
+async fn set_role(db: &Db, community: CommunityId, author: &Keys, agent: &Keys, role_id: &str) {
+    let agent_hex = agent.public_key().to_hex();
+    let event = EventBuilder::new(
+        Kind::Custom(buzz_core::kind::KIND_MANAGED_AGENT as u16),
+        serde_json::json!({ "display_name": "Ada", "role_id": role_id }).to_string(),
+    )
+    .tags(vec![tag(&["d", &agent_hex])])
+    .sign_with_keys(author)
+    .expect("sign managed-agent head");
+    let (_, inserted) = db
+        .insert_event(community, &event, None)
+        .await
+        .expect("store managed-agent head");
+    assert!(inserted);
+}
+
+/// Put a role on the payroll at `rank`. The employee identity is relay-held
+/// and nothing signs as it; what matters is the `role_id -> rank` mapping the
+/// promotion lookup resolves through.
+async fn employ_role(db: &Db, community: CommunityId, owner: &Keys, role_id: &str, rank: &str) {
+    let identity = Keys::generate();
+    let stored = db
+        .insert_employee(
+            community,
+            buzz_db::employees::NewEmployee {
+                pubkey: &identity.public_key().to_bytes(),
+                sealed_key: b"sealed-test-key",
+                role_id,
+                display_name: "Test Employee",
+                rank,
+                hired_by: &owner.public_key().to_bytes(),
+                hire_event: &identity.public_key().to_bytes(),
+            },
+        )
+        .await
+        .expect("insert employee");
+    assert!(stored.is_some(), "employee row must be inserted");
+}
+
 /// Store a plain root message, standing in for the thread an ask was raised
 /// from (`origin_thread`).
 async fn store_root(
@@ -453,6 +494,136 @@ async fn tick_with_nothing_due_returns_zero_stats() {
 }
 
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// promotion resolves the executive through the role its head names
+// ---------------------------------------------------------------------
+
+/// The hop that has never worked for a product-spawned agent.
+///
+/// Nothing writes `content.tier`, so a `tier`-only executive lookup found
+/// zero executives in every real workspace and a leader's ask could never be
+/// promoted. Every identity here is the shape the product produces: heads
+/// carry `role_id` and no tier, and rank comes from the payroll.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_leaders_ask_promotes_to_the_executive_named_only_by_its_role() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    employ_role(&db, community, &owner, "frontend-engineer", "worker").await;
+    employ_role(&db, community, &owner, "cto", "leader").await;
+    employ_role(&db, community, &owner, "chief-of-staff", "executive").await;
+
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    set_role(&db, community, &owner, &worker, "frontend-engineer").await;
+    set_role(&db, community, &owner, &leader, "cto").await;
+    set_role(&db, community, &owner, &executive, "chief-of-staff").await;
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-role", "dns-txt"),
+        &content_no_default("Need the DNS TXT record"),
+        None,
+    )
+    .await;
+
+    let now = ask.created_at.as_secs() as i64 + 100;
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+
+    let new_row = db
+        .find_open_ask_by_need(community, "init-role", "dns-txt")
+        .await
+        .expect("query asks projection")
+        .expect("the promotion must be a new open ask for the same need");
+    assert_eq!(
+        new_row.audience_pubkey,
+        executive.public_key().to_bytes().to_vec(),
+        "the ask must be promoted to the agent whose owner-authored head names \
+         the employed executive role"
+    );
+    assert_eq!(new_row.prior_ask, Some(ask.id.as_bytes().to_vec()));
+}
+
+/// The security question: promotion decides who reaches a human, so a
+/// forgeable target is worse than no promotion at all.
+///
+/// `KIND_MANAGED_AGENT` is client-writable, so an agent can publish a head
+/// about itself naming the executive's role. The roster only contains
+/// CURRENT-owner-authored heads, so it must confer nothing.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_self_published_executive_role_cannot_become_the_promotion_target() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let relay_keys = Keys::generate();
+    let state = state(db.clone(), &pool, relay_keys.clone()).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    employ_role(&db, community, &owner, "cto", "leader").await;
+    employ_role(&db, community, &owner, "chief-of-staff", "executive").await;
+
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    set_tier(&db, community, &owner, &worker, "worker").await;
+    set_role(&db, community, &owner, &leader, "cto").await;
+
+    // Nobody legitimate fills the executive role. An impostor claims it
+    // about itself.
+    let impostor = Keys::generate();
+    set_role(&db, community, &impostor, &impostor, "chief-of-staff").await;
+
+    let ask = file_ask(
+        &db,
+        &tenant,
+        &state,
+        &worker,
+        ask_tags("decision", &leader.public_key(), "init-forge", "forge"),
+        &content_no_default("Escalate me"),
+        None,
+    )
+    .await;
+
+    let now = ask.created_at.as_secs() as i64 + 100;
+    run_interrupt_tick(&state, now, 100)
+        .await
+        .expect("tick must not error");
+
+    let row = fetch_ask_row(&pool, community, ask.id.as_bytes()).await;
+    assert_eq!(
+        row.status, "open",
+        "a self-authored head naming the executive role must not become the \
+         promotion target; the sweep must re-deadline instead"
+    );
+    // And no ask anywhere in this community is addressed to the impostor.
+    let addressed_to_impostor: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM asks WHERE community_id = $1 AND audience_pubkey = $2",
+    )
+    .bind(community.as_uuid())
+    .bind(impostor.public_key().to_bytes().to_vec())
+    .fetch_one(&pool)
+    .await
+    .expect("count asks addressed to the impostor");
+    assert_eq!(
+        addressed_to_impostor, 0,
+        "a self-authored head must never make its own pubkey an ask audience"
+    );
+}
+
 // (a) leader-audience ask past deadline promotes to the executive
 // ---------------------------------------------------------------------
 
