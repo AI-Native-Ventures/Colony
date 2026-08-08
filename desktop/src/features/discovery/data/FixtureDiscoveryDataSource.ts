@@ -292,9 +292,16 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       throw new Error(`Unknown Discovery lead: ${leadId}`);
     }
     const profile = this.leadProfiles.get(leadId) ?? {};
+    // The lead's own status is the fallback, not `candidate`. Hardcoding the
+    // entry state here made the detail disagree with the list for any fixture
+    // lead that starts further along: the drawer showed Candidate while the
+    // row showed Qualified, and `updateLead`'s transition guard, which reads
+    // the lead's status, then refused a move the drawer had just offered. The
+    // relay defaults an absent profile row to Candidate because it has nothing
+    // else to go on; here there is something else to go on.
     return {
       ...lead,
-      status: profile.status ?? "candidate",
+      status: profile.status ?? lead.status ?? "candidate",
       ...profile,
     } as LeadDetail;
   }
