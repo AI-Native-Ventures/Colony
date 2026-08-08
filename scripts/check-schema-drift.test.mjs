@@ -87,4 +87,33 @@ test("the repo's real schema has no drift beyond KNOWN_DRIFT", async () => {
     encoding: "utf8",
   });
   assert.equal(r.status, 0, `check-schema-drift failed:\n${r.stderr}${r.stdout}`);
+  // Asserting on status ALONE would pass vacuously if main() never ran, which
+  // is precisely how this script silently no-opped when its entrypoint check
+  // compared unresolved paths across the /tmp -> /private/tmp symlink. The
+  // guard has to prove it did something, not merely that it did not fail.
+  assert.match(r.stdout, /schema\.sql covers every table/);
+});
+
+test("the entrypoint check survives a symlinked path", async () => {
+  // Reproduces the real defect: on macOS `/tmp` resolves to `/private/tmp`, so
+  // a raw string comparison of argv[1] against import.meta.url does not match
+  // and the script exits 0 having checked nothing.
+  const { default: cp } = await import("node:child_process");
+  const { default: fs } = await import("node:fs");
+  const { default: os } = await import("node:os");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, join } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+
+  const dir = fs.mkdtempSync(join(os.tmpdir(), "drift-link-"));
+  const link = join(dir, "check-schema-drift.mjs");
+  fs.symlinkSync(join(here, "check-schema-drift.mjs"), link);
+  const r = cp.spawnSync(process.execPath, [link], { encoding: "utf8" });
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  assert.match(
+    r.stdout,
+    /schema\.sql covers every table/,
+    `run through a symlink produced no output, so main() never ran:\n${r.stderr}`,
+  );
 });

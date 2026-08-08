@@ -30,7 +30,7 @@
 // schema.sql. Adding an entry means you are knowingly shipping a table CI
 // cannot see -- do not, unless you also know no CI job will ever touch it.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -125,4 +125,25 @@ function main() {
   );
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+/**
+ * Whether this file is the entrypoint, compared by real path.
+ *
+ * A plain `process.argv[1] === fileURLToPath(import.meta.url)` is wrong the
+ * moment either side traverses a symlink: on macOS `/tmp` resolves to
+ * `/private/tmp`, so the two strings differ, `main()` never runs, and the
+ * process exits 0 having checked nothing. A guard that silently does nothing
+ * and reports success is the exact failure this script exists to catch.
+ */
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  const real = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  return real(process.argv[1]) === real(fileURLToPath(import.meta.url));
+}
+
+if (isEntrypoint()) main();
