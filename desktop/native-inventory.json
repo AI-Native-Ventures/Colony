@@ -813,7 +813,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1458",
+        "src/parity/session/script.ts:1459",
         "src/shared/api/tauriAgentAuth.ts:52"
       ]
     },
@@ -957,7 +957,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:544",
-        "src/parity/session/script.ts:1604",
+        "src/parity/session/script.ts:1605",
         "src/shared/api/tauriChannels.ts:172"
       ]
     },
@@ -968,8 +968,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1008",
-        "src/parity/session/script.ts:1635",
-        "src/parity/session/script.ts:1641"
+        "src/parity/session/script.ts:1636",
+        "src/parity/session/script.ts:1642"
       ]
     },
     "delete_custom_harness": {
@@ -978,7 +978,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1513",
+        "src/parity/session/script.ts:1514",
         "src/shared/api/tauri.ts:989"
       ]
     },
@@ -988,7 +988,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1567",
+        "src/parity/session/script.ts:1568",
         "src/shared/api/discoveryCredentials.ts:34"
       ]
     },
@@ -1019,7 +1019,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:941",
-        "src/parity/session/script.ts:1629",
+        "src/parity/session/script.ts:1630",
         "src/shared/api/tauriPersonas.ts:170"
       ]
     },
@@ -1049,7 +1049,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:785",
-        "src/parity/session/script.ts:1615",
+        "src/parity/session/script.ts:1616",
         "src/shared/api/tauriArchive.ts:184"
       ]
     },
@@ -1060,7 +1060,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:890",
-        "src/parity/session/script.ts:1623",
+        "src/parity/session/script.ts:1624",
         "src/shared/api/tauriTeams.ts:76"
       ]
     },
@@ -1109,7 +1109,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1455",
+        "src/parity/session/script.ts:1456",
         "src/shared/api/tauriAgentAuth.ts:42"
       ]
     },
@@ -1119,8 +1119,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1488",
         "src/parity/session/script.ts:1489",
+        "src/parity/session/script.ts:1490",
         "src/shared/api/tauri.ts:949"
       ]
     },
@@ -1130,8 +1130,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1385",
         "src/parity/session/script.ts:1386",
+        "src/parity/session/script.ts:1387",
         "src/shared/api/agentModels.ts:15"
       ]
     },
@@ -1141,7 +1141,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1482",
+        "src/parity/session/script.ts:1483",
         "src/shared/api/tauri.ts:1135"
       ]
     },
@@ -1151,7 +1151,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1494",
+        "src/parity/session/script.ts:1495",
         "src/shared/api/tauri.ts:935"
       ]
     },
@@ -1161,7 +1161,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1491",
+        "src/parity/session/script.ts:1492",
         "src/shared/api/tauri.ts:1007"
       ]
     },
@@ -1280,7 +1280,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1463",
+        "src/parity/session/script.ts:1464",
         "src/shared/api/agentProposals.ts:37"
       ]
     },
@@ -1411,7 +1411,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1388",
+        "src/parity/session/script.ts:1389",
         "src/shared/api/tauri.ts:1025"
       ]
     },
@@ -1564,7 +1564,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1559",
+        "src/parity/session/script.ts:1560",
         "src/shared/api/discoveryCredentials.ts:26"
       ]
     },
@@ -1700,7 +1700,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1399",
+        "src/parity/session/script.ts:1400",
         "src/shared/api/tauri.ts:920"
       ]
     },
@@ -1782,7 +1782,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1537",
+        "src/parity/session/script.ts:1538",
         "src/shared/api/osIdle.ts:6"
       ]
     },
@@ -2017,7 +2017,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1414",
+        "src/parity/session/script.ts:1415",
         "src/shared/api/tauriManagedAgentMessageMarkers.ts:9"
       ]
     },
@@ -2068,7 +2068,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1516",
+        "src/parity/session/script.ts:1517",
         "src/shared/api/tauri.ts:996"
       ]
     },
@@ -2087,7 +2087,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1541",
+        "src/parity/session/script.ts:1542",
         "src/shared/api/tauri.ts:1204"
       ]
     },
@@ -2211,7 +2211,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1423",
+        "src/parity/session/script.ts:1424",
         "src/shared/api/tauriManagedAgents.ts:57"
       ]
     },
@@ -2222,7 +2222,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/huddle/components/AddAgentDialog.tsx:52",
-        "src/parity/session/script.ts:1394",
+        "src/parity/session/script.ts:1395",
         "src/shared/api/tauri.ts:864"
       ]
     },
@@ -2253,7 +2253,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/hooks.ts:330",
-        "src/parity/session/script.ts:1497",
+        "src/parity/session/script.ts:1498",
         "src/shared/api/tauri.ts:858"
       ]
     },
@@ -2274,7 +2274,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:782",
-        "src/parity/session/script.ts:1611",
+        "src/parity/session/script.ts:1612",
         "src/shared/api/tauriArchive.ts:6"
       ]
     },
@@ -2324,7 +2324,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1524",
+        "src/parity/session/script.ts:1525",
         "src/shared/api/tauriMesh.ts:77"
       ]
     },
@@ -2334,7 +2334,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1521",
+        "src/parity/session/script.ts:1522",
         "src/shared/api/tauriMesh.ts:113"
       ]
     },
@@ -2345,7 +2345,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/mesh-compute/hooks/useMeshNodeStatus.ts:7",
-        "src/parity/session/script.ts:1522",
+        "src/parity/session/script.ts:1523",
         "src/shared/api/tauriMesh.ts:52"
       ]
     },
@@ -2355,7 +2355,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1523",
+        "src/parity/session/script.ts:1524",
         "src/shared/api/tauriMesh.ts:73"
       ]
     },
@@ -2366,7 +2366,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/mesh-compute/classifyModelRef.ts:21",
-        "src/parity/session/script.ts:1525",
+        "src/parity/session/script.ts:1526",
         "src/shared/api/tauriMesh.ts:44"
       ]
     },
@@ -2376,7 +2376,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1528",
+        "src/parity/session/script.ts:1529",
         "src/shared/api/tauriMesh.ts:48"
       ]
     },
@@ -2457,7 +2457,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1544",
+        "src/parity/session/script.ts:1545",
         "src/shared/lib/haptics.ts:8"
       ]
     },
@@ -2525,7 +2525,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1485",
+        "src/parity/session/script.ts:1486",
         "src/shared/api/tauri.ts:1141"
       ]
     },
@@ -2597,7 +2597,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1426",
+        "src/parity/session/script.ts:1427",
         "src/shared/api/tauriManagedAgents.ts:86"
       ]
     },
@@ -2647,7 +2647,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1432",
+        "src/parity/session/script.ts:1433",
         "src/shared/api/tauriManagedAgents.ts:95"
       ]
     },
@@ -2675,8 +2675,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1553",
         "src/parity/session/script.ts:1554",
+        "src/parity/session/script.ts:1555",
         "src/shared/api/useReconnectRelay.ts:26"
       ]
     },
@@ -2686,8 +2686,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1556",
         "src/parity/session/script.ts:1557",
+        "src/parity/session/script.ts:1558",
         "src/shared/api/useReconnectRelay.ts:25"
       ]
     },
@@ -2770,7 +2770,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1441",
+        "src/parity/session/script.ts:1442",
         "src/shared/api/tauriManagedAgents.ts:79"
       ]
     },
@@ -2782,7 +2782,7 @@
       "example_sites": [
         "src/features/settings/ui/harnessFormLogic.ts:95",
         "src/features/settings/ui/harnessFormLogic.ts:128",
-        "src/parity/session/script.ts:1502"
+        "src/parity/session/script.ts:1503"
       ]
     },
     "save_discovery_credential": {
@@ -2791,7 +2791,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1562",
+        "src/parity/session/script.ts:1563",
         "src/shared/api/discoveryCredentials.ts:17"
       ]
     },
@@ -2802,8 +2802,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/discovery/lib/exportLeads.ts:38",
-        "src/parity/session/script.ts:1570",
-        "src/parity/session/script.ts:1571"
+        "src/parity/session/script.ts:1571",
+        "src/parity/session/script.ts:1572"
       ]
     },
     "save_png_data_url": {
@@ -2812,8 +2812,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1576",
-        "src/parity/session/script.ts:1577"
+        "src/parity/session/script.ts:1577",
+        "src/parity/session/script.ts:1578"
       ]
     },
     "search_messages": {
@@ -2863,7 +2863,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1404",
+        "src/parity/session/script.ts:1405",
         "src/shared/api/tauriManagedAgentMessages.ts:23"
       ]
     },
@@ -2873,8 +2873,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1444",
         "src/parity/session/script.ts:1445",
+        "src/parity/session/script.ts:1446",
         "src/shared/api/tauri.ts:1198"
       ]
     },
@@ -2991,7 +2991,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1447",
+        "src/parity/session/script.ts:1448",
         "src/shared/api/tauriManagedAgents.ts:44"
       ]
     },
@@ -3001,7 +3001,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1452",
+        "src/parity/session/script.ts:1453",
         "src/shared/api/tauriManagedAgents.ts:30"
       ]
     },
@@ -3073,8 +3073,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1550",
         "src/parity/session/script.ts:1551",
+        "src/parity/session/script.ts:1552",
         "src/shared/theme/ThemeProvider.tsx:285"
       ]
     },
@@ -3085,7 +3085,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/notifications/lib/desktop.ts:305",
-        "src/parity/session/script.ts:1531"
+        "src/parity/session/script.ts:1532"
       ]
     },
     "sign_event": {
@@ -3174,7 +3174,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1435",
+        "src/parity/session/script.ts:1436",
         "src/shared/api/tauriManagedAgents.ts:65"
       ]
     },
@@ -3211,7 +3211,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1438",
+        "src/parity/session/script.ts:1439",
         "src/shared/api/tauriManagedAgents.ts:72"
       ]
     },
@@ -3243,7 +3243,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1547",
+        "src/parity/session/script.ts:1548",
         "src/shared/lib/titleBarActions.ts:8",
         "src/shared/lib/titleBarActions.ts:18"
       ]
@@ -3307,7 +3307,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:1391",
+        "src/parity/session/script.ts:1392",
         "src/shared/api/tauri.ts:1121"
       ]
     },
