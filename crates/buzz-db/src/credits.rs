@@ -42,6 +42,10 @@ pub struct LedgerEntry {
     pub observed_cost: Option<i64>,
     /// Provider request id, when the entry is a debit.
     pub request_id: Option<String>,
+    /// How a debit's cost was determined: `observed` (provider stated it on
+    /// the wire) or `estimated` (priced from the price book because the
+    /// provider stated none). `None` on non-debit entries.
+    pub settle_basis: Option<String>,
     /// When the entry was recorded (UTC).
     pub created_at: DateTime<Utc>,
 }
@@ -79,6 +83,7 @@ pub async fn credit(
             model: None,
             observed_cost: None,
             request_id: None,
+            settle_basis: None,
         },
     )
     .await
@@ -103,6 +108,7 @@ pub async fn seed(
             model: None,
             observed_cost: None,
             request_id: None,
+            settle_basis: None,
         },
     )
     .await
@@ -123,6 +129,54 @@ pub async fn debit_observed(
     model: Option<&str>,
     request_id: Option<&str>,
 ) -> Result<LedgerEntry> {
+    debit_internal(
+        pool,
+        pubkey,
+        cost,
+        reference,
+        model,
+        request_id,
+        Some("observed"),
+    )
+    .await
+}
+
+/// Debit an **estimated** cost, idempotent on `reference`.
+///
+/// The provider stated no usable cost (an unfamiliar usage shape), so the
+/// gateway priced the call from the price book. `cost` is that estimate in
+/// nanoUSD; the ledger line records basis `estimated` so reconciliation can
+/// flag it rather than treating it as a provider-stated charge. Everything
+/// else matches [`debit_observed`].
+pub async fn debit_estimated(
+    pool: &PgPool,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: Option<&str>,
+    request_id: Option<&str>,
+) -> Result<LedgerEntry> {
+    debit_internal(
+        pool,
+        pubkey,
+        cost,
+        reference,
+        model,
+        request_id,
+        Some("estimated"),
+    )
+    .await
+}
+
+async fn debit_internal(
+    pool: &PgPool,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: Option<&str>,
+    request_id: Option<&str>,
+    settle_basis: Option<&str>,
+) -> Result<LedgerEntry> {
     let cost = i64::try_from(cost)
         .map_err(|_| crate::error::DbError::InvalidAmount(format!("cost {cost} exceeds i64")))?;
     apply_entry(
@@ -135,6 +189,7 @@ pub async fn debit_observed(
             model,
             observed_cost: Some(cost),
             request_id,
+            settle_basis,
         },
     )
     .await
@@ -180,6 +235,7 @@ fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<LedgerEntry> {
         model: row.try_get("model")?,
         observed_cost: row.try_get("observed_cost")?,
         request_id: row.try_get("request_id")?,
+        settle_basis: row.try_get("settle_basis")?,
         created_at: row.try_get("created_at")?,
     })
 }
@@ -193,6 +249,7 @@ struct EntryParams<'a> {
     model: Option<&'a str>,
     observed_cost: Option<i64>,
     request_id: Option<&'a str>,
+    settle_basis: Option<&'a str>,
 }
 
 async fn apply_entry(pool: &PgPool, params: EntryParams<'_>) -> Result<LedgerEntry> {
@@ -228,6 +285,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
     let model = params.model;
     let observed_cost = params.observed_cost;
     let request_id = params.request_id;
+    let settle_basis = params.settle_basis;
     let mut tx = pool.begin().await?;
 
     sqlx::query("INSERT INTO accounts (pubkey) VALUES ($1) ON CONFLICT (pubkey) DO NOTHING")
@@ -236,10 +294,12 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
         .await?;
 
     let row = sqlx::query(
-        "INSERT INTO credit_ledger (pubkey, delta, kind, ref, model, observed_cost, request_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+        "INSERT INTO credit_ledger \
+           (pubkey, delta, kind, ref, model, observed_cost, request_id, settle_basis) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (pubkey, ref) DO NOTHING \
-         RETURNING id, pubkey, delta, kind, ref, model, observed_cost, request_id, created_at",
+         RETURNING id, pubkey, delta, kind, ref, model, observed_cost, request_id, \
+                   settle_basis, created_at",
     )
     .bind(pubkey)
     .bind(delta)
@@ -248,6 +308,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
     .bind(model)
     .bind(observed_cost)
     .bind(request_id)
+    .bind(settle_basis)
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -281,7 +342,8 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<Led
             // same race fails loudly with a serialization error instead of
             // double-debiting — the dangerous direction always errors.
             let row = sqlx::query(
-                "SELECT id, pubkey, delta, kind, ref, model, observed_cost, request_id, created_at \
+                "SELECT id, pubkey, delta, kind, ref, model, observed_cost, request_id, \
+                        settle_basis, created_at \
                  FROM credit_ledger WHERE pubkey = $1 AND ref = $2",
             )
             .bind(pubkey)

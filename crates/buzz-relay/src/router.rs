@@ -149,6 +149,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(media_router)
         .merge(git_router)
         .merge(git_policy_router);
+    if let Some(gateway) = state.gateway.get() {
+        // Colony Credits hosted gateway: mounted only when configured, so an
+        // unconfigured deployment answers 404 for the gateway paths exactly
+        // as if the routes did not exist.
+        merged = merged.merge(crate::gateway::router(state.clone(), Arc::clone(gateway)));
+    }
     if let Some(admin_router) = admin_router {
         merged = merged.merge(admin_router);
     }

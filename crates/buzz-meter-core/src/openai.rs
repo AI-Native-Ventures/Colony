@@ -70,6 +70,12 @@ fn breakdown(usage: &Value) -> Option<UsageBreakdown> {
 ///
 /// Responses API streaming nests all three under `response`, so both
 /// placements are checked.
+///
+/// The stated cost survives an unfamiliar token shape: a provider that
+/// reports `cost` alongside token counts the parser does not recognize has
+/// still stated what it charged, and dropping the figure because the counts
+/// are floats would bill nothing for a real charge. The token breakdown is
+/// `None` in that case, but the cost is kept.
 fn read_document(document: &Value) -> Option<ParsedUsage> {
     for scope in [Some(document), document.get("response")]
         .into_iter()
@@ -78,14 +84,13 @@ fn read_document(document: &Value) -> Option<ParsedUsage> {
         let Some(usage) = scope.get("usage").filter(|usage| usage.is_object()) else {
             continue;
         };
-        let Some(tokens) = breakdown(usage) else {
-            continue;
-        };
+        let cost = observed_cost_nanousd(usage);
+        let tokens = breakdown(usage);
         return Some(ParsedUsage {
-            tokens: Some(tokens),
+            tokens,
             model: string_field(scope, "model"),
             request_id: string_field(scope, "id"),
-            observed_cost_nanousd: observed_cost_nanousd(usage),
+            observed_cost_nanousd: cost,
         });
     }
     None
@@ -363,6 +368,17 @@ mod tests {
         assert!(parsed.tokens.is_some());
     }
 
+    /// A stated cost survives an unfamiliar token shape (float counts):
+    /// billing must not hinge on the parser recognizing every field layout.
+    #[test]
+    fn a_stated_cost_survives_unfamiliar_float_token_counts() {
+        let body = br#"{"id":"chatcmpl-1","model":"gpt-4o","usage":{"prompt_tokens":15.0,"completion_tokens":8.0,"total_tokens":23.0,"cost":0.05}}"#;
+        let parsed = parse_json_response(body);
+        assert_eq!(parsed.observed_cost_nanousd, Some(50_000_000));
+        assert_eq!(parsed.tokens, None, "the float counts are not a breakdown");
+        assert_eq!(parsed.request_id.as_deref(), Some("chatcmpl-1"));
+    }
+
     /// A stream reports its cost in the terminal chunk, alongside the counts.
     #[test]
     fn a_streamed_charge_is_read_from_the_terminal_chunk() {
@@ -452,5 +468,138 @@ mod tests {
     fn non_json_request_is_left_alone() {
         assert_eq!(ensure_stream_usage(b"not json at all"), None);
         assert_eq!(ensure_stream_usage(b"[1,2,3]"), None);
+    }
+
+    /// A real Vercel AI Gateway response, captured verbatim on 2026-08-08
+    /// against `https://ai-gateway.vercel.sh/v1/chat/completions` with a
+    /// project-scoped gateway key (model `alibaba/qwen-3-14b`, served by
+    /// DeepInfra under Vercel system credentials).
+    ///
+    /// This is the fixture the hosted gateway's billing claims rest on.
+    /// What the capture shows: Vercel injects its own enriched `usage`
+    /// object rather than passing the provider's through — `cost`,
+    /// `market_cost`, `gateway_cost`, `is_byok`, and cache fields are all
+    /// Vercel's. The cost appears **in the body only**; no response header
+    /// carries a cost. The token counts are integers in the same object as
+    /// the float `cost`, so the recognized-shape gate passes and the stated
+    /// cost is kept.
+    #[test]
+    fn vercel_gateway_json_reports_cost_and_counts_off_a_real_body() {
+        let body = include_str!("../tests/fixtures/vercel/chat_completions_nonstream.json");
+        let parsed = parse_json_response(body.as_bytes());
+
+        // "cost": 3.72e-06 dollars, is_byok false -> the full charge.
+        assert_eq!(parsed.observed_cost_nanousd, Some(3_720));
+        assert_eq!(
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 15,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 8,
+            })
+        );
+        assert_eq!(parsed.model.as_deref(), Some("alibaba/qwen-3-14b"));
+        assert_eq!(
+            parsed.request_id.as_deref(),
+            Some("gen_01KZFF63YNC978ZF8761GQ83D7")
+        );
+    }
+
+    /// The streaming twin of the capture above: the terminal chunk carries
+    /// the same enriched usage object, cost included, without any
+    /// `stream_options` having been requested.
+    #[test]
+    fn vercel_gateway_stream_reads_cost_from_the_terminal_chunk() {
+        let sse = include_str!("../tests/fixtures/vercel/chat_completions_stream.sse");
+        let parsed = parse_sse_response(sse.as_bytes());
+
+        assert_eq!(parsed.observed_cost_nanousd, Some(3_720));
+        assert_eq!(
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 15,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 8,
+            })
+        );
+        assert_eq!(parsed.model.as_deref(), Some("alibaba/qwen-3-14b"));
+    }
+
+    /// A second provider through the same gateway (OpenAI, model
+    /// `openai/gpt-4o-mini`): same injected shape, so the cost contract is
+    /// the gateway's, not any one provider's.
+    #[test]
+    fn vercel_gateway_shape_holds_across_providers() {
+        let sse = include_str!("../tests/fixtures/vercel/chat_completions_stream_gpt4o_mini.sse");
+        let parsed = parse_sse_response(sse.as_bytes());
+
+        assert_eq!(parsed.observed_cost_nanousd, Some(3_300));
+        assert_eq!(
+            parsed.tokens,
+            Some(UsageBreakdown {
+                input_uncached_tokens: 14,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                output_tokens: 2,
+            })
+        );
+    }
+
+    /// The cost is in the body only — asserted against the verbatim header
+    /// captures, not just documented. Neither the streaming nor the
+    /// non-streaming response carries anything cost-shaped in its headers;
+    /// `x-vercel-id` (the idempotency id the ledger refs) is there, but no
+    /// header name mentions cost, usage, price, or charge.
+    #[test]
+    fn vercel_gateway_headers_carry_no_cost() {
+        for (headers, expected_content_type) in [
+            (
+                include_str!("../tests/fixtures/vercel/headers_nonstream.txt"),
+                "application/json",
+            ),
+            (
+                include_str!("../tests/fixtures/vercel/headers_stream.txt"),
+                "text/event-stream",
+            ),
+        ] {
+            let mut saw_vercel_id = false;
+            let mut saw_content_type = false;
+            for line in headers.lines() {
+                if line.starts_with("HTTP/") {
+                    assert!(
+                        line.contains("200"),
+                        "fixture must be a 200 capture, got: {line}"
+                    );
+                    continue;
+                }
+                let Some((name, _)) = line.split_once(':') else {
+                    continue;
+                };
+                let name = name.trim().to_ascii_lowercase();
+                for needle in ["cost", "usage", "price", "charge"] {
+                    assert!(
+                        !name.contains(needle),
+                        "header `{name}` looks cost-bearing; cost must live in the body only"
+                    );
+                }
+                if name == "x-vercel-id" {
+                    saw_vercel_id = true;
+                }
+                if name == "content-type" {
+                    assert!(
+                        line.contains(expected_content_type),
+                        "expected `{expected_content_type}` content type, got: {line}"
+                    );
+                    saw_content_type = true;
+                }
+            }
+            assert!(saw_vercel_id, "capture must carry the upstream response id");
+            assert!(saw_content_type, "capture must carry a content type");
+        }
     }
 }

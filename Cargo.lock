@@ -1219,6 +1219,7 @@ dependencies = [
  "buzz-core",
  "buzz-db",
  "buzz-media",
+ "buzz-meter-core",
  "buzz-pubsub",
  "buzz-relay-mesh",
  "buzz-sdk",

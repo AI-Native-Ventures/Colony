@@ -17,6 +17,8 @@ mod discovery_worker_broker;
 mod discovery_workspace_broker;
 mod employee_broker;
 pub mod employee_key;
+/// Colony Credits hosted gateway (provisioned mode).
+pub mod gateway;
 mod job_broker;
 mod ledger_broker;
 mod party_broker;
