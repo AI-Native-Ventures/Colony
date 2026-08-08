@@ -195,8 +195,11 @@ impl ShellProxy for TauriShellProxy {
     }
 
     fn run_on_main_thread(&self, task: MainThreadTask) -> Result<(), ShellError> {
+        // `MainThreadTask` is a boxed FnOnce, which is itself FnOnce, so it
+        // passes straight through. Wrapping it in `move || task()` is a
+        // redundant closure, which clippy denies under `-D warnings`.
         self.app
-            .run_on_main_thread(move || task())
+            .run_on_main_thread(task)
             .map_err(ShellError::new)
     }
 
