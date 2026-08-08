@@ -35,20 +35,30 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    # A merge_group run tests the merged result, exactly like a push to develop,
-    # and every gated job below already runs unconditionally on push. So the
-    # queue runs the full relevant matrix: all buckets are forced true rather
-    # than path-filtered. That also sidesteps the fact that paths-filter has no
-    # base to diff against in a merge_group context -- github.ref is the
-    # gh-readonly-queue branch, and fetch-depth 2 does not contain the queue's
-    # base_sha.
+    # In a merge_group run, paths-filter has no base to diff against:
+    # github.ref is the gh-readonly-queue branch and fetch-depth 2 does not
+    # contain the queue's base_sha. So buckets are set explicitly rather than
+    # filtered.
+    #
+    # rust / desktop / desktop-rust are forced true because between them they
+    # gate every one of the five required checks (Rust Lint, Unit Tests,
+    # Desktop Core, Desktop, and Detect Changed Paths which always runs). The
+    # queue re-tests those on the merged result, which is the whole point of it.
+    #
+    # web / mobile / blocks are NOT forced. They gate only Web, Mobile and
+    # Blocks Live Gate, none of which is required, and Mobile alone is 915
+    # Flutter tests. Running them per batch buys no gate strength and spends
+    # the queue's 60-minute check_response_timeout -- and a queue run that times
+    # out fails into exactly the stuck-forever state this commit fixes. The
+    # relay e2e chain still runs, since it hangs off `rust`; it is the longest
+    # pole in a queue run and #168 lengthened its cold build further.
     outputs:
       rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.rust }}
       desktop: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop }}
       desktop-rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop-rust }}
-      web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.web }}
-      mobile: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.mobile }}
-      blocks: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.blocks }}
+      web: ${{ steps.filter.outputs.web }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+      blocks: ${{ steps.filter.outputs.blocks }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
