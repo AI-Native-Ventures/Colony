@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "wdio-harness",
+  "description": "WebDriverIO test permissions. Template: materialized as wdio.json only for harness builds (scripts/build-real-shell-app.sh), so shipping builds never load it.",
+  "windows": ["main"],
+  "permissions": [
+    "wdio:default",
+    "wdio-webdriver:default"
+  ]
+}

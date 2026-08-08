@@ -18,6 +18,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = ["system-keyring"]
+# Test-only WebDriverIO harness: embedded W3C WebDriver server + execute/mock
+# surface. NEVER enabled for shipping builds; the harness build script enables
+# it explicitly (`tauri build --features wdio-harness`) and materializes the
+# matching capability file from capabilities/wdio.json.harness.
+wdio-harness = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 mesh-llm = ["dep:iroh", "dep:mesh-llm-sdk", "dep:mesh-llm-host-runtime", "dep:mesh-llm-client", "dep:mesh-llm-node", "dep:mesh-llm-system", "dep:mesh-llm-events"]
 # OS keyring backing for desktop secret storage (nsec private keys). When
 # disabled, secrets fall back to 0o600 files. On by default for real builds.
@@ -66,6 +71,8 @@ tauri-plugin-window-state = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-wdio = { version = "1.3.0", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1.3.0", optional = true }
 infer = "0.19"
 hex = "0.4"
 ed25519-dalek = "=3.0.0-rc.0"

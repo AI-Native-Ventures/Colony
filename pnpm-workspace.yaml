@@ -4,7 +4,12 @@ packages:
   - "admin-web"
   - "site"
 allowBuilds:
+  # @wdio/cli pulls edgedriver/geckodriver as optional deps. Their postinstall
+  # scripts download browser drivers this suite never uses; deny explicitly so
+  # pnpm does not error on ignored builds (and CI stays deterministic).
+  edgedriver: false
   esbuild: true
+  geckodriver: false
 overrides:
   # Force a single copy of the dismissable-layer. Radix packages otherwise
   # resolve different versions (react-menu pulled 1.1.11, react-dialog 1.1.15),

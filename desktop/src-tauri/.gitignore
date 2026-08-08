@@ -8,3 +8,7 @@
 
 # Sidecar binaries (built by scripts/bundle-sidecars.sh)
 /binaries
+
+# Materialized only during harness builds (scripts/build-real-shell-app.sh);
+# the committed template is capabilities/wdio.json.harness.
+/capabilities/wdio.json
