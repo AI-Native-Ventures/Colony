@@ -31,6 +31,8 @@ mod relay_admission;
 mod reset;
 mod secret_store;
 mod shutdown;
+#[cfg(debug_assertions)]
+mod smoke_probe;
 mod templates;
 mod util;
 #[cfg(target_os = "linux")]
@@ -314,6 +316,11 @@ pub fn run() {
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            #[cfg(debug_assertions)]
+            if std::env::var_os("BUZZ_HUDDLE_SMOKE").is_some() {
+                crate::smoke_probe::run(app_handle.clone());
+            }
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
             // Must run before migrations and identity resolution so the wipe
