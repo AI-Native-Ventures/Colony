@@ -74,7 +74,7 @@ pub async fn set_global_agent_config(
     let phase1 = tokio::task::spawn_blocking(move || {
         validate_global_config(&config)?;
 
-        let old_global = load_global_agent_config(&app_for_write).unwrap_or_default();
+        let old_global = load_global_agent_config(&app_for_write)?;
 
         save_global_agent_config(&app_for_write, &config)?;
 
@@ -211,7 +211,8 @@ fn collect_restart_candidates(
             // restart for a process that already exited between the pre-filter
             // scan and Phase 2.  NotReady→Ready bypasses the alive check
             // because Phase 2 will stop-then-start unconditionally.
-            let env_changed = old_ready && old_effective.env != new_effective.env;
+            let env_changed = old_ready && old_effective.env != new_effective.env
+                || old_global.credential_mode != new_global.credential_mode;
 
             should_restart_on_config_change(old_ready, new_ready, env_changed)
         })
@@ -315,7 +316,8 @@ async fn restart_local_agent_on_config_change(
         let old_ready = matches!(agent_readiness(&old_effective), AgentReadiness::Ready);
         let new_ready = matches!(agent_readiness(&new_effective), AgentReadiness::Ready);
         // Under lock, the alive check was already done above via process_is_running.
-        let env_changed = old_ready && old_effective.env != new_effective.env;
+        let env_changed = old_ready && old_effective.env != new_effective.env
+            || old_global_clone.credential_mode != new_global_clone.credential_mode;
         if !should_restart_on_config_change(old_ready, new_ready, env_changed) {
             return Err(format!(
                 "agent {pubkey_owned} restart condition no longer valid under lock"

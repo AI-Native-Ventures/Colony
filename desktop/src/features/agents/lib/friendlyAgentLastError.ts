@@ -30,6 +30,7 @@
  */
 export type FriendlyAgentLastError =
   | { severity: "denied"; copy: string }
+  | { severity: "actionable"; action: "reconnect"; copy: string }
   | { severity: "generic"; copy: string };
 
 /**
@@ -44,6 +45,11 @@ export const MODEL_NOT_FOUND_COPY =
 
 export const CLI_ACP_INTERNAL_ERROR_COPY =
   "The agent's harness reported an internal error. For Codex agents this can mean the configured model isn't supported by your installed codex-acp — check the model in `~/.codex/config.toml` or upgrade the adapter (`brew upgrade codex-acp`).";
+
+export const COLONY_CREDITS_RECONNECT_COPY =
+  "Colony Credits authorization expired — reconnect to resume this agent.";
+export const COLONY_CREDITS_DEPLETED_COPY =
+  "Colony Credits depleted — top up, then reconnect.";
 
 const EMBEDDED_CODE_RE = /^Agent reported error \(code (-?\d+)\): /;
 /** Bare form of the standard JSON-RPC -32603 message (after stripping the ACP wrapper prefix). */
@@ -68,6 +74,35 @@ export function friendlyAgentLastError(
   if (raw == null) return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
+
+  // Gateway HTTP statuses are preserved in the supervisor error text. Keep
+  // these separate from generic auth failures so the UI can offer one
+  // explicit reconnect action and never schedule an automatic retry loop.
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.includes("gateway") &&
+    (lower.includes("401") ||
+      lower.includes("unauthorized") ||
+      lower.includes("authorization expired"))
+  ) {
+    return {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_RECONNECT_COPY,
+    };
+  }
+  if (
+    lower.includes("gateway") &&
+    (lower.includes("402") ||
+      lower.includes("payment required") ||
+      lower.includes("depleted"))
+  ) {
+    return {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_DEPLETED_COPY,
+    };
+  }
 
   // Structured code first; a code embedded in the message string is the
   // same signal recovered from a record that lost the field.

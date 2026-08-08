@@ -26,6 +26,11 @@ pub(crate) use metadata::{
     SESSION_TITLE_ENV_VAR,
 };
 
+mod provisioned;
+pub(crate) use provisioned::{
+    configure_runtime_cli, provisioned_spawn_env, spawn_agent_child_with_lease,
+};
+
 mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
 pub use stop::{stop_managed_agent_process, stop_managed_agent_workspace_pair};
@@ -62,8 +67,6 @@ mod instance_reaper;
 pub(crate) use instance_reaper::reap_dead_instance_agents;
 #[cfg(test)]
 use instance_reaper::{buffer_contains_identifier, is_desktop_binary};
-
-// Exact-path harness sweep lives in runtime/sweep.rs (re-exported above).
 
 mod lifecycle;
 #[cfg(test)]
@@ -421,30 +424,6 @@ pub(crate) fn build_respond_to_env(
     Ok((set, remove))
 }
 
-pub(crate) fn configure_runtime_cli(
-    command: &mut std::process::Command,
-    runtime: Option<&KnownAcpRuntime>,
-) {
-    let Some(runtime) = runtime else {
-        return;
-    };
-    if runtime.id != "claude" {
-        return;
-    }
-    if let Some(cli_path) = runtime.underlying_cli.and_then(resolve_command) {
-        // On Windows, `.cmd` and `.bat` files are batch shims — they cannot be
-        // passed directly to `CreateProcess` and cause EINVAL when the Claude
-        // adapter tries to spawn them (issue #2397). Skip setting
-        // `CLAUDE_CODE_EXECUTABLE` for shim paths so the adapter falls back to
-        // its own PATH lookup and finds the real binary instead.
-        // Non-Windows: `.cmd`/`.bat` are valid executables and must be assigned.
-        if should_skip_claude_executable(&cli_path, cfg!(windows)) {
-            return;
-        }
-        command.env("CLAUDE_CODE_EXECUTABLE", cli_path);
-    }
-}
-
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
@@ -458,6 +437,17 @@ pub fn spawn_agent_child(
     lazy: bool,
     owner_hex: Option<&str>,
 ) -> Result<crate::managed_agents::ManagedAgentProcess, String> {
+    spawn_agent_child_with_lease(app, record, relay_url, lazy, owner_hex, None)
+}
+
+fn spawn_agent_child_inner(
+    app: &AppHandle,
+    record: &ManagedAgentRecord,
+    relay_url: &str,
+    lazy: bool,
+    owner_hex: Option<&str>,
+    lease_override: Option<&crate::provisioned_credits::GatewayLease>,
+) -> Result<crate::managed_agents::ManagedAgentProcess, String> {
     if let Some(error) = spawn_key_refusal(record) {
         return Err(error);
     }
@@ -469,9 +459,8 @@ pub fn spawn_agent_child(
     // frozen record snapshot. Mirrors the model resolution below.
     let personas = super::load_personas(app).unwrap_or_default();
     let teams = super::load_teams(app).unwrap_or_default();
-    // Load global config once; used for runtime_metadata_env_vars (model/provider fallback)
-    // and for the env-var merge at spawn time.
-    let global = crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
+    // Load global config once; unknown credential modes fail closed here.
+    let global = crate::managed_agents::load_global_agent_config(app)?;
 
     // Resolve model/provider/prompt ONCE, here, at the shared spawn boundary —
     // the single source both the env writes below and `spawn_config_hash`
@@ -506,6 +495,22 @@ pub fn spawn_agent_child(
             })?;
     let effective_command = &descriptor.command;
     let agent_args = &descriptor.args;
+    let runtime_meta = known_acp_runtime(effective_command);
+    let effective_relay_url = runtime_key.relay_url.clone();
+    let runtime_id = runtime_meta.map(|runtime| runtime.id).unwrap_or("custom");
+    let provisioned_lease = provisioned_spawn_env(
+        app,
+        &effective_relay_url,
+        matches!(
+            global.credential_mode,
+            crate::managed_agents::CredentialMode::ColonyCredits
+        ),
+        &descriptor.env,
+        runtime_id,
+        effective_cfg.provider.value.as_deref(),
+        owner_hex,
+        lease_override,
+    )?;
 
     let log_path = super::managed_agent_runtime_log_path(app, &runtime_key)?;
     append_log_marker(
@@ -545,10 +550,6 @@ pub fn spawn_agent_child(
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| effective_command.clone());
 
-    // The caller supplies the explicit canonical pair relay. This is the only
-    // relay this child may connect to, regardless of the record/workspace default.
-    let effective_relay_url = runtime_key.relay_url.clone();
-
     // Augment PATH for DMG launches so child processes can find:
     //   - bundled CLI via ~/.local/bin symlink
     //   - nvm-managed node/npm (nvm initializes only in interactive shells)
@@ -576,7 +577,7 @@ pub fn spawn_agent_child(
     if let Some(ref path) = augmented_path {
         command.env("PATH", path);
     }
-    command.env("RUST_LOG", child_rust_log_filter());
+    command.env("RUST_LOG", provisioned::child_rust_log_filter());
     command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
     command.env("BUZZ_RELAY_URL", &effective_relay_url);
     command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
@@ -592,7 +593,6 @@ pub fn spawn_agent_child(
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
-    let runtime_meta = known_acp_runtime(effective_command);
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
     }
@@ -624,7 +624,10 @@ pub fn spawn_agent_child(
         // Construct EffectiveAgentEnv from the descriptor computed above — no second
         // resolver call; the descriptor's env is already the fully layered result.
         let effective = EffectiveAgentEnv {
-            env: descriptor.env.clone(),
+            env: provisioned_lease
+                .as_ref()
+                .map(|(_, env)| env.clone())
+                .unwrap_or_else(|| descriptor.env.clone()),
             config_file_path: runtime_meta.and_then(|r| r.config_file_path),
             effective_command: descriptor.command.clone(),
         };
@@ -857,7 +860,11 @@ pub fn spawn_agent_child(
     // applied. Writing it last lets user-provided values win over every Buzz-set env
     // written above — reserved keys were already stripped from descriptor.env so they
     // cannot clobber BUZZ_PRIVATE_KEY, NOSTR_PRIVATE_KEY, etc.
-    for (key, value) in &descriptor.env {
+    let spawn_env = provisioned_lease
+        .as_ref()
+        .map(|(_, env)| env)
+        .unwrap_or(&descriptor.env);
+    for (key, value) in spawn_env {
         command.env(key, value);
     }
     configure_runtime_cli(&mut command, runtime_meta);
@@ -961,14 +968,6 @@ pub fn spawn_agent_child(
         adapter_availability: spawned_adapter_availability,
         start_nonce,
     })
-}
-
-fn child_rust_log_filter() -> String {
-    match std::env::var("RUST_LOG") {
-        Ok(existing) if existing.contains("buzz_acp") => existing,
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing},buzz_acp=info"),
-        _ => "buzz_acp=info".to_string(),
-    }
 }
 
 pub fn start_managed_agent_process(

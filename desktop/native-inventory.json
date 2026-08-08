@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 320,
-    "rust_lines": 131334,
-    "tauri_coupled": 132,
+    "rust_total": 323,
+    "rust_lines": 132419,
+    "tauri_coupled": 135,
     "portable": 188,
-    "portable_lines": 72699,
+    "portable_lines": 72746,
     "tauri_coupled_list": [
       "src-tauri/src/app_state.rs",
       "src-tauri/src/archive/mod.rs",
@@ -67,6 +67,7 @@
       "src-tauri/src/commands/project_git_diff.rs",
       "src-tauri/src/commands/project_git_workflow.rs",
       "src-tauri/src/commands/project_terminal.rs",
+      "src-tauri/src/commands/provisioned_credits.rs",
       "src-tauri/src/commands/qr_download.rs",
       "src-tauri/src/commands/relay_members.rs",
       "src-tauri/src/commands/relay_reconnect.rs",
@@ -117,6 +118,7 @@
       "src-tauri/src/managed_agents/runtime.rs",
       "src-tauri/src/managed_agents/runtime/orphan_sweep.rs",
       "src-tauri/src/managed_agents/runtime/process.rs",
+      "src-tauri/src/managed_agents/runtime/provisioned.rs",
       "src-tauri/src/managed_agents/runtime/stop.rs",
       "src-tauri/src/managed_agents/runtime_commands.rs",
       "src-tauri/src/managed_agents/storage.rs",
@@ -135,6 +137,7 @@
       "src-tauri/src/migration_avatar_refresh.rs",
       "src-tauri/src/native_websocket.rs",
       "src-tauri/src/prevent_sleep.rs",
+      "src-tauri/src/provisioned_credits.rs",
       "src-tauri/src/ptt_shortcut.rs",
       "src-tauri/src/shutdown.rs",
       "src-tauri/src/templates/storage.rs"
@@ -334,10 +337,10 @@
     ]
   },
   "commands": {
-    "registered": 281,
-    "defined": 281,
+    "registered": 283,
+    "defined": 283,
     "by_reach": {
-      "frontend": 277,
+      "frontend": 279,
       "frontend-plugin-prefixed": 2,
       "NO CALLER FOUND": 2
     },
@@ -347,7 +350,7 @@
     ]
   },
   "params": {
-    "AppHandle": 271,
+    "AppHandle": 286,
     "State": 214,
     "Window": 7,
     "ipc::Request": 1,
@@ -355,7 +358,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 271,
+      "AppHandle": 286,
       "State": 214,
       "Window": 7,
       "ipc::Request": 1,
@@ -374,7 +377,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 85,
+    ".state::<": 94,
     ".emit(": 34,
     ".emit_to(": 0,
     ".dialog()": 4,
@@ -468,6 +471,7 @@
     "src-tauri/src/commands/agent_providers.rs": 2,
     "src-tauri/src/commands/personas/snapshot.rs": 2,
     "src-tauri/src/commands/canvas.rs": 2,
+    "src-tauri/src/commands/provisioned_credits.rs": 2,
     "src-tauri/src/commands/global_agent_config.rs": 2,
     "src-tauri/src/commands/project_git_diff.rs": 2,
     "src-tauri/src/commands/dms.rs": 2,
@@ -1522,6 +1526,15 @@
       "example_sites": [
         "src/parity/session/script.ts:815",
         "src/shared/api/tauriWorkflows.ts:182"
+      ]
+    },
+    "get_colony_credits_account": {
+      "defining_file": "src-tauri/src/commands/provisioned_credits.rs",
+      "module": "provisioned_credits",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriProvisionedCredits.ts:12"
       ]
     },
     "get_contact_list": {
@@ -2638,6 +2651,15 @@
         "src/shared/api/tauriManagedAgents.ts:95"
       ]
     },
+    "reconnect_colony_credits": {
+      "defining_file": "src-tauri/src/commands/provisioned_credits.rs",
+      "module": "provisioned_credits",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriProvisionedCredits.ts:17"
+      ]
+    },
     "reconnect_huddle_audio": {
       "defining_file": "src-tauri/src/huddle/reconnect.rs",
       "module": "reconnect",
@@ -2917,7 +2939,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/ui/AgentConfigFields.tsx:208",
+        "src/features/agents/ui/AgentConfigFields.tsx:209",
         "src/features/agents/ui/OpenRouterConnectField.tsx:8",
         "src/features/agents/ui/OpenRouterConnectField.tsx:71"
       ]

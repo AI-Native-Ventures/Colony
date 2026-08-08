@@ -26,6 +26,7 @@ mod native_websocket;
 mod nostr_bind;
 pub mod nostr_convert;
 mod prevent_sleep;
+mod provisioned_credits;
 mod ptt_shortcut;
 mod relay;
 mod relay_admission;
@@ -785,6 +786,8 @@ pub fn run() {
             put_agent_session_config,
             get_global_agent_config,
             set_global_agent_config,
+            get_colony_credits_account,
+            reconnect_colony_credits,
             connect_openrouter,
             mesh_start_node,
             mesh_stop_node,

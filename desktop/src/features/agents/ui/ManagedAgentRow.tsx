@@ -381,7 +381,8 @@ function StatusBlock({
         <p
           className={cn(
             "text-xs",
-            friendlyError.severity === "denied"
+            friendlyError.severity === "denied" ||
+              friendlyError.severity === "actionable"
               ? "text-destructive"
               : "text-muted-foreground",
           )}

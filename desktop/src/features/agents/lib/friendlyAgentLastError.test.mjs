@@ -7,10 +7,47 @@ import {
   CLI_ACP_INTERNAL_ERROR_COPY,
   MODEL_NOT_FOUND_COPY,
   RELAY_MESH_DENIED_COPY,
+  COLONY_CREDITS_RECONNECT_COPY,
+  COLONY_CREDITS_DEPLETED_COPY,
 } from "./friendlyAgentLastError.ts";
 
 test("null lastError → null", () => {
   assert.equal(friendlyAgentLastError(null), null);
+});
+
+test("gateway 401 offers one explicit reconnect action", () => {
+  assert.deepEqual(
+    friendlyAgentLastError("gateway returned 401 Unauthorized"),
+    {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_RECONNECT_COPY,
+    },
+  );
+});
+
+test("gateway authorization-expired copy remains actionable", () => {
+  assert.deepEqual(
+    friendlyAgentLastError(
+      "Colony Credits gateway authorization expired — reconnect",
+    ),
+    {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_RECONNECT_COPY,
+    },
+  );
+});
+
+test("gateway 402 offers depleted top-up copy without retry semantics", () => {
+  assert.deepEqual(
+    friendlyAgentLastError("gateway returned 402 Payment Required"),
+    {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_DEPLETED_COPY,
+    },
+  );
 });
 
 test("empty/whitespace lastError → null", () => {

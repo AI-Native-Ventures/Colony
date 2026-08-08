@@ -55,7 +55,11 @@ pub struct MeterEnv {
 /// able to authenticate the call, which is exactly how a subscription login
 /// used to fail with "no provider credential configured".
 pub const ANTHROPIC_CREDENTIAL_VARS: &[&str] = &["ANTHROPIC_API_KEY"];
-pub const OPENAI_CREDENTIAL_VARS: &[&str] = &["OPENAI_API_KEY", "OPENROUTER_API_KEY"];
+pub const OPENAI_CREDENTIAL_VARS: &[&str] = &[
+    "OPENAI_API_KEY",
+    "OPENAI_COMPAT_API_KEY",
+    "OPENROUTER_API_KEY",
+];
 
 /// Base-URL variables pointing agents at the checkpoint.
 ///
@@ -195,6 +199,17 @@ mod tests {
                 "{name} must carry the virtual key, never a real credential"
             );
         }
+    }
+
+    #[test]
+    fn openai_compatible_credentials_are_also_replaced() {
+        let vars = meter_env_vars(&sample());
+        assert_eq!(
+            vars.iter()
+                .find(|(key, _)| key == "OPENAI_COMPAT_API_KEY")
+                .map(|(_, value)| value.as_str()),
+            Some("colony-vk-abc123")
+        );
     }
 
     /// A checkpoint holding no key must not take the agent's credential away:
