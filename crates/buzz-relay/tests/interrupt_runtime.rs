@@ -28,7 +28,10 @@ async fn setup() -> (Db, PgPool) {
     let pool = PgPool::connect(&database_url)
         .await
         .expect("connect to test Postgres");
-    buzz_db::migration::run_migrations(&pool)
+    // A developer's fresh `createdb` needs the migrator; CI's integration
+    // Postgres is provisioned from schema/schema.sql by pgschema and must
+    // skip it (replaying 0001 there aborts on the first existing object).
+    buzz_db::migration::run_migrations_unless_provisioned(&pool)
         .await
         .expect("apply migrations");
     (Db::from_pool(pool.clone()), pool)
