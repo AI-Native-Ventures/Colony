@@ -105,8 +105,8 @@ export function OpenRouterConnectField({
           setNotice({
             kind: "error",
             text:
-              typeof err === "string"
-                ? err
+              err instanceof Error
+                ? err.message
                 : "The key was received but could not be saved. Try again.",
           });
         } finally {
@@ -126,8 +126,8 @@ export function OpenRouterConnectField({
       setNotice({
         kind: "error",
         text:
-          typeof err === "string"
-            ? err
+          err instanceof Error
+            ? err.message
             : "Couldn't start the connection. Try again.",
       });
       setPhase("idle");
@@ -147,7 +147,10 @@ export function OpenRouterConnectField({
     } catch (err) {
       setNotice({
         kind: "error",
-        text: typeof err === "string" ? err : "Couldn't disconnect. Try again.",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Couldn't disconnect. Try again.",
       });
     } finally {
       setPhase("idle");

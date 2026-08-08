@@ -151,7 +151,11 @@ async fn run_openrouter_connect(
             message: format!("could not resolve the authorization callback port: {e}"),
         })?
         .port();
-    let redirect_uri = format!("http://localhost:{port}");
+    // Literal 127.0.0.1, not `localhost`: the listener binds 127.0.0.1, and
+    // name resolution of `localhost` is IPv6-first on some systems — without
+    // fallback the callback would be refused. OpenRouter's API reference
+    // accepts `localhost/127.0.0.1 URLs on any port for local CLI tools`.
+    let redirect_uri = format!("http://127.0.0.1:{port}");
 
     // `_server` is held until the function returns; the drop guard aborts the
     // axum task on every exit path (timeout, cancellation, exchange failure,
@@ -220,12 +224,8 @@ async fn run_openrouter_connect(
         })?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        let body: String = body.chars().take(500).collect();
         return Ok(OpenRouterConnectOutcome::Failed {
-            message: format!(
-                "OpenRouter could not complete the connection (HTTP {status}): {body}"
-            ),
+            message: exchange_failure_message(status),
         });
     }
     let value: serde_json::Value =
@@ -247,6 +247,16 @@ async fn run_openrouter_connect(
         })?;
 
     Ok(OpenRouterConnectOutcome::Connected { key })
+}
+
+/// Fixed failure message for a non-2xx token exchange. The provider's raw
+/// response body must never be reflected into the app — the message carries
+/// only the HTTP status code, like every other failure path.
+fn exchange_failure_message(status: reqwest::StatusCode) -> String {
+    format!(
+        "OpenRouter could not complete the connection (HTTP {status}). \
+         Your existing credentials were left unchanged; try again."
+    )
 }
 
 /// Build the loopback callback router. The `state` is matched before any
@@ -321,13 +331,21 @@ mod tests {
     fn auth_url_never_contains_verifier() {
         let (verifier, challenge) = pkce_pair().unwrap();
         let state = random_state().unwrap();
-        let url = build_auth_url("http://localhost:54321", &challenge, &state).unwrap();
+        let url = build_auth_url("http://127.0.0.1:54321", &challenge, &state).unwrap();
         let url_string = url.to_string();
         assert!(!url_string.contains(&verifier));
-        assert!(url_string.contains("callback_url=http%3A%2F%2Flocalhost%3A54321"));
+        assert!(url_string.contains("callback_url=http%3A%2F%2F127.0.0.1%3A54321"));
         assert!(url_string.contains(&format!("code_challenge={challenge}")));
         assert!(url_string.contains("code_challenge_method=S256"));
         assert!(url_string.contains(&format!("state={state}")));
+    }
+
+    #[test]
+    fn exchange_failure_message_carries_status_but_never_provider_text() {
+        let message = exchange_failure_message(reqwest::StatusCode::BAD_GATEWAY);
+        assert!(message.contains("HTTP 502 Bad Gateway"));
+        assert!(message.contains("left unchanged"));
+        assert!(!message.contains(": "));
     }
 
     #[test]

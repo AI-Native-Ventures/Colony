@@ -1,8 +1,8 @@
 {
-  "commit": "764ae4fb5e7cd4a2d93628c1d0a7e99e9095ec42",
+  "commit": "2ee92232295f5158db4e538fb8d752c5f960721c",
   "files": {
     "rust_total": 300,
-    "rust_lines": 126732,
+    "rust_lines": 126750,
     "tauri_coupled": 133,
     "portable": 167,
     "portable_lines": 64789
