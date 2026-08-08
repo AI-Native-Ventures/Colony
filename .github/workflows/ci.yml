@@ -392,6 +392,7 @@ jobs:
             --lib \
             --test e2e_event_reminder \
             --test interrupt_gate \
+            --test interrupt_runtime \
             --archive-file target/ci/backend-integration-tests.tar.zst
       - name: Save relay artifacts cache
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
@@ -843,6 +844,18 @@ jobs:
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Owner-contact write-path guard
+        # The guard is a pure source-scanning unit test, so unlike every other
+        # step here it runs WITHOUT --run-ignored. It needs a home that already
+        # compiles buzz-relay: `just test-unit` (the unit-tests job) covers
+        # buzz-core/auth/cli/acp/db/conformance/push-gateway but not
+        # buzz-relay, and adding the workspace's largest crate to that job for
+        # one test would cost more CI time than this archive step, which is
+        # already built.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and test(/write_path_guard/)'
       - name: Interrupt-core owner-contact gate
         # The owner wall itself (crates/buzz-relay/tests/interrupt_gate.rs).
         # This suite existed for months without ever executing in CI: the
@@ -854,6 +867,19 @@ jobs:
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
             -E 'binary(interrupt_gate)' \
+            --run-ignored ignored-only
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Interrupt-core runtime ladder
+        # The escalation sweep and roster resolution
+        # (crates/buzz-relay/tests/interrupt_runtime.rs), including the
+        # team-lead mapping the workflow owner-mention routing resolves
+        # against. Another integration target in tests/, so it was outside the
+        # archive and had never run in CI either.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'binary(interrupt_runtime)' \
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
