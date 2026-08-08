@@ -121,12 +121,47 @@ async function installE2eBridgeIfConfigured() {
   maybeInstallE2eTauriMocks();
 }
 
+function maybeStartParitySession() {
+  if (!import.meta.env.DEV) {
+    return;
+  }
+  // `tauri dev` loads the devUrl without query params, so the session can
+  // also be triggered from the environment: VITE_PARITY_MODE=record+replay
+  // VITE_PARITY_PERTURB=result:send_channel_message pnpm tauri dev
+  const url = new URL(window.location.href);
+  const urlMode = url.searchParams.get("parity");
+  const envMode = import.meta.env.VITE_PARITY_MODE;
+  const mode = urlMode ?? (typeof envMode === "string" ? envMode : undefined);
+  if (mode !== "record" && mode !== "record+replay") {
+    return;
+  }
+  const specs = url.searchParams.getAll("perturb");
+  const envPerturb = import.meta.env.VITE_PARITY_PERTURB;
+  if (typeof envPerturb === "string" && envPerturb.length > 0) {
+    specs.push(...envPerturb.split(","));
+  }
+  const perturbations: Array<{
+    kind: "result" | "error";
+    command: string;
+  }> = [];
+  for (const spec of specs) {
+    const [kind, command] = spec.split(":", 2);
+    if ((kind === "result" || kind === "error") && command) {
+      perturbations.push({ kind, command });
+    }
+  }
+  void import("@/parity/session/driver").then(({ runParitySession }) =>
+    runParitySession({ mode, perturbations }),
+  );
+}
+
 async function bootstrap() {
   resetDevWebviewStateFromUrl();
   configureDevE2eBridgeFromUrl();
   recoverLocalStorageQuotaOnStartup();
   await installE2eBridgeIfConfigured();
   await migrateLegacyCommunityStorageBeforeRender();
+  maybeStartParitySession();
   renderApp();
 }
 
