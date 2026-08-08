@@ -1,4 +1,7 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isFullscreen as isNativeFullscreen,
+  onWindowResized,
+} from "@/shared/api/nativeBridge";
 import * as React from "react";
 
 /**
@@ -16,29 +19,25 @@ export function useIsFullscreen(): boolean {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
-    const appWindow = getCurrentWindow();
-
-    void appWindow.isFullscreen().then((value) => {
+    void isNativeFullscreen().then((value) => {
       if (!cancelled) {
         setIsFullscreen(value);
       }
     });
 
-    void appWindow
-      .onResized(() => {
-        void appWindow.isFullscreen().then((value) => {
-          if (!cancelled) {
-            setIsFullscreen(value);
-          }
-        });
-      })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-        } else {
-          unlisten = fn;
+    void onWindowResized(() => {
+      void isNativeFullscreen().then((value) => {
+        if (!cancelled) {
+          setIsFullscreen(value);
         }
       });
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
 
     return () => {
       cancelled = true;

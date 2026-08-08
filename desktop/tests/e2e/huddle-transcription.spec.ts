@@ -438,7 +438,7 @@ test("keeps main-app shortcuts from navigating the huddle room", async ({
   }
 
   await page.evaluate(async (channelId) => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("deep-link-message", {
+    await window.__BUZZ_E2E_EMIT_NATIVE_EVENT__?.("deep-link-message", {
       channelId,
       messageId: "mock-general-welcome",
       threadRootId: null,
@@ -454,7 +454,7 @@ test("keeps main-app shortcuts from navigating the huddle room", async ({
     relayUrl: "wss://other.example",
   };
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("deep-link-connect", null);
+    await window.__BUZZ_E2E_EMIT_NATIVE_EVENT__?.("deep-link-connect", null);
   });
   await expect
     .poll(() =>
@@ -1203,7 +1203,7 @@ test("starts unmuted with Push to Talk while preserving manual microphone contro
   );
 
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
+    await window.__BUZZ_E2E_EMIT_NATIVE_EVENT__?.("ptt-state", true);
   });
   await expect(muteButton).toBeVisible();
   await muteButton.click();
@@ -1219,24 +1219,24 @@ test("starts unmuted with Push to Talk while preserving manual microphone contro
     .toEqual({ enabled: false });
 
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", false);
+    await window.__BUZZ_E2E_EMIT_NATIVE_EVENT__?.("ptt-state", false);
   });
   await expect(unmuteButton).toBeVisible();
 
   await page.getByRole("button", { name: "Audio settings" }).click();
   await page.getByRole("button", { name: "Turn off Push to Talk" }).click();
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
+    await window.__BUZZ_E2E_EMIT_NATIVE_EVENT__?.("ptt-state", true);
   });
   await expect(unmuteButton).toBeVisible();
   await page.getByRole("button", { name: "Turn on Push to Talk" }).click();
   await expect(unmuteButton).toBeVisible();
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
+    await window.__BUZZ_E2E_EMIT_NATIVE_EVENT__?.("ptt-state", true);
   });
   await expect(muteButton).toBeVisible();
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", false);
+    await window.__BUZZ_E2E_EMIT_NATIVE_EVENT__?.("ptt-state", false);
   });
   await expect(unmuteButton).toBeVisible();
 

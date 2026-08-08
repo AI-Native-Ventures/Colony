@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/shared/api/nativeBridge";
 
 export const HOSTED_COMMUNITY_SUFFIX = "colony.ainative.ventures";
 export const HOSTED_COMMUNITY_LIMIT = 3;

@@ -1,5 +1,5 @@
 {
-  "commit": "06e7bba9efd23a48ace01427f7ea2833a2dc2716",
+  "commit": "7de271f95b1b4fa6190f2b6b6f7e015b34f01b07",
   "files": {
     "rust_total": 320,
     "rust_lines": 131287,
@@ -190,7 +190,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:627"
+        "src/features/huddle/components/HuddleBar.tsx:625"
       ]
     },
     "add_channel_members": {
@@ -332,7 +332,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:785"
+        "src/features/huddle/HuddleContext.tsx:784"
       ]
     },
     "clone_project_repository": {
@@ -350,7 +350,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:550"
+        "src/features/huddle/components/HuddleBar.tsx:548"
       ]
     },
     "colony_check_community_name": {
@@ -405,7 +405,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:615"
+        "src/features/huddle/HuddleContext.tsx:614"
       ]
     },
     "confirm_pairing_sas": {
@@ -827,7 +827,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:511"
+        "src/features/huddle/HuddleContext.tsx:510"
       ]
     },
     "ensure_chat_task": {
@@ -988,7 +988,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:214"
+        "src/features/huddle/HuddleContext.tsx:213"
       ]
     },
     "get_baked_build_env": {
@@ -1183,7 +1183,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/lib/useTtsSubscription.ts:190"
+        "src/features/huddle/lib/useTtsSubscription.ts:189"
       ]
     },
     "get_huddle_state": {
@@ -1192,9 +1192,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/app/useHuddlePresentation.ts:67",
-        "src/app/useHuddlePresentation.ts:234",
-        "src/app/useHuddlePresentation.ts:359"
+        "src/app/useHuddlePresentation.ts:66",
+        "src/app/useHuddlePresentation.ts:233",
+        "src/app/useHuddlePresentation.ts:358"
       ]
     },
     "get_identity": {
@@ -1203,7 +1203,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:565",
+        "src/features/huddle/HuddleContext.tsx:564",
         "src/shared/api/tauriIdentity.ts:23"
       ]
     },
@@ -1250,7 +1250,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:292"
+        "src/features/huddle/components/HuddleBar.tsx:290"
       ]
     },
     "get_my_relay_membership": {
@@ -1479,7 +1479,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/lib/useHuddlePttState.ts:20"
+        "src/features/huddle/lib/useHuddlePttState.ts:19"
       ]
     },
     "get_workflow": {
@@ -1573,7 +1573,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:69"
+        "src/features/huddle/HuddleContext.tsx:68"
       ]
     },
     "is_auto_update_supported": {
@@ -1611,8 +1611,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:97",
-        "src/features/huddle/HuddleContext.tsx:724"
+        "src/features/huddle/HuddleContext.tsx:96",
+        "src/features/huddle/HuddleContext.tsx:723"
       ]
     },
     "leave_channel": {
@@ -1631,9 +1631,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:481",
-        "src/features/huddle/HuddleContext.tsx:483",
-        "src/features/huddle/HuddleContext.tsx:515"
+        "src/features/huddle/HuddleContext.tsx:480",
+        "src/features/huddle/HuddleContext.tsx:482",
+        "src/features/huddle/HuddleContext.tsx:514"
       ]
     },
     "ledger_add_price": {
@@ -1678,7 +1678,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:206"
+        "src/features/huddle/HuddleContext.tsx:205"
       ]
     },
     "list_channel_templates": {
@@ -1892,9 +1892,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/app/useHuddlePresentation.ts:267",
-        "src/features/huddle/components/HuddleBar.tsx:540",
-        "src/features/huddle/components/HuddleProfileControl.tsx:112"
+        "src/app/useHuddlePresentation.ts:266",
+        "src/features/huddle/components/HuddleBar.tsx:538",
+        "src/features/huddle/components/HuddleProfileControl.tsx:111"
       ]
     },
     "open_project_merge_recovery_terminal": {
@@ -2023,8 +2023,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/lib/audioWorklet.ts:39",
-        "src/features/huddle/lib/audioWorklet.ts:99"
+        "src/features/huddle/lib/audioWorklet.ts:33",
+        "src/features/huddle/lib/audioWorklet.ts:93",
+        "src/shared/api/nativeBridge.ts:13"
       ]
     },
     "push_project_local_repository": {
@@ -2105,7 +2106,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:925"
+        "src/features/huddle/HuddleContext.tsx:924"
       ]
     },
     "relay_reconnect_hook": {
@@ -2141,8 +2142,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:705",
-        "src/features/huddle/components/HuddleRoomHeader.tsx:55"
+        "src/features/huddle/components/HuddleBar.tsx:703",
+        "src/features/huddle/components/HuddleRoomHeader.tsx:54"
       ]
     },
     "remove_channel_member": {
@@ -2237,7 +2238,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "test-only",
       "example_sites": [
-        "src/testing/e2eBridge.ts:12830"
+        "src/testing/e2eBridge.ts:13099"
       ]
     },
     "search_messages": {
@@ -2302,7 +2303,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:197"
+        "src/features/huddle/HuddleContext.tsx:196"
       ]
     },
     "set_canvas": {
@@ -2383,8 +2384,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:292",
-        "src/features/huddle/HuddleContext.tsx:367"
+        "src/features/huddle/HuddleContext.tsx:291",
+        "src/features/huddle/HuddleContext.tsx:366"
       ]
     },
     "set_huddle_transcription_enabled": {
@@ -2393,7 +2394,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:526"
+        "src/features/huddle/components/HuddleBar.tsx:524"
       ]
     },
     "set_managed_agent_auto_restart": {
@@ -2456,7 +2457,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/HuddleBar.tsx:669",
+        "src/features/huddle/components/HuddleBar.tsx:667",
         "src/features/settings/ui/VoiceSettingsCard.tsx:84"
       ]
     },
@@ -2466,7 +2467,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:239"
+        "src/features/huddle/HuddleContext.tsx:238"
       ]
     },
     "set_window_vibrancy": {
@@ -2475,9 +2476,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/theme/ThemeProvider.tsx:286",
-        "src/shared/theme/ThemeProvider.tsx:342",
-        "src/shared/theme/ThemeProvider.tsx:373"
+        "src/shared/theme/ThemeProvider.tsx:285",
+        "src/shared/theme/ThemeProvider.tsx:341",
+        "src/shared/theme/ThemeProvider.tsx:372"
       ]
     },
     "show_native_notification": {
@@ -2486,7 +2487,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/notifications/lib/desktop.ts:302"
+        "src/features/notifications/lib/desktop.ts:305"
       ]
     },
     "sign_event": {
@@ -2540,8 +2541,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/lib/useTtsSubscription.ts:28",
-        "src/features/huddle/lib/useTtsSubscription.ts:64"
+        "src/features/huddle/lib/useTtsSubscription.ts:27",
+        "src/features/huddle/lib/useTtsSubscription.ts:63"
       ]
     },
     "start_huddle": {
@@ -2550,8 +2551,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:97",
-        "src/features/huddle/HuddleContext.tsx:649"
+        "src/features/huddle/HuddleContext.tsx:96",
+        "src/features/huddle/HuddleContext.tsx:648"
       ]
     },
     "start_managed_agent": {

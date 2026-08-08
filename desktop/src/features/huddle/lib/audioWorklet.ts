@@ -1,20 +1,14 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  invokeRawBinary,
+  listen,
+  type NativeUnlisten,
+} from "@/shared/api/nativeBridge";
 
 /**
- * Raw binary invoke — uses Tauri's internal IPC for zero-copy ArrayBuffer transfer.
- *
- * The typed @tauri-apps/api doesn't support raw binary payloads (InvokeBody::Raw).
- * This wrapper isolates the internal API dependency to a single call site.
- * Tested against Tauri v2. If this breaks on upgrade, only this function needs updating.
+ * Raw binary invoke — routed through the NativeBridge. The Tauri
+ * implementation uses Tauri's internal IPC for zero-copy ArrayBuffer transfer
+ * (the typed API does not support InvokeBody::Raw).
  */
-function invokeRawBinary(cmd: string, payload: Uint8Array): Promise<unknown> {
-  // biome-ignore lint/suspicious/noExplicitAny: Tauri internals have no public type definition
-  const internals = (window as any).__TAURI_INTERNALS__;
-  if (!internals?.invoke) {
-    return Promise.reject(new Error("Tauri internals not available"));
-  }
-  return internals.invoke(cmd, payload);
-}
 
 /** Return type for setupAudioWorklet — stop + mode control. */
 export type AudioWorkletHandle = {
@@ -105,7 +99,7 @@ export async function setupAudioWorklet(
 
   // Listen for PTT state from Rust global shortcut (Ctrl+Space press/release).
   // Direction: Rust→main→worklet. The Tauri event carries a boolean payload.
-  let pttUnlisten: UnlistenFn | null = null;
+  let pttUnlisten: NativeUnlisten | null = null;
   try {
     pttUnlisten = await listen<boolean>("ptt-state", (event) => {
       // Only forward PTT events to the worklet when in PTT mode.

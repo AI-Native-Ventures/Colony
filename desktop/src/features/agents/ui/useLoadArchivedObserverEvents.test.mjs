@@ -37,16 +37,20 @@
  * react-dom/client requires a minimal DOM; node has none. We install the same
  * minimal shim used by MessageComposerDraftImagePersist.test.mjs.
  *
- * ── Tauri IPC mock ───────────────────────────────────────────────────────────
- * @tauri-apps/api/core calls window.__TAURI_INTERNALS__.invoke(cmd, args).
- * We install a per-test mock at globalThis.__TAURI_INTERNALS__.invoke so every
- * listSaveSubscriptions / readArchivedObserverEventsForChannel / readUnindexed /
+ * ── NativeBridge mock ─────────────────────────────────────────────────────────
+ * The app routes every native call through the NativeBridge interface
+ * (src/shared/api/nativeBridge.ts). We install a mock bridge before the
+ * production modules load so every listSaveSubscriptions /
+ * readArchivedObserverEventsForChannel / readUnindexed /
  * indexObserverChannelId call is intercepted by command name without patching
  * module internals.
  */
 
 import assert from "node:assert/strict";
 import { describe, it, beforeEach } from "node:test";
+
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
 
 // ── Minimal DOM shim (matches MessageComposerDraftImagePersist.test.mjs) ──────
 
@@ -183,27 +187,23 @@ function installDOMShim() {
 
 installDOMShim();
 
-// ── Tauri IPC interceptor ─────────────────────────────────────────────────────
+// ── NativeBridge interceptor ─────────────────────────────────────────────────
 //
-// @tauri-apps/api/core calls window.__TAURI_INTERNALS__.invoke(cmd, args).
-// Install a stub now (before any module that imports tauriArchive is loaded)
-// so listSaveSubscriptions, readArchivedObserverEventsForChannel, etc. can be
-// controlled per-test by replacing ipcHandlers.
+// Install a mock NativeBridge before any module that imports tauriArchive is
+// loaded so listSaveSubscriptions, readArchivedObserverEventsForChannel, etc.
+// can be controlled per-test by replacing ipcHandlers. The bridge routes every
+// command through ipcHandlers, keyed by command name.
 
 /** @type {Map<string, (args: unknown) => Promise<unknown>>} */
 const ipcHandlers = new Map();
 
-globalThis.__TAURI_INTERNALS__ = {
-  invoke: (cmd, args) => {
+setNativeBridge(
+  createMockNativeBridge((cmd, args) => {
     const handler = ipcHandlers.get(cmd);
     if (handler) return handler(args);
     return Promise.reject(new Error(`unmocked Tauri command: ${cmd}`));
-  },
-  transformCallback: (_cb) => {
-    const id = Math.random();
-    return id;
-  },
-};
+  }),
+);
 
 function setIpcHandler(cmd, fn) {
   ipcHandlers.set(cmd, fn);

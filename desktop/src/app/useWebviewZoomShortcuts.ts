@@ -1,5 +1,5 @@
 import * as React from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { setWebviewZoom } from "@/shared/api/nativeBridge";
 
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 
@@ -90,14 +90,13 @@ export function useWebviewZoomShortcuts() {
   const zoomFactorRef = React.useRef(DEFAULT_ZOOM_FACTOR);
 
   React.useLayoutEffect(() => {
-    const webview = getCurrentWebview();
     const storedZoomFactor = readStoredZoomFactor();
 
     zoomFactorRef.current = storedZoomFactor;
     applyTextScale(storedZoomFactor);
 
     // Keep the webview coordinate system stable; only text should scale.
-    void webview.setZoom(DEFAULT_ZOOM_FACTOR).catch((error) => {
+    void setWebviewZoom(DEFAULT_ZOOM_FACTOR).catch((error) => {
       console.error("Failed to reset webview zoom", error);
     });
 

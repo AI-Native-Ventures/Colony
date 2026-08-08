@@ -1,4 +1,4 @@
-import { getVersion } from "@tauri-apps/api/app";
+import { getVersion } from "@/shared/api/nativeBridge";
 import { useMutation } from "@tanstack/react-query";
 import * as React from "react";
 

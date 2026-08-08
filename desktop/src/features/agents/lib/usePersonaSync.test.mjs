@@ -8,6 +8,8 @@ import {
   KIND_PERSONA,
   KIND_TEAM,
 } from "@/shared/constants/kinds";
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
 import { fromRawPersona } from "@/shared/api/tauriPersonas";
 import { startPersonaSync } from "./usePersonaSync.ts";
 
@@ -85,15 +87,12 @@ test("startPersonaSync backfills history including the deletion kind", () => {
 // community's scoped retention store on a mid-flight switch.
 test("startPersonaSync forwards its own relay as the event arrival relay", async () => {
   const invokes = [];
-  // @tauri-apps/api/core reads `window.__TAURI_INTERNALS__.invoke`.
-  globalThis.window = {
-    __TAURI_INTERNALS__: {
-      invoke: (cmd, args) => {
-        invokes.push({ cmd, args });
-        return Promise.resolve();
-      },
-    },
-  };
+  setNativeBridge(
+    createMockNativeBridge((cmd, args) => {
+      invokes.push({ cmd, args });
+      return Promise.resolve();
+    }),
+  );
 
   const ownEvent = { id: "e1", pubkey: "owner-pubkey", kind: KIND_PERSONA };
   const foreignEvent = { id: "e2", pubkey: "someone-else", kind: KIND_PERSONA };
@@ -125,5 +124,4 @@ test("startPersonaSync forwards its own relay as the event arrival relay", async
   assert.equal(JSON.parse(reconciles[0].args.eventJson).id, "e1");
 
   mock.reset();
-  delete globalThis.window;
 });

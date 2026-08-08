@@ -10,12 +10,8 @@ async function waitForInvokeBridge(page: import("@playwright/test").Page) {
     () => {
       const w = window as Window & {
         __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
-        __TAURI_INTERNALS__?: { invoke?: unknown };
       };
-      return (
-        typeof w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
-        typeof w.__TAURI_INTERNALS__?.invoke === "function"
-      );
+      return typeof w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function";
     },
     null,
     { timeout: 8_000 },

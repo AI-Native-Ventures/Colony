@@ -1,6 +1,6 @@
 import * as React from "react";
 import { ChevronRight, ExternalLink, Plus, Search } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/shared/api/nativeBridge";
 
 import {
   useAcpRuntimesQuery,

@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke, NativeChannel } from "@/shared/api/nativeBridge";
 import {
   createAuthEvent,
   getRelayWsUrl,
@@ -85,7 +85,7 @@ export class RelayClient {
   private reconnectListeners = new Set<() => void>();
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;
-  private onMessageChannel: Channel<unknown> | null = null;
+  private onMessageChannel: NativeChannel<unknown> | null = null;
   private connectionGeneration = 0;
   private communityGeneration = 0;
   private stabilityTimer: number | null = null;
@@ -523,7 +523,7 @@ export class RelayClient {
     );
 
     const generation = ++this.connectionGeneration;
-    this.onMessageChannel = new Channel<unknown>((message) => {
+    this.onMessageChannel = new NativeChannel<unknown>((message) => {
       void this.handleWsMessage(message, generation).catch((error) => {
         if (generation !== this.connectionGeneration) return;
         this.resetConnection(

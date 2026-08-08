@@ -8,7 +8,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/shared/api/nativeBridge";
 import { toast } from "sonner";
 
 import {

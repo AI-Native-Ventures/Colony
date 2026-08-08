@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/shared/api/nativeBridge";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 

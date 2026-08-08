@@ -1,5 +1,4 @@
-import { isTauri } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit, isTauri } from "@/shared/api/nativeBridge";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import {
