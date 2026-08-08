@@ -391,6 +391,7 @@ jobs:
             -p buzz-test-client \
             --lib \
             --test e2e_event_reminder \
+            --test interrupt_gate \
             --archive-file target/ci/backend-integration-tests.tar.zst
       - name: Save relay artifacts cache
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
@@ -842,6 +843,33 @@ jobs:
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Interrupt-core owner-contact gate
+        # The owner wall itself (crates/buzz-relay/tests/interrupt_gate.rs).
+        # This suite existed for months without ever executing in CI: the
+        # archive above was built `--lib --test e2e_event_reminder`, so an
+        # integration target in `tests/` was never compiled into it and no
+        # filter could reach it. Mutation testing confirmed the suite does
+        # bite (killing the wall fails 8 of 17), so it is worth running.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'binary(interrupt_gate)' \
+            --run-ignored ignored-only
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Workflow owner-contact routing tests
+        # Regression gate for the workflow-sink owner wall: a Worker/Leader
+        # workflow send_message that mentions an owner must route the mention
+        # to the next-in-line (own team lead, else the unique executive) and
+        # must fail the step when none resolves. Postgres-gated lib tests;
+        # the archive already contains the buzz-relay lib.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and test(/workflow_sink::integration_tests/)' \
+            --run-ignored ignored-only
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
       - name: NIP-ER reminder e2e
         # Feature e2e for NIP-ER (Event Reminders, kind:30300): write-path
         # validation, author-only read filtering, and scheduler delivery against
@@ -892,8 +920,15 @@ jobs:
           cargo test -p buzz-test-client --test e2e_persona --test e2e_nostr_interop -- --ignored --nocapture
           cargo test -p buzz-test-client --test e2e_relay invite -- --ignored --nocapture
           cargo test -p buzz-test-client --test e2e_relay nip43_membership_snapshots_are_rejected -- --ignored --nocapture
+          # Full interrupt-core climb (worker -> leader -> executive -> owner)
+          # against the live relay. Like interrupt_gate, this suite had never
+          # run in any CI job. It seeds its owner directly in Postgres, so it
+          # needs DATABASE_URL as well as RELAY_URL; start-relay-for-tests.sh
+          # brings up the same docker postgres the relay is pointed at.
+          cargo test -p buzz-test-client --test e2e_interrupts -- --ignored --nocapture
         env:
           RELAY_URL: ws://localhost:3000
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           GIT_CREDENTIAL_NOSTR_BIN: ${{ github.workspace }}/target/ci/git-credential-nostr
       - name: Upload relay logs
         if: failure()
