@@ -100,6 +100,7 @@ mesh-llm-system = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "f45
 mesh-llm-events = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "f455d493a2ae82baf2a326e2d0fda351433b4b30", package = "mesh-llm-events", optional = true }
 base64 = "0.22"
 sha2 = "0.11"
+getrandom = "0.4"
 tar = "0.4"
 bzip2 = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
