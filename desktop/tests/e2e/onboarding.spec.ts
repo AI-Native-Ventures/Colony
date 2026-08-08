@@ -459,16 +459,8 @@ async function getMockChannels(page: Page) {
         command: string,
         payload?: Record<string, unknown>,
       ) => Promise<unknown>;
-      __TAURI_INTERNALS__?: {
-        invoke?: (
-          command: string,
-          payload?: Record<string, unknown>,
-        ) => Promise<unknown>;
-      };
     };
-    const invoke =
-      bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
-      bridgeWindow.__TAURI_INTERNALS__?.invoke;
+    const invoke = bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
 
     if (!invoke) {
       throw new Error("Mock invoke bridge is unavailable.");
@@ -498,16 +490,8 @@ async function invokeMockCommand<T>(
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
-        __TAURI_INTERNALS__?: {
-          invoke?: (
-            command: string,
-            payload?: Record<string, unknown>,
-          ) => Promise<unknown>;
-        };
       };
-      const invoke =
-        bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
-        bridgeWindow.__TAURI_INTERNALS__?.invoke;
+      const invoke = bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
 
       if (!invoke) {
         throw new Error("Mock invoke bridge is unavailable.");
@@ -523,12 +507,8 @@ async function seedCurrentAvatar(page: Page, avatarUrl: string) {
   await page.waitForFunction(() => {
     const bridgeWindow = window as Window & {
       __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
-      __TAURI_INTERNALS__?: { invoke?: unknown };
     };
-    return (
-      typeof bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
-      typeof bridgeWindow.__TAURI_INTERNALS__?.invoke === "function"
-    );
+    return typeof bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function";
   });
   await invokeMockCommand(page, "update_profile", { avatarUrl });
   await page.evaluate(() => {

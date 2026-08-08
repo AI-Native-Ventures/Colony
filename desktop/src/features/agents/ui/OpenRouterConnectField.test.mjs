@@ -7,6 +7,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
 import {
   OPENROUTER_API_KEY,
   withOpenRouterKey,
@@ -197,14 +200,16 @@ globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 /** @type {Map<string, (args: unknown) => Promise<unknown>>} */
 const ipcHandlers = new Map();
 
-globalThis.__TAURI_INTERNALS__ = {
-  invoke: (cmd, args) => {
+// The component now calls `invoke` through the NativeBridge seam, so patching
+// __TAURI_INTERNALS__ no longer intercepts it. Install a mock bridge that
+// dispatches to the same handler map.
+setNativeBridge(
+  createMockNativeBridge((cmd, args) => {
     const handler = ipcHandlers.get(cmd);
     if (handler) return handler(args);
-    return Promise.reject(new Error(`unmocked Tauri command: ${cmd}`));
-  },
-  transformCallback: (_cb) => Math.random(),
-};
+    return Promise.reject(new Error(`unmocked native command: ${cmd}`));
+  }),
+);
 
 import React from "react";
 import { act } from "react";

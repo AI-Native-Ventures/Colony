@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
 import { getJoinPolicy, mintInvite } from "./invites.ts";
 
 function withFetch(response, run) {
@@ -54,39 +57,31 @@ test("getJoinPolicy fails closed on a policy endpoint error", async () => {
 });
 
 test("getJoinPolicy maps the native command response", async () => {
-  const previousWindow = globalThis.window;
-  globalThis.window = {
-    __TAURI_INTERNALS__: {
-      invoke(command, args) {
-        assert.equal(command, "fetch_join_policy");
-        assert.deepEqual(args, { relayUrl: "wss://relay.example" });
-        return Promise.resolve({
-          terms_markdown: "# Terms",
-          privacy_markdown: "# Privacy",
-          age_attestation_required: true,
-          version: "policy-v1",
-        });
-      },
-    },
-  };
+  setNativeBridge(
+    createMockNativeBridge((command, args) => {
+      assert.equal(command, "fetch_join_policy");
+      assert.deepEqual(args, { relayUrl: "wss://relay.example" });
+      return Promise.resolve({
+        terms_markdown: "# Terms",
+        privacy_markdown: "# Privacy",
+        age_attestation_required: true,
+        version: "policy-v1",
+      });
+    }),
+  );
 
-  try {
-    assert.deepEqual(await getJoinPolicy("wss://relay.example", "native"), {
-      termsMarkdown: "# Terms",
-      privacyMarkdown: "# Privacy",
-      ageAttestationRequired: true,
-      version: "policy-v1",
-    });
-  } finally {
-    globalThis.window = previousWindow;
-  }
+  assert.deepEqual(await getJoinPolicy("wss://relay.example", "native"), {
+    termsMarkdown: "# Terms",
+    privacyMarkdown: "# Privacy",
+    ageAttestationRequired: true,
+    version: "policy-v1",
+  });
 });
 
 // --- mintInvite serialization ---
 
-// The test-loader transpiles TS imports. tauri.ts imports `invoke` from
-// @tauri-apps/api/core, which calls `window.__TAURI_INTERNALS__.invoke`.
-// We stub that here so getRelayHttpUrl() and signRelayEvent() work in node.
+// The test-loader transpiles TS imports. Install a mock NativeBridge so
+// getRelayHttpUrl() and signRelayEvent() (both bridge-backed) work in node.
 
 function setupTauriStubs(
   httpBase,
@@ -100,25 +95,20 @@ function setupTauriStubs(
   },
 ) {
   const calls = { invokeArgs: [] };
-  globalThis.window = globalThis.window ?? {};
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke: async (command, args) => {
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
       calls.invokeArgs.push({ command, args });
       if (command === "get_relay_http_url") return httpBase;
       if (command === "sign_event") return JSON.stringify(authEvent);
       throw new Error(`Unexpected Tauri command: ${command}`);
-    },
-  };
+    }),
+  );
   return calls;
-}
-
-function teardownTauriStubs() {
-  delete globalThis.window.__TAURI_INTERNALS__;
 }
 
 test("mintInvite serializes bounded max_uses in the request body", async () => {
   setupTauriStubs("https://relay.example");
-  try {
+  {
     const originalFetch = globalThis.fetch;
     let capturedBody;
     globalThis.fetch = async (_url, init) => {
@@ -145,14 +135,12 @@ test("mintInvite serializes bounded max_uses in the request body", async () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
-  } finally {
-    teardownTauriStubs();
   }
 });
 
 test("mintInvite omits max_uses when null (unlimited)", async () => {
   setupTauriStubs("https://relay.example");
-  try {
+  {
     const originalFetch = globalThis.fetch;
     let capturedBody;
     globalThis.fetch = async (_url, init) => {
@@ -176,14 +164,12 @@ test("mintInvite omits max_uses when null (unlimited)", async () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
-  } finally {
-    teardownTauriStubs();
   }
 });
 
 test("mintInvite omits max_uses when not provided (unlimited default)", async () => {
   setupTauriStubs("https://relay.example");
-  try {
+  {
     const originalFetch = globalThis.fetch;
     let capturedBody;
     globalThis.fetch = async (_url, init) => {
@@ -205,7 +191,5 @@ test("mintInvite omits max_uses when not provided (unlimited default)", async ()
     } finally {
       globalThis.fetch = originalFetch;
     }
-  } finally {
-    teardownTauriStubs();
   }
 });

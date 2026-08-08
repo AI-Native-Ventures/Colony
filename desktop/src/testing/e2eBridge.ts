@@ -1,6 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { emit, listen } from "@tauri-apps/api/event";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockWindows } from "@tauri-apps/api/mocks";
 import { decode } from "nostr-tools/nip19";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
@@ -10,6 +9,15 @@ import {
   handleDeleteCustomHarness,
 } from "./e2eBridgeCustomHarnesses.ts";
 
+import {
+  NativeChannel,
+  setNativeBridge,
+  type NativeBridge,
+  type NativeEvent,
+  type NativeNotificationAction,
+  type NativeUnlisten,
+  type NativeUpdate,
+} from "@/shared/api/nativeBridge";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   STARTER_PERSONA_IDS,
@@ -1173,6 +1181,16 @@ declare global {
       members: MockHuddleMemberSeed[];
       transcriptionEnabled: boolean;
     }) => Promise<void>;
+    /** Fire a native event into the app's `listen()` handlers. */
+    __BUZZ_E2E_EMIT_NATIVE_EVENT__?: (
+      event: string,
+      payload?: unknown,
+    ) => Promise<void>;
+    /** Subscribe to the backend-signal registry mock command handlers fire. */
+    __BUZZ_E2E_LISTEN_NATIVE_EVENT__?: (
+      event: string,
+      cb: () => void,
+    ) => Promise<() => void>;
     __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
     /** Replace an existing feed item by id (or push if not found) and fire the updated event. */
     __BUZZ_E2E_REPLACE_MOCK_FEED_ITEM__?: (
@@ -3403,6 +3421,256 @@ function resetMockMesh() {
   mockMeshState.nodeState = "off";
   mockMeshState.nodeMode = null;
   mockMeshState.servingUsage = { ...ZERO_SERVING_USAGE };
+}
+// Backend-signal listeners registered by specs via __BUZZ_E2E_LISTEN_NATIVE_EVENT__,
+// fired by mock command handlers (e.g. "agents-data-changed" after a persona
+// mutation). This is the pre-bridge registry the e2e suite observed through
+// the patched __TAURI_INTERNALS__.listen; it is intentionally separate from
+// `nativeEventListeners` (app `listen()` handlers fired by `emit()`), exactly
+// as the two mocked registries were before the NativeBridge re-point.
+// App listeners registered through the mock bridge's `listen()` — the
+// replacement for mockIPC's `plugin:event|listen` handling. Fired only by the
+// mock bridge's `emit()` (the app's own `emit` and __BUZZ_E2E_EMIT_NATIVE_EVENT__).
+// Label mockWindows() installed for this run. Read by the bridge's
+// windowLabel() so the e2e double never has to touch __TAURI_INTERNALS__.
+let mockedWindowLabel = "main";
+
+// Develop-side mock helpers call `emit()` directly. Before the NativeBridge
+// re-point that was Tauri's mocked emit; now it dispatches to the same
+// registry the bridge's emit() uses, so the app sees one event stream.
+async function emit(event: string, payload?: unknown): Promise<void> {
+  for (const handler of nativeEventListeners.get(event) ?? []) {
+    handler({ event, payload });
+  }
+}
+
+const nativeEventListeners = new Map<
+  string,
+  Set<(event: { event: string; payload: unknown }) => void>
+>();
+
+type MockCommandHandler = (
+  command: string,
+  payload: unknown,
+) => Promise<unknown>;
+
+/**
+ * The NativeBridge implementation installed for e2e runs. Replaces the old
+ * mockIPC + __TAURI_INTERNALS__.listen patching: every native call the app
+ * makes funnels through this one object, exactly as it does through the Tauri
+ * implementation in production.
+ *
+ * Plugin methods delegate to the mock command handler under the same
+ * `plugin:<name>|...` command names the Tauri v2 JS API uses, so the mock
+ * answers (and throws) exactly where the old library calls landed.
+ */
+class E2eNativeBridge implements NativeBridge {
+  private readonly mockCommand: MockCommandHandler;
+
+  constructor(mockCommand: MockCommandHandler) {
+    this.mockCommand = mockCommand;
+  }
+
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    // Tauri serialises a missing arg object as `{}` on the wire, so mockIPC
+    // handlers always saw `{}` for an argument-less command. Normalise the
+    // same way or the recorded command log differs from production and specs
+    // asserting on payloads (voice-settings) break.
+    return this.mockCommand(command, args ?? {}) as Promise<T>;
+  }
+
+  invokeRawBinary(command: string, payload: Uint8Array): Promise<unknown> {
+    return this.mockCommand(command, payload);
+  }
+
+  async listen<T>(
+    event: string,
+    handler: (event: NativeEvent<T>) => void,
+  ): Promise<NativeUnlisten> {
+    let listeners = nativeEventListeners.get(event);
+    if (!listeners) {
+      listeners = new Set();
+      nativeEventListeners.set(event, listeners);
+    }
+    listeners.add(
+      handler as (event: { event: string; payload: unknown }) => void,
+    );
+    return () => {
+      nativeEventListeners
+        .get(event)
+        ?.delete(
+          handler as (event: { event: string; payload: unknown }) => void,
+        );
+    };
+  }
+
+  async emit(event: string, payload?: unknown): Promise<void> {
+    for (const handler of nativeEventListeners.get(event) ?? []) {
+      handler({ event, payload });
+    }
+  }
+
+  isTauri(): boolean {
+    return !!(window as Window & { isTauri?: boolean }).isTauri;
+  }
+
+  async openUrl(url: string): Promise<void> {
+    await this.mockCommand("plugin:opener|open_url", { url });
+  }
+
+  async getVersion(): Promise<string> {
+    return (await this.mockCommand("plugin:app|version", {})) as string;
+  }
+
+  async homeDir(): Promise<string> {
+    return (await this.mockCommand("plugin:path|resolve_directory", {
+      directory: "home",
+    })) as string;
+  }
+
+  async relaunch(): Promise<void> {
+    await this.mockCommand("plugin:process|restart", {});
+  }
+
+  async checkForUpdate(options?: {
+    headers?: Record<string, string>;
+  }): Promise<NativeUpdate | null> {
+    const metadata = (await this.mockCommand("plugin:updater|check", {
+      headers: options?.headers
+        ? Array.from(new Headers(options.headers).entries())
+        : [],
+    })) as { rid: number; version: string } | null;
+    if (!metadata) {
+      return null;
+    }
+    let downloadedBytesRid: number | null = null;
+    return {
+      version: metadata.version,
+      download: async () => {
+        downloadedBytesRid = (await this.mockCommand(
+          "plugin:updater|download",
+          {
+            onEvent: new NativeChannel(),
+            rid: metadata.rid,
+          },
+        )) as number;
+      },
+      install: async () => {
+        if (downloadedBytesRid === null) {
+          throw new Error("Update.install called before Update.download");
+        }
+        await this.mockCommand("plugin:updater|install", {
+          updateRid: metadata.rid,
+          bytesRid: downloadedBytesRid,
+        });
+        downloadedBytesRid = null;
+      },
+      close: async () => {
+        if (downloadedBytesRid !== null) {
+          await this.mockCommand("plugin:resources|close", {
+            rid: downloadedBytesRid,
+          });
+          downloadedBytesRid = null;
+        }
+        await this.mockCommand("plugin:resources|close", {
+          rid: metadata.rid,
+        });
+      },
+    };
+  }
+
+  async notificationPermissionGranted(): Promise<boolean> {
+    if (window.Notification?.permission !== "default") {
+      return window.Notification?.permission === "granted";
+    }
+    return (await this.mockCommand(
+      "plugin:notification|is_permission_granted",
+      {},
+    )) as boolean;
+  }
+
+  async requestNotificationPermission(): Promise<NotificationPermission> {
+    return window.Notification.requestPermission();
+  }
+
+  async onNotificationAction(
+    handler: (notification: NativeNotificationAction) => void,
+  ): Promise<{ unregister(): Promise<void> }> {
+    await this.mockCommand("plugin:notification|register_listener", {
+      event: "actionPerformed",
+      handler: new NativeChannel(handler),
+    });
+    return {
+      unregister: async () => {
+        await this.mockCommand("plugin:notification|unregister_listener", {
+          event: "actionPerformed",
+        });
+      },
+    };
+  }
+
+  async startDragging(): Promise<void> {
+    await this.mockCommand("plugin:window|start_dragging", {});
+  }
+
+  async isFullscreen(): Promise<boolean> {
+    return (await this.mockCommand(
+      "plugin:window|is_fullscreen",
+      {},
+    )) as boolean;
+  }
+
+  async setBadgeCount(count?: number): Promise<void> {
+    await this.mockCommand("plugin:window|set_badge_count", { value: count });
+  }
+
+  async setBadgeLabel(label?: string): Promise<void> {
+    await this.mockCommand("plugin:window|set_badge_label", { value: label });
+  }
+
+  async requestUserAttention(
+    _kind: "Informational" | "Critical",
+  ): Promise<void> {
+    await this.mockCommand("plugin:window|request_user_attention", {});
+  }
+
+  async unminimize(): Promise<void> {
+    await this.mockCommand("plugin:window|unminimize", {});
+  }
+
+  windowLabel(): string {
+    return mockedWindowLabel;
+  }
+
+  async closeWindow(): Promise<void> {
+    await this.mockCommand("plugin:window|close", {});
+  }
+
+  async showWindow(): Promise<void> {
+    await this.mockCommand("plugin:window|show", {});
+  }
+
+  async setFocus(): Promise<void> {
+    await this.mockCommand("plugin:window|set_focus", {});
+  }
+
+  async onWindowThemeChanged(
+    handler: (theme: "light" | "dark") => void,
+  ): Promise<NativeUnlisten> {
+    return this.listen("tauri://theme-changed", (event) => {
+      handler(event.payload as "light" | "dark");
+    });
+  }
+
+  async onWindowResized(handler: () => void): Promise<NativeUnlisten> {
+    return this.listen("tauri://resize", () => {
+      handler();
+    });
+  }
+
+  async setWebviewZoom(value: number): Promise<void> {
+    await this.mockCommand("plugin:webview|set_webview_zoom", { value });
+  }
 }
 let mockPersonas: RawPersona[] = [];
 let mockTeams: RawTeam[] = [];
@@ -10347,7 +10615,8 @@ export function maybeInstallE2eTauriMocks() {
   if (config.mock?.windowLabel) {
     (window as Window & { isTauri?: boolean }).isTauri = true;
   }
-  mockWindows(config.mock?.windowLabel ?? "main");
+  mockedWindowLabel = config.mock?.windowLabel ?? "main";
+  mockWindows(mockedWindowLabel);
   window.__BUZZ_E2E_COMMANDS__ = [];
   window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
@@ -13234,25 +13503,30 @@ export function maybeInstallE2eTauriMocks() {
   };
   window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ = (command, payload) =>
     handleMockCommand(command, payload ?? null);
-  window.__BUZZ_E2E_EMIT_TAURI_EVENT__ = (event, payload) =>
-    emit(event, payload);
-  mockIPC(handleMockCommand, { shouldMockEvents: true });
-  const tauriInternals = (
-    window as typeof window & {
-      __TAURI_INTERNALS__: {
-        listen?: (
-          event: string,
-          callback: () => void,
-        ) => Promise<() => Promise<void>>;
-      };
+  // Spec-visible seams into the mock bridge. __BUZZ_E2E_EMIT_NATIVE_EVENT__
+  // fires the app's `listen()` handlers; __BUZZ_E2E_LISTEN_NATIVE_EVENT__
+  // subscribes to the backend-signal registry mock command handlers fire
+  // (e.g. "agents-data-changed" after a persona mutation).
+  //
+  // `mockWindows` above is deliberately kept: it supplies __TAURI_INTERNALS__
+  // *window metadata* (huddle-transcription asserts on the popout's label),
+  // which is unrelated to IPC. Only mockIPC and the __TAURI_INTERNALS__.listen
+  // patch are gone, replaced by the NativeBridge the app now talks to.
+  const e2eNativeBridge = new E2eNativeBridge(handleMockCommand);
+  window.__BUZZ_E2E_EMIT_NATIVE_EVENT__ = (event, payload) =>
+    e2eNativeBridge.emit(event, payload);
+  window.__BUZZ_E2E_LISTEN_NATIVE_EVENT__ = async (event, cb) => {
+    let listeners = nativeEventListeners.get(event);
+    if (!listeners) {
+      listeners = new Set();
+      nativeEventListeners.set(event, listeners);
     }
-  ).__TAURI_INTERNALS__;
-  // Page-evaluated E2E specs use this surface; delegate to Tauri's mocked channel
-  // so their listeners observe the same events emitted by application test seams.
-  tauriInternals.listen = async (event, callback) => {
-    const unlisten = await listen(event, () => callback());
-    return async () => unlisten();
+    listeners.add(cb);
+    return async () => {
+      listeners?.delete(cb);
+    };
   };
+  setNativeBridge(e2eNativeBridge);
 
   installed = true;
 }

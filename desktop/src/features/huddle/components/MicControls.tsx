@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/shared/api/nativeBridge";
 import { Check, ChevronUp, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import * as React from "react";
 import type { CSSProperties } from "react";

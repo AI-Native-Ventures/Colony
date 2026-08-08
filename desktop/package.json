@@ -12,7 +12,7 @@
     "check:px-text": "node ./scripts/check-px-text.mjs",
     "check:pubkey-truncation": "node ./scripts/check-pubkey-truncation.mjs",
     "lint": "biome lint .",
-    "check": "biome check . && pnpm check:file-sizes && pnpm check:px-text && pnpm check:pubkey-truncation && pnpm check:native-inventory",
+    "check": "biome check . && pnpm check:file-sizes && pnpm check:px-text && pnpm check:pubkey-truncation && pnpm check:native-inventory && pnpm check:native-bridge-boundary",
     "format": "biome format --write .",
     "test": "node --import ./test-loader.mjs --experimental-strip-types --test \"src/**/*.test.mjs\"",
     "preview": "vite preview",
@@ -23,6 +23,7 @@
     "test:e2e:report": "playwright show-report",
     "tauri:build": "tauri build",
     "check:native-inventory": "node ./scripts/native-inventory.mjs --check",
+    "check:native-bridge-boundary": "node ./scripts/check-native-bridge-boundary.mjs",
     "generate:native-inventory": "node ./scripts/native-inventory.mjs --json ./native-inventory.json"
   },
   "dependencies": {

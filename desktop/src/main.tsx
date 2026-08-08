@@ -21,6 +21,12 @@ import { PoofBurstProvider } from "@/shared/ui/PoofBurstProvider";
 import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
+import { installTauriNativeBridge } from "@/shared/api/tauriNativeBridge";
+
+// Install the default (Tauri) bridge before anything can call it. The e2e
+// mock replaces it in bootstrap via setNativeBridge when running under a
+// mock bridge; feature code never sees a missing bridge.
+installTauriNativeBridge();
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;

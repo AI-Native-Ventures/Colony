@@ -1,5 +1,5 @@
 import * as React from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/shared/api/nativeBridge";
 import { toast } from "sonner";
 
 import { cn } from "@/shared/lib/cn";

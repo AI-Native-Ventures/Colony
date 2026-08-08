@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke, NativeChannel } from "@/shared/api/nativeBridge";
 
 import { createAuthEvent } from "@/shared/api/tauri";
 import type { RelayEvent } from "@/shared/api/types";
@@ -35,7 +35,7 @@ type PendingPublish = {
  */
 export class ReadOnlyRelayClient {
   private wsId: number | null = null;
-  private onMessageChannel: Channel<unknown> | null = null;
+  private onMessageChannel: NativeChannel<unknown> | null = null;
   private connectPromise: Promise<void> | null = null;
   private authRequest: {
     pendingEventId: string;
@@ -132,7 +132,7 @@ export class ReadOnlyRelayClient {
 
   private async openConnection(): Promise<void> {
     const generation = ++this.generation;
-    this.onMessageChannel = new Channel<unknown>((message) => {
+    this.onMessageChannel = new NativeChannel<unknown>((message) => {
       void this.handleWsMessage(message, generation);
     });
 

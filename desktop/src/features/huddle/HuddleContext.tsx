@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, invoke, listen } from "@/shared/api/nativeBridge";
 import * as React from "react";
 
 import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";

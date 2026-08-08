@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { listen } from "@/shared/api/nativeBridge";
 import {
   type BlobDescriptor,
   pickAndUploadMedia,
@@ -149,7 +150,6 @@ export function useMediaUpload() {
     let cancelled = false;
     void (async () => {
       try {
-        const { listen } = await import("@tauri-apps/api/event");
         const dispose = await listen<{
           id: string;
           sent: number;

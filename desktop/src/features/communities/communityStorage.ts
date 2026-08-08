@@ -1,5 +1,5 @@
 import type { Community } from "./types";
-import { homeDir } from "@tauri-apps/api/path";
+import { homeDir } from "@/shared/api/nativeBridge";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
 const COMMUNITIES_KEY = "buzz-communities";

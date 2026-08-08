@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@/shared/api/nativeBridge";
 
 /**
  * Runs the window action that matches the OS "double-click a window's title

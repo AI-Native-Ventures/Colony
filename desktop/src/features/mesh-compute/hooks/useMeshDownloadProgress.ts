@@ -1,5 +1,5 @@
 import * as React from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/shared/api/nativeBridge";
 
 /** Mirror of the Rust MeshDownloadProgress payload (mesh_llm/progress.rs). */
 export type MeshDownloadProgress = {

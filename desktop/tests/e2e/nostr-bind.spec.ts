@@ -30,23 +30,18 @@ const VALID_REQUEST: NostrBindPayload = {
 
 async function emitNostrBind(page: Page, payload: NostrBindPayload) {
   await page.evaluate(async (nextPayload) => {
-    const internals = (
+    const emitNativeEvent = (
       window as Window & {
-        __TAURI_INTERNALS__?: {
-          invoke?: (
-            command: string,
-            args: Record<string, unknown>,
-          ) => Promise<unknown>;
-        };
+        __BUZZ_E2E_EMIT_NATIVE_EVENT__?: (
+          event: string,
+          payload?: unknown,
+        ) => Promise<void>;
       }
-    ).__TAURI_INTERNALS__;
-    if (!internals?.invoke) {
-      throw new Error("Tauri E2E event bridge is unavailable");
+    ).__BUZZ_E2E_EMIT_NATIVE_EVENT__;
+    if (!emitNativeEvent) {
+      throw new Error("Native event bridge is unavailable");
     }
-    await internals.invoke("plugin:event|emit", {
-      event: "deep-link-nostr-bind",
-      payload: nextPayload,
-    });
+    await emitNativeEvent("deep-link-nostr-bind", nextPayload);
   }, payload);
 }
 
