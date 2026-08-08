@@ -14,6 +14,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     app_state::AppState,
+    managed_agents::ManagedAgentRuntimeKey,
     relay::{build_nip98_auth_header, relay_http_base_url},
 };
 
@@ -166,8 +167,17 @@ impl fmt::Debug for GatewayLease {
 }
 
 struct LeaseEntry {
+    /// The generation used for new spawns and already-handed-off pairs.
     lease: GatewayLease,
     refresh_task: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// A prior generation retained only for pairs that could not accept the
+    /// primary replacement yet. It has no refresh task of its own.
+    retained_old: Option<RetainedLease>,
+}
+
+struct RetainedLease {
+    lease: GatewayLease,
+    pair_keys: Vec<ManagedAgentRuntimeKey>,
 }
 
 /// Runtime-owned cache. This type is intentionally not a module-level
@@ -188,7 +198,7 @@ impl ProvisionedCreditsManager {
         None
     }
 
-    fn replace(&mut self, lease: GatewayLease) {
+    fn replace_primary(&mut self, lease: GatewayLease, retained_old: Option<RetainedLease>) {
         if let Some(previous) = self.leases.remove(&lease.key) {
             if let Some(task) = previous.refresh_task {
                 task.abort();
@@ -199,16 +209,70 @@ impl ProvisionedCreditsManager {
             LeaseEntry {
                 lease,
                 refresh_task: None,
+                retained_old,
             },
         );
     }
 
-    fn schedule_refresh(
-        &mut self,
-        app: &AppHandle,
-        key: GatewayLeaseKey,
+    fn retained_snapshot(
+        &self,
+        key: &GatewayLeaseKey,
+    ) -> Option<(GatewayLease, GatewayLease, Vec<ManagedAgentRuntimeKey>)> {
+        let entry = self.leases.get(key)?;
+        let retained = entry.retained_old.as_ref()?;
+        Some((
+            entry.lease.clone(),
+            retained.lease.clone(),
+            retained.pair_keys.clone(),
+        ))
+    }
+
+    fn is_current_generation(
+        &self,
+        key: &GatewayLeaseKey,
         expires_at: DateTime<Utc>,
-    ) {
+        token: &RedactedToken,
+    ) -> bool {
+        self.leases.get(key).is_some_and(|entry| {
+            entry.lease.expires_at == expires_at && entry.lease.token == *token
+        })
+    }
+
+    fn update_retained_old(
+        &mut self,
+        key: &GatewayLeaseKey,
+        pair_keys: Vec<ManagedAgentRuntimeKey>,
+    ) -> Option<GatewayLease> {
+        let entry = self.leases.get_mut(key)?;
+        if pair_keys.is_empty() {
+            return entry.retained_old.take().map(|retained| retained.lease);
+        }
+        if let Some(retained) = entry.retained_old.as_mut() {
+            retained.pair_keys = pair_keys;
+        }
+        None
+    }
+
+    #[cfg(test)]
+    fn retained_pair_keys(&self, key: &GatewayLeaseKey) -> Vec<ManagedAgentRuntimeKey> {
+        self.leases
+            .get(key)
+            .and_then(|entry| entry.retained_old.as_ref())
+            .map(|retained| retained.pair_keys.clone())
+            .unwrap_or_default()
+    }
+
+    fn take_retained_old(&mut self, key: &GatewayLeaseKey) -> Option<GatewayLease> {
+        self.leases
+            .get_mut(key)
+            .and_then(|entry| entry.retained_old.take())
+            .map(|retained| retained.lease)
+    }
+
+    fn schedule_refresh(&mut self, app: &AppHandle, lease: &GatewayLease) {
+        let key = lease.key.clone();
+        let expires_at = lease.expires_at;
+        let token = lease.token.clone();
         let refresh_at = expires_at - ChronoDuration::seconds(GATEWAY_REFRESH_LEAD_SECS);
         let delay = (refresh_at - Utc::now())
             .to_std()
@@ -219,7 +283,7 @@ impl ProvisionedCreditsManager {
             tokio::time::sleep(delay).await;
             let app_for_refresh = app.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                let _ = refresh_lease_blocking(&app_for_refresh, &key_for_task);
+                let _ = refresh_lease_blocking(&app_for_refresh, &key_for_task, expires_at, token);
             })
             .await;
         });
@@ -359,33 +423,56 @@ pub fn ensure_lease_blocking(
 ) -> Result<GatewayLease, String> {
     let owner = owner_pubkey(app, explicit_owner)?;
     let key = GatewayLeaseKey::new(relay_url, &owner)?;
-    rotate_lease_blocking(app, &key, force)
+    rotate_lease_blocking(
+        app,
+        &key,
+        force,
+        if force {
+            RotationReason::ManualReconnect
+        } else {
+            RotationReason::Ensure
+        },
+    )
 }
 
-fn refresh_lease_blocking(app: &AppHandle, key: &GatewayLeaseKey) -> Result<(), String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RotationReason {
+    Ensure,
+    ManualReconnect,
+    ScheduledRefresh,
+}
+
+fn refresh_lease_blocking(
+    app: &AppHandle,
+    key: &GatewayLeaseKey,
+    expected_expires_at: DateTime<Utc>,
+    expected_token: RedactedToken,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let exists = {
         let manager = state
             .provisioned_credits
             .lock()
             .map_err(|error| error.to_string())?;
-        manager.leases.contains_key(key)
+        manager.is_current_generation(key, expected_expires_at, &expected_token)
     };
     if !exists {
         return Ok(());
     }
-    let _ = rotate_lease_blocking(app, key, true)?;
+    let _ = rotate_lease_blocking(app, key, true, RotationReason::ScheduledRefresh)?;
     Ok(())
 }
 
 /// Mint and safely rotate a lease. The manager lock remains held through the
 /// replacement handoff so concurrent ensure/refresh calls cannot mint a
-/// second replacement for the same relay/owner pair. The old token remains
-/// cached and live until every running pair has accepted the replacement.
+/// second replacement for the same relay/owner pair. During a partial handoff
+/// the replacement is primary and the old generation is retained with the
+/// exact failed-pair keys until a later retry converges them.
 fn rotate_lease_blocking(
     app: &AppHandle,
     key: &GatewayLeaseKey,
     force: bool,
+    reason: RotationReason,
 ) -> Result<GatewayLease, String> {
     let state = app.state::<AppState>();
     let mut manager = state
@@ -396,31 +483,108 @@ fn rotate_lease_blocking(
         return Ok(cached);
     }
 
-    let old = manager.leases.get(key).map(|entry| entry.lease.clone());
-    let replacement = mint_lease(app, key.clone())?;
-    if old.is_some() {
-        if let Err(error) =
-            crate::managed_agents::handoff_provisioned_credits_pairs(app, &replacement)
-        {
-            if error.replacement_in_use {
-                // One or more pairs now depend on the replacement. Keep it
-                // cached and leave the old lease live for pairs that still
-                // need an explicit retry; revoking either token here would
-                // strand a working process.
-                manager.replace(replacement.clone());
-                manager.schedule_refresh(app, key.clone(), replacement.expires_at);
-            } else {
-                // No pair accepted the replacement, so the old lease remains
-                // the sole working credential and the unused mint is safe to
-                // revoke.
-                let _ = revoke_lease(app, &replacement);
+    // A partial handoff creates two generations: the replacement is primary
+    // for new/already-handed-off pairs, while the retained old lease stays
+    // live only for the explicitly listed pairs that still use it. Manual
+    // reconnect first retries that exact subset rather than minting a third
+    // generation. Scheduled refresh also converges the subset before minting
+    // its next primary replacement.
+    if let Some((primary, _old, old_pair_keys)) = manager.retained_snapshot(key) {
+        let handoff = crate::managed_agents::handoff_provisioned_credits_pairs(
+            app,
+            &primary,
+            Some(&old_pair_keys),
+        );
+        match handoff {
+            Ok(outcome) if outcome.remaining_old_keys.is_empty() => {
+                let old_to_revoke = manager.take_retained_old(key);
+                drop(manager);
+                if let Some(old) = old_to_revoke {
+                    let _ = revoke_lease(app, &old);
+                }
+                if matches!(reason, RotationReason::ManualReconnect) {
+                    return Ok(primary);
+                }
+                manager = state
+                    .provisioned_credits
+                    .lock()
+                    .map_err(|error| error.to_string())?;
             }
-            return Err(error.message);
+            Ok(outcome) => {
+                manager.update_retained_old(key, outcome.remaining_old_keys);
+                return Err(
+                    "Colony Credits reconnect incomplete — retry reconnect to resume remaining agents"
+                        .to_string(),
+                );
+            }
+            Err(error) => {
+                let old_to_revoke = if error.remaining_old_keys.is_empty() {
+                    manager.take_retained_old(key)
+                } else {
+                    manager.update_retained_old(key, error.remaining_old_keys);
+                    None
+                };
+                drop(manager);
+                if let Some(old) = old_to_revoke {
+                    let _ = revoke_lease(app, &old);
+                }
+                return Err(error.message);
+            }
         }
     }
 
-    manager.replace(replacement.clone());
-    manager.schedule_refresh(app, key.clone(), replacement.expires_at);
+    let old = manager.leases.get(key).map(|entry| entry.lease.clone());
+    let replacement = mint_lease(app, key.clone())?;
+    if let Some(old_primary) = old.clone() {
+        match crate::managed_agents::handoff_provisioned_credits_pairs(app, &replacement, None) {
+            Ok(outcome) if outcome.remaining_old_keys.is_empty() => {}
+            Ok(outcome) => {
+                manager.replace_primary(
+                    replacement.clone(),
+                    Some(RetainedLease {
+                        lease: old_primary.clone(),
+                        pair_keys: outcome.remaining_old_keys,
+                    }),
+                );
+                manager.schedule_refresh(app, &replacement);
+                return Err(
+                    "Colony Credits reconnect incomplete — retry reconnect to resume remaining agents"
+                        .to_string(),
+                );
+            }
+            Err(error) => {
+                if error.replacement_in_use {
+                    // One or more pairs now depend on the replacement. Make it
+                    // primary immediately and retain the old raw token plus the
+                    // exact failed-pair keys. New spawns therefore always receive
+                    // the replacement; old is revoked only after those keys have
+                    // converged on a later explicit retry.
+                    let retained_old = Some(RetainedLease {
+                        lease: old_primary,
+                        pair_keys: error.remaining_old_keys.clone(),
+                    });
+                    manager.replace_primary(replacement.clone(), retained_old);
+                    manager.schedule_refresh(app, &replacement);
+                    if error.remaining_old_keys.is_empty() {
+                        let old_to_revoke = manager.take_retained_old(key);
+                        drop(manager);
+                        if let Some(old) = old_to_revoke {
+                            let _ = revoke_lease(app, &old);
+                        }
+                    }
+                } else {
+                    // No pair accepted the replacement, so the old lease remains
+                    // the sole working credential and the unused mint is safe to
+                    // revoke.
+                    let _ = revoke_lease(app, &replacement);
+                }
+                return Err(error.message);
+            }
+        }
+    }
+
+    manager.replace_primary(replacement.clone(), None);
+    manager.schedule_refresh(app, &replacement);
     drop(manager);
     if let Some(old) = old {
         // Revocation is best-effort after the handoff. A replacement that is
@@ -440,7 +604,7 @@ pub fn force_reconnect_blocking(
 ) -> Result<(), String> {
     let owner = owner_pubkey(app, explicit_owner)?;
     let key = GatewayLeaseKey::new(relay_url, &owner)?;
-    let _ = rotate_lease_blocking(app, &key, true)?;
+    let _ = rotate_lease_blocking(app, &key, true, RotationReason::ManualReconnect)?;
     Ok(())
 }
 
@@ -460,7 +624,20 @@ pub fn clear_lease(app: &AppHandle, key: &GatewayLeaseKey, revoke: bool) -> Resu
             task.abort();
         }
         if revoke {
-            revoke_lease(app, &entry.lease)?;
+            let mut first_error = None;
+            for lease in std::iter::once(entry.lease).chain(
+                entry
+                    .retained_old
+                    .into_iter()
+                    .map(|retained| retained.lease),
+            ) {
+                if let Err(error) = revoke_lease(app, &lease) {
+                    first_error.get_or_insert(error);
+                }
+            }
+            if let Some(error) = first_error {
+                return Err(error);
+            }
         }
     }
     Ok(())
@@ -518,11 +695,127 @@ mod tests {
         assert_ne!(first, other_relay);
         assert_ne!(first, other_owner);
         let mut manager = ProvisionedCreditsManager::default();
-        manager.replace(GatewayLease {
-            key: first.clone(),
-            token,
-            expires_at: Utc::now() + ChronoDuration::days(30),
-        });
+        manager.replace_primary(
+            GatewayLease {
+                key: first.clone(),
+                token,
+                expires_at: Utc::now() + ChronoDuration::days(30),
+            },
+            None,
+        );
         assert!(manager.contains(&first));
+    }
+
+    fn test_key(owner_byte: char) -> ManagedAgentRuntimeKey {
+        ManagedAgentRuntimeKey::new(owner_byte.to_string().repeat(64), "wss://relay.example")
+            .expect("test runtime key")
+    }
+
+    fn test_lease(key: &GatewayLeaseKey, token: &str) -> GatewayLease {
+        GatewayLease {
+            key: key.clone(),
+            token: RedactedToken::new(token.to_string()).expect("test token"),
+            expires_at: Utc::now() + ChronoDuration::days(30),
+        }
+    }
+
+    #[test]
+    fn partial_handoff_keeps_replacement_primary_and_old_for_failed_pair() {
+        let cache_key =
+            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
+        let old_pair = test_key('b');
+        let successful_pair = test_key('c');
+        let old = test_lease(&cache_key, "old-generation");
+        let replacement = test_lease(&cache_key, "replacement-generation");
+        let mut manager = ProvisionedCreditsManager::default();
+        manager.replace_primary(
+            replacement.clone(),
+            Some(RetainedLease {
+                lease: old.clone(),
+                pair_keys: vec![old_pair.clone()],
+            }),
+        );
+
+        assert_eq!(
+            manager
+                .cached(&cache_key, false)
+                .expect("primary lease")
+                .token
+                .as_str(),
+            replacement.token.as_str()
+        );
+        assert_eq!(manager.retained_pair_keys(&cache_key), vec![old_pair]);
+        assert_eq!(
+            manager
+                .retained_snapshot(&cache_key)
+                .expect("retained generation")
+                .1
+                .token
+                .as_str(),
+            old.token.as_str()
+        );
+        assert!(!manager
+            .retained_pair_keys(&cache_key)
+            .contains(&successful_pair));
+    }
+
+    #[test]
+    fn retry_converges_retained_pairs_and_takes_old_once() {
+        let cache_key =
+            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
+        let old = test_lease(&cache_key, "old-generation");
+        let replacement = test_lease(&cache_key, "replacement-generation");
+        let mut manager = ProvisionedCreditsManager::default();
+        manager.replace_primary(
+            replacement,
+            Some(RetainedLease {
+                lease: old.clone(),
+                pair_keys: vec![test_key('b')],
+            }),
+        );
+
+        let old_to_revoke = manager.update_retained_old(&cache_key, vec![]);
+        assert_eq!(
+            old_to_revoke.as_ref().map(|lease| lease.token.as_str()),
+            Some(old.token.as_str())
+        );
+        assert!(manager.retained_pair_keys(&cache_key).is_empty());
+        assert!(manager.take_retained_old(&cache_key).is_none());
+    }
+
+    #[test]
+    fn new_spawn_after_partial_handoff_reads_replacement_primary() {
+        let cache_key =
+            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
+        let replacement = test_lease(&cache_key, "replacement-generation");
+        let mut manager = ProvisionedCreditsManager::default();
+        manager.replace_primary(
+            replacement.clone(),
+            Some(RetainedLease {
+                lease: test_lease(&cache_key, "old-generation"),
+                pair_keys: vec![test_key('b')],
+            }),
+        );
+
+        let spawn_lease = manager.cached(&cache_key, false).expect("spawn lease");
+        assert_eq!(spawn_lease.token.as_str(), replacement.token.as_str());
+    }
+
+    #[test]
+    fn replaced_primary_invalidates_the_prior_refresh_generation() {
+        let cache_key =
+            GatewayLeaseKey::new("wss://relay.example", &"aa".repeat(32)).expect("cache key");
+        let old = test_lease(&cache_key, "old-generation");
+        let replacement = test_lease(&cache_key, "replacement-generation");
+        let mut manager = ProvisionedCreditsManager::default();
+        manager.replace_primary(old.clone(), None);
+        manager.replace_primary(replacement.clone(), None);
+
+        assert!(!manager.is_current_generation(&cache_key, old.expires_at, &old.token));
+        assert!(manager.is_current_generation(
+            &cache_key,
+            replacement.expires_at,
+            &replacement.token
+        ));
     }
 }

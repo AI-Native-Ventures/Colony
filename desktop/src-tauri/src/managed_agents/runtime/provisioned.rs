@@ -90,44 +90,50 @@ pub(crate) fn apply_provisioned_meter_env(
 /// Resolve the meter environment once at the shared spawn boundary. The
 /// validation pass happens before lease minting, so unsupported subscription
 /// harnesses fail without creating a token or a runtime log.
+pub(crate) struct ProvisionedSpawnRequest<'a> {
+    pub(crate) relay_url: &'a str,
+    pub(crate) enabled: bool,
+    pub(crate) descriptor_env: &'a BTreeMap<String, String>,
+    pub(crate) runtime_id: &'a str,
+    pub(crate) effective_provider: Option<&'a str>,
+    pub(crate) owner_hex: Option<&'a str>,
+    pub(crate) lease_override: Option<&'a GatewayLease>,
+}
+
+pub(crate) type ProvisionedSpawnEnv = (GatewayLease, BTreeMap<String, String>);
+
 pub(crate) fn provisioned_spawn_env(
     app: &AppHandle,
-    relay_url: &str,
-    enabled: bool,
-    descriptor_env: &BTreeMap<String, String>,
-    runtime_id: &str,
-    effective_provider: Option<&str>,
-    owner_hex: Option<&str>,
-    lease_override: Option<&GatewayLease>,
-) -> Result<Option<(GatewayLease, BTreeMap<String, String>)>, String> {
-    if !enabled {
+    request: ProvisionedSpawnRequest<'_>,
+) -> Result<Option<ProvisionedSpawnEnv>, String> {
+    if !request.enabled {
         return Ok(None);
     }
-    let provider = effective_provider.or_else(|| {
-        let key = match runtime_id {
+    let provider = request.effective_provider.or_else(|| {
+        let key = match request.runtime_id {
             "buzz-agent" => "BUZZ_AGENT_PROVIDER",
             "goose" => "GOOSE_PROVIDER",
             _ => return None,
         };
-        descriptor_env.get(key).map(String::as_str)
+        request.descriptor_env.get(key).map(String::as_str)
     });
-    let mut meter_env = descriptor_env.clone();
+    let mut meter_env = request.descriptor_env.clone();
     apply_provisioned_meter_env(
         &mut meter_env,
-        relay_url,
+        request.relay_url,
         "validation-token",
-        runtime_id,
+        request.runtime_id,
         provider,
     )?;
-    let lease = match lease_override {
+    let lease = match request.lease_override {
         Some(lease) => lease.clone(),
-        None => ensure_lease_blocking(app, relay_url, owner_hex, false)?,
+        None => ensure_lease_blocking(app, request.relay_url, request.owner_hex, false)?,
     };
     apply_provisioned_meter_env(
         &mut meter_env,
-        relay_url,
+        request.relay_url,
         lease.token.as_str(),
-        runtime_id,
+        request.runtime_id,
         provider,
     )?;
     Ok(Some((lease, meter_env)))

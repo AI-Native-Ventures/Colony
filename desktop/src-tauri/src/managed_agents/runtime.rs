@@ -8,8 +8,8 @@ use crate::{
     managed_agents::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        spawn_key_refusal, KnownAcpRuntime, ManagedAgentPairRuntime, ManagedAgentRecord,
-        ManagedAgentRuntimeKey, ManagedAgentSummary,
+        spawn_key_refusal, CredentialMode, KnownAcpRuntime, ManagedAgentPairRuntime,
+        ManagedAgentRecord, ManagedAgentRuntimeKey, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -500,16 +500,15 @@ fn spawn_agent_child_inner(
     let runtime_id = runtime_meta.map(|runtime| runtime.id).unwrap_or("custom");
     let provisioned_lease = provisioned_spawn_env(
         app,
-        &effective_relay_url,
-        matches!(
-            global.credential_mode,
-            crate::managed_agents::CredentialMode::ColonyCredits
-        ),
-        &descriptor.env,
-        runtime_id,
-        effective_cfg.provider.value.as_deref(),
-        owner_hex,
-        lease_override,
+        provisioned::ProvisionedSpawnRequest {
+            relay_url: &effective_relay_url,
+            enabled: matches!(global.credential_mode, CredentialMode::ColonyCredits),
+            descriptor_env: &descriptor.env,
+            runtime_id,
+            effective_provider: effective_cfg.provider.value.as_deref(),
+            owner_hex,
+            lease_override,
+        },
     )?;
 
     let log_path = super::managed_agent_runtime_log_path(app, &runtime_key)?;

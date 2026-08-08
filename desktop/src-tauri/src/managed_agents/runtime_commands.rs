@@ -23,15 +23,25 @@ const STATUS_EVENT: &str = "managed-agent-runtime-status";
 pub(crate) struct ProvisionedCreditsHandoffError {
     pub(crate) message: String,
     pub(crate) replacement_in_use: bool,
+    pub(crate) remaining_old_keys: Vec<ManagedAgentRuntimeKey>,
 }
 
 impl ProvisionedCreditsHandoffError {
-    fn new(message: impl Into<String>, replacement_in_use: bool) -> Self {
+    fn new(
+        message: impl Into<String>,
+        replacement_in_use: bool,
+        remaining_old_keys: Vec<ManagedAgentRuntimeKey>,
+    ) -> Self {
         Self {
             message: message.into(),
             replacement_in_use,
+            remaining_old_keys,
         }
     }
+}
+
+pub(crate) struct ProvisionedCreditsHandoff {
+    pub(crate) remaining_old_keys: Vec<ManagedAgentRuntimeKey>,
 }
 
 fn status_for(
@@ -246,47 +256,60 @@ pub(crate) fn start_managed_agent_runtime_pair_lazy(
     start_pair(pubkey, relay_url, true, None, app)
 }
 
-/// Stage a replacement meter lease into every live pair on the matching relay
-/// before the lease manager revokes the old token. Replacement harnesses are
-/// spawned first; if any spawn fails, all staged children are terminated and
-/// the existing pairs remain untouched.
+/// Stage a replacement meter lease into live pairs on the matching relay
+/// before the lease manager revokes the old token. `target_keys` is used by a
+/// retry to select only pairs still on a retained old generation; a full
+/// rotation passes `None`. Replacement harnesses are spawned first; if any
+/// spawn fails, all staged children are terminated and the existing pairs
+/// remain untouched. The returned/error key list is the exact subset that
+/// still uses the old generation, so the lease manager can retain and retry
+/// it without orphaning the raw token reference.
 pub(crate) fn handoff_provisioned_credits_pairs(
     app: &AppHandle,
     lease: &GatewayLease,
-) -> Result<(), ProvisionedCreditsHandoffError> {
+    target_keys: Option<&[ManagedAgentRuntimeKey]>,
+) -> Result<ProvisionedCreditsHandoff, ProvisionedCreditsHandoffError> {
     let state = app.state::<AppState>();
     let _transition = state
         .managed_agent_runtime_transition
         .lock()
-        .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false))?;
+        .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false, vec![]))?;
     let _store = state
         .managed_agents_store_lock
         .lock()
-        .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false))?;
+        .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false, vec![]))?;
     let records = load_managed_agents(app)
-        .map_err(|error| ProvisionedCreditsHandoffError::new(error, false))?;
+        .map_err(|error| ProvisionedCreditsHandoffError::new(error, false, vec![]))?;
     let running_keys: Vec<ManagedAgentRuntimeKey> = {
-        let mut runtimes = state
-            .managed_agent_processes
-            .lock()
-            .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false))?;
+        let mut runtimes = state.managed_agent_processes.lock().map_err(|error| {
+            ProvisionedCreditsHandoffError::new(error.to_string(), false, vec![])
+        })?;
         runtimes
             .iter_mut()
             .filter_map(|(key, runtime)| {
                 let alive = runtime.child.try_wait().ok().flatten().is_none();
-                (alive && normalized_relay_http_origin(&key.relay_url) == lease.key.relay_origin)
-                    .then(|| key.clone())
+                (alive
+                    && normalized_relay_http_origin(&key.relay_url) == lease.key.relay_origin
+                    && target_keys
+                        .map(|targets| targets.iter().any(|target| target == key))
+                        .unwrap_or(true))
+                .then(|| key.clone())
             })
             .collect()
     };
     if running_keys.is_empty() {
-        return Ok(());
+        return Ok(ProvisionedCreditsHandoff {
+            remaining_old_keys: vec![],
+        });
     }
+    let mut remaining_old_keys = running_keys.clone();
 
     let owner = state
         .signing_keys()
         .map(|keys| keys.public_key().to_hex())
-        .map_err(|error| ProvisionedCreditsHandoffError::new(error, false))?;
+        .map_err(|error| {
+            ProvisionedCreditsHandoffError::new(error, false, remaining_old_keys.clone())
+        })?;
     let mut staged: Vec<(ManagedAgentRuntimeKey, super::ManagedAgentProcess)> =
         Vec::with_capacity(running_keys.len());
     for key in &running_keys {
@@ -301,6 +324,7 @@ pub(crate) fn handoff_provisioned_credits_pairs(
             return Err(ProvisionedCreditsHandoffError::new(
                 format!("managed agent {} disappeared during reconnect", key.pubkey),
                 false,
+                remaining_old_keys.clone(),
             ));
         };
         match super::spawn_agent_child_with_lease(
@@ -317,15 +341,18 @@ pub(crate) fn handoff_provisioned_credits_pairs(
                     let _ = terminate_process(process.child.id());
                     let _ = process.child.wait();
                 }
-                return Err(ProvisionedCreditsHandoffError::new(error, false));
+                return Err(ProvisionedCreditsHandoffError::new(
+                    error,
+                    false,
+                    remaining_old_keys.clone(),
+                ));
             }
         }
     }
 
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|error| ProvisionedCreditsHandoffError::new(error.to_string(), false))?;
+    let mut runtimes = state.managed_agent_processes.lock().map_err(|error| {
+        ProvisionedCreditsHandoffError::new(error.to_string(), false, remaining_old_keys.clone())
+    })?;
     let mut replacement_in_use = false;
     for key in &running_keys {
         let staged_index = staged.iter().position(|(staged_key, _)| staged_key == key);
@@ -337,6 +364,7 @@ pub(crate) fn handoff_provisioned_credits_pairs(
             return Err(ProvisionedCreditsHandoffError::new(
                 "managed-agent replacement disappeared during reconnect",
                 replacement_in_use,
+                remaining_old_keys.clone(),
             ));
         };
         let Some(mut runtime) = runtimes.remove(key) else {
@@ -347,6 +375,7 @@ pub(crate) fn handoff_provisioned_credits_pairs(
             return Err(ProvisionedCreditsHandoffError::new(
                 "managed-agent pair changed during reconnect",
                 replacement_in_use,
+                remaining_old_keys.clone(),
             ));
         };
 
@@ -369,6 +398,7 @@ pub(crate) fn handoff_provisioned_credits_pairs(
                 return Err(ProvisionedCreditsHandoffError::new(
                     error,
                     replacement_in_use,
+                    remaining_old_keys.clone(),
                 ));
             }
         }
@@ -384,6 +414,7 @@ pub(crate) fn handoff_provisioned_credits_pairs(
         let receipt_error = write_agent_runtime_receipt(app, &receipt).err();
         runtimes.insert(key.clone(), ManagedAgentPairRuntime::starting(process));
         replacement_in_use = true;
+        remaining_old_keys.retain(|old_key| old_key != key);
         if let Some(error) = receipt_error {
             // The replacement is already live and tracked.  Keep it running
             // and let the caller retain the new lease while reporting the
@@ -392,10 +423,14 @@ pub(crate) fn handoff_provisioned_credits_pairs(
                 let _ = terminate_process(process.child.id());
                 let _ = process.child.wait();
             }
-            return Err(ProvisionedCreditsHandoffError::new(error, true));
+            return Err(ProvisionedCreditsHandoffError::new(
+                error,
+                true,
+                remaining_old_keys.clone(),
+            ));
         }
     }
-    Ok(())
+    Ok(ProvisionedCreditsHandoff { remaining_old_keys })
 }
 
 #[tauri::command]
