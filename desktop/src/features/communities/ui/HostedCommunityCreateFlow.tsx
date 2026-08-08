@@ -4,12 +4,11 @@ import { AlertCircle, LoaderCircle } from "lucide-react";
 import {
   checkColonyCommunityName,
   createColonyCommunity,
-  HOSTED_COMMUNITY_LIMIT,
-  HOSTED_COMMUNITY_SUFFIX,
   hostedCommunityRelayUrl,
   listColonyCommunities,
   VALID_HOSTED_COMMUNITY_NAME,
 } from "@/features/communities/hostedCommunityApi";
+import { useColonyProvisioning } from "@/features/communities/useColonyProvisioning";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
 import {
   CHANNEL_FORM_FIELD_CONTROL_CLASS,
@@ -35,6 +34,7 @@ export function HostedCommunityCreateFlow({
   onComplete,
 }: HostedCommunityCreateFlowProps) {
   const onboarding = useCommunityOnboarding();
+  const provisioning = useColonyProvisioning();
   const [ownedCount, setOwnedCount] = React.useState<number | null>(null);
   const [name, setName] = React.useState("");
   const [availability, setAvailability] = React.useState<boolean | null>(null);
@@ -67,10 +67,13 @@ export function HostedCommunityCreateFlow({
     normalizedName.length <= 63 &&
     VALID_HOSTED_COMMUNITY_NAME.test(normalizedName);
   const atCommunityLimit =
-    ownedCount !== null && ownedCount >= HOSTED_COMMUNITY_LIMIT;
+    ownedCount !== null && ownedCount >= provisioning.maxPerOwner;
+  // A relay with no provisioning domain rejects every create.
+  const canCreate = provisioning.selfServe;
 
   React.useEffect(() => {
-    if (!normalizedName || !validName) {
+    // A relay that cannot provision 404s this per keystroke; do not ask.
+    if (!canCreate || !normalizedName || !validName) {
       setCheckingName(false);
       return;
     }
@@ -92,11 +95,11 @@ export function HostedCommunityCreateFlow({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [normalizedName, validName]);
+  }, [canCreate, normalizedName, validName]);
 
   const create = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!validName || atCommunityLimit || action) return;
+    if (!canCreate || !validName || atCommunityLimit || action) return;
     setAction("Creating community…");
     setError(null);
     void (async () => {
@@ -132,17 +135,23 @@ export function HostedCommunityCreateFlow({
     })();
   };
 
-  const feedback = atCommunityLimit
-    ? `You’ve reached the limit of ${HOSTED_COMMUNITY_LIMIT} hosted communities.`
-    : name && !validName
-      ? "Use lowercase letters, numbers, and single hyphens."
-      : checkingName
-        ? "Checking availability…"
-        : availability === false
-          ? "That address is already taken."
-          : availability === true
-            ? "That address is available."
-            : "You can’t change this address after creating the community.";
+  const feedback = provisioning.loading
+    ? "Asking the relay for its community address…"
+    : provisioning.unreachable
+      ? "Could not reach the relay to check how it creates communities."
+      : !canCreate
+        ? "This relay does not offer self-serve community creation. Add an existing community with its URL instead."
+        : atCommunityLimit
+          ? `You’ve reached the limit of ${provisioning.maxPerOwner} hosted communities.`
+          : name && !validName
+            ? "Use lowercase letters, numbers, and single hyphens."
+            : checkingName
+              ? "Checking availability…"
+              : availability === false
+                ? "That address is already taken."
+                : availability === true
+                  ? "That address is available."
+                  : "You can’t change this address after creating the community.";
 
   return (
     <form className="space-y-5" onSubmit={create}>
@@ -169,7 +178,7 @@ export function HostedCommunityCreateFlow({
               CHANNEL_FORM_FIELD_CONTROL_CLASS,
             )}
             data-testid="hosted-community-create-name"
-            disabled={Boolean(action) || atCommunityLimit}
+            disabled={Boolean(action) || atCommunityLimit || !canCreate}
             id="hosted-community-create-name"
             maxLength={63}
             onChange={(event) => {
@@ -181,9 +190,14 @@ export function HostedCommunityCreateFlow({
             spellCheck={false}
             value={name}
           />
-          <span className="shrink-0 text-sm text-muted-foreground/70">
-            .{HOSTED_COMMUNITY_SUFFIX}
-          </span>
+          {provisioning.domain ? (
+            <span
+              className="shrink-0 text-sm text-muted-foreground/70"
+              data-testid="hosted-community-create-suffix"
+            >
+              .{provisioning.domain}
+            </span>
+          ) : null}
         </div>
         <p
           className={cn(
@@ -209,6 +223,7 @@ export function HostedCommunityCreateFlow({
         <Button
           data-testid="hosted-community-create-submit"
           disabled={
+            !canCreate ||
             !validName ||
             availability === false ||
             checkingName ||

@@ -183,6 +183,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
 
+    // WebDriverIO test harness (feature-gated, never in shipping builds):
+    // embeds a W3C WebDriver server (macOS-capable without external drivers)
+    // and the wdio execute/mock/log surface used by desktop/e2e-real-shell.
+    #[cfg(feature = "wdio-harness")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
+
     // The global-shortcut plugin is omitted from test builds: linking it into
     // the lib-test binary makes it fail to load on Windows
     // (STATUS_ENTRYPOINT_NOT_FOUND) before any test runs.
@@ -626,6 +634,7 @@ pub fn run() {
             colony_check_community_name,
             colony_create_community,
             colony_list_my_communities,
+            colony_provisioning_config,
             title_bar_double_click,
             get_identity,
             save_discovery_credential,

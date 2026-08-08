@@ -47,6 +47,24 @@ async fn parse_response(response: reqwest::Response) -> Result<Value, String> {
     serde_json::from_str(&body).map_err(|_| "relay returned malformed JSON".to_string())
 }
 
+/// `GET /api/communities/config` — no auth required.
+///
+/// Tells the create form which domain the connected relay actually provisions
+/// on, and whether it provisions at all. Without it the form hardcodes a
+/// suffix and prints the production address on every relay.
+#[tauri::command]
+pub async fn colony_provisioning_config(state: State<'_, AppState>) -> Result<Value, String> {
+    let base = relay_api_base_url_with_override(&state);
+    let url = format!("{base}/api/communities/config");
+    let response = state
+        .http_client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("relay unreachable: {e}"))?;
+    parse_response(response).await
+}
+
 /// `GET /api/communities/availability?name=` — no auth required.
 #[tauri::command]
 pub async fn colony_check_community_name(

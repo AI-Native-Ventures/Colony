@@ -6,21 +6,38 @@ HOST=$(rustc -vV | sed -n 's|host: ||p')
 TARGET=${1:-$HOST}
 BINARIES_DIR="desktop/src-tauri/binaries"
 
-# When --target is passed explicitly to cargo (even if it matches the host),
-# binaries land in target/<triple>/release/. Without --target, they land in
-# target/release/. The script receives the target as $1 only when cargo was
-# invoked with --target, so use the qualified path whenever $1 is set.
-if [[ -n "${1:-}" ]]; then
-    SRC_DIR="target/${TARGET}/release"
-else
-    SRC_DIR="target/release"
-fi
-
 # MSVC emits <name>.exe; Tauri's externalBin then expects binaries/<name>-<triple>.exe.
 if [[ "$TARGET" == *windows* ]]; then
     EXE=".exe"
 else
     EXE=""
+fi
+
+# When --target is passed explicitly to cargo (even if it matches the host),
+# binaries land in target/<triple>/release/. Without --target, they land in
+# target/release/. The script receives the target as $1 only when cargo was
+# invoked with --target, so use the qualified path whenever $1 is set, with a
+# fallback to target/release: plain `cargo build --release` on the host triple
+# (the fresh-clone path) never populates the qualified directory, while Tauri
+# still names the bundled sidecar with the triple.
+if [[ -n "${1:-}" ]]; then
+    SRC_DIR="target/${TARGET}/release"
+    missing_in_qualified=0
+    for bin in "${SIDECARS[@]}"; do
+        [[ -f "${SRC_DIR}/${bin}${EXE}" ]] || missing_in_qualified=1
+    done
+    if [[ "${missing_in_qualified}" -eq 1 ]]; then
+        plain_dir="target/release"
+        all_in_plain=1
+        for bin in "${SIDECARS[@]}"; do
+            [[ -f "${plain_dir}/${bin}${EXE}" ]] || all_in_plain=0
+        done
+        if [[ "${all_in_plain}" -eq 1 ]]; then
+            SRC_DIR="${plain_dir}"
+        fi
+    fi
+else
+    SRC_DIR="target/release"
 fi
 
 missing=()

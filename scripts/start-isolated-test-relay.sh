@@ -81,7 +81,12 @@ MINIO_CONSOLE_PORT="${HARNESS_MINIO_CONSOLE_PORT}"
 RELAY_MAIN="${HARNESS_RELAY_PORT}"
 RELAY_HEALTH="${HARNESS_HEALTH_PORT}"
 RELAY_METRICS="${HARNESS_METRICS_PORT}"
-COMMUNITY_HOST="localhost:${RELAY_MAIN}"
+# The desktop real-shell harness needs BOTH loopback spellings seeded: the
+# app connects via `localhost`, while the managed-agent runtime canonicalizes
+# relay URLs to 127.0.0.1 (buzz_core::relay::normalize_relay_url) before the
+# sidecar connects — and the relay is host-scoped, so the sidecar 404s unless
+# 127.0.0.1 resolves to a community too.
+COMMUNITY_HOST="localhost:${RELAY_MAIN},127.0.0.1:${RELAY_MAIN}"
 DISCOVERY_EXTERNAL_WORKER_ENABLED="${BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED:-false}"
 DISCOVERY_FAKE_EXECUTOR_ENABLED="${BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED:-false}"
 DISCOVERY_LEASE_SECONDS="${BUZZ_DISCOVERY_LEASE_SECONDS:-30}"
