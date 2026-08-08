@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -535,19 +534,6 @@ async function apphandleUsage(files) {
   return counts;
 }
 
-function gitHead(projectRoot) {
-  try {
-    return execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: projectRoot,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
 export async function buildInventory(projectRoot) {
   const files = await rustFiles(projectRoot);
   const registered = await registeredCommands(projectRoot);
@@ -646,7 +632,10 @@ export async function buildInventory(projectRoot) {
   }
 
   return {
-    commit: gitHead(projectRoot),
+    // Deliberately no `commit` field. It was informational only -- the drift
+    // check deletes it from both sides before comparing -- while guaranteeing a
+    // merge conflict between any two branches that regenerate this file, since
+    // it embeds git HEAD. Phase 1 has eleven tickets that each regenerate it.
     files: {
       rust_total: files.length,
       rust_lines: totalLines,

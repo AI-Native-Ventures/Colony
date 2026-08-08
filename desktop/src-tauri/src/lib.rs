@@ -639,6 +639,7 @@ pub fn run() {
             colony_check_community_name,
             colony_create_community,
             colony_list_my_communities,
+            colony_provisioning_config,
             title_bar_double_click,
             get_identity,
             save_discovery_credential,

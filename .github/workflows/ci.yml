@@ -9,6 +9,11 @@ on:
     branches: [main, develop, release]
   pull_request:
     branches: [main, develop, release]
+  # Required for the develop merge queue. Without this trigger the queue creates
+  # no check runs at all, so every required check stays pending and entries sit
+  # in AWAITING_CHECKS forever -- three PRs were stuck for an hour before anyone
+  # noticed, because "pending" looks like "running".
+  merge_group:
 
 # One run per ref, newest wins. Rapid promotions to main collapse into a
 # single run that tests the cumulative state instead of billing one full
@@ -30,10 +35,27 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # In a merge_group run, paths-filter has no base to diff against:
+    # github.ref is the gh-readonly-queue branch and fetch-depth 2 does not
+    # contain the queue's base_sha. So buckets are set explicitly rather than
+    # filtered.
+    #
+    # rust / desktop / desktop-rust are forced true because between them they
+    # gate every one of the five required checks (Rust Lint, Unit Tests,
+    # Desktop Core, Desktop, and Detect Changed Paths which always runs). The
+    # queue re-tests those on the merged result, which is the whole point of it.
+    #
+    # web / mobile / blocks are NOT forced. They gate only Web, Mobile and
+    # Blocks Live Gate, none of which is required, and Mobile alone is 915
+    # Flutter tests. Running them per batch buys no gate strength and spends
+    # the queue's 60-minute check_response_timeout -- and a queue run that times
+    # out fails into exactly the stuck-forever state this commit fixes. The
+    # relay e2e chain still runs, since it hangs off `rust`; it is the longest
+    # pole in a queue run and #168 lengthened its cold build further.
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      desktop: ${{ steps.filter.outputs.desktop }}
-      desktop-rust: ${{ steps.filter.outputs.desktop-rust }}
+      rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.rust }}
+      desktop: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop }}
+      desktop-rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop-rust }}
       web: ${{ steps.filter.outputs.web }}
       mobile: ${{ steps.filter.outputs.mobile }}
       blocks: ${{ steps.filter.outputs.blocks }}
@@ -43,6 +65,7 @@ jobs:
           fetch-depth: 2
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
+        if: github.event_name != 'merge_group'
         with:
           token: ''
           filters: |
