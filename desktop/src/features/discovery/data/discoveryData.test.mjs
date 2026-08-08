@@ -183,6 +183,40 @@ test("fixture lead detail round-trips an edit and defaults status to candidate",
   assert.ok(updated.updatedAt);
 });
 
+test("fixture updateLead wipes omitted fields the way the relay does", async () => {
+  const source = createFixtureDiscoveryDataSource();
+  const page = await source.getLeads({ scope: "global", page: 1, pageSize: 1 });
+  const leadId = page.leads[0].id;
+
+  const seeded = await source.updateLead(leadId, {
+    status: "accepted",
+    website: "https://seed.example",
+    email: "seed@example.com",
+    notes: "Warm intro",
+    owner: "Chief of Staff",
+    score: 82,
+  });
+  assert.equal(seeded.email, "seed@example.com");
+  assert.equal(seeded.notes, "Warm intro");
+
+  // A partial write is destructive on the relay, so it must be destructive
+  // here too. If this ever preserves the omitted fields, demo mode and every
+  // Playwright edit case go blind to the data-loss hazard and only the wire
+  // test in RelayDiscoveryDataSource.test.mjs still catches it.
+  const partial = await source.updateLead(leadId, {
+    website: "https://changed.example",
+  });
+  assert.equal(partial.website, "https://changed.example");
+  assert.equal(partial.email, undefined, "an omitted email must be cleared");
+  assert.equal(partial.notes, undefined, "omitted notes must be cleared");
+  assert.equal(partial.owner, undefined, "an omitted owner must be cleared");
+  assert.equal(
+    partial.status,
+    "accepted",
+    "status is the one field the relay carries forward",
+  );
+});
+
 test("fixture source returns the complete SalesTeams people hierarchy", async () => {
   const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
   const fields = await source.getFields();

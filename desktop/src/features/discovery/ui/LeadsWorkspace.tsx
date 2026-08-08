@@ -15,8 +15,9 @@ import { Card } from "@/shared/ui/card";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
+import { recentLeadDetail, subscribeLeadUpdates } from "../data/leadUpdates";
 import { describeExportOutcome, exportLeadsToCsv } from "../lib/exportLeads";
-import type { CampaignDetail, LeadPage } from "../types";
+import type { CampaignDetail, Lead, LeadDetail, LeadPage } from "../types";
 import {
   EMPTY_LEAD_FILTERS,
   filterLeads,
@@ -49,6 +50,20 @@ export type LeadsWorkspaceProps = {
  */
 function notYetAvailable(action: string) {
   return `${action} is not available yet.`;
+}
+
+/** Editable fields from a lead update receipt, applied to a list row. */
+function leadUpdateFields(updated: LeadDetail): Partial<Lead> {
+  return {
+    website: updated.website,
+    email: updated.email,
+    phone: updated.phone,
+    linkedinUrl: updated.linkedinUrl,
+    contactName: updated.contactName,
+    contactTitle: updated.contactTitle,
+    owner: updated.owner,
+    score: updated.score,
+  };
 }
 
 function ViewToggle({
@@ -166,7 +181,20 @@ function CampaignLeads({
     targetType: campaign.targetType,
   });
 
-  const leads = page?.leads ?? [];
+  const [leadUpdateTick, setLeadUpdateTick] = React.useState(0);
+  React.useEffect(() => {
+    return subscribeLeadUpdates(() => setLeadUpdateTick((tick) => tick + 1));
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recentLeadDetail reads a module-level cache, so the memo must re-run when a receipt lands.
+  const leads = React.useMemo(
+    () =>
+      (page?.leads ?? []).map((row) => {
+        const updated = recentLeadDetail(row.id);
+        return updated ? { ...row, ...leadUpdateFields(updated) } : row;
+      }),
+    [leadUpdateTick, page],
+  );
   const visibleLeads = filterLeads(leads, filters);
   const people = campaign.targetType === "individual";
   if (isLoading) {
@@ -261,7 +289,20 @@ function GlobalLeads({
 
   React.useEffect(() => setMode(initialMode), [initialMode]);
 
-  const leads = page?.leads ?? [];
+  const [leadUpdateTick, setLeadUpdateTick] = React.useState(0);
+  React.useEffect(() => {
+    return subscribeLeadUpdates(() => setLeadUpdateTick((tick) => tick + 1));
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recentLeadDetail reads a module-level cache, so the memo must re-run when a receipt lands.
+  const leads = React.useMemo(
+    () =>
+      (page?.leads ?? []).map((row) => {
+        const updated = recentLeadDetail(row.id);
+        return updated ? { ...row, ...leadUpdateFields(updated) } : row;
+      }),
+    [leadUpdateTick, page],
+  );
   const modeLeads = leads.filter((lead) =>
     mode === "people"
       ? lead.entityType === "person"

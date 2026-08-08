@@ -53,6 +53,11 @@ export type FixtureDiscoveryDataSourceOptions = {
   scenario?: FixtureScenario;
   /** Return an empty global Leads page so the empty state is browser-testable. */
   emptyLeads?: boolean;
+  /**
+   * Make `updateLead` reject with this message, simulating a relay refusal
+   * so the drawer's inline rejection path is browser-testable in demo mode.
+   */
+  updateLeadReject?: string;
 };
 
 export type CreateFixtureDiscoveryDataSourceOptions =
@@ -193,6 +198,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   >();
   private readonly leadProfiles = new Map<string, Partial<LeadDetail>>();
   private readonly emptyLeads: boolean;
+  private readonly updateLeadReject?: string;
   private nextCampaignNumber = 1;
   private nextRunToken = 1;
 
@@ -200,6 +206,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     this.entitlement = normalizeEntitlement(options.entitlement);
     this.defaultScenario = options.scenario ?? "concurrent";
     this.emptyLeads = options.emptyLeads ?? false;
+    this.updateLeadReject = options.updateLeadReject;
 
     const fixtureCampaign = clone(CAMPAIGN_FIXTURE);
     fixtureCampaign.run = createIdleDiscoveryRun(fixtureCampaign);
@@ -293,13 +300,34 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     leadId: string,
     input: LeadUpdateInput,
   ): Promise<LeadDetail> {
+    if (this.updateLeadReject) {
+      throw new Error(this.updateLeadReject);
+    }
     await this.getLead(leadId);
     const current = this.leadProfiles.get(leadId) ?? {};
-    this.leadProfiles.set(leadId, {
-      ...current,
-      ...input,
+    // `update_lead` is a full-profile upsert on the relay: every editable
+    // column is overwritten from the request, and a field the caller omits
+    // binds NULL and wipes the stored value. Only `status` falls back to the
+    // previous value. Spreading `input` over `current` would preserve omitted
+    // fields and make demo disagree with live, so each field is written
+    // explicitly. A caller that sends a partial profile must lose data here
+    // too, otherwise the demo path and Playwright are blind to the one hazard
+    // this whole edit flow is built around.
+    const next: Partial<LeadDetail> = {
+      website: input.website,
+      email: input.email,
+      phone: input.phone,
+      linkedinUrl: input.linkedinUrl,
+      contactName: input.contactName,
+      contactTitle: input.contactTitle,
+      owner: input.owner,
+      score: input.score,
+      notes: input.notes,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    const status = input.status ?? current.status;
+    if (status) next.status = status;
+    this.leadProfiles.set(leadId, next);
     return this.getLead(leadId);
   }
 
