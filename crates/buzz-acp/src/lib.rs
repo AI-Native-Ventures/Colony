@@ -4128,6 +4128,43 @@ what you already know"
 }
 
 #[cfg(test)]
+mod ask_prompt_tests {
+    const BASE_PROMPT: &str = include_str!("base_prompt.md");
+
+    #[test]
+    fn an_ask_event_carries_its_ask_block_into_the_turn() {
+        let filer = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"type":"decision","headline":"Which vendor for SMS?","cost_of_delay":"onboarding is blocked"}"#,
+        )
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        let ask = crate::ask_context::read_incoming_ask(&event)
+            .expect("an ask event must read as an ask");
+        let section = crate::ask_context::ask_context_section(&ask);
+
+        assert!(
+            section.contains(&event.id.to_hex()),
+            "the turn must carry the ask id or the agent cannot answer it"
+        );
+    }
+
+    #[test]
+    fn base_prompt_tells_an_agent_what_to_do_with_a_received_ask() {
+        assert!(
+            BASE_PROMPT.contains("<colony-ask>"),
+            "the prompt must explain the block the agent will receive"
+        );
+        assert!(
+            BASE_PROMPT.contains("buzz asks answer"),
+            "an agent told only how to raise asks will never answer one"
+        );
+    }
+}
+
+#[cfg(test)]
 mod agent_draft_prompt_tests {
     #[test]
     fn shared_base_prompt_teaches_portable_agent_drafts() {

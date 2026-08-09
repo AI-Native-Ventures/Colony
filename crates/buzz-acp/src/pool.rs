@@ -2034,6 +2034,11 @@ pub async fn run_prompt_task(
         }
         None => None,
     };
+    let ask_section = batch
+        .as_ref()
+        .and_then(|b| b.events.last())
+        .and_then(|batch_event| crate::ask_context::read_incoming_ask(&batch_event.event))
+        .map(|ask| crate::ask_context::ask_context_section(&ask));
 
     let mut slash_command: Option<String> = None;
     let prompt_sections: Vec<String> = if let Some(text) = prompt_text {
@@ -2124,20 +2129,24 @@ pub async fn run_prompt_task(
     // own block. Per-section blocks let the observer size trimmer elide a
     // section body in place while every `[Header]` line survives at the head
     // of its own leaf — so the "Prompt context" panel counts every section.
-    // The work section leads, so the agent reads what it is working on before
-    // it reads the instruction. It is its own block for the same reason every
+    // An addressed ask leads, so the agent sees the unblock request before
+    // ordinary work context and the rest of the event prompt. The work section
+    // follows it, so the agent reads what it is working on before it reads the
+    // rest of the instruction. Each is its own block for the same reason every
     // other section is.
     let work_section = work_context
         .as_ref()
         .map(crate::work_context::work_context_section);
     let prompt_blocks: Vec<&str> = match slash_command {
         Some(ref cmd) => std::iter::once(cmd.as_str())
+            .chain(ask_section.as_deref())
             .chain(work_section.as_deref())
             .chain(prompt_sections.iter().map(String::as_str))
             .collect(),
-        None => work_section
+        None => ask_section
             .as_deref()
             .into_iter()
+            .chain(work_section.as_deref())
             .chain(prompt_sections.iter().map(String::as_str))
             .collect(),
     };
