@@ -62,8 +62,40 @@ fn is_subcommand(name: &str) -> bool {
     std::env::args().nth(1).map(|a| a == name).unwrap_or(false)
 }
 
-/// Timeout for lightweight helper subcommands (spawn + initialize + model/method probes).
-const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default timeout for lightweight helper subcommands (spawn + initialize +
+/// model/method probes).
+///
+/// 10s was measured against `claude-agent-acp`, which initializes in about two
+/// seconds. Every other adapter shipped in the harness catalog exceeded it on a
+/// normal machine, so `buzz-acp models` returned `agent timed out (10s)` for
+/// codex, opencode, and grok alike, and the desktop model dropdown rendered
+/// empty with no error surfaced. An empty dropdown reads as "this harness has
+/// no models" rather than "the probe was cut off", which is why it went
+/// unnoticed: the agent then has no model, refuses to start, and the failure
+/// surfaces three layers away as "agent needs configuration".
+///
+/// This is a probe, not an interactive path, so waiting longer costs a slower
+/// dropdown in the worst case and buys a populated one in the common case.
+const DEFAULT_MODELS_TIMEOUT_SECS: u64 = 45;
+
+/// Ceiling on the override below. Past this the desktop's own discovery call
+/// gives up first, so a larger value would only hold the subprocess open.
+const MAX_MODELS_TIMEOUT_SECS: u64 = 300;
+
+/// Timeout for lightweight helper subcommands, overridable with
+/// `BUZZ_ACP_MODELS_TIMEOUT` (whole seconds).
+///
+/// An unparseable, zero, or over-ceiling value falls back to the default rather
+/// than failing the probe: a malformed env var must not be the reason a user
+/// cannot pick a model.
+fn models_timeout() -> Duration {
+    let secs = std::env::var("BUZZ_ACP_MODELS_TIMEOUT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0 && *secs <= MAX_MODELS_TIMEOUT_SECS)
+        .unwrap_or(DEFAULT_MODELS_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
 
 /// Timeout for `buzz-acp authenticate`. Browser-based vendor auth can require
 /// human interaction, so it must not share the short probe timeout.
@@ -4479,7 +4511,7 @@ async fn run_auth_methods(args: AuthMethodsArgs) -> Result<()> {
         }
     };
 
-    let init_result = match tokio::time::timeout(MODELS_TIMEOUT, client.initialize()).await {
+    let init_result = match tokio::time::timeout(models_timeout(), client.initialize()).await {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             client.shutdown().await;
@@ -4488,7 +4520,7 @@ async fn run_auth_methods(args: AuthMethodsArgs) -> Result<()> {
         }
         Err(_) => {
             client.shutdown().await;
-            eprintln!("error: agent timed out ({MODELS_TIMEOUT:?})");
+            eprintln!("error: agent timed out ({:?})", models_timeout());
             std::process::exit(1);
         }
     };
@@ -4527,7 +4559,7 @@ async fn run_authenticate(args: AuthenticateArgs) -> Result<()> {
         }
     };
 
-    let init_result = match tokio::time::timeout(MODELS_TIMEOUT, client.initialize()).await {
+    let init_result = match tokio::time::timeout(models_timeout(), client.initialize()).await {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             client.shutdown().await;
@@ -4536,7 +4568,7 @@ async fn run_authenticate(args: AuthenticateArgs) -> Result<()> {
         }
         Err(_) => {
             client.shutdown().await;
-            eprintln!("error: agent initialize timed out ({MODELS_TIMEOUT:?})");
+            eprintln!("error: agent initialize timed out ({:?})", models_timeout());
             std::process::exit(1);
         }
     };
@@ -4598,7 +4630,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 
     // Initialize + session/new under a timeout. Client is owned above,
     // so shutdown() runs on all paths (success, error, timeout).
-    let protocol_result = tokio::time::timeout(MODELS_TIMEOUT, async {
+    let protocol_result = tokio::time::timeout(models_timeout(), async {
         let init = client.initialize().await?;
         let session = client.session_new_full(&cwd, vec![], None, None).await?;
         Ok::<_, acp::AcpError>((init, session))
@@ -4614,7 +4646,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
         }
         Err(_) => {
             client.shutdown().await;
-            eprintln!("error: agent timed out ({MODELS_TIMEOUT:?})");
+            eprintln!("error: agent timed out ({:?})", models_timeout());
             std::process::exit(1);
         }
     };
