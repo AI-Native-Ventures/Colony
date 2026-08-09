@@ -143,6 +143,7 @@ export default defineConfig({
         "**/discovery-lead-status.spec.ts",
         "**/discovery-pipeline.spec.ts",
         "**/huddle-transcription.spec.ts",
+        "**/ask-card.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
