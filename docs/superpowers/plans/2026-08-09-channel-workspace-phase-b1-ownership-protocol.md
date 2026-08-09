@@ -254,7 +254,11 @@ The whole arbitration, in two queries. Everything else is bookkeeping around the
 - Produces: `struct WorkspaceTabRow { channel_id, tab_id, tab_kind, title, creator, owner, driver, revision, head_at }`,
   `open_tab(...) -> Result<Option<WorkspaceTabRow>>`,
   `get_tab(...) -> Result<Option<WorkspaceTabRow>>`,
-  `set_driver(pool, community, channel, tab_id, expected_revision, new_driver, actor, now) -> Result<Option<WorkspaceTabRow>>`.
+  `set_driver(pool, community, channel, tab_id, expected_revision, new_driver, now) -> Result<Option<WorkspaceTabRow>>`.
+
+  There is deliberately **no `actor` parameter**: this layer moves the seat it
+  is told to move, and the broker in Task 4 decides who may tell it. An unused
+  actor argument here would imply a check that does not happen.
 
 - [ ] **Step 1: Read the precedent**
 
