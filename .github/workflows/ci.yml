@@ -148,6 +148,12 @@ jobs:
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
         run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
+      - name: Desktop dev instance identity contract
+        # Runs in this job for the same reason the schema drift guard does:
+        # `Detect Changed Paths` is required and unconditional, so a path
+        # filter cannot skip it. A regression here is silent and expensive --
+        # the app keeps launching, just against a different, empty profile.
+        run: node --test scripts/instance-env.test.mjs
       - name: Schema drift check
         # CI provisions Postgres from schema/schema.sql, not from migrations/,
         # so a table added only to migrations/ is invisible here and surfaces

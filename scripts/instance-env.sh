@@ -34,10 +34,29 @@ unset VITE_DEV_BRANCH
 # Worktree detection: compare --git-dir to --git-common-dir. In the main
 # working tree these are identical; in any worktree (whether under .worktrees/,
 # .claude/worktrees/, or elsewhere on disk) they differ.
+#
+# --path-format=absolute is load-bearing, not tidiness. Without it git answers
+# in whatever form is shortest for the current directory, and every desktop dev
+# command sources this file from `desktop/`, not the repo root. From there the
+# main working tree reports:
+#
+#     --git-dir        /abs/path/to/repo/.git      (absolute)
+#     --git-common-dir ../.git                     (relative)
+#
+# Same directory, two spellings, so a string compare called the main checkout a
+# worktree and handed the app a per-branch identifier. Every branch switch then
+# produced a brand new, empty app profile
+# (~/Library/Application Support/xyz.block.buzz.app.dev.<branch-slug>), so agent
+# config, provider keys, and the paired identity vanished on checkout and agents
+# had nothing to start with. Six such profiles accumulated on one machine while
+# the canonical xyz.block.buzz.app.dev was never created at all.
+#
+# Same idiom the Justfile already relies on for the lefthook path (see the
+# --path-format=absolute call there). Requires git >= 2.31.
 if git rev-parse --is-inside-work-tree &>/dev/null; then
-    GIT_DIR=$(git rev-parse --git-dir)
-    GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null)
-    if [[ -n "$GIT_COMMON_DIR" && "$GIT_DIR" != "$GIT_COMMON_DIR" ]]; then
+    GIT_DIR=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)
+    GIT_COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    if [[ -n "$GIT_DIR" && -n "$GIT_COMMON_DIR" && "$GIT_DIR" != "$GIT_COMMON_DIR" ]]; then
         BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
         export BUZZ_WORKTREE_LABEL="${BRANCH_NAME##*/}"
         export BUZZ_INSTANCE_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
