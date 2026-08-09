@@ -577,12 +577,19 @@ pub struct ChannelFilter {
 ///
 /// Receipts are intentionally absent: agents process addressed actions and
 /// publish receipts, but do not subscribe to every other processor's results.
+///
+/// `KIND_ASK` is here because an ask p-tags the agent it is addressed to, and
+/// `SubscriptionRule::require_mention` already means "this event p-tags me".
+/// Without it a leader is never told an ask is waiting, so no ask is ever
+/// answered below the owner and the deadline sweep promotes every one of them
+/// to the founder. That is the whole failure this kind fixes.
 pub fn default_channel_kinds() -> Vec<u32> {
     vec![
         buzz_core::kind::KIND_STREAM_MESSAGE,
         buzz_core::kind::KIND_BLOCK_ACTION,
         buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED,
         buzz_core::kind::KIND_STREAM_REMINDER,
+        buzz_core::kind::KIND_ASK,
     ]
 }
 
