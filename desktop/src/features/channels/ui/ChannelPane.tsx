@@ -36,7 +36,7 @@ import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggl
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { THREAD_SURFACE_KEY } from "@/features/channels/lib/threadFocusLayout";
 import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout";
-import { useThreadViewMode } from "@/features/channels/lib/threadViewModePreference";
+import { useEffectiveThreadViewMode } from "@/features/workspace/lib/effectiveThreadViewMode";
 import { useThreadViewModeSwitch } from "@/features/channels/ui/useThreadViewModeSwitch";
 import { useFocusDrawerPresence } from "@/features/channels/ui/useFocusDrawerPresence";
 import { useChannelWorkingAgentPubkeys } from "@/features/agents/agentWorkingSignal";
@@ -499,7 +499,7 @@ export const ChannelPane = React.memo(function ChannelPane({
 
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
-  const threadViewMode = useThreadViewMode();
+  const threadViewMode = useEffectiveThreadViewMode(activeChannel?.id);
   const useFocusThreadDrawer =
     threadViewMode === "focus" &&
     useSplitAuxiliaryPane &&
