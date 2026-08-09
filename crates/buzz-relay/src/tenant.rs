@@ -86,9 +86,69 @@ pub async fn bind_community<R: HostResolver>(
     }
     match resolver.resolve_host(&host).await {
         Ok(Some(community)) => Ok(TenantContext::resolved(community, host)),
-        Ok(None) => Err(BindError::UnmappedHost),
+        Ok(None) => resolve_loopback_alias(resolver, &host).await,
         Err(e) => Err(BindError::Lookup(e)),
     }
+}
+
+/// The loopback authorities that name the same machine.
+///
+/// `0.0.0.0` is deliberately absent: it is a bind wildcard, not a destination,
+/// and a request whose `Host` says `0.0.0.0` has not named this machine the way
+/// the other three have.
+const LOOPBACK_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]"];
+
+/// Split a normalized authority into its host and its `:port` suffix.
+///
+/// Only a trailing all-digit `:port` counts, so the colons inside an IPv6
+/// literal (`[::1]`) are left alone.
+fn split_port(authority: &str) -> (&str, &str) {
+    match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            (host, &authority[host.len()..])
+        }
+        _ => (authority, ""),
+    }
+}
+
+/// Second chance for loopback: retry the other spellings of the same machine.
+///
+/// `localhost:3200`, `127.0.0.1:3200`, and `[::1]:3200` are one host, but
+/// `communities.host` is an exact-match column, so whichever spelling the
+/// community was created under is the only one that resolves. In local dev the
+/// two sides routinely disagree: the desktop app is handed one authority and a
+/// self-provisioned community is stored under the other, and every request then
+/// fails closed with "no community is configured for this host" against a
+/// community that plainly exists.
+///
+/// Only reached when the exact host missed, so an existing per-spelling
+/// community keeps winning and no stored row changes meaning. Restricted to
+/// loopback, which is not routable off-machine, so this widens nothing for a
+/// public deployment: a non-loopback authority takes the same single lookup and
+/// the same fail-closed rejection it always did.
+async fn resolve_loopback_alias<R: HostResolver>(
+    resolver: &R,
+    host: &str,
+) -> Result<TenantContext, BindError<R::Error>> {
+    let (bare, port) = split_port(host);
+    if !LOOPBACK_HOSTS.contains(&bare) {
+        return Err(BindError::UnmappedHost);
+    }
+    for alias in LOOPBACK_HOSTS
+        .iter()
+        .filter(|candidate| **candidate != bare)
+    {
+        let candidate = format!("{alias}{port}");
+        match resolver.resolve_host(&candidate).await {
+            // Report the authority that actually resolved, not the one the
+            // request arrived with, so NIP-05 labelling and the NIP-98 `u`-host
+            // check agree with the community that was bound.
+            Ok(Some(community)) => return Ok(TenantContext::resolved(community, candidate)),
+            Ok(None) => continue,
+            Err(e) => return Err(BindError::Lookup(e)),
+        }
+    }
+    Err(BindError::UnmappedHost)
 }
 
 /// Resolve the deployment's own community from the configured relay URL host.
@@ -178,6 +238,77 @@ mod tests {
             CommunityId::from_uuid(Uuid::from_u128(id)),
         );
         MapResolver { map, fail: false }
+    }
+
+    #[tokio::test]
+    async fn loopback_spellings_bind_to_the_same_community() {
+        // The dev failure this exists for: the community is stored under one
+        // loopback spelling and the app arrives with another, so a community
+        // that plainly exists answers "no community is configured for this host".
+        let resolver = resolver_with("127.0.0.1:3200", 1);
+        for arriving_as in ["localhost:3200", "[::1]:3200", "127.0.0.1:3200"] {
+            let ctx = bind_community(&resolver, arriving_as)
+                .await
+                .unwrap_or_else(|_| panic!("{arriving_as} must bind to the loopback community"));
+            assert_eq!(ctx.community(), CommunityId::from_uuid(Uuid::from_u128(1)));
+            // Downstream labelling must see the authority that resolved.
+            assert_eq!(ctx.host(), "127.0.0.1:3200");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_exact_match_still_wins_over_an_alias() {
+        // A deployment seeded per-spelling keeps its existing split. The alias
+        // path is a second chance, never a reroute.
+        let mut map = HashMap::new();
+        map.insert(
+            "localhost:3200".to_string(),
+            CommunityId::from_uuid(Uuid::from_u128(7)),
+        );
+        map.insert(
+            "127.0.0.1:3200".to_string(),
+            CommunityId::from_uuid(Uuid::from_u128(9)),
+        );
+        let resolver = MapResolver { map, fail: false };
+        let ctx = bind_community(&resolver, "localhost:3200")
+            .await
+            .expect("exact host binds");
+        assert_eq!(ctx.community(), CommunityId::from_uuid(Uuid::from_u128(7)));
+        assert_eq!(ctx.host(), "localhost:3200");
+    }
+
+    #[tokio::test]
+    async fn the_port_must_match_too() {
+        let resolver = resolver_with("127.0.0.1:3200", 1);
+        assert!(
+            bind_community(&resolver, "localhost:9999").await.is_err(),
+            "a loopback alias on a different port is a different authority"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_loopback_host_gets_no_alias_pass() {
+        // The widening must stop at loopback. A public authority takes the same
+        // single lookup and the same fail-closed rejection it always did.
+        let resolver = resolver_with("127.0.0.1:3200", 1);
+        for arriving_as in ["relay.example:3200", "0.0.0.0:3200", "evil.example"] {
+            assert!(
+                bind_community(&resolver, arriving_as).await.is_err(),
+                "{arriving_as} must not reach a loopback community"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lookup_failure_on_the_alias_path_still_fails_closed() {
+        let resolver = MapResolver {
+            map: HashMap::new(),
+            fail: true,
+        };
+        assert!(matches!(
+            bind_community(&resolver, "localhost:3200").await,
+            Err(BindError::Lookup(_))
+        ));
     }
 
     #[tokio::test]
