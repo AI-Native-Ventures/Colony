@@ -15,6 +15,7 @@ pub struct WorkspaceFile {
     pub mime: String,
     pub bytes_base64: String,
     pub size: u64,
+    pub is_text: bool,
 }
 
 /// Guess a MIME type from a path's extension.
@@ -39,7 +40,6 @@ pub fn sniff_mime(path: &str) -> &'static str {
 }
 
 /// Whether a MIME type should render in the `file` kind's text view.
-#[allow(dead_code)]
 pub fn is_text_mime(mime: &str) -> bool {
     mime.starts_with("text/") || mime == "application/json"
 }
@@ -62,10 +62,12 @@ async fn read_file(path: &str) -> Result<WorkspaceFile, String> {
         .and_then(|n| n.to_str())
         .unwrap_or(path)
         .to_string();
+    let mime = sniff_mime(path).to_string();
     Ok(WorkspaceFile {
         path: path.to_string(),
         name,
-        mime: sniff_mime(path).to_string(),
+        is_text: is_text_mime(&mime),
+        mime,
         bytes_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
         size: meta.len(),
     })
@@ -131,6 +133,7 @@ mod tests {
         let file = read_file(path.to_string_lossy().as_ref()).await.unwrap();
         assert_eq!(file.name, "notes.md");
         assert_eq!(file.mime, "text/markdown");
+        assert!(file.is_text);
         assert_eq!(file.size, 7);
         assert_eq!(
             String::from_utf8(
@@ -141,6 +144,15 @@ mod tests {
             .unwrap(),
             "# hello"
         );
+    }
+
+    #[tokio::test]
+    async fn image_file_is_marked_non_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.png");
+        std::fs::write(&path, [0x89, b'P', b'N', b'G']).unwrap();
+        let file = read_file(path.to_string_lossy().as_ref()).await.unwrap();
+        assert!(!file.is_text);
     }
 
     #[tokio::test]

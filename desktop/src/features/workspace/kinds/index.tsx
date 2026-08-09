@@ -2,6 +2,14 @@ import type * as React from "react";
 
 import { registerTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
+  FileBody,
+  fileKindDefinition,
+} from "@/features/workspace/kinds/fileKind";
+import {
+  ImageBody,
+  imageKindDefinition,
+} from "@/features/workspace/kinds/imageKind";
+import {
   ScratchpadBody,
   scratchpadKindDefinition,
   type TabBodyProps,
@@ -33,6 +41,10 @@ export function registerAllTabKinds(): void {
   registered = true;
   registerTabKind(scratchpadKindDefinition);
   bodies.set(scratchpadKindDefinition.kind, ScratchpadBody);
+  registerTabKind(fileKindDefinition);
+  bodies.set(fileKindDefinition.kind, FileBody);
+  registerTabKind(imageKindDefinition);
+  bodies.set(imageKindDefinition.kind, ImageBody);
 }
 
 export type { TabBodyProps };

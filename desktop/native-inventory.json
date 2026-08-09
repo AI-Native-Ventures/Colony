@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 327,
-    "rust_lines": 134475,
+    "rust_lines": 134487,
     "tauri_coupled": 138,
     "portable": 189,
     "portable_lines": 73104,
@@ -344,14 +344,12 @@
     "registered": 285,
     "defined": 285,
     "by_reach": {
-      "frontend": 279,
-      "NO CALLER FOUND": 4,
-      "frontend-plugin-prefixed": 2
+      "frontend": 281,
+      "frontend-plugin-prefixed": 2,
+      "NO CALLER FOUND": 2
     },
     "no_caller": [
       "download_voice_models",
-      "pick_workspace_file",
-      "read_workspace_file",
       "start_stt_pipeline"
     ]
   },
@@ -2500,8 +2498,11 @@
       "defining_file": "src-tauri/src/commands/workspace_files.rs",
       "module": "workspace_files",
       "registered_in": "src-tauri/src/lib.rs",
-      "reached_by": "NO CALLER FOUND",
-      "example_sites": []
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/workspace/kinds/fileKind.tsx:65",
+        "src/features/workspace/kinds/imageKind.tsx:64"
+      ]
     },
     "preview_agent_snapshot_import": {
       "defining_file": "src-tauri/src/commands/personas/snapshot/import.rs",
@@ -2649,8 +2650,11 @@
       "defining_file": "src-tauri/src/commands/workspace_files.rs",
       "module": "workspace_files",
       "registered_in": "src-tauri/src/lib.rs",
-      "reached_by": "NO CALLER FOUND",
-      "example_sites": []
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/workspace/kinds/fileKind.tsx:52",
+        "src/features/workspace/kinds/imageKind.tsx:46"
+      ]
     },
     "reconcile_inbound_persona_event": {
       "defining_file": "src-tauri/src/commands/personas/inbound.rs",
