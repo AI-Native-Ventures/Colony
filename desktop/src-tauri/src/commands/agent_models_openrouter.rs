@@ -90,11 +90,7 @@ pub(super) fn filter_openrouter_models(
         .data
         .into_iter()
         .filter(|m| m.supported_parameters.iter().any(|p| p == "tools"))
-        .map(|m| AgentModelInfo {
-            id: m.id.clone(),
-            name: Some(m.id),
-            description: None,
-        })
+        .map(|m| AgentModelInfo::new(m.id.clone(), Some(m.id), None))
         .collect();
 
     if models.is_empty() {

@@ -883,3 +883,107 @@ fn draft_agent_model_discovery_env_layers_all_three_tiers_in_order() {
         );
     }
 }
+
+// --- reasoning effort -------------------------------------------------------
+//
+// Adapters advertise one entry per model-and-effort pair, and which efforts
+// exist DIFFERS BY MODEL: gpt-5.6-sol offers ultra, gpt-5.6-luna stops at max,
+// gpt-5.5 stops at xhigh. A hardcoded effort list would be wrong for most of
+// them and would drift the first time a model ships, so the split has to come
+// from what the harness actually reported.
+
+#[test]
+fn split_model_effort_reads_the_bracketed_suffix() {
+    use crate::managed_agents::split_model_effort;
+    assert_eq!(
+        split_model_effort("gpt-5.6-sol[xhigh]"),
+        ("gpt-5.6-sol".to_string(), Some("xhigh".to_string()))
+    );
+}
+
+#[test]
+fn split_model_effort_leaves_a_plain_model_alone() {
+    use crate::managed_agents::split_model_effort;
+    // Not "no effort chosen by mistake" -- a plain ID is the real, selectable
+    // "let the harness config decide" case (Codex reads model_reasoning_effort
+    // from ~/.codex/config.toml).
+    assert_eq!(
+        split_model_effort("gpt-5.6-luna"),
+        ("gpt-5.6-luna".to_string(), None)
+    );
+}
+
+#[test]
+fn split_model_effort_ignores_malformed_brackets() {
+    use crate::managed_agents::split_model_effort;
+    // Truncating on a stray bracket would corrupt a model name we do not
+    // recognise, which is worse than leaving it intact.
+    for id in ["weird[", "weird]", "[xhigh]", "gpt[]", "a[b]c"] {
+        assert_eq!(
+            split_model_effort(id),
+            (id.to_string(), None),
+            "{id} must round-trip untouched"
+        );
+    }
+}
+
+#[test]
+fn normalize_agent_models_exposes_effort_per_model() {
+    // Trimmed from a real `buzz-acp models --json` run against
+    // @agentclientprotocol/codex-acp 1.1.7: `stable` carries plain models,
+    // `unstable` carries the model-and-effort pairs.
+    let raw = serde_json::json!({
+        "agent": { "name": "codex-acp", "version": "1.1.7" },
+        "stable": { "configOptions": [{
+            "category": "model",
+            "id": "model",
+            "options": [
+                { "value": "gpt-5.6-sol" },
+                { "value": "gpt-5.6-luna" },
+            ],
+        }] },
+        "unstable": {
+            "currentModelId": "gpt-5.6-sol",
+            "availableModels": [
+                { "modelId": "gpt-5.6-sol[high]",  "name": "GPT-5.6-Sol (high)" },
+                { "modelId": "gpt-5.6-sol[ultra]", "name": "GPT-5.6-Sol (ultra)" },
+                { "modelId": "gpt-5.6-luna[high]", "name": "GPT-5.6-Luna (high)" },
+            ],
+        },
+    });
+
+    let out = normalize_agent_models(&raw, None);
+    let effort_for = |id: &str| {
+        out.models
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap_or_else(|| panic!("{id} missing from the merged list"))
+    };
+
+    let plain = effort_for("gpt-5.6-sol");
+    assert_eq!(plain.base_id, "gpt-5.6-sol");
+    assert_eq!(plain.effort, None, "a plain entry pins no effort");
+
+    let pinned = effort_for("gpt-5.6-sol[ultra]");
+    assert_eq!(pinned.base_id, "gpt-5.6-sol");
+    assert_eq!(pinned.effort.as_deref(), Some("ultra"));
+    assert_eq!(pinned.id, "gpt-5.6-sol[ultra]", "the wire ID round-trips");
+
+    // The property the UI depends on: efforts are per model, not global.
+    let efforts = |base: &str| {
+        let mut found: Vec<&str> = out
+            .models
+            .iter()
+            .filter(|m| m.base_id == base)
+            .filter_map(|m| m.effort.as_deref())
+            .collect();
+        found.sort_unstable();
+        found
+    };
+    assert_eq!(efforts("gpt-5.6-sol"), vec!["high", "ultra"]);
+    assert_eq!(
+        efforts("gpt-5.6-luna"),
+        vec!["high"],
+        "luna must not inherit sol's ultra"
+    );
+}

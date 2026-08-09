@@ -264,11 +264,7 @@ pub async fn discover_agent_models(
             models: availability
                 .models
                 .into_iter()
-                .map(|model| AgentModelInfo {
-                    id: model.id,
-                    name: model.name,
-                    description: None,
-                })
+                .map(|model| AgentModelInfo::new(model.id, model.name, None))
                 .collect(),
             agent_default_model: None,
             selected_model: None,
@@ -469,10 +465,9 @@ fn normalize_openai_compatible_models(
             Some(_) | None => true,
         })
         .filter(|item| seen.insert(item.id.clone()))
-        .map(|item| AgentModelInfo {
-            name: Some(openai_model_display_name(&item.id)),
-            id: item.id,
-            description: None,
+        .map(|item| {
+            let name = openai_model_display_name(&item.id);
+            AgentModelInfo::new(item.id, Some(name), None)
         })
         .collect()
 }
@@ -599,11 +594,7 @@ async fn discover_databricks_models(
 
     let models = entries
         .into_iter()
-        .map(|e| AgentModelInfo {
-            id: e.id,
-            name: Some(e.name),
-            description: None,
-        })
+        .map(|e| AgentModelInfo::new(e.id, Some(e.name), None))
         .collect();
 
     Ok(Some(AgentModelsResponse {
@@ -909,14 +900,13 @@ pub(super) fn normalize_agent_models(
                 for o in options {
                     if let Some(value) = o.get("value").and_then(|v| v.as_str()) {
                         if seen_ids.insert(value.to_string()) {
-                            models.push(AgentModelInfo {
-                                id: value.to_string(),
-                                name: o
-                                    .get("displayName")
+                            models.push(AgentModelInfo::new(
+                                value.to_string(),
+                                o.get("displayName")
                                     .and_then(|v| v.as_str())
                                     .map(str::to_string),
-                                description: None,
-                            });
+                                None,
+                            ));
                         }
                     }
                 }
@@ -932,14 +922,13 @@ pub(super) fn normalize_agent_models(
             for m in available {
                 if let Some(id) = m.get("modelId").and_then(|v| v.as_str()) {
                     if seen_ids.insert(id.to_string()) {
-                        models.push(AgentModelInfo {
-                            id: id.to_string(),
-                            name: m.get("name").and_then(|v| v.as_str()).map(str::to_string),
-                            description: m
-                                .get("description")
+                        models.push(AgentModelInfo::new(
+                            id.to_string(),
+                            m.get("name").and_then(|v| v.as_str()).map(str::to_string),
+                            m.get("description")
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string),
-                        });
+                        ));
                     }
                 }
             }
