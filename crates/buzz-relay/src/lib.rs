@@ -58,6 +58,8 @@ pub mod mesh_boot;
 pub mod metrics;
 /// NIP-11 relay information document.
 pub mod nip11;
+/// Deployment-wide operator analytics rollup worker.
+pub mod operator_analytics;
 pub mod price_catalog;
 /// Colony's signed remote price feed.
 pub mod price_feed;

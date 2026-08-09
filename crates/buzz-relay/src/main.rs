@@ -500,6 +500,10 @@ async fn main() -> anyhow::Result<()> {
     }
     let state = Arc::new(app_state);
 
+    // Every relay pod may run the bounded rollup worker. The transactional
+    // cursor/advisory-lock boundary in buzz-db makes overlapping pods safe.
+    tokio::spawn(buzz_relay::operator_analytics::run(Arc::clone(&state)));
+
     // Seed the relay-owned Block catalog before any client can connect. A
     // failure is loud but non-fatal for existing communities: ordinary chat
     // remains available and the deterministic seed converges on the next
@@ -1320,6 +1324,7 @@ async fn main() -> anyhow::Result<()> {
     serve(router, health_router, Arc::clone(&state)).await?;
     discovery_shutdown.cancel();
     state.community_revalidator_cancel.cancel();
+    state.operator_analytics_cancel.cancel();
 
     // The gateway owns relay-side settlement workers. Close admission and
     // wait for every tracked drain before tearing down the database/telemetry
