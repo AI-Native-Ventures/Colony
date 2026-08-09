@@ -1505,6 +1505,16 @@ fn ask_section_for_batch(batch: &FlushBatch) -> Option<String> {
     })
 }
 
+/// The prompt text for a turn woken by an Ask.
+///
+/// Returns `None` when the event is not a usable ask, so a malformed ask is
+/// dropped rather than firing an empty turn that burns a model call and tells
+/// the agent nothing.
+pub(crate) fn ask_turn_prompt(event: &nostr::Event) -> Option<String> {
+    let ask = crate::ask_context::read_incoming_ask(event)?;
+    Some(crate::ask_context::ask_context_section(&ask))
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -4077,6 +4087,84 @@ mod tests {
              one would leak it to that channel's members"
         );
         assert_eq!(prompt_source_label(&source), "ask");
+    }
+
+    #[test]
+    fn an_ask_turn_prompt_carries_the_block_with_no_batch() {
+        let filer = nostr::Keys::generate();
+        let audience = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"Which vendor for SMS?","cost_of_delay":"onboarding is blocked"}"#,
+        )
+        .tags([
+            nostr::Tag::public_key(audience.public_key()),
+            nostr::Tag::parse(["ask-type", "decision"]).unwrap(),
+            nostr::Tag::parse(["task", "task-7"]).unwrap(),
+        ])
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        let prompt = ask_turn_prompt(&event).expect("an ask event must build a turn prompt");
+
+        assert!(prompt.contains("<colony-ask>"));
+        assert!(
+            prompt.contains(&event.id.to_hex()),
+            "without the id the agent cannot answer, and the ask times out onto \
+             the founder"
+        );
+        assert!(
+            prompt.contains("decision"),
+            "the type comes from the ask-type tag"
+        );
+        assert!(
+            prompt.contains("task-7"),
+            "the task comes from the task tag"
+        );
+    }
+
+    #[test]
+    fn a_malformed_ask_builds_no_turn_rather_than_an_empty_one() {
+        let filer = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            "{not json",
+        )
+        .sign_with_keys(&filer)
+        .unwrap();
+        assert!(ask_turn_prompt(&event).is_none());
+    }
+
+    #[test]
+    fn an_ask_turn_prompt_block_appears_exactly_once_without_a_batch_section() {
+        let filer = nostr::Keys::generate();
+        let audience = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"Which vendor for SMS?","cost_of_delay":"onboarding is blocked"}"#,
+        )
+        .tags([
+            nostr::Tag::public_key(audience.public_key()),
+            nostr::Tag::parse(["ask-type", "decision"]).unwrap(),
+            nostr::Tag::parse(["task", "task-7"]).unwrap(),
+        ])
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        let prompt = ask_turn_prompt(&event).expect("an ask event must build a turn prompt");
+        let batch_derived_section = Option::<FlushBatch>::None
+            .as_ref()
+            .and_then(ask_section_for_batch);
+
+        assert!(
+            batch_derived_section.is_none(),
+            "an ask turn has no batch, so its prompt must not get a second ask block"
+        );
+        assert_eq!(
+            prompt.matches("<colony-ask>").count(),
+            1,
+            "the event-derived prompt must carry exactly one ask block"
+        );
     }
 
     // These pin the initial_message dispatch path (run_prompt_task, ~line 855):
