@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod acp;
+pub mod ask_context;
 mod config;
 mod engram_fetch;
 mod filter;
