@@ -13,11 +13,11 @@ use buzz_core::kind::{
 use buzz_core::tenant::TenantContext;
 use buzz_core::workspace_tab::{parse_tab_action, WorkspaceTabAction, WorkspaceTabOp};
 use buzz_core::{CommunityId, StoredEvent};
-use buzz_db::workspace_tabs::WorkspaceTabRow;
+use buzz_db::workspace_tabs::{get_tab, open_tab, set_driver, NewWorkspaceTab, WorkspaceTabRow};
 use chrono::{DateTime, Utc};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag, Timestamp};
 use serde_json::json;
-use sqlx::{postgres::PgRow, Postgres, Row as _, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::handlers::event::dispatch_persistent_event;
@@ -96,54 +96,37 @@ async fn apply_tab_action_inner(
     let row = match &action.op {
         WorkspaceTabOp::Open { tab_kind, title } => {
             let now = Utc::now().timestamp();
-            let inserted = sqlx::query(
-                "INSERT INTO workspace_tabs \
-                    (community_id, channel_id, tab_id, tab_kind, title, creator, owner, driver, \
-                     revision, head_at, created_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $6, $6, 1, $7, $7, $7) \
-                 ON CONFLICT DO NOTHING \
-                 RETURNING channel_id, tab_id, tab_kind, title, creator, owner, driver, \
-                           revision, head_at, created_at, updated_at",
+            let actor = action.actor.to_bytes();
+            let inserted = open_tab(
+                &mut *tx,
+                tenant.community(),
+                action.channel_id,
+                NewWorkspaceTab {
+                    tab_id: &action.tab_id,
+                    tab_kind,
+                    title,
+                    creator: actor.as_slice(),
+                },
+                now,
             )
-            .bind(tenant.community().as_uuid())
-            .bind(action.channel_id)
-            .bind(&action.tab_id)
-            .bind(tab_kind)
-            .bind(title)
-            .bind(action.actor.to_bytes().as_slice())
-            .bind(now)
-            .fetch_optional(&mut *tx)
             .await
             .map_err(|error| format!("workspace tab transaction failed: {error}"))?;
 
             // A duplicate open is intentionally indistinguishable from an
             // unauthorized take: neither path names or confirms the row.
-            inserted
-                .map(tab_row)
-                .transpose()
-                .map_err(|error| format!("workspace tab transaction failed: {error}"))?
-                .ok_or_else(|| TAB_UNAVAILABLE.to_owned())?
+            inserted.ok_or_else(|| TAB_UNAVAILABLE.to_owned())?
         }
         WorkspaceTabOp::Take => {
-            let current = sqlx::query(
-                "SELECT channel_id, tab_id, tab_kind, title, creator, owner, driver, \
-                        revision, head_at, created_at, updated_at \
-                 FROM workspace_tabs \
-                 WHERE community_id = $1 AND channel_id = $2 AND tab_id = $3 \
-                 FOR UPDATE",
+            let current = get_tab(
+                &mut *tx,
+                tenant.community(),
+                action.channel_id,
+                &action.tab_id,
             )
-            .bind(tenant.community().as_uuid())
-            .bind(action.channel_id)
-            .bind(&action.tab_id)
-            .fetch_optional(&mut *tx)
             .await
             .map_err(|error| format!("workspace tab transaction failed: {error}"))?;
 
-            let current = current
-                .map(tab_row)
-                .transpose()
-                .map_err(|error| format!("workspace tab transaction failed: {error}"))?
-                .ok_or_else(|| TAB_UNAVAILABLE.to_owned())?;
+            let current = current.ok_or_else(|| TAB_UNAVAILABLE.to_owned())?;
 
             // Do this check before looking at the expected revision. A caller
             // who does not own the tab receives the same refusal whether its
@@ -156,34 +139,22 @@ async fn apply_tab_action_inner(
                 .expected_revision
                 .ok_or_else(|| TAB_REVISION_CONFLICT.to_owned())?;
             let now = Utc::now().timestamp();
-            let updated = sqlx::query(
-                "UPDATE workspace_tabs \
-                    SET driver = $5, \
-                        revision = revision + 1, \
-                        head_at = GREATEST($6, head_at + 1), \
-                        updated_at = $6 \
-                  WHERE community_id = $1 AND channel_id = $2 AND tab_id = $3 \
-                    AND revision = $4 \
-              RETURNING channel_id, tab_id, tab_kind, title, creator, owner, driver, \
-                        revision, head_at, created_at, updated_at",
+            let actor = action.actor.to_bytes();
+            let updated = set_driver(
+                &mut *tx,
+                tenant.community(),
+                action.channel_id,
+                &action.tab_id,
+                expected_revision,
+                actor.as_slice(),
+                now,
             )
-            .bind(tenant.community().as_uuid())
-            .bind(action.channel_id)
-            .bind(&action.tab_id)
-            .bind(expected_revision)
-            .bind(action.actor.to_bytes().as_slice())
-            .bind(now)
-            .fetch_optional(&mut *tx)
             .await
             .map_err(|error| format!("workspace tab transaction failed: {error}"))?;
 
             // `None` is the CAS loser. It is a conflict, never a successful
             // no-op and never an authorization failure.
-            updated
-                .map(tab_row)
-                .transpose()
-                .map_err(|error| format!("workspace tab transaction failed: {error}"))?
-                .ok_or_else(|| TAB_REVISION_CONFLICT.to_owned())?
+            updated.ok_or_else(|| TAB_REVISION_CONFLICT.to_owned())?
         }
         WorkspaceTabOp::Grant { .. } | WorkspaceTabOp::Release => {
             // The early return above makes this unreachable, but keeping the
@@ -262,22 +233,6 @@ async fn apply_tab_action_inner(
         tab: row,
         head: stored_head,
         receipt: stored_receipt,
-    })
-}
-
-fn tab_row(row: PgRow) -> Result<WorkspaceTabRow, sqlx::Error> {
-    Ok(WorkspaceTabRow {
-        channel_id: row.try_get("channel_id")?,
-        tab_id: row.try_get("tab_id")?,
-        tab_kind: row.try_get("tab_kind")?,
-        title: row.try_get("title")?,
-        creator: row.try_get("creator")?,
-        owner: row.try_get("owner")?,
-        driver: row.try_get("driver")?,
-        revision: row.try_get("revision")?,
-        head_at: row.try_get("head_at")?,
-        created_at: row.try_get("created_at")?,
-        updated_at: row.try_get("updated_at")?,
     })
 }
 

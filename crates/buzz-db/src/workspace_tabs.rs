@@ -4,7 +4,7 @@
 //! driver. In particular, driver transitions use a revision compare-and-swap:
 //! a caller that read a stale row matches no rows and receives `Ok(None)`.
 
-use sqlx::{PgPool, Row as _};
+use sqlx::{PgExecutor, Row as _};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -75,13 +75,16 @@ fn row_to_tab(row: sqlx::postgres::PgRow) -> Result<WorkspaceTabRow> {
 /// The first caller to open `(community, channel, tab_id)` creates the row
 /// with itself as creator, owner, and driver. A later caller gets `Ok(None)`;
 /// an existing row is never reset or overwritten.
-pub async fn open_tab(
-    pool: &PgPool,
+pub async fn open_tab<'e, E>(
+    executor: E,
     community: CommunityId,
     channel: Uuid,
     tab: NewWorkspaceTab<'_>,
     now: i64,
-) -> Result<Option<WorkspaceTabRow>> {
+) -> Result<Option<WorkspaceTabRow>>
+where
+    E: PgExecutor<'e>,
+{
     let row = sqlx::query(
         "INSERT INTO workspace_tabs \
             (community_id, channel_id, tab_id, tab_kind, title, creator, owner, driver, \
@@ -98,19 +101,22 @@ pub async fn open_tab(
     .bind(tab.title)
     .bind(tab.creator)
     .bind(now)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     row.map(row_to_tab).transpose()
 }
 
 /// Read a tab by its channel coordinate.
-pub async fn get_tab(
-    pool: &PgPool,
+pub async fn get_tab<'e, E>(
+    executor: E,
     community: CommunityId,
     channel: Uuid,
     tab_id: &str,
-) -> Result<Option<WorkspaceTabRow>> {
+) -> Result<Option<WorkspaceTabRow>>
+where
+    E: PgExecutor<'e>,
+{
     let row = sqlx::query(
         "SELECT channel_id, tab_id, tab_kind, title, creator, owner, driver, \
                 revision, head_at, created_at, updated_at \
@@ -120,7 +126,7 @@ pub async fn get_tab(
     .bind(community.as_uuid())
     .bind(channel)
     .bind(tab_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     row.map(row_to_tab).transpose()
@@ -138,15 +144,18 @@ pub async fn get_tab(
 /// trusting the wall clock. NIP-33 orders revisions by `created_at` at
 /// one-second resolution, while two transitions in the same second are
 /// ordinary here.
-pub async fn set_driver(
-    pool: &PgPool,
+pub async fn set_driver<'e, E>(
+    executor: E,
     community: CommunityId,
     channel: Uuid,
     tab_id: &str,
     expected_revision: i64,
     new_driver: &[u8],
     now: i64,
-) -> Result<Option<WorkspaceTabRow>> {
+) -> Result<Option<WorkspaceTabRow>>
+where
+    E: PgExecutor<'e>,
+{
     let row = sqlx::query(
         "UPDATE workspace_tabs \
             SET driver = $5, \
@@ -164,7 +173,7 @@ pub async fn set_driver(
     .bind(expected_revision)
     .bind(new_driver)
     .bind(now)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     row.map(row_to_tab).transpose()
