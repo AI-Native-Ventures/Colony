@@ -1,8 +1,35 @@
 # Browser Engine Shell Decision
 
 Date: 2026-08-07 (revised same day, after the channel-workspace redesign)
-Status: Decided — Electron. Owner delegated the call to the session on
+Status: Decided, Electron. Owner delegated the call to the session on
 2026-08-07 after the redesign; gate 8 (live ACP journey) has passed.
+**No migration has started.** See the 2026-08-09 update below.
+
+## Update 2026-08-09: the decision is still reversible, and cheaply
+
+`browser_connect` now takes a DevTools `endpoint` and attaches to a browser it
+did not launch, instead of only launching its own (`host::attach`,
+`host::parse_endpoint`, `mcp::open_host`). The daemon owns the process only in
+the launch case, so dropping an attached host leaves the shell's browser alone.
+
+This matters for the decision below, because it removes the coupling between
+the engine and the shell:
+
+- The same daemon drives an Electron `WebContentsView` and a sidecar Chromium.
+  Both are a DevTools endpoint, and neither needs a code change here.
+- The engine can therefore ship, and agents can browse, before any shell
+  question is settled. The Electron case rests on live-view fidelity inside the
+  channel content column, which is a product claim that has not been tested with
+  a user yet.
+- Nothing in the migration has been built, so the cost of waiting is zero and
+  the cost of being wrong is the whole native surface (relay client, media
+  proxy, keychain, agent runtime, mesh LLM, worker hosts) plus a one-way
+  keychain data migration.
+
+Recommendation to the owner: keep the Electron decision recorded but do not
+start the migration until the workspace product value is demonstrated on the
+current shell. This update does not overturn the decision; it records that the
+engine no longer forces it.
 
 ## What the spike proved
 

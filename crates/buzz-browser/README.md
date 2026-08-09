@@ -14,6 +14,11 @@ snapshot-first MCP tools over stdio, and enforces a per-task context budget.
 - The daemon is a stdio MCP server, so any ACP agent
   (`goose acp`, `codex-acp`, `claude-agent-acp`) can attach it as an MCP server
   without desktop or relay changes.
+- The daemon can drive a browser it did **not** launch. Given a DevTools
+  endpoint it attaches to an existing tab and never owns the process, which is
+  what lets an agent drive the exact tab a human is watching inside a shell.
+  This is the capability no off-the-shelf browser MCP server provides: they all
+  launch a browser of their own.
 
 ## Run modes
 
@@ -28,6 +33,35 @@ calls `browser_connect` before any other tool. Tool set:
 `browser_connect`, `browser_tabs_list`, `browser_navigate`,
 `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll`,
 `browser_wait_for`, `browser_screenshot`, `context_budget_report`.
+
+#### Launch vs attach
+
+`browser_connect` has two modes:
+
+| Arguments | Behaviour |
+| --- | --- |
+| none (or `binary` / `headless`) | Launches its own Chromium with a spike profile. The daemon owns the process and kills it on drop. |
+| `endpoint` (+ optional `target_id`) | Attaches to a browser already running at that DevTools endpoint. The daemon never owns the process; dropping the host leaves the browser alone. |
+
+`endpoint` accepts a bare port, a `host:port`, or a full URL:
+
+```json
+{ "endpoint": "9222" }
+{ "endpoint": "127.0.0.1:9222", "target_id": "A1B2C3" }
+{ "endpoint": "http://127.0.0.1:9222" }
+```
+
+The attach mode is how a shell hands the agent a tab it owns. In Electron that
+is a `WebContentsView` reachable through the app's remote debugging port; with
+a sidecar Chromium it is the port the sidecar was started on. Either way the
+daemon is unchanged, which is what keeps the shell decision reversible.
+
+The tool result names the mode it took, so a caller can tell the two apart:
+
+```
+attached | A1B2C3 | https://example.com/
+launched | 0A1B2C | about:blank
+```
 
 ### 2. Reference journey (for evidence)
 

@@ -18,7 +18,7 @@ use serde::Deserialize;
 use crate::budget::BudgetLedger;
 use crate::cdp::CdpClient;
 use crate::contracts::{BrowserError, SnapshotCaps};
-use crate::host::{launch, HostConfig};
+use crate::host::{attach, launch, BrowserHost, HostConfig, TargetInfo};
 use crate::snapshot::Snapshot;
 
 pub const TOOL_CONNECT: &str = "browser_connect";
@@ -67,6 +67,42 @@ impl BuzzBrowserMcp {
 pub struct ConnectParams {
     pub binary: Option<String>,
     pub headless: Option<bool>,
+    /// DevTools endpoint of a browser that is already running: a port
+    /// (`9222`), a `host:port`, or a URL. When set, the daemon attaches to that
+    /// browser instead of launching its own, so a shell that owns the tab can
+    /// hand the agent the tab the human is watching.
+    pub endpoint: Option<String>,
+    /// Page target to drive. Defaults to the first page target.
+    pub target_id: Option<String>,
+}
+
+/// Attach when an endpoint is given, otherwise launch.
+pub(crate) async fn open_host(p: &ConnectParams) -> Result<BrowserHost, BrowserError> {
+    if let Some(endpoint) = p.endpoint.as_deref() {
+        return attach(endpoint).await;
+    }
+    let cfg = HostConfig {
+        binary: p.binary.clone().map(PathBuf::from),
+        headless: p.headless.unwrap_or(true),
+        ..HostConfig::default()
+    };
+    launch(&cfg).await
+}
+
+/// Choose the page target to drive: the requested id, else the first page.
+pub(crate) fn pick_target<'a>(
+    targets: &'a [TargetInfo],
+    requested: Option<&str>,
+) -> Result<&'a TargetInfo, BrowserError> {
+    match requested {
+        Some(id) => targets
+            .iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| BrowserError::Host(format!("no page target with id {id}"))),
+        None => targets
+            .first()
+            .ok_or_else(|| BrowserError::Host("no page target".into())),
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -100,7 +136,7 @@ pub struct WaitParams {
 impl BuzzBrowserMcp {
     #[tool(
         name = "browser_connect",
-        description = "Launch a browser and connect the daemon to the first page target."
+        description = "Connect the daemon to a browser tab. With no arguments it launches its own browser. Pass `endpoint` (a DevTools port, host:port, or URL) to attach to a browser that is already running, and `target_id` to pick which tab to drive."
     )]
     async fn connect(
         &self,
@@ -113,29 +149,25 @@ impl BuzzBrowserMcp {
                 "already connected".into(),
             )));
         }
-        let cfg = HostConfig {
-            binary: p.binary.map(PathBuf::from),
-            headless: p.headless.unwrap_or(true),
-            ..HostConfig::default()
-        };
-        let host = launch(&cfg).await.map_err(BuzzBrowserMcp::err_result)?;
-        let Some(target) = host
+        let host = open_host(&p).await.map_err(BuzzBrowserMcp::err_result)?;
+        let targets = host
             .list_targets()
             .await
+            .map_err(BuzzBrowserMcp::err_result)?;
+        let target = pick_target(&targets, p.target_id.as_deref())
             .map_err(BuzzBrowserMcp::err_result)?
-            .into_iter()
-            .next()
-        else {
-            return Err(BuzzBrowserMcp::err_result(BrowserError::Host(
-                "no page target".into(),
-            )));
-        };
+            .clone();
         let client = CdpClient::connect(&target.ws_url)
             .await
             .map_err(BuzzBrowserMcp::err_result)?;
+        let mode = if host.owns_browser_process() {
+            "launched"
+        } else {
+            "attached"
+        };
         state.host = Some(host);
         state.client = Some(client);
-        Self::text_result("connected".into())
+        Self::text_result(format!("{mode} | {} | {}", target.id, target.url))
     }
 
     #[tool(
@@ -397,5 +429,58 @@ mod tests {
         assert_eq!(TOOL_CLICK, "browser_click");
         assert_eq!(TOOL_TYPE, "browser_type");
         assert_eq!(TOOL_BUDGET, "context_budget_report");
+    }
+
+    fn target(id: &str) -> TargetInfo {
+        TargetInfo {
+            id: id.to_string(),
+            url: format!("https://{id}.test/"),
+            title: id.to_string(),
+            ws_url: format!("ws://127.0.0.1/devtools/page/{id}"),
+        }
+    }
+
+    #[test]
+    fn connect_params_accept_an_endpoint_and_a_target_id() {
+        let p: ConnectParams =
+            serde_json::from_value(serde_json::json!({ "endpoint": "9222", "target_id": "tab-b" }))
+                .unwrap();
+        assert_eq!(p.endpoint.as_deref(), Some("9222"));
+        assert_eq!(p.target_id.as_deref(), Some("tab-b"));
+    }
+
+    #[test]
+    fn pick_target_prefers_the_requested_id_over_the_first_tab() {
+        let targets = vec![target("tab-a"), target("tab-b")];
+        assert_eq!(
+            pick_target(&targets, Some("tab-b")).unwrap().id,
+            "tab-b",
+            "a shell that owns the tab strip must be able to name the tab"
+        );
+        assert_eq!(pick_target(&targets, None).unwrap().id, "tab-a");
+    }
+
+    #[test]
+    fn pick_target_reports_an_unknown_target_id() {
+        let targets = vec![target("tab-a")];
+        let err = pick_target(&targets, Some("tab-z")).unwrap_err();
+        assert!(err.to_string().contains("tab-z"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn open_host_attaches_to_an_endpoint_instead_of_launching() {
+        let (endpoint, server) = crate::host::spawn_fake_devtools().await;
+        let params = ConnectParams {
+            // A binary that cannot launch: if `open_host` ignored the endpoint
+            // and tried to launch, this call would fail instead of attaching.
+            binary: Some("/nonexistent/browser".into()),
+            headless: None,
+            endpoint: Some(endpoint),
+            target_id: None,
+        };
+        let host = open_host(&params).await.unwrap();
+        assert!(!host.owns_browser_process());
+        assert_eq!(host.list_targets().await.unwrap().len(), 2);
+        server.abort();
     }
 }
