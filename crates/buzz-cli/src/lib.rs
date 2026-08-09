@@ -199,6 +199,9 @@ enum Cmd {
     /// Create, configure, and manage channels
     #[command(subcommand)]
     Channels(ChannelsCmd),
+    /// Open and manage channel workspace tabs
+    #[command(subcommand)]
+    Workspace(WorkspaceCmd),
     /// Read the Colony company profile and request owner-authorized changes
     #[command(subcommand)]
     Company(CompanyCmd),
@@ -1426,6 +1429,47 @@ pub enum ChannelsCmd {
         /// Policy: anyone | owner_only | nobody
         #[arg(long)]
         policy: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WorkspaceCmd {
+    /// Manage tabs in a channel workspace
+    #[command(subcommand)]
+    Tabs(WorkspaceTabsCmd),
+}
+
+#[derive(Subcommand)]
+pub enum WorkspaceTabsCmd {
+    /// Open a new channel workspace tab
+    Open {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Opaque tab coordinate
+        #[arg(long)]
+        tab: String,
+        /// Registered tab kind
+        #[arg(long = "tab-kind")]
+        tab_kind: String,
+        /// Human-readable tab title
+        #[arg(long)]
+        title: String,
+    },
+    /// Take the driver seat for an existing workspace tab
+    Take {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Opaque tab coordinate
+        #[arg(long)]
+        tab: String,
+    },
+    /// List the current projected workspace-tab heads for a channel
+    List {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
     },
 }
 
@@ -2914,6 +2958,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
+        Cmd::Workspace(sub) => commands::workspace::dispatch(sub, &client).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
         Cmd::Emoji(sub) => commands::emoji::dispatch(sub, &client).await,
@@ -3319,6 +3364,38 @@ mod tests {
                 "revert commit abc",
             ],
             vec!["buzz", "decisions", "list"],
+            vec![
+                "buzz",
+                "workspace",
+                "tabs",
+                "open",
+                "--channel",
+                "0d1e2f30-0000-4000-8000-000000000001",
+                "--tab",
+                "notes",
+                "--tab-kind",
+                "scratchpad",
+                "--title",
+                "Notes",
+            ],
+            vec![
+                "buzz",
+                "workspace",
+                "tabs",
+                "take",
+                "--channel",
+                "0d1e2f30-0000-4000-8000-000000000001",
+                "--tab",
+                "notes",
+            ],
+            vec![
+                "buzz",
+                "workspace",
+                "tabs",
+                "list",
+                "--channel",
+                "0d1e2f30-0000-4000-8000-000000000001",
+            ],
         ];
 
         for args in cases {
@@ -3424,6 +3501,7 @@ mod tests {
             "upload",
             "users",
             "workflows",
+            "workspace",
         ];
 
         let cmd = Cli::command();
@@ -3615,6 +3693,7 @@ mod tests {
         );
         assert_eq!(names(&cmd, "grants"), vec!["create", "list", "revoke"]);
         assert_eq!(names(&cmd, "decisions"), vec!["list", "log"]);
+        assert_eq!(names(&cmd, "workspace"), vec!["tabs"]);
     }
 
     #[test]
@@ -3639,6 +3718,7 @@ mod tests {
             ("upload", 1),
             ("users", 5),
             ("workflows", 8),
+            ("workspace", 1),
         ];
 
         let cmd = Cli::command();
