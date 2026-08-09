@@ -297,6 +297,13 @@ pub const KIND_EMPLOYEE: u32 = 30190;
 /// relay can open an employee's sealed key.
 pub const KIND_JOB_HEAD: u32 = 30191;
 
+/// Relay-signed canonical head for one channel workspace tab.
+///
+/// This is a NIP-33 projection of the relay-owned tab row, so it is
+/// parameterized-replaceable. It is relay-authored and readable by channel
+/// members; the narrower agent read scope is added in Task 11.
+pub const KIND_WORKSPACE_TAB_HEAD: u32 = 30192;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -335,6 +342,21 @@ pub const KIND_DISCOVERY_WORKSPACE_ACTION: u32 = 40021;
 
 /// Relay-signed, requester-private Discovery campaign or Lead projection.
 pub const KIND_DISCOVERY_WORKSPACE_RECEIPT: u32 = 40022;
+
+/// Client-signed channel-scoped command for a workspace tab.
+///
+/// Actions are regular append-only evidence of one requested transition, not
+/// replaceable state. The relay broker performs the ownership decision against
+/// the canonical tab row.
+pub const KIND_WORKSPACE_TAB_ACTION: u32 = 44400;
+
+/// Relay-signed result of a workspace tab action.
+///
+/// Receipts remain readable to channel members. They are deliberately not
+/// `p`- or result-gated: a receipt that named both actor and owner could not be
+/// readable to both under the generic all-`p`-values-must-equal-reader rule;
+/// a dedicated predicate would be required for that private dual audience.
+pub const KIND_WORKSPACE_TAB_RECEIPT: u32 = 44401;
 
 /// Colony cost ledger: owner-signed ledger command.
 ///
@@ -828,6 +850,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_DISCOVERY_WORKER_RECEIPT,
     KIND_DISCOVERY_WORKSPACE_ACTION,
     KIND_DISCOVERY_WORKSPACE_RECEIPT,
+    KIND_WORKSPACE_TAB_ACTION,
+    KIND_WORKSPACE_TAB_RECEIPT,
     KIND_PRICE_BOOK,
     KIND_ATTRIBUTION_RULEBOOK,
     KIND_CORRECTION_BOOK,
@@ -836,6 +860,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_HIRE_REQUEST,
     KIND_EMPLOYEE,
     KIND_JOB_HEAD,
+    KIND_WORKSPACE_TAB_HEAD,
     KIND_JOB_FILING,
     KIND_JOB_CLAIM,
     KIND_JOB_HEARTBEAT,
@@ -1019,6 +1044,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_DISCOVERY_ACTION
             | KIND_DISCOVERY_WORKER_ACTION
             | KIND_DISCOVERY_WORKSPACE_ACTION
+            | KIND_WORKSPACE_TAB_ACTION
     )
 }
 
@@ -1049,6 +1075,8 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_DISCOVERY_RECEIPT
             | KIND_DISCOVERY_WORKER_RECEIPT
             | KIND_DISCOVERY_WORKSPACE_RECEIPT
+            | KIND_WORKSPACE_TAB_RECEIPT
+            | KIND_WORKSPACE_TAB_HEAD
     )
 }
 
@@ -1078,6 +1106,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 3017
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WINDOW_BOUNDS)); // 39006 ∈ 30000–39999
 
@@ -1104,6 +1133,9 @@ const _: () = assert!(KIND_DISCOVERY_ACTION <= u16::MAX as u32);
 const _: () = assert!(KIND_DISCOVERY_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(KIND_DISCOVERY_WORKER_ACTION <= u16::MAX as u32);
 const _: () = assert!(KIND_DISCOVERY_WORKER_RECEIPT <= u16::MAX as u32);
+const _: () = assert!(KIND_WORKSPACE_TAB_ACTION <= u16::MAX as u32);
+const _: () = assert!(KIND_WORKSPACE_TAB_RECEIPT <= u16::MAX as u32);
+const _: () = assert!(KIND_WORKSPACE_TAB_HEAD <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_COMPANY_PROFILE));
 const _: () = assert!(!is_ephemeral(KIND_INITIATIVE));
 const _: () = assert!(!is_ephemeral(KIND_TASK));
@@ -1382,6 +1414,42 @@ mod tests {
         assert!(!is_parameterized_replaceable(
             KIND_DISCOVERY_WORKSPACE_RECEIPT
         ));
+    }
+
+    #[test]
+    fn workspace_tab_kinds_have_exact_classifications() {
+        assert_eq!(KIND_WORKSPACE_TAB_ACTION, 44400);
+        assert_eq!(KIND_WORKSPACE_TAB_RECEIPT, 44401);
+        assert_eq!(KIND_WORKSPACE_TAB_HEAD, 30192);
+
+        for kind in [
+            KIND_WORKSPACE_TAB_ACTION,
+            KIND_WORKSPACE_TAB_RECEIPT,
+            KIND_WORKSPACE_TAB_HEAD,
+        ] {
+            assert!(ALL_KINDS.contains(&kind));
+            assert!(!is_ephemeral(kind));
+        }
+
+        // Actions and receipts are append-only evidence of individual
+        // transitions. Only the relay-owned head is a NIP-33 projection.
+        assert!(!is_replaceable(KIND_WORKSPACE_TAB_ACTION));
+        assert!(!is_parameterized_replaceable(KIND_WORKSPACE_TAB_ACTION));
+        assert!(!is_replaceable(KIND_WORKSPACE_TAB_RECEIPT));
+        assert!(!is_parameterized_replaceable(KIND_WORKSPACE_TAB_RECEIPT));
+        assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD));
+
+        // The action is client-authored and brokered; the receipt and head are
+        // relay-authored. Receipts stay channel-readable because the generic
+        // p-gate cannot express a private actor+owner dual audience.
+        assert!(is_command_kind(KIND_WORKSPACE_TAB_ACTION));
+        assert!(!is_relay_only_kind(KIND_WORKSPACE_TAB_ACTION));
+        assert!(!is_command_kind(KIND_WORKSPACE_TAB_RECEIPT));
+        assert!(is_relay_only_kind(KIND_WORKSPACE_TAB_RECEIPT));
+        assert!(!is_command_kind(KIND_WORKSPACE_TAB_HEAD));
+        assert!(is_relay_only_kind(KIND_WORKSPACE_TAB_HEAD));
+        assert!(!P_GATED_KINDS.contains(&KIND_WORKSPACE_TAB_RECEIPT));
+        assert!(!RESULT_GATED_KINDS.contains(&KIND_WORKSPACE_TAB_RECEIPT));
     }
 
     #[test]
