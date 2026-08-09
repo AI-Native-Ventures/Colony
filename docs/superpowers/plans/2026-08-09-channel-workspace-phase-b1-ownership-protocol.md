@@ -50,25 +50,35 @@ end-to-end proof). No desktop or TypeScript work in this plan.
 - `just ci` before the PR. `just test` as well, because this touches
   `buzz-relay` and needs Postgres and Redis running.
 
-## Known gap, accepted for B1
+## Agent read scope
 
 The spec says agents "cannot see or touch tabs they do not own or have not been
-granted, **including tabs created by other agents**". B1 delivers the *touch*
-half completely and the *see* half partially:
+granted, **including tabs created by other agents**". B1 delivers both halves.
 
-- Grants are p-gated, so an agent reads only grants addressed to it.
-- Tab payloads are device-local, so an agent cannot read another tab's contents
-  no matter what it queries.
-- **Tab heads remain visible to every channel member, agents included.** An
-  agent that queries heads learns that a tab named "Notes" exists in a channel
-  it is already a member of. It learns nothing about the contents and can drive
-  nothing.
+- *Touch* is the ingest gate in Task 4: only the current driver or the owner may
+  change a driver.
+- *See* is the read scope in Task 5: **an agent may read a tab head only when it
+  is that tab's owner or its current driver.** Humans keep full visibility of
+  every tab in a channel they belong to, which is what makes the tab list usable
+  at all.
+- Grants are p-gated on top of that, so an agent reads only grants addressed to
+  it.
+- Payloads never cross the relay, so even a visible head discloses no contents.
 
-Closing that last gap means per-kind read ACL on a channel-scoped replaceable
-kind, which the relay does not have today and which would also hide agent-owned
-tabs from the human's own tab list unless designed carefully. It is deliberately
-out of scope here and belongs with the approvals work, where the same ACL
-machinery is needed anyway. Do not half-build it in this plan.
+The one-line rule works because a grant sets the head's `driver` to the grantee.
+"Granted to me" and "driven by me" are the same state, so no join against the
+grant history is needed, and a tab taken back stops being visible the moment the
+head changes. An agent that was granted a tab last week and lost it does not
+retain visibility, which a grant-history join would have gotten wrong.
+
+Two traps to avoid while implementing Task 5:
+
+- **Do not filter by rejecting the request.** An agent asking for a channel's
+  heads is making a legitimate query; the answer is a shorter list, not a 403.
+  Rejecting would also tell the agent that tabs it cannot see exist.
+- **Live subscriptions need the same scope as one-shot queries.** A filter
+  applied only on the initial fetch leaks every subsequently created tab to
+  every agent in the channel, which is the same bug with a delay.
 
 ## Out of scope for B1
 
@@ -147,8 +157,10 @@ fn workspace_tab_kinds_are_registered_and_correctly_classified() {
     // read grants pointed at itself.
     assert!(P_GATED_KINDS.contains(&KIND_WORKSPACE_TAB_GRANT));
 
-    // The head is the channel's tab list and every member reads it, so it must
-    // NOT be p-gated. See "Known gap, accepted for B1" in the plan.
+    // The head is NOT p-gated: a human reads every tab in their channel, and a
+    // `#p`-matching requirement would break that. Agents are narrowed instead
+    // by the read scope in Task 5, which filters results rather than refusing
+    // the query.
     assert!(!P_GATED_KINDS.contains(&KIND_WORKSPACE_TAB_HEAD));
 }
 ```
@@ -820,7 +832,165 @@ git commit -s -m "feat(workspace): refuse tab grants from non-drivers at ingest"
 
 ---
 
-## Task 5: `buzz workspace tabs` CLI
+## Task 5: Agent read scope for tab heads
+
+Task 4 stops an agent touching a tab it was not given. This task stops it
+*seeing* one. The rule is one line: an agent may read a tab head only when it is
+that tab's owner or its current driver.
+
+**Files:**
+- Modify: `crates/buzz-relay/src/workspace_tab_gate.rs`
+- Modify: `crates/buzz-relay/src/handlers/req.rs`
+
+**Interfaces:**
+- Consumes: `WorkspaceTabHead` (Task 2), `agent_tier` from
+  `crates/buzz-relay/src/interrupt_gate.rs`.
+- Produces: `fn agent_may_read_head(head: &WorkspaceTabHead, agent: &str) -> bool`,
+  `fn scope_tab_heads_for_agent(heads: Vec<WorkspaceTabHead>, agent: &str) -> Vec<WorkspaceTabHead>`.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to the `tests` module in `workspace_tab_gate.rs`:
+
+```rust
+#[test]
+fn an_agent_reads_the_tabs_it_owns_or_drives() {
+    let agent = "b".repeat(64);
+    assert!(agent_may_read_head(&head(&"a".repeat(64), &agent), &agent));
+    assert!(agent_may_read_head(&head(&agent, &"a".repeat(64)), &agent));
+}
+
+#[test]
+fn an_agent_does_not_read_a_tab_it_neither_owns_nor_drives() {
+    let head = head(&"a".repeat(64), &"b".repeat(64));
+    assert!(!agent_may_read_head(&head, &"c".repeat(64)));
+}
+
+#[test]
+fn losing_a_tab_ends_visibility_immediately() {
+    // The agent held tab-7 and the human took it back, so the head's driver is
+    // the human again. Past possession must not grant continuing sight, which
+    // is exactly what a join against grant history would have gotten wrong.
+    let agent = "b".repeat(64);
+    let human = "a".repeat(64);
+    assert!(agent_may_read_head(&head(&human, &agent), &agent));
+    assert!(!agent_may_read_head(&head(&human, &human), &agent));
+}
+
+#[test]
+fn scoping_shortens_the_list_and_preserves_order() {
+    let agent = "b".repeat(64);
+    let human = "a".repeat(64);
+    let mut mine = head(&human, &agent);
+    mine.tab_id = "tab-mine".into();
+    let mut theirs = head(&human, &human);
+    theirs.tab_id = "tab-theirs".into();
+    let mut also_mine = head(&agent, &agent);
+    also_mine.tab_id = "tab-also-mine".into();
+
+    let scoped = scope_tab_heads_for_agent(
+        vec![mine, theirs, also_mine],
+        &agent,
+    );
+    assert_eq!(
+        scoped.iter().map(|h| h.tab_id.as_str()).collect::<Vec<_>>(),
+        vec!["tab-mine", "tab-also-mine"],
+        "scoping filters, it does not reorder or reject"
+    );
+}
+
+#[test]
+fn pubkey_case_does_not_change_visibility() {
+    let agent = "b".repeat(64);
+    let head = head(&"a".repeat(64), &agent.to_uppercase());
+    assert!(agent_may_read_head(&head, &agent));
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `cargo test -p buzz-relay workspace_tab_gate`
+
+Expected: FAIL, `cannot find function agent_may_read_head`.
+
+- [ ] **Step 3: Write the implementation**
+
+Append to `workspace_tab_gate.rs`:
+
+```rust
+/// Whether an agent may see this tab at all.
+///
+/// Owner or current driver, nothing else. A grant sets the head's `driver` to
+/// the grantee, so "granted to me" and "driven by me" are the same state and no
+/// lookup against grant history is needed. That also means visibility ends the
+/// moment a tab is taken back, which is the behaviour we want: past possession
+/// is not continuing sight.
+pub fn agent_may_read_head(head: &WorkspaceTabHead, agent: &str) -> bool {
+    let agent = agent.to_ascii_lowercase();
+    head.owner.to_ascii_lowercase() == agent || head.driver.to_ascii_lowercase() == agent
+}
+
+/// Narrow a result set to what this agent may see, preserving order.
+///
+/// Filters rather than rejects: an agent asking for a channel's tabs is making
+/// a legitimate request and the honest answer is a shorter list. A 403 would
+/// itself disclose that tabs it cannot see exist.
+pub fn scope_tab_heads_for_agent(
+    heads: Vec<WorkspaceTabHead>,
+    agent: &str,
+) -> Vec<WorkspaceTabHead> {
+    heads
+        .into_iter()
+        .filter(|head| agent_may_read_head(head, agent))
+        .collect()
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `cargo test -p buzz-relay workspace_tab_gate`
+
+Expected: PASS (9 tests, the 4 from Task 4 plus these 5).
+
+- [ ] **Step 5: Wire it into the read path**
+
+Read `crates/buzz-relay/src/handlers/req.rs`. Two things to find:
+
+1. How the requester's identity reaches the query path (`authed_pubkey_hex` is
+   already threaded through `p_gated_filters_authorized`).
+2. Where results are produced for a REQ, **and** where live events are pushed to
+   an existing subscription. Both need the scope; see the second trap in the
+   "Agent read scope" section.
+
+Decide agent-ness with `interrupt_gate::agent_tier(...)`: it returns a tier for
+an agent and nothing for a human. A human requester is returned untouched.
+
+Apply `scope_tab_heads_for_agent` only when the result set contains
+`KIND_WORKSPACE_TAB_HEAD` events and the requester is an agent. Do not touch any
+other kind's results.
+
+Report exactly which two call sites you wired, and how you confirmed the live
+path is covered rather than assuming it.
+
+- [ ] **Step 6: Prove it against a real relay**
+
+This is the security-critical half of the spec's ownership rule, so it does not
+ship on unit tests alone. Task 7's `e2e_workspace_tabs.rs` gains a case: with two
+agents in one channel and one tab granted to `agent_a`, a heads query by
+`agent_b` returns an empty list while the same query by the human returns the
+tab. Write it in Task 7, not here, and make sure it fails before this task's
+wiring exists.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add crates/buzz-relay/src/workspace_tab_gate.rs crates/buzz-relay/src/handlers/req.rs
+git commit -s -m "feat(workspace): scope tab head reads to the owning agent"
+```
+
+---
+
+## Task 6: `buzz workspace tabs` CLI
 
 The agent-facing surface. Per AGENTS.md, agent-facing features belong in
 `buzz-cli` first: add the subcommand here, then wire the call in `client.rs`.
@@ -938,7 +1108,7 @@ git commit -s -m "feat(workspace): buzz workspace tabs list, grant, take, releas
 
 ---
 
-## Task 6: End-to-end handover proof
+## Task 7: End-to-end handover proof
 
 Everything above can pass while the handover still does not work against a real
 relay. This task proves it does.
@@ -1027,6 +1197,52 @@ async fn an_agent_reads_only_grants_addressed_to_it() {
     // agent_a sees its own.
     assert_eq!(ctx.query_grants_for(&agent_a, &agent_a).await.len(), 1);
 }
+
+#[tokio::test]
+async fn an_agent_sees_only_the_tab_heads_it_owns_or_drives() {
+    let ctx = TestContext::new().await;
+    let human = ctx.identity("human").await;
+    let agent_a = ctx.identity("agent-a").await;
+    let agent_b = ctx.identity("agent-b").await;
+    let channel = ctx.channel(&human, "head-visibility").await;
+    ctx.join(&agent_a, &channel).await;
+    ctx.join(&agent_b, &channel).await;
+
+    // Two tabs. One ends up driven by agent_a, one stays with the human.
+    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "Granted", &human, &agent_a)
+        .await;
+    ctx.publish_tab_head(&human, &channel, "tab-2", "scratchpad", "Private", &human, &human)
+        .await;
+
+    // The human sees the whole channel.
+    let human_view = ctx.query_tab_heads(&human, &channel).await;
+    assert_eq!(human_view.len(), 2, "a human sees every tab in the channel");
+
+    // agent_a sees only the tab it drives.
+    let a_view = ctx.query_tab_heads(&agent_a, &channel).await;
+    assert_eq!(
+        a_view.iter().map(|h| h.tab_id.as_str()).collect::<Vec<_>>(),
+        vec!["tab-1"],
+        "an agent must not see a tab it neither owns nor drives"
+    );
+
+    // agent_b is a channel member and sees nothing, without being refused.
+    let b_view = ctx.query_tab_heads(&agent_b, &channel).await;
+    assert!(
+        b_view.is_empty(),
+        "a bystander agent sees no tabs: {b_view:?}"
+    );
+
+    // Taking tab-1 back ends agent_a's visibility of it.
+    ctx.publish_takeover(&human, &channel, "tab-1", &human, "human-takeover")
+        .await;
+    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "Granted", &human, &human)
+        .await;
+    assert!(
+        ctx.query_tab_heads(&agent_a, &channel).await.is_empty(),
+        "visibility must end when the tab is taken back"
+    );
+}
 ```
 
 Helper names above (`publish_tab_head`, `try_publish_grant`, `current_driver`,
@@ -1056,7 +1272,7 @@ git commit -s -m "test(workspace): end-to-end tab handover against a live relay"
 
 ---
 
-## Task 7: Write the protocol down
+## Task 8: Write the protocol down
 
 **Files:**
 - Create: `docs/nips/NIP-WS.md`
@@ -1096,7 +1312,7 @@ git commit -s -m "docs(workspace): NIP-WS tab ownership protocol"
 
 ---
 
-## Task 8: Full gate and PR
+## Task 9: Full gate and PR
 
 - [ ] **Step 1: Run the whole local gate**
 
@@ -1128,16 +1344,18 @@ showing "no checks reported" is conflicted, not ungated.
 ## Self-review
 
 **Spec coverage.** One driver at a time: the head's `driver` field, Task 2.
-Drivers are the human and one agent: Tasks 2 and 3. An agent sees and drives
-tabs granted to it: p-gated grants, Task 1, proven in Task 6. Granting hands
-control over and is recorded: Tasks 3 and 5, proven in Task 6. Agents cannot
-touch tabs they were not granted: Task 4, proven in Task 6. Multiple agents
-never drive the same tab: single `driver` field plus the ingest gate.
+Drivers are the human and one agent: Tasks 2 and 3. An agent **drives** only
+tabs granted to it: ingest gate, Task 4, proven in Task 7. An agent **sees**
+only tabs it owns or drives, including not seeing other agents' tabs: read
+scope, Task 5, proven in Task 7 against a live relay. Grants readable only by
+their grantee: p-gated in Task 1, proven in Task 7. Granting hands control over
+and is recorded: Tasks 3 and 6, proven in Task 7. Multiple agents never drive
+the same tab: single `driver` field plus the ingest gate.
 
 **Deliberately not covered, and listed in "Out of scope":** the desktop surface,
 approvals, evidence, ledger, pausing a turn on human input, and payload sync.
-The one spec requirement only partially met is agent-invisibility of tab heads,
-documented under "Known gap, accepted for B1" rather than silently skipped.
+Every ownership requirement in the spec's "Ownership and concurrency" section is
+implemented here; none is deferred.
 
 **Type consistency.** `WorkspaceTabHead`'s six fields are identical in Tasks 2,
 4 and 6. `WorkspaceTabError` gains `SelfGrant` and `UnknownReason` in Task 3 and
