@@ -67,6 +67,8 @@ pub mod usage;
 pub mod user;
 /// Workflow, run, and approval persistence.
 pub mod workflow;
+/// Relay-owned channel workspace tab state and driver compare-and-swap.
+pub mod workspace_tabs;
 
 pub use error::{DbError, Result};
 pub use event::{
