@@ -94,8 +94,16 @@ export function useOpenAsks(): { asks: OpenAsk[]; isLoading: boolean } {
     refetchInterval: connected ? 30_000 : false,
   });
 
+  // Keep the derived list stable while the two query results are unchanged.
+  // HomeView feeds this list into its inbox-item memo, so rebuilding it on an
+  // unrelated render would force the whole inbox to derive again.
+  const openAsks = React.useMemo(
+    () => selectOpenAsks(asks, closureAskIds(closuresQuery.data)),
+    [asks, closuresQuery.data],
+  );
+
   return {
-    asks: selectOpenAsks(asks, closureAskIds(closuresQuery.data)),
+    asks: openAsks,
     isLoading:
       identityQuery.isLoading || asksQuery.isLoading || closuresQuery.isLoading,
   };
