@@ -1043,27 +1043,83 @@ jobs:
           path: /tmp/buzz-relay.log
           if-no-files-found: ignore
 
+  agent-ask-e2e:
+    name: Agent Ask E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes, desktop-e2e-relay]
+    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    permissions:
+      contents: read
+    env:
+      # start-relay-for-tests.sh consumes BUZZ_TEST_RELAY_PRIVATE_KEY and
+      # passes it to the relay as BUZZ_RELAY_PRIVATE_KEY. Keep both names
+      # explicit here so the relay identity is durable for this isolated job.
+      BUZZ_TEST_RELAY_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      BUZZ_RELAY_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      BUZZ_INTERRUPT_SWEEP_SECS: "1"
+      BUZZ_STUB_LOG: /tmp/buzz-ask-stub.log
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+      # Reuse the relay artifact, but start a fresh relay and database on this
+      # job's own runner so no other E2E suite can seed its community.
+      - name: Download relay binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-e2e-relay
+          path: target/ci
+      - name: Start relay
+        run: |
+          chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
+          ./scripts/start-relay-for-tests.sh --no-build
+      - name: Build ask E2E binaries
+        run: |
+          cargo build -p buzz-cli --bin buzz
+          cargo build -p buzz-test-client --bin ask_stub_agent
+          cargo build -p buzz-acp --bin buzz-acp
+          echo "${{ github.workspace }}/target/debug" >> "$GITHUB_PATH"
+      - name: Agent ask E2E test
+        run: cargo test -p buzz-test-client --test e2e_agent_answers_ask -- --ignored --nocapture
+        env:
+          RELAY_URL: ws://localhost:3000
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Upload agent ask E2E logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: agent-ask-e2e-artifacts
+          path: |
+            /tmp/buzz-relay.log
+            /tmp/buzz-ask-stub.log
+            /tmp/*stub*.log
+            /tmp/*ask*.log
+          if-no-files-found: ignore
+
   relay-suites:
     name: Relay Suites
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, backend-integration, relay-e2e]
+    needs: [changes, backend-integration, relay-e2e, agent-ask-e2e]
     # `always()` so this still reports when a dependency fails or is skipped;
     # without it the job is skipped along with them and reports nothing, which
-    # is the state this exists to end. The path condition matches the two jobs
-    # below exactly, so a PR that touches no Rust skips this too and the
+    # is the state this exists to end. The path condition matches the three
+    # upstream jobs exactly, so a PR that touches no Rust skips this too and the
     # required check is satisfied by the skip.
     if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     steps:
-      # One stable check name standing in for two long jobs.
+      # One stable check name standing in for three long jobs.
       #
-      # `Backend Integration` and `relay-e2e` are the ONLY jobs that run the
+      # `Backend Integration`, `relay-e2e`, and `agent-ask-e2e` run the
       # Postgres-gated relay suites -- `interrupt_gate`, `interrupt_runtime`,
-      # `e2e_interrupts`, the workflow owner-routing tests and the write-path
-      # guard. None of those jobs is a required check, so a PR could merge with
-      # every one of them red.
+      # `e2e_interrupts`, the live ACP ask-answer path, the workflow
+      # owner-routing tests and the write-path guard. None of those jobs is a
+      # required check, so a PR could merge with every one of them red.
       #
       # That is not hypothetical. PR #174 stood at `Backend Integration: fail`,
       # `Relay E2E: fail`, `mergeable=MERGEABLE`, and GitHub accepted it into
@@ -1072,9 +1128,8 @@ jobs:
       # rule that stops agents interrupting a human was one working queue away
       # from landing with its own tests failing.
       #
-      # Requiring the two jobs directly would put ~30 minutes on the critical
-      # path of every merge and add two names to the ruleset. This adds one
-      # cheap stable name instead -- the same reasoning that keeps
+      # Requiring the three jobs directly would add three names to the ruleset.
+      # This adds one cheap stable name instead -- the same reasoning that keeps
       # `Server Cross-Compile` (a varying matrix) out of the required set.
       - name: Check relay suites
         run: |
@@ -1087,6 +1142,11 @@ jobs:
           if [ "${{ needs.relay-e2e.result }}" != "success" ]; then
             echo "Relay E2E finished with: ${{ needs.relay-e2e.result }}"
             echo "e2e_interrupts runs there and did not pass."
+            exit 1
+          fi
+          if [ "${{ needs.agent-ask-e2e.result }}" != "success" ]; then
+            echo "Agent Ask E2E finished with: ${{ needs.agent-ask-e2e.result }}"
+            echo "The live harness ask-answer gate did not pass."
             exit 1
           fi
           echo "Relay suites passed"
