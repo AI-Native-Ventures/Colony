@@ -30,12 +30,13 @@ import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
+import { ChannelContentSurface } from "@/features/workspace/ui/ChannelContentSurface";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { THREAD_SURFACE_KEY } from "@/features/channels/lib/threadFocusLayout";
 import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout";
-import { useThreadViewMode } from "@/features/channels/lib/threadViewModePreference";
+import { useEffectiveThreadViewMode } from "@/features/workspace/lib/effectiveThreadViewMode";
 import { useThreadViewModeSwitch } from "@/features/channels/ui/useThreadViewModeSwitch";
 import { useFocusDrawerPresence } from "@/features/channels/ui/useFocusDrawerPresence";
 import { useChannelWorkingAgentPubkeys } from "@/features/agents/agentWorkingSignal";
@@ -498,7 +499,7 @@ export const ChannelPane = React.memo(function ChannelPane({
 
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
-  const threadViewMode = useThreadViewMode();
+  const threadViewMode = useEffectiveThreadViewMode(activeChannel?.id);
   const useFocusThreadDrawer =
     threadViewMode === "focus" &&
     useSplitAuxiliaryPane &&
@@ -626,77 +627,79 @@ export const ChannelPane = React.memo(function ChannelPane({
               />
             </div>
           ) : null}
-          <MessageTimeline
-            ref={messageTimelineRef}
-            channelId={activeChannel?.id}
-            channelIntro={channelIntro}
-            directMessageIntro={directMessageIntro}
-            scrollContainerRef={timelineScrollRef}
-            currentPubkey={currentPubkey}
-            fetchOlder={fetchOlder}
-            followThreadById={followThreadById}
-            hasComposerOverlay={hasMainComposerOverlay}
-            hasOlderMessages={hasOlderMessages}
-            historyExhausted={historyExhausted}
-            hideDayDividers={isHuddleTranscript}
-            alwaysShowMessageIdentity={isHuddleTranscript}
-            hideAgentAccessBadges={isHuddleTranscript}
-            pinnedIntro={
-              isHuddleTranscript ? <HuddleTranscriptIntro /> : undefined
-            }
-            huddleMemberPubkeys={huddleMemberPubkeys}
-            huddleMemberPubkeysPending={huddleMemberPubkeysPending}
-            isFetchingOlder={isFetchingOlder}
-            isFollowingThreadById={isFollowingThreadById}
-            isMessageUnreadById={isMessageUnreadById}
-            personaLookup={personaLookup}
-            profiles={profiles}
-            ownerProfiles={ownerProfiles}
-            unfollowThreadById={unfollowThreadById}
-            emptyDescription={
-              activeChannel?.channelType === "forum"
-                ? "Select a stream or DM to load real message history in this first integration pass."
-                : "Messages and sub-replies will appear here once the relay has history for this channel."
-            }
-            emptyTitle={
-              activeChannel
-                ? activeChannel.channelType === "forum"
-                  ? "Forum channels are next"
-                  : "No messages yet"
-                : "No channel selected"
-            }
-            isLoading={isHuddleTranscript ? false : isTimelineLoading}
-            entranceMessageId={entranceMessageId}
-            onEntranceMessageComplete={onEntranceMessageComplete}
-            mainEntries={mainTimelineEntries}
-            threadSummaries={threadSummaries}
-            messages={visibleMessages}
-            firstUnreadMessageId={firstUnreadMessageId}
-            unreadCount={unreadCount}
-            onDelete={onDelete}
-            onEdit={onEdit}
-            onMarkUnread={onMarkUnread}
-            onMarkRead={onMarkRead}
-            onReply={timelineReplyHandler}
-            channelName={activeChannel?.name}
-            channelType={activeChannel?.channelType ?? null}
-            isSendingVideoReviewComment={isSending}
-            onSendVideoReviewComment={
-              activeChannel?.archivedAt ? undefined : onSendVideoReviewComment
-            }
-            onTargetReached={onTargetReached}
-            onToggleReaction={onToggleReaction}
-            searchActiveMessageId={channelFind.activeMatch?.messageId ?? null}
-            searchMatchingMessageIds={channelFind.matchingMessageIds}
-            searchQuery={channelFind.query}
-            targetMessageId={targetMessageId}
-            splitThreadPanelOpen={
-              useSplitAuxiliaryPane &&
-              !useFocusThreadDrawer &&
-              Boolean(openThreadHeadId)
-            }
-            threadUnreadCounts={threadUnreadCounts}
-          />
+          <ChannelContentSurface channelId={activeChannel?.id}>
+            <MessageTimeline
+              ref={messageTimelineRef}
+              channelId={activeChannel?.id}
+              channelIntro={channelIntro}
+              directMessageIntro={directMessageIntro}
+              scrollContainerRef={timelineScrollRef}
+              currentPubkey={currentPubkey}
+              fetchOlder={fetchOlder}
+              followThreadById={followThreadById}
+              hasComposerOverlay={hasMainComposerOverlay}
+              hasOlderMessages={hasOlderMessages}
+              historyExhausted={historyExhausted}
+              hideDayDividers={isHuddleTranscript}
+              alwaysShowMessageIdentity={isHuddleTranscript}
+              hideAgentAccessBadges={isHuddleTranscript}
+              pinnedIntro={
+                isHuddleTranscript ? <HuddleTranscriptIntro /> : undefined
+              }
+              huddleMemberPubkeys={huddleMemberPubkeys}
+              huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+              isFetchingOlder={isFetchingOlder}
+              isFollowingThreadById={isFollowingThreadById}
+              isMessageUnreadById={isMessageUnreadById}
+              personaLookup={personaLookup}
+              profiles={profiles}
+              ownerProfiles={ownerProfiles}
+              unfollowThreadById={unfollowThreadById}
+              emptyDescription={
+                activeChannel?.channelType === "forum"
+                  ? "Select a stream or DM to load real message history in this first integration pass."
+                  : "Messages and sub-replies will appear here once the relay has history for this channel."
+              }
+              emptyTitle={
+                activeChannel
+                  ? activeChannel.channelType === "forum"
+                    ? "Forum channels are next"
+                    : "No messages yet"
+                  : "No channel selected"
+              }
+              isLoading={isHuddleTranscript ? false : isTimelineLoading}
+              entranceMessageId={entranceMessageId}
+              onEntranceMessageComplete={onEntranceMessageComplete}
+              mainEntries={mainTimelineEntries}
+              threadSummaries={threadSummaries}
+              messages={visibleMessages}
+              firstUnreadMessageId={firstUnreadMessageId}
+              unreadCount={unreadCount}
+              onDelete={onDelete}
+              onEdit={onEdit}
+              onMarkUnread={onMarkUnread}
+              onMarkRead={onMarkRead}
+              onReply={timelineReplyHandler}
+              channelName={activeChannel?.name}
+              channelType={activeChannel?.channelType ?? null}
+              isSendingVideoReviewComment={isSending}
+              onSendVideoReviewComment={
+                activeChannel?.archivedAt ? undefined : onSendVideoReviewComment
+              }
+              onTargetReached={onTargetReached}
+              onToggleReaction={onToggleReaction}
+              searchActiveMessageId={channelFind.activeMatch?.messageId ?? null}
+              searchMatchingMessageIds={channelFind.matchingMessageIds}
+              searchQuery={channelFind.query}
+              targetMessageId={targetMessageId}
+              splitThreadPanelOpen={
+                useSplitAuxiliaryPane &&
+                !useFocusThreadDrawer &&
+                Boolean(openThreadHeadId)
+              }
+              threadUnreadCounts={threadUnreadCounts}
+            />
+          </ChannelContentSurface>
           {isNonMemberView ? (
             <div
               data-testid="join-banner"
