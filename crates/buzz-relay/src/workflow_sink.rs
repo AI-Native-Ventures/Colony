@@ -807,6 +807,66 @@ mod integration_tests {
         assert!(inserted);
     }
 
+    /// Write an owner-authored managed-agent head the way the PRODUCT writes
+    /// one: naming a `role_id`, never a `tier`.
+    ///
+    /// [`write_agent_head`] above writes `tier`, which nothing outside these
+    /// tests has ever written. That is exactly how a dead `tier`-only lookup
+    /// survived on the escalation path: the suite seeded the field the code
+    /// read, so the tests passed while every real workspace failed. Tests for
+    /// the role path must seed the role, and pair it with [`employ_role`].
+    async fn write_agent_head_with_role(
+        db: &buzz_db::Db,
+        community: buzz_core::CommunityId,
+        owner: &nostr::Keys,
+        agent_hex: &str,
+        role_id: &str,
+        persona_id: Option<&str>,
+    ) {
+        let content = match persona_id {
+            Some(pid) => format!(r#"{{"role_id":"{role_id}","persona_id":"{pid}"}}"#),
+            None => format!(r#"{{"role_id":"{role_id}"}}"#),
+        };
+        let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content)
+            .tags(vec![Tag::parse(["d", agent_hex]).expect("d tag")])
+            .sign_with_keys(owner)
+            .expect("sign managed-agent head");
+        let (_, inserted) = db
+            .insert_event(community, &event, None)
+            .await
+            .expect("store managed-agent head");
+        assert!(inserted);
+    }
+
+    /// Put a role on the payroll at `rank`. The employee identity is
+    /// relay-held and nothing signs as it; what matters is the
+    /// `role_id -> rank` mapping the rank lookup resolves through.
+    async fn employ_role(
+        db: &buzz_db::Db,
+        community: buzz_core::CommunityId,
+        owner: &nostr::Keys,
+        role_id: &str,
+        rank: &str,
+    ) {
+        let identity = nostr::Keys::generate();
+        let stored = db
+            .insert_employee(
+                community,
+                buzz_db::employees::NewEmployee {
+                    pubkey: &identity.public_key().to_bytes(),
+                    sealed_key: b"sealed-test-key",
+                    role_id,
+                    display_name: "Test Employee",
+                    rank,
+                    hired_by: &owner.public_key().to_bytes(),
+                    hire_event: &identity.public_key().to_bytes(),
+                },
+            )
+            .await
+            .expect("insert employee");
+        assert!(stored.is_some(), "employee row must be inserted");
+    }
+
     /// Write an owner-authored team head (kind 30176).
     async fn write_team(
         db: &buzz_db::Db,
@@ -1046,6 +1106,116 @@ mod integration_tests {
                 .await
                 .is_empty(),
             "team lead must be mention-indexed so it wakes"
+        );
+    }
+
+    /// The same route as the test above, seeded the way the product seeds it:
+    /// the heads name a `role_id` and the payroll maps that role to a rank.
+    /// Nothing writes `content.tier`, so before the role join this returned
+    /// `Ok(None)` from the team-lead rung and the worker's mention fell
+    /// through to the community executive instead of its own lead.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn workflow_send_message_worker_mentioning_owner_routes_to_the_team_lead_named_only_by_role(
+    ) {
+        let state = test_state().await;
+        let owner = nostr::Keys::generate();
+        let owner_hex = owner.public_key().to_hex();
+        let worker = nostr::Keys::generate();
+        let worker_hex = worker.public_key().to_hex();
+        let lead = nostr::Keys::generate();
+        let lead_hex = lead.public_key().to_hex();
+        // An executive exists and is a valid fallback target, so routing to
+        // the lead proves the team-lead rung fired rather than falling
+        // through. Without it a dead rung would still look like a pass.
+        let executive = nostr::Keys::generate();
+        let executive_hex = executive.public_key().to_hex();
+
+        let host = format!("wf-route-role-{}.example", uuid::Uuid::new_v4().simple());
+        let community = match state
+            .db
+            .create_community_with_owner(&host, &owner_hex)
+            .await
+            .expect("create community")
+        {
+            CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("expected fresh community, got {other:?}"),
+        };
+
+        employ_role(&state.db, community, &owner, "ic", "worker").await;
+        employ_role(&state.db, community, &owner, "team-lead", "leader").await;
+        employ_role(&state.db, community, &owner, "chief-of-staff", "executive").await;
+
+        write_agent_head_with_role(
+            &state.db,
+            community,
+            &owner,
+            &worker_hex,
+            "ic",
+            Some("p-worker"),
+        )
+        .await;
+        write_agent_head_with_role(
+            &state.db,
+            community,
+            &owner,
+            &lead_hex,
+            "team-lead",
+            Some("p-lead"),
+        )
+        .await;
+        write_agent_head_with_role(
+            &state.db,
+            community,
+            &owner,
+            &executive_hex,
+            "chief-of-staff",
+            Some("p-exec"),
+        )
+        .await;
+        write_team(
+            &state.db,
+            community,
+            &owner,
+            "team-1",
+            &["p-worker", "p-lead"],
+            Some("p-lead"),
+        )
+        .await;
+
+        let channel_id = open_channel_with_owner_member(
+            &state, community, &owner, &owner_hex, "Boss", "wf-route",
+        )
+        .await;
+
+        let sink = RelayActionSink::new(&state);
+        let event_id_hex = sink
+            .send_message(
+                community,
+                &channel_id.to_string(),
+                "cc @Boss on this",
+                &worker_hex,
+            )
+            .await
+            .expect("send_message");
+
+        let stored = stored_event(&state, community, &event_id_hex).await;
+        let p_tags = p_tag_targets(&stored);
+        assert!(
+            p_tags.contains(&lead_hex),
+            "a lead named only by its role must still be the route target; got {p_tags:?}"
+        );
+        assert!(
+            !p_tags.contains(&executive_hex),
+            "routing to the executive means the team-lead rung never fired; got {p_tags:?}"
+        );
+        assert!(
+            !p_tags.contains(&owner_hex),
+            "owner must never be p-tagged; got {p_tags:?}"
+        );
+        assert!(
+            mention_tag_targets(&stored).contains(&owner_hex),
+            "owner must remain as a reference-only mention tag"
         );
     }
 
