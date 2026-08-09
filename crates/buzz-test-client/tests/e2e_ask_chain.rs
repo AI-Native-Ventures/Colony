@@ -188,33 +188,16 @@ async fn employ_ladder(
     worker: &Keys,
     leader: &Keys,
     executive: &Keys,
-) {
+) -> (String, String, String) {
     let run = Uuid::new_v4().simple().to_string();
     let run = &run[..8];
-    employ(
-        community_id,
-        owner,
-        worker,
-        &format!("engineer-{run}"),
-        "worker",
-    )
-    .await;
-    employ(
-        community_id,
-        owner,
-        leader,
-        &format!("eng-lead-{run}"),
-        "leader",
-    )
-    .await;
-    employ(
-        community_id,
-        owner,
-        executive,
-        &format!("chief-of-staff-{run}"),
-        "executive",
-    )
-    .await;
+    let worker_role = format!("engineer-{run}");
+    let leader_role = format!("eng-lead-{run}");
+    let executive_role = format!("chief-of-staff-{run}");
+    employ(community_id, owner, worker, &worker_role, "worker").await;
+    employ(community_id, owner, leader, &leader_role, "leader").await;
+    employ(community_id, owner, executive, &executive_role, "executive").await;
+    (worker_role, leader_role, executive_role)
 }
 
 /// Publish the owner-authored managed-agent head (kind 30177) that says which
@@ -633,6 +616,33 @@ async fn raise(
     headline: &str,
     prior: Option<&str>,
 ) -> String {
+    raise_with_window(
+        filer_ws,
+        filer,
+        audience_hex,
+        initiative_id,
+        task_id,
+        need,
+        headline,
+        prior,
+        None,
+    )
+    .await
+}
+
+/// File an ask with an optional explicit deadline window.
+#[allow(clippy::too_many_arguments)]
+async fn raise_with_window(
+    filer_ws: &mut BuzzTestClient,
+    filer: &Keys,
+    audience_hex: &str,
+    initiative_id: Option<&str>,
+    task_id: &str,
+    need: &str,
+    headline: &str,
+    prior: Option<&str>,
+    window_secs: Option<u64>,
+) -> String {
     let task_ids = vec![task_id.to_string()];
     let builder = build_ask_event(&AskEventFields {
         ask_type: "decision",
@@ -648,7 +658,7 @@ async fn raise(
         cost_of_delay: "47 leads are waiting on this",
         options: &[],
         default_option: None,
-        window_secs: None,
+        window_secs,
     })
     .expect("the CLI's own builder must produce an ask event");
     let event = builder.sign_with_keys(filer).expect("sign ask");
@@ -660,6 +670,39 @@ async fn raise(
         ok.message
     );
     ask_id
+}
+
+/// Answer an open ask as its addressed audience.
+///
+/// Resolution content follows `buzz-cli`'s builder exactly: the decision and
+/// rationale live under the `answer` key, and the single `e` tag names the
+/// ask event being closed.
+async fn answer_ask(
+    answerer_ws: &mut BuzzTestClient,
+    answerer: &Keys,
+    ask_id: &str,
+    decision: &str,
+) {
+    let content = serde_json::json!({
+        "answer": {
+            "decision": decision,
+            "rationale": "within this tier's authority",
+        },
+    })
+    .to_string();
+    let resolution = EventBuilder::new(Kind::Custom(KIND_ASK_RESOLUTION as u16), content)
+        .tags([Tag::parse(["e", ask_id]).expect("e tag")])
+        .sign_with_keys(answerer)
+        .expect("sign resolution");
+    let ok = answerer_ws
+        .send_event(resolution)
+        .await
+        .expect("send resolution");
+    assert!(
+        ok.accepted,
+        "the addressed leader must be allowed to resolve its ask: {}",
+        ok.message
+    );
 }
 
 /// The Needs-Me surface's first query, verbatim: every ask addressed to me.
@@ -681,6 +724,163 @@ async fn closures_naming(owner: &Keys, ask_ids: &[String]) -> Vec<serde_json::Va
         }),
     )
     .await
+}
+
+/// Wait until the deadline sweep promotes an unanswered ask to `audience`.
+///
+/// The positive control in the absorption gate uses this to prove that the
+/// relay sweep is live in the current run; an absence assertion for the
+/// answered ask is meaningful only after this observed successor exists.
+async fn wait_for_successor(audience: &Keys, prior: &str) -> Vec<serde_json::Value> {
+    for attempt in 0..60 {
+        let successors = asks_addressed_to(audience)
+            .await
+            .into_iter()
+            .filter(|ask| tag_value(ask, "prior") == prior)
+            .collect::<Vec<_>>();
+        if !successors.is_empty() {
+            return successors;
+        }
+        if attempt < 59 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    panic!("the deadline sweep did not promote unanswered ask {prior} within 120 seconds");
+}
+
+/// The absorption gate: the worker's ask is addressed to its leader, the
+/// leader answers it, and the deadline sweep creates no successor ask for the
+/// executive or owner.
+///
+/// This drives the relay protocol directly (publish/query), not the ACP
+/// harness. It proves that an answered ask is not promoted by the deadline
+/// sweep, so it never reaches the founder; ACP prompt delivery itself is
+/// covered only by the unit tests in `buzz-acp`.
+///
+/// Run this gate against a fresh database with exactly one owner and one
+/// executive in the community. The suite seeds a new owner per test into its
+/// one host-bound community, so a persistent volume accumulates owners and
+/// disables the sweep's never-guessing human hop.
+///
+/// It must run before any other suite seeds agents into this community, and
+/// first within this file, because promotion requires exactly one executive
+/// and one owner in the managed-agent roster. The unanswered positive control
+/// makes a violation of that ordering fail loudly instead of letting the
+/// answered-ask absence assertion pass vacuously.
+#[tokio::test]
+#[ignore = "requires a running relay and Postgres"]
+async fn a_leader_answers_a_workers_ask_and_the_owner_never_sees_it() {
+    let community_id = ensure_test_community(&relay_host()).await;
+
+    let owner = Keys::generate();
+    seed_relay_owner(community_id, &owner).await;
+
+    let mut owner_ws = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("owner connect");
+    let ws = workspace(&mut owner_ws, owner.clone()).await;
+    let task_id = create_chat_task(&mut owner_ws, &ws).await;
+
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    let (worker_role, leader_role, executive_role) =
+        employ_ladder(community_id, &owner, &worker, &leader, &executive).await;
+    publish_role_head(&mut owner_ws, &owner, &worker, &worker_role).await;
+    publish_role_head(&mut owner_ws, &owner, &leader, &leader_role).await;
+    publish_role_head(&mut owner_ws, &owner, &executive, &executive_role).await;
+
+    let mut worker_ws = BuzzTestClient::connect(&relay_url(), &worker)
+        .await
+        .expect("worker connect");
+    let mut leader_ws = BuzzTestClient::connect(&relay_url(), &leader)
+        .await
+        .expect("leader connect");
+
+    let before = asks_addressed_to(&owner).await.len();
+    let ask_id = raise_with_window(
+        &mut worker_ws,
+        &worker,
+        &leader.public_key().to_hex(),
+        None,
+        &task_id,
+        &format!("sms-vendor-{}", Uuid::new_v4().simple()),
+        "Which vendor should we use for SMS?",
+        None,
+        Some(1),
+    )
+    .await;
+
+    // An unanswered sibling is the positive control: it must be promoted by
+    // the same sweep that must leave the answered ask alone. Its distinct
+    // need key keeps this from exercising the filing dedupe slot instead.
+    let control_ask_id = raise_with_window(
+        &mut worker_ws,
+        &worker,
+        &leader.public_key().to_hex(),
+        None,
+        &task_id,
+        &format!("sms-vendor-control-{}", Uuid::new_v4().simple()),
+        "Control ask left unanswered for the sweep",
+        None,
+        Some(1),
+    )
+    .await;
+
+    let addressed_to_leader = asks_addressed_to(&leader).await;
+    assert!(
+        addressed_to_leader
+            .iter()
+            .any(|ask| ask["id"] == serde_json::json!(ask_id))
+            && addressed_to_leader
+                .iter()
+                .any(|ask| ask["id"] == serde_json::json!(control_ask_id)),
+        "the leader must be able to see both asks addressed to it"
+    );
+
+    answer_ask(
+        &mut leader_ws,
+        &leader,
+        &ask_id,
+        "Use Twilio; we already hold the account",
+    )
+    .await;
+
+    // The control's successor is the positive signal that the deadline sweep
+    // actually ran in this test, rather than an absence that passes
+    // vacuously when the sweep is dead.
+    let control_successors = wait_for_successor(&executive, &control_ask_id).await;
+    let successors = asks_addressed_to(&executive)
+        .await
+        .into_iter()
+        .chain(asks_addressed_to(&owner).await)
+        .filter(|ask| tag_value(ask, "prior") == ask_id)
+        .collect::<Vec<_>>();
+    assert!(
+        successors.is_empty(),
+        "an answered ask must not be promoted to the executive or owner; successors: {successors:#?}; positive control: {control_successors:#?}"
+    );
+
+    let closures = closures_naming(&owner, std::slice::from_ref(&ask_id)).await;
+    assert_eq!(
+        closures.len(),
+        1,
+        "answering must produce exactly one closure event for the ask"
+    );
+
+    let after = asks_addressed_to(&owner).await;
+    assert_eq!(
+        after.len(),
+        before,
+        "the owner's Needs-Me surface must be unchanged: an ask a leader \
+         answered must never appear in front of the founder. Got {} asks, \
+         expected {before}",
+        after.len()
+    );
+
+    owner_ws.disconnect().await.ok();
+    worker_ws.disconnect().await.ok();
+    leader_ws.disconnect().await.ok();
 }
 
 /// The whole point: an employed worker, blocked on real work, files an ask

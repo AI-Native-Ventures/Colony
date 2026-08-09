@@ -87,6 +87,26 @@ All replies and delegations — including task assignments to other agents — g
 
 If you need something only a human or a higher tier can give (a decision, an answer, a credential, an external unblock), do not message the owner: the relay refuses direct owner contact from worker- and leader-tier agents at ingest. Raise a typed ask one tier up (worker to leader, leader to executive; only the executive addresses the owner) and keep working on whatever is not blocked:
 
+### When an ask is addressed to you
+
+If your turn opens with a `<colony-ask>` block, someone below you is blocked and
+is waiting on you. This is the most time-sensitive work you will get: they
+cannot proceed until you answer.
+
+Answer it if it is yours to decide:
+
+`buzz asks answer --ask <ask-id> --answer-json '{"decision":"<what you decided>","rationale":"<why>"}'`
+
+Escalate it if it genuinely needs a tier above you:
+
+`buzz asks escalate --prior <ask-id> --type <type> --to <one-tier-up-pubkey> --task <task-id> --need <short-slug> --headline "<what you need>" --cost-of-delay "<what waiting costs>"`
+
+Do one or the other in the same turn. Doing neither is the worst outcome: an
+unanswered ask times out and lands on the founder, which is the exact thing this
+ladder exists to prevent. Answering something you were not asked, or inventing an
+authority you do not hold, is worse than escalating. Never put a secret in an
+answer; a credential ask gets a provisioning confirmation, not the secret.
+
 `buzz asks raise --type decision --to <one-tier-up-pubkey> --task <id> --need <short-slug> --headline "<what you need>" --cost-of-delay "<what waiting costs>"`
 
 `--task` takes the `Task id` from your `<colony-work-context>` block, verbatim. Add `--initiative <id>` when that block gives an `Initiative id`; omit it when the block says `none`, and never make one up.

@@ -1472,6 +1472,13 @@ fn send_prompt_result(
     });
 }
 
+fn ask_section_for_batch(batch: &FlushBatch) -> Option<String> {
+    batch.events.iter().rev().find_map(|batch_event| {
+        crate::ask_context::read_incoming_ask(&batch_event.event)
+            .map(|ask| crate::ask_context::ask_context_section(&ask))
+    })
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -2034,6 +2041,7 @@ pub async fn run_prompt_task(
         }
         None => None,
     };
+    let ask_section = batch.as_ref().and_then(ask_section_for_batch);
 
     let mut slash_command: Option<String> = None;
     let prompt_sections: Vec<String> = if let Some(text) = prompt_text {
@@ -2124,20 +2132,24 @@ pub async fn run_prompt_task(
     // own block. Per-section blocks let the observer size trimmer elide a
     // section body in place while every `[Header]` line survives at the head
     // of its own leaf — so the "Prompt context" panel counts every section.
-    // The work section leads, so the agent reads what it is working on before
-    // it reads the instruction. It is its own block for the same reason every
+    // An addressed ask leads, so the agent sees the unblock request before
+    // ordinary work context and the rest of the event prompt. The work section
+    // follows it, so the agent reads what it is working on before it reads the
+    // rest of the instruction. Each is its own block for the same reason every
     // other section is.
     let work_section = work_context
         .as_ref()
         .map(crate::work_context::work_context_section);
     let prompt_blocks: Vec<&str> = match slash_command {
         Some(ref cmd) => std::iter::once(cmd.as_str())
+            .chain(ask_section.as_deref())
             .chain(work_section.as_deref())
             .chain(prompt_sections.iter().map(String::as_str))
             .collect(),
-        None => work_section
+        None => ask_section
             .as_deref()
             .into_iter()
+            .chain(work_section.as_deref())
             .chain(prompt_sections.iter().map(String::as_str))
             .collect(),
     };
@@ -5054,6 +5066,49 @@ mod tests {
     // regression here would silently fall through to
     // `unwrap_or(CancelReason::Steer)` at the requeue site and preserve a
     // batch that should have been discarded.
+
+    #[test]
+    fn ask_section_scans_backwards_for_an_ask_before_a_later_chat_event() {
+        let filer = Keys::generate();
+        let audience = Keys::generate();
+        let channel_id = Uuid::new_v4();
+        let ask = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"Which vendor?","cost_of_delay":"blocked"}"#,
+        )
+        .tags([
+            Tag::parse(["ask-type", "decision"]).unwrap(),
+            Tag::public_key(audience.public_key()),
+            Tag::parse(["task", "task-7"]).unwrap(),
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+        ])
+        .sign_with_keys(&filer)
+        .unwrap();
+        let ask_id = ask.id.to_hex();
+        let chat = EventBuilder::new(Kind::Custom(9), "later chat")
+            .sign_with_keys(&filer)
+            .unwrap();
+        let batch = FlushBatch {
+            channel_id,
+            events: vec![
+                crate::queue::BatchEvent {
+                    event: ask,
+                    prompt_tag: "mentions".into(),
+                    received_at: std::time::Instant::now(),
+                },
+                crate::queue::BatchEvent {
+                    event: chat,
+                    prompt_tag: "all".into(),
+                    received_at: std::time::Instant::now(),
+                },
+            ],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let section = ask_section_for_batch(&batch).expect("the earlier ask must survive batching");
+        assert!(section.contains(&ask_id));
+    }
 
     fn one_event_batch(channel_id: Uuid) -> FlushBatch {
         let keys = Keys::generate();

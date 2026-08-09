@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowLeft,
@@ -9,6 +10,8 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { useOpenAsks } from "@/features/asks/useOpenAsks";
+import { AskDetailCard } from "@/features/asks/ui/AskDetailCard";
 import type {
   InboxContextMessage,
   InboxItem,
@@ -37,7 +40,10 @@ import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { useAnchoredScroll } from "@/features/messages/ui/useAnchoredScroll";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
+import { relayClient } from "@/shared/api/relayClient";
+import { signRelayEvent } from "@/shared/api/tauri";
 import type { Channel, UserProfileSummary } from "@/shared/api/types";
+import { KIND_ASK, KIND_ASK_RESOLUTION } from "@/shared/constants/kinds";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
@@ -161,6 +167,53 @@ function InboxMessageDetailPane({
 }: InboxDetailPaneProps) {
   const detailPaneRef = React.useRef<HTMLElement | null>(null);
   const { activeCommunity } = useCommunities();
+  const queryClient = useQueryClient();
+  const openAsks = useOpenAsks();
+  const [isSubmittingAsk, setIsSubmittingAsk] = React.useState(false);
+  const [askAnswerError, setAskAnswerError] = React.useState<string | null>(
+    null,
+  );
+  const askId = item?.item.kind === KIND_ASK ? item.id : null;
+  const selectedAsk = React.useMemo(
+    () => openAsks.asks.find((ask) => ask.id === askId) ?? null,
+    [askId, openAsks.asks],
+  );
+  const handleAnswerAsk = React.useCallback(
+    async (decision: string, rationale: string): Promise<void> => {
+      if (!selectedAsk) {
+        setAskAnswerError("This ask is no longer available.");
+        return;
+      }
+
+      setAskAnswerError(null);
+      setIsSubmittingAsk(true);
+      try {
+        const event = await signRelayEvent({
+          kind: KIND_ASK_RESOLUTION,
+          content: JSON.stringify({ answer: { decision, rationale } }),
+          tags: [["e", selectedAsk.id]],
+        });
+        await relayClient.publishEvent(
+          event,
+          "Timed out answering the ask.",
+          "Failed to answer the ask.",
+        );
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["open-asks"] }),
+          queryClient.invalidateQueries({
+            queryKey: ["open-ask-closures"],
+          }),
+        ]);
+      } catch (error) {
+        setAskAnswerError(
+          error instanceof Error ? error.message : "Failed to answer the ask.",
+        );
+      } finally {
+        setIsSubmittingAsk(false);
+      }
+    },
+    [queryClient, selectedAsk],
+  );
   // Refs for the shared anchored-scroll hook's container and content roots.
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -376,6 +429,40 @@ function InboxMessageDetailPane({
             Pick an inbox item to see the full message and react to it.
           </p>
         </div>
+      </section>
+    );
+  }
+
+  if (item.item.kind === KIND_ASK) {
+    return (
+      <section
+        className="flex min-h-0 min-w-0 flex-col overflow-y-auto bg-background/60 pt-13"
+        data-testid="home-inbox-detail"
+      >
+        {selectedAsk ? (
+          <AskDetailCard
+            ask={selectedAsk}
+            isSubmitting={isSubmittingAsk}
+            onAnswer={handleAnswerAsk}
+          />
+        ) : (
+          <p
+            className="p-4 text-sm text-muted-foreground"
+            data-testid="ask-detail-loading"
+          >
+            {openAsks.isLoading
+              ? "Loading ask…"
+              : "This ask is no longer open."}
+          </p>
+        )}
+        {askAnswerError ? (
+          <p
+            className="px-4 pb-4 text-sm text-destructive"
+            data-testid="ask-answer-error"
+          >
+            {askAnswerError}
+          </p>
+        ) : null}
       </section>
     );
   }
