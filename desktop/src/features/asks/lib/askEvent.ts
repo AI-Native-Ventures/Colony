@@ -8,6 +8,7 @@ export type OpenAsk = {
   costOfDelay: string | null;
   filerPubkey: string;
   createdAt: number;
+  rawContent: string;
 };
 
 type AskEventShape = {
@@ -43,6 +44,7 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
       typeof fields.cost_of_delay === "string" ? fields.cost_of_delay : null,
     filerPubkey: event.pubkey,
     createdAt: event.created_at,
+    rawContent: event.content,
   };
 }
 

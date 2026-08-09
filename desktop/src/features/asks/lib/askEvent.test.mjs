@@ -13,18 +13,18 @@ const askEvent = (id, content) => ({
 });
 
 test("a well-formed ask reads its fields", () => {
-  const ask = readAsk(
-    askEvent("ask-1", {
-      type: "decision",
-      headline: "Which vendor for SMS?",
-      cost_of_delay: "onboarding is blocked",
-    }),
-  );
+  const event = askEvent("ask-1", {
+    type: "decision",
+    headline: "Which vendor for SMS?",
+    cost_of_delay: "onboarding is blocked",
+  });
+  const ask = readAsk(event);
   assert.equal(ask.id, "ask-1");
   assert.equal(ask.askType, "decision");
   assert.equal(ask.headline, "Which vendor for SMS?");
   assert.equal(ask.costOfDelay, "onboarding is blocked");
   assert.equal(ask.filerPubkey, "filer-pubkey");
+  assert.equal(ask.rawContent, event.content);
 });
 
 test("an ask with no headline is not renderable and reads as null", () => {
