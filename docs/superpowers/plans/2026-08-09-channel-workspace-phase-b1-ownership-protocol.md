@@ -266,8 +266,17 @@ for a lost race, and how `head_at` is stamped strictly increasing (`jobs.rs:436-
 
 - [ ] **Step 2: Write the failing test**
 
-Use this crate's existing DB test harness; find it by reading the test module in
-`jobs.rs` and copy how it gets a pool and a community. Do not invent a fixture.
+**Where DB tests live.** `jobs.rs` has no test module and there is no
+`crates/buzz-db/tests/` directory; DB-layer functions are exercised from
+**`crates/buzz-relay/tests/*.rs`**. Copy the harness from
+`crates/buzz-relay/tests/ask_broker.rs:24-40`: it resolves
+`BUZZ_TEST_DATABASE_URL` / `DATABASE_URL` with a local default and calls
+`buzz_db::migration::run_migrations_unless_provisioned(&pool)`. Use that
+function, **not** `run_migrations` — the comment beside it explains that
+replaying `0001` against a provisioned database aborts on `CREATE TYPE`.
+
+So the implementation lands in `crates/buzz-db/src/workspace_tabs.rs` and the
+tests in a new `crates/buzz-relay/tests/workspace_tabs.rs`.
 
 ```rust
 #[tokio::test]
