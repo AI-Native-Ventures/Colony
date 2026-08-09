@@ -1,1366 +1,789 @@
-# Channel Workspace Phase B1 Implementation Plan: ownership protocol
+# Channel Workspace Phase B1 Implementation Plan: ownership protocol (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship the relay-side contract for workspace tab ownership, so a tab has
-an owner and one driver at a time, the human or the owning agent can hand a tab
-to an agent, and any driver change is an auditable event, provable end to end
-with the `buzz` CLI against a live relay.
+**Goal:** Ship the relay-side contract for workspace tab ownership: a tab has an
+owner and exactly one driver, the driver seat changes hands only through the
+relay, and every change is atomic and auditable. Stage 1 proves an open-and-take-back
+handover against a live relay; Stage 2 adds grants to agents and agent read scope.
 
-**Architecture:** A tab gets a parameterized-replaceable **head** event carrying
-its identity, owner and current driver (last write wins, mirroring
-`KIND_MANAGED_AGENT` and `KIND_JOB_HEAD`). Every driver change is additionally
-recorded as an append-only **grant** or **takeover** event, giving the audit
-trail the spec asks for ("a takeover is recorded in the thread"). Grants are
-p-gated, so an agent can only read grants addressed to it. Tab **payloads never
-leave the device** — the relay learns that a tab exists, who owns it and who is
-driving it, never what is in it.
+**Architecture:** Canonical tab state is **one Postgres row** per
+`(community, channel, tab_id)` with a `revision` for compare-and-swap. Clients
+never write ownership; they submit a signed **action** and the relay validates
+it, mutates the row in one transaction, and emits a relay-signed **receipt**
+plus a relay-signed **head projection** for shared channel UI. Tab payloads
+never reach the relay.
 
-**Tech Stack:** Rust (`buzz-core` for parse/validate, `buzz-relay` for ingest
-enforcement, `buzz-cli` for the agent-facing surface, `buzz-test-client` for the
-end-to-end proof). No desktop or TypeScript work in this plan.
+**Tech Stack:** Postgres migration, `buzz-db` for the CAS, `buzz-core` for kinds
+and action parsing, `buzz-relay` for the broker and ingest wiring, `buzz-cli`
+for the agent surface, `buzz-test-client` for the live proof.
+
+## Why v2 exists, and what v1 got wrong
+
+v1 modelled the tab head as a client-authored NIP-33 replaceable event with
+`d = tab_id`, and assumed that produced one canonical head per tab. **It does
+not.** The replacement key is `(community, kind, pubkey, d_tag)`
+(`crates/buzz-db/src/lib.rs:180-189`, `schema/schema.sql:264-266`), author
+included, so two members publishing the same `d` produce two live rows each
+claiming a driver. v1 also gated only grants at ingest, leaving heads and
+takeovers forgeable by any channel member, and then authorized grants by reading
+one of those forgeable heads.
+
+`migrations/0044_jobs.sql` states the governing principle in this repo's own
+words: *"Nostr events cannot answer it. They are append-only and unordered
+across clients, so two workers appending 'I'll take it' are both equally true.
+Mutual exclusion needs a compare-and-set against one authority."* Tab ownership
+is the same problem, and gets the same answer.
+
+Three further v1 defects this plan fixes:
+
+- v1's payload test proved only that a Rust struct ignored `event.content`. The
+  signed event still carried it and ingest still stored and fanned it out. Task 6
+  rejects non-empty content at the boundary, which is what makes the guarantee real.
+- v1 added kinds to `ALL_KINDS` and stopped. `required_scope_for_kind`
+  (`crates/buzz-relay/src/handlers/ingest.rs:430-592`) is an explicit allowlist
+  and an unmapped kind is refused with `restricted: unknown event kind`.
+- v1 refused a grant for an unknown tab with a message naming the tab, an
+  existence oracle in a plan that argued two sections earlier against exactly that.
 
 ## Global Constraints
 
-- Spec of record: `docs/superpowers/specs/2026-08-07-colony-channel-browser-workspace-design.md`, section **Ownership and concurrency**.
-- Phase A shipped in PR #200 and is on `develop`. The tab store it added
-  (`desktop/src/features/workspace/lib/workspaceTabs.ts`) is device-local and
-  **this plan does not change it**. Desktop wiring is Phase B2.
-- **Payloads never cross the relay.** A tab head carries id, channel, kind,
-  title, owner and driver. It never carries scratchpad text, a file path, or
-  image bytes. A task that finds itself serialising a payload has gone wrong.
-- **One driver at a time.** The head's `driver` is the single source of truth.
-  Grant and takeover events are the audit trail, not the state.
-- **An agent may never grant itself a tab.** This is enforced at relay ingest,
-  not in the CLI and not by prompt. Same principle as the interrupt gate in
-  `crates/buzz-relay/src/interrupt_gate.rs`: the relay refuses rather than
-  trusting the caller.
-- All event kind integers live in `crates/buzz-core/src/kind.rs`. Add them there
-  first, then implement handling.
-- Channels are scoped with `h` tags (NIP-29 group tag), never `e` tags.
-- No `unsafe`. No new `unwrap()`/`expect()` in production paths, use `?` and
-  real error types. `#[cfg(test)]` may use them freely.
-- New public API needs doc comments.
-- 1000-line ceiling per file, enforced by `pnpm check:file-sizes` (it covers
-  `src-tauri/src` too) and `just mobile-check`.
-- Commit with `git commit -s` every time. The DCO check fails otherwise.
-- `just ci` before the PR. `just test` as well, because this touches
-  `buzz-relay` and needs Postgres and Redis running.
+- Spec of record: `docs/superpowers/specs/2026-08-07-colony-channel-browser-workspace-design.md`, **Ownership and concurrency**.
+- **The DB row is the authority.** Events project it and audit it. No code may
+  infer ownership from an event when it could read the row.
+- **Payloads never cross the relay.** Enforced by rejecting non-empty content on
+  workspace kinds at ingest, not by a parser that looks away.
+- **Every state change is one transaction.** Row update, audit and head
+  projection commit together or not at all. No read-then-write without a
+  revision check.
+- Channel ids on the wire are **UUIDs**: `extract_channel_id`
+  (`ingest.rs:594-605`) parses them as such, so `"chan-a"` works only in pure
+  unit tests, never in a wire test.
+- All kind integers live in `crates/buzz-core/src/kind.rs`. Registering a kind
+  means: the constant, `ALL_KINDS`, the classification lists it belongs in,
+  `required_scope_for_kind`, and `requires_h_channel_scope` (`ingest.rs:785-818`).
+- Migrations are numbered; the latest on this branch is `0055`, so this is
+  **`0056`**. `schema/schema.sql` must be updated in the same commit, because
+  provisioned installs can skip embedded migrations
+  (`crates/buzz-db/src/migration.rs:1-20,51-63`).
+- No `unsafe`. No new `unwrap()`/`expect()` in production paths. New public API
+  needs doc comments. 1000-line ceiling per file.
+- Commit with `git commit -s`. `just ci` and `just test` (Postgres + Redis)
+  before the PR.
 
-## Agent read scope
+## Staging
 
-The spec says agents "cannot see or touch tabs they do not own or have not been
-granted, **including tabs created by other agents**". B1 delivers both halves.
+**Stage 1 (Tasks 1-8): open and take back.** Canonical state, the broker, two
+operations, the CLI, and a live proof including two racing takes. This is a
+shippable slice: a human opens a tab, something else holds it, the human takes
+it back, and the relay decides who won.
 
-- *Touch* is the ingest gate in Task 4: only the current driver or the owner may
-  change a driver.
-- *See* is the read scope in Task 5: **an agent may read a tab head only when it
-  is that tab's owner or its current driver.** Humans keep full visibility of
-  every tab in a channel they belong to, which is what makes the tab list usable
-  at all.
-- Grants are p-gated on top of that, so an agent reads only grants addressed to
-  it.
-- Payloads never cross the relay, so even a visible head discloses no contents.
+**Stage 2 (Tasks 9-12): grant and read scope.** Handing a tab to an agent, and
+narrowing what an agent can see. Do not start Stage 2 until Stage 1's race test
+passes against a live relay.
 
-The one-line rule works because a grant sets the head's `driver` to the grantee.
-"Granted to me" and "driven by me" are the same state, so no join against the
-grant history is needed, and a tab taken back stops being visible the moment the
-head changes. An agent that was granted a tab last week and lost it does not
-retain visibility, which a grant-history join would have gotten wrong.
-
-Two traps to avoid while implementing Task 5:
-
-- **Do not filter by rejecting the request.** An agent asking for a channel's
-  heads is making a legitimate query; the answer is a shorter list, not a 403.
-  Rejecting would also tell the agent that tabs it cannot see exist.
-- **Live subscriptions need the same scope as one-shot queries.** A filter
-  applied only on the initial fetch leaks every subsequently created tab to
-  every agent in the channel, which is the same bug with a delay.
+Ship Stage 1 as its own PR. A half-built ownership system merged into `develop`
+is safe here only because nothing in the desktop app reads it yet (Phase B2 is a
+separate plan and lands after).
 
 ## Out of scope for B1
 
 | Deferred | Why | Lands in |
 | --- | --- | --- |
-| Desktop UI: ownership badges, Take over button, agent-working indicator | Needs this protocol to exist first | Phase B2 |
-| Approval cards, thread mirror, allow-once/always | Its own security surface, needs read ACL | Phase B3 |
-| Evidence posting and ledger wiring | Same | Phase B3 |
-| Per-kind payload sync | Only `scratchpad` and `web` payloads are portable; a path or PTY handle is not | When a portable kind needs it |
-| Pausing an agent turn on human input | Needs the desktop input surface | Phase B2 |
-| `web`, `terminal`, `video` kinds | Unchanged from Phase A | Phases C and D |
+| The whole desktop surface | Needs this protocol settled first | Phase B2 |
+| Pausing an agent turn, invalidating pending refs, explicit continuation | Runtime concern, not a protocol one; the spec requires it and **B1 does not deliver it** | Phase B2 |
+| Recording a takeover in the thread | The spec requires it; the receipt is not a thread message | Phase B2, with the thread mirror |
+| Agent-created tabs rendering on a human's screen | Needs payload transport; heads carry metadata only | When a portable kind needs it |
+| Approvals, evidence, ledger | Separate surfaces | Phase B3 |
+| `web`, `terminal`, `video` kinds | Unchanged | Phases C and D |
+
+**This plan does not claim full coverage of the spec's "Ownership and
+concurrency" section.** It delivers single-driver arbitration, grant, takeover
+and agent read scope. It does not deliver pausing, ref invalidation, or the
+thread record. Those are named above, not silently skipped.
 
 ## File structure
 
 | File | Responsibility |
 | --- | --- |
-| `crates/buzz-core/src/kind.rs` | Three new kind constants, registry and p-gate entries |
-| `crates/buzz-core/src/workspace_tab.rs` | Parse and validate head, grant and takeover events |
-| `crates/buzz-relay/src/workspace_tab_gate.rs` | Ingest rule: who may change a driver |
-| `crates/buzz-cli/src/commands/workspace.rs` | `buzz workspace tabs …` agent-facing surface |
-| `crates/buzz-test-client/tests/e2e_workspace_tabs.rs` | End-to-end handover proof |
+| `migrations/0056_workspace_tabs.sql` | Canonical tab state |
+| `schema/schema.sql` | Same table, kept in sync |
+| `crates/buzz-db/src/workspace_tabs.rs` | Insert, read, and the CAS transitions |
+| `crates/buzz-core/src/workspace_tab.rs` | Kinds' payloads: parse and validate actions |
+| `crates/buzz-relay/src/workspace_tab_broker.rs` | Apply an action, emit receipt and head |
+| `crates/buzz-cli/src/commands/workspace.rs` | `buzz workspace tabs …` |
+| `crates/buzz-test-client/tests/e2e_workspace_tabs.rs` | Live proof, races included |
 | `docs/nips/NIP-WS.md` | The protocol, written down |
 
-Modified:
-
-| File | Change |
-| --- | --- |
-| `crates/buzz-core/src/lib.rs` | `pub mod workspace_tab;` |
-| `crates/buzz-relay/src/lib.rs` | `pub mod workspace_tab_gate;` |
-| `crates/buzz-relay/src/handlers/ingest.rs` | Call the gate for the three kinds |
-| `crates/buzz-cli/src/commands/mod.rs` | `pub mod workspace;` |
-| `crates/buzz-cli/src/main.rs` | `WorkspaceCmd` subcommand and dispatch |
+Modified: `crates/buzz-core/src/kind.rs`, `crates/buzz-db/src/lib.rs`,
+`crates/buzz-relay/src/lib.rs`, `crates/buzz-relay/src/handlers/ingest.rs`,
+`crates/buzz-cli/src/lib.rs` (**not `main.rs`** — the command enum and dispatch
+live in `lib.rs` around lines 189-300 and 2907-2938).
 
 ---
 
-## Task 1: Kind constants
+# Stage 1: open and take back
 
-Three kinds. The head is parameterized-replaceable so a driver change is a
-last-write-wins update keyed by tab id, exactly like `KIND_MANAGED_AGENT`. The
-grant and takeover events are stored and non-replaceable, because an audit trail
-that can be overwritten is not an audit trail.
-
-30174 through 30191 are taken, so the head takes **30192**. 44300 through 44303
-belong to the interrupt protocol, so the audit events take **44400** and
-**44401**.
+## Task 1: Canonical tab state
 
 **Files:**
-- Modify: `crates/buzz-core/src/kind.rs`
+- Create: `migrations/0056_workspace_tabs.sql`
+- Modify: `schema/schema.sql`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `KIND_WORKSPACE_TAB_HEAD: u32 = 30192`,
-  `KIND_WORKSPACE_TAB_GRANT: u32 = 44400`,
-  `KIND_WORKSPACE_TAB_TAKEOVER: u32 = 44401`.
+- Produces: table `workspace_tabs`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Read the precedent**
 
-Add to the `#[cfg(test)] mod tests` block at the bottom of
-`crates/buzz-core/src/kind.rs`:
+Read `migrations/0044_jobs.sql` in full. It is the closest thing in the tree: a
+row that exists specifically to arbitrate between claimants, with a comment
+explaining why events cannot. Match its conventions: `community_id` first, FK to
+`communities` with `ON DELETE CASCADE`, composite tenant key, an FK on
+`(community_id, channel_id)` to `channels`, a channel index, `CHECK`
+constraints, and BIGINT epoch timestamps.
 
-```rust
-#[test]
-fn workspace_tab_kinds_are_registered_and_correctly_classified() {
-    // The head is addressable so a driver change replaces it by tab id.
-    assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD));
-    assert!(ALL_KINDS.contains(&KIND_WORKSPACE_TAB_HEAD));
+Note its `head_at` column and the reason for it: NIP-33 resolves two revisions
+by `created_at` at one-second resolution, and two transitions in the same second
+would otherwise produce a head that loses to its own predecessor. Tab open and
+tab grant will routinely land in the same second, so this table needs the same
+device.
 
-    // The audit events must NOT be replaceable: an overwritable trail is not a
-    // trail. 44400-44401 sit in the stored range.
-    assert!(!is_parameterized_replaceable(KIND_WORKSPACE_TAB_GRANT));
-    assert!(!is_parameterized_replaceable(KIND_WORKSPACE_TAB_TAKEOVER));
-    assert!(ALL_KINDS.contains(&KIND_WORKSPACE_TAB_GRANT));
-    assert!(ALL_KINDS.contains(&KIND_WORKSPACE_TAB_TAKEOVER));
+- [ ] **Step 2: Write the migration**
 
-    // A grant names the agent it addresses, so an agent must only be able to
-    // read grants pointed at itself.
-    assert!(P_GATED_KINDS.contains(&KIND_WORKSPACE_TAB_GRANT));
+```sql
+-- 0056: channel workspace tabs — who owns a tab, and who is driving it now.
+--
+-- One row per tab per channel, and the only authority on the driver seat.
+--
+-- Ownership cannot live in the tab head event alone. NIP-33 replaceable events
+-- are keyed (community, kind, pubkey, d_tag) — author included — so two members
+-- publishing the same tab id produce two live heads, each naming a different
+-- driver, both equally valid. Mutual exclusion needs a compare-and-set against
+-- one row, exactly as the job queue found in 0044.
+--
+-- The head event still exists, but it is a relay-signed PROJECTION of this row
+-- rather than the state itself. Its `d` carries the channel coordinate, because
+-- the replaceable index has no channel component and two channels would
+-- otherwise collide on the same tab id.
+--
+-- What is deliberately absent: the tab's payload. Scratchpad text, file paths
+-- and image bytes stay on the device that holds them. A file path is
+-- meaningless on another machine, and the relay has no reason to hold any of it.
+CREATE TABLE IF NOT EXISTS workspace_tabs (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    channel_id   UUID NOT NULL,
+    -- Client-chosen, unique within a channel. Never a UUID requirement: it is
+    -- opaque here and only ever compared for equality.
+    tab_id       TEXT NOT NULL,
+    -- The registry kind string (`scratchpad`, `file`, `image`). Opaque to the
+    -- relay: it never branches on this, it only stores and projects it.
+    tab_kind     TEXT NOT NULL CHECK (length(tab_kind) BETWEEN 1 AND 64),
+    title        TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+    -- Whoever opened the tab. Immutable: it is the answer to "whose tab is
+    -- this", and a mutable creator would make the audit trail meaningless.
+    creator      BYTEA NOT NULL,
+    -- The seat with authority over the tab. Starts as the creator.
+    owner        BYTEA NOT NULL,
+    -- The single active driver. This column IS the "one driver at a time" rule.
+    driver       BYTEA NOT NULL,
+    -- Bumped on every transition. Every mutation is conditional on the caller's
+    -- expected revision, so two racing transitions produce one winner and one
+    -- no-op rather than a last-writer-wins scramble.
+    revision     BIGINT NOT NULL DEFAULT 1,
+    -- Strictly increasing stamp for the projected head's `created_at`. NIP-33
+    -- resolves revisions at one-second resolution and two transitions in the
+    -- same second are ordinary here, so the wall clock cannot be trusted to
+    -- order them. Same device as jobs.head_at (migration 0044).
+    head_at      BIGINT NOT NULL,
+    created_at   BIGINT NOT NULL,
+    updated_at   BIGINT NOT NULL,
+    PRIMARY KEY (community_id, channel_id, tab_id),
+    FOREIGN KEY (community_id, channel_id)
+        REFERENCES channels (community_id, id) ON DELETE CASCADE
+);
 
-    // The head is NOT p-gated: a human reads every tab in their channel, and a
-    // `#p`-matching requirement would break that. Agents are narrowed instead
-    // by the read scope in Task 5, which filters results rather than refusing
-    // the query.
-    assert!(!P_GATED_KINDS.contains(&KIND_WORKSPACE_TAB_HEAD));
-}
+CREATE INDEX IF NOT EXISTS workspace_tabs_channel_idx
+    ON workspace_tabs (community_id, channel_id);
+
+-- An agent's tab list is "tabs I own or drive", asked per channel.
+CREATE INDEX IF NOT EXISTS workspace_tabs_driver_idx
+    ON workspace_tabs (community_id, channel_id, driver);
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+Confirm the `channels` FK target matches that table's real primary key before
+committing; if it differs, follow what `0044_jobs.sql` does for its channel
+reference and report the difference.
 
-Run: `cargo test -p buzz-core workspace_tab_kinds`
+- [ ] **Step 3: Mirror it into `schema/schema.sql`**
 
-Expected: FAIL, `cannot find value KIND_WORKSPACE_TAB_HEAD in this scope`.
+Add the same table and indexes. Provisioned installs can skip embedded
+migrations, so a table that exists only in `migrations/` is missing in
+production.
 
-- [ ] **Step 3: Write the implementation**
-
-Add after `pub const KIND_JOB_HEAD: u32 = 30191;`:
-
-```rust
-/// Channel workspace tab head (parameterized replaceable, human- or agent-authored).
-/// One per tab. `d` is the tab id, `h` is the channel. Tags: one `tab-kind`
-/// (the registry kind string, e.g. `scratchpad`), one `title`, one `owner`
-/// (pubkey hex), one `driver` (pubkey hex, the single active driver).
-///
-/// Deliberately carries no payload. Tab contents stay on the device that holds
-/// them; the relay learns that a tab exists and who is driving it, never what
-/// is in it. See docs/nips/NIP-WS.md.
-pub const KIND_WORKSPACE_TAB_HEAD: u32 = 30192;
-```
-
-Add after `pub const KIND_DECISION_LOG: u32 = 44303;`:
-
-```rust
-// Channel workspace ownership (44400–44401)
-/// Workspace tab grant (stored, non-replaceable). A human or the tab's owning
-/// agent handing the driver seat to an agent. Tags: one `p` (the grantee), one
-/// `tab` (tab id), one `h` (channel). p-gated: an agent reads only the grants
-/// addressed to it.
-pub const KIND_WORKSPACE_TAB_GRANT: u32 = 44400;
-
-/// Workspace tab takeover (stored, non-replaceable). The driver seat changing
-/// hands other than by grant: a human taking a tab back, or a driver releasing
-/// it. Tags: one `tab`, one `h`, one `reason` (`human-takeover` | `release`).
-pub const KIND_WORKSPACE_TAB_TAKEOVER: u32 = 44401;
-```
-
-Add all three to `ALL_KINDS`, and add `KIND_WORKSPACE_TAB_GRANT` to
-`P_GATED_KINDS` (the list starting at line 159).
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `cargo test -p buzz-core workspace_tab_kinds`
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/buzz-core/src/kind.rs
-git commit -s -m "feat(workspace): tab ownership event kinds"
-```
-
----
-
-## Task 2: Tab head parsing
-
-**Files:**
-- Create: `crates/buzz-core/src/workspace_tab.rs`
-- Modify: `crates/buzz-core/src/lib.rs`
-
-**Interfaces:**
-- Consumes: `KIND_WORKSPACE_TAB_HEAD` (Task 1).
-- Produces: `struct WorkspaceTabHead { tab_id, channel_id, tab_kind, title, owner, driver }` (all `String`),
-  `enum WorkspaceTabError`, `fn parse_tab_head(event: &nostr::Event) -> Result<WorkspaceTabHead, WorkspaceTabError>`.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `crates/buzz-core/src/workspace_tab.rs` with only this test module and a
-`//!` doc comment:
-
-```rust
-//! Parse and validate channel workspace ownership events.
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn head_event(tags: Vec<Vec<&str>>) -> nostr::Event {
-        crate::test_support::signed_event(KIND_WORKSPACE_TAB_HEAD, "", tags)
-    }
-
-    #[test]
-    fn a_well_formed_head_parses_every_field() {
-        let event = head_event(vec![
-            vec!["d", "tab-7"],
-            vec!["h", "chan-a"],
-            vec!["tab-kind", "scratchpad"],
-            vec!["title", "Notes"],
-            vec!["owner", &"a".repeat(64)],
-            vec!["driver", &"b".repeat(64)],
-        ]);
-        let head = parse_tab_head(&event).unwrap();
-        assert_eq!(head.tab_id, "tab-7");
-        assert_eq!(head.channel_id, "chan-a");
-        assert_eq!(head.tab_kind, "scratchpad");
-        assert_eq!(head.title, "Notes");
-        assert_eq!(head.owner, "a".repeat(64));
-        assert_eq!(head.driver, "b".repeat(64));
-    }
-
-    #[test]
-    fn a_head_without_a_channel_is_refused() {
-        let event = head_event(vec![
-            vec!["d", "tab-7"],
-            vec!["tab-kind", "scratchpad"],
-            vec!["title", "Notes"],
-            vec!["owner", &"a".repeat(64)],
-            vec!["driver", &"a".repeat(64)],
-        ]);
-        assert!(matches!(
-            parse_tab_head(&event),
-            Err(WorkspaceTabError::MissingTag("h"))
-        ));
-    }
-
-    #[test]
-    fn the_workspace_layer_never_learns_the_payload() {
-        // A head that smuggles content must still parse to metadata only. This
-        // is the plan's central rule expressed as a test: nothing in
-        // WorkspaceTabHead can carry tab contents.
-        let mut event = head_event(vec![
-            vec!["d", "tab-7"],
-            vec!["h", "chan-a"],
-            vec!["tab-kind", "scratchpad"],
-            vec!["title", "Notes"],
-            vec!["owner", &"a".repeat(64)],
-            vec!["driver", &"a".repeat(64)],
-        ]);
-        event.content = "secret scratchpad text".into();
-        let head = parse_tab_head(&event).unwrap();
-        let serialized = serde_json::to_string(&head).unwrap();
-        assert!(
-            !serialized.contains("secret scratchpad text"),
-            "a tab head must never carry payload: {serialized}"
-        );
-    }
-
-    #[test]
-    fn a_non_hex_pubkey_is_refused() {
-        let event = head_event(vec![
-            vec!["d", "tab-7"],
-            vec!["h", "chan-a"],
-            vec!["tab-kind", "scratchpad"],
-            vec!["title", "Notes"],
-            vec!["owner", "not-a-pubkey"],
-            vec!["driver", &"a".repeat(64)],
-        ]);
-        assert!(matches!(
-            parse_tab_head(&event),
-            Err(WorkspaceTabError::InvalidPubkey("owner"))
-        ));
-    }
-
-    #[test]
-    fn a_blank_title_is_refused() {
-        let event = head_event(vec![
-            vec!["d", "tab-7"],
-            vec!["h", "chan-a"],
-            vec!["tab-kind", "scratchpad"],
-            vec!["title", "   "],
-            vec!["owner", &"a".repeat(64)],
-            vec!["driver", &"a".repeat(64)],
-        ]);
-        assert!(matches!(
-            parse_tab_head(&event),
-            Err(WorkspaceTabError::BlankTag("title"))
-        ));
-    }
-}
-```
-
-Before running, check whether `crate::test_support::signed_event` exists with
-that signature. Run `grep -rn "mod test_support" crates/buzz-core/src` and read
-it. If the helper does not exist or takes different arguments, **use the
-repo's actual helper** and say in your report which one you used; do not add a
-second event-building helper.
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Add `pub mod workspace_tab;` to `crates/buzz-core/src/lib.rs`, then run:
-`cargo test -p buzz-core workspace_tab`
-
-Expected: FAIL, `cannot find function parse_tab_head`.
-
-- [ ] **Step 3: Write the implementation**
-
-Prepend to `workspace_tab.rs`:
-
-```rust
-use serde::Serialize;
-
-use crate::kind::KIND_WORKSPACE_TAB_HEAD;
-
-/// Why a workspace ownership event was refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkspaceTabError {
-    /// The event kind is not the one this parser handles.
-    WrongKind(u32),
-    /// A required tag is absent.
-    MissingTag(&'static str),
-    /// A required tag is present but empty or whitespace.
-    BlankTag(&'static str),
-    /// A pubkey tag is not 64 lowercase hex characters.
-    InvalidPubkey(&'static str),
-}
-
-impl std::fmt::Display for WorkspaceTabError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::WrongKind(kind) => write!(f, "unexpected kind {kind}"),
-            Self::MissingTag(tag) => write!(f, "missing `{tag}` tag"),
-            Self::BlankTag(tag) => write!(f, "`{tag}` tag is empty"),
-            Self::InvalidPubkey(tag) => {
-                write!(f, "`{tag}` is not a 64-character hex pubkey")
-            }
-        }
-    }
-}
-
-impl std::error::Error for WorkspaceTabError {}
-
-/// One workspace tab, as the relay knows it.
-///
-/// Metadata only, by design. The tab's `payload` stays on the device that owns
-/// it, so this struct has no field that could carry scratchpad text, a file
-/// path, or image bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WorkspaceTabHead {
-    pub tab_id: String,
-    pub channel_id: String,
-    /// The registry kind string, e.g. `scratchpad`. Opaque to the relay.
-    pub tab_kind: String,
-    pub title: String,
-    /// Pubkey hex of the tab's owner.
-    pub owner: String,
-    /// Pubkey hex of the single active driver.
-    pub driver: String,
-}
-
-fn first_tag(event: &nostr::Event, name: &'static str) -> Result<String, WorkspaceTabError> {
-    let value = event
-        .tags
-        .iter()
-        .filter_map(|tag| {
-            let slice = tag.as_slice();
-            (slice.first().map(String::as_str) == Some(name)).then(|| slice.get(1).cloned())
-        })
-        .next()
-        .flatten()
-        .ok_or(WorkspaceTabError::MissingTag(name))?;
-    if value.trim().is_empty() {
-        return Err(WorkspaceTabError::BlankTag(name));
-    }
-    Ok(value.trim().to_string())
-}
-
-fn pubkey_tag(event: &nostr::Event, name: &'static str) -> Result<String, WorkspaceTabError> {
-    let value = first_tag(event, name)?;
-    let valid = value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit());
-    if !valid {
-        return Err(WorkspaceTabError::InvalidPubkey(name));
-    }
-    Ok(value.to_ascii_lowercase())
-}
-
-/// Parse a tab head event. Rejects anything missing identity or ownership.
-pub fn parse_tab_head(event: &nostr::Event) -> Result<WorkspaceTabHead, WorkspaceTabError> {
-    let kind = event.kind.as_u16() as u32;
-    if kind != KIND_WORKSPACE_TAB_HEAD {
-        return Err(WorkspaceTabError::WrongKind(kind));
-    }
-    Ok(WorkspaceTabHead {
-        tab_id: first_tag(event, "d")?,
-        channel_id: first_tag(event, "h")?,
-        tab_kind: first_tag(event, "tab-kind")?,
-        title: first_tag(event, "title")?,
-        owner: pubkey_tag(event, "owner")?,
-        driver: pubkey_tag(event, "driver")?,
-    })
-}
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `cargo test -p buzz-core workspace_tab`
-
-Expected: PASS (5 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/buzz-core/src/workspace_tab.rs crates/buzz-core/src/lib.rs
-git commit -s -m "feat(workspace): parse workspace tab head events"
-```
-
----
-
-## Task 3: Grant and takeover parsing
-
-**Files:**
-- Modify: `crates/buzz-core/src/workspace_tab.rs`
-
-**Interfaces:**
-- Consumes: `WorkspaceTabError`, `first_tag`, `pubkey_tag` (Task 2).
-- Produces: `struct WorkspaceTabGrant { tab_id, channel_id, grantee, granter }`,
-  `struct WorkspaceTabTakeover { tab_id, channel_id, new_driver, reason }`,
-  `enum TakeoverReason { HumanTakeover, Release }`,
-  `fn parse_tab_grant(&nostr::Event) -> Result<WorkspaceTabGrant, WorkspaceTabError>`,
-  `fn parse_tab_takeover(&nostr::Event) -> Result<WorkspaceTabTakeover, WorkspaceTabError>`.
-
-- [ ] **Step 1: Write the failing test**
-
-Add to the `tests` module in `workspace_tab.rs`:
-
-```rust
-fn grant_event(author: &str, tags: Vec<Vec<&str>>) -> nostr::Event {
-    let mut event = crate::test_support::signed_event(KIND_WORKSPACE_TAB_GRANT, "", tags);
-    event.pubkey = nostr::PublicKey::from_hex(author).unwrap();
-    event
-}
-
-#[test]
-fn a_grant_names_the_agent_and_the_tab() {
-    let granter = "a".repeat(64);
-    let grantee = "b".repeat(64);
-    let event = grant_event(
-        &granter,
-        vec![
-            vec!["tab", "tab-7"],
-            vec!["h", "chan-a"],
-            vec!["p", &grantee],
-        ],
-    );
-    let grant = parse_tab_grant(&event).unwrap();
-    assert_eq!(grant.tab_id, "tab-7");
-    assert_eq!(grant.channel_id, "chan-a");
-    assert_eq!(grant.grantee, grantee);
-    assert_eq!(grant.granter, granter, "the granter is the event author");
-}
-
-#[test]
-fn a_grant_to_yourself_is_refused_at_parse_time() {
-    let same = "a".repeat(64);
-    let event = grant_event(
-        &same,
-        vec![vec!["tab", "tab-7"], vec!["h", "chan-a"], vec!["p", &same]],
-    );
-    assert!(
-        matches!(parse_tab_grant(&event), Err(WorkspaceTabError::SelfGrant)),
-        "an agent must never be able to hand itself a tab"
-    );
-}
-
-#[test]
-fn a_grant_without_a_grantee_is_refused() {
-    let event = grant_event(
-        &"a".repeat(64),
-        vec![vec!["tab", "tab-7"], vec!["h", "chan-a"]],
-    );
-    assert!(matches!(
-        parse_tab_grant(&event),
-        Err(WorkspaceTabError::MissingTag("p"))
-    ));
-}
-
-#[test]
-fn takeover_reasons_are_a_closed_set() {
-    for (raw, expected) in [
-        ("human-takeover", TakeoverReason::HumanTakeover),
-        ("release", TakeoverReason::Release),
-    ] {
-        let event = crate::test_support::signed_event(
-            KIND_WORKSPACE_TAB_TAKEOVER,
-            "",
-            vec![
-                vec!["tab", "tab-7"],
-                vec!["h", "chan-a"],
-                vec!["reason", raw],
-                vec!["driver", &"a".repeat(64)],
-            ],
-        );
-        assert_eq!(parse_tab_takeover(&event).unwrap().reason, expected);
-    }
-
-    let bogus = crate::test_support::signed_event(
-        KIND_WORKSPACE_TAB_TAKEOVER,
-        "",
-        vec![
-            vec!["tab", "tab-7"],
-            vec!["h", "chan-a"],
-            vec!["reason", "because-i-said-so"],
-            vec!["driver", &"a".repeat(64)],
-        ],
-    );
-    assert!(matches!(
-        parse_tab_takeover(&bogus),
-        Err(WorkspaceTabError::UnknownReason)
-    ));
-}
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `cargo test -p buzz-core workspace_tab`
-
-Expected: FAIL, `cannot find function parse_tab_grant` and
-`no variant named SelfGrant`.
-
-- [ ] **Step 3: Write the implementation**
-
-Add two variants to `WorkspaceTabError`, with their `Display` arms:
-
-```rust
-    /// The event author granted the tab to itself.
-    SelfGrant,
-    /// The `reason` tag is not one of the known takeover reasons.
-    UnknownReason,
-```
-
-```rust
-            Self::SelfGrant => write!(f, "an agent cannot grant itself a tab"),
-            Self::UnknownReason => write!(f, "unknown takeover reason"),
-```
-
-Then append:
-
-```rust
-use crate::kind::{KIND_WORKSPACE_TAB_GRANT, KIND_WORKSPACE_TAB_TAKEOVER};
-
-/// A tab handed from its current driver to an agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WorkspaceTabGrant {
-    pub tab_id: String,
-    pub channel_id: String,
-    /// Pubkey hex of the agent receiving the driver seat.
-    pub grantee: String,
-    /// Pubkey hex of the event author handing it over.
-    pub granter: String,
-}
-
-/// Why the driver seat changed hands other than by grant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum TakeoverReason {
-    /// A human took the tab back from an agent.
-    HumanTakeover,
-    /// The current driver gave the tab up voluntarily.
-    Release,
-}
-
-/// The driver seat changing hands other than by grant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WorkspaceTabTakeover {
-    pub tab_id: String,
-    pub channel_id: String,
-    /// Pubkey hex of the driver after the change.
-    pub new_driver: String,
-    pub reason: TakeoverReason,
-}
-
-/// Parse a grant. Refuses a self-grant regardless of who signed it.
-pub fn parse_tab_grant(event: &nostr::Event) -> Result<WorkspaceTabGrant, WorkspaceTabError> {
-    let kind = event.kind.as_u16() as u32;
-    if kind != KIND_WORKSPACE_TAB_GRANT {
-        return Err(WorkspaceTabError::WrongKind(kind));
-    }
-    let grantee = pubkey_tag(event, "p")?;
-    let granter = event.pubkey.to_hex().to_ascii_lowercase();
-    if grantee == granter {
-        return Err(WorkspaceTabError::SelfGrant);
-    }
-    Ok(WorkspaceTabGrant {
-        tab_id: first_tag(event, "tab")?,
-        channel_id: first_tag(event, "h")?,
-        grantee,
-        granter,
-    })
-}
-
-/// Parse a takeover. The reason is a closed set so the audit trail stays
-/// queryable rather than becoming free text.
-pub fn parse_tab_takeover(
-    event: &nostr::Event,
-) -> Result<WorkspaceTabTakeover, WorkspaceTabError> {
-    let kind = event.kind.as_u16() as u32;
-    if kind != KIND_WORKSPACE_TAB_TAKEOVER {
-        return Err(WorkspaceTabError::WrongKind(kind));
-    }
-    let reason = match first_tag(event, "reason")?.as_str() {
-        "human-takeover" => TakeoverReason::HumanTakeover,
-        "release" => TakeoverReason::Release,
-        _ => return Err(WorkspaceTabError::UnknownReason),
-    };
-    Ok(WorkspaceTabTakeover {
-        tab_id: first_tag(event, "tab")?,
-        channel_id: first_tag(event, "h")?,
-        new_driver: pubkey_tag(event, "driver")?,
-        reason,
-    })
-}
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `cargo test -p buzz-core workspace_tab`
-
-Expected: PASS (9 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/buzz-core/src/workspace_tab.rs
-git commit -s -m "feat(workspace): parse tab grant and takeover events"
-```
-
----
-
-## Task 4: Relay ingest gate
-
-Parse-time validation stops a malformed grant. This task stops a *well-formed*
-one from the wrong author. The rule: only the tab's current driver or its owner
-may hand it on. Anyone else is refused at ingest, the same way
-`interrupt_gate.rs` refuses an agent messaging an owner rather than trusting a
-prompt not to.
-
-**Files:**
-- Create: `crates/buzz-relay/src/workspace_tab_gate.rs`
-- Modify: `crates/buzz-relay/src/lib.rs`, `crates/buzz-relay/src/handlers/ingest.rs`
-
-**Interfaces:**
-- Consumes: `parse_tab_grant`, `WorkspaceTabHead` (Tasks 2 and 3).
-- Produces: `fn grant_authorized(head: &WorkspaceTabHead, granter: &str) -> Result<(), String>`.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `crates/buzz-relay/src/workspace_tab_gate.rs` with the test module only:
-
-```rust
-//! Who may change a workspace tab's driver.
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn head(owner: &str, driver: &str) -> WorkspaceTabHead {
-        WorkspaceTabHead {
-            tab_id: "tab-7".into(),
-            channel_id: "chan-a".into(),
-            tab_kind: "scratchpad".into(),
-            title: "Notes".into(),
-            owner: owner.into(),
-            driver: driver.into(),
-        }
-    }
-
-    #[test]
-    fn the_current_driver_may_hand_the_tab_on() {
-        let agent = "b".repeat(64);
-        assert!(grant_authorized(&head(&"a".repeat(64), &agent), &agent).is_ok());
-    }
-
-    #[test]
-    fn the_owner_may_hand_the_tab_on_even_while_an_agent_drives() {
-        let owner = "a".repeat(64);
-        assert!(grant_authorized(&head(&owner, &"b".repeat(64)), &owner).is_ok());
-    }
-
-    #[test]
-    fn a_bystander_agent_cannot_hand_on_someone_elses_tab() {
-        let error = grant_authorized(&head(&"a".repeat(64), &"b".repeat(64)), &"c".repeat(64))
-            .unwrap_err();
-        assert!(
-            error.contains("not the driver"),
-            "unexpected refusal: {error}"
-        );
-    }
-
-    #[test]
-    fn the_refusal_never_leaks_the_other_pubkeys() {
-        // A bystander learning who owns or drives a tab it cannot touch is a
-        // disclosure. The message says no, not who.
-        let owner = "a".repeat(64);
-        let driver = "b".repeat(64);
-        let error =
-            grant_authorized(&head(&owner, &driver), &"c".repeat(64)).unwrap_err();
-        assert!(!error.contains(&owner), "leaked the owner: {error}");
-        assert!(!error.contains(&driver), "leaked the driver: {error}");
-    }
-}
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Add `pub mod workspace_tab_gate;` to `crates/buzz-relay/src/lib.rs`, then run:
-`cargo test -p buzz-relay workspace_tab_gate`
-
-Expected: FAIL, `cannot find function grant_authorized`.
-
-- [ ] **Step 3: Write the implementation**
-
-Prepend to `workspace_tab_gate.rs`:
-
-```rust
-use buzz_core::workspace_tab::WorkspaceTabHead;
-
-/// Whether `granter` may change this tab's driver.
-///
-/// Only the current driver or the tab's owner may. A refusal deliberately does
-/// not name the owner or the driver: an agent that cannot touch a tab should
-/// not learn who can.
-pub fn grant_authorized(head: &WorkspaceTabHead, granter: &str) -> Result<(), String> {
-    let granter = granter.to_ascii_lowercase();
-    if granter == head.driver.to_ascii_lowercase()
-        || granter == head.owner.to_ascii_lowercase()
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "restricted: you are not the driver or owner of tab {}",
-        head.tab_id
-    ))
-}
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `cargo test -p buzz-relay workspace_tab_gate`
-
-Expected: PASS (4 tests).
-
-- [ ] **Step 5: Wire it into ingest**
-
-Read `crates/buzz-relay/src/handlers/ingest.rs` and find where a kind-specific
-check runs before an event is stored. `KIND_DISCOVERY_WORKSPACE_ACTION` appears
-at lines 454, 677 and 741 and shows the shape. Add a branch for
-`KIND_WORKSPACE_TAB_GRANT` that:
-
-1. parses the event with `parse_tab_grant`, refusing with the parse error text
-   on `Err`;
-2. loads the current head for `(channel_id, tab_id)` from the store;
-3. calls `grant_authorized(&head, &grant.granter)` and refuses with that error
-   text on `Err`.
-
-If no head exists for that tab, refuse with
-`"restricted: unknown tab {tab_id}"`. A grant for a tab the relay has never seen
-is either a race or a probe, and neither should be stored.
-
-Follow the existing refusal mechanism in that file exactly. Do not invent a new
-error channel, and report which one you used.
-
-- [ ] **Step 6: Verify the wiring with an integration test**
+- [ ] **Step 4: Verify**
 
 Run: `just test`
 
-This needs Postgres and Redis. Expected: PASS, no regressions.
+Expected: migrations apply cleanly on a fresh database, no regressions. If
+`pgschema` complains on a re-run, use the isolated harness rather than a reused
+database.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/buzz-relay/src/workspace_tab_gate.rs crates/buzz-relay/src/lib.rs \
-        crates/buzz-relay/src/handlers/ingest.rs
-git commit -s -m "feat(workspace): refuse tab grants from non-drivers at ingest"
+git add migrations/0056_workspace_tabs.sql schema/schema.sql
+git commit -s -m "feat(workspace): canonical tab ownership state"
 ```
 
 ---
 
-## Task 5: Agent read scope for tab heads
+## Task 2: The compare-and-swap
 
-Task 4 stops an agent touching a tab it was not given. This task stops it
-*seeing* one. The rule is one line: an agent may read a tab head only when it is
-that tab's owner or its current driver.
+The whole arbitration, in two queries. Everything else is bookkeeping around them.
 
 **Files:**
-- Modify: `crates/buzz-relay/src/workspace_tab_gate.rs`
-- Modify: `crates/buzz-relay/src/handlers/req.rs`
+- Create: `crates/buzz-db/src/workspace_tabs.rs`
+- Modify: `crates/buzz-db/src/lib.rs`
 
 **Interfaces:**
-- Consumes: `WorkspaceTabHead` (Task 2), `agent_tier` from
-  `crates/buzz-relay/src/interrupt_gate.rs`.
-- Produces: `fn agent_may_read_head(head: &WorkspaceTabHead, agent: &str) -> bool`,
-  `fn scope_tab_heads_for_agent(heads: Vec<WorkspaceTabHead>, agent: &str) -> Vec<WorkspaceTabHead>`.
+- Consumes: Task 1's table.
+- Produces: `struct WorkspaceTabRow { channel_id, tab_id, tab_kind, title, creator, owner, driver, revision, head_at }`,
+  `open_tab(...) -> Result<Option<WorkspaceTabRow>>`,
+  `get_tab(...) -> Result<Option<WorkspaceTabRow>>`,
+  `set_driver(pool, community, channel, tab_id, expected_revision, new_driver, actor, now) -> Result<Option<WorkspaceTabRow>>`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Read the precedent**
 
-Add to the `tests` module in `workspace_tab_gate.rs`:
-
-```rust
-#[test]
-fn an_agent_reads_the_tabs_it_owns_or_drives() {
-    let agent = "b".repeat(64);
-    assert!(agent_may_read_head(&head(&"a".repeat(64), &agent), &agent));
-    assert!(agent_may_read_head(&head(&agent, &"a".repeat(64)), &agent));
-}
-
-#[test]
-fn an_agent_does_not_read_a_tab_it_neither_owns_nor_drives() {
-    let head = head(&"a".repeat(64), &"b".repeat(64));
-    assert!(!agent_may_read_head(&head, &"c".repeat(64)));
-}
-
-#[test]
-fn losing_a_tab_ends_visibility_immediately() {
-    // The agent held tab-7 and the human took it back, so the head's driver is
-    // the human again. Past possession must not grant continuing sight, which
-    // is exactly what a join against grant history would have gotten wrong.
-    let agent = "b".repeat(64);
-    let human = "a".repeat(64);
-    assert!(agent_may_read_head(&head(&human, &agent), &agent));
-    assert!(!agent_may_read_head(&head(&human, &human), &agent));
-}
-
-#[test]
-fn scoping_shortens_the_list_and_preserves_order() {
-    let agent = "b".repeat(64);
-    let human = "a".repeat(64);
-    let mut mine = head(&human, &agent);
-    mine.tab_id = "tab-mine".into();
-    let mut theirs = head(&human, &human);
-    theirs.tab_id = "tab-theirs".into();
-    let mut also_mine = head(&agent, &agent);
-    also_mine.tab_id = "tab-also-mine".into();
-
-    let scoped = scope_tab_heads_for_agent(
-        vec![mine, theirs, also_mine],
-        &agent,
-    );
-    assert_eq!(
-        scoped.iter().map(|h| h.tab_id.as_str()).collect::<Vec<_>>(),
-        vec!["tab-mine", "tab-also-mine"],
-        "scoping filters, it does not reorder or reject"
-    );
-}
-
-#[test]
-fn pubkey_case_does_not_change_visibility() {
-    let agent = "b".repeat(64);
-    let head = head(&"a".repeat(64), &agent.to_uppercase());
-    assert!(agent_may_read_head(&head, &agent));
-}
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `cargo test -p buzz-relay workspace_tab_gate`
-
-Expected: FAIL, `cannot find function agent_may_read_head`.
-
-- [ ] **Step 3: Write the implementation**
-
-Append to `workspace_tab_gate.rs`:
-
-```rust
-/// Whether an agent may see this tab at all.
-///
-/// Owner or current driver, nothing else. A grant sets the head's `driver` to
-/// the grantee, so "granted to me" and "driven by me" are the same state and no
-/// lookup against grant history is needed. That also means visibility ends the
-/// moment a tab is taken back, which is the behaviour we want: past possession
-/// is not continuing sight.
-pub fn agent_may_read_head(head: &WorkspaceTabHead, agent: &str) -> bool {
-    let agent = agent.to_ascii_lowercase();
-    head.owner.to_ascii_lowercase() == agent || head.driver.to_ascii_lowercase() == agent
-}
-
-/// Narrow a result set to what this agent may see, preserving order.
-///
-/// Filters rather than rejects: an agent asking for a channel's tabs is making
-/// a legitimate request and the honest answer is a shorter list. A 403 would
-/// itself disclose that tabs it cannot see exist.
-pub fn scope_tab_heads_for_agent(
-    heads: Vec<WorkspaceTabHead>,
-    agent: &str,
-) -> Vec<WorkspaceTabHead> {
-    heads
-        .into_iter()
-        .filter(|head| agent_may_read_head(head, agent))
-        .collect()
-}
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `cargo test -p buzz-relay workspace_tab_gate`
-
-Expected: PASS (9 tests, the 4 from Task 4 plus these 5).
-
-- [ ] **Step 5: Wire it into the read path**
-
-Read `crates/buzz-relay/src/handlers/req.rs`. Two things to find:
-
-1. How the requester's identity reaches the query path (`authed_pubkey_hex` is
-   already threaded through `p_gated_filters_authorized`).
-2. Where results are produced for a REQ, **and** where live events are pushed to
-   an existing subscription. Both need the scope; see the second trap in the
-   "Agent read scope" section.
-
-Decide agent-ness with `interrupt_gate::agent_tier(...)`: it returns a tier for
-an agent and nothing for a human. A human requester is returned untouched.
-
-Apply `scope_tab_heads_for_agent` only when the result set contains
-`KIND_WORKSPACE_TAB_HEAD` events and the requester is an agent. Do not touch any
-other kind's results.
-
-Report exactly which two call sites you wired, and how you confirmed the live
-path is covered rather than assuming it.
-
-- [ ] **Step 6: Prove it against a real relay**
-
-This is the security-critical half of the spec's ownership rule, so it does not
-ship on unit tests alone. Task 7's `e2e_workspace_tabs.rs` gains a case: with two
-agents in one channel and one tab granted to `agent_a`, a heads query by
-`agent_b` returns an empty list while the same query by the human returns the
-tab. Write it in Task 7, not here, and make sure it fails before this task's
-wiring exists.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/buzz-relay/src/workspace_tab_gate.rs crates/buzz-relay/src/handlers/req.rs
-git commit -s -m "feat(workspace): scope tab head reads to the owning agent"
-```
-
----
-
-## Task 6: `buzz workspace tabs` CLI
-
-The agent-facing surface. Per AGENTS.md, agent-facing features belong in
-`buzz-cli` first: add the subcommand here, then wire the call in `client.rs`.
-
-**Files:**
-- Create: `crates/buzz-cli/src/commands/workspace.rs`
-- Modify: `crates/buzz-cli/src/commands/mod.rs`, `crates/buzz-cli/src/main.rs`
-
-**Interfaces:**
-- Consumes: everything from Tasks 1 to 3.
-- Produces: `buzz workspace tabs list --channel <id>`,
-  `buzz workspace tabs grant --channel <id> --tab <id> --to <pubkey>`,
-  `buzz workspace tabs take --channel <id> --tab <id>`,
-  `buzz workspace tabs release --channel <id> --tab <id>`.
-
-- [ ] **Step 1: Read the pattern first**
-
-Read `crates/buzz-cli/src/commands/grants.rs`. It is the closest existing
-command: it builds a signed event, submits it, and maps relay refusals to exit
-codes. Copy its shape, including how it reports a write conflict. Note the exit
-code contract from AGENTS.md: 0 ok, 1 input error, 2 network/relay, 3 auth,
-4 other, 5 write conflict.
+Read `crates/buzz-db/src/jobs.rs:230-274` (`claim_job`) and `276-360`
+(heartbeat fencing). `claim_job` is the shape to copy: a conditional
+`UPDATE … WHERE … RETURNING`, where a losing caller matches no rows and gets
+`Ok(None)`. Copy that idiom, including returning `Option` rather than an error
+for a lost race, and how `head_at` is stamped strictly increasing (`jobs.rs:436-485`).
 
 - [ ] **Step 2: Write the failing test**
 
-Add to `crates/buzz-cli/src/commands/workspace.rs`:
+Use this crate's existing DB test harness; find it by reading the test module in
+`jobs.rs` and copy how it gets a pool and a community. Do not invent a fixture.
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[tokio::test]
+async fn two_racing_takes_produce_one_winner() {
+    let (pool, community, channel) = fixture().await;
+    let human = [1u8; 32];
+    let agent_a = [2u8; 32];
+    let agent_b = [3u8; 32];
 
-    #[tokio::test]
-    async fn granting_to_yourself_is_refused_before_any_network_call() {
-        // The relay refuses this too, but a CLI that needs the network to
-        // discover an obvious input error wastes a round trip and is untestable
-        // offline. Same guard grants.rs applies to hard-list categories.
-        let me = "a".repeat(64);
-        let error = validate_grant_input(&me, &me).unwrap_err();
-        assert!(
-            matches!(error, CliError::Input(_)),
-            "expected an input error, got {error:?}"
-        );
-    }
+    let tab = open_tab(&pool, community, channel, "tab-1", "scratchpad", "Notes", &human, 100)
+        .await
+        .unwrap()
+        .expect("a fresh tab opens");
+    assert_eq!(tab.revision, 1);
+    assert_eq!(tab.driver, human.to_vec());
 
-    #[tokio::test]
-    async fn granting_to_a_malformed_pubkey_is_refused_before_any_network_call() {
-        let error = validate_grant_input(&"a".repeat(64), "nope").unwrap_err();
-        assert!(matches!(error, CliError::Input(_)));
-    }
+    // Both callers read revision 1 and both try to take the seat.
+    let first = set_driver(&pool, community, channel, "tab-1", 1, &agent_a, &human, 101)
+        .await
+        .unwrap();
+    let second = set_driver(&pool, community, channel, "tab-1", 1, &agent_b, &human, 102)
+        .await
+        .unwrap();
 
-    #[tokio::test]
-    async fn granting_to_a_different_valid_pubkey_is_accepted() {
-        assert!(validate_grant_input(&"a".repeat(64), &"b".repeat(64)).is_ok());
-    }
+    assert!(first.is_some(), "the first transition wins");
+    assert!(
+        second.is_none(),
+        "a transition against a stale revision must be a no-op, not a second winner"
+    );
+    let current = get_tab(&pool, community, channel, "tab-1").await.unwrap().unwrap();
+    assert_eq!(current.driver, agent_a.to_vec());
+    assert_eq!(current.revision, 2);
+}
+
+#[tokio::test]
+async fn head_at_is_strictly_increasing_even_within_one_second() {
+    let (pool, community, channel) = fixture().await;
+    let human = [1u8; 32];
+    let agent = [2u8; 32];
+    let opened = open_tab(&pool, community, channel, "tab-1", "scratchpad", "Notes", &human, 100)
+        .await
+        .unwrap()
+        .unwrap();
+    // Same wall-clock second as the open.
+    let taken = set_driver(&pool, community, channel, "tab-1", 1, &agent, &human, 100)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        taken.head_at > opened.head_at,
+        "two transitions in one second must still order: {} vs {}",
+        opened.head_at,
+        taken.head_at
+    );
+}
+
+#[tokio::test]
+async fn opening_the_same_tab_twice_is_idempotent_not_a_hijack() {
+    let (pool, community, channel) = fixture().await;
+    let human = [1u8; 32];
+    let stranger = [9u8; 32];
+    open_tab(&pool, community, channel, "tab-1", "scratchpad", "Notes", &human, 100)
+        .await
+        .unwrap()
+        .unwrap();
+    // A second open of the same coordinate must NOT reset ownership: that would
+    // be a free takeover for anyone who can guess a tab id.
+    let again = open_tab(&pool, community, channel, "tab-1", "scratchpad", "Mine now", &stranger, 101)
+        .await
+        .unwrap();
+    assert!(again.is_none(), "re-opening an existing tab must not succeed");
+    let current = get_tab(&pool, community, channel, "tab-1").await.unwrap().unwrap();
+    assert_eq!(current.creator, human.to_vec());
+    assert_eq!(current.title, "Notes");
+}
+
+#[tokio::test]
+async fn a_tab_in_another_channel_is_a_different_tab() {
+    let (pool, community, channel_a) = fixture().await;
+    let channel_b = second_channel(&pool, community).await;
+    let human = [1u8; 32];
+    open_tab(&pool, community, channel_a, "tab-1", "scratchpad", "A", &human, 100)
+        .await
+        .unwrap()
+        .unwrap();
+    let in_b = open_tab(&pool, community, channel_b, "tab-1", "scratchpad", "B", &human, 100)
+        .await
+        .unwrap();
+    assert!(in_b.is_some(), "the same tab id in another channel is free");
 }
 ```
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Add `pub mod workspace;` to `crates/buzz-cli/src/commands/mod.rs`, then run:
-`cargo test -p buzz-cli workspace`
+Run: `cargo test -p buzz-db workspace_tabs`
 
-Expected: FAIL, `cannot find function validate_grant_input`.
+Expected: FAIL, `cannot find function open_tab`.
 
 - [ ] **Step 4: Write the implementation**
 
-```rust
-use crate::error::CliError;
+`set_driver` is the important one:
 
-/// Reject a grant the relay would reject anyway, without a round trip.
-pub fn validate_grant_input(granter: &str, grantee: &str) -> Result<(), CliError> {
-    let valid = grantee.len() == 64 && grantee.chars().all(|c| c.is_ascii_hexdigit());
-    if !valid {
-        return Err(CliError::Input(format!(
-            "`--to` must be a 64-character hex pubkey, got `{grantee}`"
-        )));
-    }
-    if granter.eq_ignore_ascii_case(grantee) {
-        return Err(CliError::Input(
-            "an agent cannot grant itself a tab; ask the owner".into(),
-        ));
-    }
-    Ok(())
+```rust
+/// Move the driver seat, if the caller is looking at the current revision.
+///
+/// The whole arbitration is the `WHERE`: it matches only when the row is still
+/// at the revision the caller read. Two racing transitions therefore produce
+/// one winner and one `Ok(None)`, which is how a loser learns it lost. This is
+/// `claim_job`'s idiom (buzz-db/src/jobs.rs:245) applied to a driver seat.
+///
+/// `head_at` is stamped strictly greater than the row's current value rather
+/// than from the clock, because NIP-33 orders revisions by `created_at` at
+/// one-second resolution and two transitions in the same second are ordinary
+/// here.
+pub async fn set_driver(
+    pool: &PgPool,
+    community: CommunityId,
+    channel: Uuid,
+    tab_id: &str,
+    expected_revision: i64,
+    new_driver: &[u8],
+    now: i64,
+) -> Result<Option<WorkspaceTabRow>> {
+    let row = sqlx::query(
+        "UPDATE workspace_tabs \
+            SET driver = $5, \
+                revision = revision + 1, \
+                head_at = GREATEST($6, head_at + 1), \
+                updated_at = $6 \
+          WHERE community_id = $1 AND channel_id = $2 AND tab_id = $3 \
+            AND revision = $4 \
+      RETURNING channel_id, tab_id, tab_kind, title, creator, owner, driver, \
+                revision, head_at, created_at, updated_at",
+    )
+    .bind(community.as_uuid())
+    .bind(channel)
+    .bind(tab_id)
+    .bind(expected_revision)
+    .bind(new_driver)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_tab).transpose()
 }
 ```
 
-Then the four subcommands, each building and submitting its event:
+`open_tab` inserts with `ON CONFLICT DO NOTHING` and returns `Ok(None)` when the
+coordinate is taken, which is what makes a second open a no-op rather than a
+hijack. `get_tab` is a plain select. Add `pub mod workspace_tabs;` to
+`crates/buzz-db/src/lib.rs`.
 
-- `list`: query `KIND_WORKSPACE_TAB_HEAD` filtered by `#h` = channel, print the
-  sig-stripped JSON array of heads (reads return arrays, per AGENTS.md).
-- `grant`: `validate_grant_input`, then publish `KIND_WORKSPACE_TAB_GRANT` with
-  tags `tab`, `h`, `p`, then republish the head with `driver` set to the
-  grantee. Print `{event_id, accepted, message}`.
-- `take`: publish `KIND_WORKSPACE_TAB_TAKEOVER` with `reason` `human-takeover`
-  and `driver` set to your own pubkey, then republish the head.
-- `release`: same with `reason` `release` and `driver` set to the head's owner.
-
-Match `CliError` to the exit codes from Step 1. Use the existing error type,
-do not add a new one.
+Authorization is **not** in this layer: these functions do what they are told.
+The broker decides who may tell them.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `cargo test -p buzz-cli workspace`
+Run: `cargo test -p buzz-db workspace_tabs`
 
-Expected: PASS (3 tests).
+Expected: PASS (4 tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/buzz-cli/src/commands/workspace.rs \
-        crates/buzz-cli/src/commands/mod.rs crates/buzz-cli/src/main.rs
-git commit -s -m "feat(workspace): buzz workspace tabs list, grant, take, release"
+git add crates/buzz-db/src/workspace_tabs.rs crates/buzz-db/src/lib.rs
+git commit -s -m "feat(workspace): compare-and-swap for the driver seat"
 ```
 
 ---
 
-## Task 7: End-to-end handover proof
+## Task 3: Kinds and action parsing
 
-Everything above can pass while the handover still does not work against a real
-relay. This task proves it does.
+**Files:**
+- Modify: `crates/buzz-core/src/kind.rs`
+- Create: `crates/buzz-core/src/workspace_tab.rs`
+- Modify: `crates/buzz-core/src/lib.rs`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `KIND_WORKSPACE_TAB_ACTION: u32 = 44400`,
+  `KIND_WORKSPACE_TAB_RECEIPT: u32 = 44401`,
+  `KIND_WORKSPACE_TAB_HEAD: u32 = 30192`,
+  `enum WorkspaceTabOp { Open { tab_kind, title }, Take, Grant { grantee }, Release }`,
+  `struct WorkspaceTabAction { channel_id, tab_id, op, expected_revision: Option<i64>, actor }`,
+  `parse_tab_action(&nostr::Event) -> Result<WorkspaceTabAction, WorkspaceTabError>`.
+
+Stage 1 parses all four ops; the broker rejects `Grant` and `Release` until
+Stage 2, so the wire format does not change under B2 later.
+
+- [ ] **Step 1: Note the test helper**
+
+There is **no** `crate::test_support::signed_event`. The real helpers are
+`crate::test_helpers::make_event(kind)` and `make_event_with_keys(keys, kind)`
+(`crates/buzz-core/src/lib.rs:78-104`), and neither takes tags or content.
+Build events with `nostr::EventBuilder` + `Keys` in the test module, or extend
+`test_helpers` with one clearly named addition. Say which you did.
+
+The pinned crate is `nostr 0.44.7`, where `Tags::iter`, `Tag::as_slice() -> &[String]`
+and `PublicKey::to_hex()` all exist and behave as expected. That part of v1 was
+verified correct and can be reused.
+
+- [ ] **Step 2: Write the failing test**
+
+Cover, at minimum: a well-formed `open` action parses; an action whose `h` is
+not a UUID is refused; an unknown `op` is refused; a `grant` naming the actor
+itself is refused at parse time; a duplicate `tab` tag is refused rather than
+first-wins; an oversized title is refused. Assert error variants, not strings.
+
+Duplicate-tag rejection matters: v1's `first_tag` silently took the first of a
+duplicate pair, which lets a crafted event show one thing to a validator and
+another to a later reader.
+
+- [ ] **Step 3: Run the test to verify it fails**
+
+Run: `cargo test -p buzz-core workspace_tab`
+
+Expected: FAIL, no such module.
+
+- [ ] **Step 4: Implement**
+
+Register the three kinds in `kind.rs`: the constants, `ALL_KINDS`, and the
+classification lists. Decide each deliberately and write the reason in a
+comment:
+
+- The **action** is client-signed and channel-scoped.
+- The **receipt** is relay-signed. If it should be private to the actor, it needs
+  both a `p` tag and an entry in the right result-gate list, and you must confirm
+  the owner can still read it if the design wants that; the generic rule requires
+  **all** `p` values to equal the reader.
+- The **head** is relay-signed and readable by channel members, narrowed for
+  agents in Task 11.
+
+Write `parse_tab_action` with exactly-one-tag enforcement and explicit length
+bounds. Reject non-empty tag values that are not valid UUIDs for `h`.
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/buzz-core/src/kind.rs crates/buzz-core/src/workspace_tab.rs \
+        crates/buzz-core/src/lib.rs
+git commit -s -m "feat(workspace): tab action kinds and parsing"
+```
+
+---
+
+## Task 4: The broker
+
+**Files:**
+- Create: `crates/buzz-relay/src/workspace_tab_broker.rs`
+- Modify: `crates/buzz-relay/src/lib.rs`
+
+**Interfaces:**
+- Consumes: Tasks 2 and 3.
+- Produces: `apply_tab_action(state, tenant, action) -> Result<TabActionOutcome, String>`.
+
+- [ ] **Step 1: Read the precedents**
+
+- `crates/buzz-relay/src/job_broker.rs:73-90,214-251,344-429` — the closest small
+  broker with relay-owned head publication and a handful of transitions.
+- `crates/buzz-relay/src/company_broker.rs:96-186` with
+  `crates/buzz-db/src/lib.rs:2626-2887` (`apply_company_action_once`) — the
+  precedent for locking rows, checking an expected head, claiming idempotency,
+  and writing action, head and receipt in **one transaction**.
+
+Report which envelope you followed and why. `discovery_workspace_broker.rs` is
+the same family but carries an 881-line domain model that does not apply here.
+
+- [ ] **Step 2: Write the failing test**
+
+Authorization is the point of this module, so test it directly:
+
+- the creator may `Take` their own tab back;
+- a bystander may not `Take` a tab they neither own nor drive;
+- a stale `expected_revision` is refused as a conflict, not applied;
+- a refusal for a tab that does not exist is **indistinguishable** from a refusal
+  for a tab the caller may not touch (assert the two error strings are equal —
+  this is the existence-oracle fix, and a test is the only thing that keeps it
+  true as messages get edited);
+- `Grant` and `Release` are refused in Stage 1 with a "not yet supported" error
+  distinct from an authorization failure.
+
+- [ ] **Step 3: Run the test to verify it fails**
+
+- [ ] **Step 4: Implement**
+
+`Open` inserts and, on conflict, returns the indistinguishable refusal. `Take`
+requires the caller to be the row's `owner`, and passes the caller's
+`expected_revision` to `set_driver`; `Ok(None)` from the CAS is a conflict, not
+a success. Emit the receipt and the projected head inside the same transaction
+as the row change.
+
+**The head's `d` must be `{channel_id}:{tab_id}`**, not `tab_id`. The replaceable
+index has no channel component, so a bare tab id collides across channels.
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/buzz-relay/src/workspace_tab_broker.rs crates/buzz-relay/src/lib.rs
+git commit -s -m "feat(workspace): transactional tab ownership broker"
+```
+
+---
+
+## Task 5: Ingest wiring
+
+The step v1 skipped entirely, which would have left every workspace event
+refused at the door.
+
+**Files:**
+- Modify: `crates/buzz-relay/src/handlers/ingest.rs`
+
+- [ ] **Step 1: Register the kinds in every registry**
+
+1. `required_scope_for_kind` (`ingest.rs:430-592`) — an explicit allowlist;
+   unmapped kinds are refused with `restricted: unknown event kind` (line 590).
+2. `requires_h_channel_scope` (`ingest.rs:785-818`) — all three are channel-scoped.
+3. The dispatcher, so an action reaches the broker. The real per-kind security
+   branches are around `ingest.rs:2714-2807`; that is the shape to follow, not
+   the discovery lines v1 cited (those are scope mapping, not authorization).
+
+- [ ] **Step 2: Refuse what clients must not author**
+
+Clients may submit **actions** only. A client-signed receipt or head must be
+refused, otherwise the projection is forgeable and the whole design collapses
+back into v1.
+
+- [ ] **Step 3: Make the payload guarantee real**
+
+Reject **non-empty `content`** on all three workspace kinds at ingest. Without
+this, "payloads never cross the relay" is a property of a parser, not of the
+relay: the event is stored and fanned out whole.
+
+- [ ] **Step 4: Write the tests**
+
+Through the real ingest boundary, not a `kind.rs` unit test: an action with a
+UUID `h` is accepted; a client-signed head is refused; a client-signed receipt
+is refused; an action with non-empty content is refused; an action with a
+non-UUID `h` is refused.
+
+- [ ] **Step 5: Run and commit**
+
+```bash
+just test
+git add crates/buzz-relay/src/handlers/ingest.rs
+git commit -s -m "feat(workspace): register and gate workspace kinds at ingest"
+```
+
+---
+
+## Task 6: `buzz workspace tabs` CLI (open, take, list)
+
+**Files:**
+- Create: `crates/buzz-cli/src/commands/workspace.rs`
+- Modify: `crates/buzz-cli/src/commands/mod.rs`, `crates/buzz-cli/src/lib.rs`
+
+The command enum and dispatch are in **`lib.rs`** (around lines 189-300 and
+2907-2938), not `main.rs`, which is only a thin `run_from_args` entrypoint.
+
+The error variant is **`CliError::Usage(String)`** (`crates/buzz-cli/src/error.rs:3-45`).
+There is no `CliError::Input`.
+
+- [ ] **Step 1: Read `crates/buzz-cli/src/commands/grants.rs`** for the
+  build-sign-submit shape and its conflict handling. Exit codes: 0 ok, 1 input,
+  2 network/relay, 3 auth, 4 other, 5 write conflict. A lost CAS race is **exit 5**,
+  and the message must say so plainly rather than looking like a crash.
+
+- [ ] **Step 2: Write the failing test** for the pure input validation
+  (`--channel` must parse as a UUID; `--tab` must be non-empty), asserting
+  `CliError::Usage`.
+
+- [ ] **Step 3: Run it, watch it fail, implement, watch it pass.**
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add crates/buzz-cli/src/commands/workspace.rs crates/buzz-cli/src/commands/mod.rs \
+        crates/buzz-cli/src/lib.rs
+git commit -s -m "feat(workspace): buzz workspace tabs open, take, list"
+```
+
+---
+
+## Task 7: Live proof, races included
 
 **Files:**
 - Create: `crates/buzz-test-client/tests/e2e_workspace_tabs.rs`
 
-**Interfaces:**
-- Consumes: every task above.
-- Produces: nothing.
+**There is no `TestContext` in `buzz-test-client`.** `tests/common/mod.rs:18-148`
+has `relay_http_url`, a DB fixture, `submit`, NIP-98 helpers, `query` and
+`tag_value`; `src/lib.rs:83-180` has the low-level `BuzzTestClient`. Existing
+E2E setup is manual (`e2e_relay.rs`, `e2e_interrupts.rs`). Building fixtures is
+part of this task, not a given.
 
-- [ ] **Step 1: Read an existing E2E test first**
+- [ ] **Step 1: Read `e2e_relay.rs` and `e2e_interrupts.rs`** and copy their
+  setup. Channels must be real UUIDs.
 
-Read `crates/buzz-test-client/tests/e2e_relay.rs` for the harness: how it starts
-a relay, creates identities, publishes and queries. Copy that setup rather than
-building your own.
+- [ ] **Step 2: Write the failing tests**
 
-- [ ] **Step 2: Write the failing test**
+1. A human opens a tab; the projected head appears with the human as owner and driver.
+2. A bystander's `take` is refused.
+3. The owner's `take` succeeds and bumps the revision.
+4. **Two concurrent takes with the same expected revision: exactly one succeeds.**
+   This is the test the whole redesign exists for. Submit both before either
+   completes; assert one 5-class conflict and one success, and that the row's
+   driver is the winner's.
+5. A client-signed head is refused.
+6. An action with non-empty content is refused.
 
-```rust
-//! A tab changes hands, end to end, against a real relay.
+- [ ] **Step 3: Run, fix, and re-run until green.** `just test`.
 
-#[tokio::test]
-async fn a_tab_hands_over_from_human_to_agent_and_back() {
-    let ctx = TestContext::new().await;
-    let human = ctx.identity("human").await;
-    let agent = ctx.identity("agent").await;
-    let bystander = ctx.identity("bystander").await;
-    let channel = ctx.channel(&human, "workspace-handover").await;
-    ctx.join(&agent, &channel).await;
-    ctx.join(&bystander, &channel).await;
-
-    // The human opens a tab. Driver is the human.
-    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "Notes", &human, &human)
-        .await;
-
-    // A bystander agent cannot hand it on.
-    let refused = ctx
-        .try_publish_grant(&bystander, &channel, "tab-1", &agent)
-        .await;
-    assert!(
-        refused.is_err(),
-        "a bystander must not be able to grant someone else's tab"
-    );
-
-    // The human grants it to the agent.
-    ctx.publish_grant(&human, &channel, "tab-1", &agent).await;
-    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "Notes", &human, &agent)
-        .await;
-    assert_eq!(ctx.current_driver(&channel, "tab-1").await, agent.pubkey_hex());
-
-    // The agent cannot grant it back to itself.
-    let self_grant = ctx.try_publish_grant(&agent, &channel, "tab-1", &agent).await;
-    assert!(self_grant.is_err(), "self-grant must be refused");
-
-    // The human takes it back.
-    ctx.publish_takeover(&human, &channel, "tab-1", &human, "human-takeover")
-        .await;
-    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "Notes", &human, &human)
-        .await;
-    assert_eq!(ctx.current_driver(&channel, "tab-1").await, human.pubkey_hex());
-
-    // The whole handover is on the record, in order.
-    let trail = ctx.ownership_trail(&channel, "tab-1").await;
-    assert_eq!(trail.len(), 2, "one grant and one takeover: {trail:?}");
-}
-
-#[tokio::test]
-async fn an_agent_reads_only_grants_addressed_to_it() {
-    let ctx = TestContext::new().await;
-    let human = ctx.identity("human").await;
-    let agent_a = ctx.identity("agent-a").await;
-    let agent_b = ctx.identity("agent-b").await;
-    let channel = ctx.channel(&human, "grant-visibility").await;
-    ctx.join(&agent_a, &channel).await;
-    ctx.join(&agent_b, &channel).await;
-
-    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "A", &human, &human)
-        .await;
-    ctx.publish_grant(&human, &channel, "tab-1", &agent_a).await;
-
-    // agent_b asking for grants addressed to agent_a is refused by the p-gate.
-    let refused = ctx.try_query_grants_for(&agent_b, &agent_a).await;
-    assert!(refused.is_err(), "p-gated kinds must refuse a cross-pubkey query");
-
-    // agent_a sees its own.
-    assert_eq!(ctx.query_grants_for(&agent_a, &agent_a).await.len(), 1);
-}
-
-#[tokio::test]
-async fn an_agent_sees_only_the_tab_heads_it_owns_or_drives() {
-    let ctx = TestContext::new().await;
-    let human = ctx.identity("human").await;
-    let agent_a = ctx.identity("agent-a").await;
-    let agent_b = ctx.identity("agent-b").await;
-    let channel = ctx.channel(&human, "head-visibility").await;
-    ctx.join(&agent_a, &channel).await;
-    ctx.join(&agent_b, &channel).await;
-
-    // Two tabs. One ends up driven by agent_a, one stays with the human.
-    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "Granted", &human, &agent_a)
-        .await;
-    ctx.publish_tab_head(&human, &channel, "tab-2", "scratchpad", "Private", &human, &human)
-        .await;
-
-    // The human sees the whole channel.
-    let human_view = ctx.query_tab_heads(&human, &channel).await;
-    assert_eq!(human_view.len(), 2, "a human sees every tab in the channel");
-
-    // agent_a sees only the tab it drives.
-    let a_view = ctx.query_tab_heads(&agent_a, &channel).await;
-    assert_eq!(
-        a_view.iter().map(|h| h.tab_id.as_str()).collect::<Vec<_>>(),
-        vec!["tab-1"],
-        "an agent must not see a tab it neither owns nor drives"
-    );
-
-    // agent_b is a channel member and sees nothing, without being refused.
-    let b_view = ctx.query_tab_heads(&agent_b, &channel).await;
-    assert!(
-        b_view.is_empty(),
-        "a bystander agent sees no tabs: {b_view:?}"
-    );
-
-    // Taking tab-1 back ends agent_a's visibility of it.
-    ctx.publish_takeover(&human, &channel, "tab-1", &human, "human-takeover")
-        .await;
-    ctx.publish_tab_head(&human, &channel, "tab-1", "scratchpad", "Granted", &human, &human)
-        .await;
-    assert!(
-        ctx.query_tab_heads(&agent_a, &channel).await.is_empty(),
-        "visibility must end when the tab is taken back"
-    );
-}
-```
-
-Helper names above (`publish_tab_head`, `try_publish_grant`, `current_driver`,
-`ownership_trail`, `try_query_grants_for`) are new. Add them to the test file
-itself unless `TestContext` already has an equivalent; if it does, use the
-existing one and say which.
-
-- [ ] **Step 3: Run the test to verify it fails**
-
-Run: `just test`
-
-Expected: FAIL. Before the CLI and gate exist, the bystander grant is stored
-instead of refused.
-
-- [ ] **Step 4: Make it pass**
-
-Fix whatever the test exposes. If it passes with no changes at all, the test is
-not exercising the gate: check that the bystander really is a channel member and
-really is neither owner nor driver, and say so in your report.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/buzz-test-client/tests/e2e_workspace_tabs.rs
-git commit -s -m "test(workspace): end-to-end tab handover against a live relay"
+git commit -s -m "test(workspace): live ownership handover and race proof"
 ```
 
 ---
 
-## Task 8: Write the protocol down
+## Task 8: Stage 1 gate and PR
 
-**Files:**
-- Create: `docs/nips/NIP-WS.md`
-- Modify: `CLAUDE.md` is a symlink to `AGENTS.md`; **stage `AGENTS.md`**
+- [ ] `just ci` and `just test`, both green.
+- [ ] PR against `develop` with `--auto`, every `gh` call carrying
+      `--repo AI-Native-Ventures/Colony`.
+- [ ] The PR body states plainly that this is Stage 1: open and take back, no
+      grants, no agent read scope, and nothing in the desktop app reads it yet.
 
-**Interfaces:**
-- Consumes: everything above.
-- Produces: nothing.
-
-- [ ] **Step 1: Write the NIP**
-
-Read `docs/nips/NIP-IQ.md` first and match its structure. Document:
-
-- the three kinds, their tags, and which are replaceable;
-- the single-driver rule and who may change a driver;
-- that grants are p-gated and what that means for an agent's queries;
-- that payloads never cross the relay, and why (a file path or PTY handle is
-  meaningless on another machine);
-- the accepted B1 gap: tab heads are visible to every channel member.
-
-- [ ] **Step 2: Add the CLI to the agent guide**
-
-In `AGENTS.md`, next to the existing "Agent asks" paragraph, add a short
-paragraph on tab ownership: an agent drives a tab only while it is the head's
-`driver`, it obtains that by grant and never by self-grant, and
-`buzz workspace tabs list` shows what it holds.
-
-Stage `AGENTS.md`, not `CLAUDE.md`. `CLAUDE.md` is a symlink (mode 120000) and
-staging it is a no-op that silently drops the change.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/nips/NIP-WS.md AGENTS.md
-git commit -s -m "docs(workspace): NIP-WS tab ownership protocol"
-```
+**Stop here and get Stage 1 reviewed before starting Task 9.**
 
 ---
 
-## Task 9: Full gate and PR
+# Stage 2: grant and read scope
 
-- [ ] **Step 1: Run the whole local gate**
+## Task 9: Grant and release
 
-```bash
-just ci
-just test
-```
+Extends the broker with the two remaining ops. A `Grant` requires the caller to
+be the row's owner or current driver, refuses a self-grant, and moves the seat
+by the same CAS. A `Release` returns the seat to the owner.
 
-`just test` needs Postgres and Redis. Both must pass.
+Tests mirror Task 4's, plus: a grant from a bystander is refused
+indistinguishably from a grant for a nonexistent tab; two concurrent grants
+produce one winner; a grant to the caller itself is refused.
 
-- [ ] **Step 2: Open the PR and arm auto-merge**
+## Task 10: Agent read scope
 
-```bash
-gh pr create --repo AI-Native-Ventures/Colony --base develop \
-  --title "feat(workspace): tab ownership protocol (phase B1)" --body-file <body>
-gh pr merge <number> --repo AI-Native-Ventures/Colony --merge --auto
-```
+An agent may read a tab head only when it is the row's `owner` or `driver`.
+Humans see every tab in their channel.
 
-`--auto` is required; plain `gh pr merge` is refused on `develop` because the
-merge queue owns the strategy. Every `gh` command needs `--repo`, since a bare
-`gh` resolves to the upstream `block/buzz`.
+- [ ] **Step 1: Decide agent-ness.** `interrupt_gate::agent_tier` is
+  `(&TenantContext, &AppState, &PublicKey) -> Result<Option<AgentTier>, String>`
+  (`interrupt_gate.rs:143-147`). `None` means human or unmanaged. **Fail closed
+  on the `Result`.** A test "agent" must be a real employee or managed-agent
+  head, not a random key, or it is treated as a human and the test proves nothing.
 
-CI runs on develop PRs here (`.github/workflows/ci.yml`, `pull_request:
-branches: [main, develop, release]`), including the Rust and relay suites. A PR
-showing "no checks reported" is conflicted, not ungated.
+- [ ] **Step 2: Wire one predicate into every surface.** v1 named two files and
+  missed seven. The full set:
+  - REQ historical: `handlers/req.rs:373-411`, `690-724`
+  - local live fan-out: `handlers/event.rs:115-221`, called at `224-247`
+  - Redis fan-out: `event.rs:280-307`
+  - persistent ingest fan-out: `event.rs:429-439`
+  - HTTP query: `api/bridge.rs:1307-1320`
+  - HTTP count: `bridge.rs:1525-1535`, `1595-1605`
+  - HTTP search: `bridge.rs:1774-1785`
+  - WS count: `handlers/count.rs:201-209`, `274-281`
+
+  `filter_fanout_by_access` does not receive the `TenantContext`/`PublicKey`
+  shape `agent_tier` needs, so this requires a deliberate signature change.
+  Report what you changed.
+
+- [ ] **Step 3: Push the predicate into SQL, or overfetch deliberately.**
+  Filtering after a `LIMIT` (`req.rs:943-989` builds a bounded query, visibility
+  applies at `373-394`) returns a short or empty page even when visible tabs
+  exist. State which you chose.
+
+- [ ] **Step 4: Prove it live.** Two agents in a channel, one tab granted to the
+  first: the bystander's query returns empty **without a refusal**, the human's
+  returns everything, and taking the tab back ends the grantee's visibility.
+  Cover the bypasses v1 missed: explicit-kind `ids`, kindless `ids`,
+  channel-scoped REQ, HTTP `/query`, and live delivery.
+
+## Task 11: NIP-WS
+
+Document the three kinds, the four ops, the CAS and revision semantics, the
+projection-not-state relationship, the read scope, and **what is deliberately
+not covered**: pausing, ref invalidation, the thread record, and agent-created
+tab payload transport. Match `docs/nips/NIP-IQ.md`'s structure.
+
+Stage `AGENTS.md`, never `CLAUDE.md`: it is a symlink and staging it is a no-op.
+
+## Task 12: Stage 2 gate and PR
+
+Same gate as Task 8.
 
 ---
 
 ## Self-review
 
-**Spec coverage.** One driver at a time: the head's `driver` field, Task 2.
-Drivers are the human and one agent: Tasks 2 and 3. An agent **drives** only
-tabs granted to it: ingest gate, Task 4, proven in Task 7. An agent **sees**
-only tabs it owns or drives, including not seeing other agents' tabs: read
-scope, Task 5, proven in Task 7 against a live relay. Grants readable only by
-their grantee: p-gated in Task 1, proven in Task 7. Granting hands control over
-and is recorded: Tasks 3 and 6, proven in Task 7. Multiple agents never drive
-the same tab: single `driver` field plus the ingest gate.
+**What the spec asks and where it lands.** One driver at a time: the `driver`
+column plus the CAS, Task 2, proven by the race test in Task 7. Drivers are the
+human and one agent: same column. An agent drives only what it was granted: the
+broker, Tasks 4 and 9. An agent sees only what it owns or drives: Task 10.
+Granting hands control over and is recorded: Task 9 plus the receipt. Multiple
+agents never drive the same tab: one row, one conditional update.
 
-**Deliberately not covered, and listed in "Out of scope":** the desktop surface,
-approvals, evidence, ledger, pausing a turn on human input, and payload sync.
-Every ownership requirement in the spec's "Ownership and concurrency" section is
-implemented here; none is deferred.
+**What the spec asks and this plan does NOT deliver**, listed in "Out of scope"
+and repeated here so no self-review claims otherwise: pausing the previous
+driver's turn, invalidating its pending refs, explicit continuation, recording
+the takeover **in the thread**, and any path by which an agent-created tab
+becomes visible and usable on a human's screen.
 
-**Type consistency.** `WorkspaceTabHead`'s six fields are identical in Tasks 2,
-4 and 6. `WorkspaceTabError` gains `SelfGrant` and `UnknownReason` in Task 3 and
-is used unchanged in Tasks 4 and 5. `parse_tab_grant` returns
-`WorkspaceTabGrant` whose `granter` field is what Task 4's `grant_authorized`
-takes as its second argument. The tag names (`d`, `h`, `tab-kind`, `title`,
-`owner`, `driver`, `tab`, `p`, `reason`) are identical across Tasks 1, 2, 3, 5
-and 6.
+**Type consistency.** `WorkspaceTabRow`'s columns are identical in Tasks 1, 2
+and 4. `WorkspaceTabOp`'s four variants are parsed in Task 3, rejected in Task 4
+for the two Stage 2 ops, and accepted in Task 9. `set_driver`'s
+`expected_revision` parameter is the same value the broker reads from the row
+and the CLI surfaces as exit code 5.
