@@ -141,7 +141,7 @@ impl SessionState {
             PromptSource::Channel(cid) => {
                 self.invalidate_channel(cid);
             }
-            PromptSource::Heartbeat => {
+            PromptSource::Heartbeat | PromptSource::Ask { .. } => {
                 self.heartbeat_session = None;
                 self.heartbeat_turn_count = 0;
             }
@@ -261,11 +261,37 @@ pub struct PromptResult {
     pub batch: Option<FlushBatch>,
 }
 
-/// Whether the prompt came from a channel event or a heartbeat.
+/// Whether the prompt came from a channel event, a heartbeat, or an addressed ask.
 #[derive(Debug)]
 pub enum PromptSource {
     Channel(Uuid),
     Heartbeat,
+    /// A turn woken by an Ask addressed to this agent.
+    ///
+    /// Carries no channel: an ask is addressed to an agent, and a real ask
+    /// raised without `--channel` has no `h` tag at all. The agent answers by
+    /// running `buzz asks answer` with the id from its `<colony-ask>` block,
+    /// not by posting into a room.
+    Ask {
+        ask_event_id: String,
+    },
+}
+
+/// Return the optional channel associated with a prompt source.
+fn prompt_source_channel(source: &PromptSource) -> Option<Uuid> {
+    match source {
+        PromptSource::Channel(channel_id) => Some(*channel_id),
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
+    }
+}
+
+/// Return the human-facing kind label for a prompt source.
+fn prompt_source_label(source: &PromptSource) -> &'static str {
+    match source {
+        PromptSource::Channel(_) => "channel",
+        PromptSource::Heartbeat => "heartbeat",
+        PromptSource::Ask { .. } => "ask",
+    }
 }
 
 /// Apply state effects for Race 1, where a control signal arrives just after the
@@ -1479,6 +1505,16 @@ fn ask_section_for_batch(batch: &FlushBatch) -> Option<String> {
     })
 }
 
+/// The prompt text for a turn woken by an Ask.
+///
+/// Returns `None` when the event is not a usable ask, so a malformed ask is
+/// dropped rather than firing an empty turn that burns a model call and tells
+/// the agent nothing.
+pub(crate) fn ask_turn_prompt(event: &nostr::Event) -> Option<String> {
+    let ask = crate::ask_context::read_incoming_ask(event)?;
+    Some(crate::ask_context::ask_context_section(&ask))
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -1500,15 +1536,12 @@ pub async fn run_prompt_task(
     control_rx: Option<tokio::sync::oneshot::Receiver<ControlSignal>>,
     turn_id: String,
 ) {
-    // Is this a channel prompt or a heartbeat?
+    // Is this a channel prompt or a channel-less heartbeat/ask?
     let source = match &batch {
         Some(b) => PromptSource::Channel(b.channel_id),
         None => PromptSource::Heartbeat,
     };
-    let observer_channel_id = match &source {
-        PromptSource::Channel(channel_id) => Some(*channel_id),
-        PromptSource::Heartbeat => None,
-    };
+    let observer_channel_id = prompt_source_channel(&source);
     let turn_started_at = chrono::Utc::now().to_rfc3339();
     agent.acp.set_observer_context(observer::context_for_turn(
         observer_channel_id,
@@ -1523,10 +1556,7 @@ pub async fn run_prompt_task(
     agent.acp.observe(
         "turn_started",
         serde_json::json!({
-            "source": match &source {
-                PromptSource::Channel(_) => "channel",
-                PromptSource::Heartbeat => "heartbeat",
-            },
+            "source": prompt_source_label(&source),
             "triggeringEventIds": triggering_event_ids,
         }),
     );
@@ -1720,32 +1750,27 @@ pub async fn run_prompt_task(
 
     // The core section to fold into the system prompt for this turn's session.
     // Channel-scoped; heartbeats carry no owner core.
-    let agent_core: Option<String> = match &source {
-        PromptSource::Channel(cid) => agent.state.core_sections.get(cid).cloned(),
-        PromptSource::Heartbeat => None,
-    };
+    let agent_core: Option<String> =
+        prompt_source_channel(&source).and_then(|cid| agent.state.core_sections.get(&cid).cloned());
 
     // The onboarding section for a session about to be created, from the
     // cache the resolution block above just populated (or left in place, if
     // this channel's session already exists and is settled/no lookup was
     // needed). Cheap in-memory read; only actually consumed below when a new
     // session is created, which is the only place `onboarding_section` is used.
-    let onboarding_section: Option<&'static str> = match &source {
-        PromptSource::Channel(cid) => cached_onboarding_section(&agent.state, cid),
-        PromptSource::Heartbeat => None,
-    };
+    let onboarding_section: Option<&'static str> = prompt_source_channel(&source)
+        .and_then(|cid| cached_onboarding_section(&agent.state, &cid));
 
     // The canvas metadata section — channel-scoped, absent for heartbeats/DMs.
     // Prefer the committed cache; fall back to pending (for new sessions being created now).
-    let agent_canvas: Option<String> = match &source {
-        PromptSource::Channel(cid) => agent
+    let agent_canvas: Option<String> = prompt_source_channel(&source).and_then(|cid| {
+        agent
             .state
             .canvas_sections
-            .get(cid)
+            .get(&cid)
             .cloned()
-            .or_else(|| pending_canvas.as_ref().map(|(_, s)| s.clone())),
-        PromptSource::Heartbeat => None,
-    };
+            .or_else(|| pending_canvas.as_ref().map(|(_, s)| s.clone()))
+    });
 
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(cid) => {
@@ -1806,7 +1831,7 @@ pub async fn run_prompt_task(
                 }
             }
         }
-        PromptSource::Heartbeat => {
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => {
             if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
@@ -2354,7 +2379,7 @@ pub async fn run_prompt_task(
                             *count += 1;
                             *count >= limit
                         }
-                        PromptSource::Heartbeat => {
+                        PromptSource::Heartbeat | PromptSource::Ask { .. } => {
                             agent.state.heartbeat_turn_count += 1;
                             agent.state.heartbeat_turn_count >= limit
                         }
@@ -3414,9 +3439,9 @@ fn classify_control_cancel_failure(
 ///
 /// Shared by the turn-start and turn-stop lines so a log can be read as pairs.
 fn prompt_label(source: &PromptSource) -> String {
-    match source {
-        PromptSource::Channel(cid) => format!("channel {cid}"),
-        PromptSource::Heartbeat => "heartbeat".to_string(),
+    match prompt_source_channel(source) {
+        Some(cid) => format!("{} {cid}", prompt_source_label(source)),
+        None => prompt_source_label(source).to_string(),
     }
 }
 
@@ -4049,6 +4074,98 @@ mod tests {
     use buzz_core::company::CompanyOnboardingStatus;
     use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
     use serde_json::json;
+
+    #[test]
+    fn an_ask_turn_has_no_channel_to_reply_into() {
+        let source = PromptSource::Ask {
+            ask_event_id: "abc123".into(),
+        };
+        assert_eq!(
+            prompt_source_channel(&source),
+            None,
+            "an ask is agent-addressed and has no channel; posting a reply into \
+             one would leak it to that channel's members"
+        );
+        assert_eq!(prompt_source_label(&source), "ask");
+    }
+
+    #[test]
+    fn an_ask_turn_prompt_carries_the_block_with_no_batch() {
+        let filer = nostr::Keys::generate();
+        let audience = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"Which vendor for SMS?","cost_of_delay":"onboarding is blocked"}"#,
+        )
+        .tags([
+            nostr::Tag::public_key(audience.public_key()),
+            nostr::Tag::parse(["ask-type", "decision"]).unwrap(),
+            nostr::Tag::parse(["task", "task-7"]).unwrap(),
+        ])
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        let prompt = ask_turn_prompt(&event).expect("an ask event must build a turn prompt");
+
+        assert!(prompt.contains("<colony-ask>"));
+        assert!(
+            prompt.contains(&event.id.to_hex()),
+            "without the id the agent cannot answer, and the ask times out onto \
+             the founder"
+        );
+        assert!(
+            prompt.contains("decision"),
+            "the type comes from the ask-type tag"
+        );
+        assert!(
+            prompt.contains("task-7"),
+            "the task comes from the task tag"
+        );
+    }
+
+    #[test]
+    fn a_malformed_ask_builds_no_turn_rather_than_an_empty_one() {
+        let filer = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            "{not json",
+        )
+        .sign_with_keys(&filer)
+        .unwrap();
+        assert!(ask_turn_prompt(&event).is_none());
+    }
+
+    #[test]
+    fn an_ask_turn_prompt_block_appears_exactly_once_without_a_batch_section() {
+        let filer = nostr::Keys::generate();
+        let audience = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"Which vendor for SMS?","cost_of_delay":"onboarding is blocked"}"#,
+        )
+        .tags([
+            nostr::Tag::public_key(audience.public_key()),
+            nostr::Tag::parse(["ask-type", "decision"]).unwrap(),
+            nostr::Tag::parse(["task", "task-7"]).unwrap(),
+        ])
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        let prompt = ask_turn_prompt(&event).expect("an ask event must build a turn prompt");
+        let batch_derived_section = Option::<FlushBatch>::None
+            .as_ref()
+            .and_then(ask_section_for_batch);
+
+        assert!(
+            batch_derived_section.is_none(),
+            "an ask turn has no batch, so its prompt must not get a second ask block"
+        );
+        assert_eq!(
+            prompt.matches("<colony-ask>").count(),
+            1,
+            "the event-derived prompt must carry exactly one ask block"
+        );
+    }
 
     // These pin the initial_message dispatch path (run_prompt_task, ~line 855):
     // a legacy agent WITH a base_prompt must get [Base] prepended to the user

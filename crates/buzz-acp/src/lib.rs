@@ -3500,7 +3500,7 @@ fn handle_prompt_result(
 
     match &result.source {
         PromptSource::Channel(ch) => queue.mark_complete(*ch),
-        PromptSource::Heartbeat => *heartbeat_in_flight = false,
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => *heartbeat_in_flight = false,
     }
 
     // Strip sessions for channels the agent was removed from while this
@@ -3536,7 +3536,7 @@ fn handle_prompt_result(
 
     let channel_id = match &result.source {
         PromptSource::Channel(ch) => Some(*ch),
-        PromptSource::Heartbeat => None,
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
     };
     let turn_id = result.turn_id.clone();
     let gateway_denial = if config.provisioned {
