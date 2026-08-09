@@ -37,6 +37,23 @@ pub struct WorkspaceTabRow {
     pub updated_at: i64,
 }
 
+/// The fields a new tab needs.
+///
+/// A struct rather than eight positional arguments, because
+/// `open_tab(pool, community, channel, id, kind, title, creator, now)` has two
+/// adjacent `&str` pairs and two adjacent byte slices that a caller can
+/// silently transpose.
+pub struct NewWorkspaceTab<'a> {
+    /// Client-chosen tab coordinate, unique within the channel.
+    pub tab_id: &'a str,
+    /// Opaque registry kind for the tab body.
+    pub tab_kind: &'a str,
+    /// Human-readable title shown in the tab strip.
+    pub title: &'a str,
+    /// Identity that opens and initially owns and drives the tab.
+    pub creator: &'a [u8],
+}
+
 fn row_to_tab(row: sqlx::postgres::PgRow) -> Result<WorkspaceTabRow> {
     Ok(WorkspaceTabRow {
         channel_id: row.try_get("channel_id")?,
@@ -62,10 +79,7 @@ pub async fn open_tab(
     pool: &PgPool,
     community: CommunityId,
     channel: Uuid,
-    tab_id: &str,
-    tab_kind: &str,
-    title: &str,
-    creator: &[u8],
+    tab: NewWorkspaceTab<'_>,
     now: i64,
 ) -> Result<Option<WorkspaceTabRow>> {
     let row = sqlx::query(
@@ -79,10 +93,10 @@ pub async fn open_tab(
     )
     .bind(community.as_uuid())
     .bind(channel)
-    .bind(tab_id)
-    .bind(tab_kind)
-    .bind(title)
-    .bind(creator)
+    .bind(tab.tab_id)
+    .bind(tab.tab_kind)
+    .bind(tab.title)
+    .bind(tab.creator)
     .bind(now)
     .fetch_optional(pool)
     .await?;

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use buzz_core::CommunityId;
-use buzz_db::workspace_tabs::{get_tab, open_tab, set_driver};
+use buzz_db::workspace_tabs::{get_tab, open_tab, set_driver, NewWorkspaceTab};
 use buzz_db::Db;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -101,10 +101,12 @@ async fn two_racing_takes_produce_one_winner() {
         &pool,
         community,
         channel,
-        "tab-1",
-        "scratchpad",
-        "Notes",
-        &human,
+        NewWorkspaceTab {
+            tab_id: "tab-1",
+            tab_kind: "scratchpad",
+            title: "Notes",
+            creator: &human,
+        },
         100,
     )
     .await
@@ -180,10 +182,12 @@ async fn head_at_is_strictly_increasing_even_within_one_second() {
         &pool,
         community,
         channel,
-        "tab-1",
-        "scratchpad",
-        "Notes",
-        &human,
+        NewWorkspaceTab {
+            tab_id: "tab-1",
+            tab_kind: "scratchpad",
+            title: "Notes",
+            creator: &human,
+        },
         100,
     )
     .await
@@ -211,10 +215,12 @@ async fn opening_the_same_tab_twice_is_idempotent_not_a_hijack() {
         &pool,
         community,
         channel,
-        "tab-1",
-        "scratchpad",
-        "Notes",
-        &human,
+        NewWorkspaceTab {
+            tab_id: "tab-1",
+            tab_kind: "scratchpad",
+            title: "Notes",
+            creator: &human,
+        },
         100,
     )
     .await
@@ -226,10 +232,12 @@ async fn opening_the_same_tab_twice_is_idempotent_not_a_hijack() {
         &pool,
         community,
         channel,
-        "tab-1",
-        "scratchpad",
-        "Mine now",
-        &stranger,
+        NewWorkspaceTab {
+            tab_id: "tab-1",
+            tab_kind: "scratchpad",
+            title: "Mine now",
+            creator: &stranger,
+        },
         101,
     )
     .await
@@ -255,10 +263,12 @@ async fn a_tab_in_another_channel_is_a_different_tab() {
         &pool,
         community,
         channel_a,
-        "tab-1",
-        "scratchpad",
-        "A",
-        &human,
+        NewWorkspaceTab {
+            tab_id: "tab-1",
+            tab_kind: "scratchpad",
+            title: "A",
+            creator: &human,
+        },
         100,
     )
     .await
@@ -268,10 +278,12 @@ async fn a_tab_in_another_channel_is_a_different_tab() {
         &pool,
         community,
         channel_b,
-        "tab-1",
-        "scratchpad",
-        "B",
-        &human,
+        NewWorkspaceTab {
+            tab_id: "tab-1",
+            tab_kind: "scratchpad",
+            title: "B",
+            creator: &human,
+        },
         100,
     )
     .await
