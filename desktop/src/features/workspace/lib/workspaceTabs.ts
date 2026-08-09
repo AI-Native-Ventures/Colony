@@ -172,6 +172,11 @@ export function setActiveTab(channelId: string, tabId: string): void {
   );
 }
 
+/** Show the new-tab page without closing anything. */
+export function clearActiveTab(channelId: string): void {
+  write(channelId, (state) => ({ ...state, activeTabId: null }));
+}
+
 /** Rename a tab. Blank titles are rejected. */
 export function renameTab(
   channelId: string,

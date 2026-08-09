@@ -112,6 +112,21 @@ test("closing the active tab activates its neighbour", async () => {
   });
 });
 
+test("clearing the active tab keeps every tab open", async () => {
+  await freshStore((mod) => {
+    const first = mod.openTab("chan-a", scratch("A"));
+    const second = mod.openTab("chan-a", scratch("B"));
+    mod.clearActiveTab("chan-a");
+    const state = mod.getWorkspace("chan-a");
+    assert.equal(state.activeTabId, null);
+    assert.deepEqual(
+      state.tabs.map((tab) => tab.id),
+      [first, second],
+      "clearing the active tab must not close any tabs",
+    );
+  });
+});
+
 test("closing the last tab leaves no active tab", async () => {
   await freshStore((mod) => {
     const a = mod.openTab("chan-a", scratch("A"));

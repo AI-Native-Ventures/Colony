@@ -6,6 +6,7 @@ import {
 } from "@/features/workspace/lib/channelSurfaceMode";
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
+  clearActiveTab,
   closeTab,
   openTab,
   setActiveTab,
@@ -14,6 +15,8 @@ import {
 import { getTabBody, registerAllTabKinds } from "@/features/workspace/kinds";
 import { NewTabPage } from "@/features/workspace/ui/NewTabPage";
 import { WorkspaceTabStrip } from "@/features/workspace/ui/WorkspaceTabStrip";
+import { cn } from "@/shared/lib/cn";
+import { channelChrome } from "@/shared/layout/chromeLayout";
 
 type ChannelWorkspaceProps = {
   channelId: string;
@@ -51,16 +54,18 @@ export function ChannelWorkspace({
   const handleNewTab = React.useCallback(() => {
     // The new-tab page renders when nothing is active, so this only needs to
     // clear the active tab rather than create one of a guessed kind.
-    const first = tabs.at(0);
-    if (first) setActiveTab(channelId, first.id);
-  }, [channelId, tabs]);
+    clearActiveTab(channelId);
+  }, [channelId]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const Body = activeTab ? getTabBody(activeTab.kind) : undefined;
 
   return (
     <div
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+        channelChrome.contentPadding,
+      )}
       data-testid="channel-workspace"
     >
       <WorkspaceTabStrip
