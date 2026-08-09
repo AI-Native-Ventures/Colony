@@ -930,26 +930,41 @@ async fn active_role_ranks(tenant: &TenantContext, state: &AppState) -> Result<R
 /// point 3 (never guess), unchanged. Pure (no I/O) so a caller looping over
 /// many candidates in the same community can call it repeatedly against ONE
 /// fetched roster instead of re-querying.
+/// The rank an owner-authored managed-agent head confers.
+///
+/// The role the head names, resolved against the active payroll, then the
+/// legacy `content.tier` field. This is the single place that ordering lives,
+/// because the escalation path has three readers of an agent's rank
+/// ([`interrupt_gate::agent_tier`], [`unique_executive_in_roster`], and
+/// [`team_lead_in_rosters`]) and they drifted apart once already: each was
+/// written against `content.tier`, which nothing in the product writes, so
+/// each in turn resolved to no rank at all in every real workspace.
+///
+/// The caller is responsible for the trust boundary. Every caller here reads
+/// a roster from [`fetch_owner_authored_managed_agent_roster`], so a head an
+/// agent published about itself is never in scope and a self-declared role
+/// confers nothing.
+fn head_rank(content: &serde_json::Value, role_ranks: &RoleRanks) -> Option<AgentTier> {
+    content
+        .get("role_id")
+        .and_then(|value| value.as_str())
+        .map(|role| role.trim().to_ascii_lowercase())
+        .and_then(|role| role_ranks.get(&role).copied())
+        .or_else(|| {
+            content
+                .get("tier")
+                .and_then(|value| value.as_str())
+                .and_then(AgentTier::parse)
+        })
+}
+
 fn unique_executive_in_roster(
     roster: &ManagedAgentRoster,
     role_ranks: &RoleRanks,
 ) -> Result<Option<PublicKey>, String> {
     let mut executives: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for (d_tag, content) in roster {
-        // The role the owner's head names, resolved against the payroll,
-        // then the legacy `tier` field.
-        let tier = content
-            .get("role_id")
-            .and_then(|value| value.as_str())
-            .map(|role| role.trim().to_ascii_lowercase())
-            .and_then(|role| role_ranks.get(&role).copied())
-            .or_else(|| {
-                content
-                    .get("tier")
-                    .and_then(|value| value.as_str())
-                    .and_then(AgentTier::parse)
-            });
-        if tier != Some(AgentTier::Executive) {
+        if head_rank(content, role_ranks) != Some(AgentTier::Executive) {
             continue;
         }
         let Ok(pubkey_bytes) = hex::decode(d_tag) else {
@@ -1040,6 +1055,7 @@ async fn fetch_owner_authored_teams(
 fn team_lead_in_rosters(
     heads: &ManagedAgentRoster,
     teams: &TeamRoster,
+    role_ranks: &RoleRanks,
     worker: &PublicKey,
 ) -> Result<Option<PublicKey>, String> {
     // 1. The worker's persona id, from its own owner-authored head. A worker
@@ -1080,21 +1096,24 @@ fn team_lead_in_rosters(
     };
 
     // 4. The lead persona must resolve to exactly one live agent
-    //    (`persona_pubkey_in_roster`) whose head declares Leader tier.
+    //    (`persona_pubkey_in_roster`) that is a Leader. Rank comes from
+    //    [`head_rank`], so this rung reads the role the owner's head names
+    //    exactly as the other two readers on this path do. It used to match
+    //    `content.tier` alone, which nothing in the product writes, so
+    //    `lead_tier` was `None` in every real workspace and this rung never
+    //    fired: a worker's owner-mention skipped its own team lead and went
+    //    straight to the community executive.
     let Some(lead_pubkey) = persona_pubkey_in_roster(heads, lead_persona)? else {
         return Ok(None);
     };
-    let lead_tier = heads
-        .iter()
-        .find_map(|(_, content)| {
-            (content
-                .get("persona_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(lead_persona))
-            .then(|| content.get("tier").and_then(serde_json::Value::as_str))
-            .flatten()
-        })
-        .and_then(AgentTier::parse);
+    let lead_tier = heads.iter().find_map(|(_, content)| {
+        (content
+            .get("persona_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(lead_persona))
+        .then(|| head_rank(content, role_ranks))
+        .flatten()
+    });
     if lead_tier != Some(AgentTier::Leader) {
         return Ok(None);
     }
@@ -1147,12 +1166,15 @@ pub async fn resolve_owner_mention_route(
             let heads =
                 fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
             let teams = fetch_owner_authored_teams(tenant, state, MAX_ROSTER_HEADS).await?;
-            if let Some(lead) = team_lead_in_rosters(&heads, &teams, actor)? {
+            // One payroll read serves both rungs: the team lead's rank and,
+            // failing that, the executive's. Fetched before the team-lead
+            // scan rather than after it, because that scan needs it now too.
+            let role_ranks = active_role_ranks(tenant, state).await?;
+            if let Some(lead) = team_lead_in_rosters(&heads, &teams, &role_ranks, actor)? {
                 return Ok(OwnerMentionRoute::Route(lead));
             }
             // Fallback rung: the unique executive, resolved from the roster
             // already fetched for the team-lead scan (no second round trip).
-            let role_ranks = active_role_ranks(tenant, state).await?;
             let Some(executive) = unique_executive_in_roster(&heads, &role_ranks)? else {
                 return Err(format!(
                     "worker {} has no unique team lead or community executive \
