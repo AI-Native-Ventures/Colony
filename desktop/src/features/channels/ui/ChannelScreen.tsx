@@ -747,6 +747,7 @@ export function ChannelScreen({
     () => (
       <ChannelScreenHeader
         activeChannel={activeChannel}
+        channelId={activeChannel?.id}
         activeChannelEphemeralDisplay={activeChannelEphemeralDisplay}
         activeChannelTitle={activeChannelTitle}
         actionsVariant={shouldCompactHeaderActions ? "compact" : "inline"}
