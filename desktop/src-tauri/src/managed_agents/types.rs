@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+
+use super::model_effort::AgentModelInfo;
 use std::{collections::BTreeMap, path::PathBuf, process::Child};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -745,16 +747,6 @@ pub struct AgentModelsResponse {
     pub selected_model: Option<String>,
     /// Whether this agent supports model switching.
     pub supports_switching: bool,
-}
-
-/// A single model available from an agent.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentModelInfo {
-    /// Canonical ID used for persistence and round-tripping.
-    pub id: String,
-    pub name: Option<String>,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

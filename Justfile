@@ -709,6 +709,10 @@ clean:
     cargo clean
     cargo clean --manifest-path desktop/src-tauri/Cargo.toml
 
+# Stop Compose stacks whose worktree is gone (dry run; pass --yes to apply)
+docker-gc *ARGS:
+    @./scripts/docker-gc.sh {{ARGS}}
+
 # Check the Rust workspace compiles without producing binaries
 check-compile:
     cargo check --workspace --all-targets
