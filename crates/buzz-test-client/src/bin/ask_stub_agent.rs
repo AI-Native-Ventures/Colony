@@ -32,9 +32,7 @@ fn handle_rpc(line: &str, state: &mut StubState) -> Option<String> {
         }
     };
 
-    let Some(id) = request.get("id").cloned() else {
-        return None;
-    };
+    let id = request.get("id").cloned()?;
 
     let method = request
         .get("method")
