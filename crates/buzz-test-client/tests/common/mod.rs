@@ -10,6 +10,8 @@
 //! using half of it would otherwise warn about the other half.
 #![allow(dead_code)]
 
+pub mod ask;
+
 use base64::Engine;
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use sha2::{Digest, Sha256};
