@@ -32,10 +32,36 @@ pub fn read_incoming_ask(event: &Event) -> Option<IncomingAsk> {
         .get("headline")
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())?;
-    let ask_type = value
-        .get("type")
-        .and_then(|v| v.as_str())
+    let ask_type = event
+        .tags
+        .iter()
+        .find_map(|tag| {
+            let parts = tag.as_slice();
+            if parts.len() == 2 && parts[0].as_str() == "ask-type" {
+                parts.get(1).map(|value| value.as_str())
+            } else {
+                None
+            }
+        })
+        .or_else(|| value.get("type").and_then(|v| v.as_str()))
         .unwrap_or("question");
+    let task_id = event
+        .tags
+        .iter()
+        .find_map(|tag| {
+            let parts = tag.as_slice();
+            if parts.len() == 2 && parts[0].as_str() == "task" {
+                parts.get(1).map(|value| value.to_string())
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            value
+                .get("task")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
     Some(IncomingAsk {
         id: event.id.to_hex(),
         ask_type: ask_type.to_string(),
@@ -44,10 +70,7 @@ pub fn read_incoming_ask(event: &Event) -> Option<IncomingAsk> {
             .get("cost_of_delay")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        task_id: value
-            .get("task")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        task_id,
     })
 }
 
@@ -110,6 +133,31 @@ mod tests {
         assert_eq!(ask.ask_type, "decision");
         assert_eq!(ask.headline, "Which vendor for SMS?");
         assert_eq!(ask.cost_of_delay.as_deref(), Some("onboarding is blocked"));
+        assert_eq!(ask.task_id.as_deref(), Some("task-7"));
+    }
+
+    #[test]
+    fn a_real_ask_reads_its_type_and_task_from_tags() {
+        let audience = nostr::Keys::generate();
+        let filer = nostr::Keys::generate();
+        let channel = uuid::Uuid::new_v4();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"Which vendor for SMS?","cost_of_delay":"onboarding is blocked"}"#,
+        )
+        .tags([
+            nostr::Tag::parse(["ask-type", "decision"]).unwrap(),
+            nostr::Tag::public_key(audience.public_key()),
+            nostr::Tag::parse(["initiative", "init-1"]).unwrap(),
+            nostr::Tag::parse(["need", "sms-vendor"]).unwrap(),
+            nostr::Tag::parse(["task", "task-7"]).unwrap(),
+            nostr::Tag::parse(["h", &channel.to_string()]).unwrap(),
+        ])
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        let ask = read_incoming_ask(&event).expect("should parse");
+        assert_eq!(ask.ask_type, "decision");
         assert_eq!(ask.task_id.as_deref(), Some("task-7"));
     }
 
