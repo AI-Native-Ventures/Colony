@@ -2781,10 +2781,10 @@ async fn resubscribe_after_reconnect(
             debug!("rate-gated: parking Ask inbox resubscribe after reconnect");
             state.ask_resub_needed = true;
         } else {
-            if !state.active_subscriptions.is_empty() || state.membership_sub_active {
-                if !pacing_sleep(cmd_rx, &mut deferred_commands, REQ_PACING_INTERVAL).await {
-                    return ResubscribeResult::Shutdown;
-                }
+            if (!state.active_subscriptions.is_empty() || state.membership_sub_active)
+                && !pacing_sleep(cmd_rx, &mut deferred_commands, REQ_PACING_INTERVAL).await
+            {
+                return ResubscribeResult::Shutdown;
             }
             let sent = send_ask_inbox_subscribe(ws, agent_pubkey_hex, state.ask_since()).await;
             if sent {
