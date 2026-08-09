@@ -592,7 +592,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:233",
+        "src/features/communities/useCommunityInit.ts:237",
         "src/features/communities/useNestNotifications.ts:12",
         "src/features/communities/useNestNotifications.ts:21"
       ]
@@ -2044,7 +2044,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/communities/communityStorage.ts:62",
-        "src/features/communities/useCommunityInit.ts:219",
+        "src/features/communities/useCommunityInit.ts:223",
         "src/parity/session/script.ts:321"
       ]
     },
