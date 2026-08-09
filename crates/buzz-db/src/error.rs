@@ -48,6 +48,10 @@ pub enum DbError {
     /// A stored timestamp value could not be interpreted.
     #[error("invalid timestamp: {0}")]
     InvalidTimestamp(i64),
+
+    /// A monetary amount is malformed (zero or negative credit, overflow).
+    #[error("invalid amount: {0}")]
+    InvalidAmount(String),
 }
 
 /// Convenience alias for `Result<T, DbError>`.

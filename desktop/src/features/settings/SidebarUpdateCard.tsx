@@ -1,5 +1,5 @@
 import * as React from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/shared/api/nativeBridge";
 import { CircleArrowUp, ExternalLink } from "lucide-react";
 
 import { useUpdaterContext } from "./hooks/UpdaterProvider";

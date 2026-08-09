@@ -1,6 +1,6 @@
 import * as React from "react";
 import { EllipsisVertical, ExternalLink } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/shared/api/nativeBridge";
 
 import {
   useAcpAuthMethodsQuery,

@@ -12,6 +12,10 @@ import {
   RelayDiscoveryDataSource,
 } from "./RelayDiscoveryDataSource.ts";
 import { mapCampaign } from "./relayDiscoveryModels.ts";
+import {
+  buildLeadUpdateInput,
+  createLeadEditDraft,
+} from "../ui/leadEditForm.ts";
 
 const ACTOR_SECRET = generateSecretKey();
 const RELAY_SECRET = generateSecretKey();
@@ -31,6 +35,7 @@ function harness(
   let runActions = 0;
   let run = null;
   let leadStatus = null;
+  const publishedById = new Map();
   const publishedEvents = [];
   const workerId = "1f507956-6f08-4e6a-bf38-3a7011565047";
   let lead = {
@@ -53,6 +58,7 @@ function harness(
     source_url: "https://maps.example/sandton-auto",
     image_url: null,
     added_at: NOW,
+    status: "candidate",
   };
   const operations = [];
   return {
@@ -64,6 +70,7 @@ function harness(
     dependencies: {
       delay: async () => {},
       relaySelf: async () => RELAY_PUBKEY,
+      relaySupportsDiscovery: async () => true,
       sign: async ({ kind, content, createdAt, tags }) =>
         finalizeEvent(
           {
@@ -76,6 +83,7 @@ function harness(
         ),
       publish: async (event) => {
         published = event;
+        publishedById.set(event.id, event);
         publishedEvents.push(event);
         if (event.kind === 40017) {
           runActions += 1;
@@ -122,18 +130,23 @@ function harness(
         };
       },
       fetchFirstEvent: async (filter) => {
-        assert.ok(published, "an action must be published before its receipt");
-        assert.deepEqual(filter["#e"], [published.id]);
-        assert.deepEqual(filter["#p"], [published.pubkey]);
-        if (published.kind === 40017) {
-          const action = JSON.parse(published.content);
+        const actionEvent =
+          publishedById.get(filter["#e"]?.[0] ?? "") ?? published;
+        assert.ok(
+          actionEvent,
+          "an action must be published before its receipt",
+        );
+        assert.deepEqual(filter["#e"], [actionEvent.id]);
+        assert.deepEqual(filter["#p"], [actionEvent.pubkey]);
+        if (actionEvent.kind === 40017) {
+          const action = JSON.parse(actionEvent.content);
           const receipt = finalizeEvent(
             {
               kind: 40018,
               created_at: 1_785_665_601,
               tags: [
-                ["p", published.pubkey],
-                ["e", published.id, "", "discovery-action"],
+                ["p", actionEvent.pubkey],
+                ["e", actionEvent.id, "", "discovery-action"],
                 ["run", run.run_id],
                 [
                   "discovery-receipt",
@@ -211,9 +224,9 @@ function harness(
           });
           return receipt;
         }
-        const action = JSON.parse(published.content);
+        const action = JSON.parse(actionEvent.content);
         const request = action.request;
-        const tuple = published.tags.find(
+        const tuple = actionEvent.tags.find(
           (tag) => tag[0] === "discovery-workspace-action",
         );
         const operation = tuple[2];
@@ -297,17 +310,39 @@ function harness(
           leadStatus = input.status ?? leadStatus ?? "candidate";
           lead = {
             ...lead,
-            website: input.website ?? lead.website,
-            phone: input.phone ?? lead.phone,
+            website: input.website ?? null,
+            email: input.email ?? null,
+            phone: input.phone ?? null,
+            linkedin_url: input.linkedin_url ?? null,
+            contact_name: input.contact_name ?? null,
+            contact_title: input.contact_title ?? null,
+            notes: input.notes ?? null,
+            score: input.score ?? null,
+            owner_persona_id: input.owner_persona_id ?? null,
           };
           result = {
             result: "lead",
             lead: {
               ...lead,
               status: leadStatus,
-              owner: input.owner_persona_id ?? null,
-              notes: input.notes ?? null,
               updatedAt: NOW,
+            },
+          };
+        } else if (operation === "list_leads") {
+          const requestStatus = request.payload.request.status ?? null;
+          const currentStatus = leadStatus ?? "candidate";
+          const rows =
+            campaign?.lead_count &&
+            (requestStatus === null || requestStatus === currentStatus)
+              ? [lead]
+              : [];
+          result = {
+            result: "leads",
+            page: {
+              leads: rows,
+              total: rows.length,
+              offset: 0,
+              limit: 100,
             },
           };
         } else {
@@ -326,8 +361,8 @@ function harness(
             kind: 40022,
             created_at: 1_785_665_601,
             tags: [
-              ["p", published.pubkey],
-              ["e", published.id, "", "discovery-workspace-action"],
+              ["p", actionEvent.pubkey],
+              ["e", actionEvent.id, "", "discovery-workspace-action"],
               [
                 "discovery-workspace-receipt",
                 "2",
@@ -586,6 +621,7 @@ test("inactive workspaces stay on the cost-free demo and cannot create live reco
 
 test("a relay without Discovery kinds falls back to the cost-free demo", async () => {
   const unsupported = harness(false);
+  unsupported.dependencies.relaySupportsDiscovery = async () => false;
   unsupported.dependencies.publish = async () => {
     throw new Error("restricted: unknown event kind");
   };
@@ -597,6 +633,58 @@ test("a relay without Discovery kinds falls back to the cost-free demo", async (
     experience: "demo",
   });
   assert.ok((await source.getIndustries()).length > 0);
+});
+
+test("a relay that advertises Discovery never falls back to the demo on a rejection", async () => {
+  const supported = harness(false);
+  supported.dependencies.relaySupportsDiscovery = async () => true;
+  supported.dependencies.publish = async () => {
+    throw new Error("restricted: unknown event kind");
+  };
+  const source = new RelayDiscoveryDataSource(supported.dependencies);
+
+  await assert.rejects(
+    source.getEntitlement(),
+    /restricted: unknown event kind/,
+  );
+});
+
+test("an unreachable NIP-11 capability probe never downgrades to the demo", async () => {
+  const unreachable = harness(false);
+  let probes = 0;
+  unreachable.dependencies.relaySupportsDiscovery = async () => {
+    probes += 1;
+    throw new Error("NIP-11 unreachable");
+  };
+  unreachable.dependencies.publish = async () => {
+    throw new Error("restricted: unknown event kind");
+  };
+  const source = new RelayDiscoveryDataSource(unreachable.dependencies);
+
+  await assert.rejects(
+    source.getEntitlement(),
+    /restricted: unknown event kind/,
+  );
+  // The loud path clears the memoised promise, so a retry re-runs the access
+  // call and re-probes instead of reusing the rejected promise.
+  await assert.rejects(
+    source.getEntitlement(),
+    /restricted: unknown event kind/,
+  );
+  assert.equal(probes, 2);
+});
+
+test("an unrelated error containing the phrase never yields the demo", async () => {
+  const supported = harness(false);
+  supported.dependencies.relaySupportsDiscovery = async () => true;
+  supported.dependencies.publish = async () => {
+    throw new Error(
+      "Failed to load the report; search for 'unknown event kind' in the logs",
+    );
+  };
+  const source = new RelayDiscoveryDataSource(supported.dependencies);
+
+  await assert.rejects(source.getEntitlement(), /Failed to load the report/);
 });
 
 test("a receipt not signed by the tenant relay cannot grant Discovery access", async () => {
@@ -650,10 +738,128 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
   });
   assert.equal(page.total, 1);
   assert.equal(page.leads[0].companyName, "Sandton Auto Works");
-  assert.equal(page.leads[0].status, "new");
+  assert.equal(page.leads[0].status, "candidate");
   assert.equal(page.leads[0].score, 0);
   assert.equal(page.leads[0].source, "brave_search");
   assert.equal(page.leads[0].sourceLabel, "Brave Web Search");
+});
+
+test("getLeads forwards the funnel status to the relay payload", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+
+  await source.getLeads({
+    scope: "global",
+    status: "dormant",
+    page: 1,
+    pageSize: 25,
+  });
+
+  const listEvent = live.publishedEvents.find(
+    (event) =>
+      event.kind === 40021 &&
+      JSON.parse(event.content).request.payload.operation === "list_leads",
+  );
+  assert.ok(listEvent, "a list_leads workspace action must be published");
+  const listRequest = JSON.parse(listEvent.content).request.payload.request;
+  assert.equal(
+    listRequest.status,
+    "dormant",
+    "the selected status must travel in the relay request, not a client-side filter",
+  );
+});
+
+test("pipeline columns come from six bounded status-filtered list_leads calls", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const campaign = await source.createCampaign({
+    name: "Pipeline bounds",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+  });
+  const events = [];
+  for await (const event of source.startDiscovery(campaign.id)) {
+    events.push(event);
+  }
+
+  const columns = await source.getPipelineColumns();
+  const listEvents = live.publishedEvents.filter(
+    (event) =>
+      event.kind === 40021 &&
+      JSON.parse(event.content).request.payload.operation === "list_leads",
+  );
+  assert.equal(
+    listEvents.length,
+    6,
+    "one list_leads workspace action per column",
+  );
+  const requests = listEvents.map((event) => {
+    const payload = JSON.parse(event.content).request.payload.request;
+    return {
+      status: payload.status,
+      offset: payload.offset,
+      limit: payload.limit,
+      campaign_id: payload.campaign_id,
+    };
+  });
+  assert.deepEqual(
+    requests.map((request) => request.status),
+    [
+      "candidate",
+      "accepted",
+      "qualified",
+      "dormant",
+      "disqualified",
+      "client_active",
+    ],
+  );
+  for (const request of requests) {
+    assert.equal(request.offset, 0, "each column is one bounded page");
+    assert.equal(request.limit, 100, "each column is capped at one page");
+    assert.equal(
+      request.campaign_id,
+      null,
+      "the pipeline is global, never campaign-scoped",
+    );
+  }
+  assert.deepEqual(
+    columns.map((column) => [column.status, column.total]),
+    [
+      ["candidate", 1],
+      ["accepted", 0],
+      ["qualified", 0],
+      ["dormant", 0],
+      ["disqualified", 0],
+      ["client_active", 0],
+    ],
+    "column totals come from the relay response, never the loaded array",
+  );
+});
+
+test("pipeline totals follow the relay after a status move", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const campaign = await source.createCampaign({
+    name: "Pipeline move",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+  });
+  const events = [];
+  for await (const event of source.startDiscovery(campaign.id)) {
+    events.push(event);
+  }
+
+  const lead = await source.getLead("b53e6fb2-2a91-45bc-a382-60feb217767a");
+  await source.updateLead(lead.id, { status: "accepted" });
+  const columns = await source.getPipelineColumns();
+  const byStatus = new Map(columns.map((column) => [column.status, column]));
+  assert.equal(byStatus.get("candidate").total, 0);
+  assert.equal(byStatus.get("accepted").total, 1);
+  assert.equal(byStatus.get("accepted").leads[0].id, lead.id);
 });
 
 test("a released V1 worker receipt still wakes the V2 desktop run loop", async () => {
@@ -709,4 +915,60 @@ test("live lead get and update round-trip through the workspace ops", async () =
   assert.equal(updated.notes, "Warm intro");
   assert.ok(live.operations.includes("get_lead"));
   assert.ok(live.operations.includes("update_lead"));
+});
+
+test("a field-only lead edit still submits the complete profile", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  const detail = await source.getLead("b53e6fb2-2a91-45bc-a382-60feb217767a");
+
+  const seedDraft = createLeadEditDraft(detail);
+  seedDraft.owner = "Chief of Staff";
+  seedDraft.email = "hello@example.com";
+  seedDraft.notes = "Warm intro";
+  const seeded = await source.updateLead(
+    detail.id,
+    buildLeadUpdateInput(seedDraft),
+  );
+  assert.equal(seeded.owner, "Chief of Staff");
+  assert.equal(seeded.notes, "Warm intro");
+
+  const editDraft = createLeadEditDraft(seeded);
+  editDraft.website = "https://new.example";
+  const updated = await source.updateLead(
+    seeded.id,
+    buildLeadUpdateInput(editDraft),
+  );
+  assert.equal(updated.website, "https://new.example");
+  assert.equal(updated.owner, "Chief of Staff");
+  assert.equal(updated.email, "hello@example.com");
+  assert.equal(updated.notes, "Warm intro");
+
+  const updateInputs = live.publishedEvents
+    .filter((event) => event.kind === 40021)
+    .map((event) => JSON.parse(event.content).request.payload)
+    .filter((payload) => payload.operation === "update_lead")
+    .map((payload) => payload.input);
+  assert.equal(updateInputs.length, 2);
+  const secondInput = updateInputs[1];
+  assert.equal(
+    secondInput.website,
+    "https://new.example",
+    "the changed field is on the wire",
+  );
+  assert.equal(
+    secondInput.owner_persona_id,
+    "Chief of Staff",
+    "owner must survive a website-only edit",
+  );
+  assert.equal(
+    secondInput.email,
+    "hello@example.com",
+    "email must survive a website-only edit",
+  );
+  assert.equal(
+    secondInput.notes,
+    "Warm intro",
+    "notes must survive a website-only edit",
+  );
 });

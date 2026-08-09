@@ -17,7 +17,7 @@ use buzz_core::{
         DiscoveryWorkerSourceProgressRequest,
     },
     discovery_workspace::{
-        DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryLeadStatus,
+        DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryLeadPage, DiscoveryLeadStatus,
         DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
         DiscoveryWorkspaceResult,
     },
@@ -72,6 +72,33 @@ async fn relay_pubkey() -> nostr::PublicKey {
             .expect("NIP-11 self key"),
     )
     .expect("valid relay pubkey")
+}
+
+/// Wire-contract pin shared with the desktop entitlement gate: the running
+/// relay's NIP-11 document must advertise the `colony-discovery` extension
+/// token. The desktop constant and this test are two spellings of one token;
+/// if either side drifts, this test fails.
+#[tokio::test]
+async fn relay_nip11_advertises_colony_discovery() {
+    let info: Value = reqwest::Client::new()
+        .get(relay_http_url())
+        .header("Accept", "application/nostr+json")
+        .send()
+        .await
+        .expect("fetch NIP-11")
+        .json()
+        .await
+        .expect("parse NIP-11");
+    let extensions = info
+        .get("supported_extensions")
+        .and_then(Value::as_array)
+        .expect("NIP-11 document must carry supported_extensions");
+    assert!(
+        extensions
+            .iter()
+            .any(|extension| extension.as_str() == Some("colony-discovery")),
+        "NIP-11 supported_extensions must advertise colony-discovery, got {extensions:?}"
+    );
 }
 
 async fn submit_worker_action(
@@ -177,6 +204,35 @@ async fn submit_workspace_action(
     assert_eq!(parsed.actor_pubkey, actor.public_key());
     assert_eq!(parsed.action_event_id, action_id);
     parsed.receipt.result
+}
+
+async fn list_leads_page(
+    client: &mut BuzzTestClient,
+    actor: &Keys,
+    relay: nostr::PublicKey,
+    campaign_id: Uuid,
+    status: Option<DiscoveryLeadStatus>,
+) -> DiscoveryLeadPage {
+    let result = submit_workspace_action(
+        client,
+        actor,
+        relay,
+        DiscoveryWorkspaceActionPayload::ListLeads {
+            request: DiscoveryLeadListRequest {
+                campaign_id: Some(campaign_id),
+                industry_id: None,
+                vertical_id: None,
+                status,
+                offset: 0,
+                limit: 25,
+            },
+        },
+    )
+    .await;
+    match result {
+        DiscoveryWorkspaceResult::Leads { page } => page,
+        other => panic!("list leads must return the page projection, got {other:?}"),
+    }
 }
 
 async fn create_campaign(
@@ -890,7 +946,7 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
     let DiscoveryWorkspaceResult::Lead { lead } = result else {
         panic!("get lead must return the detail projection");
     };
-    assert_eq!(lead.status, DiscoveryLeadStatus::Candidate);
+    assert_eq!(lead.lead.status, DiscoveryLeadStatus::Candidate);
 
     let result = submit_workspace_action(
         &mut client,
@@ -916,7 +972,7 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
     let DiscoveryWorkspaceResult::Lead { lead } = result else {
         panic!("update lead must return the detail projection");
     };
-    assert_eq!(lead.status, DiscoveryLeadStatus::Accepted);
+    assert_eq!(lead.lead.status, DiscoveryLeadStatus::Accepted);
     assert_eq!(lead.notes.as_deref(), Some("Warm intro"));
     assert_eq!(lead.score, Some(82));
     assert_eq!(
@@ -970,7 +1026,7 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
     let DiscoveryWorkspaceResult::Lead { lead } = result else {
         panic!("disqualify must return the detail projection");
     };
-    assert_eq!(lead.status, DiscoveryLeadStatus::Disqualified);
+    assert_eq!(lead.lead.status, DiscoveryLeadStatus::Disqualified);
 
     let refused = DiscoveryWorkspaceRequest {
         request_id: Uuid::new_v4(),
@@ -1002,6 +1058,244 @@ async fn lead_update_persists_and_rejects_illegal_transitions() {
             "unexpected illegal transition error: {error}"
         ),
     }
+
+    sqlx::query("DELETE FROM discovery_business_observations WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(lead_id)
+        .execute(&pool)
+        .await
+        .expect("clean up observations");
+    sqlx::query("DELETE FROM discovery_lead_profiles WHERE community_id=$1 AND lead_id=$2")
+        .bind(community_id)
+        .bind(lead_id)
+        .execute(&pool)
+        .await
+        .expect("clean up lead profiles");
+    sqlx::query("DELETE FROM discovery_runs WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("clean up run");
+    sqlx::query("DELETE FROM discovery_campaigns WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(campaign_id)
+        .execute(&pool)
+        .await
+        .expect("clean up campaign");
+}
+
+#[tokio::test]
+#[ignore = "requires the isolated Postgres, Redis, and relay harness"]
+async fn list_leads_candidate_filter_returns_unedited_leads() {
+    let _test_guard = DISCOVERY_E2E_LOCK.lock().await;
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5471/buzz".to_owned());
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("connect isolated Postgres");
+    let host = buzz_core::tenant::relay_url_authority(&relay_url());
+    let community_id: Uuid = sqlx::query("SELECT id FROM communities WHERE lower(host)=lower($1)")
+        .bind(&host)
+        .fetch_one(&pool)
+        .await
+        .expect("isolated community exists")
+        .try_get("id")
+        .expect("community UUID");
+    let actor = Keys::generate();
+    provision_member(&pool, community_id, &actor).await;
+    sqlx::query(
+        "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
+         VALUES ($1,TRUE,now()) ON CONFLICT (community_id) \
+         DO UPDATE SET active=TRUE,updated_at=now()",
+    )
+    .bind(community_id)
+    .execute(&pool)
+    .await
+    .expect("enable entitlement");
+    let relay = relay_pubkey().await;
+    let mut client = BuzzTestClient::connect(&relay_url(), &actor)
+        .await
+        .expect("authenticate actor");
+    let campaign_id = create_campaign(&mut client, &actor, relay).await;
+    let run_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO discovery_runs \
+         (community_id,id,campaign_id,requested_by,start_idempotency_key,state,total_steps) \
+         VALUES ($1,$2,$3,$4,$5,'succeeded',4)",
+    )
+    .bind(community_id)
+    .bind(run_id)
+    .bind(campaign_id)
+    .bind(actor.public_key().to_bytes().as_slice())
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .expect("insert succeeded run");
+    let mut lead_ids = Vec::new();
+    for index in 0..3 {
+        let lead_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,\
+              observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper',$4,$5,decode(repeat('ef',32),'hex'))",
+        )
+        .bind(community_id)
+        .bind(lead_id)
+        .bind(run_id)
+        .bind(format!("maps:status-filter-{index}"))
+        .bind(format!("Sandton Status Filter {index}"))
+        .execute(&pool)
+        .await
+        .expect("insert retained observation");
+        lead_ids.push(lead_id);
+    }
+
+    let page = list_leads_page(
+        &mut client,
+        &actor,
+        relay,
+        campaign_id,
+        Some(DiscoveryLeadStatus::Candidate),
+    )
+    .await;
+    assert_eq!(
+        page.total, 3,
+        "unedited leads must match the candidate filter"
+    );
+    assert_eq!(
+        page.leads.len(),
+        3,
+        "candidate filter must return the matching rows"
+    );
+    assert!(page.leads.iter().all(|lead| {
+        lead.status == DiscoveryLeadStatus::Candidate && lead_ids.contains(&lead.lead_id)
+    }));
+
+    let result = submit_workspace_action(
+        &mut client,
+        &actor,
+        relay,
+        DiscoveryWorkspaceActionPayload::GetLead {
+            lead_id: lead_ids[0],
+        },
+    )
+    .await;
+    let DiscoveryWorkspaceResult::Lead { lead: before } = result else {
+        panic!("get lead must return the detail projection");
+    };
+    assert_eq!(
+        before.lead.status,
+        DiscoveryLeadStatus::Candidate,
+        "get_lead must agree with the list row before any edit"
+    );
+
+    let result = submit_workspace_action(
+        &mut client,
+        &actor,
+        relay,
+        DiscoveryWorkspaceActionPayload::UpdateLead {
+            lead_id: lead_ids[0],
+            input: DiscoveryLeadUpdateInput {
+                website: None,
+                email: None,
+                phone: None,
+                linkedin_url: None,
+                contact_name: None,
+                contact_title: None,
+                notes: None,
+                score: None,
+                owner_persona_id: None,
+                status: Some(DiscoveryLeadStatus::Accepted),
+            },
+        },
+    )
+    .await;
+    let DiscoveryWorkspaceResult::Lead { lead: updated } = result else {
+        panic!("update lead must return the detail projection");
+    };
+    assert_eq!(updated.lead.status, DiscoveryLeadStatus::Accepted);
+
+    let page = list_leads_page(
+        &mut client,
+        &actor,
+        relay,
+        campaign_id,
+        Some(DiscoveryLeadStatus::Accepted),
+    )
+    .await;
+    assert_eq!(page.total, 1, "edited lead must match the accepted filter");
+    assert_eq!(page.leads[0].lead_id, lead_ids[0]);
+    assert_eq!(page.leads[0].status, DiscoveryLeadStatus::Accepted);
+    let result = submit_workspace_action(
+        &mut client,
+        &actor,
+        relay,
+        DiscoveryWorkspaceActionPayload::GetLead {
+            lead_id: lead_ids[0],
+        },
+    )
+    .await;
+    let DiscoveryWorkspaceResult::Lead { lead: after } = result else {
+        panic!("get lead must return the detail projection");
+    };
+    assert_eq!(
+        after.lead.status, page.leads[0].status,
+        "get_lead must agree with the list row after the edit"
+    );
+
+    let page = list_leads_page(
+        &mut client,
+        &actor,
+        relay,
+        campaign_id,
+        Some(DiscoveryLeadStatus::Candidate),
+    )
+    .await;
+    assert_eq!(page.total, 2, "remaining unedited leads stay candidates");
+
+    for (status, expected) in [
+        (DiscoveryLeadStatus::Candidate, 2),
+        (DiscoveryLeadStatus::Accepted, 1),
+        (DiscoveryLeadStatus::Qualified, 0),
+        (DiscoveryLeadStatus::Dormant, 0),
+        (DiscoveryLeadStatus::Disqualified, 0),
+        (DiscoveryLeadStatus::ClientActive, 0),
+    ] {
+        let page = list_leads_page(&mut client, &actor, relay, campaign_id, Some(status)).await;
+        assert_eq!(page.total, expected, "count for {status:?}");
+        assert_eq!(
+            page.leads.len() as u32,
+            page.total,
+            "filtered rows must equal the filtered count for {status:?}"
+        );
+    }
+
+    sqlx::query("DELETE FROM discovery_business_observations WHERE community_id=$1 AND id=ANY($2)")
+        .bind(community_id)
+        .bind(&lead_ids)
+        .execute(&pool)
+        .await
+        .expect("clean up observations");
+    sqlx::query("DELETE FROM discovery_lead_profiles WHERE community_id=$1 AND lead_id=ANY($2)")
+        .bind(community_id)
+        .bind(&lead_ids)
+        .execute(&pool)
+        .await
+        .expect("clean up lead profiles");
+    sqlx::query("DELETE FROM discovery_runs WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("clean up run");
+    sqlx::query("DELETE FROM discovery_campaigns WHERE community_id=$1 AND id=$2")
+        .bind(community_id)
+        .bind(campaign_id)
+        .execute(&pool)
+        .await
+        .expect("clean up campaign");
 }
 
 #[tokio::test]

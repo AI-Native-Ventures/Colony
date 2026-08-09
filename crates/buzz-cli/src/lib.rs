@@ -10,10 +10,19 @@ mod validate;
 pub mod worker;
 
 use clap::{Parser, Subcommand};
-use client::BuzzClient;
-use error::CliError;
 use nostr::Keys;
 use uuid::Uuid;
+
+pub use client::BuzzClient;
+pub use error::CliError;
+
+/// The Ask event builder behind `buzz asks raise` and `buzz asks escalate`.
+///
+/// Re-exported so an end-to-end proof can construct an ask the way an agent's
+/// CLI actually does. `crates/buzz-test-client/tests/e2e_interrupts.rs` keeps
+/// its own copy of this tag shape, which is one edit away from proving a
+/// layout no agent ever sends; anything new builds from here instead.
+pub use commands::asks::{build_ask_event, AskEventFields};
 
 /// Run the Buzz CLI from raw arguments (including `argv[0]`).
 ///
@@ -2523,11 +2532,15 @@ pub struct AskFileArgs {
     /// community owner)
     #[arg(long)]
     pub to: String,
-    /// Initiative id this ask belongs to
+    /// Initiative id this ask belongs to. Copy it from the
+    /// `<colony-work-context>` block's `Initiative id` line. Omit it when
+    /// that line reads `none`: work with no initiative (any task created
+    /// from chat) groups under a reserved `no-initiative` value instead.
     #[arg(long)]
-    pub initiative: String,
+    pub initiative: Option<String>,
     /// Task id this ask blocks on, can be specified multiple times, at
-    /// least one is required
+    /// least one is required. Copy it from the `<colony-work-context>`
+    /// block's `Task id` line.
     #[arg(long = "task")]
     pub task: Vec<String>,
     /// Dedupe key, matching [a-z0-9-]{1,64}. Concurrent asks that share an
@@ -2644,6 +2657,12 @@ pub enum JobsCmd {
         /// The result
         #[arg(long)]
         result: String,
+        /// Provider that executed the job; stamped on the head
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model that executed the job; stamped on the head
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Report a job failed (kind 43013). Only the current lease holder may.
     Fail {

@@ -4,6 +4,10 @@ Every provider call an agent makes is forwarded through a loopback proxy that
 reads the token counts off the provider's own response. That is what the cost
 ledger is built on: it does not take an agent's word for what it spent.
 
+Provider response parsing (usage blocks, stated cost, SSE reading) is
+transport-independent and lives in `buzz-meter-core`, shared with the hosted
+gateway so both paths compute the same number.
+
 ## The two routes are wire formats, not vendors
 
 There is a `/anthropic` route and an `/openai` route. They exist because

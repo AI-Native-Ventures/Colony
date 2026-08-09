@@ -1,6 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import {
+  checkForUpdate as checkForUpdateNative,
+  relaunch,
+  type NativeUpdate,
+} from "@/shared/api/nativeBridge";
 import { isAutoUpdateSupported } from "@/shared/api/tauri";
 
 export type UpdateStatus =
@@ -58,7 +61,7 @@ function initialUpdateStatus(): UpdateStatus {
 export function useUpdater() {
   const [status, setStatusState] = useState<UpdateStatus>(initialUpdateStatus);
   const statusRef = useRef<UpdateStatus>(initialUpdateStatus());
-  const updateRef = useRef<Update | null>(null);
+  const updateRef = useRef<NativeUpdate | null>(null);
   const checkInFlightRef = useRef(false);
   const downloadInFlightRef = useRef(false);
   const installInFlightRef = useRef(false);
@@ -149,7 +152,7 @@ export function useUpdater() {
           setStatus({ state: "checking" });
         }
 
-        const update = await check({
+        const update = await checkForUpdateNative({
           headers: { "Cache-Control": "no-cache" },
         });
         const shouldShowQuietResult =

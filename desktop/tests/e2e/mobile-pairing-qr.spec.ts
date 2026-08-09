@@ -13,23 +13,18 @@ test.beforeEach(async ({ page }) => {
 async function emitPairingEvent(page: Page, event: string, payload?: unknown) {
   await page.evaluate(
     async ({ eventName, eventPayload }) => {
-      const internals = (
+      const emitNativeEvent = (
         window as Window & {
-          __TAURI_INTERNALS__?: {
-            invoke?: (
-              command: string,
-              args: Record<string, unknown>,
-            ) => Promise<unknown>;
-          };
+          __BUZZ_E2E_EMIT_NATIVE_EVENT__?: (
+            event: string,
+            payload?: unknown,
+          ) => Promise<void>;
         }
-      ).__TAURI_INTERNALS__;
-      if (!internals?.invoke) {
-        throw new Error("Tauri E2E event bridge is unavailable");
+      ).__BUZZ_E2E_EMIT_NATIVE_EVENT__;
+      if (!emitNativeEvent) {
+        throw new Error("Native event bridge is unavailable");
       }
-      await internals.invoke("plugin:event|emit", {
-        event: eventName,
-        payload: eventPayload,
-      });
+      await emitNativeEvent(eventName, eventPayload);
     },
     { eventName: event, eventPayload: payload },
   );

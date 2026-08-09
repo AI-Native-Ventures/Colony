@@ -12,7 +12,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/shared/api/nativeBridge";
 import { toast } from "sonner";
 
 import { relayClient } from "@/shared/api/relayClient";

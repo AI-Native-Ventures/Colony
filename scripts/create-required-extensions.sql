@@ -1,0 +1,19 @@
+-- Postgres extensions the relay's own queries depend on.
+--
+-- Migration 0001 and schema/schema.sql both carry
+-- `CREATE EXTENSION IF NOT EXISTS pgcrypto`, so a migrated database always
+-- has it. A pgschema-provisioned one does NOT: pgschema is a declarative
+-- differ over types, functions and tables (its plan summary reads
+-- "types: N to add, functions: N to add, tables: N to add") and it does not
+-- manage extensions at all, so the CREATE EXTENSION line in schema.sql is
+-- silently ignored.
+--
+-- The gap is not cosmetic. `query_in_progress_task_heads`
+-- (crates/buzz-db/src/event.rs) derives its stall `need_key` with pgcrypto's
+-- `digest()`, and that query runs on every interrupt-runtime sweep tick, so
+-- without the extension a CI relay fails the sweep continuously with
+-- `function digest(text, unknown) does not exist`. Nothing caught it because
+-- the only suite exercising that path had never run in CI.
+--
+-- Run this after `pgschema apply`, alongside attach-schema-partitions.sql.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;

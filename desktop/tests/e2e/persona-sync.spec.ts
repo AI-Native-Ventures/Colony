@@ -36,12 +36,8 @@ async function waitForInvokeBridge(page: import("@playwright/test").Page) {
     () => {
       const w = window as Window & {
         __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
-        __TAURI_INTERNALS__?: { invoke?: unknown };
       };
-      return (
-        typeof w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
-        typeof w.__TAURI_INTERNALS__?.invoke === "function"
-      );
+      return typeof w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function";
     },
     null,
     { timeout: 5_000 },
@@ -61,12 +57,8 @@ async function invokeTauri<T>(
           c: string,
           p?: Record<string, unknown>,
         ) => Promise<unknown>;
-        __TAURI_INTERNALS__?: {
-          invoke?: (c: string, p?: Record<string, unknown>) => Promise<unknown>;
-        };
       };
-      const invoke =
-        w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ?? w.__TAURI_INTERNALS__?.invoke;
+      const invoke = w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) throw new Error("Mock invoke bridge is unavailable.");
       return (await invoke(c, p)) as T;
     },
@@ -90,18 +82,19 @@ async function listenForAgentsDataChanged(
     (
       window as Window & { __agentsDataChangedFired?: Promise<boolean> }
     ).__agentsDataChangedFired = new Promise<boolean>((resolve) => {
-      const internals = (
+      const listenNativeEvent = (
         window as Window & {
-          __TAURI_INTERNALS__?: {
-            listen?: (event: string, cb: () => void) => Promise<() => void>;
-          };
+          __BUZZ_E2E_LISTEN_NATIVE_EVENT__?: (
+            event: string,
+            cb: () => void,
+          ) => Promise<() => void>;
         }
-      ).__TAURI_INTERNALS__;
-      if (!internals?.listen) {
+      ).__BUZZ_E2E_LISTEN_NATIVE_EVENT__;
+      if (!listenNativeEvent) {
         resolve(false);
         return;
       }
-      void internals.listen("agents-data-changed", () => resolve(true));
+      void listenNativeEvent("agents-data-changed", () => resolve(true));
       // Timeout guard: 500 ms covers the 200 ms debounce coalesce with margin.
       setTimeout(() => resolve(false), 500);
     });

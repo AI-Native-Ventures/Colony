@@ -1,7 +1,10 @@
+import * as React from "react";
 import { ExternalLink, Globe2, Mail, Phone } from "lucide-react";
 
 import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import type { DiscoverySearch } from "@/app/routes/discovery";
 import { DISCOVERY_SOURCE_LABELS } from "../sourceConfig";
 import type { Lead } from "../types";
 import {
@@ -17,6 +20,7 @@ export type LeadTableProps = {
   leads: readonly Lead[];
   view: LeadTableView;
   scope: "campaign" | "global";
+  search: DiscoverySearch;
 };
 
 export type LeadTableRow = {
@@ -35,9 +39,11 @@ function formatDate(value: string) {
 }
 
 function statusVariant(status: Lead["status"]) {
-  if (status === "qualified") return "success" as const;
-  if (status === "rejected") return "destructive" as const;
-  if (status === "enriched") return "info" as const;
+  if (status === "qualified" || status === "client_active")
+    return "success" as const;
+  if (status === "accepted") return "info" as const;
+  if (status === "dormant") return "warning" as const;
+  if (status === "disqualified") return "destructive" as const;
   return "secondary" as const;
 }
 
@@ -67,13 +73,20 @@ const columnLabels: Record<LeadRowColumn, string> = {
   status: "Status",
 };
 
-function LeadContact({ lead }: { lead: Lead }) {
+function LeadContact({
+  lead,
+  onInteract,
+}: {
+  lead: Lead;
+  onInteract?: (event: React.MouseEvent) => void;
+}) {
   return (
     <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-muted-foreground">
       {lead.website ? (
         <a
           className="inline-flex items-center gap-1 hover:text-foreground"
           href={lead.website}
+          onClick={onInteract}
           rel="noreferrer"
           target="_blank"
         >
@@ -98,14 +111,29 @@ function LeadContact({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadGrid({ leads }: { leads: readonly Lead[] }) {
+function LeadGrid({
+  leads,
+  onOpenLead,
+}: {
+  leads: readonly Lead[];
+  onOpenLead: (leadId: string) => void;
+}) {
   return (
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {stableLeadOrder(leads).map((lead) => (
         <Card
-          className="border-border/60 bg-card/70 p-4 shadow-none"
+          className="cursor-pointer border-border/60 bg-card/70 p-4 shadow-none transition-colors hover:bg-card"
           data-testid={`lead-card-${lead.id}`}
           key={lead.id}
+          onClick={() => onOpenLead(lead.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onOpenLead(lead.id);
+            }
+          }}
+          role="button"
+          tabIndex={0}
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -138,14 +166,24 @@ function LeadGrid({ leads }: { leads: readonly Lead[] }) {
               <p className="mt-0.5 text-foreground">{lead.score}</p>
             </div>
           </div>
-          <LeadContact lead={lead} />
+          <LeadContact
+            lead={lead}
+            onInteract={(event) => event.stopPropagation()}
+          />
         </Card>
       ))}
     </div>
   );
 }
 
-export function LeadTable({ leads, scope, view }: LeadTableProps) {
+export function LeadTable({ leads, scope, search, view }: LeadTableProps) {
+  const { goDiscovery } = useAppNavigation();
+  const openLead = React.useCallback(
+    (leadId: string) => {
+      void goDiscovery({ ...search, leadId });
+    },
+    [goDiscovery, search],
+  );
   const rows = leadTableRows(leads);
   if (rows.length === 0) {
     return (
@@ -159,7 +197,7 @@ export function LeadTable({ leads, scope, view }: LeadTableProps) {
       </Card>
     );
   }
-  if (view === "grid") return <LeadGrid leads={leads} />;
+  if (view === "grid") return <LeadGrid leads={leads} onOpenLead={openLead} />;
 
   return (
     <Card className="overflow-hidden border-border/60 bg-card/70 p-0 shadow-none">
@@ -186,13 +224,22 @@ export function LeadTable({ leads, scope, view }: LeadTableProps) {
           <tbody>
             {rows.map(({ columns, lead }) => (
               <tr
-                className="border-t border-border/50 align-top"
+                className="cursor-pointer border-t border-border/50 align-top transition-colors hover:bg-muted/30"
                 data-testid={`lead-row-${lead.id}`}
                 key={lead.id}
+                onClick={() => openLead(lead.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openLead(lead.id);
+                  }
+                }}
+                tabIndex={0}
               >
                 <td className="px-4 py-3">
                   <input
                     aria-label={`Select ${lead.companyName}`}
+                    onClick={(event) => event.stopPropagation()}
                     type="checkbox"
                   />
                 </td>
@@ -201,7 +248,10 @@ export function LeadTable({ leads, scope, view }: LeadTableProps) {
                   scope="row"
                 >
                   <div>{columns.company}</div>
-                  <LeadContact lead={lead} />
+                  <LeadContact
+                    lead={lead}
+                    onInteract={(event) => event.stopPropagation()}
+                  />
                 </th>
                 <td className="px-4 py-3 text-muted-foreground">
                   {columns.location}

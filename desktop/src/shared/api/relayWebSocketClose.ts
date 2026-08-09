@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/shared/api/nativeBridge";
 
 /**
  * Remove the connection from the native manager before waiting for its socket

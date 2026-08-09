@@ -165,7 +165,12 @@ test("fixture lead counts match the taxonomy cards", async () => {
 
 test("fixture lead detail round-trips an edit and defaults status to candidate", async () => {
   const source = createFixtureDiscoveryDataSource();
-  const page = await source.getLeads({ scope: "global", page: 1, pageSize: 1 });
+  const page = await source.getLeads({
+    scope: "global",
+    status: "candidate",
+    page: 1,
+    pageSize: 1,
+  });
   const leadId = page.leads[0].id;
   const detail = await source.getLead(leadId);
   assert.equal(detail.status, "candidate");
@@ -181,6 +186,42 @@ test("fixture lead detail round-trips an edit and defaults status to candidate",
   assert.equal(updated.score, 82);
   assert.equal(updated.owner, "Chief of Staff");
   assert.ok(updated.updatedAt);
+});
+
+test("fixture updateLead wipes omitted fields the way the relay does", async () => {
+  const source = createFixtureDiscoveryDataSource();
+  const page = await source.getLeads({ scope: "global", page: 1, pageSize: 1 });
+  const leadId = page.leads[0].id;
+
+  // No status on the seed. The fixture now enforces the relay's transition
+  // matrix, so naming a status here would couple this test to whichever
+  // funnel status the first fixture lead happens to start in.
+  const seeded = await source.updateLead(leadId, {
+    website: "https://seed.example",
+    email: "seed@example.com",
+    notes: "Warm intro",
+    owner: "Chief of Staff",
+    score: 82,
+  });
+  assert.equal(seeded.email, "seed@example.com");
+  assert.equal(seeded.notes, "Warm intro");
+
+  // A partial write is destructive on the relay, so it must be destructive
+  // here too. If this ever preserves the omitted fields, demo mode and every
+  // Playwright edit case go blind to the data-loss hazard and only the wire
+  // test in RelayDiscoveryDataSource.test.mjs still catches it.
+  const partial = await source.updateLead(leadId, {
+    website: "https://changed.example",
+  });
+  assert.equal(partial.website, "https://changed.example");
+  assert.equal(partial.email, undefined, "an omitted email must be cleared");
+  assert.equal(partial.notes, undefined, "omitted notes must be cleared");
+  assert.equal(partial.owner, undefined, "an omitted owner must be cleared");
+  assert.equal(
+    partial.status,
+    seeded.status,
+    "status is the one field the relay carries forward",
+  );
 });
 
 test("fixture source returns the complete SalesTeams people hierarchy", async () => {
@@ -585,4 +626,57 @@ test("repeated discovery emits duplicates without inflating campaign leads", asy
   assert.equal(terminal?.run.stored, 0);
   assert.equal(terminal?.run.duplicates, 2);
   assert.equal(terminal?.targetReached, false);
+});
+
+test("pipeline columns mirror the fixture's status-filtered totals", async () => {
+  const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
+  const columns = await source.getPipelineColumns();
+  assert.equal(columns.length, 6);
+  for (const column of columns) {
+    const page = await source.getLeads({
+      scope: "global",
+      status: column.status,
+      page: 1,
+      pageSize: 100,
+    });
+    assert.equal(
+      column.total,
+      page.total,
+      `${column.status} total must come from the status-filtered page, not the loaded array`,
+    );
+    assert.equal(column.leads.length, Math.min(page.total, 100));
+    assert.ok(
+      column.leads.every((lead) => lead.status === column.status),
+      `${column.status} column must only hold leads of that status`,
+    );
+  }
+});
+
+test("fixture updateLead enforces the relay transition matrix with its wording", async () => {
+  const source = createFixtureDiscoveryDataSource({ entitlement: "entitled" });
+  const page = await source.getLeads({
+    scope: "global",
+    status: "candidate",
+    page: 1,
+    pageSize: 1,
+  });
+  const leadId = page.leads[0].id;
+  const accepted = await source.updateLead(leadId, { status: "accepted" });
+  assert.equal(accepted.status, "accepted");
+  const disqualified = await source.updateLead(leadId, {
+    status: "disqualified",
+  });
+  assert.equal(disqualified.status, "disqualified");
+
+  await assert.rejects(
+    source.updateLead(leadId, { status: "accepted" }),
+    {
+      message:
+        "invalid: Lead status transition Disqualified -> Accepted is not allowed",
+    },
+    "a move out of a terminal status must refuse with the relay's wording",
+  );
+  const notesOnly = await source.updateLead(leadId, { notes: "Still warm" });
+  assert.equal(notesOnly.status, "disqualified");
+  assert.equal(notesOnly.notes, "Still warm");
 });

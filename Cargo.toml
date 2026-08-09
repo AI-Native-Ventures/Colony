@@ -2,6 +2,7 @@
 members = [
     "crates/buzz-relay",
     "crates/buzz-core",
+    "crates/buzz-native",
     "crates/buzz-conformance",
     "crates/buzz-push-gateway",
     "crates/buzz-db",
@@ -18,6 +19,7 @@ members = [
     "crates/buzz-workflow",
     "crates/buzz-media",
     "crates/buzz-meter",
+    "crates/buzz-meter-core",
     "crates/buzz-cli",
     "crates/buzz-pairing-cli",
     "crates/buzz-sdk",
@@ -27,6 +29,7 @@ members = [
     "crates/buzz-pair-relay",
     "crates/buzz-relay-mesh",
     "crates/buzz-dev-mcp",
+    "crates/buzz-voice",
     "crates/buzz-browser",
     "examples/countdown-bot",
 ]
@@ -130,6 +133,7 @@ schemars = { version = "1", default-features = false }
 # Internal crates
 buzz-core = { path = "crates/buzz-core" }
 buzz-meter   = { path = "crates/buzz-meter" }
+buzz-meter-core = { path = "crates/buzz-meter-core" }
 buzz-conformance = { path = "crates/buzz-conformance" }
 buzz-db = { path = "crates/buzz-db" }
 buzz-auth = { path = "crates/buzz-auth" }

@@ -7,10 +7,79 @@ import {
   CLI_ACP_INTERNAL_ERROR_COPY,
   MODEL_NOT_FOUND_COPY,
   RELAY_MESH_DENIED_COPY,
+  COLONY_CREDITS_RECONNECT_COPY,
+  COLONY_CREDITS_DEPLETED_COPY,
+  COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+  COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
 } from "./friendlyAgentLastError.ts";
 
 test("null lastError → null", () => {
   assert.equal(friendlyAgentLastError(null), null);
+});
+
+test("exact meter 401 marker offers one explicit reconnect action", () => {
+  assert.deepEqual(
+    friendlyAgentLastError(
+      `adapter body: ${COLONY_CREDITS_GATEWAY_STATUS_401_MARKER}`,
+    ),
+    {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_RECONNECT_COPY,
+    },
+  );
+});
+
+test("non-canonical authorization text remains generic", () => {
+  assert.deepEqual(
+    friendlyAgentLastError(
+      "Colony Credits gateway authorization expired — reconnect",
+    ),
+    {
+      severity: "generic",
+      copy: "Colony Credits gateway authorization expired — reconnect",
+    },
+  );
+});
+
+test("structured ACP Colony Credits denial marker remains actionable", () => {
+  assert.deepEqual(
+    friendlyAgentLastError(
+      `⚠️ ${COLONY_CREDITS_GATEWAY_STATUS_401_MARKER}: authorization expired`,
+    ),
+    {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_RECONNECT_COPY,
+    },
+  );
+});
+
+test("exact meter 402 marker offers depleted top-up copy", () => {
+  assert.deepEqual(
+    friendlyAgentLastError(
+      `adapter body: ${COLONY_CREDITS_GATEWAY_STATUS_402_MARKER}`,
+    ),
+    {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_DEPLETED_COPY,
+    },
+  );
+});
+
+test("ordinary 401/402 provider text never becomes a Colony Credits action", () => {
+  for (const message of [
+    "gateway returned 401 Unauthorized",
+    "gateway returned 402 Payment Required",
+    "Colony Credits depleted",
+    "COLONY_CREDITS_GATEWAY_STATUS_4012",
+  ]) {
+    assert.deepEqual(friendlyAgentLastError(message), {
+      severity: "generic",
+      copy: message,
+    });
+  }
 });
 
 test("empty/whitespace lastError → null", () => {

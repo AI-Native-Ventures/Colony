@@ -66,6 +66,12 @@ pub const MAX_NONCE: usize = 64;
 /// what one job can cost the relay no matter how talkative a worker is.
 pub const MAX_JOB_DETAIL: usize = 16_000;
 
+/// Longest accepted provider or model stamp, in characters.
+///
+/// The stamp names the seat binding that produced a result. It is bounded so
+/// a misconfigured binding cannot stuff an arbitrary payload into the head.
+pub const MAX_JOB_STAMP: usize = 256;
+
 /// Where a job is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {
@@ -132,6 +138,8 @@ pub enum JobParseError {
     UnknownStatus(String),
     /// An outcome reported a status that is not an ending.
     NotAnOutcome(String),
+    /// A provider/model stamp tag was empty or over the cap.
+    InvalidStamp(&'static str),
     /// A numeric tag did not parse.
     InvalidNumber(&'static str),
     /// The head's content is not the JSON object the format calls for.
@@ -152,6 +160,9 @@ impl std::fmt::Display for JobParseError {
             Self::UnknownStatus(value) => write!(f, "unknown job status: {value}"),
             Self::NotAnOutcome(value) => {
                 write!(f, "an outcome must report done or failed, not {value}")
+            }
+            Self::InvalidStamp(field) => {
+                write!(f, "{field} must be 1-{MAX_JOB_STAMP} characters")
             }
             Self::InvalidNumber(field) => write!(f, "{field} must be a number"),
             Self::InvalidHeadContent => write!(f, "job head content must be a JSON object"),
@@ -229,6 +240,10 @@ pub struct ParsedJobOutcome {
     pub status: JobStatus,
     /// The result, or why it failed.
     pub detail: String,
+    /// Which provider's binding executed the job, when the worker stamped it.
+    pub provider: Option<String>,
+    /// Which model on that provider produced the result, when stamped.
+    pub model: Option<String>,
 }
 
 /// The relay's account of one job, signed by the employee that owes it.
@@ -259,6 +274,10 @@ pub struct ParsedJobHead {
     pub result: Option<String>,
     /// Why it failed, once it has.
     pub failure: Option<String>,
+    /// The provider stamp on a finished head, when the worker set one.
+    pub provider: Option<String>,
+    /// The model stamp on a finished head, when the worker set one.
+    pub model: Option<String>,
 }
 
 fn tag(event: &nostr::Event, name: &'static str) -> Result<String, JobParseError> {
@@ -290,6 +309,21 @@ fn optional_hex64(
 ) -> Result<Option<String>, JobParseError> {
     optional(event, name)?
         .map(|value| hex64(name, &value))
+        .transpose()
+}
+
+fn optional_stamp(
+    event: &nostr::Event,
+    name: &'static str,
+) -> Result<Option<String>, JobParseError> {
+    optional(event, name)?
+        .map(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() || trimmed.chars().count() > MAX_JOB_STAMP {
+                return Err(JobParseError::InvalidStamp(name));
+            }
+            Ok(trimmed)
+        })
         .transpose()
 }
 
@@ -363,6 +397,8 @@ pub fn parse_job_outcome(event: &nostr::Event) -> Result<ParsedJobOutcome, JobPa
         attempt,
         status,
         detail: detail(&event.content)?,
+        provider: optional_stamp(event, "provider")?,
+        model: optional_stamp(event, "model")?,
     })
 }
 
@@ -404,6 +440,8 @@ pub fn parse_job_head(event: &nostr::Event) -> Result<ParsedJobHead, JobParseErr
         instruction: instruction(text("instruction").unwrap_or_default())?,
         result: text("result").map(detail).transpose()?,
         failure: text("failure").map(detail).transpose()?,
+        provider: optional_stamp(event, "provider")?,
+        model: optional_stamp(event, "model")?,
     })
 }
 
@@ -630,7 +668,62 @@ mod tests {
             assert_eq!(parsed.status, expected);
             assert_eq!(parsed.attempt, 1);
             assert_eq!(parsed.detail, "the detail");
+            assert_eq!(parsed.provider, None);
+            assert_eq!(parsed.model, None);
         }
+    }
+
+    #[test]
+    fn a_done_outcome_carries_its_execution_stamp() {
+        let parsed = parse_job_outcome(&event(
+            43013,
+            "the result",
+            vec![
+                vec!["job", JOB],
+                vec!["attempt", "2"],
+                vec!["status", "done"],
+                vec!["provider", "deepseek"],
+                vec!["model", "deepseek-chat"],
+            ],
+        ))
+        .unwrap();
+
+        assert_eq!(parsed.status, JobStatus::Done);
+        assert_eq!(parsed.provider.as_deref(), Some("deepseek"));
+        assert_eq!(parsed.model.as_deref(), Some("deepseek-chat"));
+    }
+
+    #[test]
+    fn refuses_an_overlong_or_blank_execution_stamp() {
+        let long = "x".repeat(MAX_JOB_STAMP + 1);
+        assert_eq!(
+            parse_job_outcome(&event(
+                43013,
+                "the result",
+                vec![
+                    vec!["job", JOB],
+                    vec!["attempt", "1"],
+                    vec!["status", "done"],
+                    vec!["provider", &long],
+                ],
+            ))
+            .unwrap_err(),
+            JobParseError::InvalidStamp("provider")
+        );
+        assert_eq!(
+            parse_job_outcome(&event(
+                43013,
+                "the result",
+                vec![
+                    vec!["job", JOB],
+                    vec!["attempt", "1"],
+                    vec!["status", "done"],
+                    vec!["model", "   "],
+                ],
+            ))
+            .unwrap_err(),
+            JobParseError::InvalidStamp("model")
+        );
     }
 
     #[test]

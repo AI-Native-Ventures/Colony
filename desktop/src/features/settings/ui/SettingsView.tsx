@@ -1,5 +1,5 @@
 import * as React from "react";
-import { getVersion } from "@tauri-apps/api/app";
+import { getVersion } from "@/shared/api/nativeBridge";
 import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { useMyRelayMembershipLookupQuery } from "@/features/community-members/hooks";
@@ -58,6 +58,7 @@ const settingsNavGroups: Array<{
       "profile",
       "appearance",
       "notifications",
+      "voice",
       "shortcuts",
       "custom-emoji",
       "local-archive",

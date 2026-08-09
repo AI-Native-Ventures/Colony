@@ -109,6 +109,12 @@ CREATE INDEX idx_channels_community_visibility ON channels (community_id, visibi
 CREATE INDEX idx_channels_created_by ON channels (community_id, created_by);
 CREATE INDEX idx_channels_ttl_expiry ON channels (ttl_deadline)
     WHERE ttl_seconds IS NOT NULL AND archived_at IS NULL AND deleted_at IS NULL;
+-- Tenant-independent channel-id → community lookups (Db::communities_of_channels,
+-- Db::community_of_channel) carry no community_id predicate, so no
+-- community_id-leading index can serve them. Covering + partial: index-only scan.
+-- Not UNIQUE — the same channel id may exist under more than one community.
+CREATE INDEX idx_channels_id_live ON channels (id) INCLUDE (community_id)
+    WHERE deleted_at IS NULL;
 
 -- channels.community_id is immutable: a channel can never be re-tenanted.
 -- (Conformance: "Migration lint forbids channel re-tenanting except through an
@@ -530,7 +536,7 @@ CREATE TABLE reactions (
     event_created_at    TIMESTAMPTZ NOT NULL,
     event_id            BYTEA NOT NULL,
     pubkey              BYTEA NOT NULL,
-    emoji               VARCHAR(64) NOT NULL,
+    emoji               VARCHAR(66) NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     removed_at          TIMESTAMPTZ,
     reaction_event_id   BYTEA,
@@ -781,7 +787,109 @@ CREATE TABLE _operator_global_tables (
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('communities',           'the tenant registry itself; id IS the community key'),
     ('rate_limit_violations', 'deployment abuse/health; never tenant-observable; community_id is an attribution label only'),
-    ('_operator_global_tables', 'the registry table itself');
+    ('_operator_global_tables', 'the registry table itself'),
+    ('accounts',               'credit balances are identity-global, not community-scoped'),
+    ('credit_ledger',          'append-only money journal is identity-global, not community-scoped'),
+    ('gateway_tokens',         'provisioned-mode tokens are identity-global, not community-scoped'),
+    ('model_catalog',          'model allowlist is deployment-global'),
+    ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable attribution/reconciliation'),
+    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement');
+
+-- Colony Credits gateway tables. Keep the schema snapshot aligned with the
+-- migration path so a fresh isolated harness has the same money/admission
+-- surface even before the relay's startup migrator runs.
+CREATE TABLE accounts (
+    pubkey BYTEA PRIMARY KEY CHECK (octet_length(pubkey) = 32),
+    balance BIGINT NOT NULL DEFAULT 0,
+    trial_model TEXT,
+    trial_expires_at TIMESTAMPTZ,
+    trial_concurrency SMALLINT,
+    typical_call_cost_nanousd BIGINT
+        CHECK (typical_call_cost_nanousd IS NULL OR typical_call_cost_nanousd > 0),
+    max_in_flight SMALLINT
+        CHECK (max_in_flight IS NULL OR max_in_flight BETWEEN 1 AND 4),
+    hourly_burn_cap_nanousd BIGINT
+        CHECK (hourly_burn_cap_nanousd IS NULL OR hourly_burn_cap_nanousd > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE credit_ledger (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    delta BIGINT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('debit', 'credit', 'seed', 'correction')),
+    ref TEXT NOT NULL,
+    model TEXT,
+    observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
+    request_id TEXT,
+    settle_basis TEXT CHECK (settle_basis IS NULL OR settle_basis IN ('observed', 'estimated')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (pubkey, ref)
+);
+CREATE INDEX credit_ledger_created_at_idx ON credit_ledger (created_at);
+
+CREATE TABLE gateway_tokens (
+    token_hash BYTEA PRIMARY KEY CHECK (octet_length(token_hash) = 32),
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    expires_at TIMESTAMPTZ NOT NULL,
+    session_scope TEXT NOT NULL DEFAULT 'session'
+        CHECK (session_scope IN ('session', 'provisioned')),
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX gateway_tokens_pubkey_idx ON gateway_tokens (pubkey);
+
+CREATE TABLE model_catalog (
+    model_id TEXT PRIMARY KEY,
+    vercel_slug TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    display_price_nanousd BIGINT NOT NULL CHECK (display_price_nanousd >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE gateway_reconciliation_outcomes (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    reference TEXT NOT NULL,
+    model TEXT NOT NULL,
+    http_status SMALLINT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMPTZ,
+    UNIQUE (pubkey, reference)
+);
+CREATE INDEX gateway_reconciliation_outcomes_pending_idx
+    ON gateway_reconciliation_outcomes (created_at)
+    WHERE resolved_at IS NULL;
+
+CREATE TABLE gateway_settlement_intents (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    reference TEXT NOT NULL,
+    model TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'admitted'
+        CHECK (state IN ('admitted', 'provider_completed', 'debited', 'reconciliation', 'resolved')),
+    provider_request_id TEXT,
+    observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
+    provider_status SMALLINT,
+    reason TEXT,
+    correction_ref TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMPTZ,
+    UNIQUE (pubkey, reference)
+);
+CREATE INDEX gateway_settlement_intents_pending_idx
+    ON gateway_settlement_intents (updated_at)
+    WHERE state <> 'resolved';
+
+ALTER TABLE gateway_reconciliation_outcomes
+    ADD COLUMN intent_id BIGINT REFERENCES gateway_settlement_intents(id),
+    ADD COLUMN provider_request_id TEXT,
+    ADD COLUMN observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
+    ADD COLUMN correction_ref TEXT;
 -- NIP-PL effective lease state and durable wake outbox. Every key is led by
 -- community_id: client-provided origin is confirmation only, never routing.
 CREATE TABLE push_leases (
@@ -1971,3 +2079,74 @@ CREATE UNIQUE INDEX IF NOT EXISTS asks_open_need_uniq
 -- give that cross-tenant scan a real range scan instead of a full scan.
 CREATE INDEX IF NOT EXISTS asks_due_idx ON asks (deadline_at) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS asks_audience_idx ON asks (community_id, audience_pubkey) WHERE status = 'open';
+
+-- Company employees (migration 0043): workspace-owned agent identities.
+--
+-- An employee is a role the company employs rather than a process a member
+-- runs. Its identity keypair is minted by the relay and held sealed here, so
+-- every member's machine can produce work as one colleague without a private
+-- key being copied between laptops.
+--
+-- `rank` is what the interrupt ladder reads to decide who may interrupt a
+-- human (crates/buzz-relay/src/interrupt_gate.rs::agent_tier), so a database
+-- provisioned from this file without the table leaves the gate unable to
+-- resolve any agent's rank at all -- it fails closed and refuses every gated
+-- write. That is why this table has to be here and not only in migrations.
+--
+-- The sealed key is AES-256-GCM under an operator-held KEK with the community
+-- id and employee pubkey bound in as associated data, so a dump without the
+-- KEK yields no ability to speak as anyone.
+CREATE TABLE IF NOT EXISTS employees (
+    community_id  UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    pubkey        BYTEA NOT NULL,
+    -- nonce || ciphertext from the sealer above. Never a bare secret key.
+    sealed_key    BYTEA NOT NULL,
+    role_id       TEXT NOT NULL,
+    display_name  TEXT NOT NULL,
+    rank          TEXT NOT NULL CHECK (rank IN ('worker','leader','executive')),
+    -- The owner who hired this employee, and the hire request that asked for
+    -- it. The request is owner-signed, so anyone can re-derive authority from
+    -- events alone rather than trusting this table.
+    hired_by      BYTEA NOT NULL,
+    hire_event    BYTEA NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+    created_at    BIGINT NOT NULL,
+    updated_at    BIGINT NOT NULL,
+    PRIMARY KEY (community_id, pubkey),
+    CHECK (LENGTH(pubkey) = 32),
+    CHECK (LENGTH(hired_by) = 32),
+    CHECK (LENGTH(hire_event) = 32)
+);
+
+-- Hiring is driven by a best-effort side effect, which may run more than once
+-- for the same request. One employee per hire request makes a repeat run a
+-- no-op instead of a second identity for the same role.
+CREATE UNIQUE INDEX IF NOT EXISTS employees_hire_event_uniq
+    ON employees (community_id, hire_event);
+
+-- One active employee per role: a workspace employs one Chief of Staff, not
+-- one per member who asked. Retired rows are excluded so a role can be
+-- refilled after its holder is retired.
+CREATE UNIQUE INDEX IF NOT EXISTS employees_active_role_uniq
+    ON employees (community_id, role_id) WHERE status = 'active';
+
+-- Durable idempotency claims for relay-brokered Colony Company Actions
+-- (migration 0029).
+--
+-- The claim records the owner-signed action, the relay-authored head, and the
+-- relay-signed receipt that committed as one transaction, so a replayed action
+-- returns its original result instead of creating a second record. Community
+-- leads the key so identical retry UUIDs stay independent across tenants.
+--
+-- Every Company, Initiative, and Task write goes through this table, so a
+-- database without it cannot create company state at all: the broker answers
+-- `invalid: company action claim lookup failed` and no head is ever authored.
+CREATE TABLE IF NOT EXISTS company_action_claims (
+    community_id     UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key  UUID NOT NULL,
+    action_event_id  BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    head_event_id    BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key)
+);

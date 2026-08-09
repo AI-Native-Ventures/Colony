@@ -3143,8 +3143,9 @@ mod tests {
             DiscoveryWorkerSalvageBatchRequest, DiscoveryWorkerSourceProgressRequest,
         },
         discovery_workspace::{
-            DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryWorkspaceActionPayload,
-            DiscoveryWorkspaceReceipt, DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
+            DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryLeadStatus,
+            DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceReceipt,
+            DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
         },
         CommunityId,
     };
@@ -3827,6 +3828,30 @@ mod tests {
             },
         )
         .await
+    }
+
+    async fn apply_workspace_result(
+        db: &Db,
+        community: CommunityId,
+        actor: &Keys,
+        relay: &Keys,
+        request: &DiscoveryWorkspaceRequest,
+    ) -> DiscoveryWorkspaceResult {
+        use crate::discovery_workspace::DiscoveryWorkspaceCommandApply;
+
+        let action = build_discovery_workspace_action(relay.public_key(), request)
+            .expect("build workspace action")
+            .sign_with_keys(actor)
+            .expect("sign workspace action");
+        match apply_workspace_request(db, community, actor, relay, request, &action)
+            .await
+            .expect("apply workspace action")
+        {
+            DiscoveryWorkspaceCommandApply::Applied { result, .. } => *result,
+            DiscoveryWorkspaceCommandApply::Duplicate { .. } => {
+                panic!("test action unexpectedly reused an idempotency key")
+            }
+        }
     }
 
     fn lease_request(worker_id: Uuid, run_id: Uuid, lease_id: Uuid) -> DiscoveryWorkerLeaseRequest {
@@ -6119,6 +6144,287 @@ mod tests {
         assert!(source_counts.contains(&(first_run, "outscraper".to_owned(), 1, 0)));
         assert!(source_counts.contains(&(second_run, "brave_search".to_owned(), 0, 1)));
         assert!(source_counts.contains(&(third_run, "exa_search".to_owned(), 0, 1)));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn list_leads_status_matches_get_lead_and_filters_by_candidate() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        let run_id = match db
+            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 1, &search)
+            .await
+            .expect("create run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        let mut lead_ids = Vec::new();
+        for index in 0..3 {
+            let lead_id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO discovery_business_observations \
+                 (community_id,id,first_run_id,provider,provider_record_id,name,\
+                  observation_fingerprint) \
+                 VALUES ($1,$2,$3,'outscraper',$4,$5,decode(repeat('ef',32),'hex'))",
+            )
+            .bind(community.as_uuid())
+            .bind(lead_id)
+            .bind(run_id)
+            .bind(format!("maps:status-default-{index}"))
+            .bind(format!("Sandton Status {index}"))
+            .execute(&db.pool)
+            .await
+            .expect("insert retained observation");
+            lead_ids.push(lead_id);
+        }
+
+        let actor = Keys::generate();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert workspace member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert workspace identity");
+        let relay = Keys::generate();
+
+        let db_ref = &db;
+        let actor_ref = &actor;
+        let relay_ref = &relay;
+        let list_page = |status: Option<DiscoveryLeadStatus>| async move {
+            let result = apply_workspace_result(
+                db_ref,
+                community,
+                actor_ref,
+                relay_ref,
+                &DiscoveryWorkspaceRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    payload: DiscoveryWorkspaceActionPayload::ListLeads {
+                        request: DiscoveryLeadListRequest {
+                            campaign_id: Some(campaign_id),
+                            industry_id: None,
+                            vertical_id: None,
+                            status,
+                            offset: 0,
+                            limit: 25,
+                        },
+                    },
+                },
+            )
+            .await;
+            match result {
+                DiscoveryWorkspaceResult::Leads { page } => page,
+                other => panic!("list leads must return the page projection, got {other:?}"),
+            }
+        };
+        let get_detail = |lead_id: Uuid| async move {
+            let result = apply_workspace_result(
+                db_ref,
+                community,
+                actor_ref,
+                relay_ref,
+                &DiscoveryWorkspaceRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    payload: DiscoveryWorkspaceActionPayload::GetLead { lead_id },
+                },
+            )
+            .await;
+            match result {
+                DiscoveryWorkspaceResult::Lead { lead } => *lead,
+                other => panic!("get lead must return the detail projection, got {other:?}"),
+            }
+        };
+        let update_status = |lead_id: Uuid, status: DiscoveryLeadStatus| async move {
+            let result = apply_workspace_result(
+                db_ref,
+                community,
+                actor_ref,
+                relay_ref,
+                &DiscoveryWorkspaceRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    payload: DiscoveryWorkspaceActionPayload::UpdateLead {
+                        lead_id,
+                        input: DiscoveryLeadUpdateInput {
+                            website: None,
+                            email: None,
+                            phone: None,
+                            linkedin_url: None,
+                            contact_name: None,
+                            contact_title: None,
+                            notes: None,
+                            score: None,
+                            owner_persona_id: None,
+                            status: Some(status),
+                        },
+                    },
+                },
+            )
+            .await;
+            match result {
+                DiscoveryWorkspaceResult::Lead { lead } => *lead,
+                other => panic!("update lead must return the detail projection, got {other:?}"),
+            }
+        };
+
+        let page = list_page(Some(DiscoveryLeadStatus::Candidate)).await;
+        assert_eq!(
+            page.total, 3,
+            "unedited leads must match the candidate filter"
+        );
+        assert_eq!(
+            page.leads.len(),
+            3,
+            "candidate filter must return the matching rows"
+        );
+        assert!(page.leads.iter().all(|lead| {
+            lead.status == DiscoveryLeadStatus::Candidate && lead_ids.contains(&lead.lead_id)
+        }));
+
+        let page = list_page(None).await;
+        assert_eq!(page.total, 3, "unfiltered list returns every lead");
+        assert!(page
+            .leads
+            .iter()
+            .all(|lead| { lead.status == DiscoveryLeadStatus::Candidate }));
+
+        let detail = get_detail(lead_ids[0]).await;
+        assert_eq!(
+            detail.lead.status,
+            DiscoveryLeadStatus::Candidate,
+            "get_lead must agree with the list row before any edit"
+        );
+
+        let updated = update_status(lead_ids[0], DiscoveryLeadStatus::Accepted).await;
+        assert_eq!(updated.lead.status, DiscoveryLeadStatus::Accepted);
+
+        let page = list_page(Some(DiscoveryLeadStatus::Accepted)).await;
+        assert_eq!(page.total, 1, "edited lead must match the accepted filter");
+        assert_eq!(page.leads[0].lead_id, lead_ids[0]);
+        assert_eq!(page.leads[0].status, DiscoveryLeadStatus::Accepted);
+        let detail = get_detail(lead_ids[0]).await;
+        assert_eq!(
+            detail.lead.status, page.leads[0].status,
+            "get_lead must agree with the list row after the edit"
+        );
+
+        let page = list_page(Some(DiscoveryLeadStatus::Candidate)).await;
+        assert_eq!(page.total, 2, "remaining unedited leads stay candidates");
+
+        for (status, expected) in [
+            (DiscoveryLeadStatus::Candidate, 2),
+            (DiscoveryLeadStatus::Accepted, 1),
+            (DiscoveryLeadStatus::Qualified, 0),
+            (DiscoveryLeadStatus::Dormant, 0),
+            (DiscoveryLeadStatus::Disqualified, 0),
+            (DiscoveryLeadStatus::ClientActive, 0),
+        ] {
+            let page = list_page(Some(status)).await;
+            assert_eq!(page.total, expected, "count for {status:?}");
+            assert_eq!(
+                page.leads.len() as u32,
+                page.total,
+                "filtered rows must equal the filtered count for {status:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn list_leads_candidate_filter_returns_unedited_leads() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, human, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let search = business_search();
+        let campaign_id = Uuid::new_v4();
+        insert_test_campaign(&db, community, &human, campaign_id, &search).await;
+        let run_id = match db
+            .create_discovery_run_once(community, &human, campaign_id, Uuid::new_v4(), 1, &search)
+            .await
+            .expect("create run")
+        {
+            DiscoveryRunCreate::Created(run) | DiscoveryRunCreate::Existing(run) => run.id,
+        };
+        for index in 0..3 {
+            sqlx::query(
+                "INSERT INTO discovery_business_observations \
+                 (community_id,id,first_run_id,provider,provider_record_id,name,\
+                  observation_fingerprint) \
+                 VALUES ($1,$2,$3,'outscraper',$4,$5,decode(repeat('ef',32),'hex'))",
+            )
+            .bind(community.as_uuid())
+            .bind(Uuid::new_v4())
+            .bind(run_id)
+            .bind(format!("maps:status-default-{index}"))
+            .bind(format!("Sandton Status {index}"))
+            .execute(&db.pool)
+            .await
+            .expect("insert retained observation");
+        }
+
+        let actor = Keys::generate();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert workspace member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_bytes().as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert workspace identity");
+        let relay = Keys::generate();
+
+        let result = apply_workspace_result(
+            &db,
+            community,
+            &actor,
+            &relay,
+            &DiscoveryWorkspaceRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                payload: DiscoveryWorkspaceActionPayload::ListLeads {
+                    request: DiscoveryLeadListRequest {
+                        campaign_id: Some(campaign_id),
+                        industry_id: None,
+                        vertical_id: None,
+                        status: Some(DiscoveryLeadStatus::Candidate),
+                        offset: 0,
+                        limit: 25,
+                    },
+                },
+            },
+        )
+        .await;
+        let DiscoveryWorkspaceResult::Leads { page } = result else {
+            panic!("list leads must return the page projection");
+        };
+        assert_eq!(
+            page.total, 3,
+            "unedited leads must match the candidate filter"
+        );
+        assert_eq!(
+            page.leads.len(),
+            3,
+            "candidate filter must return the matching rows"
+        );
     }
 
     #[tokio::test]

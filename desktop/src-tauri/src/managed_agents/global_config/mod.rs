@@ -24,7 +24,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tauri::AppHandle;
 
 use crate::managed_agents::env_vars::{
@@ -32,6 +32,36 @@ use crate::managed_agents::env_vars::{
 };
 use crate::managed_agents::storage::{atomic_write_json_restricted, managed_agents_base_dir};
 use crate::managed_agents::types::{AgentDefinition, ManagedAgentRecord};
+
+/// Which credential source the desktop should use when launching managed
+/// agents. Missing values deserialize as [`CredentialMode::Byok`] so older
+/// global-agent-config files keep their existing behavior. Explicit unknown
+/// strings are rejected by serde instead of silently changing spend behavior.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialMode {
+    /// Preserve the provider credentials already configured by the user.
+    #[default]
+    Byok,
+    /// Use the relay-bound Colony Credits gateway for supported runtimes.
+    ColonyCredits,
+}
+
+impl<'de> Deserialize<'de> for CredentialMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "byok" => Ok(Self::Byok),
+            "colony_credits" => Ok(Self::ColonyCredits),
+            other => Err(serde::de::Error::custom(format!(
+                "credential_mode: unsupported value `{other}`"
+            ))),
+        }
+    }
+}
 
 /// The global agent configuration record.
 ///
@@ -45,6 +75,10 @@ use crate::managed_agents::types::{AgentDefinition, ManagedAgentRecord};
 /// consulted); for a definition-less instance, instance → global.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GlobalAgentConfig {
+    /// Credential source for supported managed-agent runtimes.
+    #[serde(default)]
+    pub credential_mode: CredentialMode,
+
     /// Global env vars injected into ALL agents unconditionally.
     ///
     /// Lowest user-settable layer — per-agent and persona values win on any

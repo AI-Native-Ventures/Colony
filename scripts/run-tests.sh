@@ -101,6 +101,9 @@ run_unit_tests() {
   run_test_step "buzz-auth unit tests" \
     cargo test -p buzz-auth --lib -- --nocapture
 
+  run_test_step "buzz-voice tests" \
+    cargo test -p buzz-voice --lib -- --nocapture
+
   run_test_step "buzz-cli tests" \
     cargo test -p buzz-cli -- --nocapture
 
@@ -109,6 +112,12 @@ run_unit_tests() {
   # red without any gate noticing.
   run_test_step "buzz-acp unit tests" \
     cargo test -p buzz-acp --lib -- --nocapture
+
+  # buzz-native: the shell-agnostic core and the HostCtx seam. Infra-free. Both
+  # unit paths are explicit allowlists rather than workspace runs, so a new
+  # member's tests silently never execute until it is named here.
+  run_test_step "buzz-native unit tests" \
+    cargo test -p buzz-native --lib -- --nocapture
 
   # buzz-db migrator/lint unit tests (no infra): guard the embedded-migrator
   # invariant (exactly the consolidated 0001; cutover/backfill stays an operator

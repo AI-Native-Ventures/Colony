@@ -460,7 +460,7 @@ function fixtureLead(
     industryId: "automotive",
     verticalId: "auto-repair",
     campaignIds: [CAMPAIGN_ID],
-    status: "new",
+    status: "candidate",
     addedAt: "2026-08-01T08:30:00.000Z",
     ...details,
   };
@@ -504,7 +504,7 @@ export const FIXTURE_CAMPAIGN_LEADS: Lead[] = [
       email: "team@randburgautoclinic.example",
       website: "https://randburgautoclinic.example",
       score: 86,
-      status: "enriched",
+      status: "accepted",
     },
   ),
   fixtureLead(
@@ -526,7 +526,7 @@ export const FIXTURE_CAMPAIGN_LEADS: Lead[] = [
     {
       contacts: 1,
       score: 72,
-      status: "new",
+      status: "dormant",
     },
   ),
   fixtureLead(
@@ -613,7 +613,7 @@ function fixturePerson(
     industryId: "marketing",
     verticalId: "marketing-director",
     campaignIds: [PEOPLE_CAMPAIGN_ID],
-    status: "qualified",
+    status: "candidate",
     addedAt: "2026-08-01T09:00:00.000Z",
     ...details,
   };
@@ -730,7 +730,7 @@ export const FIXTURE_PRO_SERVICES_LEADS: Lead[] = Array.from(
             ? `https://accounting-practice-${number}.example`
             : undefined,
         score: 70 + (index % 27),
-        status: index % 4 === 0 ? "enriched" : "qualified",
+        status: index % 4 === 0 ? "accepted" : "candidate",
       },
     );
   },
@@ -749,7 +749,7 @@ export const FIXTURE_GLOBAL_LEADS: Lead[] = [
       campaignIds: [],
       location: "Pretoria, Gauteng",
       score: 67,
-      status: "enriched",
+      status: "candidate",
     },
   ),
   fixtureLead(
@@ -761,7 +761,7 @@ export const FIXTURE_GLOBAL_LEADS: Lead[] = [
       campaignIds: [],
       location: "Boksburg, Gauteng",
       score: 61,
-      status: "new",
+      status: "candidate",
     },
   ),
 ];

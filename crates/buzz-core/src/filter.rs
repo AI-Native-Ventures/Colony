@@ -5,6 +5,7 @@
 use nostr::Filter;
 
 use crate::event::StoredEvent;
+use crate::kind::KIND_USAGE_RECORD;
 
 /// Returns `true` if the event matches any of the provided NIP-01 filters.
 pub fn filters_match(filters: &[Filter], event: &StoredEvent) -> bool {
@@ -22,6 +23,12 @@ pub fn filters_match(filters: &[Filter], event: &StoredEvent) -> bool {
 pub fn reader_authorized_for_event(event: &nostr::Event, reader_pubkey_hex: &str) -> bool {
     let kind = crate::kind::event_kind_u32(event);
     if !crate::kind::RESULT_GATED_KINDS.contains(&kind) {
+        return true;
+    }
+    // A self-metered seat authors and owns the same usage record, and the
+    // relay drops a `#p` pointing at the event's own author. The author side
+    // is the owner side for that shape.
+    if kind == KIND_USAGE_RECORD && event.pubkey.to_hex() == reader_pubkey_hex {
         return true;
     }
     let p = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
@@ -294,6 +301,30 @@ mod tests {
         assert!(
             !reader_authorized_for_event(&metric, &agent_keys.public_key().to_hex()),
             "the authoring agent must NOT be authorized to read its own metric event (owner-only)"
+        );
+    }
+
+    #[test]
+    fn self_metered_usage_record_is_readable_by_its_author() {
+        let seat = Keys::generate();
+        let seat_hex = seat.public_key().to_hex();
+        let attacker = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+        // The relay drops a `p` tag that points at the event's own author, so
+        // a seat-authored usage record has no owner tag to check. The author
+        // IS the owner for that shape.
+        let record = EventBuilder::new(Kind::Custom(KIND_USAGE_RECORD as u16), "encrypted-payload")
+            .tags([Tag::parse(["agent", &seat_hex]).unwrap()])
+            .sign_with_keys(&seat)
+            .expect("sign");
+
+        assert!(
+            reader_authorized_for_event(&record, &seat_hex),
+            "a self-metered seat must be able to read its own usage record"
+        );
+        assert!(
+            !reader_authorized_for_event(&record, attacker),
+            "a third party must not be able to read another seat's usage record"
         );
     }
 

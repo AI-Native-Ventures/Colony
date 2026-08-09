@@ -34,6 +34,15 @@ pub struct Binding {
     /// else.
     #[serde(default)]
     pub key_var: Option<String>,
+    /// Explicit endpoint for this binding's provider API.
+    ///
+    /// Normally the endpoint is derived from `provider` (the hardcoded
+    /// defaults in `crate::llm`). An override lets a seat point at a proxy,
+    /// an AI gateway, or a self-hosted model instead of the vendor's own
+    /// host, which is also how tests drive `crate::llm` against a local
+    /// stub.
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 impl Binding {
@@ -102,7 +111,14 @@ impl SeatConfig {
 }
 
 /// Where the seat config lives.
+///
+/// `BUZZ_SEAT_CONFIG` overrides the default path, so one machine can keep
+/// separate configs per worktree or point at a shared file, and tests can
+/// load a real config from a temp path without touching the machine's own.
 pub fn seat_config_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("BUZZ_SEAT_CONFIG") {
+        return PathBuf::from(path);
+    }
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join("buzz").join("seat.toml")
 }
@@ -196,6 +212,7 @@ mod tests {
             provider: "openrouter".into(),
             model: "x".into(),
             key_var: None,
+            endpoint: None,
         };
         assert_eq!(binding.key_var(), "OPENROUTER_API_KEY");
 
@@ -203,8 +220,52 @@ mod tests {
             provider: "deepseek".into(),
             model: "x".into(),
             key_var: Some("MY_CUSTOM_VAR".into()),
+            endpoint: None,
         };
         assert_eq!(binding.key_var(), "MY_CUSTOM_VAR");
+    }
+
+    #[test]
+    fn an_endpoint_override_survives_toml_loading() {
+        let seat: SeatConfig = toml::from_str(
+            r#"
+            [default]
+            bindings = [
+              { provider = "openrouter", model = "x", endpoint = "http://127.0.0.1:9999/v1" },
+            ]
+            "#,
+        )
+        .unwrap();
+        let binding = &seat.bindings_for("abc")[0];
+        assert_eq!(
+            binding.endpoint.as_deref(),
+            Some("http://127.0.0.1:9999/v1")
+        );
+    }
+
+    #[test]
+    fn seat_config_env_var_overrides_the_default_path() {
+        let dir =
+            std::env::temp_dir().join(format!("buzz-seat-config-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("seat.toml");
+        std::fs::write(
+            &path,
+            "[default]\nbindings = [{ provider = \"openrouter\", model = \"x\" }]\n",
+        )
+        .unwrap();
+
+        let prev = std::env::var_os("BUZZ_SEAT_CONFIG");
+        std::env::set_var("BUZZ_SEAT_CONFIG", &path);
+        assert_eq!(seat_config_path(), path);
+        let loaded = load_seat_config().unwrap();
+        assert_eq!(loaded.bindings_for("abc")[0].provider, "openrouter");
+        assert!(loaded.is_configured());
+
+        match prev {
+            Some(v) => std::env::set_var("BUZZ_SEAT_CONFIG", v),
+            None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { relaunch } from "@/shared/api/nativeBridge";
 import { importIdentity } from "@/shared/api/tauriIdentity";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";

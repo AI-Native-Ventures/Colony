@@ -1,10 +1,17 @@
-//! End-to-end proof of the job queue (`docs/design/company-employees.html`, phase 2).
+//! End-to-end proof of the job queue (`docs/design/company-employees.html`,
+//! phases 2 and 3). Phase 2 is the queue itself; phase 3 is the execution
+//! stamp on a finished head and the usage record a seat posts to the ledger.
 //!
-//! The phase gate is: a job filed by one member, claimed and completed by a
-//! worker, survives a mid-job worker kill by being re-leased. Everything here
-//! goes through the door a real client uses (signed events over HTTP `/events`
-//! and `/query`); nothing calls into `buzz-relay`'s internals, so what passes
-//! here is what a worker on a founder's laptop would see.
+//! The phase 2 gate is: a job filed by one member, claimed and completed by a
+//! worker, survives a mid-job worker kill by being re-leased. The phase 3
+//! gate is: the same employee completes jobs for both founders on different
+//! bindings, stamps and ledger correct. Most tests here sign the events a
+//! worker would sign directly; the last one drives the real worker loop
+//! (`buzz_cli::worker::run_worker_once`) against a real seat config on disk
+//! and a local provider stub, so binding selection is proven, not assumed.
+//! Everything goes through the door a real client uses (signed events over
+//! HTTP `/events` and `/query`); nothing calls into `buzz-relay`'s internals,
+//! so what passes here is what a worker on a founder's laptop would see.
 //!
 //! Five properties, each of which the queue is worthless without:
 //!
@@ -46,16 +53,33 @@ mod common;
 
 use std::time::Duration;
 
-use nostr::{EventBuilder, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp};
 use uuid::Uuid;
 
 use buzz_core::job::MAX_JOB_ATTEMPTS;
 use buzz_core::kind::{
     KIND_EMPLOYEE, KIND_HIRE_REQUEST, KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD,
-    KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME,
+    KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_USAGE_RECORD,
+};
+use buzz_core::usage_record::{
+    decrypt_usage_record, encrypt_usage_record, PaymentMode, UsageBreakdown, UsageRecordPayload,
+    UsageSource,
 };
 
 use common::{default_community, e2e_db_pool, query, seed_relay_owner, submit, tag_value};
+
+use buzz_cli::seat::load_seat_config;
+use buzz_cli::worker::run_worker_once;
+use buzz_cli::BuzzClient;
+
+/// Serializes the tests that read or write process-global environment
+/// (`BUZZ_SEAT_CONFIG`, binding key vars, `BUZZ_WORKER_HEARTBEAT_SECS`).
+///
+/// Tokio tests in one binary run concurrently on separate threads, and these
+/// variables are process-wide: without the lock, two seats running at once
+/// would read each other's config mid-run and the suite would fail on
+/// scheduling rather than on behaviour.
+static SEAT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Hire an employee and return its pubkey.
 ///
@@ -127,6 +151,77 @@ fn finish_job(worker: &Keys, job: &str, attempt: i32, status: &str, detail: &str
         ])
         .sign_with_keys(worker)
         .expect("sign job outcome")
+}
+
+/// Finish a job with the execution stamp a worker's seat puts on it.
+fn finish_job_stamped(
+    worker: &Keys,
+    job: &str,
+    attempt: i32,
+    status: &str,
+    detail: &str,
+    provider: &str,
+    model: &str,
+) -> nostr::Event {
+    EventBuilder::new(Kind::Custom(KIND_JOB_OUTCOME as u16), detail)
+        .tags(vec![
+            Tag::parse(["job", job]).unwrap(),
+            Tag::parse(["attempt", &attempt.to_string()]).unwrap(),
+            Tag::parse(["status", status]).unwrap(),
+            Tag::parse(["provider", provider]).unwrap(),
+            Tag::parse(["model", model]).unwrap(),
+        ])
+        .sign_with_keys(worker)
+        .expect("sign stamped job outcome")
+}
+
+/// Publish the usage record a worker's seat posts after one LLM call.
+async fn publish_usage_record(
+    founder: &Keys,
+    employee: &str,
+    provider: &str,
+    model: &str,
+    job: &str,
+) -> String {
+    let payload = UsageRecordPayload {
+        source: UsageSource::Wire,
+        provider: provider.to_string(),
+        request_id: format!("req-{job}"),
+        model: Some(model.to_string()),
+        timestamp: Timestamp::now().to_human_datetime(),
+        payment_mode: PaymentMode::Metered,
+        tokens: Some(UsageBreakdown {
+            input_uncached_tokens: 100,
+            cache_read_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            output_tokens: 40,
+        }),
+        amount_nanousd: None,
+        observed_cost_nanousd: None,
+        harness: Some("buzz-worker".to_string()),
+        session_id: None,
+        turn_id: Some(job.to_string()),
+        http_status: Some(200),
+        description: None,
+        agent_pubkey: Some(employee.to_string()),
+        channel_id: None,
+        work_context: None,
+    };
+    let founder_hex = founder.public_key().to_hex();
+    let ciphertext =
+        encrypt_usage_record(founder, &founder.public_key(), &payload).expect("record encrypts");
+    let event = EventBuilder::new(Kind::Custom(KIND_USAGE_RECORD as u16), ciphertext)
+        .tags(vec![
+            Tag::parse(["p", &founder_hex]).unwrap(),
+            Tag::parse(["agent", &founder_hex]).unwrap(),
+        ])
+        .sign_with_keys(founder)
+        .expect("record signs");
+
+    let (accepted, body) = submit(&event).await;
+    assert!(accepted, "usage record not accepted: {body}");
+    event.id.to_hex()
 }
 
 /// Poll for the job head in a given state.
@@ -591,4 +686,875 @@ async fn a_stranger_cannot_publish_a_job_head() {
         error.contains("not an employee"),
         "expected the employment gate to refuse this, got: {error}"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn the_same_employee_completes_both_founders_jobs_with_distinct_stamps() {
+    // Phase 3 gate: the same employee completes jobs for both founders on
+    // different bindings, and each finished head carries that seat's stamp
+    // (lease holder, provider, model) plus the ledger record for the call.
+    let community = default_community().await;
+    let founder_a = Keys::generate();
+    let founder_b = Keys::generate();
+    seed_relay_owner(community, &founder_a).await;
+    seed_relay_owner(community, &founder_b).await;
+    let employee = hire_an_employee(&founder_a).await;
+
+    let filing_a = file_job(&founder_a, &employee, "Draft the investor update");
+    let filing_b = file_job(&founder_b, &employee, "Summarize the pipeline");
+    assert!(
+        submit(&filing_a).await.0,
+        "founder A's filing was not accepted"
+    );
+    assert!(
+        submit(&filing_b).await.0,
+        "founder B's filing was not accepted"
+    );
+    let job_a = filing_a.id.to_hex();
+    let job_b = filing_b.id.to_hex();
+    await_job_state(&founder_a, &job_a, "open").await;
+    await_job_state(&founder_b, &job_b, "open").await;
+
+    for (founder, job, provider, model, result) in [
+        (
+            &founder_a,
+            job_a.as_str(),
+            "deepseek",
+            "deepseek-chat",
+            "draft ready",
+        ),
+        (
+            &founder_b,
+            job_b.as_str(),
+            "openrouter",
+            "anthropic/claude-sonnet-4",
+            "pipeline summary",
+        ),
+    ] {
+        assert!(
+            submit(&claim_job(founder, job)).await.0,
+            "{provider} seat could not claim its own job"
+        );
+        let leased = await_job_state(founder, job, "leased").await;
+        assert_eq!(
+            tag_value(&leased, "lease-holder"),
+            founder.public_key().to_hex(),
+            "the claiming founder must hold the lease"
+        );
+        let attempt = attempt_of(&leased);
+
+        assert!(
+            submit(&finish_job_stamped(
+                founder, job, attempt, "done", result, provider, model,
+            ))
+            .await
+            .0,
+            "{provider} seat could not finish its job"
+        );
+
+        let done = await_job_state(founder, job, "done").await;
+        assert_eq!(
+            tag_value(&done, "employee"),
+            employee,
+            "both jobs must be owed by the same employee"
+        );
+        assert_eq!(
+            tag_value(&done, "lease-holder"),
+            founder.public_key().to_hex(),
+            "the head must name the founder whose seat executed it"
+        );
+        assert_eq!(tag_value(&done, "attempts"), "1");
+        assert_eq!(tag_value(&done, "provider"), provider);
+        assert_eq!(tag_value(&done, "model"), model);
+        assert_eq!(
+            head_content(&done)["result"],
+            serde_json::json!(result),
+            "the finished head must carry the seat's result"
+        );
+
+        let record_id = publish_usage_record(founder, &employee, provider, model, job).await;
+        assert!(!record_id.is_empty(), "usage record id must be present");
+
+        // The seat authored the record itself, so the relay drops the
+        // self-referential `p` tag; the ledger still has to be able to read
+        // it back by author. This is the read shape the CLI report uses.
+        let readback = query(
+            founder,
+            serde_json::json!({
+                "kinds": [KIND_USAGE_RECORD],
+                "authors": [founder.public_key().to_hex()]
+            }),
+        )
+        .await;
+        let record = readback.iter().find_map(|value| {
+            let Ok(event) = Event::from_json(value.to_string()) else {
+                return None;
+            };
+            decrypt_usage_record(founder, &event).ok()
+        });
+        let record = record.expect("the founder must be able to read its usage record");
+        assert_eq!(record.provider, provider);
+        assert_eq!(record.model.as_deref(), Some(model));
+        assert_eq!(record.agent_pubkey.as_deref(), Some(employee.as_str()));
+    }
+}
+
+/// Write a real seat config for `employee` into a fresh temp dir and load it
+/// back through `load_seat_config`, the loader a real seat uses.
+///
+/// The `BUZZ_SEAT_CONFIG` env var redirects the loader to the file, exactly
+/// as it would for a seat pointing at a shared or per-worktree config. The
+/// returned config is what the worker runs on; nothing here builds a
+/// `SeatConfig` in memory.
+fn write_seat_config(
+    employee: &str,
+    provider: &str,
+    model: &str,
+    endpoint: &str,
+    key_var: &str,
+) -> (buzz_cli::seat::SeatConfig, std::path::PathBuf) {
+    write_seat_config_bindings(employee, &[(provider, model, endpoint, key_var)])
+}
+
+/// Write a seat config listing several bindings for `employee`, and load it
+/// back through `load_seat_config`, the loader a real seat uses.
+///
+/// The `BUZZ_SEAT_CONFIG` env var redirects the loader to the file, exactly
+/// as it would for a seat pointing at a shared or per-worktree config. The
+/// returned config is what the worker runs on; nothing here builds a
+/// `SeatConfig` in memory.
+fn write_seat_config_bindings(
+    employee: &str,
+    bindings: &[(&str, &str, &str, &str)],
+) -> (buzz_cli::seat::SeatConfig, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("buzz-e2e-seat-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("seat.toml");
+    let binding_lines = bindings
+        .iter()
+        .map(|(provider, model, endpoint, key_var)| {
+            format!(
+                "\x20 {{ provider = \"{provider}\", model = \"{model}\", endpoint = \"{endpoint}\", key_var = \"{key_var}\" }},\n"
+            )
+        })
+        .collect::<String>();
+    let toml = format!(
+        "[employees.{employee}]\n\
+         bindings = [\n\
+         {binding_lines}\
+         ]\n"
+    );
+    std::fs::write(&path, toml).unwrap();
+    std::env::set_var("BUZZ_SEAT_CONFIG", &path);
+    let config = load_seat_config()
+        .unwrap_or_else(|e| panic!("load seat config from {}: {e}", path.display()));
+    (config, path)
+}
+
+/// Spawn a tiny OpenAI-compatible provider stub on an ephemeral port.
+///
+/// `POST /v1/seat-a` answers 200 with an `id` (the dedupe-key passthrough
+/// case); `POST /v1/seat-b` answers 201 without one (the deterministic
+/// `local:{job}:{attempt}` fallback case). The statuses differ on purpose so
+/// the ledger's `http_status` is provably the wire value, not a hardcoded
+/// 200.
+async fn spawn_provider_stub() -> String {
+    use axum::routing::post;
+    use axum::Router;
+
+    async fn seat_a() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+        (
+            axum::http::StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "id": "stub-a-req-1",
+                "choices": [{ "message": { "content": "draft ready on seat A" } }],
+                "usage": { "prompt_tokens": 12, "completion_tokens": 34 },
+            })),
+        )
+    }
+
+    async fn seat_b() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+        (
+            axum::http::StatusCode::CREATED,
+            axum::Json(serde_json::json!({
+                "choices": [{ "message": { "content": "pipeline summary on seat B" } }],
+                "usage": { "prompt_tokens": 5, "completion_tokens": 9 },
+            })),
+        )
+    }
+
+    let app = Router::new()
+        .route("/v1/seat-a", post(seat_a))
+        .route("/v1/seat-b", post(seat_b));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// Spawn a two-route stub for the fallback-chain walk: the first binding's
+/// route always fails, the second always serves.
+///
+/// The returned counter is how the test proves the first binding was really
+/// tried: if the walk skipped straight to the working binding, the stamps
+/// and ledger would look right and the test would measure nothing.
+async fn spawn_fallback_stub() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use axum::routing::post;
+    use axum::Router;
+    use std::sync::atomic::Ordering;
+
+    let failures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failures_for_handler = failures.clone();
+
+    async fn serving() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+        (
+            axum::http::StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "id": "stub-b-req-1",
+                "choices": [{ "message": { "content": "served by binding B" } }],
+                "usage": { "prompt_tokens": 7, "completion_tokens": 13 },
+            })),
+        )
+    }
+
+    let app = Router::new()
+        .route(
+            "/v1/fallback-bad",
+            post(move || {
+                let failures = failures_for_handler.clone();
+                async move {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::Json(serde_json::json!({
+                            "error": { "message": "quota exhausted on binding A" }
+                        })),
+                    )
+                }
+            }),
+        )
+        .route("/v1/fallback-good", post(serving));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), failures)
+}
+
+/// Spawn a stub that answers like the Anthropic Messages API and records
+/// what it was asked.
+///
+/// The handler insists on the two headers the wire format requires
+/// (`x-api-key`, `anthropic-version`) and a Messages-shaped body, answering
+/// 400 when any of them are wrong, so a regression that drops a header fails
+/// the job instead of passing silently. The captured request is returned so
+/// the test can assert the exact shape positively as well.
+async fn spawn_anthropic_stub() -> (
+    String,
+    std::sync::Arc<tokio::sync::Mutex<serde_json::Value>>,
+) {
+    use axum::extract::Json;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::post;
+    use axum::Router;
+
+    #[derive(Clone)]
+    struct AnthropicStubState {
+        seen: std::sync::Arc<tokio::sync::Mutex<serde_json::Value>>,
+    }
+
+    async fn anthropic_messages(
+        State(state): State<AnthropicStubState>,
+        headers: HeaderMap,
+        body: Json<serde_json::Value>,
+    ) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+        let captured = serde_json::json!({
+            "x-api-key": headers.get("x-api-key").and_then(|v| v.to_str().ok()),
+            "anthropic-version": headers.get("anthropic-version").and_then(|v| v.to_str().ok()),
+            "content-type": headers.get("content-type").and_then(|v| v.to_str().ok()),
+            "body": body.0.clone(),
+        });
+        let shape_ok = captured["x-api-key"].is_string()
+            && captured["anthropic-version"].as_str() == Some("2023-06-01")
+            && body["model"].is_string()
+            && body["max_tokens"].is_u64()
+            && body["messages"].is_array()
+            && body["messages"][0]["role"].as_str() == Some("user")
+            && body["messages"][0]["content"].is_string();
+        if !shape_ok {
+            return (
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                Json(serde_json::json!({
+                    "error": { "message": "unexpected request shape" }
+                })),
+            );
+        }
+        *state.seen.lock().await = captured;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "request-id",
+            axum::http::HeaderValue::from_static("msg_stub-1"),
+        );
+        (
+            StatusCode::OK,
+            headers,
+            Json(serde_json::json!({
+                "id": "msg_stub-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "anthropic reply text" }],
+                "model": body["model"],
+                "stop_reason": "end_turn",
+                "usage": { "input_tokens": 11, "output_tokens": 22 },
+            })),
+        )
+    }
+
+    let seen = std::sync::Arc::new(tokio::sync::Mutex::new(serde_json::json!({})));
+    let app = Router::new()
+        .route("/v1/messages", post(anthropic_messages))
+        .with_state(AnthropicStubState { seen: seen.clone() });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), seen)
+}
+
+/// Spawn a provider stub that holds the request open for `delay` before
+/// answering, so the worker's heartbeat loop has time to fire mid-call.
+async fn spawn_slow_stub(delay: Duration) -> String {
+    use axum::routing::post;
+    use axum::Router;
+
+    let app = Router::new().route(
+        "/v1/slow",
+        post(move || async move {
+            tokio::time::sleep(delay).await;
+            (
+                axum::http::StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "id": "slow-req-1",
+                    "choices": [{ "message": { "content": "slow call finished" } }],
+                    "usage": { "prompt_tokens": 9, "completion_tokens": 17 },
+                })),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// Read back and decrypt the ledger record a seat posted for its own call.
+async fn read_usage_record(owner: &Keys) -> UsageRecordPayload {
+    let readback = query(
+        owner,
+        serde_json::json!({
+            "kinds": [KIND_USAGE_RECORD],
+            "authors": [owner.public_key().to_hex()]
+        }),
+    )
+    .await;
+    let record = readback.iter().find_map(|value| {
+        let Ok(event) = Event::from_json(value.to_string()) else {
+            return None;
+        };
+        decrypt_usage_record(owner, &event).ok()
+    });
+    record.expect("the seat must be able to read back its own usage record")
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn the_worker_executes_jobs_on_bindings_from_the_seat_config() {
+    // The phase 3 gate through the real worker path: a seat config on disk,
+    // the worker's job loop, and a real HTTP call to a provider stub. The
+    // stamps and ledger records below must come from the config each seat
+    // loaded, never from literals this test signs itself.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
+    let community = default_community().await;
+    let founder_a = Keys::generate();
+    let founder_b = Keys::generate();
+    seed_relay_owner(community, &founder_a).await;
+    seed_relay_owner(community, &founder_b).await;
+    let employee = hire_an_employee(&founder_a).await;
+
+    let stub = spawn_provider_stub().await;
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+
+    // Seat A: the same employee maps to openai on stub A, with the key in a
+    // custom env var so `key_var` is exercised too.
+    let (config_a, path_a) = write_seat_config(
+        &employee,
+        "openai",
+        "stub-model-a",
+        &format!("{stub}/v1/seat-a"),
+        "STUB_KEY_A",
+    );
+    std::env::set_var("STUB_KEY_A", "test-key-a");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path_a,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding_a = &config_a.bindings_for(&employee)[0];
+
+    let filing_a = file_job(&founder_a, &employee, "Draft the investor update");
+    assert!(submit(&filing_a).await.0, "founder A's filing not accepted");
+    let job_a = filing_a.id.to_hex();
+    await_job_state(&founder_a, &job_a, "open").await;
+
+    let client_a = BuzzClient::new(common::relay_http_url(), founder_a.clone(), None, None)
+        .expect("client for founder A");
+    assert!(
+        run_worker_once(&client_a, &config_a)
+            .await
+            .expect("worker pass A"),
+        "seat A must find and work its job"
+    );
+
+    let done_a = await_job_state(&founder_a, &job_a, "done").await;
+    assert_eq!(
+        tag_value(&done_a, "provider"),
+        binding_a.provider,
+        "the head's provider stamp must be the seat config's binding"
+    );
+    assert_eq!(
+        tag_value(&done_a, "model"),
+        binding_a.model,
+        "the head's model stamp must be the seat config's binding"
+    );
+    assert_eq!(
+        tag_value(&done_a, "lease-holder"),
+        founder_a.public_key().to_hex()
+    );
+    assert_eq!(
+        head_content(&done_a)["result"],
+        serde_json::json!("draft ready on seat A")
+    );
+
+    let record_a = read_usage_record(&founder_a).await;
+    assert_eq!(record_a.provider, binding_a.provider);
+    assert_eq!(record_a.model.as_deref(), Some(binding_a.model.as_str()));
+    assert_eq!(
+        record_a.http_status,
+        Some(200),
+        "the ledger must carry the stub's real HTTP status"
+    );
+    assert_eq!(
+        record_a.request_id, "stub-a-req-1",
+        "a provider request id passes through to the ledger as the dedupe key"
+    );
+    assert_eq!(record_a.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    // Seat B: the same employee, a different config, a different binding.
+    let (config_b, path_b) = write_seat_config(
+        &employee,
+        "deepseek",
+        "stub-model-b",
+        &format!("{stub}/v1/seat-b"),
+        "STUB_KEY_B",
+    );
+    std::env::set_var("STUB_KEY_B", "test-key-b");
+    assert_eq!(buzz_cli::seat::seat_config_path(), path_b);
+    let binding_b = &config_b.bindings_for(&employee)[0];
+    assert_ne!(
+        binding_a.provider, binding_b.provider,
+        "the two seats must run on different bindings by design"
+    );
+
+    let filing_b = file_job(&founder_b, &employee, "Summarize the pipeline");
+    assert!(submit(&filing_b).await.0, "founder B's filing not accepted");
+    let job_b = filing_b.id.to_hex();
+    await_job_state(&founder_b, &job_b, "open").await;
+
+    let client_b = BuzzClient::new(common::relay_http_url(), founder_b.clone(), None, None)
+        .expect("client for founder B");
+    assert!(
+        run_worker_once(&client_b, &config_b)
+            .await
+            .expect("worker pass B"),
+        "seat B must find and work its job"
+    );
+
+    let done_b = await_job_state(&founder_b, &job_b, "done").await;
+    assert_eq!(
+        tag_value(&done_b, "provider"),
+        binding_b.provider,
+        "the head's provider stamp must be seat B's binding, not seat A's"
+    );
+    assert_eq!(tag_value(&done_b, "model"), binding_b.model);
+    assert_ne!(
+        tag_value(&done_b, "provider"),
+        tag_value(&done_a, "provider"),
+        "two seats on different bindings must stamp the same employee differently"
+    );
+
+    let record_b = read_usage_record(&founder_b).await;
+    assert_eq!(record_b.provider, binding_b.provider);
+    assert_eq!(record_b.model.as_deref(), Some(binding_b.model.as_str()));
+    assert_eq!(
+        record_b.http_status,
+        Some(201),
+        "the ledger must carry stub B's real status, not a hardcoded 200"
+    );
+    assert_eq!(
+        record_b.request_id,
+        format!("local:{job_b}:1"),
+        "without a provider request id, the deterministic local fallback is the dedupe key"
+    );
+    assert_eq!(record_b.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    // Leave the environment as we found it.
+    std::env::remove_var("STUB_KEY_A");
+    std::env::remove_var("STUB_KEY_B");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn a_worker_walks_the_fallback_chain_when_the_first_binding_fails() {
+    // The seat config lists two bindings for the employee, and the first
+    // one's provider is down (the stub answers 500). The worker must keep
+    // walking and serve the job from the second binding: the stamps on the
+    // finished head and the ledger record must be the second binding's. If
+    // the walk stopped at the first failure, the job would end `failed`
+    // with no stamps at all.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
+    let community = default_community().await;
+    let founder = Keys::generate();
+    seed_relay_owner(community, &founder).await;
+    let employee = hire_an_employee(&founder).await;
+
+    let (stub, failures) = spawn_fallback_stub().await;
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+    let (config, path) = write_seat_config_bindings(
+        &employee,
+        &[
+            (
+                "openai",
+                "stub-model-down",
+                &format!("{stub}/v1/fallback-bad"),
+                "E2E_FALLBACK_KEY_A",
+            ),
+            (
+                "deepseek",
+                "stub-model-up",
+                &format!("{stub}/v1/fallback-good"),
+                "E2E_FALLBACK_KEY_B",
+            ),
+        ],
+    );
+    std::env::set_var("E2E_FALLBACK_KEY_A", "test-key-a");
+    std::env::set_var("E2E_FALLBACK_KEY_B", "test-key-b");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding_b = &config.bindings_for(&employee)[1];
+
+    let filing = file_job(&founder, &employee, "Summarize the pipeline");
+    assert!(submit(&filing).await.0, "job filing not accepted");
+    let job = filing.id.to_hex();
+    await_job_state(&founder, &job, "open").await;
+
+    let client = BuzzClient::new(common::relay_http_url(), founder.clone(), None, None)
+        .expect("client for founder");
+    assert!(
+        run_worker_once(&client, &config)
+            .await
+            .expect("worker pass"),
+        "the worker must find and work the job"
+    );
+
+    let done = await_job_state(&founder, &job, "done").await;
+    assert_eq!(
+        tag_value(&done, "provider"),
+        binding_b.provider,
+        "the head must be stamped with the binding that actually served"
+    );
+    assert_eq!(tag_value(&done, "model"), binding_b.model);
+    assert_eq!(
+        tag_value(&done, "attempts"),
+        "1",
+        "the fallback walk is one lease, not a re-lease"
+    );
+    assert_eq!(
+        tag_value(&done, "lease-holder"),
+        founder.public_key().to_hex()
+    );
+    assert_eq!(
+        head_content(&done)["result"],
+        serde_json::json!("served by binding B")
+    );
+    assert_eq!(
+        failures.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the failing binding must have been tried exactly once before the walk moved on"
+    );
+
+    let record = read_usage_record(&founder).await;
+    assert_eq!(record.provider, binding_b.provider);
+    assert_eq!(record.model.as_deref(), Some(binding_b.model.as_str()));
+    assert_eq!(
+        record.request_id, "stub-b-req-1",
+        "the serving binding's request id must reach the ledger"
+    );
+    assert_eq!(record.http_status, Some(200));
+    assert_eq!(record.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    std::env::remove_var("E2E_FALLBACK_KEY_A");
+    std::env::remove_var("E2E_FALLBACK_KEY_B");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn a_worker_speaks_the_anthropic_messages_wire_format() {
+    // A seat whose binding names `anthropic` must use the Messages API, not
+    // the OpenAI-compatible path: `x-api-key` and `anthropic-version`
+    // headers, a `{model, max_tokens, messages}` body, and the
+    // `content[].text` response shape. The stub answers 400 to any request
+    // that is not that shape, so a regression in the format fails the job
+    // rather than passing silently, and the captured request lets the test
+    // assert the exact shape positively as well.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
+    let community = default_community().await;
+    let founder = Keys::generate();
+    seed_relay_owner(community, &founder).await;
+    let employee = hire_an_employee(&founder).await;
+
+    let (stub, seen) = spawn_anthropic_stub().await;
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+    let (config, path) = write_seat_config(
+        &employee,
+        "anthropic",
+        "claude-sonnet-stub",
+        &format!("{stub}/v1/messages"),
+        "E2E_ANTHROPIC_KEY",
+    );
+    std::env::set_var("E2E_ANTHROPIC_KEY", "anthropic-test-key");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding = &config.bindings_for(&employee)[0];
+
+    let instruction = "Draft the investor update";
+    let filing = file_job(&founder, &employee, instruction);
+    assert!(submit(&filing).await.0, "job filing not accepted");
+    let job = filing.id.to_hex();
+    await_job_state(&founder, &job, "open").await;
+
+    let client = BuzzClient::new(common::relay_http_url(), founder.clone(), None, None)
+        .expect("client for founder");
+    assert!(
+        run_worker_once(&client, &config)
+            .await
+            .expect("worker pass"),
+        "the worker must find and work the job"
+    );
+
+    let done = await_job_state(&founder, &job, "done").await;
+    assert_eq!(tag_value(&done, "provider"), binding.provider);
+    assert_eq!(tag_value(&done, "model"), binding.model);
+    assert_eq!(
+        head_content(&done)["result"],
+        serde_json::json!("anthropic reply text"),
+        "the Messages reply text must land in the head stamp"
+    );
+
+    let seen = seen.lock().await;
+    assert_eq!(
+        seen["x-api-key"],
+        serde_json::json!("anthropic-test-key"),
+        "the binding's key must ride in x-api-key, not Authorization"
+    );
+    assert_eq!(
+        seen["anthropic-version"],
+        serde_json::json!("2023-06-01"),
+        "the Messages API version header must be present"
+    );
+    assert!(
+        seen["content-type"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("application/json")),
+        "the call must be a JSON POST, got {:?}",
+        seen["content-type"]
+    );
+    assert_eq!(
+        seen["body"]["model"],
+        serde_json::json!("claude-sonnet-stub"),
+        "the request body must name the binding's model"
+    );
+    assert_eq!(
+        seen["body"]["max_tokens"],
+        serde_json::json!(4096),
+        "the request body must carry the worker's max_tokens"
+    );
+    assert_eq!(
+        seen["body"]["messages"],
+        serde_json::json!([{ "role": "user", "content": instruction }]),
+        "the request body must be Messages-shaped"
+    );
+    drop(seen);
+
+    let record = read_usage_record(&founder).await;
+    assert_eq!(record.provider, binding.provider);
+    assert_eq!(record.model.as_deref(), Some(binding.model.as_str()));
+    assert_eq!(
+        record.request_id, "msg_stub-1",
+        "the Messages response's request-id must reach the ledger"
+    );
+    assert_eq!(record.http_status, Some(200));
+    assert_eq!(record.agent_pubkey.as_deref(), Some(employee.as_str()));
+
+    std::env::remove_var("E2E_ANTHROPIC_KEY");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with BUZZ_EMPLOYEE_KEK and Postgres"]
+async fn a_slow_provider_call_keeps_its_lease_by_heartbeating() {
+    // The provider stub holds the call open longer than one heartbeat
+    // interval. The worker must renew its lease mid-call (observable as
+    // heartbeat events on the relay), a competing claim from the same
+    // human's other machine must be refused while the lease is live, and
+    // the job must finish on the original lease with the correct result.
+    // Without renewal the lease lapses and the competing claim takes the
+    // job over as a new attempt, which is what the deliberate-break run
+    // proves: the mid-call heartbeat assertion fails first.
+    let _env_guard = SEAT_ENV_LOCK.lock().await;
+    let community = default_community().await;
+    let founder = Keys::generate();
+    seed_relay_owner(community, &founder).await;
+    let employee = hire_an_employee(&founder).await;
+
+    let stub = spawn_slow_stub(Duration::from_secs(6)).await;
+    let previous_heartbeat = std::env::var_os("BUZZ_WORKER_HEARTBEAT_SECS");
+    std::env::set_var("BUZZ_WORKER_HEARTBEAT_SECS", "2");
+    let previous_config = std::env::var_os("BUZZ_SEAT_CONFIG");
+    let (config, path) = write_seat_config(
+        &employee,
+        "openai",
+        "slow-model",
+        &format!("{stub}/v1/slow"),
+        "E2E_SLOW_KEY",
+    );
+    std::env::set_var("E2E_SLOW_KEY", "slow-key");
+    assert_eq!(
+        buzz_cli::seat::seat_config_path(),
+        path,
+        "the loader must read exactly the file this test wrote"
+    );
+    let binding = &config.bindings_for(&employee)[0];
+    let provider = binding.provider.clone();
+    let model = binding.model.clone();
+
+    let filing = file_job(&founder, &employee, "Run the long report");
+    assert!(submit(&filing).await.0, "job filing not accepted");
+    let job = filing.id.to_hex();
+    await_job_state(&founder, &job, "open").await;
+
+    let client = BuzzClient::new(common::relay_http_url(), founder.clone(), None, None)
+        .expect("client for founder");
+    let worker = tokio::spawn(async move {
+        run_worker_once(&client, &config)
+            .await
+            .expect("worker pass")
+    });
+
+    // Mid-flight: the heartbeat loop must actually reach the relay. Without
+    // renewal this assertion fails on the first beat that never comes.
+    let founder_hex = founder.public_key().to_hex();
+    let mut beats = 0usize;
+    for _ in 0..20 {
+        let events = query(
+            &founder,
+            serde_json::json!({ "kinds": [KIND_JOB_HEARTBEAT], "authors": [founder_hex] }),
+        )
+        .await;
+        beats = events
+            .iter()
+            .filter(|event| tag_value(event, "job") == job)
+            .count();
+        if beats > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(
+        beats > 0,
+        "no heartbeat for {job} reached the relay while the call was in flight"
+    );
+
+    // A competing machine with the same identity (the laptop and the desktop
+    // share a pubkey) asks for the job while the lease is live. The relay
+    // must refuse: same head, same attempt, same holder.
+    assert!(
+        submit(&claim_job(&founder, &job)).await.0,
+        "the competing claim must be accepted for storage"
+    );
+    let head = await_head(
+        &founder,
+        &job,
+        "still leased on the original attempt",
+        |head| tag_value(head, "status") == "leased" && attempt_of(head) == 1,
+    )
+    .await;
+    assert_eq!(
+        tag_value(&head, "lease-holder"),
+        founder_hex,
+        "the lease must still belong to the worker that is heartbeating"
+    );
+
+    // The slow call finishes; the worker posts its answer and the job ends
+    // on the original lease, not on a stolen one.
+    let worked = tokio::time::timeout(Duration::from_secs(60), worker)
+        .await
+        .expect("worker must finish within a minute")
+        .expect("worker task must not panic");
+    assert!(worked, "worker must report that it worked the job");
+
+    let done = await_job_state(&founder, &job, "done").await;
+    assert_eq!(tag_value(&done, "attempts"), "1");
+    assert_eq!(tag_value(&done, "provider"), provider);
+    assert_eq!(tag_value(&done, "model"), model);
+    assert_eq!(
+        head_content(&done)["result"],
+        serde_json::json!("slow call finished")
+    );
+
+    let record = read_usage_record(&founder).await;
+    assert_eq!(record.provider, provider);
+    assert_eq!(record.model.as_deref(), Some(model.as_str()));
+    assert_eq!(
+        record.request_id, "slow-req-1",
+        "the slow call's request id must reach the ledger"
+    );
+    assert_eq!(record.http_status, Some(200));
+
+    std::env::remove_var("E2E_SLOW_KEY");
+    match previous_config {
+        Some(value) => std::env::set_var("BUZZ_SEAT_CONFIG", value),
+        None => std::env::remove_var("BUZZ_SEAT_CONFIG"),
+    }
+    match previous_heartbeat {
+        Some(value) => std::env::set_var("BUZZ_WORKER_HEARTBEAT_SECS", value),
+        None => std::env::remove_var("BUZZ_WORKER_HEARTBEAT_SECS"),
+    }
 }

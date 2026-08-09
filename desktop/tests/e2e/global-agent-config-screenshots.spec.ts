@@ -198,6 +198,37 @@ test.describe("global agent config screenshots", () => {
     });
   });
 
+  test("02-colony-credits-credential-choice", async ({ page }) => {
+    await installMockBridge(page, {
+      globalAgentConfig: {
+        credential_mode: "byok",
+        preferred_runtime: "codex",
+        provider: null,
+        model: null,
+        env_vars: {},
+      },
+      colonyCreditsAccount: {
+        balance_nanousd: "123456789",
+        currency: "USD",
+        status: "active",
+      },
+      acpRuntimesCatalog: CATALOG_WITH_CODEX,
+    });
+
+    await openAiDefaultsSettings(page);
+
+    const choice = page.getByTestId("colony-credits-credential-choice");
+    await expect(choice).toBeVisible();
+    await choice.getByRole("button", { name: /Colony Credits/ }).click();
+    await expect(choice.getByTestId("colony-credits-balance")).toHaveText(
+      "$0.12",
+    );
+    await waitForAnimations(page);
+    await choice.screenshot({
+      path: `${SHOTS}/02-colony-credits-credential-choice.png`,
+    });
+  });
+
   test("settings renders and saves the persisted preferred harness", async ({
     page,
   }) => {

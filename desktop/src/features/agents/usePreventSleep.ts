@@ -7,7 +7,7 @@ import {
 import { createPreventSleepActivityTracker } from "@/features/agents/preventSleepActivity";
 import { setPreventSleepActive } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/shared/api/nativeBridge";
 
 // Intentionally not scoped per-pubkey — multi-user desktop is rare and the
 // setting applies to the machine's sleep behavior regardless of account.

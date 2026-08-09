@@ -3,7 +3,8 @@ export type DiscoverySurface =
   | "verticals"
   | "campaigns"
   | "campaign"
-  | "leads";
+  | "leads"
+  | "pipeline";
 
 export type DiscoveryTab =
   | "overview"
@@ -23,6 +24,7 @@ export type DiscoverySearch = {
   fieldId?: string;
   roleId?: string;
   campaignId?: string;
+  leadId?: string;
   tab?: DiscoveryTab;
 };
 
@@ -32,6 +34,7 @@ const DISCOVERY_SURFACES: readonly DiscoverySurface[] = [
   "campaigns",
   "campaign",
   "leads",
+  "pipeline",
 ];
 
 const DISCOVERY_TABS: readonly DiscoveryTab[] = [
@@ -79,6 +82,7 @@ export function validateDiscoverySearch(
     fieldId: nonEmptyString(search.fieldId),
     roleId: nonEmptyString(search.roleId),
     campaignId: nonEmptyString(search.campaignId),
+    leadId: nonEmptyString(search.leadId),
     tab: enumValue(search.tab, DISCOVERY_TABS),
   };
 }

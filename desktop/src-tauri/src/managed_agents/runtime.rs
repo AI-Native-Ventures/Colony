@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::agent_env::build_buzz_agent_provider_defaults;
 
@@ -8,8 +8,8 @@ use crate::{
     managed_agents::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        spawn_key_refusal, KnownAcpRuntime, ManagedAgentPairRuntime, ManagedAgentRecord,
-        ManagedAgentRuntimeKey, ManagedAgentSummary,
+        spawn_key_refusal, CredentialMode, KnownAcpRuntime, ManagedAgentPairRuntime,
+        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentRuntimeKey, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -25,6 +25,43 @@ pub(crate) use metadata::{
     resolve_effective_prompt_model_provider, resolve_session_title, runtime_metadata_env_vars,
     SESSION_TITLE_ENV_VAR,
 };
+
+mod provisioned;
+pub(crate) use provisioned::{
+    configure_runtime_cli, provisioned_spawn_env, spawn_agent_child_with_lease,
+};
+
+/// Verify that a provisioned lease is still owned by the current signing
+/// identity. Callers run this at the transition-lock commit point, after
+/// potentially blocking spawn work, so an identity switch cannot register a
+/// child carrying the previous owner's token.
+pub(crate) fn provisioned_lease_matches_current_identity(
+    app: &AppHandle,
+    lease: &crate::provisioned_credits::GatewayLease,
+) -> bool {
+    let state = app.state::<crate::app_state::AppState>();
+    state
+        .signing_keys()
+        .map(|keys| {
+            keys.public_key()
+                .to_hex()
+                .eq_ignore_ascii_case(&lease.key.owner_pubkey)
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn provisioned_process_matches_current_identity(
+    app: &AppHandle,
+    relay_url: &str,
+    process: &ManagedAgentProcess,
+) -> bool {
+    let Some(lease) = process.provisioned_lease.as_ref() else {
+        return true;
+    };
+    crate::provisioned_credits::normalized_relay_http_origin(relay_url)
+        .is_ok_and(|origin| origin == lease.key.relay_origin)
+        && provisioned_lease_matches_current_identity(app, lease)
+}
 
 mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
@@ -62,8 +99,6 @@ mod instance_reaper;
 pub(crate) use instance_reaper::reap_dead_instance_agents;
 #[cfg(test)]
 use instance_reaper::{buffer_contains_identifier, is_desktop_binary};
-
-// Exact-path harness sweep lives in runtime/sweep.rs (re-exported above).
 
 mod lifecycle;
 #[cfg(test)]
@@ -421,30 +456,6 @@ pub(crate) fn build_respond_to_env(
     Ok((set, remove))
 }
 
-pub(crate) fn configure_runtime_cli(
-    command: &mut std::process::Command,
-    runtime: Option<&KnownAcpRuntime>,
-) {
-    let Some(runtime) = runtime else {
-        return;
-    };
-    if runtime.id != "claude" {
-        return;
-    }
-    if let Some(cli_path) = runtime.underlying_cli.and_then(resolve_command) {
-        // On Windows, `.cmd` and `.bat` files are batch shims — they cannot be
-        // passed directly to `CreateProcess` and cause EINVAL when the Claude
-        // adapter tries to spawn them (issue #2397). Skip setting
-        // `CLAUDE_CODE_EXECUTABLE` for shim paths so the adapter falls back to
-        // its own PATH lookup and finds the real binary instead.
-        // Non-Windows: `.cmd`/`.bat` are valid executables and must be assigned.
-        if should_skip_claude_executable(&cli_path, cfg!(windows)) {
-            return;
-        }
-        command.env("CLAUDE_CODE_EXECUTABLE", cli_path);
-    }
-}
-
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
@@ -458,6 +469,17 @@ pub fn spawn_agent_child(
     lazy: bool,
     owner_hex: Option<&str>,
 ) -> Result<crate::managed_agents::ManagedAgentProcess, String> {
+    spawn_agent_child_with_lease(app, record, relay_url, lazy, owner_hex, None)
+}
+
+fn spawn_agent_child_inner(
+    app: &AppHandle,
+    record: &ManagedAgentRecord,
+    relay_url: &str,
+    lazy: bool,
+    owner_hex: Option<&str>,
+    lease_override: Option<&crate::provisioned_credits::GatewayLease>,
+) -> Result<crate::managed_agents::ManagedAgentProcess, String> {
     if let Some(error) = spawn_key_refusal(record) {
         return Err(error);
     }
@@ -469,9 +491,8 @@ pub fn spawn_agent_child(
     // frozen record snapshot. Mirrors the model resolution below.
     let personas = super::load_personas(app).unwrap_or_default();
     let teams = super::load_teams(app).unwrap_or_default();
-    // Load global config once; used for runtime_metadata_env_vars (model/provider fallback)
-    // and for the env-var merge at spawn time.
-    let global = crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
+    // Load global config once; unknown credential modes fail closed here.
+    let global = crate::managed_agents::load_global_agent_config(app)?;
 
     // Resolve model/provider/prompt ONCE, here, at the shared spawn boundary —
     // the single source both the env writes below and `spawn_config_hash`
@@ -480,7 +501,7 @@ pub fn spawn_agent_child(
     // from `personas`; a definition edit landing between a caller's snapshot
     // apply and this spawn could hand a fresh model/provider to a stale
     // prompt. This also folds in orphan refusal via `require_resolved`: every
-    // caller (interactive start, launch restore, `start_managed_agent_process`)
+    // caller (interactive start and launch restore)
     // inherits it — no caller can bypass this by reaching `spawn_agent_child`
     // directly. Checked before any side effect (log marker, log file, process
     // spawn) so a refused spawn leaves no trace.
@@ -506,6 +527,22 @@ pub fn spawn_agent_child(
             })?;
     let effective_command = &descriptor.command;
     let agent_args = &descriptor.args;
+    let runtime_meta = known_acp_runtime(effective_command);
+    let effective_relay_url = runtime_key.relay_url.clone();
+    let runtime_id = runtime_meta.map(|runtime| runtime.id).unwrap_or("custom");
+    let provisioned_lease = provisioned_spawn_env(
+        app,
+        provisioned::ProvisionedSpawnRequest {
+            relay_url: &effective_relay_url,
+            enabled: matches!(global.credential_mode, CredentialMode::ColonyCredits),
+            descriptor_env: &descriptor.env,
+            runtime_id,
+            effective_provider: effective_cfg.provider.value.as_deref(),
+            owner_hex,
+            lease_override,
+        },
+    )?;
+    let spawned_provisioned_lease = provisioned_lease.as_ref().map(|(lease, _)| lease.clone());
 
     let log_path = super::managed_agent_runtime_log_path(app, &runtime_key)?;
     append_log_marker(
@@ -545,10 +582,6 @@ pub fn spawn_agent_child(
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| effective_command.clone());
 
-    // The caller supplies the explicit canonical pair relay. This is the only
-    // relay this child may connect to, regardless of the record/workspace default.
-    let effective_relay_url = runtime_key.relay_url.clone();
-
     // Augment PATH for DMG launches so child processes can find:
     //   - bundled CLI via ~/.local/bin symlink
     //   - nvm-managed node/npm (nvm initializes only in interactive shells)
@@ -576,7 +609,7 @@ pub fn spawn_agent_child(
     if let Some(ref path) = augmented_path {
         command.env("PATH", path);
     }
-    command.env("RUST_LOG", child_rust_log_filter());
+    command.env("RUST_LOG", provisioned::child_rust_log_filter());
     command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
     command.env("BUZZ_RELAY_URL", &effective_relay_url);
     command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
@@ -592,7 +625,6 @@ pub fn spawn_agent_child(
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
-    let runtime_meta = known_acp_runtime(effective_command);
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
     }
@@ -624,7 +656,10 @@ pub fn spawn_agent_child(
         // Construct EffectiveAgentEnv from the descriptor computed above — no second
         // resolver call; the descriptor's env is already the fully layered result.
         let effective = EffectiveAgentEnv {
-            env: descriptor.env.clone(),
+            env: provisioned_lease
+                .as_ref()
+                .map(|(_, env)| env.clone())
+                .unwrap_or_else(|| descriptor.env.clone()),
             config_file_path: runtime_meta.and_then(|r| r.config_file_path),
             effective_command: descriptor.command.clone(),
         };
@@ -857,7 +892,20 @@ pub fn spawn_agent_child(
     // applied. Writing it last lets user-provided values win over every Buzz-set env
     // written above — reserved keys were already stripped from descriptor.env so they
     // cannot clobber BUZZ_PRIVATE_KEY, NOSTR_PRIVATE_KEY, etc.
-    for (key, value) in &descriptor.env {
+    let spawn_env = provisioned_lease
+        .as_ref()
+        .map(|(_, env)| env)
+        .unwrap_or(&descriptor.env);
+    if provisioned_lease.is_some() {
+        // Never inherit the ambient ACP no-meter opt-out for a provisioned
+        // launch. The raw gateway token remains only in ACP's meter config;
+        // AcpClient scrubs it before spawning the underlying harness.
+        command.env_remove("BUZZ_ACP_NO_METER");
+        command.env("BUZZ_ACP_PROVISIONED", "true");
+    } else {
+        command.env_remove("BUZZ_ACP_PROVISIONED");
+    }
+    for (key, value) in spawn_env {
         command.env(key, value);
     }
     configure_runtime_cli(&mut command, runtime_meta);
@@ -950,6 +998,7 @@ pub fn spawn_agent_child(
         spawned_setup_mode,
         spawned_adapter_availability,
         start_nonce,
+        spawned_provisioned_lease,
         &record.name,
     ));
     #[cfg(not(windows))]
@@ -960,72 +1009,8 @@ pub fn spawn_agent_child(
         setup_mode: spawned_setup_mode,
         adapter_availability: spawned_adapter_availability,
         start_nonce,
+        provisioned_lease: spawned_provisioned_lease,
     })
-}
-
-fn child_rust_log_filter() -> String {
-    match std::env::var("RUST_LOG") {
-        Ok(existing) if existing.contains("buzz_acp") => existing,
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing},buzz_acp=info"),
-        _ => "buzz_acp=info".to_string(),
-    }
-}
-
-pub fn start_managed_agent_process(
-    app: &AppHandle,
-    record: &mut ManagedAgentRecord,
-    runtimes: &mut HashMap<ManagedAgentRuntimeKey, ManagedAgentPairRuntime>,
-    owner_hex: Option<&str>,
-) -> Result<(), String> {
-    let relay_url = {
-        use tauri::Manager;
-        let state = app.state::<crate::app_state::AppState>();
-        crate::relay::effective_agent_relay_url(
-            &record.relay_url,
-            &crate::relay::relay_ws_url_with_override(&state),
-        )
-    };
-    let key = ManagedAgentRuntimeKey::new(record.pubkey.clone(), &relay_url)?;
-    if let Some(runtime) = runtimes.get_mut(&key) {
-        if runtime
-            .child
-            .try_wait()
-            .map_err(|error| format!("failed to inspect running process: {error}"))?
-            .is_none()
-        {
-            return Ok(());
-        }
-
-        runtimes.remove(&key);
-        super::remove_agent_runtime_receipt(app, &key);
-    }
-
-    // Scalar PIDs are migration-only and never establish pair liveness.
-    record.runtime_pid = None;
-
-    let mut process = spawn_agent_child(app, record, &key.relay_url, false, owner_hex)?;
-    let now = now_iso();
-    let receipt = super::ManagedAgentRuntimeReceipt {
-        key: key.clone(),
-        pid: process.child.id(),
-        desktop_instance_id: current_instance_id(app),
-        started_at: now.clone(),
-    };
-    if let Err(error) = super::write_agent_runtime_receipt(app, &receipt) {
-        let _ = terminate_process(process.child.id());
-        let _ = process.child.wait();
-        return Err(error);
-    }
-
-    record.updated_at = now.clone();
-    record.last_started_at = Some(now);
-    record.last_stopped_at = None;
-    record.last_exit_code = None;
-    record.last_error = None;
-    record.last_error_code = None;
-
-    runtimes.insert(key, ManagedAgentPairRuntime::starting(process));
-    Ok(())
 }
 
 #[cfg(test)]

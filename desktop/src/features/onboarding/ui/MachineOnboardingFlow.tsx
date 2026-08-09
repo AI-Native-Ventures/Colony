@@ -170,6 +170,7 @@ export function MachineOnboardingFlow({
               <div className="mt-10 flex flex-col items-center gap-3">
                 <Button
                   className={ONBOARDING_LANDING_CTA_CLASS}
+                  data-testid="machine-onboarding-primary"
                   disabled={isPending}
                   onClick={() => void loadFreshIdentity()}
                   type="button"

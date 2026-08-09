@@ -35,6 +35,7 @@ export type DiscoveryNavigationOptions = NavigationBehavior &
       | "fieldId"
       | "roleId"
       | "campaignId"
+      | "leadId"
     >
   > & {
     surface?: DiscoverySurface;
@@ -53,6 +54,7 @@ export function buildDiscoverySearch(
     ...(options?.fieldId ? { fieldId: options.fieldId } : {}),
     ...(options?.roleId ? { roleId: options.roleId } : {}),
     ...(options?.campaignId ? { campaignId: options.campaignId } : {}),
+    ...(options?.leadId ? { leadId: options.leadId } : {}),
     ...(options?.tab ? { tab: options.tab } : {}),
   };
 }
@@ -155,6 +157,18 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goProfile = React.useCallback(
+    (pubkey: string, behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/pulse",
+          search: { profile: pubkey },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goProjects = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -235,6 +249,8 @@ export function useAppNavigation() {
         autoSend?: string;
         messageId?: string;
         replace?: boolean;
+        /** Open this thread panel directly without waiting for a timeline row. */
+        thread?: string;
         threadRootId?: string | null;
       },
     ) =>
@@ -254,6 +270,7 @@ export function useAppNavigation() {
             ...(options?.agentSession
               ? { agentSession: options.agentSession }
               : {}),
+            ...(options?.thread ? { thread: options.thread } : {}),
             ...(options?.autoSend ? { autoSend: options.autoSend } : {}),
           },
         },
@@ -391,6 +408,7 @@ export function useAppNavigation() {
     goProject,
     goProjects,
     goPulse,
+    goProfile,
     goSettings,
     goSpend,
     goWorkflow,

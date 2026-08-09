@@ -28,7 +28,10 @@ async fn setup() -> (Db, PgPool) {
     let pool = PgPool::connect(&database_url)
         .await
         .expect("connect to test Postgres");
-    buzz_db::migration::run_migrations(&pool)
+    // A developer's fresh `createdb` needs the migrator; CI's integration
+    // Postgres is provisioned from schema/schema.sql by pgschema and must
+    // skip it (replaying 0001 there aborts on the first existing object).
+    buzz_db::migration::run_migrations_unless_provisioned(&pool)
         .await
         .expect("apply migrations");
     (Db::from_pool(pool.clone()), pool)
@@ -156,6 +159,47 @@ async fn set_tier_at(
     assert!(inserted);
 }
 
+/// Publish a kind:30177 managed-agent head for `agent`, authored by `author`,
+/// naming the workspace role it fills and carrying no `tier` at all.
+///
+/// This is the shape the desktop actually publishes: `PersonaEventContent`
+/// has a `role_id` field and no `tier` field, and `company/seed.rs` sets the
+/// role for every baseline roster entry. A head with a `tier` in it is a
+/// shape no product code path writes, which is why the tests below that need
+/// a realistic managed agent use this rather than [`set_tier`].
+async fn set_role(db: &Db, community: CommunityId, author: &Keys, agent: &Keys, role_id: &str) {
+    set_role_and_tier(db, community, author, agent, Some(role_id), None).await;
+}
+
+/// A head carrying any combination of `role_id` and `tier`, so a test can pin
+/// which of the two the gate actually used.
+async fn set_role_and_tier(
+    db: &Db,
+    community: CommunityId,
+    author: &Keys,
+    agent: &Keys,
+    role_id: Option<&str>,
+    tier: Option<&str>,
+) {
+    let agent_hex = agent.public_key().to_hex();
+    let mut content = serde_json::json!({ "display_name": "Ada" });
+    if let Some(role_id) = role_id {
+        content["role_id"] = serde_json::Value::String(role_id.to_string());
+    }
+    if let Some(tier) = tier {
+        content["tier"] = serde_json::Value::String(tier.to_string());
+    }
+    let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content.to_string())
+        .tags(vec![tag(&["d", &agent_hex])])
+        .sign_with_keys(author)
+        .expect("sign managed-agent head");
+    let (_, inserted) = db
+        .insert_event(community, &event, None)
+        .await
+        .expect("store managed-agent head");
+    assert!(inserted);
+}
+
 /// Store a plain root message (no thread metadata needed: rule (a) of the
 /// exemption only inspects the root event's own author).
 async fn store_root(
@@ -224,6 +268,39 @@ async fn store_reply(
     event
 }
 
+/// Employ `agent` at `rank` in the community's `employees` table, the way a
+/// hire request does. This is the workspace's own durable record of who it
+/// employs and at what rank; unlike a managed-agent head it is a relay-written
+/// row, not an event anyone can publish.
+async fn employ(
+    db: &Db,
+    community: CommunityId,
+    owner: &Keys,
+    agent: &Keys,
+    role_id: &str,
+    rank: &str,
+) {
+    let stored = db
+        .insert_employee(
+            community,
+            buzz_db::employees::NewEmployee {
+                pubkey: &agent.public_key().to_bytes(),
+                sealed_key: b"sealed-test-key",
+                role_id,
+                display_name: "Test Employee",
+                rank,
+                hired_by: &owner.public_key().to_bytes(),
+                // Distinct per employee: one hire request produces one
+                // employee, so the column is unique and a shared constant
+                // makes the second insert a silent no-op.
+                hire_event: &agent.public_key().to_bytes(),
+            },
+        )
+        .await
+        .expect("insert employee");
+    assert!(stored.is_some(), "employee row must be inserted");
+}
+
 fn stream_message(author: &Keys, tags: Vec<Tag>, content: &str) -> Event {
     EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), content)
         .tags(tags)
@@ -236,6 +313,545 @@ fn dm_open(author: &Keys, tags: Vec<Tag>) -> Event {
         .tags(tags)
         .sign_with_keys(author)
         .expect("sign dm open")
+}
+
+/// The employees table is a tier source in its own right.
+///
+/// Rank is recorded when an owner hires an employee, but the interrupt path
+/// used to read tier ONLY from a managed-agent head's `content.tier` -- a
+/// field no product code path ever writes. Every hired employee therefore
+/// resolved to "no tier", which the gate treats as unrestricted, so the very
+/// agents the ladder exists to constrain could address owners freely while
+/// their asks were refused for having no tier. This test pins the fix: an
+/// employed worker is a Worker, with no managed-agent head anywhere.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn employed_worker_with_no_managed_agent_head_is_still_a_worker() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    // Employed as a worker. Deliberately NO kind-30177 head: this is exactly
+    // the shape every real agent has today.
+    let worker = Keys::generate();
+    employ(&db, community, &owner_keys, &worker, "engineer", "worker").await;
+
+    let msg = stream_message(&worker, vec![tag(&["p", &owner_hex])], "hey, got a sec?");
+
+    let error = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
+        .await
+        .expect_err("an employed worker must not address an owner directly");
+    assert!(
+        error.contains("cannot address an owner"),
+        "unexpected rejection message: {error}"
+    );
+}
+
+/// An employee's rank outranks a self-published managed-agent head. The head
+/// is an ordinary event any pubkey may publish about itself; the employees row
+/// is written by the relay from an owner-signed hire request. A worker that
+/// publishes `{"tier":"executive"}` about itself must stay a worker.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn self_published_executive_head_cannot_outrank_an_employed_worker() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    let worker = Keys::generate();
+    employ(&db, community, &owner_keys, &worker, "engineer", "worker").await;
+    // The agent promotes itself in the weaker, event-based source.
+    set_tier(&db, community, &worker, &worker, "executive").await;
+
+    let msg = stream_message(&worker, vec![tag(&["p", &owner_hex])], "promoting myself");
+
+    let error = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
+        .await
+        .expect_err("a self-published head must not outrank the employees row");
+    assert!(
+        error.contains("cannot address an owner"),
+        "unexpected rejection message: {error}"
+    );
+}
+
+/// An employed executive keeps the executive's exemption, so the fix restricts
+/// exactly the ranks it should and no others.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn employed_executive_may_still_address_an_owner() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    let chief = Keys::generate();
+    employ(
+        &db,
+        community,
+        &owner_keys,
+        &chief,
+        "chief-of-staff",
+        "executive",
+    )
+    .await;
+
+    let msg = stream_message(&chief, vec![tag(&["p", &owner_hex])], "your call needed");
+
+    enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
+        .await
+        .expect("an employed executive may address an owner");
+}
+
+/// The join that reaches the agents which actually run.
+///
+/// A managed agent is not an employee: the desktop generates its key locally
+/// and never sends a hire request, so it has no `employees` row and the
+/// by-pubkey lookup never fires for one. Its head does carry `role_id`
+/// (`persona_events.rs`, set for every baseline roster entry by
+/// `company/seed.rs`), and `employees.role_id` is unique per community among
+/// active rows, so the role is what says what rank the agent carries.
+///
+/// Probed with a **worker** role deliberately. An untiered signer is treated
+/// as an unrestricted human, so an executive role would be indistinguishable
+/// from resolving nothing at all: both end in the message being allowed.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_managed_agent_filling_an_employed_role_inherits_that_roles_rank() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    // The workspace employs a frontend engineer at worker rank. The relay
+    // holds that employee's key; this is a different identity.
+    let employee = Keys::generate();
+    employ(
+        &db,
+        community,
+        &owner_keys,
+        &employee,
+        "frontend-engineer",
+        "worker",
+    )
+    .await;
+
+    // The agent that actually runs: its own key, no employees row, and an
+    // owner-authored head saying which role it fills.
+    let agent = Keys::generate();
+    set_role(&db, community, &owner_keys, &agent, "frontend-engineer").await;
+
+    let msg = stream_message(&agent, vec![tag(&["p", &owner_hex])], "hey, got a sec?");
+
+    let error = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
+        .await
+        .expect_err("an agent filling a worker role must not address an owner directly");
+    assert!(
+        error.contains("cannot address an owner"),
+        "unexpected rejection message: {error}"
+    );
+}
+
+/// The role is read only from a head the current owner authored, which is the
+/// whole security boundary.
+///
+/// `KIND_MANAGED_AGENT` is client-writable, so an agent can publish a head
+/// about itself naming the most senior role the workspace employs. Honouring
+/// that would let any process promote itself to executive and reach the
+/// human, which is precisely the wall this gate exists to hold.
+///
+/// Probed through the ask path rather than owner contact, because that is
+/// where the two outcomes differ: `check_altitude` refuses an untiered filer
+/// outright, so an ignored claim is visibly different from an honoured one.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_self_published_role_claim_cannot_reach_the_owner() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    add_owner(&pool, community, &owner_keys.public_key().to_hex()).await;
+
+    let chief = Keys::generate();
+    employ(
+        &db,
+        community,
+        &owner_keys,
+        &chief,
+        "chief-of-staff",
+        "executive",
+    )
+    .await;
+
+    // Not owner-authored: the agent signs a head about itself.
+    let impostor = Keys::generate();
+    set_role(&db, community, &impostor, &impostor, "chief-of-staff").await;
+
+    let ask = EventBuilder::new(
+        Kind::Custom(buzz_core::kind::KIND_ASK as u16),
+        r#"{"headline":"Approve the spend","cost_of_delay":"work is stopped"}"#,
+    )
+    .tags(vec![
+        tag(&["ask-type", "decision"]),
+        tag(&["p", &owner_keys.public_key().to_hex()]),
+        tag(&["initiative", "no-initiative"]),
+        tag(&["task", "task-1"]),
+        tag(&["need", "self-promotion"]),
+    ])
+    .sign_with_keys(&impostor)
+    .expect("sign ask");
+    buzz_core::interrupt::parse_ask(&ask).expect("the test's own ask event must be well formed");
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: impostor.public_key(),
+        scopes: Scope::all_known(),
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+    // An ask-broker refusal is `Ok(IngestResult::refused(..))`, not `Err`, so
+    // asserting only that this call succeeded would pass whatever the gate
+    // decided. The verdict is in the result.
+    let result = ingest_event(&state, &tenant, ask, auth)
+        .await
+        .expect("ingest answers a well-formed ask rather than erroring");
+    assert!(
+        !result.accepted(),
+        "a self-authored head must not confer the role's rank: {}",
+        result.message()
+    );
+    assert!(
+        result
+            .message()
+            .contains("owners answer asks; they do not file them"),
+        "a self-promoted agent must resolve to no tier at all, got: {}",
+        result.message()
+    );
+}
+
+/// A head naming a role nobody currently fills is a vacancy, not a rank.
+///
+/// It must fall through to the legacy `tier` field rather than resolving to
+/// nothing and stopping, which would silently drop an authority the owner did
+/// state. Pinned with a worker `tier`, because an untiered signer is
+/// unrestricted and would otherwise look identical to a resolved executive.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn an_owner_authored_head_naming_an_unstaffed_role_falls_through_to_tier() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    // Nobody is employed as a CTO.
+    let agent = Keys::generate();
+    set_role_and_tier(
+        &db,
+        community,
+        &owner_keys,
+        &agent,
+        Some("cto"),
+        Some("worker"),
+    )
+    .await;
+
+    let msg = stream_message(&agent, vec![tag(&["p", &owner_hex])], "hey, got a sec?");
+
+    let error = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
+        .await
+        .expect_err("an unstaffed role must fall through to the head's own tier");
+    assert!(
+        error.contains("cannot address an owner"),
+        "unexpected rejection message: {error}"
+    );
+}
+
+/// Retiring an employee frees its role, and the freed role stops conferring
+/// rank on anyone.
+///
+/// This is the one place the role path deliberately disagrees with the
+/// by-pubkey path. There, rank survives retirement so a still-running process
+/// is not silently promoted to unrestricted owner contact. Here the question
+/// is "who fills this role now", asked in order to hand that rank to a
+/// *different* pubkey, and a vacated role must stop answering it.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_retired_roles_rank_is_not_handed_to_anyone() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    let employee = Keys::generate();
+    employ(
+        &db,
+        community,
+        &owner_keys,
+        &employee,
+        "frontend-engineer",
+        "worker",
+    )
+    .await;
+    assert!(
+        db.retire_employee(community, &employee.public_key().to_bytes())
+            .await
+            .expect("retire employee"),
+        "the fixture must actually retire a row, or this proves nothing"
+    );
+
+    let agent = Keys::generate();
+    set_role(&db, community, &owner_keys, &agent, "frontend-engineer").await;
+
+    let msg = stream_message(&agent, vec![tag(&["p", &owner_hex])], "hey, got a sec?");
+
+    // No rank from a vacant role, no `tier` on the head: an unmanaged
+    // identity, which this gate leaves alone.
+    enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
+        .await
+        .expect("a vacated role must confer no rank at all");
+}
+
+/// An agent's own employment outranks whatever role its head names.
+///
+/// The by-pubkey row is the more specific fact and is written by the relay
+/// from an owner-signed hire request. A head naming a more senior role must
+/// not overtake it, or the head becomes a promotion channel.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn an_agents_own_employment_outranks_the_role_its_head_names() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+    add_owner(&pool, community, &owner_hex).await;
+
+    let chief = Keys::generate();
+    employ(
+        &db,
+        community,
+        &owner_keys,
+        &chief,
+        "chief-of-staff",
+        "executive",
+    )
+    .await;
+
+    let agent = Keys::generate();
+    employ(&db, community, &owner_keys, &agent, "engineer", "worker").await;
+    // Even the owner naming a senior role must not overtake the agent's own
+    // employment record.
+    set_role(&db, community, &owner_keys, &agent, "chief-of-staff").await;
+
+    let msg = stream_message(&agent, vec![tag(&["p", &owner_hex])], "promoting myself");
+
+    let error = enforce_owner_contact(&tenant, &state, &msg, &msg.pubkey)
+        .await
+        .expect_err("an employed worker stays a worker whatever a head names");
+    assert!(
+        error.contains("cannot address an owner"),
+        "unexpected rejection message: {error}"
+    );
+}
+
+/// End to end: an employed worker files a real Ask through the real ingest
+/// pipeline, and the relay stores it.
+///
+/// This is the behaviour the whole ladder depends on and the one that has
+/// never worked. `check_altitude` refuses a filer with no tier ("owners answer
+/// asks; they do not file them"), and before the employees-table lookup every
+/// agent had no tier, so every ask an agent raised was rejected while the same
+/// agent was free to message the owner directly. The system asked agents to
+/// escalate, refused their escalations, and permitted the interruption.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn an_employed_worker_can_file_an_ask_to_its_leader_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    add_owner(&pool, community, &owner_keys.public_key().to_hex()).await;
+
+    let leader = Keys::generate();
+    employ(&db, community, &owner_keys, &leader, "eng-lead", "leader").await;
+
+    let worker = Keys::generate();
+    employ(&db, community, &owner_keys, &worker, "engineer", "worker").await;
+
+    let ask = EventBuilder::new(
+        Kind::Custom(buzz_core::kind::KIND_ASK as u16),
+        r#"{"headline":"Choose the outreach batch size",
+            "cost_of_delay":"47 leads are waiting",
+            "options":[{"label":"all","consequence":"sends 47 emails"},
+                       {"label":"top15","consequence":"sends 15 emails","recommended":true}],
+            "default_option":"top15",
+            "default_window_secs":3600}"#,
+    )
+    .tags(vec![
+        tag(&["ask-type", "decision"]),
+        tag(&["p", &leader.public_key().to_hex()]),
+        tag(&["initiative", "tennant-premium-site"]),
+        tag(&["task", "task-batch-size"]),
+        tag(&["need", "batch-size"]),
+    ])
+    .sign_with_keys(&worker)
+    .expect("sign ask");
+
+    // Sanity floor: the event the worker built is one the relay considers
+    // valid, so an ingest rejection is an authorization verdict rather than a
+    // malformed-event complaint.
+    buzz_core::interrupt::parse_ask(&ask).expect("the test's own ask event must be well formed");
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: worker.public_key(),
+        scopes: Scope::all_known(),
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+    ingest_event(&state, &tenant, ask.clone(), auth)
+        .await
+        .expect("an employed worker must be able to file an ask to a leader");
+
+    let stored = db
+        .find_ask_by_event_id(community, &ask.id.to_bytes())
+        .await
+        .expect("query ask row")
+        .expect("the ask must be stored, not merely accepted");
+    assert_eq!(stored.initiative_id, "tennant-premium-site");
+    assert_eq!(
+        stored.audience_pubkey,
+        leader.public_key().to_bytes().to_vec()
+    );
+}
+
+/// The finish line: an agent of the kind that actually runs files an ask.
+///
+/// Every identity here is the shape the product really produces. The filer is
+/// a managed agent with a locally generated key and **no** `employees` row,
+/// described only by the owner-authored head the desktop already publishes,
+/// carrying `role_id` and no `tier` -- because no product code path has ever
+/// written a `tier`. Its rank, and its leader's, come from the roles they
+/// fill. Before the role join this filer resolved to no tier at all and the
+/// relay refused the ask with "owners answer asks; they do not file them",
+/// which is the exact reason zero asks had ever been raised.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_managed_agent_with_no_employees_row_can_file_an_ask_through_ingest() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    let owner_keys = Keys::generate();
+    add_owner(&pool, community, &owner_keys.public_key().to_hex()).await;
+
+    // The payroll: two roles, two ranks. The relay holds both these keys.
+    let employed_lead = Keys::generate();
+    let employed_engineer = Keys::generate();
+    employ(&db, community, &owner_keys, &employed_lead, "cto", "leader").await;
+    employ(
+        &db,
+        community,
+        &owner_keys,
+        &employed_engineer,
+        "frontend-engineer",
+        "worker",
+    )
+    .await;
+
+    // The processes that actually run: their own keys, no employees rows,
+    // owner-authored heads naming the roles they fill.
+    let lead_agent = Keys::generate();
+    let worker_agent = Keys::generate();
+    set_role(&db, community, &owner_keys, &lead_agent, "cto").await;
+    set_role(
+        &db,
+        community,
+        &owner_keys,
+        &worker_agent,
+        "frontend-engineer",
+    )
+    .await;
+
+    let ask = EventBuilder::new(
+        Kind::Custom(buzz_core::kind::KIND_ASK as u16),
+        r#"{"headline":"DNS needs a TXT record only a human can add",
+            "cost_of_delay":"the site cannot go live until this lands"}"#,
+    )
+    .tags(vec![
+        tag(&["ask-type", "blocker"]),
+        tag(&["p", &lead_agent.public_key().to_hex()]),
+        // The reserved grouping value for work that belongs to no
+        // initiative, which is what any task created from chat carries.
+        tag(&["initiative", "no-initiative"]),
+        tag(&["task", "horizonlabs:chat:0001"]),
+        tag(&["need", "dns-txt-record"]),
+    ])
+    .sign_with_keys(&worker_agent)
+    .expect("sign ask");
+    // Sanity floor: the event is well formed, so an ingest refusal below is an
+    // authorization verdict rather than a malformed-event complaint.
+    buzz_core::interrupt::parse_ask(&ask).expect("the test's own ask event must be well formed");
+
+    let auth = IngestAuth::Nip42 {
+        pubkey: worker_agent.public_key(),
+        scopes: Scope::all_known(),
+        channel_ids: None,
+        conn_id: Uuid::new_v4(),
+    };
+    // `ingest_event` answers a refusal with `Ok(..)`, so the acceptance has to
+    // be read off the result rather than inferred from the call returning.
+    let result = ingest_event(&state, &tenant, ask.clone(), auth)
+        .await
+        .expect("ingest answers a well-formed ask rather than erroring");
+    assert!(
+        result.accepted(),
+        "a managed agent filling an employed worker role must be able to file an ask, got: {}",
+        result.message()
+    );
+
+    let stored = db
+        .find_ask_by_event_id(community, &ask.id.to_bytes())
+        .await
+        .expect("query ask row")
+        .expect("the ask must be stored, not merely accepted");
+    assert_eq!(stored.initiative_id, "no-initiative");
+    assert_eq!(
+        stored.audience_pubkey,
+        lead_agent.public_key().to_bytes().to_vec(),
+        "the ask must be addressed to the agent filling the leader role, not to the \
+         relay-held employee identity behind it"
+    );
 }
 
 #[tokio::test]
@@ -351,6 +967,100 @@ async fn worker_replying_in_thread_owner_never_touched_is_rejected() {
         error.starts_with("restricted:"),
         "unexpected message: {error}"
     );
+}
+
+/// The all-owners property: `enforce_owner_contact` loops EVERY owner in the
+/// p-tags and rejects on the first one the thread exemption does not cover.
+/// One exempt owner must never carry a second, unexempt one through.
+///
+/// This exists because mutation testing found the property untested: rewriting
+/// the loop to `if permitted { return Ok(()); }` (short-circuit on the first
+/// exempt owner) left all sixteen existing tests green, since every one of
+/// them p-tags exactly one owner. Both tag orders are asserted so the test
+/// bites regardless of which owner the loop happens to reach first.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn worker_replying_to_two_owners_is_rejected_when_one_is_unexempt() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let channel_id = channel(&pool, community, "general").await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = TenantContext::resolved(community, "test-host");
+
+    // Two distinct owners. `exempt_owner` authors the thread root, so rule (a)
+    // of the exemption covers it. `bystander_owner` never touches the thread.
+    let exempt_owner = Keys::generate();
+    let exempt_owner_hex = exempt_owner.public_key().to_hex();
+    add_owner(&pool, community, &exempt_owner_hex).await;
+
+    let bystander_owner = Keys::generate();
+    let bystander_owner_hex = bystander_owner.public_key().to_hex();
+    add_owner(&pool, community, &bystander_owner_hex).await;
+
+    let worker = Keys::generate();
+    set_tier(&db, community, &exempt_owner, &worker, "worker").await;
+
+    let root = store_root(
+        &db,
+        community,
+        channel_id,
+        &exempt_owner,
+        vec![],
+        "can someone look into the pricing page?",
+    )
+    .await;
+
+    // Sanity floor: replying to the exempt owner ALONE is accepted, so a
+    // rejection below is attributable to the second owner and not to a broken
+    // fixture (a thread the exemption never covered would reject either way).
+    let single = stream_message(
+        &worker,
+        vec![
+            tag(&["p", &exempt_owner_hex]),
+            tag(&["e", &root.id.to_hex(), "", "root"]),
+        ],
+        "on it",
+    );
+    enforce_owner_contact(&tenant, &state, &single, &single.pubkey)
+        .await
+        .expect("the exempt owner alone must still be accepted");
+
+    for (label, first, second) in [
+        (
+            "exempt owner first",
+            &exempt_owner_hex,
+            &bystander_owner_hex,
+        ),
+        (
+            "exempt owner second",
+            &bystander_owner_hex,
+            &exempt_owner_hex,
+        ),
+    ] {
+        let reply = stream_message(
+            &worker,
+            vec![
+                tag(&["p", first]),
+                tag(&["p", second]),
+                tag(&["e", &root.id.to_hex(), "", "root"]),
+            ],
+            "on it, done",
+        );
+
+        let error = enforce_owner_contact(&tenant, &state, &reply, &reply.pubkey)
+            .await
+            .expect_err(&format!(
+                "{label}: one exempt owner must not carry an unexempt owner through"
+            ));
+        assert!(
+            error.starts_with("restricted:"),
+            "{label}: unexpected rejection message: {error}"
+        );
+        assert!(
+            error.contains("cannot address an owner"),
+            "{label}: unexpected rejection message: {error}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -1,5 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockWindows } from "@tauri-apps/api/mocks";
 import { decode } from "nostr-tools/nip19";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
@@ -9,6 +9,15 @@ import {
   handleDeleteCustomHarness,
 } from "./e2eBridgeCustomHarnesses.ts";
 
+import {
+  NativeChannel,
+  setNativeBridge,
+  type NativeBridge,
+  type NativeEvent,
+  type NativeNotificationAction,
+  type NativeUnlisten,
+  type NativeUpdate,
+} from "@/shared/api/nativeBridge";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   STARTER_PERSONA_IDS,
@@ -159,9 +168,32 @@ type MockSearchProfileSeed = {
   isAgent?: boolean;
 };
 
+type MockHuddleMemberSeed = {
+  pubkey: string;
+  role: "owner" | "admin" | "member" | "guest" | "bot";
+};
+
+type MockHuddleSeed = {
+  parentChannelId: string;
+  ephemeralChannelId: string;
+  huddleThreadEventId?: string | null;
+  phase?: "creating" | "connected" | "active";
+  members: MockHuddleMemberSeed[];
+  transcriptionEnabled?: boolean;
+  ttsEnabled?: boolean;
+  isCreator?: boolean;
+};
+
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /** Tauri window label exposed to the app. Defaults to the main window. */
+    windowLabel?: string;
+    ttsSettings?: {
+      version: number;
+      agentTextToSpeech: boolean;
+      voicePreferences: string[];
+    };
     /** Signed Block manifests/catalog events served by the mock relay. */
     blockEvents?: RelayEvent[];
     /** Signed Block timeline events seeded before the app subscribes. */
@@ -190,6 +222,8 @@ type E2eConfig = {
     >;
     /** Use the active real E2E identity in the standard mock channels. */
     activeIdentityInDefaultChannels?: boolean;
+    /** Native picker boundary result for Pocket voice import tests. */
+    pocketVoiceImportResult?: "success" | "cancel" | "invalid";
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Optional policy returned by the native join-policy discovery command. */
@@ -206,6 +240,17 @@ type E2eConfig = {
       normalized_host?: string;
       archived_at?: string | null;
     }>;
+    /**
+     * What `colony_provisioning_config` should answer with. Override to
+     * exercise a relay that does not provision (`self_serve: false`) or one on
+     * a different domain; the default mirrors the production deployment.
+     */
+    colonyProvisioningConfig?: {
+      self_serve?: boolean;
+      domain?: string | null;
+      public?: boolean;
+      max_per_owner?: number;
+    };
     /**
      * A `ledger_report` response. Money is decimal strings here, matching the
      * real command: a fixture using numbers would let a rounding bug pass.
@@ -266,6 +311,20 @@ type E2eConfig = {
       mcp?: MockCommandAvailability;
     };
     managedAgents?: MockManagedAgentSeed[];
+    /** Result returned by the mocked `add_agent_to_huddle` command. */
+    addAgentToHuddleResult?: {
+      ephemeral_added: boolean;
+      parent_added: boolean;
+      parent_error: string | null;
+    };
+    /** When set, the mocked `add_agent_to_huddle` command throws. */
+    addAgentToHuddleError?: string;
+    /** Delay an invocation-time huddle snapshot to exercise hydration ordering. */
+    huddleStateReadDelayMs?: number;
+    /** Delay companion creation to expose the newly-started huddle handoff state. */
+    openHuddleWindowDelayMs?: number;
+    /** Delay the native start result after membership arrives in the channel list. */
+    startHuddleReturnDelayMs?: number;
     /** Per agent+relay runtime rows for the pair-scoped lifecycle commands
      *  (`list/start/stop/restart_managed_agent_runtime`). */
     managedAgentRuntimes?: MockManagedAgentRuntimeSeed[];
@@ -276,6 +335,8 @@ type E2eConfig = {
     personaSharePublicationStatuses?: Array<"published" | "queued">;
     teams?: MockTeamSeed[];
     relayAgents?: MockRelayAgentSeed[];
+    /** Native-like huddle state seeded from authoritative role-bearing membership. */
+    huddle?: MockHuddleSeed;
     agentListDelayMs?: number;
     agentMemory?: RawAgentMemoryListing | Record<string, RawAgentMemoryListing>;
     addChannelMembersDelayMs?: number;
@@ -463,11 +524,20 @@ type E2eConfig = {
      * Pass a config with a provider to test Inherit-from-global behavior.
      */
     globalAgentConfig?: {
+      credential_mode?: "byok" | "colony_credits";
       env_vars: Record<string, string>;
       provider: string | null;
       model: string | null;
       preferred_runtime?: string | null;
     };
+    /** Volatile Colony Credits account response used by settings specs. */
+    colonyCreditsAccount?: {
+      balance_nanousd: string;
+      currency: "USD";
+      status: "active" | "depleted";
+    };
+    /** Reject the explicit Colony Credits reconnect action with this message. */
+    colonyCreditsReconnectError?: string;
     /** File-layer config returned by runtime id. */
     runtimeFileConfigs?: Record<string, RuntimeFileConfigSubset | null>;
     /** Baked build env returned by the display and key-name Tauri commands. */
@@ -1071,6 +1141,10 @@ declare global {
       command: string;
       payload: unknown;
     }>;
+    __BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?: (payload: {
+      pubkey: string | null;
+      level: number;
+    }) => Promise<void>;
     __BUZZ_E2E_WEBVIEW_ZOOM__?: number;
     __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
       channelName: string;
@@ -1119,6 +1193,24 @@ declare global {
       command: string,
       payload?: Record<string, unknown>,
     ) => Promise<unknown>;
+    __BUZZ_E2E_EMIT_TAURI_EVENT__?: (
+      event: string,
+      payload: unknown,
+    ) => Promise<void>;
+    __BUZZ_E2E_SET_MOCK_HUDDLE_SNAPSHOT__?: (input: {
+      members: MockHuddleMemberSeed[];
+      transcriptionEnabled: boolean;
+    }) => Promise<void>;
+    /** Fire a native event into the app's `listen()` handlers. */
+    __BUZZ_E2E_EMIT_NATIVE_EVENT__?: (
+      event: string,
+      payload?: unknown,
+    ) => Promise<void>;
+    /** Subscribe to the backend-signal registry mock command handlers fire. */
+    __BUZZ_E2E_LISTEN_NATIVE_EVENT__?: (
+      event: string,
+      cb: () => void,
+    ) => Promise<() => void>;
     __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
     /** Replace an existing feed item by id (or push if not found) and fire the updated event. */
     __BUZZ_E2E_REPLACE_MOCK_FEED_ITEM__?: (
@@ -3350,10 +3442,419 @@ function resetMockMesh() {
   mockMeshState.nodeMode = null;
   mockMeshState.servingUsage = { ...ZERO_SERVING_USAGE };
 }
+// Backend-signal listeners registered by specs via __BUZZ_E2E_LISTEN_NATIVE_EVENT__,
+// fired by mock command handlers (e.g. "agents-data-changed" after a persona
+// mutation). This is the pre-bridge registry the e2e suite observed through
+// the patched __TAURI_INTERNALS__.listen; it is intentionally separate from
+// `nativeEventListeners` (app `listen()` handlers fired by `emit()`), exactly
+// as the two mocked registries were before the NativeBridge re-point.
+// App listeners registered through the mock bridge's `listen()` — the
+// replacement for mockIPC's `plugin:event|listen` handling. Fired only by the
+// mock bridge's `emit()` (the app's own `emit` and __BUZZ_E2E_EMIT_NATIVE_EVENT__).
+// Label mockWindows() installed for this run. Read by the bridge's
+// windowLabel() so the e2e double never has to touch __TAURI_INTERNALS__.
+let mockedWindowLabel = "main";
+
+// Develop-side mock helpers call `emit()` directly. Before the NativeBridge
+// re-point that was Tauri's mocked emit; now it dispatches to the same
+// registry the bridge's emit() uses, so the app sees one event stream.
+async function emit(event: string, payload?: unknown): Promise<void> {
+  for (const handler of nativeEventListeners.get(event) ?? []) {
+    handler({ event, payload });
+  }
+}
+
+const nativeEventListeners = new Map<
+  string,
+  Set<(event: { event: string; payload: unknown }) => void>
+>();
+
+type MockCommandHandler = (
+  command: string,
+  payload: unknown,
+) => Promise<unknown>;
+
+/**
+ * The NativeBridge implementation installed for e2e runs. Replaces the old
+ * mockIPC + __TAURI_INTERNALS__.listen patching: every native call the app
+ * makes funnels through this one object, exactly as it does through the Tauri
+ * implementation in production.
+ *
+ * Plugin methods delegate to the mock command handler under the same
+ * `plugin:<name>|...` command names the Tauri v2 JS API uses, so the mock
+ * answers (and throws) exactly where the old library calls landed.
+ */
+class E2eNativeBridge implements NativeBridge {
+  private readonly mockCommand: MockCommandHandler;
+
+  constructor(mockCommand: MockCommandHandler) {
+    this.mockCommand = mockCommand;
+  }
+
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    // Tauri serialises a missing arg object as `{}` on the wire, so mockIPC
+    // handlers always saw `{}` for an argument-less command. Normalise the
+    // same way or the recorded command log differs from production and specs
+    // asserting on payloads (voice-settings) break.
+    return this.mockCommand(command, args ?? {}) as Promise<T>;
+  }
+
+  invokeRawBinary(command: string, payload: Uint8Array): Promise<unknown> {
+    return this.mockCommand(command, payload);
+  }
+
+  async listen<T>(
+    event: string,
+    handler: (event: NativeEvent<T>) => void,
+  ): Promise<NativeUnlisten> {
+    let listeners = nativeEventListeners.get(event);
+    if (!listeners) {
+      listeners = new Set();
+      nativeEventListeners.set(event, listeners);
+    }
+    listeners.add(
+      handler as (event: { event: string; payload: unknown }) => void,
+    );
+    return () => {
+      nativeEventListeners
+        .get(event)
+        ?.delete(
+          handler as (event: { event: string; payload: unknown }) => void,
+        );
+    };
+  }
+
+  async emit(event: string, payload?: unknown): Promise<void> {
+    for (const handler of nativeEventListeners.get(event) ?? []) {
+      handler({ event, payload });
+    }
+  }
+
+  isTauri(): boolean {
+    return !!(window as Window & { isTauri?: boolean }).isTauri;
+  }
+
+  async openUrl(url: string): Promise<void> {
+    await this.mockCommand("plugin:opener|open_url", { url });
+  }
+
+  async getVersion(): Promise<string> {
+    return (await this.mockCommand("plugin:app|version", {})) as string;
+  }
+
+  async homeDir(): Promise<string> {
+    return (await this.mockCommand("plugin:path|resolve_directory", {
+      directory: "home",
+    })) as string;
+  }
+
+  async relaunch(): Promise<void> {
+    await this.mockCommand("plugin:process|restart", {});
+  }
+
+  async checkForUpdate(options?: {
+    headers?: Record<string, string>;
+  }): Promise<NativeUpdate | null> {
+    const metadata = (await this.mockCommand("plugin:updater|check", {
+      headers: options?.headers
+        ? Array.from(new Headers(options.headers).entries())
+        : [],
+    })) as { rid: number; version: string } | null;
+    if (!metadata) {
+      return null;
+    }
+    let downloadedBytesRid: number | null = null;
+    return {
+      version: metadata.version,
+      download: async () => {
+        downloadedBytesRid = (await this.mockCommand(
+          "plugin:updater|download",
+          {
+            onEvent: new NativeChannel(),
+            rid: metadata.rid,
+          },
+        )) as number;
+      },
+      install: async () => {
+        if (downloadedBytesRid === null) {
+          throw new Error("Update.install called before Update.download");
+        }
+        await this.mockCommand("plugin:updater|install", {
+          updateRid: metadata.rid,
+          bytesRid: downloadedBytesRid,
+        });
+        downloadedBytesRid = null;
+      },
+      close: async () => {
+        if (downloadedBytesRid !== null) {
+          await this.mockCommand("plugin:resources|close", {
+            rid: downloadedBytesRid,
+          });
+          downloadedBytesRid = null;
+        }
+        await this.mockCommand("plugin:resources|close", {
+          rid: metadata.rid,
+        });
+      },
+    };
+  }
+
+  async notificationPermissionGranted(): Promise<boolean> {
+    if (window.Notification?.permission !== "default") {
+      return window.Notification?.permission === "granted";
+    }
+    return (await this.mockCommand(
+      "plugin:notification|is_permission_granted",
+      {},
+    )) as boolean;
+  }
+
+  async requestNotificationPermission(): Promise<NotificationPermission> {
+    return window.Notification.requestPermission();
+  }
+
+  async onNotificationAction(
+    handler: (notification: NativeNotificationAction) => void,
+  ): Promise<{ unregister(): Promise<void> }> {
+    await this.mockCommand("plugin:notification|register_listener", {
+      event: "actionPerformed",
+      handler: new NativeChannel(handler),
+    });
+    return {
+      unregister: async () => {
+        await this.mockCommand("plugin:notification|unregister_listener", {
+          event: "actionPerformed",
+        });
+      },
+    };
+  }
+
+  async startDragging(): Promise<void> {
+    await this.mockCommand("plugin:window|start_dragging", {});
+  }
+
+  async isFullscreen(): Promise<boolean> {
+    return (await this.mockCommand(
+      "plugin:window|is_fullscreen",
+      {},
+    )) as boolean;
+  }
+
+  async setBadgeCount(count?: number): Promise<void> {
+    await this.mockCommand("plugin:window|set_badge_count", { value: count });
+  }
+
+  async setBadgeLabel(label?: string): Promise<void> {
+    await this.mockCommand("plugin:window|set_badge_label", { value: label });
+  }
+
+  async requestUserAttention(
+    _kind: "Informational" | "Critical",
+  ): Promise<void> {
+    await this.mockCommand("plugin:window|request_user_attention", {});
+  }
+
+  async unminimize(): Promise<void> {
+    await this.mockCommand("plugin:window|unminimize", {});
+  }
+
+  windowLabel(): string {
+    return mockedWindowLabel;
+  }
+
+  async closeWindow(): Promise<void> {
+    await this.mockCommand("plugin:window|close", {});
+  }
+
+  async showWindow(): Promise<void> {
+    await this.mockCommand("plugin:window|show", {});
+  }
+
+  async setFocus(): Promise<void> {
+    await this.mockCommand("plugin:window|set_focus", {});
+  }
+
+  async onWindowThemeChanged(
+    handler: (theme: "light" | "dark") => void,
+  ): Promise<NativeUnlisten> {
+    return this.listen("tauri://theme-changed", (event) => {
+      handler(event.payload as "light" | "dark");
+    });
+  }
+
+  async onWindowResized(handler: () => void): Promise<NativeUnlisten> {
+    return this.listen("tauri://resize", () => {
+      handler();
+    });
+  }
+
+  async setWebviewZoom(value: number): Promise<void> {
+    await this.mockCommand("plugin:webview|set_webview_zoom", { value });
+  }
+}
 let mockPersonas: RawPersona[] = [];
 let mockTeams: RawTeam[] = [];
-// Listeners registered via the mock __TAURI_INTERNALS__.listen — keyed by event name.
-const tauriEventListeners = new Map<string, Set<() => void>>();
+
+type MockHuddleState = {
+  phase: "creating" | "connected" | "active";
+  parent_channel_id: string;
+  ephemeral_channel_id: string;
+  huddle_thread_event_id: string | null;
+  participants: string[];
+  agent_pubkeys: string[];
+  agent_voice_settings: Record<string, { enabled: boolean; voice_key: string }>;
+  tts_enabled: boolean;
+  transcription_enabled: boolean;
+  is_creator: boolean;
+  voice_input_mode: "push_to_talk" | "voice_activity";
+};
+
+type PersistedMockHuddle = {
+  members: MockHuddleMemberSeed[];
+  state: MockHuddleState;
+};
+
+const MOCK_HUDDLE_STORAGE_KEY = "buzz.e2e.mock-huddle.v1";
+let mockHuddle: PersistedMockHuddle | null = null;
+
+function persistMockHuddle() {
+  if (mockHuddle) {
+    window.sessionStorage.setItem(
+      MOCK_HUDDLE_STORAGE_KEY,
+      JSON.stringify(mockHuddle),
+    );
+  }
+}
+
+async function emitMockHuddleState() {
+  if (!mockHuddle) return;
+  await emit("huddle-state-changed", structuredClone(mockHuddle.state));
+}
+
+const MOCK_POCKET_VOICE_KEYS = [
+  "pocket:anna",
+  "pocket:vera",
+  "pocket:fantine",
+  "pocket:charles",
+  "pocket:paul",
+  "pocket:eponine",
+  "pocket:azelma",
+  "pocket:george",
+  "pocket:mary",
+  "pocket:jane",
+  "pocket:michael",
+  "pocket:eve",
+];
+
+function refreshMockHuddleMembership(config?: E2eConfig | null) {
+  if (!mockHuddle) return;
+  mockHuddle.state.agent_pubkeys = mockHuddle.members
+    .filter((member) => member.role === "bot")
+    .map((member) => member.pubkey);
+  mockHuddle.state.participants = mockHuddle.members.map(
+    (member) => member.pubkey,
+  );
+  mockHuddle.state.agent_voice_settings ??= {};
+  const agentSet = new Set(mockHuddle.state.agent_pubkeys);
+  for (const pubkey of Object.keys(mockHuddle.state.agent_voice_settings)) {
+    if (!agentSet.has(pubkey)) {
+      delete mockHuddle.state.agent_voice_settings[pubkey];
+    }
+  }
+  const defaultVoice =
+    config?.mock?.ttsSettings?.voicePreferences.find((key) =>
+      key.startsWith("pocket:"),
+    ) ?? "pocket:mary";
+  const used = new Set(
+    Object.values(mockHuddle.state.agent_voice_settings).map(
+      (settings) => settings.voice_key,
+    ),
+  );
+  mockHuddle.state.agent_pubkeys.forEach((pubkey, index) => {
+    if (mockHuddle?.state.agent_voice_settings[pubkey]) return;
+    const voiceKey =
+      index === 0 && !used.has(defaultVoice)
+        ? defaultVoice
+        : (MOCK_POCKET_VOICE_KEYS.find(
+            (key) => key !== defaultVoice && !used.has(key),
+          ) ?? defaultVoice);
+    used.add(voiceKey);
+    if (mockHuddle) {
+      mockHuddle.state.agent_voice_settings[pubkey] = {
+        enabled: true,
+        voice_key: voiceKey,
+      };
+    }
+  });
+}
+
+function initializeMockHuddle(
+  seed: MockHuddleSeed | undefined,
+  config?: E2eConfig,
+) {
+  mockHuddle = null;
+  if (!seed) {
+    window.sessionStorage.removeItem(MOCK_HUDDLE_STORAGE_KEY);
+    return;
+  }
+
+  const persisted = window.sessionStorage.getItem(MOCK_HUDDLE_STORAGE_KEY);
+  if (persisted) {
+    try {
+      mockHuddle = JSON.parse(persisted) as PersistedMockHuddle;
+    } catch {
+      window.sessionStorage.removeItem(MOCK_HUDDLE_STORAGE_KEY);
+    }
+  }
+
+  if (!mockHuddle) {
+    mockHuddle = {
+      members: structuredClone(seed.members),
+      state: {
+        phase: seed.phase ?? "active",
+        parent_channel_id: seed.parentChannelId,
+        ephemeral_channel_id: seed.ephemeralChannelId,
+        huddle_thread_event_id: seed.huddleThreadEventId ?? null,
+        participants: [],
+        agent_pubkeys: [],
+        agent_voice_settings: {},
+        tts_enabled: seed.ttsEnabled ?? false,
+        transcription_enabled: seed.transcriptionEnabled ?? false,
+        is_creator: seed.isCreator ?? true,
+        voice_input_mode: "push_to_talk",
+      },
+    };
+  }
+  if (!mockChannels.some((channel) => channel.id === seed.ephemeralChannelId)) {
+    const owner = createCurrentMember(config, "owner");
+    mockChannels.push(
+      createMockChannel({
+        id: seed.ephemeralChannelId,
+        name: "huddle",
+        channel_type: "stream",
+        visibility: "private",
+        description: "",
+        topic: null,
+        purpose: null,
+        last_message_at: null,
+        archived_at: null,
+        created_by: owner.pubkey,
+        topic_set_by: null,
+        topic_set_at: null,
+        purpose_set_by: null,
+        purpose_set_at: null,
+        topic_required: false,
+        max_members: null,
+        nip29_group_id: null,
+        ttl_seconds: 3_600,
+        created_minutes_ago: 0,
+        members: [owner],
+      }),
+    );
+  }
+  refreshMockHuddleMembership(config);
+  persistMockHuddle();
+}
 const openedExternalUrls: string[] = [];
 const defaultMockRelayAgents: RawRelayAgent[] = [
   {
@@ -4562,6 +5063,15 @@ function emitMockChannelMessage(
   );
   recordMockMessage(channelId, event);
   emitMockLiveEvent(channelId, event);
+  const rootEvent = history.find((candidate) => candidate.id === rootEventId);
+  if (rootEvent && mockHuddle?.state.ephemeral_channel_id === channelId) {
+    const summary = buildMockChannelThreadSummary(
+      channelId,
+      rootEvent,
+      getMockMessageStore(channelId),
+    );
+    if (summary) emitMockLiveEvent(channelId, summary);
+  }
   return event;
 }
 
@@ -7701,11 +8211,21 @@ let installCallCount = 0;
 const installCallCountByRuntime: Record<string, number> = {};
 let addChannelMembersCallCount = 0;
 let mockGlobalAgentConfig: {
+  credential_mode?: "byok" | "colony_credits";
   env_vars: Record<string, string>;
   provider: string | null;
   model: string | null;
   preferred_runtime?: string | null;
 } | null = null;
+let mockColonyCreditsAccount: {
+  balance_nanousd: string;
+  currency: "USD";
+  status: "active" | "depleted";
+} = {
+  balance_nanousd: "0",
+  currency: "USD" as const,
+  status: "depleted" as const,
+};
 
 // Per-page get_nsec call counter for sequenced error testing.
 let nsecCallCount = 0;
@@ -7990,7 +8510,7 @@ type MockUpdatePersonaInput = {
 async function handleUpdatePersona(args: {
   input: MockUpdatePersonaInput;
 }): Promise<RawPersona> {
-  return { ...applyMockPersonaUpdate(args.input) };
+  return { ...(await applyMockPersonaUpdate(args.input)) };
 }
 
 /**
@@ -8003,7 +8523,9 @@ async function handleUpdatePersona(args: {
  * make a UI that never calls `update_persona_and_publish` look like it kept
  * the "Save and publish" promise.
  */
-function applyMockPersonaUpdate(input: MockUpdatePersonaInput): RawPersona {
+async function applyMockPersonaUpdate(
+  input: MockUpdatePersonaInput,
+): Promise<RawPersona> {
   const persona = mockPersonas.find((candidate) => candidate.id === input.id);
   if (!persona) {
     throw new Error(`agent ${input.id} not found`);
@@ -8029,9 +8551,7 @@ function applyMockPersonaUpdate(input: MockUpdatePersonaInput): RawPersona {
   applyMockPersonaBehavior(persona, input.behavior);
   persona.updated_at = new Date().toISOString();
 
-  for (const callback of tauriEventListeners.get("agents-data-changed") ?? []) {
-    callback();
-  }
+  await emit("agents-data-changed");
   return persona;
 }
 
@@ -8201,7 +8721,10 @@ async function handleUpdatePersonaAndPublish(
   args: { input: MockUpdatePersonaInput },
   config?: E2eConfig,
 ): Promise<MockPersonaPublicationResult> {
-  return publishMockPersonaHead(applyMockPersonaUpdate(args.input), config);
+  return publishMockPersonaHead(
+    await applyMockPersonaUpdate(args.input),
+    config,
+  );
 }
 
 function ensureMockPersonaIsActive(personaId: string) {
@@ -10100,8 +10623,15 @@ export function maybeInstallE2eTauriMocks() {
     }
   }
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
-    ? { ...config.mock.globalAgentConfig }
+    ? {
+        ...config.mock.globalAgentConfig,
+        credential_mode:
+          config.mock.globalAgentConfig.credential_mode ?? "byok",
+      }
     : null;
+  mockColonyCreditsAccount = config.mock?.colonyCreditsAccount
+    ? { ...config.mock.colonyCreditsAccount }
+    : { balance_nanousd: "0", currency: "USD", status: "depleted" };
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
   resetMockRelayAgents(config);
@@ -10117,11 +10647,18 @@ export function maybeInstallE2eTauriMocks() {
   resetMockSaveSubscriptions(config);
   resetObserverArchivePolicyGate();
   resetMockPendingCommunityDeepLinks(config);
+  initializeMockHuddle(config.mock?.huddle, config);
   mockWebsocketSendMutexWedged = false;
-  mockWindows("main");
+  if (config.mock?.windowLabel) {
+    (window as Window & { isTauri?: boolean }).isTauri = true;
+  }
+  mockedWindowLabel = config.mock?.windowLabel ?? "main";
+  mockWindows(mockedWindowLabel);
   window.__BUZZ_E2E_COMMANDS__ = [];
   window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
+  window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__ = (payload) =>
+    emit("huddle-tts-speaker-level", payload);
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
   window.__BUZZ_E2E_PUBLISHED_EVENTS__ = [];
   window.__BUZZ_E2E_MOCK_COMPANY_BROKER__ = readMockCompanyBrokerLog;
@@ -10138,6 +10675,19 @@ export function maybeInstallE2eTauriMocks() {
       tags: fixture.event.tags.map((tag) => [...tag]),
     });
   }
+  window.__BUZZ_E2E_SET_MOCK_HUDDLE_SNAPSHOT__ = async ({
+    members,
+    transcriptionEnabled,
+  }) => {
+    if (!mockHuddle) {
+      throw new Error("No mock huddle is configured.");
+    }
+    mockHuddle.members = structuredClone(members);
+    mockHuddle.state.transcription_enabled = transcriptionEnabled;
+    refreshMockHuddleMembership(config);
+    persistMockHuddle();
+    await emitMockHuddleState();
+  };
   window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
@@ -10428,7 +10978,25 @@ export function maybeInstallE2eTauriMocks() {
     deviceId: state === "running" ? "mock-endpoint-id" : null,
     deviceName: state === "running" ? "Mock desktop" : null,
   });
-  const handleMockCommand = async (command: string, payload: unknown) => {
+  let mockImportedVoices: Array<{
+    key: string;
+    displayName: string;
+    backend: string;
+    backendName: string;
+    availability: "installed";
+    fallbackKey: string;
+    referenceFile: string;
+    provenance: {
+      source: string;
+      contentHash: string;
+      license: null;
+      sourceUrl: null;
+    };
+  }> = [];
+  const handleMockCommand = async (
+    command: string,
+    payload: unknown,
+  ): Promise<unknown> => {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
     window.__BUZZ_E2E_COMMANDS__?.push(command);
@@ -10446,6 +11014,493 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_huddle_state": {
+        const snapshot = mockHuddle ? structuredClone(mockHuddle.state) : null;
+        const delayMs = activeConfig?.mock?.huddleStateReadDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        return snapshot;
+      }
+      case "get_voice_input_mode":
+        return mockHuddle?.state.voice_input_mode ?? "push_to_talk";
+      case "set_voice_input_mode": {
+        if (!mockHuddle) throw new Error("No active mock huddle.");
+        const mode = (payload as { mode?: unknown }).mode;
+        if (mode !== "push_to_talk" && mode !== "voice_activity") {
+          throw new Error("Missing voice input mode.");
+        }
+        mockHuddle.state.voice_input_mode = mode;
+        persistMockHuddle();
+        await emitMockHuddleState();
+        return null;
+      }
+      case "set_huddle_manual_mic_unmuted":
+        return null;
+      case "get_huddle_agent_pubkeys":
+        if (!mockHuddle) return [];
+        return [...mockHuddle.state.agent_pubkeys];
+      case "start_huddle": {
+        const request = payload as {
+          parentChannelId: string;
+          memberPubkeys?: string[];
+          channelName?: string;
+        };
+        const ephemeralChannelId = crypto.randomUUID();
+        const selfPubkey = identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey;
+        const owner = createCurrentMember(activeConfig, "owner");
+        mockHuddle = {
+          members: [
+            { pubkey: selfPubkey, role: "owner" },
+            ...(request.memberPubkeys ?? []).map((pubkey) => ({
+              pubkey,
+              role: "bot" as const,
+            })),
+          ],
+          state: {
+            phase: "creating",
+            parent_channel_id: request.parentChannelId,
+            ephemeral_channel_id: ephemeralChannelId,
+            huddle_thread_event_id: null,
+            participants: [],
+            agent_pubkeys: [],
+            agent_voice_settings: {},
+            tts_enabled: false,
+            transcription_enabled: false,
+            is_creator: true,
+            voice_input_mode: "push_to_talk",
+          },
+        };
+        refreshMockHuddleMembership(activeConfig);
+        persistMockHuddle();
+        await emitMockHuddleState();
+        mockChannels.push(
+          createMockChannel({
+            id: ephemeralChannelId,
+            name: request.channelName ?? "huddle",
+            channel_type: "stream",
+            visibility: "private",
+            description: "",
+            topic: null,
+            purpose: null,
+            last_message_at: null,
+            archived_at: null,
+            created_by: owner.pubkey,
+            topic_set_by: null,
+            topic_set_at: null,
+            purpose_set_by: null,
+            purpose_set_at: null,
+            topic_required: false,
+            max_members: null,
+            nip29_group_id: null,
+            ttl_seconds: 3_600,
+            created_minutes_ago: 0,
+            members: [owner],
+          }),
+        );
+        emitMockGlobalEvent(
+          createMockEvent(
+            KIND_MEMBER_ADDED_NOTIFICATION,
+            "",
+            [
+              ["h", ephemeralChannelId],
+              ["p", selfPubkey],
+            ],
+            selfPubkey,
+          ),
+        );
+        if ((activeConfig?.mock?.startHuddleReturnDelayMs ?? 0) > 0) {
+          await new Promise((resolve) =>
+            window.setTimeout(
+              resolve,
+              activeConfig?.mock?.startHuddleReturnDelayMs ?? 0,
+            ),
+          );
+        }
+        if (mockHuddle) {
+          mockHuddle.state.phase = "connected";
+          persistMockHuddle();
+          await emitMockHuddleState();
+        }
+        return { ephemeral_channel_id: ephemeralChannelId };
+      }
+      case "confirm_huddle_active":
+        if (mockHuddle) {
+          mockHuddle.state.phase = "active";
+          persistMockHuddle();
+          await emitMockHuddleState();
+        }
+        return null;
+      case "open_huddle_window":
+        if ((activeConfig?.mock?.openHuddleWindowDelayMs ?? 0) > 0) {
+          await new Promise((resolve) =>
+            window.setTimeout(
+              resolve,
+              activeConfig?.mock?.openHuddleWindowDelayMs ?? 0,
+            ),
+          );
+        }
+        return null;
+      case "close_huddle_companion":
+        await emit("huddle-companion-returned", null);
+        return null;
+      case "leave_huddle":
+      case "end_huddle":
+        mockHuddle = null;
+        window.sessionStorage.removeItem(MOCK_HUDDLE_STORAGE_KEY);
+        // Deliberately leave the unarchived backing channel in the mock list.
+        // This models relay/cache propagation lag and proves the UI removes it
+        // at the local huddle lifecycle boundary rather than waiting for data.
+        await emit("huddle-state-changed", {
+          phase: "idle",
+          parent_channel_id: null,
+          ephemeral_channel_id: null,
+          huddle_thread_event_id: null,
+          participants: [],
+          agent_pubkeys: [],
+          agent_voice_settings: {},
+          tts_enabled: false,
+          transcription_enabled: false,
+          is_creator: false,
+          voice_input_mode: "push_to_talk",
+        });
+        return null;
+      case "set_huddle_transcription_enabled":
+        if (!mockHuddle) {
+          throw new Error("No active mock huddle.");
+        }
+        mockHuddle.state.transcription_enabled = Boolean(
+          (payload as { enabled?: boolean }).enabled,
+        );
+        persistMockHuddle();
+        await emitMockHuddleState();
+        return null;
+      case "ensure_huddle_agent_voice_settings":
+        refreshMockHuddleMembership(activeConfig);
+        persistMockHuddle();
+        return structuredClone(mockHuddle?.state.agent_voice_settings ?? {});
+      case "set_huddle_agent_tts_enabled": {
+        if (!mockHuddle) throw new Error("No active mock huddle.");
+        const request = payload as { agentPubkey?: string; enabled?: boolean };
+        if (!request.agentPubkey || typeof request.enabled !== "boolean") {
+          throw new Error("Missing agent text-to-speech setting.");
+        }
+        refreshMockHuddleMembership(activeConfig);
+        const settings =
+          mockHuddle.state.agent_voice_settings[request.agentPubkey];
+        if (!settings) throw new Error("Agent is not in the active huddle.");
+        settings.enabled = request.enabled;
+        persistMockHuddle();
+        await emitMockHuddleState();
+        return structuredClone(settings);
+      }
+      case "set_huddle_agent_voice": {
+        if (!mockHuddle) throw new Error("No active mock huddle.");
+        const request = payload as { agentPubkey?: string; voiceKey?: string };
+        if (!request.agentPubkey || !request.voiceKey) {
+          throw new Error("Missing agent voice setting.");
+        }
+        refreshMockHuddleMembership(activeConfig);
+        const settings =
+          mockHuddle.state.agent_voice_settings[request.agentPubkey];
+        if (!settings) throw new Error("Agent is not in the active huddle.");
+        settings.voice_key = request.voiceKey;
+        persistMockHuddle();
+        await emitMockHuddleState();
+        return structuredClone(settings);
+      }
+      case "sync_agents_to_active_huddle": {
+        const request = payload as {
+          channelId?: string;
+          agentPubkeys?: string[];
+        };
+        if (
+          !mockHuddle ||
+          !request.channelId ||
+          (request.channelId !== mockHuddle.state.parent_channel_id &&
+            request.channelId !== mockHuddle.state.ephemeral_channel_id)
+        ) {
+          return { matched_active_huddle: false, added: [] };
+        }
+
+        const existingAgents = new Set(
+          mockHuddle.members
+            .filter((member) => member.role === "bot")
+            .map((member) => member.pubkey),
+        );
+        const added: string[] = [];
+        for (const pubkey of request.agentPubkeys ?? []) {
+          if (!pubkey || existingAgents.has(pubkey)) continue;
+          existingAgents.add(pubkey);
+          added.push(pubkey);
+          mockHuddle.members.push({ pubkey, role: "bot" });
+        }
+        refreshMockHuddleMembership(activeConfig);
+        persistMockHuddle();
+        if (added.length > 0) {
+          await emitMockHuddleState();
+        }
+        return { matched_active_huddle: true, added };
+      }
+      case "add_agent_to_huddle": {
+        const error = activeConfig?.mock?.addAgentToHuddleError;
+        if (error) {
+          throw new Error(error);
+        }
+        const result = activeConfig?.mock?.addAgentToHuddleResult;
+        if (!result) {
+          throw new Error("No mock add-agent result configured.");
+        }
+        return structuredClone(result);
+      }
+      case "remove_agent_from_huddle": {
+        const agentPubkey = (payload as { agentPubkey?: string })?.agentPubkey;
+        if (!mockHuddle || !agentPubkey) {
+          throw new Error("No active huddle agent to remove.");
+        }
+        const initialCount = mockHuddle.members.length;
+        mockHuddle.members = mockHuddle.members.filter(
+          (member) => member.role !== "bot" || member.pubkey !== agentPubkey,
+        );
+        if (mockHuddle.members.length === initialCount) {
+          throw new Error("Agent is not in this huddle.");
+        }
+        refreshMockHuddleMembership(activeConfig);
+        persistMockHuddle();
+        await emitMockHuddleState();
+        return;
+      }
+      case "get_model_status":
+        return { stt: "ready", tts: "ready" };
+      case "get_tts_settings":
+        return (
+          activeConfig?.mock?.ttsSettings ?? {
+            version: 1,
+            agentTextToSpeech: true,
+            voicePreferences: ["pocket:mary"],
+          }
+        );
+      case "list_voice_registry":
+        return [
+          ...[
+            [
+              "anna",
+              "Anna",
+              "anna.wav",
+              "p228_023_enhanced.wav",
+              "0a6de25cf12bf1540beb85979f306a92be81fecc051c547c5395e7e5237a3856",
+            ],
+            [
+              "vera",
+              "Vera",
+              "vera.wav",
+              "p229_023_enhanced.wav",
+              "309cf91a895830f15842b398f69a4962cb1f7e0bfab10e25dd27838e826c204b",
+            ],
+            [
+              "fantine",
+              "Fantine",
+              "fantine.wav",
+              "p244_023_enhanced.wav",
+              "5f07d4e2a3f20a15572aae885156b43ef3fc12ef3812996fd135680d9956448b",
+            ],
+            [
+              "charles",
+              "Charles",
+              "charles.wav",
+              "p254_023_enhanced.wav",
+              "6b681a429198f16e378d53bccb08d06939da7b00144a7696111d4f8f76be7756",
+            ],
+            [
+              "paul",
+              "Paul",
+              "paul.wav",
+              "p259_023_enhanced.wav",
+              "7aba504fe0b3b16478b69ed27ce6007e3cb42b0c1915b5f1c6a6024ae37d679b",
+            ],
+            [
+              "eponine",
+              "Eponine",
+              "eponine.wav",
+              "p262_023_enhanced.wav",
+              "a13c27fb47627b05223691a0ef2974358a18c886e6c2f9d2762ff1d02c20926b",
+            ],
+            [
+              "azelma",
+              "Azelma",
+              "azelma.wav",
+              "p303_023_enhanced.wav",
+              "60e3d26cdf2efdec5df712152c839928f4d5522821e6554ae11fd96c57ab1026",
+            ],
+            [
+              "george",
+              "George",
+              "george.wav",
+              "p315_023_enhanced.wav",
+              "29a41f93bf5236e5b21501091d7774c255d5f3d4e62fa4f9fdf0a92a793c84ae",
+            ],
+            [
+              "mary",
+              "Mary",
+              "reference_sample.wav",
+              "p333_023_enhanced.wav",
+              "a35b0468382218e9f37a9a7494d1e4b74deaf18d7ced22265b4e325bb55c183f",
+            ],
+            [
+              "jane",
+              "Jane",
+              "jane.wav",
+              "p339_023_enhanced.wav",
+              "2f12e7f155eb3118f55425394f1b049e5b1b67bdc9b3932c8ba4521420aeb84a",
+            ],
+            [
+              "michael",
+              "Michael",
+              "michael.wav",
+              "p360_023_enhanced.wav",
+              "b6743e9195e5e3fd34fe9d1633ae93f7ffab787b249e45f6467d7d6f7a6ee6ad",
+            ],
+            [
+              "eve",
+              "Eve",
+              "eve.wav",
+              "p361_023_enhanced.wav",
+              "396e7cbd066b0f3fb6d67fa26e7904076958239d736d4390f15b5fe88feb14cd",
+            ],
+          ].map(
+            ([id, displayName, referenceFile, upstreamFile, contentHash]) => ({
+              key: `pocket:${id}`,
+              displayName,
+              backend: "pocket",
+              backendName: "Pocket TTS",
+              availability: "bundled",
+              fallbackKey: id === "mary" ? null : "pocket:mary",
+              referenceFile,
+              provenance: {
+                source: "bundled",
+                contentHash,
+                license: "CC-BY-4.0",
+                sourceUrl: `https://huggingface.co/kyutai/tts-voices/blob/323332d33f997de8394f24a193e1a76df720e01a/vctk/${upstreamFile}`,
+              },
+            }),
+          ),
+          ...mockImportedVoices,
+        ];
+      case "set_tts_enabled": {
+        const enabled = (payload as { enabled?: boolean })?.enabled;
+        if (typeof enabled !== "boolean")
+          throw new Error("Missing text-to-speech enabled state");
+        const settings = {
+          version: 1,
+          agentTextToSpeech: enabled,
+          voicePreferences: activeConfig?.mock?.ttsSettings
+            ?.voicePreferences ?? ["pocket:mary"],
+        };
+        if (activeConfig) {
+          activeConfig.mock ??= {};
+          activeConfig.mock.ttsSettings = settings;
+        }
+        return settings;
+      }
+      case "interrupt_huddle_speech":
+        return;
+      case "set_pocket_voice": {
+        const voiceKey = (payload as { voiceKey?: string })?.voiceKey;
+        if (!voiceKey) throw new Error("Missing Pocket voice key");
+        const current = activeConfig?.mock?.ttsSettings ?? {
+          version: 1,
+          agentTextToSpeech: true,
+          voicePreferences: ["pocket:mary"],
+        };
+        const firstPocketIndex = current.voicePreferences.findIndex((key) =>
+          key.startsWith("pocket:"),
+        );
+        const preferences = current.voicePreferences.filter(
+          (key) => !key.startsWith("pocket:"),
+        );
+        preferences.splice(
+          firstPocketIndex < 0 ? preferences.length : firstPocketIndex,
+          0,
+          voiceKey,
+        );
+        const settings = { ...current, voicePreferences: preferences };
+        if (activeConfig) {
+          activeConfig.mock ??= {};
+          activeConfig.mock.ttsSettings = settings;
+        }
+        return settings;
+      }
+      case "preview_pocket_voice":
+        return null;
+      case "import_pocket_voice": {
+        const importResult =
+          activeConfig?.mock?.pocketVoiceImportResult ?? "success";
+        if (importResult === "cancel") return null;
+        if (importResult === "invalid") {
+          throw new Error("Voice WAV must contain PCM or 32-bit float audio");
+        }
+        const contentHash = "1".repeat(64);
+        const imported = {
+          key: `pocket:imported:${contentHash}`,
+          displayName: "My voice",
+          backend: "pocket",
+          backendName: "Pocket TTS",
+          availability: "installed" as const,
+          fallbackKey: "pocket:mary",
+          referenceFile: `${contentHash}.wav`,
+          provenance: {
+            source: "local import",
+            contentHash,
+            license: null,
+            sourceUrl: null,
+          },
+        };
+        mockImportedVoices = [imported];
+        const current = activeConfig?.mock?.ttsSettings ?? {
+          version: 1,
+          agentTextToSpeech: true,
+          voicePreferences: ["pocket:mary"],
+        };
+        const settings = {
+          ...current,
+          voicePreferences: [imported.key],
+        };
+        if (activeConfig) {
+          activeConfig.mock ??= {};
+          activeConfig.mock.ttsSettings = settings;
+        }
+        return {
+          settings,
+          registry: await handleMockCommand("list_voice_registry", null),
+        };
+      }
+      case "delete_pocket_voice": {
+        const voiceKey = (payload as { voiceKey?: string })?.voiceKey;
+        if (!voiceKey?.startsWith("pocket:imported:"))
+          throw new Error("Missing imported Pocket voice key");
+        mockImportedVoices = mockImportedVoices.filter(
+          (voice) => voice.key !== voiceKey,
+        );
+        const current = activeConfig?.mock?.ttsSettings ?? {
+          version: 1,
+          agentTextToSpeech: true,
+          voicePreferences: ["pocket:mary"],
+        };
+        const settings = {
+          ...current,
+          voicePreferences: current.voicePreferences.includes(voiceKey)
+            ? ["pocket:mary"]
+            : current.voicePreferences,
+        };
+        if (activeConfig) {
+          activeConfig.mock ??= {};
+          activeConfig.mock.ttsSettings = settings;
+        }
+        return {
+          settings,
+          registry: await handleMockCommand("list_voice_registry", null),
+        };
+      }
       case "get_discovery_credential_status": {
         const provider = (payload as { provider?: string } | null)?.provider;
         if (
@@ -10512,6 +11567,15 @@ export function maybeInstallE2eTauriMocks() {
         );
         return "missing";
       }
+      case "colony_provisioning_config":
+        return (
+          activeConfig?.mock?.colonyProvisioningConfig ?? {
+            self_serve: true,
+            domain: "colony.ainative.ventures",
+            public: false,
+            max_per_owner: 3,
+          }
+        );
       case "colony_check_community_name":
         return {
           name: (payload as { name?: string })?.name ?? "community",
@@ -11394,9 +12458,7 @@ export function maybeInstallE2eTauriMocks() {
           }
         }
         // Mirror the real Rust backend: emit "agents-data-changed" after reconcile.
-        for (const cb of tauriEventListeners.get("agents-data-changed") ?? []) {
-          cb();
-        }
+        await emit("agents-data-changed");
         return undefined;
       }
       case "set_persona_active":
@@ -11828,12 +12890,22 @@ export function maybeInstallE2eTauriMocks() {
         // Return the mutable persisted mock value, seeded from the test config.
         return (
           mockGlobalAgentConfig ?? {
+            credential_mode: "byok",
             env_vars: {},
             provider: null,
             model: null,
             preferred_runtime: null,
           }
         );
+      }
+      case "get_colony_credits_account": {
+        return mockColonyCreditsAccount;
+      }
+      case "reconnect_colony_credits": {
+        if (activeConfig?.mock?.colonyCreditsReconnectError) {
+          throw new Error(activeConfig.mock.colonyCreditsReconnectError);
+        }
+        return null;
       }
       case "set_global_agent_config": {
         // Echo back the submitted config as the saved value (mirrors the
@@ -11842,6 +12914,7 @@ export function maybeInstallE2eTauriMocks() {
         const savedConfig = (
           payload as {
             config: {
+              credential_mode?: "byok" | "colony_credits";
               env_vars: Record<string, string>;
               provider: string | null;
               model: string | null;
@@ -11860,11 +12933,14 @@ export function maybeInstallE2eTauriMocks() {
         if (saveDelayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, saveDelayMs));
         }
-        mockGlobalAgentConfig = savedConfig;
+        mockGlobalAgentConfig = {
+          ...savedConfig,
+          credential_mode: savedConfig.credential_mode ?? "byok",
+        };
         // In the E2E environment there are no running agents to restart, so
         // the counts default to 0 unless a spec drives them explicitly.
         return {
-          config: savedConfig,
+          config: mockGlobalAgentConfig,
           restarted_count: config?.mock?.globalConfigRestartedCount ?? 0,
           failed_restart_count:
             config?.mock?.globalConfigFailedRestartCount ?? 0,
@@ -12296,9 +13372,6 @@ export function maybeInstallE2eTauriMocks() {
       case "plugin:webview|set_webview_zoom":
         window.__BUZZ_E2E_WEBVIEW_ZOOM__ = (payload as { value: number }).value;
         return;
-      case "plugin:event|listen":
-        // Tauri event system (pairing, huddle) — no-op in e2e, return unlisten fn ID
-        return Math.floor(Math.random() * 1_000_000);
       case "start_pairing": {
         const delayMs = activeConfig?.mock?.pairingStartDelayMs ?? 0;
         if (delayMs > 0) {
@@ -12490,28 +13563,30 @@ export function maybeInstallE2eTauriMocks() {
   };
   window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ = (command, payload) =>
     handleMockCommand(command, payload ?? null);
-  mockIPC(handleMockCommand, { shouldMockEvents: true });
-
-  // Wire up __TAURI_INTERNALS__.listen so tests can subscribe to backend-emitted
-  // events (e.g. "agents-data-changed"). mockIPC already ensures __TAURI_INTERNALS__
-  // exists; we just add the listen property without clobbering invoke.
-  (
-    window as unknown as {
-      __TAURI_INTERNALS__: {
-        listen?: (event: string, cb: () => void) => Promise<() => void>;
-      };
-    }
-  ).__TAURI_INTERNALS__.listen = async (event: string, cb: () => void) => {
-    let listeners = tauriEventListeners.get(event);
+  // Spec-visible seams into the mock bridge. __BUZZ_E2E_EMIT_NATIVE_EVENT__
+  // fires the app's `listen()` handlers; __BUZZ_E2E_LISTEN_NATIVE_EVENT__
+  // subscribes to the backend-signal registry mock command handlers fire
+  // (e.g. "agents-data-changed" after a persona mutation).
+  //
+  // `mockWindows` above is deliberately kept: it supplies __TAURI_INTERNALS__
+  // *window metadata* (huddle-transcription asserts on the popout's label),
+  // which is unrelated to IPC. Only mockIPC and the __TAURI_INTERNALS__.listen
+  // patch are gone, replaced by the NativeBridge the app now talks to.
+  const e2eNativeBridge = new E2eNativeBridge(handleMockCommand);
+  window.__BUZZ_E2E_EMIT_NATIVE_EVENT__ = (event, payload) =>
+    e2eNativeBridge.emit(event, payload);
+  window.__BUZZ_E2E_LISTEN_NATIVE_EVENT__ = async (event, cb) => {
+    let listeners = nativeEventListeners.get(event);
     if (!listeners) {
       listeners = new Set();
-      tauriEventListeners.set(event, listeners);
+      nativeEventListeners.set(event, listeners);
     }
     listeners.add(cb);
-    return () => {
-      tauriEventListeners.get(event)?.delete(cb);
+    return async () => {
+      listeners?.delete(cb);
     };
   };
+  setNativeBridge(e2eNativeBridge);
 
   installed = true;
 }

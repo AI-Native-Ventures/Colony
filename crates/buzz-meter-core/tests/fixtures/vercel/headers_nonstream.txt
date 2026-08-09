@@ -1,0 +1,14 @@
+HTTP/2 200 
+access-control-allow-headers: Content-Type, Authorization, ai-gateway-auth-method, ai-gateway-protocol-version, ai-model-id, ai-language-model-id, ai-language-model-specification-version, ai-image-model-specification-version, ai-embedding-model-specification-version, ai-language-model-streaming, ai-reporting-tags, ai-reporting-user, http-referer, x-title, anthropic-beta, x-vercel-ai-gateway-team
+access-control-allow-methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+access-control-allow-origin: *
+cache-control: public, max-age=0, must-revalidate
+content-type: application/json
+date: Sat, 08 Aug 2026 01:18:21 GMT
+server: Vercel
+strict-transport-security: max-age=63072000; includeSubDomains; preload
+vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+x-matched-path: /v1/chat/completions
+x-vercel-cache: MISS
+x-vercel-id: cpt1::fra1::p6fxn-1786151898997-1ff95ed4522d
+

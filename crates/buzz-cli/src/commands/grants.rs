@@ -13,7 +13,10 @@ use nostr::{EventBuilder, Kind, Tag};
 use buzz_core::interrupt::parse_grant;
 use buzz_core::kind::{KIND_DELEGATION_GRANT, KIND_NIP43_MEMBERSHIP_LIST};
 
-use crate::client::{extract_d_tag, normalize_write_response, write_conflict_reason, BuzzClient};
+use crate::client::{
+    extract_d_tag, head_is_newer, head_rank, normalize_write_response, report_malformed_head,
+    write_conflict_reason, BuzzClient,
+};
 use crate::error::CliError;
 
 /// Build a two-element string tag, e.g. `["d", "grant-copy"]`.
@@ -92,16 +95,25 @@ async fn cmd_revoke(client: &BuzzClient, id: &str) -> Result<(), CliError> {
         .collect();
     let any_head_exists = !heads.is_empty();
     let owners = current_owner_pubkeys(client).await?;
+    let owner_authored = retain_owner_authored(heads, owners.as_ref());
+    let owner_authored_exist = !owner_authored.is_empty();
 
-    let current = newest_head(retain_owner_authored(heads, owners.as_ref())).ok_or_else(|| {
-        if any_head_exists {
+    let current = newest_head(owner_authored).ok_or_else(|| {
+        if !any_head_exists {
+            CliError::Usage(format!("no grant head found with id '{id}'"))
+        } else if !owner_authored_exist {
             CliError::Usage(format!(
                 "grant '{id}' has heads, but none authored by a current community owner. The \
                  relay ignores those heads too, so this grant is already unenforceable and \
                  there is nothing to revoke."
             ))
         } else {
-            CliError::Usage(format!("no grant head found with id '{id}'"))
+            CliError::Usage(format!(
+                "grant '{id}' has heads authored by a current community owner, but every one is \
+                 malformed (missing id, or missing or non-integer created_at) and was skipped. \
+                 The relay would ignore those heads too, so this grant is already unenforceable \
+                 and there is nothing to revoke."
+            ))
         }
     })?;
 
@@ -166,6 +178,10 @@ fn newest_heads_by_d_tag(events: Vec<serde_json::Value>) -> Vec<serde_json::Valu
         std::collections::HashMap::new();
     for event in events {
         let d_tag = extract_d_tag(&event);
+        if head_rank(&event).is_none() {
+            report_malformed_head(&d_tag, &event);
+            continue;
+        }
         let should_replace = newest
             .get(&d_tag)
             .map(|existing| head_is_newer(&event, existing))
@@ -178,37 +194,17 @@ fn newest_heads_by_d_tag(events: Vec<serde_json::Value>) -> Vec<serde_json::Valu
     let mut result: Vec<serde_json::Value> = newest.into_values().collect();
     // Deterministic across runs: `HashMap` iteration order is not, so a
     // created_at tie would otherwise reorder the output between invocations.
-    result.sort_by(|a, b| {
-        created_at_of(b)
-            .cmp(&created_at_of(a))
-            .then_with(|| event_id_of(a).cmp(event_id_of(b)))
+    result.sort_by(|a, b| match (head_rank(a), head_rank(b)) {
+        (Some((a_at, a_id)), Some((b_at, b_id))) => b_at.cmp(&a_at).then_with(|| a_id.cmp(b_id)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     });
     result
 }
 
-/// A head event's `created_at`, or 0 when absent or not an integer.
-fn created_at_of(event: &serde_json::Value) -> i64 {
-    event
-        .get("created_at")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0)
-}
-
-/// A head event's `id` as lowercase hex, or `""` when absent.
-///
-/// Nostr event ids are lowercase hex of 32 bytes, so comparing these strings
-/// lexicographically is the same comparison the relay makes on the raw
-/// bytes.
-fn event_id_of(event: &serde_json::Value) -> &str {
-    event
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-}
-
-/// Whether `candidate` supersedes `incumbent` under the relay's own ordering
-/// for NIP-33 heads, `created_at DESC, id ASC`
-/// (`buzz-db`'s `query_events`, which backs `interrupt_gate::active_grant`).
+/// The single head the relay would honour among `heads`, or `None` when
+/// `heads` is empty or every head is malformed.
 ///
 /// The tie matters: Nostr `created_at` is whole seconds, so two heads
 /// published inside one second collide, and the relay breaks that tie toward
@@ -216,24 +212,24 @@ fn event_id_of(event: &serde_json::Value) -> &str {
 /// returns the LAST maximum and therefore picked the highest id, the exact
 /// opposite; `grants list` agreed with the relay only by accident of the
 /// order the query happened to return rows in.
-fn head_is_newer(candidate: &serde_json::Value, incumbent: &serde_json::Value) -> bool {
-    match created_at_of(candidate).cmp(&created_at_of(incumbent)) {
-        std::cmp::Ordering::Greater => true,
-        std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => event_id_of(candidate) < event_id_of(incumbent),
-    }
-}
-
-/// The single head the relay would honour among `heads`, or `None` when
-/// `heads` is empty.
 fn newest_head(heads: Vec<serde_json::Value>) -> Option<serde_json::Value> {
-    heads.into_iter().reduce(|incumbent, candidate| {
-        if head_is_newer(&candidate, &incumbent) {
-            candidate
-        } else {
-            incumbent
-        }
-    })
+    heads
+        .into_iter()
+        .filter(|event| {
+            if head_rank(event).is_none() {
+                report_malformed_head(&extract_d_tag(event), event);
+                false
+            } else {
+                true
+            }
+        })
+        .reduce(|incumbent, candidate| {
+            if head_is_newer(&candidate, &incumbent) {
+                candidate
+            } else {
+                incumbent
+            }
+        })
 }
 
 /// Drop every head whose author does not CURRENTLY hold the community's
@@ -341,7 +337,7 @@ async fn current_owner_pubkeys(
         .await?;
     let Some(newest) = newest_head(snapshot) else {
         eprintln!(
-            "warning: this relay has published no membership snapshot (kind \
+            "warning: this relay has published no readable membership snapshot (kind \
              {KIND_NIP43_MEMBERSHIP_LIST}), so the current owner roster cannot be read; showing \
              every grant head regardless of author. The relay honours only heads authored by a \
              current owner, so this view may disagree with what is actually enforced."
@@ -392,6 +388,13 @@ pub async fn dispatch(cmd: crate::GrantsCmd, client: &BuzzClient) -> Result<(), 
 mod tests {
     use super::*;
     use nostr::Keys;
+
+    /// Test projection of the selected head's `id`, or `""` when it cannot
+    /// be read. Selection itself goes through the shared comparator, so this
+    /// only reads, never decides.
+    fn event_id_of(event: &serde_json::Value) -> &str {
+        head_rank(event).map(|(_, id)| id).unwrap_or("")
+    }
 
     fn signed_grant(
         id: &str,
@@ -597,6 +600,49 @@ mod tests {
             owners,
             std::collections::HashSet::from(["owner-a".to_string(), "owner-b".to_string()])
         );
+    }
+
+    /// Gate 3: a head with no `id` is malformed and must be skipped, so a
+    /// well-formed head wins even at an identical `created_at`. Today the
+    /// missing id projects to `""`, which sorts below every hex id, so the
+    /// id-less head wins the tie: the dangerous direction on an
+    /// authorization path. Convergence: the shared comparator in
+    /// `crate::client::tests::shared_head_comparator_selects_the_relays_head`
+    /// pins the rule in one place.
+    #[test]
+    fn a_head_without_an_id_never_beats_a_well_formed_head() {
+        let mut idless = head("aa", 100, "owner-a");
+        idless.as_object_mut().unwrap().remove("id");
+        let well_formed = head("bb", 100, "owner-a");
+
+        for events in [
+            vec![idless.clone(), well_formed.clone()],
+            vec![well_formed, idless],
+        ] {
+            assert_eq!(
+                newest_head(events).as_ref().map(event_id_of),
+                Some("bb"),
+                "the well-formed head must win regardless of relay order"
+            );
+        }
+    }
+
+    /// Gate 4: a head with a missing `created_at` is malformed and must lose
+    /// to a valid head with a negative timestamp, in both positions. Today
+    /// the malformed head is ranked as epoch zero and beats the valid head.
+    #[test]
+    fn malformed_created_at_never_beats_a_valid_head() {
+        let mut missing = head("aa", 100, "owner-a");
+        missing.as_object_mut().unwrap().remove("created_at");
+        let valid = head("bb", -5, "owner-a");
+
+        for events in [vec![missing.clone(), valid.clone()], vec![valid, missing]] {
+            assert_eq!(
+                newest_head(events).as_ref().map(event_id_of),
+                Some("bb"),
+                "the valid head must win regardless of relay order"
+            );
+        }
     }
 
     /// Serve one canned relay write response on `POST /events`.

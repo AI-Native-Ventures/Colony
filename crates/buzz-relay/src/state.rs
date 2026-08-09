@@ -643,6 +643,11 @@ pub struct AppState {
     /// byte-identically to a relay without the mesh. Access via
     /// [`AppState::mesh`].
     pub mesh: Arc<std::sync::OnceLock<crate::mesh_boot::MeshHandle>>,
+    /// Colony Credits hosted gateway, set once by `main.rs` when
+    /// `VERCEL_AI_GATEWAY_KEY` is configured (never a constructor parameter,
+    /// so `AppState::new` call sites are untouched). Unset ⇒ the gateway
+    /// routes do not exist and answer 404.
+    pub gateway: Arc<std::sync::OnceLock<Arc<crate::gateway::GatewayState>>>,
 }
 
 impl AppState {
@@ -835,6 +840,7 @@ impl AppState {
             // `crates/buzz-test-client` once those land).
             tracer: Arc::new(crate::conformance::NoopTracer),
             mesh: Arc::new(std::sync::OnceLock::new()),
+            gateway: Arc::new(std::sync::OnceLock::new()),
         };
         (
             state,
@@ -1254,7 +1260,9 @@ impl std::fmt::Debug for AppState {
 }
 
 #[cfg(test)]
-mod tests {
+/// Test-only helpers shared across the crate's test modules (gateway E2E,
+/// media, bridge, operator). Exists only in `cfg(test)` builds.
+pub mod tests {
     use super::*;
     use crate::connection::{AuthState, ConnectionState};
     use std::collections::HashMap;
@@ -1292,10 +1300,20 @@ mod tests {
         (mgr, conn_id, rx, ctrl_rx, cancel, bp)
     }
 
-    async fn test_state() -> Arc<AppState> {
+    /// Build an `AppState` from the environment (`DATABASE_URL`), with relay
+    /// membership enforcement off and an unreachable Redis (pub/sub state is
+    /// lazy). The returned state is ready for handlers or `build_router`.
+    pub async fn test_state() -> Arc<AppState> {
+        test_state_with_redis("redis://127.0.0.1:1").await
+    }
+
+    /// Build an `AppState` exactly like [`test_state`], but with the given
+    /// Redis URL. Endpoints that need the replay guard or pub/sub (NIP-98
+    /// mint/revoke, live events) must pass a reachable Redis.
+    pub async fn test_state_with_redis(redis_url: &str) -> Arc<AppState> {
         let mut config = crate::config::Config::from_env().expect("default config loads");
         config.require_relay_membership = false;
-        config.redis_url = "redis://127.0.0.1:1".to_string();
+        config.redis_url = redis_url.to_string();
         let pool = sqlx::PgPool::connect_lazy(&config.database_url).expect("lazy pg pool");
         let db = buzz_db::Db::from_pool(pool.clone());
         let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)

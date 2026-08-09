@@ -146,6 +146,10 @@ test.describe("Blocks live Gate C", () => {
       "BUZZ_E2E_APPROVAL_COUNTER",
       process.env.BUZZ_E2E_APPROVAL_COUNTER,
     );
+    const harnessProject = required(
+      "BUZZ_E2E_HARNESS_PROJECT",
+      process.env.BUZZ_E2E_HARNESS_PROJECT,
+    );
     const evidence = evidenceRoot;
     const name = `blocks-live-${process.pid}`;
 
@@ -597,7 +601,7 @@ test.describe("Blocks live Gate C", () => {
       [
         "compose",
         "-p",
-        "buzz-harness",
+        harnessProject,
         "-f",
         "docker-compose.harness.yml",
         "exec",
@@ -691,6 +695,16 @@ test.describe("Blocks live Gate C", () => {
     await page.getByRole("button", { name: "Inbox" }).click();
     await page.getByTestId("inbox-filter-trigger").click();
     await page.getByRole("menuitemradio", { name: "Needs action" }).click();
+    // The home feed refreshes from the real relay when a live feed update
+    // lands (useLiveHomeFeedActions), and e2e mode exposes the same refetch
+    // via the app's buzz:e2e-home-feed-updated hook. Wait for the feed to
+    // converge on the relay's projection before asserting: the gate must
+    // prove the loop, not race the client feed cache. The assertion below
+    // still fails if the loop is broken (no receipt, or the projection keeps
+    // the resolved instance) because the refetch hits the real relay.
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event("buzz:e2e-home-feed-updated"));
+    });
     await expect(
       page.getByTestId(`home-inbox-item-${proposalIds[0]}`),
     ).toHaveCount(0);

@@ -41,6 +41,7 @@ import { IndustryGrid } from "./IndustryGrid";
 import { DiscoveryListFilters } from "./DiscoveryListFilters";
 import { VerticalGrid } from "./VerticalGrid";
 import { LeadsWorkspace } from "./LeadsWorkspace";
+import { PipelineWorkspace } from "./PipelineWorkspace";
 import { FieldGrid } from "./FieldGrid";
 import { RoleGrid } from "./RoleGrid";
 import { RoleCampaignListView } from "./RoleCampaignListView";
@@ -641,6 +642,20 @@ export function DiscoveryWorkspace({
           initialLeads={readModel.leads}
           initialMode={mode === "people" ? "people" : "companies"}
           scope="global"
+          search={search}
+        />
+      </div>
+    );
+  }
+
+  if (surface === "pipeline") {
+    return (
+      <div className="px-9 pb-16 pt-9">
+        <PipelineWorkspace
+          dataSource={dataSource}
+          onOpenLead={(leadId) =>
+            void goDiscovery({ surface: "pipeline", leadId })
+          }
         />
       </div>
     );

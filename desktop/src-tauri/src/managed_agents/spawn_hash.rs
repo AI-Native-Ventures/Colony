@@ -90,6 +90,11 @@ pub(crate) fn spawn_config_hash(
 
     let mut hasher = DefaultHasher::new();
 
+    // Credential mode changes the meter seam even when the user-facing
+    // provider/model/env fields stay identical, so a running pair must show a
+    // restart badge and receive the new lease on restart.
+    global.credential_mode.hash(&mut hasher);
+
     // Harness identity and derivations (live-persona-resolved, like spawn).
     record.acp_command.hash(&mut hasher);
     descriptor.command.hash(&mut hasher);

@@ -1,7 +1,10 @@
+import * as React from "react";
 import { ExternalLink, Link2, Mail } from "lucide-react";
 
 import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import type { DiscoverySearch } from "@/app/routes/discovery";
 import type { Lead } from "../types";
 import { stableLeadOrder } from "./LeadFilters";
 import type { LeadTableView } from "./LeadTable";
@@ -9,6 +12,7 @@ import type { LeadTableView } from "./LeadTable";
 type PeopleLeadTableProps = {
   leads: readonly Lead[];
   scope: "campaign" | "global";
+  search: DiscoverySearch;
   view: LeadTableView;
 };
 
@@ -22,9 +26,11 @@ function initials(name: string) {
 }
 
 function statusVariant(status: Lead["status"]) {
-  if (status === "qualified") return "success" as const;
-  if (status === "rejected") return "destructive" as const;
-  if (status === "enriched") return "info" as const;
+  if (status === "qualified" || status === "client_active")
+    return "success" as const;
+  if (status === "accepted") return "info" as const;
+  if (status === "dormant") return "warning" as const;
+  if (status === "disqualified") return "destructive" as const;
   return "secondary" as const;
 }
 
@@ -53,14 +59,29 @@ function PersonIdentity({ lead }: { lead: Lead }) {
   );
 }
 
-function PeopleGrid({ leads }: { leads: readonly Lead[] }) {
+function PeopleGrid({
+  leads,
+  onOpenLead,
+}: {
+  leads: readonly Lead[];
+  onOpenLead: (leadId: string) => void;
+}) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {stableLeadOrder(leads).map((lead) => (
         <Card
-          className="border-border/60 bg-card/70 p-5 shadow-none"
+          className="cursor-pointer border-border/60 bg-card/70 p-5 shadow-none transition-colors hover:bg-card"
           data-testid={`person-card-${lead.id}`}
           key={lead.id}
+          onClick={() => onOpenLead(lead.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onOpenLead(lead.id);
+            }
+          }}
+          role="button"
+          tabIndex={0}
         >
           <div className="flex items-start justify-between gap-3">
             <PersonIdentity lead={lead} />
@@ -101,6 +122,7 @@ function PeopleGrid({ leads }: { leads: readonly Lead[] }) {
               <a
                 className="inline-flex items-center gap-1 text-primary hover:underline"
                 href={lead.linkedinUrl}
+                onClick={(event) => event.stopPropagation()}
                 rel="noreferrer"
                 target="_blank"
               >
@@ -116,7 +138,19 @@ function PeopleGrid({ leads }: { leads: readonly Lead[] }) {
   );
 }
 
-export function PeopleLeadTable({ leads, scope, view }: PeopleLeadTableProps) {
+export function PeopleLeadTable({
+  leads,
+  scope,
+  search,
+  view,
+}: PeopleLeadTableProps) {
+  const { goDiscovery } = useAppNavigation();
+  const openLead = React.useCallback(
+    (leadId: string) => {
+      void goDiscovery({ ...search, leadId });
+    },
+    [goDiscovery, search],
+  );
   const rows = stableLeadOrder(leads);
   if (rows.length === 0) {
     return (
@@ -130,7 +164,7 @@ export function PeopleLeadTable({ leads, scope, view }: PeopleLeadTableProps) {
       </Card>
     );
   }
-  if (view === "grid") return <PeopleGrid leads={rows} />;
+  if (view === "grid") return <PeopleGrid leads={rows} onOpenLead={openLead} />;
   return (
     <Card className="overflow-hidden border-border/60 bg-card/70 p-0 shadow-none">
       <div className="overflow-x-auto">
@@ -159,12 +193,24 @@ export function PeopleLeadTable({ leads, scope, view }: PeopleLeadTableProps) {
                 lead.personName ?? lead.contactName ?? lead.companyName;
               return (
                 <tr
-                  className="border-t border-border/50"
+                  className="cursor-pointer border-t border-border/50 transition-colors hover:bg-muted/30"
                   data-testid={`person-row-${lead.id}`}
                   key={lead.id}
+                  onClick={() => openLead(lead.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openLead(lead.id);
+                    }
+                  }}
+                  tabIndex={0}
                 >
                   <td className="px-4 py-3">
-                    <input aria-label={`Select ${name}`} type="checkbox" />
+                    <input
+                      aria-label={`Select ${name}`}
+                      onClick={(event) => event.stopPropagation()}
+                      type="checkbox"
+                    />
                   </td>
                   <th className="px-4 py-3 text-left font-normal">
                     <PersonIdentity lead={lead} />

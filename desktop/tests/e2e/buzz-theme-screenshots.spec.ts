@@ -340,20 +340,17 @@ async function expectAppliedBuzzTheme(
 
 async function emitNativeThemeChange(page: Page, theme: "light" | "dark") {
   await page.evaluate(async (nextTheme) => {
-    const tauriWindow = window as typeof window & {
-      __TAURI_INTERNALS__?: {
-        invoke?: (
-          command: string,
-          payload?: Record<string, unknown>,
-        ) => Promise<unknown>;
-      };
-    };
-    const invoke = tauriWindow.__TAURI_INTERNALS__?.invoke;
-    if (!invoke) throw new Error("Mock Tauri invoke bridge is unavailable.");
-    await invoke("plugin:event|emit", {
-      event: "tauri://theme-changed",
-      payload: nextTheme,
-    });
+    const emitNativeEvent = (
+      window as typeof window & {
+        __BUZZ_E2E_EMIT_NATIVE_EVENT__?: (
+          event: string,
+          payload?: unknown,
+        ) => Promise<void>;
+      }
+    ).__BUZZ_E2E_EMIT_NATIVE_EVENT__;
+    if (!emitNativeEvent)
+      throw new Error("Native event bridge is unavailable.");
+    await emitNativeEvent("tauri://theme-changed", nextTheme);
   }, theme);
 }
 

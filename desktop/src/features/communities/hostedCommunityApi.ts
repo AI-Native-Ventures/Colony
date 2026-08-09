@@ -1,7 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/shared/api/nativeBridge";
 
-export const HOSTED_COMMUNITY_SUFFIX = "colony.ainative.ventures";
-export const HOSTED_COMMUNITY_LIMIT = 3;
+import {
+  type ColonyProvisioningConfig,
+  HOSTED_COMMUNITY_LIMIT,
+} from "@/features/communities/colonyProvisioning";
+
+export { HOSTED_COMMUNITY_LIMIT };
+
 export const VALID_HOSTED_COMMUNITY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 // ── Colony self-serve provisioning ──────────────────────────────────────────
@@ -26,6 +31,16 @@ export type ColonyCommunitiesResponse = {
   owner_pubkey?: string;
   communities?: (HostedCommunity & { archived_at?: string | null })[];
 };
+
+/**
+ * What the connected relay will actually provision. `domain` is null when the
+ * operator never set `BUZZ_SELF_PROVISION_DOMAIN`, which is the default: that
+ * relay rejects every create, so the form must say so rather than offer an
+ * address it cannot mint.
+ */
+export function fetchColonyProvisioningConfig() {
+  return invoke<ColonyProvisioningConfig>("colony_provisioning_config");
+}
 
 export function checkColonyCommunityName(name: string) {
   return invoke<ColonyAvailability>("colony_check_community_name", { name });

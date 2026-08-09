@@ -20,6 +20,13 @@ pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33
 /// to be verifiable by clients.
 pub(crate) const NIP_RELAY_MEMBERSHIP: u32 = 43;
 
+/// Discovery capability token advertised in NIP-11 `supported_extensions`.
+/// Discovery kinds (40017-40022) predate any NIP document, so a plain
+/// extension identifier is the wire contract: clients that need to know
+/// whether this relay can serve Discovery ask the NIP-11 document, never a
+/// rejection message.
+pub(crate) const DISCOVERY_EXTENSION: &str = "colony-discovery";
+
 /// Relay information document served at `GET /` with `Accept: application/nostr+json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayInfo {
@@ -157,7 +164,7 @@ impl RelayInfo {
             pubkey: None,
             contact: None,
             supported_nips,
-            supported_extensions: Some(vec!["nip-er".to_string()]),
+            supported_extensions: Some(vec!["nip-er".to_string(), DISCOVERY_EXTENSION.to_string()]),
             push: None,
             software: "https://github.com/block/buzz".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -381,6 +388,24 @@ mod tests {
         assert!(
             SUPPORTED_NIPS.contains(&56),
             "NIP-56 (reporting) must be advertised — kind:1984 ingest is live"
+        );
+    }
+
+    /// Wire-contract pin: the NIP-11 document must advertise the Discovery
+    /// capability token. The literal is asserted, not the constant, so the
+    /// test fails if the token itself ever changes.
+    #[test]
+    fn supported_extensions_advertise_discovery_token() {
+        let info = RelayInfo::build(None, None, false, DEFAULT_MAX_FRAME_BYTES, None);
+        let extensions = info
+            .supported_extensions
+            .as_deref()
+            .expect("supported_extensions must be present");
+        assert!(
+            extensions
+                .iter()
+                .any(|extension| extension == "colony-discovery"),
+            "NIP-11 supported_extensions must advertise colony-discovery, got {extensions:?}"
         );
     }
 

@@ -15,9 +15,10 @@ import {
   DiscoveryWorkspace,
   type DiscoveryRouteReadModel,
 } from "./DiscoveryWorkspace";
+import { LeadDetailDrawer } from "./LeadDetailDrawer";
 import { DiscoveryTopTabs } from "./DiscoveryTopTabs";
 import { DISCOVERY_LIGHT_SURFACE_STYLE } from "./discoverySurfaceStyle";
-import { discoverySurface } from "./discoveryLayout";
+import { discoverySurface, showPipelineTab } from "./discoveryLayout";
 
 type DiscoveryRouteScreenProps = {
   search: DiscoverySearch;
@@ -67,6 +68,7 @@ function routeNeedsLeads(search: DiscoverySearch) {
 type DiscoveryE2eWindow = Window & {
   __BUZZ_E2E_DISCOVERY_ENTITLEMENT__?: DiscoveryEntitlementState;
   __BUZZ_E2E_DISCOVERY_EMPTY_LEADS__?: boolean;
+  __BUZZ_E2E_DISCOVERY_UPDATE_LEAD_REJECT__?: string;
 };
 
 /**
@@ -79,6 +81,14 @@ function fixtureEntitlementOverride(): DiscoveryEntitlementState | undefined {
     return undefined;
   }
   return (window as DiscoveryE2eWindow).__BUZZ_E2E_DISCOVERY_ENTITLEMENT__;
+}
+
+function fixtureUpdateLeadRejectOverride(): string | undefined {
+  if (import.meta.env.MODE !== "e2e" || typeof window === "undefined") {
+    return undefined;
+  }
+  return (window as DiscoveryE2eWindow)
+    .__BUZZ_E2E_DISCOVERY_UPDATE_LEAD_REJECT__;
 }
 
 function fixtureEmptyLeadsOverride(): boolean | undefined {
@@ -152,6 +162,15 @@ async function loadReadModel(
 }
 
 export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
+  /**
+   * The read model ignores `leadId`: opening or closing the drawer is a
+   * navigation, and the surfaces behind it must not refetch or flash their
+   * loading state because the drawer opened.
+   */
+  const readModelSearch = React.useMemo(() => {
+    const { leadId: _leadId, ...rest } = search;
+    return rest;
+  }, [search]);
   const dataSourceRef = React.useRef<DiscoveryDataSource | null>(null);
   if (!dataSourceRef.current) {
     dataSourceRef.current =
@@ -159,6 +178,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
         ? createFixtureDiscoveryDataSource({
             entitlement: fixtureEntitlementOverride(),
             emptyLeads: fixtureEmptyLeadsOverride(),
+            updateLeadReject: fixtureUpdateLeadRejectOverride(),
           })
         : createRelayDiscoveryDataSource();
   }
@@ -181,7 +201,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
 
     void Promise.all([
       dataSource.getEntitlement(),
-      loadReadModel(dataSource, search),
+      loadReadModel(dataSource, readModelSearch),
     ])
       .then(([entitlement, readModel]) => {
         if (cancelled) return;
@@ -205,14 +225,21 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
     return () => {
       cancelled = true;
     };
-  }, [dataSource, search]);
+  }, [dataSource, readModelSearch]);
 
   return (
     <div
       className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain bg-background text-foreground"
       style={DISCOVERY_LIGHT_SURFACE_STYLE}
     >
-      <DiscoveryTopTabs surface={discoverySurface(search)} />
+      <DiscoveryTopTabs
+        showPipeline={showPipelineTab({
+          experience: state.entitlement?.experience,
+          leadTotal: state.readModel?.leads?.total ?? 0,
+          surface: discoverySurface(search),
+        })}
+        surface={discoverySurface(search)}
+      />
       <DiscoveryWorkspace
         dataSource={dataSource}
         entitlement={state.entitlement}
@@ -221,6 +248,7 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
         readModel={state.readModel}
         search={search}
       />
+      <LeadDetailDrawer dataSource={dataSource} search={search} />
     </div>
   );
 }

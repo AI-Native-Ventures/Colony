@@ -9,6 +9,7 @@ import type {
   CampaignStatus,
   DiscoveryRun,
   Lead,
+  LeadFunnelStatus,
   SourceMetric,
   SourceStatus,
 } from "../types";
@@ -102,6 +103,7 @@ export type LeadProjection = {
   source_url: string | null;
   image_url: string | null;
   added_at: string;
+  status: LeadFunnelStatus;
 };
 
 export function campaignSourceConfig(
@@ -350,7 +352,7 @@ export function mapLead(lead: LeadProjection): Lead {
     industryId: lead.industry_id,
     verticalId: lead.vertical_id,
     campaignIds: [lead.campaign_id],
-    status: "new",
+    status: lead.status ?? "candidate",
     addedAt: lead.added_at,
   };
 }
