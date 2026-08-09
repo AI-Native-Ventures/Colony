@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 326,
-    "rust_lines": 134310,
+    "rust_total": 327,
+    "rust_lines": 134456,
     "tauri_coupled": 137,
-    "portable": 189,
-    "portable_lines": 73103,
+    "portable": 190,
+    "portable_lines": 73260,
     "tauri_coupled_list": [
       "src-tauri/src/app_state.rs",
       "src-tauri/src/archive/mod.rs",
@@ -264,6 +264,7 @@
       "src-tauri/src/managed_agents/global_config/tests.rs",
       "src-tauri/src/managed_agents/managed_node_paths.rs",
       "src-tauri/src/managed_agents/mod.rs",
+      "src-tauri/src/managed_agents/model_effort.rs",
       "src-tauri/src/managed_agents/nest/tests.rs",
       "src-tauri/src/managed_agents/persona_avatars.rs",
       "src-tauri/src/managed_agents/persona_events/tests.rs",
