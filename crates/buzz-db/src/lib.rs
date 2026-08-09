@@ -45,6 +45,8 @@ pub mod jobs;
 pub mod migration;
 /// Community moderation: reports, bans/timeouts, audit actions.
 pub mod moderation;
+/// Deployment-wide operator analytics taxonomy, rollups, and metadata reads.
+pub mod operator_analytics;
 /// Monthly table partition management.
 pub mod partition;
 /// Buzz product-feedback sidecar persistence.
