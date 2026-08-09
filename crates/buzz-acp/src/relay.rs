@@ -537,6 +537,13 @@ enum RelayMessage {
 
 /// Subscription ID for the global membership notification subscription.
 const MEMBERSHIP_NOTIF_SUB_ID: &str = "membership-notif";
+/// Subscription id for the agent's global Ask inbox.
+///
+/// Distinct from `ch-<uuid>` channel subscriptions because an Ask is addressed
+/// to an *agent*, not to a room. A real ask raised without `--channel` carries
+/// no `h` tag and is stored with a NULL channel, so a channel-scoped REQ can
+/// never return it.
+const ASK_INBOX_SUB_ID: &str = "ask-inbox";
 /// Subscription ID for encrypted owner-to-agent observer control frames.
 const OBSERVER_CONTROL_SUB_ID: &str = "agent-observer-control";
 
@@ -3190,6 +3197,29 @@ async fn wait_for_reconnect(
     }
 }
 
+/// The NIP-01 filter for the global Ask inbox.
+///
+/// Deliberately carries no `#h`: an ask is agent-addressed and usually has no
+/// channel at all. `#p` is what scopes it, and it is mandatory. Without it an
+/// agent would be woken by every ask in the community.
+pub(crate) fn ask_inbox_req_filter(
+    agent_pubkey_hex: &str,
+    since: Option<u64>,
+) -> serde_json::Value {
+    let mut filter = serde_json::Map::new();
+    filter.insert("kinds".into(), json!([buzz_core::kind::KIND_ASK]));
+    filter.insert("#p".into(), json!([agent_pubkey_hex]));
+    match since {
+        Some(since) => {
+            filter.insert("since".into(), json!(since.saturating_sub(SINCE_SKEW_SECS)));
+        }
+        None => {
+            filter.insert("since".into(), json!(unix_now_secs()));
+        }
+    }
+    serde_json::Value::Object(filter)
+}
+
 /// Send a NIP-01 REQ for a channel, built from a [`ChannelFilter`].
 ///
 /// - `kinds` is included only when `filter.kinds` is `Some`; `None` = wildcard.
@@ -3228,10 +3258,7 @@ async fn send_subscribe(
     // subtract skew buffer to catch events missed during the disconnect window.
     let since_ts = match since {
         Some(ts) => ts.saturating_sub(SINCE_SKEW_SECS),
-        None => std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        None => unix_now_secs(),
     };
     req_filter.insert("since".into(), json!(since_ts));
 
@@ -4107,6 +4134,40 @@ mod tests {
     #[test]
     fn channel_id_from_sub_id_empty() {
         assert!(channel_id_from_sub_id("").is_none());
+    }
+
+    #[test]
+    fn the_ask_inbox_filter_is_global_and_p_tagged() {
+        let agent = "a".repeat(64);
+        let filter = ask_inbox_req_filter(&agent, None);
+
+        assert_eq!(
+            filter["kinds"],
+            serde_json::json!([buzz_core::kind::KIND_ASK]),
+            "the ask inbox subscribes to asks and nothing else"
+        );
+        assert_eq!(
+            filter["#p"],
+            serde_json::json!([agent]),
+            "an agent must only be woken by asks addressed to it"
+        );
+        assert!(
+            filter.get("#h").is_none(),
+            "an ask carries no h tag when it is raised without a channel, which \
+             is the common case; adding #h here reintroduces the bug that no ask \
+             ever reaches the harness"
+        );
+    }
+
+    #[test]
+    fn the_ask_inbox_filter_replays_from_since_on_reconnect() {
+        let agent = "b".repeat(64);
+        let filter = ask_inbox_req_filter(&agent, Some(1_000));
+        assert_eq!(
+            filter["since"],
+            serde_json::json!(1_000 - SINCE_SKEW_SECS),
+            "a reconnect must not silently drop an ask raised while disconnected"
+        );
     }
 
     fn meta_event(uuid: Uuid, name: &str, extra: &[&str]) -> serde_json::Value {
