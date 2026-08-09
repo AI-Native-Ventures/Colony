@@ -82,6 +82,8 @@ pub mod tunnel;
 pub mod webhook_secret;
 /// Workflow action sink — relay-side implementation of [`buzz_workflow::ActionSink`].
 pub mod workflow_sink;
+/// Relay-owned channel workspace-tab ownership broker.
+pub mod workspace_tab_broker;
 
 pub use config::Config;
 pub use error::{RelayError, Result};
