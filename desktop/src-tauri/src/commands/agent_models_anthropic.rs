@@ -64,11 +64,7 @@ pub(super) fn normalize_anthropic_models(
         .data
         .into_iter()
         .filter(|item| seen.insert(item.id.clone()))
-        .map(|item| AgentModelInfo {
-            id: item.id,
-            name: item.display_name,
-            description: None,
-        })
+        .map(|item| AgentModelInfo::new(item.id, item.display_name, None))
         .collect()
 }
 
