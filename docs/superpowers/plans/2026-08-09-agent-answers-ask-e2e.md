@@ -345,10 +345,18 @@ async fn a_live_harness_reads_the_ask_block_and_answers_it() {
     let mut harness = spawn_harness_as(&leader, &log_path).await;
     await_ask_inbox_ready(&leader).await;
 
+    // A LONG deadline, deliberately. The CI job runs the interrupt sweep every
+    // second, and this ask has to survive delivery, prompt assembly, the stub's
+    // turn, and a `buzz asks answer` subprocess before it is closed. A short
+    // window races the sweep: the ask is promoted to the executive before the
+    // agent ever answers, and the final assertion fails on timing while looking
+    // exactly like a delivery bug. The relay-level gate in `e2e_ask_chain` uses
+    // a 1-second window because nothing has to happen in between there; here
+    // something does.
     let ask_id = raise_with_window(
         &mut worker_ws, &worker, &leader.public_key().to_hex(), None, &task_id,
         &format!("sms-vendor-{}", Uuid::new_v4().simple()),
-        "Which vendor should we use for SMS?", None, Some(1),
+        "Which vendor should we use for SMS?", None, Some(600),
     ).await;
 
     let entry = await_stub_entry(&log_path, Duration::from_secs(90)).await;
@@ -481,7 +489,19 @@ It is `#[ignore]` plus an env gate in the design and is run by hand when the
 prompt wording changes. Which of answer versus escalate a model picks is model
 behaviour, not our contract.
 
-**Known risk.** `await_ask_inbox_ready` is the piece most likely to be
+**Known risk 1.** `await_ask_inbox_ready` is the piece most likely to be
 implemented as a sleep. If it is, the test will be flaky in CI and will fail
 under load in exactly the way that looks like a product bug. Task 3 Step 4 calls
 this out; hold the line on it in review.
+
+**Known risk 2: the deadline must outlast the agent's turn.** The CI job sets
+`BUZZ_INTERRUPT_SWEEP_SECS=1`. The answered ask therefore needs a window long
+enough to survive delivery, prompt assembly, the stub's turn and a `buzz asks
+answer` subprocess, which is why Task 3 uses 600 seconds and not the 1 second the
+relay-level gate uses. If a future change shortens it, the sweep promotes the ask
+to the executive before the agent answers and the final assertion fails on
+timing while looking like a delivery bug.
+
+If a positive control is added later to prove the sweep is alive in this run,
+give **that** ask the short window and leave the answered one long. Do not give
+both the same deadline.
