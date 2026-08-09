@@ -18,6 +18,8 @@ import {
   initDraftStore,
 } from "@/features/messages/lib/useDrafts";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
+import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
+import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
 import {
   resetActiveAgentTurnsStore,
   saveActiveAgentTurnsForCommunity,
@@ -59,6 +61,8 @@ function resetCommunityState({
   relayClient.disconnect();
   resetRateLimitGate();
   clearAllDrafts();
+  resetWorkspaceTabs();
+  resetChannelSurfaceModes();
   resetAgentObserverStore();
   resetActiveAgentTurnsStore();
   resetAgentWorkingSignal();

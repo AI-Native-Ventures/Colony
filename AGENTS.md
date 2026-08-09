@@ -650,6 +650,8 @@ reconnects preserve pending avatar verification work):
 - `relayClient.disconnect()` — WebSocket teardown + promise rejection
 - `resetRateLimitGate()` — clears any active rate-limit window from the old relay
 - `clearAllDrafts()` — message draft cache
+- `resetWorkspaceTabs()` — per-channel workspace tabs
+- `resetChannelSurfaceModes()` — per-channel timeline/workspace mode
 - `resetAgentObserverStore()` — agent observer relay store
 - `resetActiveAgentTurnsStore()` — active agent turn timers
 - `resetAgentWorkingSignal()` — agent working indicator signal
