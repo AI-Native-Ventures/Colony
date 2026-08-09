@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 326,
-    "rust_lines": 134310,
-    "tauri_coupled": 137,
+    "rust_total": 327,
+    "rust_lines": 134475,
+    "tauri_coupled": 138,
     "portable": 189,
-    "portable_lines": 73103,
+    "portable_lines": 73104,
     "tauri_coupled_list": [
       "src-tauri/src/app_state.rs",
       "src-tauri/src/archive/mod.rs",
@@ -79,6 +79,7 @@
       "src-tauri/src/commands/window_vibrancy.rs",
       "src-tauri/src/commands/workflows.rs",
       "src-tauri/src/commands/workspace.rs",
+      "src-tauri/src/commands/workspace_files.rs",
       "src-tauri/src/deep_link.rs",
       "src-tauri/src/discovery_credentials.rs",
       "src-tauri/src/discovery_worker/brave_tests.rs",
@@ -340,20 +341,22 @@
     ]
   },
   "commands": {
-    "registered": 283,
-    "defined": 283,
+    "registered": 285,
+    "defined": 285,
     "by_reach": {
       "frontend": 279,
-      "frontend-plugin-prefixed": 2,
-      "NO CALLER FOUND": 2
+      "NO CALLER FOUND": 4,
+      "frontend-plugin-prefixed": 2
     },
     "no_caller": [
       "download_voice_models",
+      "pick_workspace_file",
+      "read_workspace_file",
       "start_stt_pipeline"
     ]
   },
   "params": {
-    "AppHandle": 296,
+    "AppHandle": 297,
     "State": 214,
     "Window": 7,
     "ipc::Request": 1,
@@ -361,7 +364,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 296,
+      "AppHandle": 297,
       "State": 214,
       "Window": 7,
       "ipc::Request": 1,
@@ -383,7 +386,7 @@
     ".state::<": 96,
     ".emit(": 34,
     ".emit_to(": 0,
-    ".dialog()": 4,
+    ".dialog()": 5,
     ".shell()": 0,
     ".opener()": 1,
     ".notification()": 0,
@@ -480,6 +483,7 @@
     "src-tauri/src/commands/dms.rs": 2,
     "src-tauri/src/commands/project_terminal.rs": 2,
     "src-tauri/src/commands/window_chrome.rs": 2,
+    "src-tauri/src/commands/workspace_files.rs": 2,
     "src-tauri/src/commands/relay_reconnect.rs": 2,
     "src-tauri/src/huddle/transcription.rs": 2,
     "src-tauri/src/commands/personas/sharing.rs": 2,
@@ -2492,6 +2496,13 @@
         "src/shared/api/tauri.ts:609"
       ]
     },
+    "pick_workspace_file": {
+      "defining_file": "src-tauri/src/commands/workspace_files.rs",
+      "module": "workspace_files",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
     "preview_agent_snapshot_import": {
       "defining_file": "src-tauri/src/commands/personas/snapshot/import.rs",
       "module": "import",
@@ -2633,6 +2644,13 @@
         "src/parity/session/script.ts:802",
         "src/shared/api/tauriArchive.ts:301"
       ]
+    },
+    "read_workspace_file": {
+      "defining_file": "src-tauri/src/commands/workspace_files.rs",
+      "module": "workspace_files",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "reconcile_inbound_persona_event": {
       "defining_file": "src-tauri/src/commands/personas/inbound.rs",

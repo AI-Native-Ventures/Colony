@@ -740,6 +740,8 @@ pub fn run() {
             upload_media,
             pick_and_upload_media,
             pick_and_upload_image,
+            commands::workspace_files::read_workspace_file,
+            commands::workspace_files::pick_workspace_file,
             upload_media_bytes,
             download_image,
             save_png_data_url,
