@@ -1103,23 +1103,23 @@ jobs:
     name: Relay Suites
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, backend-integration, relay-e2e]
+    needs: [changes, backend-integration, relay-e2e, agent-ask-e2e]
     # `always()` so this still reports when a dependency fails or is skipped;
     # without it the job is skipped along with them and reports nothing, which
-    # is the state this exists to end. The path condition matches the two jobs
-    # below exactly, so a PR that touches no Rust skips this too and the
+    # is the state this exists to end. The path condition matches the three
+    # upstream jobs exactly, so a PR that touches no Rust skips this too and the
     # required check is satisfied by the skip.
     if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     steps:
-      # One stable check name standing in for two long jobs.
+      # One stable check name standing in for three long jobs.
       #
-      # `Backend Integration` and `relay-e2e` are the ONLY jobs that run the
+      # `Backend Integration`, `relay-e2e`, and `agent-ask-e2e` run the
       # Postgres-gated relay suites -- `interrupt_gate`, `interrupt_runtime`,
-      # `e2e_interrupts`, the workflow owner-routing tests and the write-path
-      # guard. None of those jobs is a required check, so a PR could merge with
-      # every one of them red.
+      # `e2e_interrupts`, the live ACP ask-answer path, the workflow
+      # owner-routing tests and the write-path guard. None of those jobs is a
+      # required check, so a PR could merge with every one of them red.
       #
       # That is not hypothetical. PR #174 stood at `Backend Integration: fail`,
       # `Relay E2E: fail`, `mergeable=MERGEABLE`, and GitHub accepted it into
@@ -1128,9 +1128,8 @@ jobs:
       # rule that stops agents interrupting a human was one working queue away
       # from landing with its own tests failing.
       #
-      # Requiring the two jobs directly would put ~30 minutes on the critical
-      # path of every merge and add two names to the ruleset. This adds one
-      # cheap stable name instead -- the same reasoning that keeps
+      # Requiring the three jobs directly would add three names to the ruleset.
+      # This adds one cheap stable name instead -- the same reasoning that keeps
       # `Server Cross-Compile` (a varying matrix) out of the required set.
       - name: Check relay suites
         run: |
@@ -1143,6 +1142,11 @@ jobs:
           if [ "${{ needs.relay-e2e.result }}" != "success" ]; then
             echo "Relay E2E finished with: ${{ needs.relay-e2e.result }}"
             echo "e2e_interrupts runs there and did not pass."
+            exit 1
+          fi
+          if [ "${{ needs.agent-ask-e2e.result }}" != "success" ]; then
+            echo "Agent Ask E2E finished with: ${{ needs.agent-ask-e2e.result }}"
+            echo "The live harness ask-answer gate did not pass."
             exit 1
           fi
           echo "Relay suites passed"
