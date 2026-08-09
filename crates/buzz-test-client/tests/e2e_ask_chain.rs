@@ -757,10 +757,16 @@ async fn wait_for_successor(audience: &Keys, prior: &str) -> Vec<serde_json::Val
 /// sweep, so it never reaches the founder; ACP prompt delivery itself is
 /// covered only by the unit tests in `buzz-acp`.
 ///
-/// Run this gate against a fresh database with exactly one owner in the
-/// community: the suite seeds a new owner per test into its one host-bound
-/// community, so a persistent volume accumulates owners and disables the
-/// sweep's never-guessing human hop.
+/// Run this gate against a fresh database with exactly one owner and one
+/// executive in the community. The suite seeds a new owner per test into its
+/// one host-bound community, so a persistent volume accumulates owners and
+/// disables the sweep's never-guessing human hop.
+///
+/// It must run before any other suite seeds agents into this community, and
+/// first within this file, because promotion requires exactly one executive
+/// and one owner in the managed-agent roster. The unanswered positive control
+/// makes a violation of that ordering fail loudly instead of letting the
+/// answered-ask absence assertion pass vacuously.
 #[tokio::test]
 #[ignore = "requires a running relay and Postgres"]
 async fn a_leader_answers_a_workers_ask_and_the_owner_never_sees_it() {
