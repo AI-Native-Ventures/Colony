@@ -2372,12 +2372,24 @@ async fn tokio_main() -> Result<()> {
                                 )
                                 .await;
                                 if !allowed {
-                                    tracing::debug!(
+                                    // INFO, not DEBUG: this is the difference
+                                    // between "the agent is broken" and "the
+                                    // agent was told not to answer you", and
+                                    // from the outside those look identical.
+                                    // The relay accepted the message and
+                                    // indexed the mention, so every surface
+                                    // says it was delivered; the agent then
+                                    // discards it and, at DEBUG, says nothing
+                                    // an operator running at INFO will ever
+                                    // see. Diagnosing that costs an hour and
+                                    // ends at a one-line gate.
+                                    tracing::info!(
                                         channel_id = %buzz_event.channel_id,
                                         author = %buzz_event.event.pubkey.to_hex(),
                                         mode = %config.respond_to,
                                         is_dm,
-                                        "inbound author gate — dropping event"
+                                        "not answering: the author is not permitted by respond_to; \
+                                         set --respond-to (BUZZ_ACP_RESPOND_TO) to widen it"
                                     );
                                     continue;
                                 }
