@@ -293,6 +293,20 @@ async fn author_allowed(
     }
 }
 
+/// Whether to open the global ask inbox.
+///
+/// Independent of channel membership: an ask is addressed to an agent, so an
+/// agent in zero channels must still receive one. This is the whole reason the
+/// inbox exists separately from channel subscriptions.
+fn should_subscribe_ask_inbox(_channel_ids: &[uuid::Uuid]) -> bool {
+    true
+}
+
+/// Whether the configured kind set includes asks.
+fn should_subscribe_ask_inbox_for_kinds(kinds: &[u32]) -> bool {
+    kinds.contains(&buzz_core::kind::KIND_ASK)
+}
+
 /// Resolve whether `channel_id` is a DM, for the inbound author gate.
 ///
 /// Resolution order:
@@ -1680,6 +1694,30 @@ async fn tokio_main() -> Result<()> {
         }
     }
 
+    // A wildcard rule (empty `kinds`) includes asks just like an explicit
+    // KIND_ASK entry. Keep the global inbox decision independent of channel
+    // discovery: a channel-less agent can still be addressed by an ask.
+    let mut resolved_rule_kinds = Vec::new();
+    for rule in &rules {
+        if rule.kinds.is_empty() {
+            resolved_rule_kinds.push(buzz_core::kind::KIND_ASK);
+        } else {
+            resolved_rule_kinds.extend(rule.kinds.iter().copied());
+        }
+    }
+    let mut ask_events = if should_subscribe_ask_inbox(&channel_ids)
+        && should_subscribe_ask_inbox_for_kinds(&resolved_rule_kinds)
+    {
+        if let Err(e) = relay.subscribe_ask_inbox().await {
+            tracing::warn!("failed to subscribe to ask inbox: {e}");
+        } else {
+            tracing::info!("subscribed to ask inbox");
+        }
+        relay.take_ask_events()
+    } else {
+        None
+    };
+
     if let Some((observer, publisher, keys, agent_pubkey, owner_pubkey, owner)) =
         relay_observer_publisher.take()
     {
@@ -1773,6 +1811,9 @@ async fn tokio_main() -> Result<()> {
         None
     };
     let mut heartbeat_in_flight = false;
+    // Asks have no channel queue to hold them while every agent is busy. Keep
+    // accepted asks here until the shared channel-less turn slot is available.
+    let mut pending_asks: VecDeque<(nostr::Event, String)> = VecDeque::new();
 
     let mut presence_heartbeat = if config.presence_enabled {
         let interval = Duration::from_secs(60);
@@ -2010,7 +2051,12 @@ async fn tokio_main() -> Result<()> {
             }
         }
 
+        dispatch_pending_asks(&mut pool, &ctx, &mut heartbeat_in_flight, &mut pending_asks);
+
         // Borrow result_rx and join_set simultaneously via split-borrow helper.
+        // Keep the ask receiver bounded while the shared channel-less slot is
+        // occupied; the relay can then replay any asks that wait in its queue.
+        let ask_dispatch_ready = !heartbeat_in_flight && pool.any_idle();
         let pool_event: Option<PoolEvent> = {
             let (result_rx, join_set) = pool.rx_and_join_set();
             tokio::select! {
@@ -2091,6 +2137,60 @@ async fn tokio_main() -> Result<()> {
                         None => {
                             relay_observer_control_rx = None;
                             tracing::warn!("relay observer control channel closed");
+                        }
+                    }
+                    None
+                }
+                ask_event = async {
+                    match ask_events.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                }, if ask_dispatch_ready => {
+                    let _ = result_rx;
+                    match ask_event {
+                        Some(event) => {
+                            if config.ignore_self && event.pubkey.to_hex() == pubkey_hex {
+                                tracing::debug!(
+                                    event_id = %event.id,
+                                    "dropping self-authored ask"
+                                );
+                                continue;
+                            }
+
+                            let author = event.pubkey.to_hex();
+                            let allowed = author_allowed(
+                                &config.respond_to,
+                                &config.respond_to_allowlist,
+                                &author,
+                                false,
+                                &owner_cache,
+                                &ctx.rest_client,
+                            )
+                            .await;
+                            if !allowed {
+                                tracing::info!(
+                                    author = %author,
+                                    mode = %config.respond_to,
+                                    is_dm = false,
+                                    event_id = %event.id,
+                                    "not answering: the ask author is not permitted by respond_to"
+                                );
+                                continue;
+                            }
+
+                            let Some(prompt) = pool::ask_turn_prompt(&event) else {
+                                tracing::debug!(
+                                    event_id = %event.id,
+                                    "dropping malformed ask — no turn prompt"
+                                );
+                                continue;
+                            };
+                            pending_asks.push_back((event, prompt));
+                        }
+                        None => {
+                            ask_events = None;
+                            tracing::warn!("ask inbox event stream ended");
                         }
                     }
                     None
@@ -3209,6 +3309,7 @@ fn dispatch_pending(
                 result_tx,
                 Some(control_rx),
                 task_turn_id,
+                PromptSource::Channel(channel_id),
             )
             .await;
         });
@@ -3921,6 +4022,7 @@ fn dispatch_heartbeat(
             result_tx,
             None,
             task_turn_id,
+            PromptSource::Heartbeat,
         )
         .await;
     });
@@ -3938,6 +4040,87 @@ fn dispatch_heartbeat(
     );
     *heartbeat_in_flight = true;
     tracing::info!(agent = agent_index, "heartbeat_fired");
+}
+
+/// Dispatch the next accepted Ask when the shared channel-less turn slot is
+/// available. Asks have no channel queue, so keep them pending until an agent
+/// is idle rather than dropping one merely because all agents are busy.
+fn dispatch_pending_asks(
+    pool: &mut AgentPool,
+    ctx: &Arc<PromptContext>,
+    heartbeat_in_flight: &mut bool,
+    pending_asks: &mut VecDeque<(nostr::Event, String)>,
+) {
+    if *heartbeat_in_flight {
+        return;
+    }
+    let Some((event, prompt)) = pending_asks.pop_front() else {
+        return;
+    };
+    if !dispatch_ask(
+        pool,
+        ctx,
+        heartbeat_in_flight,
+        event.clone(),
+        prompt.clone(),
+    ) {
+        pending_asks.push_front((event, prompt));
+    }
+}
+
+/// Spawn a channel-less turn for one addressed Ask.
+fn dispatch_ask(
+    pool: &mut AgentPool,
+    ctx: &Arc<PromptContext>,
+    heartbeat_in_flight: &mut bool,
+    event: nostr::Event,
+    prompt_text: String,
+) -> bool {
+    if *heartbeat_in_flight {
+        return false;
+    }
+    let Some(agent) = pool.try_claim(None) else {
+        return false;
+    };
+
+    let ask_event_id = event.id.to_hex();
+    let source = PromptSource::Ask {
+        ask_event_id: ask_event_id.clone(),
+    };
+    let result_tx = pool.result_tx();
+    let ctx_clone = Arc::clone(ctx);
+    let agent_index = agent.index;
+    let turn_id = Uuid::new_v4().to_string();
+    let task_turn_id = turn_id.clone();
+
+    let abort_handle = pool.join_set.spawn(async move {
+        pool::run_prompt_task(
+            agent,
+            None,
+            Some(prompt_text),
+            ctx_clone,
+            result_tx,
+            None,
+            task_turn_id,
+            source,
+        )
+        .await;
+    });
+
+    pool.task_map_mut().insert(
+        abort_handle.id(),
+        pool::TaskMeta {
+            agent_index,
+            channel_id: None,
+            turn_id,
+            recoverable_batch: None,
+            control_tx: None,
+            steer_tx: None,
+        },
+    );
+    *heartbeat_in_flight = true;
+    tracing::info!(agent = agent_index, ask_event_id, "ask_fired");
+    true
 }
 
 /// The Chief of Staff's company onboarding protocol.
@@ -4172,6 +4355,30 @@ mod ask_prompt_tests {
         assert!(
             BASE_PROMPT.contains("buzz asks answer"),
             "an agent told only how to raise asks will never answer one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ask_inbox_subscription_tests {
+    use super::*;
+
+    #[test]
+    fn the_ask_inbox_is_subscribed_even_with_no_channels() {
+        assert!(
+            should_subscribe_ask_inbox(&[]),
+            "an agent with no channel memberships must still receive asks \
+             addressed to it; asks are agent-addressed, not room-addressed"
+        );
+    }
+
+    #[test]
+    fn the_ask_inbox_is_skipped_when_asks_are_not_subscribed() {
+        let kinds = vec![buzz_core::kind::KIND_STREAM_MESSAGE];
+        assert!(
+            !should_subscribe_ask_inbox_for_kinds(&kinds),
+            "an operator who overrode kinds to exclude asks must not be woken \
+             by them through a side door"
         );
     }
 }

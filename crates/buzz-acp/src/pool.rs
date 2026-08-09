@@ -1535,12 +1535,8 @@ pub async fn run_prompt_task(
     result_tx: mpsc::UnboundedSender<PromptResult>,
     control_rx: Option<tokio::sync::oneshot::Receiver<ControlSignal>>,
     turn_id: String,
+    source: PromptSource,
 ) {
-    // Is this a channel prompt or a channel-less heartbeat/ask?
-    let source = match &batch {
-        Some(b) => PromptSource::Channel(b.channel_id),
-        None => PromptSource::Heartbeat,
-    };
     let observer_channel_id = prompt_source_channel(&source);
     let turn_started_at = chrono::Utc::now().to_rfc3339();
     agent.acp.set_observer_context(observer::context_for_turn(
@@ -1549,10 +1545,14 @@ pub async fn run_prompt_task(
         turn_id.clone(),
         turn_started_at.clone(),
     ));
-    let triggering_event_ids: Vec<String> = batch
-        .as_ref()
-        .map(|b| b.events.iter().map(|be| be.event.id.to_hex()).collect())
-        .unwrap_or_default();
+    let triggering_event_ids: Vec<String> = match &source {
+        PromptSource::Ask { ask_event_id } => vec![ask_event_id.clone()],
+        PromptSource::Channel(_) => batch
+            .as_ref()
+            .map(|b| b.events.iter().map(|be| be.event.id.to_hex()).collect())
+            .unwrap_or_default(),
+        PromptSource::Heartbeat => Vec::new(),
+    };
     agent.acp.observe(
         "turn_started",
         serde_json::json!({
