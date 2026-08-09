@@ -502,6 +502,8 @@ mod tests {
             ..SubscriptionRule::default()
         };
 
+        // Deliberately channel-scoped: this fixture exercises the existing
+        // channel mention rule and is not a real ask raised without --channel.
         let ask = nostr::EventBuilder::new(
             nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
             "{\"headline\":\"which vendor?\"}",
@@ -553,6 +555,40 @@ mod tests {
                 .await
                 .is_none(),
             "an agent must never see an ask addressed to a different agent"
+        );
+    }
+
+    #[test]
+    fn a_real_ask_has_no_h_tag_and_so_needs_the_global_inbox() {
+        let audience = nostr::Keys::generate();
+        let filer = nostr::Keys::generate();
+
+        // Exactly what `buzz asks raise` produces without `--channel`: the
+        // common case, and the one no fixture covered before.
+        let ask = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"Which vendor?","cost_of_delay":"blocked"}"#,
+        )
+        .tags([
+            nostr::Tag::public_key(audience.public_key()),
+            nostr::Tag::parse(["ask-type", "decision"]).unwrap(),
+            nostr::Tag::parse(["task", "task-7"]).unwrap(),
+        ])
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        assert!(
+            !ask.tags
+                .iter()
+                .any(|t| t.as_slice().first().map(String::as_str) == Some("h")),
+            "guard: this fixture must stay channel-less, or it stops \
+             representing a real ask"
+        );
+
+        let filter = crate::relay::ask_inbox_req_filter(&audience.public_key().to_hex(), None);
+        assert!(
+            filter.get("#h").is_none(),
+            "a channel-scoped filter can never return this ask; that was the bug"
         );
     }
 
