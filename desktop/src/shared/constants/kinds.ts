@@ -64,6 +64,12 @@ export const KIND_MANAGED_AGENT = 30177;
 export const KIND_COMPANY_PROFILE = 30179;
 export const KIND_INITIATIVE = 30180;
 export const KIND_TASK = 30181;
+/** Colony interrupt Ask (NIP-IQ). Filed by an agent, addressed to one tier up. */
+export const KIND_ASK = 44300;
+/** Resolution of an open ask: the answer that closes it. */
+export const KIND_ASK_RESOLUTION = 44301;
+/** Withdrawal of an open ask by its filer. */
+export const KIND_ASK_WITHDRAWAL = 44302;
 export const KIND_COMPANY_ACTION = 40013;
 export const KIND_COMPANY_RECEIPT = 40014;
 // Canonical external parties and the company's Lead/Client views over them.
