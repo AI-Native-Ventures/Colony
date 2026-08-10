@@ -30,7 +30,11 @@ import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
-import { ChannelContentSurface } from "@/features/workspace/ui/ChannelContentSurface";
+import { ChannelWorkspaceDock } from "@/features/workspace/ui/ChannelWorkspaceDock";
+import {
+  useChannelSurfaceMode,
+  useWorkspaceExpanded,
+} from "@/features/workspace/lib/channelSurfaceMode";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
@@ -169,6 +173,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   typingPubkeys,
 }: ChannelPaneProps) {
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
+  const layoutRef = React.useRef<HTMLDivElement>(null);
   const messageTimelineRef = React.useRef<MessageTimelineHandle>(null);
   const composerWrapperRef = React.useRef<HTMLDivElement>(null);
   const completedWelcomeBannerChannelIdsRef = React.useRef(new Set<string>());
@@ -498,7 +503,11 @@ export const ChannelPane = React.memo(function ChannelPane({
   ]);
 
   const isOverlay = useIsThreadPanelOverlay();
-  const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
+  const workspaceOpen =
+    useChannelSurfaceMode(activeChannel?.id) === "workspace";
+  const workspaceExpanded = useWorkspaceExpanded(activeChannel?.id);
+  const useSplitAuxiliaryPane =
+    !isSinglePanelView && (!isOverlay || workspaceOpen);
   const threadViewMode = useEffectiveThreadViewMode(activeChannel?.id);
   const useFocusThreadDrawer =
     threadViewMode === "focus" &&
@@ -577,6 +586,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   return (
     <div
       className="relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden"
+      data-workspace-expanded={workspaceExpanded}
+      ref={layoutRef}
       style={isHuddleTranscript ? HUDDLE_TRANSCRIPT_ROOT_STYLE : undefined}
     >
       {!isSinglePanelView && !isHuddleTranscript ? (
@@ -594,6 +605,7 @@ export const ChannelPane = React.memo(function ChannelPane({
         <section
           aria-label="Channel messages and composer"
           className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          hidden={workspaceExpanded}
           inert={channelIsCovered ? true : undefined}
           data-testid="channel-drop-zone"
           onDragEnter={
@@ -627,79 +639,77 @@ export const ChannelPane = React.memo(function ChannelPane({
               />
             </div>
           ) : null}
-          <ChannelContentSurface channelId={activeChannel?.id}>
-            <MessageTimeline
-              ref={messageTimelineRef}
-              channelId={activeChannel?.id}
-              channelIntro={channelIntro}
-              directMessageIntro={directMessageIntro}
-              scrollContainerRef={timelineScrollRef}
-              currentPubkey={currentPubkey}
-              fetchOlder={fetchOlder}
-              followThreadById={followThreadById}
-              hasComposerOverlay={hasMainComposerOverlay}
-              hasOlderMessages={hasOlderMessages}
-              historyExhausted={historyExhausted}
-              hideDayDividers={isHuddleTranscript}
-              alwaysShowMessageIdentity={isHuddleTranscript}
-              hideAgentAccessBadges={isHuddleTranscript}
-              pinnedIntro={
-                isHuddleTranscript ? <HuddleTranscriptIntro /> : undefined
-              }
-              huddleMemberPubkeys={huddleMemberPubkeys}
-              huddleMemberPubkeysPending={huddleMemberPubkeysPending}
-              isFetchingOlder={isFetchingOlder}
-              isFollowingThreadById={isFollowingThreadById}
-              isMessageUnreadById={isMessageUnreadById}
-              personaLookup={personaLookup}
-              profiles={profiles}
-              ownerProfiles={ownerProfiles}
-              unfollowThreadById={unfollowThreadById}
-              emptyDescription={
-                activeChannel?.channelType === "forum"
-                  ? "Select a stream or DM to load real message history in this first integration pass."
-                  : "Messages and sub-replies will appear here once the relay has history for this channel."
-              }
-              emptyTitle={
-                activeChannel
-                  ? activeChannel.channelType === "forum"
-                    ? "Forum channels are next"
-                    : "No messages yet"
-                  : "No channel selected"
-              }
-              isLoading={isHuddleTranscript ? false : isTimelineLoading}
-              entranceMessageId={entranceMessageId}
-              onEntranceMessageComplete={onEntranceMessageComplete}
-              mainEntries={mainTimelineEntries}
-              threadSummaries={threadSummaries}
-              messages={visibleMessages}
-              firstUnreadMessageId={firstUnreadMessageId}
-              unreadCount={unreadCount}
-              onDelete={onDelete}
-              onEdit={onEdit}
-              onMarkUnread={onMarkUnread}
-              onMarkRead={onMarkRead}
-              onReply={timelineReplyHandler}
-              channelName={activeChannel?.name}
-              channelType={activeChannel?.channelType ?? null}
-              isSendingVideoReviewComment={isSending}
-              onSendVideoReviewComment={
-                activeChannel?.archivedAt ? undefined : onSendVideoReviewComment
-              }
-              onTargetReached={onTargetReached}
-              onToggleReaction={onToggleReaction}
-              searchActiveMessageId={channelFind.activeMatch?.messageId ?? null}
-              searchMatchingMessageIds={channelFind.matchingMessageIds}
-              searchQuery={channelFind.query}
-              targetMessageId={targetMessageId}
-              splitThreadPanelOpen={
-                useSplitAuxiliaryPane &&
-                !useFocusThreadDrawer &&
-                Boolean(openThreadHeadId)
-              }
-              threadUnreadCounts={threadUnreadCounts}
-            />
-          </ChannelContentSurface>
+          <MessageTimeline
+            ref={messageTimelineRef}
+            channelId={activeChannel?.id}
+            channelIntro={channelIntro}
+            directMessageIntro={directMessageIntro}
+            scrollContainerRef={timelineScrollRef}
+            currentPubkey={currentPubkey}
+            fetchOlder={fetchOlder}
+            followThreadById={followThreadById}
+            hasComposerOverlay={hasMainComposerOverlay}
+            hasOlderMessages={hasOlderMessages}
+            historyExhausted={historyExhausted}
+            hideDayDividers={isHuddleTranscript}
+            alwaysShowMessageIdentity={isHuddleTranscript}
+            hideAgentAccessBadges={isHuddleTranscript}
+            pinnedIntro={
+              isHuddleTranscript ? <HuddleTranscriptIntro /> : undefined
+            }
+            huddleMemberPubkeys={huddleMemberPubkeys}
+            huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+            isFetchingOlder={isFetchingOlder}
+            isFollowingThreadById={isFollowingThreadById}
+            isMessageUnreadById={isMessageUnreadById}
+            personaLookup={personaLookup}
+            profiles={profiles}
+            ownerProfiles={ownerProfiles}
+            unfollowThreadById={unfollowThreadById}
+            emptyDescription={
+              activeChannel?.channelType === "forum"
+                ? "Select a stream or DM to load real message history in this first integration pass."
+                : "Messages and sub-replies will appear here once the relay has history for this channel."
+            }
+            emptyTitle={
+              activeChannel
+                ? activeChannel.channelType === "forum"
+                  ? "Forum channels are next"
+                  : "No messages yet"
+                : "No channel selected"
+            }
+            isLoading={isHuddleTranscript ? false : isTimelineLoading}
+            entranceMessageId={entranceMessageId}
+            onEntranceMessageComplete={onEntranceMessageComplete}
+            mainEntries={mainTimelineEntries}
+            threadSummaries={threadSummaries}
+            messages={visibleMessages}
+            firstUnreadMessageId={firstUnreadMessageId}
+            unreadCount={unreadCount}
+            onDelete={onDelete}
+            onEdit={onEdit}
+            onMarkUnread={onMarkUnread}
+            onMarkRead={onMarkRead}
+            onReply={timelineReplyHandler}
+            channelName={activeChannel?.name}
+            channelType={activeChannel?.channelType ?? null}
+            isSendingVideoReviewComment={isSending}
+            onSendVideoReviewComment={
+              activeChannel?.archivedAt ? undefined : onSendVideoReviewComment
+            }
+            onTargetReached={onTargetReached}
+            onToggleReaction={onToggleReaction}
+            searchActiveMessageId={channelFind.activeMatch?.messageId ?? null}
+            searchMatchingMessageIds={channelFind.matchingMessageIds}
+            searchQuery={channelFind.query}
+            targetMessageId={targetMessageId}
+            splitThreadPanelOpen={
+              useSplitAuxiliaryPane &&
+              !useFocusThreadDrawer &&
+              Boolean(openThreadHeadId)
+            }
+            threadUnreadCounts={threadUnreadCounts}
+          />
           {isNonMemberView ? (
             <div
               data-testid="join-banner"
@@ -792,10 +802,6 @@ export const ChannelPane = React.memo(function ChannelPane({
                   }
                   showTopBorder={false}
                 />
-                {/* The activity accessory is anchored in the dock's reserved
-                    bottom rail, so fading it cannot change the observed
-                    overlay height or move the conversation. Its natural
-                    content height remains responsive. */}
                 <ChannelComposerActivityAccessory
                   agents={activityAgents}
                   channel={activeChannel}
@@ -816,14 +822,6 @@ export const ChannelPane = React.memo(function ChannelPane({
         </section>
       ) : null}
 
-      {/*
-       * `AnimatePresence` keeps the focus thread drawer mounted through its exit
-       * animation — without it the drawer's own existence condition
-       * (`useFocusThreadDrawer`, which is derived from `threadHeadMessage`) goes
-       * false on the same frame as the close, and there is nothing left to
-       * animate. It can hold the real thread through the exit rather than a
-       * frozen snapshot because the panel is fully prop-driven.
-       */}
       <AnimatePresence onExitComplete={markExitComplete}>
         {channelManagementOpen && activeChannel ? (
           <ChannelManagementAuxiliaryPanel
@@ -991,6 +989,11 @@ export const ChannelPane = React.memo(function ChannelPane({
           })()
         ) : null}
       </AnimatePresence>
+      <ChannelWorkspaceDock
+        channelId={activeChannelId}
+        hasAuxiliaryPane={hasSplitAuxiliaryPane}
+        layoutRef={layoutRef}
+      />
     </div>
   );
 });

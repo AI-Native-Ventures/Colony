@@ -87,9 +87,7 @@ export function ChannelScreenHeader({
       {channelId ? (
         <button
           aria-label={
-            surfaceMode === "workspace"
-              ? "Show message timeline"
-              : "Show workspace"
+            surfaceMode === "workspace" ? "Close workspace" : "Open workspace"
           }
           aria-pressed={surfaceMode === "workspace"}
           className={cn(

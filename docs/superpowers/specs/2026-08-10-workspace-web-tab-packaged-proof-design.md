@@ -1,5 +1,11 @@
 # Workspace web tab reconciliation and packaged proof
 
+> **Layout amendment:** the current workspace presentation is the resizable
+> far-right pane defined in
+> `2026-08-10-channel-workspace-docked-pane-design.md`. Flow 08 must show the
+> channel beside the browser pane; a browser replacing the timeline is a visual
+> failure even when native IPC succeeds.
+
 Date: 2026-08-10
 Status: Approved for implementation
 

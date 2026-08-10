@@ -118,7 +118,8 @@ test.describe("web workspace tab", () => {
     });
 
     await page.getByRole("button", { name: "Close Web" }).click();
-    await expect(page.getByTestId("workspace-new-tab-page")).toBeVisible();
+    await expect(page.getByTestId("channel-workspace-pane")).toHaveCount(0);
+    await expect(page.getByTestId("channel-drop-zone")).toBeVisible();
     await expect
       .poll(async () => (await commands(page)).map((entry) => entry.command))
       .toContain("workspace_web_close");
