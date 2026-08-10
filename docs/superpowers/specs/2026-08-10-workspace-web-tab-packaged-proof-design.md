@@ -120,6 +120,47 @@ Hosted PR CI and the merge queue are the broad acceptance gates. The PR is not
 called green or merged until every non-skipped hosted check passes and GitHub
 reports the final merge state.
 
+## Amendments after first packaged run
+
+### Browser chrome and responsive viewport (commits 44055c13f1, 31d209a304, ff3ec194b3)
+
+The spike's toolbar exposed the DevTools endpoint and target id as primary
+controls and let the screencast image letterbox inside the panel. Shipped
+instead: Back, Forward, Reload, a single URL field with a visible Go control,
+and the endpoint/target attach controls collapsed under an "Advanced
+connection" disclosure that is closed by default. The screencast surface fills
+the workspace panel, and a `ResizeObserver` drives `workspace_web_resize` so
+Chromium's CDP viewport tracks the panel instead of the image being stretched
+or cropped.
+
+Two native commands were added for this: `workspace_web_back`,
+`workspace_web_forward`, `workspace_web_reload`, and `workspace_web_resize`.
+
+### Wheel forwarding opt-out (commit b4458f2b66)
+
+`useWebviewScrollBoundaryLock` registers a window-capture, `passive: false`
+wheel listener that calls `preventDefault()` and `stopPropagation()` on any
+wheel whose event path contains no scrollable element. The screencast surface
+is deliberately `overflow-hidden`, so it matched that rule and every wheel over
+the Web tab was consumed before React's `onWheel` could run. Remote scrolling
+never worked, in any environment. This was previously misdiagnosed as a
+packaged WebKit/Tauri boundary limitation.
+
+Surfaces that forward wheel gestures somewhere else now opt out with
+`data-buzz-wheel-forwarding`, matching the existing
+`data-buzz-conversation-scroll` exemption idiom. Rubber-band protection is
+unchanged and `tests/e2e/overscroll-boundary.spec.ts` still passes.
+
+### Proof layering
+
+The packaged WDIO journey is no longer the place where input and lifecycle are
+iterated. Engine input behaviour is proven by the `engine-chromium` and
+`engine-webkit` Playwright projects, because WebKit is the engine behind the
+packaged macOS WKWebView. Owned-browser process lifecycle is proven by Rust
+integration tests against real headless Chromium. Flow 08 keeps only the proof
+that requires the signed bundle: real Tauri IPC producing a real CDP frame
+inside the packaged app, plus a screenshot.
+
 ## Out of scope
 
 - Electron or any shell migration.
