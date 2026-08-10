@@ -6,17 +6,13 @@
 import { browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
 
-import {
-  clickTestId,
-  fillTestId,
-  waitForFirstPaint,
-  waitForTestId,
-} from "../helpers/app";
+import { clickTestId, fillTestId, waitForTestId } from "../helpers/app";
 import {
   processTree,
   waitForPidsGone,
   waitForProcessWhere,
 } from "../helpers/process";
+import { ensureJoinedCommunity } from "../helpers/community";
 import { recordResult } from "../helpers/results";
 
 const RELAY_A = process.env.BUZZ_E2E_RELAY_URL ?? "ws://localhost:3040";
@@ -100,6 +96,17 @@ async function createTerminalTab() {
   await clickTestId("workspace-create-terminal");
   const body = await terminalBody();
   return { body, pid: await terminalPid(body) };
+}
+
+async function waitForCommunityReady(communityId: string): Promise<void> {
+  const marker = await $(
+    `[data-testid="community-lifecycle-marker"][data-community-id="${communityId}"][data-community-state="ready"]`,
+  );
+  await marker.waitForExist({
+    timeout: 120_000,
+    timeoutMsg: `community ${communityId} never reached the applied/ready marker`,
+  });
+  expect(await marker.getAttribute("data-community-relay")).toBe(RELAY_B);
 }
 
 type PersistedCommunity = {
@@ -226,196 +233,200 @@ function detachWdioSession(): void {
 
 describe("06 packaged workspace terminal", () => {
   it("proves PTY I/O, inactive preservation, A→B cleanup, and normal exit", async () => {
-    recordResult("06-workspace-terminal", "pass", "running");
-    await waitForFirstPaint();
-    await waitForTestId("channel-general", 120_000);
+    try {
+      await ensureJoinedCommunity(RELAY_A);
 
-    await openWorkspace();
-    const first = await createTerminalTab();
-    await browser.waitUntil(
-      async () =>
-        ((await first.body.getAttribute("data-output")) ?? "").length > 0,
-      { timeout: 60_000, timeoutMsg: "first terminal never produced a prompt" },
-    );
-    // Keep a real child alive so the process-tree assertion observes more
-    // than a leader PID and cleanup must reap both the shell and its child.
-    await sendTerminalCommand("sleep 30 & printf 'terminal-%s-output\\n' a");
-    await waitForTerminalOutput("terminal-a-output");
+      await openWorkspace();
+      const first = await createTerminalTab();
+      await browser.waitUntil(
+        async () =>
+          ((await first.body.getAttribute("data-output")) ?? "").length > 0,
+        {
+          timeout: 60_000,
+          timeoutMsg: "first terminal never produced a prompt",
+        },
+      );
+      // Keep a real child alive so the process-tree assertion observes more
+      // than a leader PID and cleanup must reap both the shell and its child.
+      await sendTerminalCommand("sleep 30 & printf 'terminal-%s-output\\n' a");
+      await waitForTerminalOutput("terminal-a-output");
 
-    await clickTestId("workspace-new-tab");
-    const second = await createTerminalTab();
-    await sendTerminalCommand("sleep 30 & printf 'terminal-%s-output\\n' b");
-    await waitForTerminalOutput("terminal-b-output");
-    const pidsA = await processEvidence("community A", [first.pid, second.pid]);
+      await clickTestId("workspace-new-tab");
+      const second = await createTerminalTab();
+      await sendTerminalCommand("sleep 30 & printf 'terminal-%s-output\\n' b");
+      await waitForTerminalOutput("terminal-b-output");
+      const pidsA = await processEvidence("community A", [
+        first.pid,
+        second.pid,
+      ]);
 
-    // The first session is inactive while the second tab is selected. Return
-    // to it and prove the output survived body unmount/remount.
-    const tabs = await $$('[role="tab"]');
-    expect(tabs.length).toBeGreaterThanOrEqual(2);
-    await tabs[0].click();
-    await waitForTerminalOutput("terminal-a-output");
-    await browser.saveScreenshot("./e2e-real-shell/results/06-terminal.png");
+      // The first session is inactive while the second tab is selected. Return
+      // to it and prove the output survived body unmount/remount.
+      const tabs = await $$('[role="tab"]');
+      expect(tabs.length).toBeGreaterThanOrEqual(2);
+      await tabs[0].click();
+      await waitForTerminalOutput("terminal-a-output");
+      await browser.saveScreenshot("./e2e-real-shell/results/06-terminal.png");
 
-    // Exercise the destructive tab-close boundary against the first real
-    // session before switching communities. The PTY body is active here and
-    // the second session remains the next selected tab after disposal.
-    const firstTabPids = [
-      first.pid,
-      ...processTree(first.pid).map((row) => row.pid),
-    ];
-    const firstTabEntry = await $('[data-testid^="workspace-tab-"]');
-    await firstTabEntry.moveTo();
-    const closeFirstTab = await firstTabEntry.$(
-      'button[aria-label="Close Terminal"]',
-    );
-    await closeFirstTab.waitForExist({ timeout: 30_000 });
-    await closeFirstTab.click();
-    await browser.waitUntil(
-      async () =>
-        Number(
-          await $('[data-testid="workspace-terminal-body"]').getAttribute(
-            "data-pid",
-          ),
-        ) === second.pid,
-      {
-        timeout: 30_000,
-        timeoutMsg: "closing the first terminal did not select the second tab",
-      },
-    );
-    await waitForPidsGone(firstTabPids, 60_000, "closed A terminal tab tree");
-    // eslint-disable-next-line no-console
-    console.log(
-      `[06] close-tab PID evidence: leader=${first.pid} descendants=${firstTabPids
-        .slice(1)
-        .join(",")} kill-0=false`,
-    );
+      // Exercise the destructive tab-close boundary against the first real
+      // session before switching communities. The PTY body is active here and
+      // the second session remains the next selected tab after disposal.
+      const firstTabPids = [
+        first.pid,
+        ...processTree(first.pid).map((row) => row.pid),
+      ];
+      const firstTabEntry = await $('[data-testid^="workspace-tab-"]');
+      await firstTabEntry.moveTo();
+      const closeFirstTab = await firstTabEntry.$(
+        'button[aria-label="Close Terminal"]',
+      );
+      await closeFirstTab.waitForExist({ timeout: 30_000 });
+      await closeFirstTab.click();
+      await browser.waitUntil(
+        async () =>
+          Number(
+            await $('[data-testid="workspace-terminal-body"]').getAttribute(
+              "data-pid",
+            ),
+          ) === second.pid,
+        {
+          timeout: 30_000,
+          timeoutMsg:
+            "closing the first terminal did not select the second tab",
+        },
+      );
+      await waitForPidsGone(firstTabPids, 60_000, "closed A terminal tab tree");
+      // eslint-disable-next-line no-console
+      console.log(
+        `[06] close-tab PID evidence: leader=${first.pid} descendants=${firstTabPids
+          .slice(1)
+          .join(",")} kill-0=false`,
+      );
 
-    const appBundle = process.env.BUZZ_REAL_SHELL_APP ?? "";
-    const appBeforeSwitch = await waitForProcessWhere(
-      (row) => row.command.includes(appBundle),
-      120_000,
-      "packaged Colony app before community switch",
-    );
-    // Adding B exercises the real community onboarding path. The app's
-    // resetCommunityState() must close every A session before B is applied.
-    const communityBId = await addAndSwitchToCommunityB();
-    // The active ID changes before useCommunityInit applies B. This is the
-    // observable handoff point; resetCommunityState() must finish draining
-    // every A session before the later B-ready assertion can pass.
-    await browser.waitUntil(
-      async () => (await persistedCommunityState()).activeId === communityBId,
-      {
-        timeout: 60_000,
-        timeoutMsg: "community B switch never became active",
-      },
-    );
-    await waitForPidsGone(pidsA, 60_000, "community A terminal process trees");
-    await waitForTestId("channel-general", 120_000);
-    await browser.waitUntil(
-      async () => (await persistedCommunityState()).activeId === communityBId,
-      {
-        timeout: 30_000,
-        timeoutMsg: "community B was not still active after ready",
-      },
-    );
-    // eslint-disable-next-line no-console
-    console.log(
-      `[06] community A cleanup observed before B ready: appPid=${appBeforeSwitch.pid} pids=${pidsA.join(",")}`,
-    );
+      const appBundle = process.env.BUZZ_REAL_SHELL_APP ?? "";
+      const appBeforeSwitch = await waitForProcessWhere(
+        (row) => row.command.includes(appBundle),
+        120_000,
+        "packaged Colony app before community switch",
+      );
+      // Adding B exercises the real community onboarding path. The app's
+      // resetCommunityState() must close every A session before B is applied.
+      const communityBId = await addAndSwitchToCommunityB();
+      // The active ID changes before useCommunityInit applies B. This is the
+      // observable handoff point; resetCommunityState() must finish draining
+      // every A session before the later B-ready assertion can pass.
+      await waitForPidsGone(
+        pidsA,
+        60_000,
+        "community A terminal process trees",
+      );
+      await waitForCommunityReady(communityBId);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[06] community A cleanup observed before B ready: appPid=${appBeforeSwitch.pid} pids=${pidsA.join(",")}`,
+      );
 
-    // B has independent runtime sessions. Capture both trees before the
-    // normal window close, including the inactive tab.
-    await openWorkspace();
-    const bFirst = await createTerminalTab();
-    await sendTerminalCommand("sleep 30 & printf 'terminal-%s-live\\n' b");
-    await waitForTerminalOutput("terminal-b-live");
-    await clickTestId("workspace-new-tab");
-    const bSecond = await createTerminalTab();
-    await sendTerminalCommand("sleep 30 & printf 'terminal-%s-second\\n' b");
-    await waitForTerminalOutput("terminal-b-second");
-    const pidsB = await processEvidence("community B", [
-      bFirst.pid,
-      bSecond.pid,
-    ]);
-    expect(pidsB).toContain(bFirst.pid);
-    expect(pidsB).toContain(bSecond.pid);
+      // B has independent runtime sessions. Capture both trees before the
+      // normal window close, including the inactive tab.
+      await openWorkspace();
+      const bFirst = await createTerminalTab();
+      await sendTerminalCommand("sleep 30 & printf 'terminal-%s-live\\n' b");
+      await waitForTerminalOutput("terminal-b-live");
+      await clickTestId("workspace-new-tab");
+      const bSecond = await createTerminalTab();
+      await sendTerminalCommand("sleep 30 & printf 'terminal-%s-second\\n' b");
+      await waitForTerminalOutput("terminal-b-second");
+      const pidsB = await processEvidence("community B", [
+        bFirst.pid,
+        bSecond.pid,
+      ]);
+      expect(pidsB).toContain(bFirst.pid);
+      expect(pidsB).toContain(bSecond.pid);
 
-    const rootFontBefore = await browser.execute(
-      () => getComputedStyle(document.documentElement).fontSize,
-    );
-    const terminalFontBefore = Number(
-      await (await $('[data-testid="workspace-terminal-body"]')).getAttribute(
-        "data-terminal-font-size",
-      ),
-    );
-    await browser.keys([Key.Command, "+"]);
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () => getComputedStyle(document.documentElement).fontSize,
-        )) !== rootFontBefore,
-      {
-        timeout: 10_000,
-        timeoutMsg: "packaged Cmd+ zoom did not change root font size",
-      },
-    );
-    const zoomedRootFont = await browser.execute(
-      () => getComputedStyle(document.documentElement).fontSize,
-    );
-    const zoomedTerminalFont = await (
-      await $('[data-testid="workspace-terminal-body"]')
-    ).getAttribute("data-terminal-font-size");
-    expect(zoomedRootFont).not.toBe(rootFontBefore);
-    expect(Number(zoomedTerminalFont)).toBeGreaterThan(terminalFontBefore);
-    console.log(
-      `[06] packaged zoom evidence: root=${rootFontBefore}->${zoomedRootFont} xterm=${terminalFontBefore}->${zoomedTerminalFont}`,
-    );
-    await browser.keys([Key.Command, "-"]);
+      const rootFontBefore = await browser.execute(
+        () => getComputedStyle(document.documentElement).fontSize,
+      );
+      const terminalFontBefore = Number(
+        await (await $('[data-testid="workspace-terminal-body"]')).getAttribute(
+          "data-terminal-font-size",
+        ),
+      );
+      await browser.keys([Key.Command, "+"]);
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(
+            () => getComputedStyle(document.documentElement).fontSize,
+          )) !== rootFontBefore,
+        {
+          timeout: 10_000,
+          timeoutMsg: "packaged Cmd+ zoom did not change root font size",
+        },
+      );
+      const zoomedRootFont = await browser.execute(
+        () => getComputedStyle(document.documentElement).fontSize,
+      );
+      const zoomedTerminalFont = await (
+        await $('[data-testid="workspace-terminal-body"]')
+      ).getAttribute("data-terminal-font-size");
+      expect(zoomedRootFont).not.toBe(rootFontBefore);
+      expect(Number(zoomedTerminalFont)).toBeGreaterThan(terminalFontBefore);
+      console.log(
+        `[06] packaged zoom evidence: root=${rootFontBefore}->${zoomedRootFont} xterm=${terminalFontBefore}->${zoomedTerminalFont}`,
+      );
+      await browser.keys([Key.Command, "-"]);
 
-    const app = await waitForProcessWhere(
-      (row) => row.command.includes(appBundle),
-      60_000,
-      "packaged Colony app before normal exit",
-    );
-    const appTree = processTree(app.pid).map((row) => row.pid);
-    // eslint-disable-next-line no-console
-    console.log(
-      `[06] normal-exit app process tree: ${JSON.stringify([app.pid, appTree])}`,
-    );
+      const app = await waitForProcessWhere(
+        (row) => row.command.includes(appBundle),
+        60_000,
+        "packaged Colony app before normal exit",
+      );
+      const appTree = processTree(app.pid).map((row) => row.pid);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[06] normal-exit app process tree: ${JSON.stringify([app.pid, appTree])}`,
+      );
 
-    // This is the real window-close action. It must reach Tauri's
-    // RunEvent::ExitRequested/Exit handlers, not a test-only close flag. Use
-    // the same Tauri window-plugin operation as NativeBridge.closeWindow(),
-    // issued through the native WDIO boundary. WebDriver's closeWindow()
-    // helper performs a follow-up window-handle query after the app exits;
-    // that query races the deliberate process shutdown and marks an otherwise
-    // complete proof as a driver failure.
-    await browser.tauri.execute(({ core }) => {
-      // Let the WebDriver execute request complete before the app processes
-      // the close event; otherwise the embedded server can disappear while
-      // serializing the command response and report a false fetch failure.
-      setTimeout(() => {
-        void core
-          .invoke("plugin:window|close", { label: "main" })
-          .catch(() => undefined);
-      }, 0);
-      return true;
-    });
-    // The embedded WebDriver server lives inside the app, so a successful
-    // normal exit necessarily takes the server down before WDIO's worker
-    // teardown can issue DELETE /session. Mark that already-completed driver
-    // session detached; the process/PID assertions below are the authoritative
-    // shutdown proof and no WebDriver call is made after this point.
-    detachWdioSession();
-    await waitForPidsGone(
-      [app.pid, ...appTree, ...pidsB],
-      120_000,
-      "normal app exit and community B terminal process trees",
-    );
-    // eslint-disable-next-line no-console
-    console.log(
-      `[06] normal exit PID evidence: appPid=${app.pid} kill-0=false; all B leaders/descendants kill-0=false`,
-    );
-    recordResult("06-workspace-terminal", "pass", `appPid=${app.pid}`);
+      // This is the real window-close action. It must reach Tauri's
+      // RunEvent::ExitRequested/Exit handlers, not a test-only close flag. Use
+      // the same Tauri window-plugin operation as NativeBridge.closeWindow(),
+      // issued through the native WDIO boundary. WebDriver's closeWindow()
+      // helper performs a follow-up window-handle query after the app exits;
+      // that query races the deliberate process shutdown and marks an otherwise
+      // complete proof as a driver failure.
+      await browser.tauri.execute(({ core }) => {
+        // Let the WebDriver execute request complete before the app processes
+        // the close event; otherwise the embedded server can disappear while
+        // serializing the command response and report a false fetch failure.
+        setTimeout(() => {
+          void core
+            .invoke("plugin:window|close", { label: "main" })
+            .catch(() => undefined);
+        }, 0);
+        return true;
+      });
+      // The embedded WebDriver server lives inside the app, so a successful
+      // normal exit necessarily takes the server down before WDIO's worker
+      // teardown can issue DELETE /session. Mark that already-completed driver
+      // session detached; the process/PID assertions below are the authoritative
+      // shutdown proof and no WebDriver call is made after this point.
+      detachWdioSession();
+      await waitForPidsGone(
+        [app.pid, ...appTree, ...pidsB],
+        120_000,
+        "normal app exit and community B terminal process trees",
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        `[06] normal exit PID evidence: appPid=${app.pid} kill-0=false; all B leaders/descendants kill-0=false`,
+      );
+      recordResult("06-workspace-terminal", "pass", `appPid=${app.pid}`);
+    } catch (cause: unknown) {
+      recordResult(
+        "06-workspace-terminal",
+        "fail",
+        cause instanceof Error ? cause.message : String(cause),
+      );
+      throw cause;
+    }
   });
 });

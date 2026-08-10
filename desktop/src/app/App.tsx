@@ -565,6 +565,20 @@ function CommunityApp({
 
   return (
     <>
+      <span
+        aria-hidden="true"
+        data-community-id={activeCommunity?.id ?? ""}
+        data-community-key={communityKey}
+        data-community-relay={activeCommunity?.relayUrl ?? ""}
+        data-community-state={
+          "appliedKey" in community && community.appliedKey === communityKey
+            ? community.isReady
+              ? "ready"
+              : "applying"
+            : "pending"
+        }
+        data-testid="community-lifecycle-marker"
+      />
       {appContent}
       {transaction ? (
         <div

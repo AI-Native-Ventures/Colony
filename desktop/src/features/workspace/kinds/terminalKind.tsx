@@ -2,7 +2,7 @@ import * as React from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import { useCommunities } from "@/features/communities/useCommunities";
-import { useProjectsQuery } from "@/features/projects/hooks";
+import { useProjectsQuery, type Project } from "@/features/projects/hooks";
 import type { TabKindDefinition } from "@/features/workspace/lib/tabKindRegistry";
 import {
   disposeTerminalSession,
@@ -12,6 +12,7 @@ import {
   subscribeTerminalSession,
   writeTerminalInput,
 } from "@/features/workspace/lib/terminalSessions";
+import type { TerminalStartRequest } from "@/features/workspace/lib/terminalSessions";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
 
 const TERMINAL_FONT_SCALE = 7 / 8;
@@ -33,6 +34,37 @@ function computedTerminalFontSize(): number {
   return Number.isFinite(rootSize)
     ? Math.max(10, rootSize * TERMINAL_FONT_SCALE)
     : 14;
+}
+
+/**
+ * Build the one native start request allowed for a terminal body.
+ *
+ * The project query must settle first: an unresolved query is not evidence
+ * that the channel has no linked project, so starting then would permanently
+ * pin the PTY to the home directory.
+ */
+export function buildTerminalStartRequest({
+  channelId,
+  project,
+  projectsSettled,
+  reposDir,
+}: {
+  channelId: string;
+  project: Project | null | undefined;
+  projectsSettled: boolean;
+  reposDir: string | null;
+}): TerminalStartRequest | null {
+  if (!projectsSettled) return null;
+  return {
+    channelId,
+    projectDtag: project?.dtag ?? null,
+    cloneUrl: project?.cloneUrls[0] ?? null,
+    reposDir,
+    cols: 80,
+    rows: 24,
+    pixelWidth: 0,
+    pixelHeight: 0,
+  };
 }
 
 /** Real xterm.js terminal renderer backed by the NativeBridge PTY. */
@@ -59,20 +91,18 @@ export function TerminalBody({
     (candidate) => candidate.projectChannelId === channelId,
   );
   const request = React.useMemo(
-    () => ({
-      channelId,
-      projectDtag: project?.dtag ?? null,
-      cloneUrl: project?.cloneUrls[0] ?? null,
-      reposDir: activeCommunity?.reposDir ?? null,
-      cols: 80,
-      rows: 24,
-      pixelWidth: 0,
-      pixelHeight: 0,
-    }),
-    [activeCommunity?.reposDir, channelId, project],
+    () =>
+      buildTerminalStartRequest({
+        channelId,
+        project,
+        projectsSettled: projects.isFetched,
+        reposDir: activeCommunity?.reposDir ?? null,
+      }),
+    [activeCommunity?.reposDir, channelId, project, projects.isFetched],
   );
 
   React.useEffect(() => {
+    if (!request) return;
     void ensureTerminalSession(tab.id, request);
   }, [request, tab.id]);
 

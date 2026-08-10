@@ -2,6 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { installTerminalMockBridge } from "../helpers/terminalBridge";
 
 type TerminalCommand = { command: string; payload: unknown };
 
@@ -56,6 +57,7 @@ test.describe("terminal workspace tab", () => {
   test("renders a real xterm body, preserves it across remount, and wires PTY events", async ({
     page,
   }) => {
+    await installTerminalMockBridge(page);
     await installMockBridge(page);
     await page.goto("/");
     await page.getByTestId("channel-general").click();
@@ -141,6 +143,7 @@ test.describe("terminal workspace tab", () => {
   test("closing the terminal invokes native process cleanup", async ({
     page,
   }) => {
+    await installTerminalMockBridge(page);
     await installMockBridge(page);
     await page.goto("/");
     await page.getByTestId("channel-general").click();

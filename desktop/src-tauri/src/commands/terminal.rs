@@ -1,7 +1,6 @@
 //! Native command boundary for workspace terminal tabs.
 
-use crate::app_state::AppState;
-use crate::terminal::TerminalStartResult;
+use crate::terminal::{TerminalManager, TerminalStartResult};
 use portable_pty::PtySize;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -72,7 +71,7 @@ fn pty_size(
 pub fn workspace_terminal_start(
     request: TerminalStartRequest,
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, TerminalManager>,
 ) -> Result<TerminalStartResult, String> {
     if request.channel_id.trim().is_empty() {
         return Err("terminal channel id must not be empty".to_string());
@@ -82,7 +81,7 @@ pub fn workspace_terminal_start(
         request.project_dtag.as_deref(),
         request.clone_url.as_deref(),
     )?;
-    state.terminal_sessions.start(
+    state.start(
         Some(app),
         cwd,
         pty_size(
@@ -99,18 +98,18 @@ pub fn workspace_terminal_start(
 pub fn workspace_terminal_write(
     session_id: String,
     data: String,
-    state: State<'_, AppState>,
+    state: State<'_, TerminalManager>,
 ) -> Result<(), String> {
-    state.terminal_sessions.write(&session_id, data.as_bytes())
+    state.write(&session_id, data.as_bytes())
 }
 
 /// Resize the PTY backing a terminal tab.
 #[tauri::command]
 pub fn workspace_terminal_resize(
     request: TerminalResizeRequest,
-    state: State<'_, AppState>,
+    state: State<'_, TerminalManager>,
 ) -> Result<(), String> {
-    state.terminal_sessions.resize(
+    state.resize(
         &request.session_id,
         pty_size(
             Some(request.cols),
@@ -125,15 +124,15 @@ pub fn workspace_terminal_resize(
 #[tauri::command]
 pub fn workspace_terminal_close(
     session_id: String,
-    state: State<'_, AppState>,
+    state: State<'_, TerminalManager>,
 ) -> Result<(), String> {
-    state.terminal_sessions.close(&session_id)
+    state.close(&session_id)
 }
 
 /// Close all terminal sessions before a community boundary or app exit.
 #[tauri::command]
-pub fn workspace_terminal_close_all(state: State<'_, AppState>) -> Result<(), String> {
-    state.terminal_sessions.close_all();
+pub fn workspace_terminal_close_all(state: State<'_, TerminalManager>) -> Result<(), String> {
+    state.close_all();
     Ok(())
 }
 

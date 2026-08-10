@@ -126,9 +126,8 @@ pub struct AppState {
     /// bounded and letting a later leave correctly flip the channel back to
     /// `is_member=false`.
     pub pending_owned_channels: Mutex<std::collections::HashSet<(String, String)>>,
-    /// Runtime-owned PTYs backing channel workspace terminal tabs.
-    pub terminal_sessions: crate::terminal::TerminalManager,
 }
+
 /// Parse the `BUZZ_PRIVATE_KEY` env var into identity keys. `Some` means the
 /// env var was present and valid and MUST win over any persisted/keyring key
 /// (the dev/CI/harness override). `None` means absent or malformed — callers
@@ -228,7 +227,6 @@ pub fn build_app_state() -> AppState {
         #[cfg(feature = "mesh-llm")]
         mesh_coordinator: AsyncMutex::new(None),
         pending_owned_channels: Mutex::new(std::collections::HashSet::new()),
-        terminal_sessions: crate::terminal::TerminalManager::default(),
     }
 }
 

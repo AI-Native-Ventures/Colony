@@ -20,7 +20,7 @@ export type TerminalSessionState = {
   error: string | null;
 };
 
-type TerminalStartRequest = {
+export type TerminalStartRequest = {
   channelId: string;
   projectDtag: string | null;
   cloneUrl: string | null;
@@ -41,9 +41,18 @@ const MAX_OUTPUT_CHARS = 256 * 1024;
 const sessions = new Map<string, TerminalSessionState>();
 const nativeToTab = new Map<string, string>();
 const pendingOutput = new Map<string, string>();
-const starts = new Map<string, Promise<void>>();
+type PendingStart = {
+  lifecycleEpoch: number;
+  tabEpoch: number;
+  promise: Promise<void>;
+};
+
+const starts = new Map<string, PendingStart>();
+const tabEpochs = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
 let nativeListeners: Promise<NativeUnlisten[]> | null = null;
+let lifecycleEpoch = 0;
+let resetInFlight: Promise<void> | null = null;
 
 const EMPTY_SESSION: TerminalSessionState = Object.freeze({
   status: "starting",
@@ -134,15 +143,52 @@ export function subscribeTerminalSession(
   };
 }
 
+function nextTabEpoch(tabId: string): number {
+  const epoch = (tabEpochs.get(tabId) ?? 0) + 1;
+  tabEpochs.set(tabId, epoch);
+  return epoch;
+}
+
+function isCurrentStart(tabId: string, pending: PendingStart): boolean {
+  return (
+    lifecycleEpoch === pending.lifecycleEpoch &&
+    tabEpochs.get(tabId) === pending.tabEpoch &&
+    starts.get(tabId) === pending
+  );
+}
+
+async function closeLateNativeSession(sessionId: string): Promise<void> {
+  try {
+    await invoke("workspace_terminal_close", { sessionId });
+  } catch {
+    // A concurrent close_all may have already reaped this stale session.
+  }
+  pendingOutput.delete(sessionId);
+}
+
 /** Start the native session once for a tab; remounts reuse the same PTY. */
 export async function ensureTerminalSession(
   tabId: string,
   request: TerminalStartRequest,
 ): Promise<void> {
+  if (resetInFlight) {
+    await resetInFlight;
+    return ensureTerminalSession(tabId, request);
+  }
   const current = sessions.get(tabId);
   if (current?.sessionId && current.status === "running") return;
   const existing = starts.get(tabId);
-  if (existing) return existing;
+  if (existing) {
+    await existing.promise;
+    if (isCurrentStart(tabId, existing)) return;
+    return ensureTerminalSession(tabId, request);
+  }
+
+  const pendingStart: PendingStart = {
+    lifecycleEpoch,
+    tabEpoch: nextTabEpoch(tabId),
+    promise: Promise.resolve(),
+  };
 
   const start = (async () => {
     sessions.set(tabId, { ...(current ?? emptyState()), status: "starting" });
@@ -153,6 +199,10 @@ export async function ensureTerminalSession(
         "workspace_terminal_start",
         { request },
       );
+      if (!isCurrentStart(tabId, pendingStart)) {
+        await closeLateNativeSession(result.sessionId);
+        return;
+      }
       nativeToTab.set(result.sessionId, tabId);
       sessions.set(tabId, {
         ...(sessions.get(tabId) ?? emptyState()),
@@ -170,6 +220,7 @@ export async function ensureTerminalSession(
         emit(tabId);
       }
     } catch (cause: unknown) {
+      if (!isCurrentStart(tabId, pendingStart)) return;
       sessions.set(tabId, {
         ...(sessions.get(tabId) ?? emptyState()),
         status: "error",
@@ -177,10 +228,11 @@ export async function ensureTerminalSession(
       });
       emit(tabId);
     } finally {
-      starts.delete(tabId);
+      if (starts.get(tabId) === pendingStart) starts.delete(tabId);
     }
   })();
-  starts.set(tabId, start);
+  pendingStart.promise = start;
+  starts.set(tabId, pendingStart);
   return start;
 }
 
@@ -225,30 +277,75 @@ export async function resizeTerminal(
 
 /** Close one session when its tab is closed. */
 export async function disposeTerminalSession(tabId: string): Promise<void> {
+  const invalidationEpoch = nextTabEpoch(tabId);
   const session = sessions.get(tabId);
-  starts.delete(tabId);
+  const pending = starts.get(tabId);
+  let failure: unknown = null;
   if (session?.sessionId) {
-    await invoke("workspace_terminal_close", { sessionId: session.sessionId });
+    try {
+      await invoke("workspace_terminal_close", {
+        sessionId: session.sessionId,
+      });
+    } catch (cause: unknown) {
+      failure = cause;
+    }
     nativeToTab.delete(session.sessionId);
     pendingOutput.delete(session.sessionId);
   }
-  sessions.delete(tabId);
+  if (pending) {
+    try {
+      await pending.promise;
+    } catch (cause: unknown) {
+      failure ??= cause;
+    }
+  }
+  if (tabEpochs.get(tabId) === invalidationEpoch) {
+    const lateSession = sessions.get(tabId)?.sessionId;
+    if (lateSession && lateSession !== session?.sessionId) {
+      try {
+        await invoke("workspace_terminal_close", { sessionId: lateSession });
+      } catch (cause: unknown) {
+        failure ??= cause;
+      }
+      nativeToTab.delete(lateSession);
+      pendingOutput.delete(lateSession);
+    }
+    sessions.delete(tabId);
+  }
   emit(tabId);
+  if (failure) throw failure;
 }
 
 /** Drain every native session before a community switch or app reset. */
-export async function resetTerminalSessions(): Promise<void> {
-  let failure: unknown = null;
-  try {
-    await invoke("workspace_terminal_close_all");
-  } catch (cause: unknown) {
-    failure = cause;
-  } finally {
+export function resetTerminalSessions(): Promise<void> {
+  if (resetInFlight) return resetInFlight;
+  lifecycleEpoch += 1;
+  const pending = [...new Set(starts.values())];
+  const reset = (async () => {
+    let failure: unknown = null;
+    try {
+      await invoke("workspace_terminal_close_all");
+    } catch (cause: unknown) {
+      failure = cause;
+    }
+    const settled = await Promise.allSettled(
+      pending.map((start) => start.promise),
+    );
+    const lateFailure = settled.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    failure ??= lateFailure?.reason ?? null;
     sessions.clear();
     nativeToTab.clear();
     pendingOutput.clear();
     starts.clear();
+    tabEpochs.clear();
     for (const tabId of listeners.keys()) emit(tabId);
-  }
-  if (failure) throw failure;
+    if (failure) throw failure;
+  })();
+  const guarded = reset.finally(() => {
+    if (resetInFlight === guarded) resetInFlight = null;
+  });
+  resetInFlight = guarded;
+  return guarded;
 }

@@ -320,6 +320,7 @@ pub fn run() {
             });
         })
         .manage(build_app_state())
+        .manage(terminal::TerminalManager::default())
         .manage(ClipboardState::new())
         .manage(PendingCommunityDeepLinks::default())
         .manage(commands::pairing::PairingHandle::new())
