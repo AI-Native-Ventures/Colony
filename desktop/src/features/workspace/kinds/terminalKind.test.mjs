@@ -2,11 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 test("registerAllTabKinds exposes a creatable terminal kind and body", async () => {
-  const registry = await import(
-    "../lib/tabKindRegistry.ts?terminal-regression-registry"
-  );
+  const registry = await import("../lib/tabKindRegistry.ts");
   registry.clearTabKindRegistry();
-  const kinds = await import("./index.tsx?terminal-regression-kinds");
+  const kinds = await import("./index.tsx");
 
   kinds.registerAllTabKinds();
 

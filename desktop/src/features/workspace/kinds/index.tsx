@@ -14,6 +14,10 @@ import {
   scratchpadKindDefinition,
   type TabBodyProps,
 } from "@/features/workspace/kinds/scratchpadKind";
+import {
+  TerminalBody,
+  terminalKindDefinition,
+} from "@/features/workspace/kinds/terminalKind";
 
 /**
  * Kind string to body component.
@@ -45,6 +49,9 @@ export function registerAllTabKinds(): void {
   bodies.set(fileKindDefinition.kind, FileBody);
   registerTabKind(imageKindDefinition);
   bodies.set(imageKindDefinition.kind, ImageBody);
+  registerTabKind(terminalKindDefinition);
+  bodies.set(terminalKindDefinition.kind, TerminalBody);
 }
 
 export type { TabBodyProps };
+export { TerminalBody };

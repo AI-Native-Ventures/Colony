@@ -2,10 +2,15 @@
 // (Node), NOT inside the app: they observe real OS state.
 import { execFileSync } from "node:child_process";
 
-export type OsProcess = { pid: number; command: string };
+export type OsProcess = {
+  pid: number;
+  ppid: number;
+  pgid: number;
+  command: string;
+};
 
 function psSnapshot(): OsProcess[] {
-  const out = execFileSync("/bin/ps", ["-axo", "pid=,command="], {
+  const out = execFileSync("/bin/ps", ["-axo", "pid=,ppid=,pgid=,command="], {
     encoding: "utf8",
   });
   return out
@@ -13,8 +18,15 @@ function psSnapshot(): OsProcess[] {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const match = line.match(/^(\d+)\s+(.*)$/);
-      return match ? { pid: Number(match[1]), command: match[2] } : null;
+      const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+      return match
+        ? {
+            pid: Number(match[1]),
+            ppid: Number(match[2]),
+            pgid: Number(match[3]),
+            command: match[4],
+          }
+        : null;
     })
     .filter((row): row is OsProcess => row !== null);
 }
@@ -27,6 +39,55 @@ export function psFindWhere(
   predicate: (row: OsProcess) => boolean,
 ): OsProcess[] {
   return psSnapshot().filter(predicate);
+}
+
+export function processTree(rootPid: number): OsProcess[] {
+  const snapshot = psSnapshot();
+  const byParent = new Map<number, OsProcess[]>();
+  for (const row of snapshot) {
+    const children = byParent.get(row.ppid) ?? [];
+    children.push(row);
+    byParent.set(row.ppid, children);
+  }
+  const result: OsProcess[] = [];
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    const parent = pending.pop();
+    if (parent === undefined) continue;
+    for (const child of byParent.get(parent) ?? []) {
+      if (result.some((row) => row.pid === child.pid)) continue;
+      result.push(child);
+      pending.push(child.pid);
+    }
+  }
+  return result;
+}
+
+export function pidIsAlive(pid: number): boolean {
+  try {
+    execFileSync("/bin/kill", ["-0", String(pid)], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function waitForPidsGone(
+  pids: number[],
+  timeoutMs = 60_000,
+  describe = "tracked process tree",
+): Promise<void> {
+  const uniquePids = [...new Set(pids)];
+  const deadline = Date.now() + timeoutMs;
+  while (uniquePids.some(pidIsAlive) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  const remaining = uniquePids.filter((pid) => pidIsAlive(pid));
+  if (remaining.length > 0) {
+    throw new Error(
+      `${describe} still alive by kill -0: ${remaining.join(",")}`,
+    );
+  }
 }
 
 export function appProcessExists(bundlePath: string): boolean {

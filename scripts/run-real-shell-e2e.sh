@@ -2,17 +2,19 @@
 # =============================================================================
 # run-real-shell-e2e.sh — run the real-shell E2E smoke suite
 # =============================================================================
-# Drives a PACKAGED Tauri build (real backend) through five smoke flows:
+# Drives a PACKAGED Tauri build (real backend) through seven smoke flows:
 #   01 launch-to-first-paint    boot, keychain unlock, window creation
 #   02 onboard identity         secret_store.rs against the real OS keychain
 #   03 join + message           live relay socket and push
 #   04 managed agent spawn/stop sidecar spawn, protected PID set, reaper
 #   05 huddle + brief transmit  audio devices, raw binary IPC
+#   06 terminal PTY + normal exit real shell sessions, community boundary
+#   07 terminal PTY + SIGTERM process-tree cleanup
 #
 # Backend: reuses the repo's isolated relay harness
-# (scripts/start-isolated-test-relay.sh, tmux dawn-relay, port 3030,
+# (scripts/start-isolated-test-relay.sh, tmux dawn-relay, port 3040,
 # buzz-harness compose) — the exact harness prior work in this epic used.
-# A live relay on :3030 is reused as-is; a tmux-capable host starts the
+# A live relay on :3040 is reused as-is; a tmux-capable host starts the
 # official script; a host without tmux (e.g. some CI runners) gets the
 # inline nohup fallback. A fresh clone needs only: docker, tmux (optional),
 # hermit, and this script.
@@ -58,12 +60,12 @@ while (($#)); do
   esac
 done
 if [[ ${#FLOWS[@]} -eq 0 ]]; then
-  FLOWS=(01 02 03 04 05)
+  FLOWS=(01 02 03 04 05 06 07)
 fi
 
 # ── Resolve harness configuration ────────────────────────────────────────────
 HARNESS_IDENTIFIER="xyz.block.buzz.app.harness"
-RELAY_PORT="${BUZZ_HARNESS_RELAY_PORT:-3030}"
+RELAY_PORT="${BUZZ_HARNESS_RELAY_PORT:-3040}"
 RELAY_WS="ws://localhost:${RELAY_PORT}"
 RELAY_HTTP="http://localhost:${RELAY_PORT}"
 APP_BUNDLE="desktop/src-tauri/target/release/bundle/macos/Colony.app"
@@ -135,17 +137,17 @@ start_relay_nohup() {
   fi
   local project="buzz-harness-${RELAY_PORT}"
   local compose_file="docker-compose.harness.yml"
-  local pg_port="${BUZZ_HARNESS_PG_PORT:-5471}"
-  local redis_port="${BUZZ_HARNESS_REDIS_PORT:-6471}"
-  local minio_port="${BUZZ_HARNESS_MINIO_PORT:-9471}"
-  local health_port="${BUZZ_HARNESS_HEALTH_PORT:-8088}"
-  local metrics_port="${BUZZ_HARNESS_METRICS_PORT:-9202}"
+  local pg_port="${BUZZ_HARNESS_PG_PORT:-5481}"
+  local redis_port="${BUZZ_HARNESS_REDIS_PORT:-6481}"
+  local minio_port="${BUZZ_HARNESS_MINIO_PORT:-9481}"
+  local health_port="${BUZZ_HARNESS_HEALTH_PORT:-8098}"
+  local metrics_port="${BUZZ_HARNESS_METRICS_PORT:-9212}"
   local relay_log="/tmp/dawn-relay-${RELAY_PORT}.log"
 
   export BUZZ_HARNESS_PG_PORT="${pg_port}"
   export BUZZ_HARNESS_REDIS_PORT="${redis_port}"
   export BUZZ_HARNESS_MINIO_PORT="${minio_port}"
-  export BUZZ_HARNESS_MINIO_CONSOLE_PORT="${BUZZ_HARNESS_MINIO_CONSOLE_PORT:-9472}"
+  export BUZZ_HARNESS_MINIO_CONSOLE_PORT="${BUZZ_HARNESS_MINIO_CONSOLE_PORT:-9492}"
   export BUZZ_HARNESS_OWNER="${REPO_ROOT}"
 
   docker compose -p "${project}" -f "${compose_file}" up -d

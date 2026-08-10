@@ -34,6 +34,7 @@ mod reset;
 mod secret_store;
 mod shutdown;
 mod templates;
+mod terminal;
 mod util;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
@@ -673,6 +674,11 @@ pub fn run() {
             merge_project_pull_request,
             open_project_terminal,
             open_project_merge_recovery_terminal,
+            workspace_terminal_start,
+            workspace_terminal_write,
+            workspace_terminal_resize,
+            workspace_terminal_close,
+            workspace_terminal_close_all,
             search_users,
             get_presence,
             get_os_idle_seconds,

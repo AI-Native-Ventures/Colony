@@ -1141,6 +1141,11 @@ declare global {
       command: string;
       payload: unknown;
     }>;
+    __BUZZ_E2E_TERMINAL_COMMANDS__?: () => Array<{
+      command: string;
+      payload: unknown;
+    }>;
+    __BUZZ_E2E_RESET_TERMINAL_MOCK__?: () => void;
     __BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?: (payload: {
       pubkey: string | null;
       level: number;
@@ -3441,6 +3446,35 @@ function resetMockMesh() {
   mockMeshState.nodeState = "off";
   mockMeshState.nodeMode = null;
   mockMeshState.servingUsage = { ...ZERO_SERVING_USAGE };
+}
+
+type MockTerminalSession = {
+  sessionId: string;
+  cwd: string;
+  pid: number;
+};
+
+const mockTerminalSessions = new Map<string, MockTerminalSession>();
+const mockTerminalCommands: Array<{ command: string; payload: unknown }> = [];
+let mockTerminalSequence = 0;
+
+function resetMockTerminal() {
+  mockTerminalSessions.clear();
+  mockTerminalCommands.length = 0;
+  mockTerminalSequence = 0;
+}
+
+function recordMockTerminalCommand(command: string, payload: unknown) {
+  mockTerminalCommands.push({
+    command,
+    payload: structuredClone(payload),
+  });
+}
+
+function emitMockTerminalOutput(sessionId: string, data: string) {
+  window.setTimeout(() => {
+    void emit("workspace-terminal-output", { sessionId, data });
+  }, 0);
 }
 // Backend-signal listeners registered by specs via __BUZZ_E2E_LISTEN_NATIVE_EVENT__,
 // fired by mock command handlers (e.g. "agents-data-changed" after a persona
@@ -10648,6 +10682,7 @@ export function maybeInstallE2eTauriMocks() {
   resetObserverArchivePolicyGate();
   resetMockPendingCommunityDeepLinks(config);
   initializeMockHuddle(config.mock?.huddle, config);
+  resetMockTerminal();
   mockWebsocketSendMutexWedged = false;
   if (config.mock?.windowLabel) {
     (window as Window & { isTauri?: boolean }).isTauri = true;
@@ -10657,6 +10692,9 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMANDS__ = [];
   window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
+  window.__BUZZ_E2E_TERMINAL_COMMANDS__ = () =>
+    mockTerminalCommands.map((entry) => structuredClone(entry));
+  window.__BUZZ_E2E_RESET_TERMINAL_MOCK__ = resetMockTerminal;
   window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__ = (payload) =>
     emit("huddle-tts-speaker-level", payload);
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
@@ -12284,6 +12322,74 @@ export function maybeInstallE2eTauriMocks() {
           path: "/tmp/buzz/REPOS/buzz",
           cloned: false,
         };
+      case "workspace_terminal_start": {
+        const input = ((payload as { request?: unknown }).request ??
+          payload) as {
+          projectDtag?: string | null;
+          reposDir?: string | null;
+        };
+        mockTerminalSequence += 1;
+        const sessionId = `mock-terminal-${mockTerminalSequence}`;
+        const cwd = input.projectDtag
+          ? `${input.reposDir ?? "/tmp/buzz/REPOS"}/${input.projectDtag}`
+          : "/Users/mock";
+        const session = {
+          sessionId,
+          cwd,
+          pid: 40_000 + mockTerminalSequence,
+        };
+        mockTerminalSessions.set(sessionId, session);
+        recordMockTerminalCommand(command, payload);
+        emitMockTerminalOutput(sessionId, "$ ");
+        return session;
+      }
+      case "workspace_terminal_write": {
+        const input = payload as { sessionId?: string; data?: string };
+        const session = input.sessionId
+          ? mockTerminalSessions.get(input.sessionId)
+          : undefined;
+        if (!session) throw new Error("mock terminal session was not found");
+        recordMockTerminalCommand(command, payload);
+        // This is intentionally asynchronous and uses the same native event
+        // name as the production PTY reader. Frontend tests therefore fail if
+        // they only observe an invoke return value and never wire the event.
+        emitMockTerminalOutput(
+          session.sessionId,
+          `mock-output:${input.data ?? ""}`,
+        );
+        return null;
+      }
+      case "workspace_terminal_resize":
+        recordMockTerminalCommand(command, payload);
+        return null;
+      case "workspace_terminal_close": {
+        const input = payload as { sessionId?: string };
+        if (input.sessionId) mockTerminalSessions.delete(input.sessionId);
+        recordMockTerminalCommand(command, payload);
+        if (input.sessionId) {
+          window.setTimeout(() => {
+            void emit("workspace-terminal-exit", {
+              sessionId: input.sessionId,
+              code: 0,
+              signal: null,
+            });
+          }, 0);
+        }
+        return null;
+      }
+      case "workspace_terminal_close_all":
+        recordMockTerminalCommand(command, payload);
+        for (const sessionId of mockTerminalSessions.keys()) {
+          window.setTimeout(() => {
+            void emit("workspace-terminal-exit", {
+              sessionId,
+              code: 0,
+              signal: null,
+            });
+          }, 0);
+        }
+        mockTerminalSessions.clear();
+        return null;
       case "get_relay_ws_url":
         return getRelayWsUrl(activeConfig);
       case "get_default_relay_url":

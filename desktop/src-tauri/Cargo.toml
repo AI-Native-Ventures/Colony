@@ -36,6 +36,7 @@ tauri-build = { version = "2", features = [] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+nix = { version = "0.28", features = ["process", "signal"] }
 ctrlc = { version = "3", features = ["termination"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -136,6 +137,7 @@ audioadapter-buffers = "3.0"
 tempfile = "3"
 strip-ansi-escapes = "0.2"
 tracing = "0.1"
+portable-pty = "0.9"
 
 [dev-dependencies]
 # `test` gives a real AppHandle with a working path resolver, so the company
