@@ -10,7 +10,7 @@
 #   05 huddle + brief transmit  audio devices, raw binary IPC
 #   06 terminal PTY + normal exit real shell sessions, community boundary
 #   07 terminal PTY + SIGTERM process-tree cleanup
-#   08 web CDP screencast       owned browser, input, lifecycle cleanup
+#   08 web CDP screencast       packaged IPC and one real browser frame
 #
 # Backend: reuses the repo's isolated relay harness
 # (scripts/start-isolated-test-relay.sh, tmux dawn-relay, port 3040,

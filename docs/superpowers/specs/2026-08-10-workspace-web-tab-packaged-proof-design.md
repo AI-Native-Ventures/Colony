@@ -53,11 +53,10 @@ so a restored payload cannot execute an arbitrary binary or steal focus.
 
 ## Packaged Tauri journey
 
-Add real-shell flow 08. Its Node test process starts a deterministic HTTP
-fixture on `127.0.0.1` using an ephemeral port and shuts it down in `finally`.
-The fixture contains a visually distinct page with a text field, action button,
-status panel, and scrollable region. It records browser requests that prove
-which page-side events occurred.
+Real-shell flow 08 is deliberately one proof wide. Its Node process serves a
+static, visually distinct page from `127.0.0.1` on an ephemeral port and shuts
+the server down in `finally`. The fixture has no coordinate receipts or input
+state.
 
 The flow:
 
@@ -65,19 +64,16 @@ The flow:
 2. Enables only `workspaceWebTab` in the harness feature override and reloads.
 3. Opens the channel workspace, creates a Web tab, enters the fixture URL, and
    leaves the DevTools endpoint empty so Colony owns the browser launch.
-4. Waits for a real non-empty screencast frame and the running-session marker.
-5. Sends a pointer click to the remote field, types `colony-web`, sends wheel
-   input, and clicks the remote action button.
-6. Requires the fixture server to observe the exact value `colony-web` once,
-   plus pointer/action and scroll receipts. This catches missing forwarding and
-   duplicate printable insertion.
-7. Waits for the updated real frame and captures `08-web.png`, which must visibly
-   show the fixture's PASS state inside the Colony Web tab.
-8. Closes the tab and proves the owned Chromium leader and descendants disappear
-   with explicit `kill-0=false ps=absent` output.
-9. Starts a second owned session, switches communities, proves the old browser
-   tree is gone before the new community readiness marker, then starts a third
-   session and proves app quit removes that browser tree as well.
+4. Requires the native running-session marker and one non-empty real
+   `Page.startScreencast` frame that fills the workspace surface.
+5. Captures exactly one `08-web.png` screenshot.
+
+Pointer, wheel, key, and text behavior are intentionally absent from this
+journey; the matching Chromium/WebKit Playwright projects own them. PID/profile
+teardown on close, reset, cancellation, timeout, and quit is intentionally
+absent too; the real-Chromium Rust lifecycle tests own it. A Flow 08 failure can
+therefore mean only that the signed bundle did not cross real Tauri IPC into
+the browser host or did not render the returned frame.
 
 The native start result exposes the owned browser PID as runtime observability;
 attached sessions return no owned PID and are never killed by Colony. The
@@ -109,12 +105,14 @@ Focused local gates:
 - focused `WebManager` and `buzz-browser` tests;
 - typecheck, harness typecheck, NativeBridge boundary, px-text, file-size, and
   native-inventory drift checks;
-- `pnpm build:e2e` plus the registered mock Web-tab Playwright spec;
-- one packaged build, followed by flow 08 reruns with `--no-build`;
+- `pnpm build:e2e` plus the `engine-chromium` and `engine-webkit` Web-input
+  projects, with a total iteration under one minute;
+- one packaged build and one Flow 08 run for final bundle acceptance, not as an
+  implementation loop;
 - a visually inspected, non-blank `08-web.png` posted to the PR through
   `scripts/post-screenshots.sh`;
-- explicit browser PID disappearance for tab close, community reset, and app
-  quit.
+- explicit browser PID/profile disappearance in the Rust lifecycle layer for
+  tab close, community reset, cancellation/timeout, and app quit.
 
 Hosted PR CI and the merge queue are the broad acceptance gates. The PR is not
 called green or merged until every non-skipped hosted check passes and GitHub
@@ -159,7 +157,8 @@ iterated. Engine input behaviour is proven by the `engine-chromium` and
 packaged macOS WKWebView. Owned-browser process lifecycle is proven by Rust
 integration tests against real headless Chromium. Flow 08 keeps only the proof
 that requires the signed bundle: real Tauri IPC producing a real CDP frame
-inside the packaged app, plus a screenshot.
+inside the packaged app, plus one screenshot. Any loop iteration over one
+minute is a harness defect to fix before changing product code.
 
 ## Out of scope
 

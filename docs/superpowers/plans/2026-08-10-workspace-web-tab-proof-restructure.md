@@ -449,69 +449,47 @@ git push origin feat/workspace-web-tab
 
 ### Task 4: Shrink flow 08 to the proof only it can carry
 
-With Tasks 2 and 3 green, three of flow 08's four proofs are covered somewhere faster. What remains packaged-only: real Tauri IPC inside the signed bundle producing a real CDP frame, the frame filling the workspace surface, forwarded input reaching the remote page, and a screenshot a human can look at.
+With Tasks 2 and 3 green, input and lifecycle belong entirely to cheaper
+layers. What remains packaged-only is real Tauri IPC inside the signed bundle
+producing one real CDP frame, the frame filling the workspace surface, and one
+screenshot a human can inspect.
 
-This drops flow 08 from three browser sessions plus a community switch plus an app quit to a single session.
+This drops flow 08 to a single session with no coordinate receipts, forwarded
+input, process tracking, or cleanup assertions.
 
 **Files:**
 - Modify: `desktop/e2e-real-shell/specs/08-workspace-web.spec.ts`
+- Modify: `desktop/e2e-real-shell/helpers/web-fixture.ts`
 - Modify: `desktop/e2e-real-shell/README.md`
 
 **Interfaces:**
-- Consumes: `createOwnedWeb(url)`, `proveFixtureInput(fixture, frame)`, `startWebFixture()`, `recordResult(name, status, detail)` from the existing spec and helpers.
+- Consumes: `startWebFixture()` and `recordResult(name, status, detail)`.
 - Produces: `desktop/e2e-real-shell/results/08-web.png`.
 
-- [ ] **Step 1: Delete the lifecycle sections from the spec body**
+- [ ] **Step 1: Reduce the spec to IPC, one frame, and one screenshot**
 
-In `desktop/e2e-real-shell/specs/08-workspace-web.spec.ts`, the `it(...)` body currently runs three sessions. Replace the body between `const fixture = await startWebFixture();` and the `catch` block with:
+Delete the coordinate-stability loop, remote pointer/key/wheel actions,
+fixture receipts, PID/process-tree tracking, tab-close proof, and all cleanup
+assertions. Keep one owned session that reaches `data-status="running"`, yields
+a non-empty frame filling the surface, and writes `results/08-web.png` once.
 
-```ts
-    try {
-      await enableWebPreview();
-      await ensureJoinedCommunity(RELAY_A);
-      await openWorkspace();
+- [ ] **Step 2: Make the fixture static**
 
-      // One session only. Tab-close, community-reset, and app-quit reaping are
-      // proven in desktop/src-tauri/src/web_lifecycle_tests.rs against a real
-      // headless Chromium, which does not need a packaged build and does not
-      // flash windows at whoever is watching. What is packaged-only is this:
-      // real Tauri IPC inside the signed bundle producing a real CDP frame.
-      const session = await createOwnedWeb(fixture.url);
-      const tree = await trackedTree(session.pid, "packaged browser");
-      await proveFixtureInput(fixture, session.frame);
-      await browser.saveScreenshot("./e2e-real-shell/results/08-web.png");
+Remove receipt state, coordinate targets, pointer/action/scroll handlers, and
+the `/receipt` endpoint from `helpers/web-fixture.ts`. Serve only a visually
+distinct static loopback page.
 
-      const tab = await $('[data-testid^="workspace-tab-"]');
-      await tab.moveTo();
-      const close = await tab.$('button[aria-label="Close Web"]');
-      await close.waitForExist({ timeout: 30_000 });
-      await close.click();
-      // Kept because this run owns these processes and must not leak them,
-      // not as the lifecycle proof.
-      await proveGone("packaged browser tree", tree);
+- [ ] **Step 3: Update the test title and imports**
 
-      recordResult(
-        "08-workspace-web",
-        "pass",
-        `fixture=${fixture.url} browserPid=${session.pid}`,
-      );
-    } catch (cause: unknown) {
-```
-
-- [ ] **Step 2: Remove the code that is now unreachable**
-
-Delete these now-unused declarations from the same file: `RELAY_B`, `PersistedCommunity`, `PersistedCommunityState`, `persistedCommunityState`, `addAndSwitchToCommunityB`, `waitForCommunityReady`, `detachWdioSession`, and the `waitForProcessWhere` import if nothing else uses it. Keep `processTree`, `psFindWhere`, and `waitForPidsGone`.
-
-- [ ] **Step 3: Update the test title**
-
-Change the `it(...)` title from `"proves real CDP frames, input, and owned browser cleanup"` to `"renders a real CDP frame and forwards input inside the packaged app"`.
+Name the test `"renders one real CDP frame through packaged Tauri IPC"` and
+delete every now-unused WebDriver key/process helper import.
 
 - [ ] **Step 4: Typecheck the harness**
 
 ```bash
 cd desktop
 pnpm harness:typecheck
-pnpm exec biome check --write e2e-real-shell/specs/08-workspace-web.spec.ts
+pnpm exec biome check --write e2e-real-shell/specs/08-workspace-web.spec.ts e2e-real-shell/helpers/web-fixture.ts
 ```
 
 Expected: no unused-import or unused-variable errors. If any remain, they name code Step 2 missed; delete it.
@@ -522,9 +500,9 @@ In `desktop/e2e-real-shell/README.md`, find the flow 08 entry and replace its de
 
 ```markdown
 - **08 workspace web**: packaged Tauri launches an owned headless Chromium,
-  renders a real `Page.startScreencast` frame filling the workspace surface,
-  and forwards pointer and keyboard input to a loopback fixture that reports
-  exact receipts. Produces `results/08-web.png`.
+  crosses real native IPC, and renders one real `Page.startScreencast` frame
+  filling the workspace surface. It produces exactly one proof screenshot at
+  `results/08-web.png`.
 
   Scope note: owned-browser reaping on tab close, community reset, and app quit
   is **not** proven here. It is proven in
@@ -532,7 +510,8 @@ In `desktop/e2e-real-shell/README.md`, find the flow 08 entry and replace its de
   `crates/buzz-browser/src/host.rs` against a real headless Chromium, which
   runs in seconds without a packaged build. Engine input quirks are proven by
   the `engine-chromium` and `engine-webkit` Playwright projects. Flow 08 keeps
-  only the proof that requires the signed bundle.
+  only the IPC/frame proof that requires the signed bundle; it has no input
+  receipts, coordinate-stability fixture, or PID teardown assertions.
 ```
 
 - [ ] **Step 6: Commit**
@@ -622,7 +601,11 @@ On failure, revert and note the failure in Task 7's evidence record.
 
 ### Task 6: Run the packaged proof once and inspect it
 
-This discharges Task 5 steps 5 and 6 of the predecessor plan. The last recorded flow 08 result is `fail` (`remote input never received the forwarded pointer`, 2026-08-10T09:52:46Z), from before the fixture viewport fix in `ff3ec194b3` and before the wheel fix in `b4458f2b66`. Neither has been validated in a packaged run.
+This is a final bundle acceptance, not an implementation loop. The previous
+`remote input never received the forwarded pointer` and `fixture never reported
+target coordinates for a stable current viewport` failures belonged to the
+removed multi-proof harness. Input is already gated in both browser engines;
+coordinate receipts no longer exist.
 
 **Files:**
 - Verify only. No source changes unless a real defect is found, in which case fix it under its own red-before-green cycle and rerun with `--no-build`.
@@ -652,7 +635,7 @@ pnpm check:native-inventory
 
 Expected: all green. `engine-chromium` plus `engine-webkit` is 8 tests in roughly 25 seconds.
 
-- [ ] **Step 3: Build once and run flow 08**
+- [ ] **Step 3: Reuse the existing bundle and live relay for flow 08**
 
 ```bash
 cd /Users/mac/.traycer/worktrees/ai-native-ventures__colony/feat-workspace-web-tab
@@ -660,12 +643,18 @@ cd /Users/mac/.traycer/worktrees/ai-native-ventures__colony/feat-workspace-web-t
 export BUZZ_HARNESS_RELAY_PORT=3040 BUZZ_HARNESS_PG_PORT=5481
 export BUZZ_HARNESS_REDIS_PORT=6481 BUZZ_HARNESS_MINIO_PORT=9481
 export BUZZ_HARNESS_HEALTH_PORT=8098 BUZZ_HARNESS_METRICS_PORT=9212
-./scripts/run-real-shell-e2e.sh --flow 08
+./scripts/run-real-shell-e2e.sh --no-build --relay-mode reuse --flow 08
 ```
 
-Expected: `desktop/e2e-real-shell/results/flow-results.jsonl` gains a `"status":"pass"` line for `08-workspace-web`.
+Expected: `desktop/e2e-real-shell/results/flow-results.jsonl` gains a
+`"status":"pass"` line for `08-workspace-web`. Record the wall time. Start
+the isolated relay once outside the measured loop; every subsequent packaged
+iteration must reuse it and remain under one minute.
 
-If it fails: read the failure, decide whether it is product or harness, fix it under a red-before-green cycle, and rerun with `./scripts/run-real-shell-e2e.sh --no-build --flow 08` if the fix did not touch the bundle. **Do not iterate more than twice here.** A third failure means the proof belongs at a lower layer; stop, record it, and report rather than continuing to rebuild.
+If it fails, do not debug product behavior through another packaged build.
+Route any input or lifecycle symptom back to its sub-minute layer. A single
+`--no-build` rerun is allowed only for an identified driver startup flake; all
+other failures stop the packaged gate.
 
 - [ ] **Step 4: Inspect the screenshot with your own eyes**
 
@@ -673,9 +662,12 @@ If it fails: read the failure, decide whether it is product or harness, fix it u
 shasum -a 256 desktop/e2e-real-shell/results/08-web.png
 ```
 
-Then read the PNG with the Read tool. It must visibly show: the Colony window, one URL bar with no visible DevTools endpoint or target id field, the remote fixture page filling the panel with no grey gutters, and the fixture's PASS state. A blank or letterboxed frame is a failure regardless of what the ledger says.
+Then inspect the PNG. It must visibly show the Colony window, one URL bar with
+no visible DevTools endpoint or target id field, and the static loopback page
+filling the panel with no grey gutters. A blank or letterboxed frame is a
+failure regardless of what the ledger says.
 
-- [ ] **Step 5: Prove cleanup**
+- [ ] **Step 5: Check run hygiene**
 
 ```bash
 lsof -nP -iTCP:3040 -iTCP:5481 -iTCP:6481 -iTCP:9481 -iTCP:8098 -iTCP:9212 || true
@@ -683,7 +675,9 @@ ps -axo pid=,ppid=,command= | rg "Colony.app|remote-debugging-port|buzz-harness-
 git status --short
 ```
 
-Expected: no task-owned Colony or Chromium process remains, and the worktree is clean apart from intended result artifacts.
+Expected: no task-owned Colony or Chromium process remains, and the worktree
+is clean apart from intended result artifacts. This is teardown hygiene, not
+the lifecycle acceptance proof; the Rust tests own that proof.
 
 - [ ] **Step 6: Commit the evidence artifacts**
 
