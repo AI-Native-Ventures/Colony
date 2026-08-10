@@ -119,9 +119,14 @@ async function invokeTerminal(
   }
 }
 
-/** Install terminal-only mock commands outside the legacy bridge module. */
+/** Install terminal mock commands outside the legacy bridge module.
+ *
+ * Community reset invokes `workspace_terminal_close_all` even when no terminal
+ * tab was opened, so every E2E bridge needs this adapter rather than only the
+ * terminal-specific specs.
+ */
 export function installTerminalE2eBridge(): void {
-  if (installed || !window.__BUZZ_E2E_TERMINAL_MOCK__) return;
+  if (installed) return;
   const base = getNativeBridge();
   const bridge = new Proxy(base, {
     get(target, property, receiver) {
