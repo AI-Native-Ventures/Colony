@@ -49,6 +49,12 @@ async function commandsNamed(
   return matching();
 }
 
+async function resizeCommandCount(page: Page): Promise<number> {
+  return (await commands(page)).filter(
+    (entry) => entry.command === "workspace_web_resize",
+  ).length;
+}
+
 async function openWebTab(page: Page): Promise<void> {
   await installMockBridge(page);
   await page.goto("/");
@@ -141,5 +147,27 @@ test.describe("web workspace input contract", () => {
       .map((input) => input?.text ?? "")
       .join("");
     expect(typed).toBe("colony-web");
+  });
+
+  test("converges after initial and viewport resize events", async ({
+    page,
+  }) => {
+    await runningFrame(page);
+    await commandsNamed(page, "workspace_web_resize");
+
+    const settleWindowMs = 1_000;
+    const maxResizeBurst = 2;
+    const initialCount = await resizeCommandCount(page);
+    await page.waitForTimeout(settleWindowMs);
+    expect(await resizeCommandCount(page)).toBe(initialCount);
+
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page.waitForTimeout(settleWindowMs);
+    const afterResizeCount = await resizeCommandCount(page);
+    expect(afterResizeCount).toBeGreaterThan(initialCount);
+    expect(afterResizeCount - initialCount).toBeLessThanOrEqual(maxResizeBurst);
+
+    await page.waitForTimeout(settleWindowMs);
+    expect(await resizeCommandCount(page)).toBe(afterResizeCount);
   });
 });
