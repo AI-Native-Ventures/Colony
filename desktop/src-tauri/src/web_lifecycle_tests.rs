@@ -7,17 +7,12 @@
 //! a packaged build.
 //!
 //! Gated on `BUZZ_BROWSER_REAL=1` because they launch an actual browser.
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Runtime};
 
 use super::{WebManager, WebStartRequest, WebStartResult};
-
-static PROFILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// `ps -p` rather than a raw signal probe: this crate forbids `unsafe`, and a
 /// reaped-but-unwaited zombie must still read as gone.
@@ -53,14 +48,14 @@ fn owned_request() -> WebStartRequest {
     }
 }
 
-async fn start_owned<R: Runtime>(manager: &WebManager, app: AppHandle<R>) -> WebStartResult {
-    // `open_host` uses a fixed profile under `temp_dir`; give each real launch
-    // an isolated temp root so two owned sessions can coexist in close_all.
-    let profile_root = std::env::temp_dir().join(format!(
-        "buzz-web-lifecycle-{}-{}",
-        std::process::id(),
-        PROFILE_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
+async fn start_owned<R: Runtime>(
+    manager: &WebManager,
+    app: AppHandle<R>,
+) -> Result<WebStartResult, String> {
+    // All launches in one test share this temp root. The product's host layer
+    // must still assign each owned launch a distinct profile below it.
+    let profile_root =
+        std::env::temp_dir().join(format!("buzz-web-lifecycle-shared-{}", std::process::id()));
     std::fs::create_dir_all(&profile_root).expect("failed to create browser profile root");
     let previous_tmpdir = std::env::var_os("TMPDIR");
     std::env::set_var("TMPDIR", &profile_root);
@@ -70,7 +65,13 @@ async fn start_owned<R: Runtime>(manager: &WebManager, app: AppHandle<R>) -> Web
     } else {
         std::env::remove_var("TMPDIR");
     }
-    result.expect("owned web session failed to start")
+    result
+}
+
+fn cleanup_profile_root() {
+    let profile_root =
+        std::env::temp_dir().join(format!("buzz-web-lifecycle-shared-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(profile_root);
 }
 
 #[tokio::test]
@@ -82,7 +83,9 @@ async fn closing_a_session_reaps_the_browser_it_owns() {
     let app = tauri::test::mock_app();
     let manager = Arc::new(WebManager::default());
 
-    let started = start_owned(&manager, app.handle().clone()).await;
+    let started = start_owned(&manager, app.handle().clone())
+        .await
+        .expect("owned web session failed to start");
     assert!(started.owns_browser_process);
     let pid = started
         .browser_pid
@@ -98,6 +101,7 @@ async fn closing_a_session_reaps_the_browser_it_owns() {
         wait_for_pid_gone(pid, Duration::from_secs(30)).await,
         "browser {pid} survived session close"
     );
+    cleanup_profile_root();
 }
 
 #[tokio::test]
@@ -109,8 +113,12 @@ async fn close_all_reaps_every_owned_browser() {
     let app = tauri::test::mock_app();
     let manager = Arc::new(WebManager::default());
 
-    let first = start_owned(&manager, app.handle().clone()).await;
-    let second = start_owned(&manager, app.handle().clone()).await;
+    let first = start_owned(&manager, app.handle().clone())
+        .await
+        .expect("first owned web session failed to start");
+    let second = start_owned(&manager, app.handle().clone())
+        .await
+        .expect("second owned web session failed to start");
     let pids: Vec<u32> = [first.browser_pid, second.browser_pid]
         .into_iter()
         .map(|pid| pid.expect("an owned session must expose a browser PID"))
@@ -131,6 +139,7 @@ async fn close_all_reaps_every_owned_browser() {
             "browser {pid} survived close_all"
         );
     }
+    cleanup_profile_root();
 }
 
 #[tokio::test]
@@ -142,7 +151,9 @@ async fn synchronous_close_all_reaps_every_owned_browser() {
     let app = tauri::test::mock_app();
     let manager = Arc::new(WebManager::default());
 
-    let started = start_owned(&manager, app.handle().clone()).await;
+    let started = start_owned(&manager, app.handle().clone())
+        .await
+        .expect("owned web session failed to start");
     let pid = started
         .browser_pid
         .expect("an owned session must expose a browser PID");
@@ -155,7 +166,8 @@ async fn synchronous_close_all_reaps_every_owned_browser() {
         .expect("synchronous close_all task panicked");
 
     assert!(
-        wait_for_pid_gone(pid, Duration::from_secs(30)).await,
+        !process_is_alive(pid),
         "browser {pid} survived synchronous close_all"
     );
+    cleanup_profile_root();
 }

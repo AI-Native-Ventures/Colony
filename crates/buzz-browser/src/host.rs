@@ -20,7 +20,8 @@ impl Default for HostConfig {
     fn default() -> Self {
         Self {
             binary: None,
-            profile_dir: std::env::temp_dir().join("buzz-browser-spike-profile"),
+            profile_dir: std::env::temp_dir()
+                .join(format!("buzz-browser-profile-{}", uuid::Uuid::new_v4())),
             headless: true,
         }
     }
@@ -137,7 +138,12 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
         })?,
     };
     let port = pick_free_port().await?;
-    let _ = std::fs::create_dir_all(&cfg.profile_dir);
+    std::fs::create_dir_all(&cfg.profile_dir).map_err(|error| {
+        BrowserError::Host(format!(
+            "failed to create browser profile {}: {error}",
+            cfg.profile_dir.display()
+        ))
+    })?;
     let mut cmd = Command::new(&binary);
     cmd.kill_on_drop(true);
     cmd.arg(format!("--remote-debugging-port={port}"))
@@ -152,7 +158,13 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
     if cfg.headless {
         cmd.arg("--headless=new");
     }
-    let mut child = cmd.spawn().map_err(|e| BrowserError::Host(e.to_string()))?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&cfg.profile_dir);
+            return Err(BrowserError::Host(error.to_string()));
+        }
+    };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{port}/json/version")).await {
@@ -166,6 +178,7 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
         }
         if tokio::time::Instant::now() > deadline {
             let _ = child.start_kill();
+            let _ = std::fs::remove_dir_all(&cfg.profile_dir);
             return Err(BrowserError::Host(
                 "browser did not open CDP port in time".into(),
             ));
@@ -230,6 +243,9 @@ impl Drop for BrowserHost {
         // Only kill what we launched. An attached browser belongs to the shell.
         if let Some(child) = self.child.as_mut() {
             let _ = child.start_kill();
+        }
+        if let Some(profile_dir) = self.profile_dir.take() {
+            let _ = std::fs::remove_dir_all(profile_dir);
         }
     }
 }
@@ -450,8 +466,12 @@ mod tests {
         if std::env::var("BUZZ_BROWSER_REAL").is_err() {
             return;
         }
-        let pid = {
+        let (pid, profile_dir) = {
             let host = launch(&HostConfig::default()).await.unwrap();
+            let profile_dir = host
+                .profile_dir()
+                .expect("an owned launch must expose a profile directory")
+                .to_path_buf();
             assert!(
                 host.owns_browser_process(),
                 "a launched host must own its browser process"
@@ -463,12 +483,17 @@ mod tests {
                 process_is_alive(pid),
                 "the launched browser {pid} was not running"
             );
-            pid
+            (pid, profile_dir)
         };
 
         assert!(
             wait_for_pid_gone(pid, std::time::Duration::from_secs(30)).await,
             "owned browser {pid} survived the host drop"
+        );
+        assert!(
+            !profile_dir.exists(),
+            "owned browser profile survived the host drop: {}",
+            profile_dir.display()
         );
     }
 }

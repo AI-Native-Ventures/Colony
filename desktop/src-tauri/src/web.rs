@@ -618,7 +618,7 @@ async fn initialize_page(
 async fn run_session<R: Runtime>(
     app: AppHandle<R>,
     session_id: String,
-    _host: buzz_browser_pkg::host::BrowserHost,
+    host: buzz_browser_pkg::host::BrowserHost,
     mut client: CdpClient,
     stop_requested: Arc<AtomicBool>,
     mut commands: mpsc::Receiver<WebCommand>,
@@ -642,6 +642,7 @@ async fn run_session<R: Runtime>(
             error: result.err(),
         },
     );
+    drop(host);
     let _ = done_sender.send(());
 }
 
