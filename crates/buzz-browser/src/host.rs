@@ -1,10 +1,11 @@
 //! Chrome discovery, launch, and shutdown.
 
 use std::path::PathBuf;
+use std::process::{Child, Command};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::net::TcpListener;
-use tokio::process::{Child, Command};
 
 use crate::contracts::BrowserError;
 
@@ -37,7 +38,98 @@ impl Default for HostConfig {
 pub struct BrowserHost {
     base_url: String,
     profile_dir: Option<PathBuf>,
-    child: Option<Child>,
+    owned_process: Option<OwnedBrowserCleanup>,
+}
+
+#[derive(Debug)]
+struct OwnedProcessState {
+    child: Mutex<Option<Child>>,
+    profile_dir: PathBuf,
+}
+
+/// Synchronously kill and reap a browser process and remove its profile.
+///
+/// This handle is cloneable so an owner can retain cleanup authority outside
+/// the async session task. It is deliberately absent for attached browsers.
+#[derive(Clone, Debug)]
+pub struct OwnedBrowserCleanup {
+    state: Arc<OwnedProcessState>,
+}
+
+#[derive(Debug)]
+struct OwnedBrowserGuard {
+    cleanup: OwnedBrowserCleanup,
+    armed: bool,
+}
+
+impl OwnedBrowserCleanup {
+    fn new(profile_dir: PathBuf) -> Self {
+        Self {
+            state: Arc::new(OwnedProcessState {
+                child: Mutex::new(None),
+                profile_dir,
+            }),
+        }
+    }
+
+    fn install_child(&self, mut child: Child) -> Result<(), String> {
+        let mut slot = match self.state.child.lock() {
+            Ok(slot) => slot,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("owned browser child store is poisoned: {error}"));
+            }
+        };
+        *slot = Some(child);
+        Ok(())
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        match self.state.child.lock() {
+            Ok(child) => child.as_ref().map(Child::id),
+            Err(error) => error.into_inner().as_ref().map(Child::id),
+        }
+    }
+
+    /// Kill and reap the owned child before removing its profile directory.
+    pub fn cleanup(&self) {
+        let child = match self.state.child.lock() {
+            Ok(mut child) => child.take(),
+            Err(error) => error.into_inner().take(),
+        };
+        if let Some(mut child) = child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = std::fs::remove_dir_all(&self.state.profile_dir);
+    }
+}
+
+impl OwnedBrowserGuard {
+    fn new(profile_dir: PathBuf) -> Self {
+        Self {
+            cleanup: OwnedBrowserCleanup::new(profile_dir),
+            armed: true,
+        }
+    }
+
+    fn install_child(&self, child: Child) -> Result<(), String> {
+        self.cleanup.install_child(child)
+    }
+
+    fn disarm(mut self) -> OwnedBrowserCleanup {
+        self.armed = false;
+        self.cleanup.clone()
+    }
+}
+
+impl Drop for OwnedBrowserGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cleanup.cleanup();
+        }
+    }
 }
 
 pub async fn pick_free_port() -> Result<u16, BrowserError> {
@@ -104,7 +196,7 @@ pub async fn attach(endpoint: &str) -> Result<BrowserHost, BrowserError> {
     Ok(BrowserHost {
         base_url,
         profile_dir: None,
-        child: None,
+        owned_process: None,
     })
 }
 
@@ -130,6 +222,25 @@ fn find_browser_binary() -> Option<PathBuf> {
     None
 }
 
+#[cfg(test)]
+struct LaunchPause {
+    entered: std::sync::mpsc::Sender<(u32, PathBuf)>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+static LAUNCH_PAUSE: std::sync::OnceLock<std::sync::Mutex<Option<LaunchPause>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn take_launch_pause() -> Option<LaunchPause> {
+    LAUNCH_PAUSE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|mut pause| pause.take())
+}
+
 pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
     let binary = match &cfg.binary {
         Some(b) => b.clone(),
@@ -144,8 +255,8 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
             cfg.profile_dir.display()
         ))
     })?;
+    let guard = OwnedBrowserGuard::new(cfg.profile_dir.clone());
     let mut cmd = Command::new(&binary);
-    cmd.kill_on_drop(true);
     cmd.arg(format!("--remote-debugging-port={port}"))
         .arg(format!("--user-data-dir={}", cfg.profile_dir.display()))
         .arg("--no-first-run")
@@ -158,13 +269,19 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
     if cfg.headless {
         cmd.arg("--headless=new");
     }
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(child) => child,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&cfg.profile_dir);
-            return Err(BrowserError::Host(error.to_string()));
-        }
+        Err(error) => return Err(BrowserError::Host(error.to_string())),
     };
+    guard.install_child(child).map_err(BrowserError::Host)?;
+    #[cfg(test)]
+    if let Some(pause) = take_launch_pause() {
+        let _ = pause.entered.send((
+            guard.cleanup.process_id().unwrap_or_default(),
+            cfg.profile_dir.clone(),
+        ));
+        let _ = pause.release.await;
+    }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{port}/json/version")).await {
@@ -172,13 +289,11 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
                 return Ok(BrowserHost {
                     base_url: format!("http://127.0.0.1:{port}"),
                     profile_dir: Some(cfg.profile_dir.clone()),
-                    child: Some(child),
+                    owned_process: Some(guard.disarm()),
                 });
             }
         }
         if tokio::time::Instant::now() > deadline {
-            let _ = child.start_kill();
-            let _ = std::fs::remove_dir_all(&cfg.profile_dir);
             return Err(BrowserError::Host(
                 "browser did not open CDP port in time".into(),
             ));
@@ -201,7 +316,7 @@ impl BrowserHost {
     /// Whether dropping this host tears the browser down. False when attached:
     /// the shell that started the browser keeps owning it.
     pub fn owns_browser_process(&self) -> bool {
-        self.child.is_some()
+        self.owned_process.is_some()
     }
 
     /// Process identifier for a browser launched and owned by this host.
@@ -209,7 +324,14 @@ impl BrowserHost {
     /// Attached browsers return `None` because their process is externally
     /// owned and must never be treated as Colony teardown evidence.
     pub fn process_id(&self) -> Option<u32> {
-        self.child.as_ref().and_then(|child| child.id())
+        self.owned_process
+            .as_ref()
+            .and_then(OwnedBrowserCleanup::process_id)
+    }
+
+    /// Clone synchronous cleanup authority for an owned browser process.
+    pub fn cleanup_handle(&self) -> Option<OwnedBrowserCleanup> {
+        self.owned_process.clone()
     }
 
     /// `{base_url}/json/list` page targets.
@@ -241,11 +363,8 @@ impl BrowserHost {
 impl Drop for BrowserHost {
     fn drop(&mut self) {
         // Only kill what we launched. An attached browser belongs to the shell.
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.start_kill();
-        }
-        if let Some(profile_dir) = self.profile_dir.take() {
-            let _ = std::fs::remove_dir_all(profile_dir);
+        if let Some(cleanup) = self.owned_process.as_ref() {
+            cleanup.cleanup();
         }
     }
 }
@@ -409,6 +528,7 @@ mod tests {
         {
             let attached = attach(&endpoint).await.unwrap();
             assert!(!attached.owns_browser_process());
+            assert!(attached.cleanup_handle().is_none());
             assert!(!attached.list_targets().await.unwrap().is_empty());
         }
         // The attached host has been dropped. The browser belongs to whoever
@@ -456,10 +576,9 @@ mod tests {
         false
     }
 
-    // `Drop for BrowserHost` and `Command::kill_on_drop(true)` (line 142) each
-    // reap the child independently, so this test cannot catch a regression in
-    // one of them alone: it went red only when both were disabled. It guards
-    // the combined contract, which is the one callers depend on.
+    // BrowserHost::Drop and the retained cleanup handle both call the same
+    // idempotent child/profile cleanup, so this guards the combined contract
+    // that callers depend on.
     #[tokio::test]
     #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
     async fn real_owned_launch_exposes_a_pid_and_reaps_it_on_drop() {
@@ -494,6 +613,53 @@ mod tests {
             !profile_dir.exists(),
             "owned browser profile survived the host drop: {}",
             profile_dir.display()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
+    async fn cancelling_owned_launch_reaps_process_and_profile() {
+        if std::env::var("BUZZ_BROWSER_REAL").is_err() {
+            return;
+        }
+        let cfg = HostConfig::default();
+        let expected_profile = cfg.profile_dir.clone();
+        let (entered_sender, entered_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = tokio::sync::oneshot::channel();
+        *LAUNCH_PAUSE
+            .get_or_init(|| std::sync::Mutex::new(None))
+            .lock()
+            .unwrap() = Some(LaunchPause {
+            entered: entered_sender,
+            release: release_receiver,
+        });
+
+        let launch_task = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_millis(100), launch(&cfg)).await
+        });
+        let (pid, reported_profile) = tokio::task::spawn_blocking(move || {
+            entered_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("launch did not reach the after-spawn pause")
+        })
+        .await
+        .unwrap();
+        assert_eq!(reported_profile, expected_profile);
+
+        let result = launch_task.await.unwrap();
+        assert!(
+            result.is_err(),
+            "outer launch timeout unexpectedly completed"
+        );
+        drop(release_sender);
+        assert!(
+            wait_for_pid_gone(pid, Duration::from_secs(30)).await,
+            "cancelled owned browser {pid} survived launch cancellation"
+        );
+        assert!(
+            !expected_profile.exists(),
+            "cancelled owned browser profile survived launch cancellation: {}",
+            expected_profile.display()
         );
     }
 }

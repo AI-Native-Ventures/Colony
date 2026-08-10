@@ -150,6 +150,7 @@ struct WebSession {
     stop_requested: Arc<AtomicBool>,
     done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    owned_process_cleanup: Option<buzz_browser_pkg::host::OwnedBrowserCleanup>,
 }
 
 struct PendingStart {
@@ -262,6 +263,7 @@ impl WebManager {
             stop_requested: Arc::clone(&stop_requested),
             done: Mutex::new(Some(done_receiver)),
             task: Mutex::new(None),
+            owned_process_cleanup: host.cleanup_handle(),
         });
 
         if !self.insert_if_current(token, session_id.clone(), Arc::clone(&session))? {
@@ -395,6 +397,7 @@ impl WebManager {
             session.stop_requested.store(true, Ordering::SeqCst);
             if !wait_for_done(&session) {
                 eprintln!("buzz-desktop: timed out stopping web session task");
+                cleanup_owned_process(&session);
                 abort_session_task_now(&session);
             } else {
                 drop_session_task(&session);
@@ -533,8 +536,15 @@ async fn stop_and_wait(session: Arc<WebSession>) -> Result<(), String> {
         reap_session_task(&session).await;
         Ok(())
     } else {
+        cleanup_owned_process(&session);
         abort_session_task(&session).await;
         Err("timed out stopping web session task".to_string())
+    }
+}
+
+fn cleanup_owned_process(session: &WebSession) {
+    if let Some(cleanup) = session.owned_process_cleanup.as_ref() {
+        cleanup.cleanup();
     }
 }
 
@@ -624,6 +634,11 @@ async fn run_session<R: Runtime>(
     mut commands: mpsc::Receiver<WebCommand>,
     done_sender: std::sync::mpsc::Sender<()>,
 ) {
+    #[cfg(test)]
+    if let Some(pause) = web_lifecycle_tests::take_session_pause() {
+        let _ = pause.entered.send(());
+        let _ = pause.release.recv();
+    }
     let result = run_session_loop(
         &app,
         &session_id,
@@ -974,6 +989,7 @@ mod tests {
             stop_requested: Arc::new(AtomicBool::new(false)),
             done: Mutex::new(Some(done_receiver)),
             task: Mutex::new(None),
+            owned_process_cleanup: None,
         })
     }
 }
