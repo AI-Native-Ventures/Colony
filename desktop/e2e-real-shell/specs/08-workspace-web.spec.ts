@@ -306,13 +306,23 @@ async function proveFixtureInput(
   fixture: WebFixture,
   frame: ChainablePromiseElement,
 ): Promise<void> {
-  await browser.waitUntil(() => fixture.receipts().targets !== null, {
-    timeout: 60_000,
-    timeoutMsg: "fixture never reported its CDP target coordinates",
-  });
+  const metrics = await frameMetrics(frame);
+  await browser.waitUntil(
+    () => {
+      const receipt = fixture.receipts();
+      return (
+        receipt.targets !== null &&
+        receipt.viewport?.width === metrics.nativeWidth &&
+        receipt.viewport?.height === metrics.nativeHeight
+      );
+    },
+    {
+      timeout: 60_000,
+      timeoutMsg: `fixture never reported target coordinates for ${metrics.nativeWidth}x${metrics.nativeHeight}`,
+    },
+  );
   const targets = fixture.receipts().targets;
   if (!targets) throw new Error("fixture target coordinates disappeared");
-  const metrics = await frameMetrics(frame);
 
   await clickRemote(metrics, targets.input);
   await browser.waitUntil(() => fixture.receipts().pointerEvents > 0, {

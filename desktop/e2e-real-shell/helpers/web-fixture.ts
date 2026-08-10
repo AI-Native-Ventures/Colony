@@ -11,6 +11,7 @@ export type WebFixtureReceipts = {
   inputValues: string[];
   maxScrollY: number;
   targets: WebFixtureTargets | null;
+  viewport: { width: number; height: number } | null;
   visualPass: boolean;
   pass: boolean;
 };
@@ -139,12 +140,17 @@ const PAGE = `<!doctype html>
         const bounds = document.querySelector(selector).getBoundingClientRect();
         return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
       };
-      requestAnimationFrame(() => void receipt({
+      const reportLayout = () => void receipt({
         kind: "layout",
         input: center("#remote-input"),
         action: center("#remote-action"),
         scroll: center("#scroll-region"),
-      }));
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      });
+      requestAnimationFrame(reportLayout);
+      window.addEventListener("resize", () => requestAnimationFrame(reportLayout), {
+        passive: true,
+      });
       input.addEventListener("pointerdown", () => void receipt({ kind: "pointer" }));
       scroller.addEventListener("scroll", () => {
         if (scroller.scrollTop > 0) {
@@ -170,7 +176,10 @@ const PAGE = `<!doctype html>
 </html>`;
 
 type ReceiptInput =
-  | ({ kind: "layout" } & WebFixtureTargets)
+  | ({
+      kind: "layout";
+      viewport: { width: number; height: number };
+    } & WebFixtureTargets)
   | { kind: "pointer" }
   | { kind: "scroll"; scrollY: number }
   | { kind: "action"; value: string }
@@ -187,6 +196,7 @@ function snapshot(state: Omit<WebFixtureReceipts, "pass">): WebFixtureReceipts {
           scroll: { ...state.targets.scroll },
         }
       : null,
+    viewport: state.viewport ? { ...state.viewport } : null,
     pass:
       state.pointerEvents > 0 &&
       state.actions === 1 &&
@@ -227,6 +237,7 @@ export async function startWebFixture(): Promise<WebFixture> {
     inputValues: [],
     maxScrollY: 0,
     targets: null,
+    viewport: null,
     visualPass: false,
   };
   const server = createServer(async (request, response) => {
@@ -248,6 +259,7 @@ export async function startWebFixture(): Promise<WebFixture> {
             action: receipt.action,
             scroll: receipt.scroll,
           };
+          state.viewport = { ...receipt.viewport };
         }
         if (receipt.kind === "pointer") state.pointerEvents += 1;
         if (receipt.kind === "scroll" && Number.isFinite(receipt.scrollY)) {
