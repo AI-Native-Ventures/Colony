@@ -18,6 +18,7 @@ import {
   TerminalBody,
   terminalKindDefinition,
 } from "@/features/workspace/kinds/terminalKind";
+import { WebBody, webKindDefinition } from "@/features/workspace/kinds/webKind";
 
 /**
  * Kind string to body component.
@@ -51,7 +52,10 @@ export function registerAllTabKinds(): void {
   bodies.set(imageKindDefinition.kind, ImageBody);
   registerTabKind(terminalKindDefinition);
   bodies.set(terminalKindDefinition.kind, TerminalBody);
+  registerTabKind(webKindDefinition);
+  bodies.set(webKindDefinition.kind, WebBody);
 }
 
 export type { TabBodyProps };
 export { TerminalBody };
+export { WebBody };

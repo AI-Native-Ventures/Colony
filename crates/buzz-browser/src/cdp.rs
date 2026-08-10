@@ -2,6 +2,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -14,7 +15,7 @@ type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub struct CdpClient {
     ws: Ws,
     next_id: u64,
-    events: Vec<Value>,
+    events: VecDeque<Value>,
 }
 
 impl CdpClient {
@@ -25,7 +26,7 @@ impl CdpClient {
         Ok(Self {
             ws,
             next_id: 1,
-            events: Vec::new(),
+            events: VecDeque::new(),
         })
     }
 
@@ -60,7 +61,40 @@ impl CdpClient {
                 return Ok(v["result"].clone());
             }
             if self.events.len() < 100 {
-                self.events.push(v);
+                self.events.push_back(v);
+            }
+        }
+    }
+
+    /// Read the next CDP notification, preserving a bounded queue of events
+    /// received while a command response was in flight.
+    ///
+    /// A screencast is a stream of `Page.screencastFrame` notifications. The
+    /// command path above must continue to correlate responses by id, while a
+    /// live surface needs to consume those notifications in order. Keeping
+    /// both operations on this one websocket prevents a second browser/engine
+    /// path from being introduced by the desktop shell.
+    pub async fn next_event(&mut self) -> Result<Value, BrowserError> {
+        loop {
+            if let Some(event) = self.events.pop_front() {
+                if event.get("method").is_some() {
+                    return Ok(event);
+                }
+            }
+
+            let msg = self
+                .ws
+                .next()
+                .await
+                .ok_or_else(|| BrowserError::Cdp("websocket closed".into()))?
+                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+            let text = msg
+                .into_text()
+                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+            let event: Value = serde_json::from_str(&text)
+                .map_err(|e| BrowserError::Cdp(format!("bad json: {e}")))?;
+            if event.get("method").is_some() {
+                return Ok(event);
             }
         }
     }
@@ -189,5 +223,48 @@ mod tests {
             .unwrap();
         assert_eq!(result["echo"], "Page.navigate");
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn next_event_returns_notifications_buffered_during_a_command() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let msg = ws.next().await.unwrap().unwrap();
+            let request: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({
+                    "method": "Page.screencastFrame",
+                    "params": { "sessionId": 7, "data": "frame" }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({
+                    "id": request["id"],
+                    "result": {}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        });
+
+        let url = format!("ws://{addr}");
+        let mut client = CdpClient::connect(&url).await.unwrap();
+        client
+            .send_command("Page.enable", serde_json::json!({}))
+            .await
+            .unwrap();
+        let event = client.next_event().await.unwrap();
+        assert_eq!(event["method"], "Page.screencastFrame");
+        assert_eq!(event["params"]["sessionId"], 7);
+        server.await.unwrap();
     }
 }

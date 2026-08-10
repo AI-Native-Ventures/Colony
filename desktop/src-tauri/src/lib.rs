@@ -36,6 +36,7 @@ mod shutdown;
 mod templates;
 mod terminal;
 mod util;
+mod web;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
@@ -680,6 +681,14 @@ pub fn run() {
             workspace_terminal_resize,
             workspace_terminal_close,
             workspace_terminal_close_all,
+            workspace_web_start,
+            workspace_web_navigate,
+            workspace_web_mouse,
+            workspace_web_wheel,
+            workspace_web_key,
+            workspace_web_text,
+            workspace_web_close,
+            workspace_web_close_all,
             search_users,
             get_presence,
             get_os_idle_seconds,

@@ -21,6 +21,7 @@ import { resetRenderScopedReactionHydration } from "@/features/messages/lib/rend
 import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
 import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
 import { resetTerminalSessions } from "@/features/workspace/lib/terminalSessions";
+import { resetWebSessions } from "@/features/workspace/lib/webSessions";
 import {
   resetActiveAgentTurnsStore,
   saveActiveAgentTurnsForCommunity,
@@ -63,6 +64,7 @@ function resetCommunityState({
   resetRateLimitGate();
   clearAllDrafts();
   const terminalReset = resetTerminalSessions();
+  const webReset = resetWebSessions();
   resetWorkspaceTabs();
   resetChannelSurfaceModes();
   resetAgentObserverStore();
@@ -87,7 +89,7 @@ function resetCommunityState({
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
   resetLinkPreviewTitleCache();
-  return terminalReset;
+  return Promise.all([terminalReset, webReset]).then(() => undefined);
 }
 
 type CommunityInitResult =

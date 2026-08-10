@@ -18,4 +18,17 @@ test("registerAllTabKinds exposes a creatable terminal kind and body", async () 
   assert.deepEqual(definition.createPayload(), {
     sessionKey: null,
   });
+
+  const webDefinition = registry.getTabKind("web");
+  assert.ok(webDefinition, "web must be registered");
+  assert.equal(webDefinition.label, "Web");
+  assert.equal(webDefinition.canCreateFromNewTabPage, true);
+  assert.equal(typeof webDefinition.createTitle, "function");
+  assert.equal(typeof webDefinition.createPayload, "function");
+  assert.equal(typeof kinds.getTabBody("web"), "function");
+  assert.deepEqual(webDefinition.createPayload(), {
+    endpoint: null,
+    targetId: null,
+    url: "about:blank",
+  });
 });

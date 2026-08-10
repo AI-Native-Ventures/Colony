@@ -77,7 +77,11 @@ pub struct ConnectParams {
 }
 
 /// Attach when an endpoint is given, otherwise launch.
-pub(crate) async fn open_host(p: &ConnectParams) -> Result<BrowserHost, BrowserError> {
+///
+/// This is public so a native shell can hand the same DevTools endpoint to the
+/// browser engine it already uses. The shell must not duplicate the launch or
+/// attach protocol.
+pub async fn open_host(p: &ConnectParams) -> Result<BrowserHost, BrowserError> {
     if let Some(endpoint) = p.endpoint.as_deref() {
         return attach(endpoint).await;
     }
@@ -90,7 +94,7 @@ pub(crate) async fn open_host(p: &ConnectParams) -> Result<BrowserHost, BrowserE
 }
 
 /// Choose the page target to drive: the requested id, else the first page.
-pub(crate) fn pick_target<'a>(
+pub fn pick_target<'a>(
     targets: &'a [TargetInfo],
     requested: Option<&str>,
 ) -> Result<&'a TargetInfo, BrowserError> {

@@ -34,6 +34,7 @@ export default defineConfig({
         "**/channel-browser.spec.ts",
         "**/channel-workspace.spec.ts",
         "**/workspace-terminal.spec.ts",
+        "**/workspace-web.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
         "**/invites-settings-screenshots.spec.ts",
