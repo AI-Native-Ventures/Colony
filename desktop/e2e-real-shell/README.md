@@ -13,7 +13,7 @@ flowchart LR
     APP -->|spawn/kill| SIDE[buzz-acp sidecar]
 ```
 
-## The seven flows
+## The eight flows
 
 | Flow | Spec | Reaches (nothing the mock can touch) | What it catches if it breaks |
 | --- | --- | --- | --- |
@@ -24,11 +24,15 @@ flowchart LR
 | 05 huddle + transmit | `specs/05-huddle.spec.ts` | Audio devices, the raw binary IPC path | Huddle join broken; audio capture broken; binary IPC path broken |
 | 06 terminal PTY + normal exit | `specs/06-workspace-terminal.spec.ts` | Packaged xterm renderer, real PTY prompt/input/output, inactive-tab remounts, all-session community cleanup, Cmd +/- zoom, normal Tauri exit | Terminal is mocked, sessions leak across a community boundary, zoom is not computed from the root, or RunEvent exit cleanup misses a PTY |
 | 07 terminal PTY + SIGTERM | `specs/07-workspace-terminal-sigterm.spec.ts` | Separate packaged launch, real terminal leaders/descendants, Unix SIGTERM handler | Signal shutdown leaves a terminal process tree alive |
+| 08 Web CDP screencast | `specs/08-workspace-web.spec.ts` | Owned headless Chromium, real `Page.startScreencast` frames, pointer/text/wheel input, tab/community/quit cleanup | Web frames are mocked or blank, input is dropped/duplicated, or owned Chromium survives a lifecycle boundary |
 
 Each flow starts the app fresh (one spec per launch). State persists across
 flows inside a single run: 02 creates the identity, 03 proves it restores and
 joins the community, 04 and 05 start from the joined state, and 06/07 exercise
-the joined community with real terminal sessions.
+  the joined community with real terminal sessions. Flow 08 is also
+  prerequisite-independent: it completes isolated onboarding when run alone,
+  enables the default-off Web preview only in harness local storage, and uses a
+  loopback-only page fixture.
 
 ## How it works
 
@@ -95,6 +99,7 @@ Options:
 
 ```bash
 ./scripts/run-real-shell-e2e.sh --flow 03            # just the messaging flow
+./scripts/run-real-shell-e2e.sh --flow 08            # packaged Web/CDP proof
 ./scripts/run-real-shell-e2e.sh --no-build           # reuse an existing harness app
 BUZZ_REAL_SHELL_RELAY_MODE=nohup ./scripts/run-real-shell-e2e.sh  # skip tmux path
 ```

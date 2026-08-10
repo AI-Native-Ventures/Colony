@@ -12,9 +12,16 @@ test("loopback fixture records exact text, pointer, scroll, and one action", asy
     assert.match(await page.text(), /COLONY CDP LOOPBACK/);
 
     for (const receipt of [
+      {
+        kind: "layout",
+        input: { x: 120, y: 180 },
+        action: { x: 120, y: 240 },
+        scroll: { x: 120, y: 360 },
+      },
       { kind: "pointer" },
       { kind: "scroll", scrollY: 240 },
       { kind: "action", value: "colony-web" },
+      { kind: "visual" },
     ]) {
       const response = await fetch(new URL("receipt", fixture.url), {
         method: "POST",
@@ -29,8 +36,22 @@ test("loopback fixture records exact text, pointer, scroll, and one action", asy
       actions: 1,
       inputValues: ["colony-web"],
       maxScrollY: 240,
+      targets: {
+        input: { x: 120, y: 180 },
+        action: { x: 120, y: 240 },
+        scroll: { x: 120, y: 360 },
+      },
+      visualPass: true,
       pass: true,
     });
+
+    await fetch(new URL("receipt", fixture.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "action", value: "colony-web" }),
+    });
+    assert.equal(fixture.receipts().actions, 2);
+    assert.equal(fixture.receipts().pass, false);
   } finally {
     await fixture.close();
   }

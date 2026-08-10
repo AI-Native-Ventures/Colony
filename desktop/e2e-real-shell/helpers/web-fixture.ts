@@ -10,7 +10,17 @@ export type WebFixtureReceipts = {
   actions: number;
   inputValues: string[];
   maxScrollY: number;
+  targets: WebFixtureTargets | null;
+  visualPass: boolean;
   pass: boolean;
+};
+
+export type WebFixturePoint = { x: number; y: number };
+
+export type WebFixtureTargets = {
+  input: WebFixturePoint;
+  action: WebFixturePoint;
+  scroll: WebFixturePoint;
 };
 
 export type WebFixture = {
@@ -125,6 +135,16 @@ const PAGE = `<!doctype html>
         }).then((response) => response.json()));
         return queue;
       };
+      const center = (selector) => {
+        const bounds = document.querySelector(selector).getBoundingClientRect();
+        return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+      };
+      requestAnimationFrame(() => void receipt({
+        kind: "layout",
+        input: center("#remote-input"),
+        action: center("#remote-action"),
+        scroll: center("#scroll-region"),
+      }));
       input.addEventListener("pointerdown", () => void receipt({ kind: "pointer" }));
       scroller.addEventListener("scroll", () => {
         if (scroller.scrollTop > 0) {
@@ -135,20 +155,34 @@ const PAGE = `<!doctype html>
         const result = await receipt({ kind: "action", value: input.value });
         status.textContent = result.pass ? "PASS" : "FAILED";
         status.className = result.pass ? "pass" : "";
+        if (result.pass) {
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            void receipt({ kind: "visual" });
+          }));
+        }
       });
     </script>
   </body>
 </html>`;
 
 type ReceiptInput =
+  | ({ kind: "layout" } & WebFixtureTargets)
   | { kind: "pointer" }
   | { kind: "scroll"; scrollY: number }
-  | { kind: "action"; value: string };
+  | { kind: "action"; value: string }
+  | { kind: "visual" };
 
 function snapshot(state: Omit<WebFixtureReceipts, "pass">): WebFixtureReceipts {
   return {
     ...state,
     inputValues: [...state.inputValues],
+    targets: state.targets
+      ? {
+          input: { ...state.targets.input },
+          action: { ...state.targets.action },
+          scroll: { ...state.targets.scroll },
+        }
+      : null,
     pass:
       state.pointerEvents > 0 &&
       state.actions === 1 &&
@@ -189,6 +223,8 @@ export async function startWebFixture(): Promise<WebFixture> {
     actions: 0,
     inputValues: [],
     maxScrollY: 0,
+    targets: null,
+    visualPass: false,
   };
   const server = createServer(async (request, response) => {
     try {
@@ -203,6 +239,13 @@ export async function startWebFixture(): Promise<WebFixture> {
       }
       if (request.method === "POST" && url.pathname === "/receipt") {
         const receipt = await readReceipt(request);
+        if (receipt.kind === "layout") {
+          state.targets = {
+            input: receipt.input,
+            action: receipt.action,
+            scroll: receipt.scroll,
+          };
+        }
         if (receipt.kind === "pointer") state.pointerEvents += 1;
         if (receipt.kind === "scroll" && Number.isFinite(receipt.scrollY)) {
           state.maxScrollY = Math.max(state.maxScrollY, receipt.scrollY);
@@ -211,6 +254,7 @@ export async function startWebFixture(): Promise<WebFixture> {
           state.actions += 1;
           state.inputValues.push(receipt.value);
         }
+        if (receipt.kind === "visual") state.visualPass = true;
         sendJson(response, 200, snapshot(state));
         return;
       }
