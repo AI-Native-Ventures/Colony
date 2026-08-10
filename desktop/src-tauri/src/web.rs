@@ -22,7 +22,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::{mpsc, oneshot};
 
 /// Event emitted for each acknowledged CDP screencast frame.
@@ -188,9 +188,9 @@ pub struct WebManager {
 
 impl WebManager {
     /// Attach to or launch a browser through the shared `buzz-browser` path.
-    pub async fn start(
+    pub async fn start<R: Runtime>(
         &self,
-        app: AppHandle,
+        app: AppHandle<R>,
         request: WebStartRequest,
     ) -> Result<WebStartResult, String> {
         let url = normalize_url(&request.url)?;
@@ -208,9 +208,9 @@ impl WebManager {
         result
     }
 
-    async fn start_inner(
+    async fn start_inner<R: Runtime>(
         &self,
-        app: AppHandle,
+        app: AppHandle<R>,
         request: WebStartRequest,
         url: String,
         token: StartToken,
@@ -615,8 +615,8 @@ async fn initialize_page(
     Ok(())
 }
 
-async fn run_session(
-    app: AppHandle,
+async fn run_session<R: Runtime>(
+    app: AppHandle<R>,
     session_id: String,
     _host: buzz_browser_pkg::host::BrowserHost,
     mut client: CdpClient,
@@ -645,8 +645,8 @@ async fn run_session(
     let _ = done_sender.send(());
 }
 
-async fn run_session_loop(
-    app: &AppHandle,
+async fn run_session_loop<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     client: &mut CdpClient,
     stop_requested: &AtomicBool,
@@ -845,7 +845,11 @@ struct WebClosedEvent {
     error: Option<String>,
 }
 
-fn emit_frame(app: &AppHandle, session_id: &str, event: &Value) -> Result<(), String> {
+fn emit_frame<R: Runtime>(
+    app: &AppHandle<R>,
+    session_id: &str,
+    event: &Value,
+) -> Result<(), String> {
     let params = &event["params"];
     let data = params["data"]
         .as_str()
@@ -868,7 +872,7 @@ fn emit_frame(app: &AppHandle, session_id: &str, event: &Value) -> Result<(), St
     .map_err(|error| format!("failed to emit web frame: {error}"))
 }
 
-fn emit_error(app: &AppHandle, session_id: &str, error: &str) {
+fn emit_error<R: Runtime>(app: &AppHandle<R>, session_id: &str, error: &str) {
     if let Err(emit_error) = app.emit(
         WEB_ERROR_EVENT,
         WebErrorEvent {

@@ -1,21 +1,21 @@
 //! Owned-browser lifecycle for `WebManager`, against a real headless Chromium.
 //!
 //! These tests replace the three visible browser sessions the packaged WDIO
-//! journey used to open. The current `WebManager::start` signature requires a
-//! Wry runtime, while `tauri::test::mock_app` supplies a mock runtime, so the
-//! tests use the real `open_host` path plus explicit manager bookkeeping and
-//! tear down in seconds without a packaged build.
+//! journey used to open. A generic Tauri runtime lets
+//! `tauri::test::mock_app` drive the complete `WebManager::start` path with no
+//! window, so a full session can be started and torn down in seconds without
+//! a packaged build.
 //!
 //! Gated on `BUZZ_BROWSER_REAL=1` because they launch an actual browser.
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+    Arc,
 };
 use std::time::Duration;
 
-use buzz_browser_pkg::mcp::{open_host, ConnectParams};
+use tauri::{AppHandle, Runtime};
 
-use super::{WebManager, WebSession};
+use super::{WebManager, WebStartRequest, WebStartResult};
 
 static PROFILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -44,7 +44,16 @@ async fn wait_for_pid_gone(pid: u32, timeout: Duration) -> bool {
     false
 }
 
-async fn insert_owned_session(manager: &WebManager, session_id: &str) -> u32 {
+fn owned_request() -> WebStartRequest {
+    WebStartRequest {
+        // No endpoint means Colony launches and owns the browser.
+        endpoint: None,
+        target_id: None,
+        url: "about:blank".to_string(),
+    }
+}
+
+async fn start_owned<R: Runtime>(manager: &WebManager, app: AppHandle<R>) -> WebStartResult {
     // `open_host` uses a fixed profile under `temp_dir`; give each real launch
     // an isolated temp root so two owned sessions can coexist in close_all.
     let profile_root = std::env::temp_dir().join(format!(
@@ -55,46 +64,13 @@ async fn insert_owned_session(manager: &WebManager, session_id: &str) -> u32 {
     std::fs::create_dir_all(&profile_root).expect("failed to create browser profile root");
     let previous_tmpdir = std::env::var_os("TMPDIR");
     std::env::set_var("TMPDIR", &profile_root);
-    let host_result = open_host(&ConnectParams {
-        // No endpoint means Colony launches and owns the browser.
-        binary: None,
-        headless: Some(true),
-        endpoint: None,
-        target_id: None,
-    })
-    .await;
+    let result = manager.start(app, owned_request()).await;
     if let Some(tmpdir) = previous_tmpdir {
         std::env::set_var("TMPDIR", tmpdir);
     } else {
         std::env::remove_var("TMPDIR");
     }
-    let host = host_result.expect("owned browser failed to start");
-    let pid = host
-        .process_id()
-        .expect("an owned host must expose a browser PID");
-    let stop_requested = Arc::new(AtomicBool::new(false));
-    let (commands, _receiver) = tokio::sync::mpsc::channel(1);
-    let (done_sender, done_receiver) = std::sync::mpsc::channel();
-    let task_stop_requested = Arc::clone(&stop_requested);
-    let task = tokio::spawn(async move {
-        while !task_stop_requested.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        drop(host);
-        let _ = done_sender.send(());
-    });
-    let session = Arc::new(WebSession {
-        commands,
-        stop_requested,
-        done: Mutex::new(Some(done_receiver)),
-        task: Mutex::new(Some(task)),
-    });
-    manager
-        .sessions
-        .lock()
-        .expect("web session store was poisoned")
-        .insert(session_id.to_string(), session);
-    pid
+    result.expect("owned web session failed to start")
 }
 
 #[tokio::test]
@@ -103,17 +79,18 @@ async fn closing_a_session_reaps_the_browser_it_owns() {
     if std::env::var("BUZZ_BROWSER_REAL").is_err() {
         return;
     }
-    let manager = WebManager::default();
-    // `WebManager::start` currently requires AppHandle<Wry>, while
-    // `tauri::test::mock_app` returns AppHandle<MockRuntime>. Exercise the
-    // same ownership and teardown path by inserting a real open_host session
-    // into the manager's bookkeeping without the packaged app.
-    let session_id = "lifecycle-close";
-    let pid = insert_owned_session(&manager, session_id).await;
+    let app = tauri::test::mock_app();
+    let manager = Arc::new(WebManager::default());
+
+    let started = start_owned(&manager, app.handle().clone()).await;
+    assert!(started.owns_browser_process);
+    let pid = started
+        .browser_pid
+        .expect("an owned session must expose a browser PID");
     assert!(process_is_alive(pid), "browser {pid} was not running");
 
     manager
-        .close(session_id)
+        .close(&started.session_id)
         .await
         .expect("closing the session failed");
 
@@ -129,17 +106,20 @@ async fn close_all_reaps_every_owned_browser() {
     if std::env::var("BUZZ_BROWSER_REAL").is_err() {
         return;
     }
-    let manager = WebManager::default();
+    let app = tauri::test::mock_app();
+    let manager = Arc::new(WebManager::default());
 
-    let pids = vec![
-        insert_owned_session(&manager, "lifecycle-close-all-first").await,
-        insert_owned_session(&manager, "lifecycle-close-all-second").await,
-    ];
+    let first = start_owned(&manager, app.handle().clone()).await;
+    let second = start_owned(&manager, app.handle().clone()).await;
+    let pids: Vec<u32> = [first.browser_pid, second.browser_pid]
+        .into_iter()
+        .map(|pid| pid.expect("an owned session must expose a browser PID"))
+        .collect();
     for pid in &pids {
         assert!(process_is_alive(*pid), "browser {pid} was not running");
     }
 
-    // This is the community-reset and app-quit path: both call close_all.
+    // This is the community-reset path: it calls close_all_async.
     manager
         .close_all_async()
         .await
@@ -151,4 +131,31 @@ async fn close_all_reaps_every_owned_browser() {
             "browser {pid} survived close_all"
         );
     }
+}
+
+#[tokio::test]
+#[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
+async fn synchronous_close_all_reaps_every_owned_browser() {
+    if std::env::var("BUZZ_BROWSER_REAL").is_err() {
+        return;
+    }
+    let app = tauri::test::mock_app();
+    let manager = Arc::new(WebManager::default());
+
+    let started = start_owned(&manager, app.handle().clone()).await;
+    let pid = started
+        .browser_pid
+        .expect("an owned session must expose a browser PID");
+    assert!(process_is_alive(pid), "browser {pid} was not running");
+
+    // App shutdown calls the synchronous path from its signal and exit hooks.
+    let close_manager = Arc::clone(&manager);
+    tokio::task::spawn_blocking(move || close_manager.close_all())
+        .await
+        .expect("synchronous close_all task panicked");
+
+    assert!(
+        wait_for_pid_gone(pid, Duration::from_secs(30)).await,
+        "browser {pid} survived synchronous close_all"
+    );
 }
