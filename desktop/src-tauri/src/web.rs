@@ -179,6 +179,8 @@ impl Default for StartState {
     }
 }
 
+type WebShutdownWork = (Vec<Arc<WebSession>>, Vec<std::sync::mpsc::Receiver<()>>);
+
 /// The native owner for all live workspace web tabs.
 #[derive(Default)]
 pub struct WebManager {
@@ -489,9 +491,7 @@ impl WebManager {
         Ok(true)
     }
 
-    fn invalidate_and_drain(
-        &self,
-    ) -> Result<(Vec<Arc<WebSession>>, Vec<std::sync::mpsc::Receiver<()>>), String> {
+    fn invalidate_and_drain(&self) -> Result<WebShutdownWork, String> {
         let mut state = self
             .starts
             .lock()
@@ -684,9 +684,7 @@ async fn run_session_loop<R: Runtime>(
 
         while let Ok(command) = commands.try_recv() {
             let result = execute_command(client, command).await;
-            if let Err(error) = result {
-                return Err(error);
-            }
+            result?;
         }
     }
 }
