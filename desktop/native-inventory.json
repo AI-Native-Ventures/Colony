@@ -406,8 +406,8 @@
     ".exit(": 0
   },
   "events": {
-    "distinct": 26,
-    "emit_sites": 36,
+    "distinct": 29,
+    "emit_sites": 39,
     "names": [
       "agents-data-changed",
       "deep-link-add-community",
@@ -434,7 +434,10 @@
       "ptt-state",
       "repos-dir-error",
       "workspace-terminal-exit",
-      "workspace-terminal-output"
+      "workspace-terminal-output",
+      "workspace-web-closed",
+      "workspace-web-error",
+      "workspace-web-frame"
     ],
     "unresolved_emit_sites": []
   },

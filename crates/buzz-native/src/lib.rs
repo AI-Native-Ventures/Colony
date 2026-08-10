@@ -13,7 +13,7 @@
 //! | Was | Is | Sites |
 //! | --- | --- | --- |
 //! | `app.state::<AppState>()` | [`HostCtx::state`] | 85 |
-//! | `app.emit(name, payload)` | [`HostCtx::events`] + [`EventSinkExt::emit`] | 34 |
+//! | `app.emit(name, payload)` | [`HostCtx::events`] + [`EventSinkExt::emit`] | 39 |
 //! | `app.path()` | [`HostCtx::paths`] | 26 |
 //! | `app.config()` | [`HostCtx::info`] | 4 |
 //! | `app.dialog()`, `get_webview_window()`, `run_on_main_thread()`, `request_restart()`, `opener()`, `global_shortcut()` | [`HostCtx::shell`] | 19 |

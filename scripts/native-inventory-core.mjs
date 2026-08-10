@@ -434,20 +434,19 @@ async function emittedEvents(files, projectRoot) {
       if (!out.has(name)) out.set(name, []);
       if (!out.get(name).includes(site)) out.get(name).push(site);
     }
-    for (const [lineNo, line] of stripped.split(/\r?\n/).entries()) {
-      for (const match of line.matchAll(EMIT_CONST)) {
-        const ident = match[1];
-        const name = constants.get(ident);
-        const site = `${rel}:${lineNo + 1}`;
-        if (name === undefined) {
-          // Loud, not dropped. An emit whose name cannot be resolved is an
-          // event missing from the contract, which is how three of them hid.
-          unresolved.push(`${site} (${ident})`);
-          continue;
-        }
-        if (!out.has(name)) out.set(name, []);
-        if (!out.get(name).includes(site)) out.get(name).push(site);
+    for (const match of stripped.matchAll(EMIT_CONST)) {
+      const ident = match[1];
+      const name = constants.get(ident);
+      const lineNo = stripped.slice(0, match.index).split(/\r?\n/).length;
+      const site = `${rel}:${lineNo}`;
+      if (name === undefined) {
+        // Loud, not dropped. An emit whose name cannot be resolved is an
+        // event missing from the contract, which is how an emit can hide.
+        unresolved.push(`${site} (${ident})`);
+        continue;
       }
+      if (!out.has(name)) out.set(name, []);
+      if (!out.get(name).includes(site)) out.get(name).push(site);
     }
   }
   return { events: out, unresolved: unresolved.sort() };

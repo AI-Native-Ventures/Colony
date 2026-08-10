@@ -68,7 +68,7 @@ impl<S> HostCtx<S> {
         Arc::clone(&self.state)
     }
 
-    /// Was `app.emit(...)`. 34 call sites, 24 event names.
+    /// Was `app.emit(...)`. 39 call sites, 29 event names.
     ///
     /// Returns the trait object so [`EventSinkExt::emit`](crate::EventSinkExt)
     /// applies: `ctx.events().emit("ptt-state", true)`.
