@@ -563,6 +563,17 @@ mod tests {
         manager.write(session_id, enter).expect("write PTY enter");
     }
 
+    #[cfg(windows)]
+    fn answer_initial_cursor_position_query(manager: &TerminalManager, session_id: &str) {
+        wait_for_output(manager, session_id, "\u{1b}[6n");
+        manager
+            .write(session_id, b"\x1b[1;1R")
+            .expect("answer Windows PTY cursor-position query");
+    }
+
+    #[cfg(not(windows))]
+    fn answer_initial_cursor_position_query(_manager: &TerminalManager, _session_id: &str) {}
+
     fn wait_for_descendants(pid: u32) -> Vec<u32> {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut observed = Vec::new();
@@ -648,6 +659,7 @@ mod tests {
         let command = "printf 'terminal-proof\\n'";
         #[cfg(windows)]
         let command = "echo terminal-proof";
+        answer_initial_cursor_position_query(&manager, &result.session_id);
         write_test_command(&manager, &result.session_id, command);
         wait_for_output(&manager, &result.session_id, "terminal-proof");
         write_test_command(&manager, &result.session_id, "exit");
@@ -687,6 +699,7 @@ mod tests {
         let (command, expected) = ("stty size", "41 121");
         #[cfg(windows)]
         let (command, expected) = ("echo terminal-resize-proof", "terminal-resize-proof");
+        answer_initial_cursor_position_query(&manager, &result.session_id);
         write_test_command(&manager, &result.session_id, command);
         wait_for_output(&manager, &result.session_id, expected);
         manager.close(&result.session_id).expect("close PTY");
