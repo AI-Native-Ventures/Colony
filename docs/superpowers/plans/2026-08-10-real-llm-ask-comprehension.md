@@ -93,20 +93,25 @@ OPENAI_COMPAT_API_KEY=<DEEPSEEK_API_KEY>
 OPENAI_COMPAT_MODEL=<DEEPSEEK_MODEL>
 OPENAI_COMPAT_BASE_URL=<DEEPSEEK_BASE_URL>
 OPENAI_COMPAT_API=chat
-BUZZ_AGENT_MAX_ROUNDS=4
+BUZZ_AGENT_MAX_ROUNDS=8
 BUZZ_AGENT_LLM_TIMEOUT_SECS=240
 ```
 
 Keep the same leader relay credentials, NIP-OA tag, target/debug `PATH`, EOSE
 readiness wait, shipped `owner-only` response policy, file-backed stdout/stderr,
-and no-meter/no-presence settings as the scripted launcher. Never log the API
-key.
+and no-meter/no-presence settings as the scripted launcher. Use
+`RUST_LOG=warn,buzz_acp=debug,acp::tool=info`: this retains EOSE and turn
+completion while keeping `acp::wire=debug` disabled, because wire frames carry
+the MCP child environment. Never log the API key or relay credentials.
 
 - [ ] **Step 4: Implement resolution polling and content validation**
 
 Poll `closures_naming(owner, &[ask_id])` every 250ms until the deadline. If the
-harness exits first, fail with its redirected output. On timeout, fail with the
-harness output. Parse the sole closure's `content` as JSON and require:
+harness exits first, fail with its redirected output. If the agent turn reports
+success without a closure, allow two seconds for query visibility and then fail
+with the harness output instead of waiting out the full provider timeout. On
+timeout, fail with the harness output. Parse the sole closure's `content` as JSON
+and require:
 
 ```rust
 let answer = &content["answer"];
