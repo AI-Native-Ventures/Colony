@@ -1,3 +1,5 @@
+import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
+
 /**
  * What the workspace needs to know about a tab kind.
  *
@@ -20,6 +22,8 @@ export type TabKindDefinition = {
    * kind-agnostic contract is proven without building a second surface.
    */
   canCreateFromNewTabPage: boolean;
+  /** Optional kind-owned cleanup before the shell removes a tab. */
+  dispose?: (tab: WorkspaceTab) => void | Promise<void>;
 };
 
 const registry = new Map<string, TabKindDefinition>();

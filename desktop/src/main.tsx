@@ -119,6 +119,10 @@ async function installE2eBridgeIfConfigured() {
 
   const { maybeInstallE2eTauriMocks } = await import("@/testing/e2eBridge");
   maybeInstallE2eTauriMocks();
+  const { installTerminalE2eBridge } = await import(
+    "@/testing/terminalE2eBridge"
+  );
+  installTerminalE2eBridge();
 }
 
 function maybeStartParitySession() {

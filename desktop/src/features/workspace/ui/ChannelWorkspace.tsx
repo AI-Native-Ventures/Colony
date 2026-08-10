@@ -57,6 +57,20 @@ export function ChannelWorkspace({
     clearActiveTab(channelId);
   }, [channelId]);
 
+  const handleClose = React.useCallback(
+    (tabId: string) => {
+      const tab = tabs.find((candidate) => candidate.id === tabId);
+      if (!tab) return;
+      const definition = getTabKind(tab.kind);
+      void Promise.resolve(definition?.dispose?.(tab))
+        .catch((error: unknown) => {
+          console.error("Failed to dispose workspace tab:", error);
+        })
+        .finally(() => closeTab(channelId, tabId));
+    },
+    [channelId, tabs],
+  );
+
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const Body = activeTab ? getTabBody(activeTab.kind) : undefined;
 
@@ -71,7 +85,7 @@ export function ChannelWorkspace({
       <WorkspaceTabStrip
         activeTabId={activeTabId}
         isExpanded={isExpanded}
-        onClose={(tabId) => closeTab(channelId, tabId)}
+        onClose={handleClose}
         onNewTab={handleNewTab}
         onSelect={(tabId) => setActiveTab(channelId, tabId)}
         onToggleExpanded={() => setWorkspaceExpanded(channelId, !isExpanded)}

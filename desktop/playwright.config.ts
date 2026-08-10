@@ -33,6 +33,7 @@ export default defineConfig({
         "**/badge.spec.ts",
         "**/channel-browser.spec.ts",
         "**/channel-workspace.spec.ts",
+        "**/workspace-terminal.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
         "**/invites-settings-screenshots.spec.ts",

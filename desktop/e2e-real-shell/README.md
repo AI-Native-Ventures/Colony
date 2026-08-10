@@ -8,12 +8,12 @@ interception. The mock suite proves the frontend; this suite proves the shell.
 ```mermaid
 flowchart LR
     WDIO[WebdriverIO spec] -->|W3C WebDriver| APP[Colony.app<br/>release bundle<br/>wdio-harness feature]
-    APP -->|real socket| RELAY[isolated relay :3030<br/>buzz-harness compose]
+    APP -->|real socket| RELAY[isolated relay :3040<br/>buzz-harness compose]
     APP -->|identity resolution| ID[0o600 identity.key<br/>system-keyring off in harness build]
     APP -->|spawn/kill| SIDE[buzz-acp sidecar]
 ```
 
-## The five flows
+## The seven flows
 
 | Flow | Spec | Reaches (nothing the mock can touch) | What it catches if it breaks |
 | --- | --- | --- | --- |
@@ -22,10 +22,13 @@ flowchart LR
 | 03 join + message | `specs/03-messaging.spec.ts` | Live relay socket and push; real ingestion | Relay URL resolution broken; socket layer broken; event sign/publish broken |
 | 04 agent spawn/stop | `specs/04-agent.spec.ts` | Sidecar spawn, protected PID set, reaper | Sidecar bundling broken; spawn env broken; stop/reaper leaks processes. The spec pins the agent's ACP command to the bundle's own `Contents/MacOS/buzz-acp`: on a dev machine the app's workspace-command resolution would otherwise prefer a leftover `target/release/buzz-acp` from the build that produced the bundle, proving nothing about the packaged app (an installed app has no workspace dirs, so it resolves the same bundled binary the pin selects) |
 | 05 huddle + transmit | `specs/05-huddle.spec.ts` | Audio devices, the raw binary IPC path | Huddle join broken; audio capture broken; binary IPC path broken |
+| 06 terminal PTY + normal exit | `specs/06-workspace-terminal.spec.ts` | Packaged xterm renderer, real PTY prompt/input/output, inactive-tab remounts, all-session community cleanup, Cmd +/- zoom, normal Tauri exit | Terminal is mocked, sessions leak across a community boundary, zoom is not computed from the root, or RunEvent exit cleanup misses a PTY |
+| 07 terminal PTY + SIGTERM | `specs/07-workspace-terminal-sigterm.spec.ts` | Separate packaged launch, real terminal leaders/descendants, Unix SIGTERM handler | Signal shutdown leaves a terminal process tree alive |
 
 Each flow starts the app fresh (one spec per launch). State persists across
 flows inside a single run: 02 creates the identity, 03 proves it restores and
-joins the community, 04 and 05 start from the joined state.
+joins the community, 04 and 05 start from the joined state, and 06/07 exercise
+the joined community with real terminal sessions.
 
 ## How it works
 
@@ -63,12 +66,13 @@ joins the community, 04 and 05 start from the joined state.
   decision to allow switching the default keychain to an ephemeral file for
   the duration of the run.
 - **Backend**: the repo's isolated relay harness
-  (`scripts/start-isolated-test-relay.sh`, tmux `dawn-relay-3030`,
-  `buzz-harness` compose: postgres :5471, redis :6471, minio :9471, relay
-  :3030, health :8088). A live relay on :3030 is reused as-is; without tmux
+  (`scripts/start-isolated-test-relay.sh`, tmux `dawn-relay-3040`,
+  `buzz-harness` compose: postgres :5481, redis :6481, minio :9481,
+  MinIO console :9492, relay :3040, health :8098, metrics :9212). A live
+  relay on :3040 is reused as-is; without tmux
   the orchestrator falls back to an inline nohup launch of the same stack.
   The seed (`setup-desktop-test-data.sh`) registers the test community for
-  BOTH `localhost:3030` and `127.0.0.1:3030`: the app connects via
+  BOTH `localhost:3040` and `127.0.0.1:3040`: the app connects via
   `localhost`, while the managed-agent runtime canonicalizes relay URLs to
   `127.0.0.1` (`buzz_core::relay::normalize_relay_url`) before injecting
   them into the sidecar, and the relay is host-scoped — a sidecar connecting
