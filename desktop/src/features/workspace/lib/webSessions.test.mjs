@@ -69,6 +69,48 @@ test("forwards wheel and text input through the native web session", async () =>
   await resetWebSessions();
 });
 
+test("does not forward hostile launch controls from a restored tab payload", async () => {
+  const calls = [];
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "workspace_web_start") {
+        return {
+          sessionId: "session-trusted-launch",
+          targetId: "target-1",
+          url: "about:blank",
+          ownsBrowserProcess: true,
+        };
+      }
+      return null;
+    }),
+  );
+
+  await ensureWebSession("tab-hostile", {
+    endpoint: null,
+    targetId: null,
+    url: "about:blank",
+    binary: "/tmp/attacker-controlled-browser",
+    headless: false,
+  });
+
+  assert.deepEqual(
+    calls.find(({ command }) => command === "workspace_web_start"),
+    {
+      command: "workspace_web_start",
+      args: {
+        request: {
+          endpoint: null,
+          targetId: null,
+          url: "about:blank",
+        },
+      },
+    },
+  );
+  await disposeWebSession("tab-hostile");
+  await resetWebSessions();
+});
+
 test("a start that resolves after tab disposal closes its late native session", async () => {
   const calls = [];
   let resolveStart;
@@ -88,13 +130,19 @@ test("a start that resolves after tab disposal closes its late native session", 
     targetId: "target-1",
     url: "about:blank",
   });
-  await disposeWebSession("tab-late");
+  let disposed = false;
+  const pendingDispose = disposeWebSession("tab-late").then(() => {
+    disposed = true;
+  });
+  await Promise.resolve();
+  assert.equal(disposed, false);
   resolveStart({
     sessionId: "late-session",
     targetId: "target-1",
     url: "about:blank",
     ownsBrowserProcess: true,
   });
+  await pendingDispose;
   await pendingStart;
 
   assert.deepEqual(

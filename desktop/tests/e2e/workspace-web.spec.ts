@@ -17,6 +17,22 @@ async function commands(page: Parameters<typeof installMockBridge>[0]) {
 }
 
 test.describe("web workspace tab", () => {
+  test("keeps the default-off preview out of creation and native start", async ({
+    page,
+  }) => {
+    await installMockBridge(page, undefined, { seedPreviewFeatures: false });
+    await page.goto("/");
+    await page.getByTestId("channel-general").click();
+    await page.getByTestId("channel-workspace-toggle").click();
+
+    await expect(page.getByTestId("workspace-new-tab-page")).toBeVisible();
+    await expect(page.getByTestId("workspace-create-web")).toHaveCount(0);
+    await expect(page.getByTestId("workspace-web-body")).toHaveCount(0);
+    expect((await commands(page)).map((entry) => entry.command)).not.toContain(
+      "workspace_web_start",
+    );
+  });
+
   test("wires the web registry, mock frame, scaled input, and cleanup", async ({
     page,
   }) => {

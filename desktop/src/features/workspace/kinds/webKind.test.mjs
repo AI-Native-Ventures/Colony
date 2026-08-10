@@ -28,7 +28,20 @@ test("web payload parsing keeps the connection surface kind-scoped", () => {
     endpoint: null,
     targetId: null,
     url: "about:blank",
-    binary: null,
-    headless: true,
   });
+
+  assert.deepEqual(
+    readWebPayloadForTest({
+      endpoint: "127.0.0.1:9222",
+      targetId: "target-1",
+      url: "about:blank",
+      binary: "/tmp/attacker-controlled-browser",
+      headless: false,
+    }),
+    {
+      endpoint: "127.0.0.1:9222",
+      targetId: "target-1",
+      url: "about:blank",
+    },
+  );
 });

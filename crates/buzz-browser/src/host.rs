@@ -139,6 +139,7 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
     let port = pick_free_port().await?;
     let _ = std::fs::create_dir_all(&cfg.profile_dir);
     let mut cmd = Command::new(&binary);
+    cmd.kill_on_drop(true);
     cmd.arg(format!("--remote-debugging-port={port}"))
         .arg(format!("--user-data-dir={}", cfg.profile_dir.display()))
         .arg("--no-first-run")

@@ -30,16 +30,15 @@ pub const WEB_CLOSED_EVENT: &str = "workspace-web-closed";
 const MAX_COMMAND_TEXT: usize = 64 * 1024;
 const MAX_COORDINATE: f64 = 100_000.0;
 const SESSION_POLL: Duration = Duration::from_millis(100);
+const START_TIMEOUT: Duration = Duration::from_secs(20);
+const START_WAIT_TIMEOUT: Duration = Duration::from_secs(25);
+const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct WebStartRequest {
     /// Existing DevTools endpoint; `None` launches through `buzz-browser`.
     pub endpoint: Option<String>,
-    /// Optional Chromium binary used when launching a new browser.
-    pub binary: Option<String>,
-    /// Whether a launched browser should run headlessly.
-    pub headless: bool,
     /// Optional page target id to attach to.
     pub target_id: Option<String>,
     /// Initial page URL.
@@ -131,12 +130,41 @@ struct WebSession {
     commands: mpsc::Sender<WebCommand>,
     stop_requested: Arc<AtomicBool>,
     done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+struct PendingStart {
+    done_receiver: std::sync::mpsc::Receiver<()>,
+    cancel_sender: oneshot::Sender<()>,
+}
+
+#[derive(Clone, Copy)]
+struct StartToken {
+    id: u64,
+    generation: u64,
+}
+
+struct StartState {
+    generation: u64,
+    next_id: u64,
+    pending: HashMap<u64, PendingStart>,
+}
+
+impl Default for StartState {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            next_id: 1,
+            pending: HashMap::new(),
+        }
+    }
 }
 
 /// The native owner for all live workspace web tabs.
 #[derive(Default)]
 pub struct WebManager {
     sessions: Mutex<HashMap<String, Arc<WebSession>>>,
+    starts: Mutex<StartState>,
 }
 
 impl WebManager {
@@ -147,9 +175,33 @@ impl WebManager {
         request: WebStartRequest,
     ) -> Result<WebStartResult, String> {
         let url = normalize_url(&request.url)?;
+        let (token, done_sender, mut cancel_receiver) = self.begin_start()?;
+        let result = tokio::select! {
+            biased;
+            // `start_inner` inserts and spawns the session in the same poll as
+            // its final Ready result. Prefer that completed result when a
+            // cancellation notification arrives at the same instant; the
+            // generation fence still rejects cancellation before insertion.
+            result = self.start_inner(app, request, url, token) => result,
+            _ = &mut cancel_receiver => Err("web start was cancelled".to_string()),
+        };
+        self.finish_start(token, done_sender);
+        result
+    }
+
+    async fn start_inner(
+        &self,
+        app: AppHandle,
+        request: WebStartRequest,
+        url: String,
+        token: StartToken,
+    ) -> Result<WebStartResult, String> {
         let params = ConnectParams {
-            binary: request.binary,
-            headless: Some(request.headless),
+            // Launch configuration stays in buzz-browser's trusted discovery
+            // path. The relay-synchronized tab payload never chooses a local
+            // executable and every owned launch is headless.
+            binary: None,
+            headless: Some(true),
             endpoint: request
                 .endpoint
                 .as_deref()
@@ -158,19 +210,21 @@ impl WebManager {
                 .map(str::to_owned),
             target_id: request.target_id,
         };
-        let host = open_host(&params)
+        let host = tokio::time::timeout(START_TIMEOUT, open_host(&params))
             .await
+            .map_err(|_| "browser connection timed out".to_string())?
             .map_err(|error| error.to_string())?;
         let owns_browser_process = host.owns_browser_process();
-        let targets = host
-            .list_targets()
+        let targets = tokio::time::timeout(START_TIMEOUT, host.list_targets())
             .await
+            .map_err(|_| "browser target listing timed out".to_string())?
             .map_err(|error| error.to_string())?;
         let target = pick_target(&targets, params.target_id.as_deref())
             .map_err(|error| error.to_string())?
             .clone();
-        let mut client = CdpClient::connect(&target.ws_url)
+        let mut client = tokio::time::timeout(START_TIMEOUT, CdpClient::connect(&target.ws_url))
             .await
+            .map_err(|_| "CDP connection timed out".to_string())?
             .map_err(|error| error.to_string())?;
 
         initialize_page(&mut client, &url)
@@ -185,14 +239,14 @@ impl WebManager {
             commands,
             stop_requested: Arc::clone(&stop_requested),
             done: Mutex::new(Some(done_receiver)),
+            task: Mutex::new(None),
         });
 
-        self.sessions
-            .lock()
-            .map_err(|error| format!("web session store is poisoned: {error}"))?
-            .insert(session_id.clone(), Arc::clone(&session));
+        if !self.insert_if_current(token, session_id.clone(), Arc::clone(&session))? {
+            return Err("web start was cancelled".to_string());
+        }
 
-        tokio::spawn(run_session(
+        let task = tokio::spawn(run_session(
             app,
             session_id.clone(),
             host,
@@ -201,6 +255,15 @@ impl WebManager {
             receiver,
             done_sender,
         ));
+        let mut task_slot = match session.task.lock() {
+            Ok(task_slot) => task_slot,
+            Err(error) => {
+                task.abort();
+                let _ = self.remove(&session_id);
+                return Err(format!("web session task store is poisoned: {error}"));
+            }
+        };
+        *task_slot = Some(task);
 
         Ok(WebStartResult {
             session_id,
@@ -256,24 +319,43 @@ impl WebManager {
 
     /// Close every web tab asynchronously during a community reset.
     pub async fn close_all_async(&self) -> Result<(), String> {
-        for session in self.drain()? {
-            stop_and_wait(session).await?;
+        let (sessions, pending_starts) = self.invalidate_and_drain()?;
+        let mut failure: Option<String> = None;
+        for session in sessions {
+            if let Err(error) = stop_and_wait(session).await {
+                failure.get_or_insert(error);
+            }
         }
-        Ok(())
+        for receiver in pending_starts {
+            if let Err(error) = wait_for_start(receiver).await {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     /// Close every web tab synchronously during app shutdown.
     pub fn close_all(&self) {
-        let sessions = match self.drain() {
-            Ok(sessions) => sessions,
+        let (sessions, pending_starts) = match self.invalidate_and_drain() {
+            Ok(result) => result,
             Err(error) => {
                 eprintln!("buzz-desktop: failed to drain web sessions: {error}");
-                Vec::new()
+                (Vec::new(), Vec::new())
             }
         };
         for session in sessions {
             session.stop_requested.store(true, Ordering::SeqCst);
-            wait_for_done(&session);
+            if !wait_for_done(&session) {
+                eprintln!("buzz-desktop: timed out stopping web session task");
+                abort_session_task_now(&session);
+            } else {
+                drop_session_task(&session);
+            }
+        }
+        for receiver in pending_starts {
+            if receiver.recv_timeout(START_WAIT_TIMEOUT).is_err() {
+                eprintln!("buzz-desktop: timed out cancelling web start");
+            }
         }
     }
 
@@ -299,58 +381,190 @@ impl WebManager {
             .map_err(|_| "web session task has exited".to_string())?
     }
 
+    fn begin_start(
+        &self,
+    ) -> Result<
+        (
+            StartToken,
+            std::sync::mpsc::Sender<()>,
+            oneshot::Receiver<()>,
+        ),
+        String,
+    > {
+        let mut state = self
+            .starts
+            .lock()
+            .map_err(|error| format!("web start store is poisoned: {error}"))?;
+        let id = state.next_id;
+        state.next_id = state.next_id.wrapping_add(1);
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+        let (cancel_sender, cancel_receiver) = oneshot::channel();
+        let token = StartToken {
+            id,
+            generation: state.generation,
+        };
+        state.pending.insert(
+            id,
+            PendingStart {
+                done_receiver,
+                cancel_sender,
+            },
+        );
+        Ok((token, done_sender, cancel_receiver))
+    }
+
+    fn finish_start(&self, token: StartToken, done_sender: std::sync::mpsc::Sender<()>) {
+        if let Ok(mut state) = self.starts.lock() {
+            state.pending.remove(&token.id);
+        }
+        let _ = done_sender.send(());
+    }
+
+    fn insert_if_current(
+        &self,
+        token: StartToken,
+        session_id: String,
+        session: Arc<WebSession>,
+    ) -> Result<bool, String> {
+        // Hold the generation guard while taking the session lock. Reset/close
+        // takes the same order, so a late attach cannot slip between the check
+        // and insertion after close_all has invalidated this generation.
+        let state = self
+            .starts
+            .lock()
+            .map_err(|error| format!("web start store is poisoned: {error}"))?;
+        if state.generation != token.generation {
+            return Ok(false);
+        }
+        self.sessions
+            .lock()
+            .map_err(|error| format!("web session store is poisoned: {error}"))?
+            .insert(session_id, session);
+        Ok(true)
+    }
+
+    fn invalidate_and_drain(
+        &self,
+    ) -> Result<(Vec<Arc<WebSession>>, Vec<std::sync::mpsc::Receiver<()>>), String> {
+        let mut state = self
+            .starts
+            .lock()
+            .map_err(|error| format!("web start store is poisoned: {error}"))?;
+        state.generation = state.generation.wrapping_add(1);
+        let pending_starts = state
+            .pending
+            .drain()
+            .map(|(_, pending)| {
+                let _ = pending.cancel_sender.send(());
+                pending.done_receiver
+            })
+            .collect();
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|error| format!("web session store is poisoned: {error}"))?
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
+        Ok((sessions, pending_starts))
+    }
+
     fn remove(&self, session_id: &str) -> Result<Option<Arc<WebSession>>, String> {
         self.sessions
             .lock()
             .map_err(|error| format!("web session store is poisoned: {error}"))
             .map(|mut sessions| sessions.remove(session_id))
     }
-
-    fn drain(&self) -> Result<Vec<Arc<WebSession>>, String> {
-        self.sessions
-            .lock()
-            .map_err(|error| format!("web session store is poisoned: {error}"))
-            .map(|mut sessions| sessions.drain().map(|(_, session)| session).collect())
-    }
 }
 
 async fn stop_and_wait(session: Arc<WebSession>) -> Result<(), String> {
     session.stop_requested.store(true, Ordering::SeqCst);
-    tokio::task::spawn_blocking(move || wait_for_done(&session))
+    let wait_session = Arc::clone(&session);
+    let stopped = tokio::task::spawn_blocking(move || wait_for_done(&wait_session))
         .await
-        .map_err(|error| format!("web session shutdown task failed: {error}"))
+        .map_err(|error| format!("web session shutdown task failed: {error}"))?;
+    if stopped {
+        reap_session_task(&session).await;
+        Ok(())
+    } else {
+        abort_session_task(&session).await;
+        Err("timed out stopping web session task".to_string())
+    }
 }
 
-fn wait_for_done(session: &WebSession) {
+fn wait_for_done(session: &WebSession) -> bool {
     let receiver = session.done.lock().ok().and_then(|mut done| done.take());
-    if let Some(receiver) = receiver {
-        if receiver.recv_timeout(CLOSE_TIMEOUT).is_err() {
-            eprintln!("buzz-desktop: timed out stopping web session task");
-        }
+    receiver
+        .map(|receiver| receiver.recv_timeout(CLOSE_TIMEOUT).is_ok())
+        .unwrap_or(true)
+}
+
+async fn reap_session_task(session: &WebSession) {
+    let task = session.task.lock().ok().and_then(|mut task| task.take());
+    if let Some(task) = task {
+        let _ = task.await;
     }
+}
+
+async fn abort_session_task(session: &WebSession) {
+    let task = session.task.lock().ok().and_then(|mut task| task.take());
+    if let Some(task) = task {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+fn abort_session_task_now(session: &WebSession) {
+    if let Some(task) = session.task.lock().ok().and_then(|mut task| task.take()) {
+        task.abort();
+    }
+}
+
+fn drop_session_task(session: &WebSession) {
+    let _ = session.task.lock().ok().and_then(|mut task| task.take());
+}
+
+async fn wait_for_start(receiver: std::sync::mpsc::Receiver<()>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        receiver
+            .recv_timeout(START_WAIT_TIMEOUT)
+            .map_err(|_| "timed out cancelling web start".to_string())
+    })
+    .await
+    .map_err(|error| format!("web start wait task failed: {error}"))?
+}
+
+async fn send_command_bounded(
+    client: &mut CdpClient,
+    method: &str,
+    params: Value,
+) -> Result<Value, buzz_browser_pkg::BrowserError> {
+    tokio::time::timeout(CDP_COMMAND_TIMEOUT, client.send_command(method, params))
+        .await
+        .map_err(|_| {
+            buzz_browser_pkg::BrowserError::Cdp(format!("CDP command timed out: {method}"))
+        })?
 }
 
 async fn initialize_page(
     client: &mut CdpClient,
     url: &str,
 ) -> Result<(), buzz_browser_pkg::BrowserError> {
-    client.send_command("Page.enable", json!({})).await?;
-    client
-        .send_command(
-            "Page.startScreencast",
-            json!({
-                "format": "jpeg",
-                "quality": 85,
-                "maxWidth": 1600,
-                "maxHeight": 1200,
-                "everyNthFrame": 1
-            }),
-        )
-        .await?;
+    send_command_bounded(client, "Page.enable", json!({})).await?;
+    send_command_bounded(
+        client,
+        "Page.startScreencast",
+        json!({
+            "format": "jpeg",
+            "quality": 85,
+            "maxWidth": 1600,
+            "maxHeight": 1200,
+            "everyNthFrame": 1
+        }),
+    )
+    .await?;
     if url != "about:blank" {
-        client
-            .send_command("Page.navigate", json!({ "url": url }))
-            .await?;
+        send_command_bounded(client, "Page.navigate", json!({ "url": url })).await?;
     }
     Ok(())
 }
@@ -396,7 +610,7 @@ async fn run_session_loop(
         if stop_requested.load(Ordering::SeqCst) {
             let _ = tokio::time::timeout(
                 CLOSE_TIMEOUT,
-                client.send_command("Page.stopScreencast", json!({})),
+                send_command_bounded(client, "Page.stopScreencast", json!({})),
             )
             .await;
             return Ok(());
@@ -409,10 +623,13 @@ async fn run_session_loop(
                     let frame_id = event["params"]["sessionId"]
                         .as_u64()
                         .ok_or_else(|| "screencast frame had no session id".to_string())?;
-                    client
-                        .send_command("Page.screencastFrameAck", json!({ "sessionId": frame_id }))
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    send_command_bounded(
+                        client,
+                        "Page.screencastFrameAck",
+                        json!({ "sessionId": frame_id }),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
                 }
             }
             Ok(Err(error)) => return Err(error.to_string()),
@@ -431,8 +648,7 @@ async fn run_session_loop(
 async fn execute_command(client: &mut CdpClient, command: WebCommand) -> Result<(), String> {
     match command {
         WebCommand::Navigate { url, reply } => {
-            let result = client
-                .send_command("Page.navigate", json!({ "url": url }))
+            let result = send_command_bounded(client, "Page.navigate", json!({ "url": url }))
                 .await
                 .map(|_| ())
                 .map_err(|error| error.to_string());
@@ -448,28 +664,27 @@ async fn execute_command(client: &mut CdpClient, command: WebCommand) -> Result<
             if let Some(click_count) = input.click_count {
                 params["clickCount"] = json!(click_count);
             }
-            let result = client
-                .send_command("Input.dispatchMouseEvent", params)
+            let result = send_command_bounded(client, "Input.dispatchMouseEvent", params)
                 .await
                 .map(|_| ())
                 .map_err(|error| error.to_string());
             let _ = reply.send(result);
         }
         WebCommand::Wheel { input, reply } => {
-            let result = client
-                .send_command(
-                    "Input.dispatchMouseEvent",
-                    json!({
-                        "type": "mouseWheel",
-                        "x": input.x,
-                        "y": input.y,
-                        "deltaX": input.delta_x,
-                        "deltaY": input.delta_y,
-                    }),
-                )
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string());
+            let result = send_command_bounded(
+                client,
+                "Input.dispatchMouseEvent",
+                json!({
+                    "type": "mouseWheel",
+                    "x": input.x,
+                    "y": input.y,
+                    "deltaX": input.delta_x,
+                    "deltaY": input.delta_y,
+                }),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string());
             let _ = reply.send(result);
         }
         WebCommand::Key { input, reply } => {
@@ -485,16 +700,14 @@ async fn execute_command(client: &mut CdpClient, command: WebCommand) -> Result<
             if let Some(key_code) = input.windows_virtual_key_code {
                 params["windowsVirtualKeyCode"] = json!(key_code);
             }
-            let result = client
-                .send_command("Input.dispatchKeyEvent", params)
+            let result = send_command_bounded(client, "Input.dispatchKeyEvent", params)
                 .await
                 .map(|_| ())
                 .map_err(|error| error.to_string());
             let _ = reply.send(result);
         }
         WebCommand::Text { text, reply } => {
-            let result = client
-                .send_command("Input.insertText", json!({ "text": text }))
+            let result = send_command_bounded(client, "Input.insertText", json!({ "text": text }))
                 .await
                 .map(|_| ())
                 .map_err(|error| error.to_string());
@@ -683,5 +896,40 @@ mod tests {
             windows_virtual_key_code: None,
         })
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn close_all_invalidates_a_deferred_start_before_late_insertion() {
+        let manager = WebManager::default();
+        let (token, done_sender, cancel_receiver) = manager.begin_start().unwrap();
+        let cancelled = tokio::spawn(async move { cancel_receiver.await.is_ok() });
+
+        let (drained_sessions, pending_starts) = manager.invalidate_and_drain().unwrap();
+        assert!(drained_sessions.is_empty());
+        assert_eq!(pending_starts.len(), 1);
+        assert!(
+            !manager
+                .insert_if_current(token, "late-session".into(), test_session())
+                .unwrap(),
+            "a late host must not populate after close_all invalidates its generation"
+        );
+        assert!(manager.sessions.lock().unwrap().is_empty());
+        assert!(cancelled.await.unwrap());
+
+        manager.finish_start(token, done_sender);
+        assert!(pending_starts[0]
+            .recv_timeout(Duration::from_secs(1))
+            .is_ok());
+    }
+
+    fn test_session() -> Arc<WebSession> {
+        let (commands, _receiver) = mpsc::channel(1);
+        let (_done_sender, done_receiver) = std::sync::mpsc::channel();
+        Arc::new(WebSession {
+            commands,
+            stop_requested: Arc::new(AtomicBool::new(false)),
+            done: Mutex::new(Some(done_receiver)),
+            task: Mutex::new(None),
+        })
     }
 }

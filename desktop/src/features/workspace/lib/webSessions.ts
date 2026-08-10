@@ -22,8 +22,6 @@ export type WebSessionState = {
 
 export type WebSessionRequest = {
   endpoint: string | null;
-  binary?: string | null;
-  headless?: boolean;
   targetId: string | null;
   url: string;
 };
@@ -189,7 +187,15 @@ export async function ensureWebSession(
     try {
       await ensureNativeListeners();
       const result = await invoke<WebStartResult>("workspace_web_start", {
-        request,
+        // Only endpoint/target/url are user-facing connection inputs. The
+        // browser binary and launch mode stay native-owned so a restored tab
+        // payload can never execute an arbitrary local path or open a visible
+        // focus-stealing browser.
+        request: {
+          endpoint: request.endpoint,
+          targetId: request.targetId,
+          url: request.url,
+        },
       });
       if (!isCurrentGeneration(tabId, generation, resetAtStart)) {
         await invoke("workspace_web_close", {
@@ -298,23 +304,36 @@ export async function sendWebText(tabId: string, text: string): Promise<void> {
 
 /** Close one native web session before removing its tab. */
 export async function disposeWebSession(tabId: string): Promise<void> {
+  const pendingStart = starts.get(tabId);
   advanceTabGeneration(tabId);
   const session = sessions.get(tabId);
+  let failure: unknown = null;
   if (session?.sessionId) {
     try {
       await invoke("workspace_web_close", { sessionId: session.sessionId });
+    } catch (cause: unknown) {
+      failure = cause;
     } finally {
       nativeToTab.delete(session.sessionId);
       pendingFrames.delete(session.sessionId);
     }
   }
+  if (pendingStart) {
+    try {
+      await pendingStart;
+    } catch (cause: unknown) {
+      failure ??= cause;
+    }
+  }
   sessions.delete(tabId);
   emit(tabId);
+  if (failure) throw failure;
 }
 
 /** Drain every native web session at a community boundary. */
 export async function resetWebSessions(): Promise<void> {
   resetGeneration += 1;
+  const pendingStarts = [...starts.values()];
   let failure: unknown = null;
   try {
     await invoke("workspace_web_close_all");
@@ -324,6 +343,7 @@ export async function resetWebSessions(): Promise<void> {
     sessions.clear();
     nativeToTab.clear();
     pendingFrames.clear();
+    await Promise.allSettled(pendingStarts);
     startTokens.clear();
     starts.clear();
     for (const tabId of listeners.keys()) emit(tabId);

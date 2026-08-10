@@ -10,10 +10,6 @@ use tauri::{AppHandle, State};
 pub struct WebStartRequestWire {
     /// Existing DevTools endpoint, or `None` to launch through `buzz-browser`.
     pub endpoint: Option<String>,
-    /// Optional Chromium binary path for a launched browser.
-    pub binary: Option<String>,
-    /// Whether a launched browser should run headlessly.
-    pub headless: Option<bool>,
     /// Optional page target id.
     pub target_id: Option<String>,
     /// Initial page URL.
@@ -33,8 +29,6 @@ pub async fn workspace_web_start(
             app,
             WebStartRequest {
                 endpoint: request.endpoint,
-                binary: request.binary,
-                headless: request.headless.unwrap_or(true),
                 target_id: request.target_id,
                 url: request.url,
             },

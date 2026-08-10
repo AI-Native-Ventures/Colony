@@ -22,8 +22,6 @@ type WebPayload = {
   endpoint: string | null;
   targetId: string | null;
   url: string;
-  binary?: string | null;
-  headless?: boolean;
 };
 
 export const webKindDefinition: TabKindDefinition = {
@@ -48,8 +46,6 @@ function readWebPayload(payload: unknown): WebPayload {
     endpoint: typeof value.endpoint === "string" ? value.endpoint : null,
     targetId: typeof value.targetId === "string" ? value.targetId : null,
     url: typeof value.url === "string" && value.url ? value.url : "about:blank",
-    binary: typeof value.binary === "string" ? value.binary : null,
-    headless: typeof value.headless === "boolean" ? value.headless : true,
   };
 }
 
@@ -147,20 +143,10 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       endpoint: endpoint.trim() || null,
       targetId: targetId.trim() || null,
       url: url.trim() || "about:blank",
-      headless: payload.headless ?? true,
-      binary: payload.binary ?? null,
     };
     persistPayload();
     void ensureWebSession(tab.id, request);
-  }, [
-    endpoint,
-    payload.binary,
-    payload.headless,
-    persistPayload,
-    tab.id,
-    targetId,
-    url,
-  ]);
+  }, [endpoint, persistPayload, tab.id, targetId, url]);
 
   const navigate = React.useCallback(() => {
     persistPayload();
