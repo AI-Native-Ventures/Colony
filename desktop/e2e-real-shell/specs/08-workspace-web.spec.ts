@@ -109,13 +109,39 @@ async function createOwnedWeb(url = "about:blank"): Promise<{
 }> {
   await clickTestId("workspace-create-web", 60_000);
   await fillTestId("workspace-web-url", url, 60_000);
-  await browser.keys([Key.Enter]);
+  // WebKit's global key action does not reliably submit the focused React
+  // form in the packaged webview. The visible Go control exercises the same
+  // URL-bar submit path without depending on that driver quirk.
+  await clickTestId("workspace-web-navigate", 60_000);
   const body = await webBody();
   const frame = await $('[data-testid="workspace-web-frame"]');
   await frame.waitForDisplayed({ timeout: 120_000 });
   await browser.waitUntil(
     async () => ((await frame.getAttribute("src")) ?? "").length > 200,
     { timeout: 60_000, timeoutMsg: "CDP screencast frame remained empty" },
+  );
+  const surface = await $('[data-testid="workspace-web-surface"]');
+  await browser.waitUntil(
+    async () => {
+      const [frameSize, surfaceSize] = await Promise.all([
+        frame.getSize(),
+        surface.getSize(),
+      ]);
+      return (
+        Math.abs(frameSize.width - surfaceSize.width) <= 2 &&
+        Math.abs(frameSize.height - surfaceSize.height) <= 2
+      );
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: "CDP frame did not fill the workspace browser surface",
+    },
+  );
+  expect(await $('[data-testid="workspace-web-toolbar"]').isDisplayed()).toBe(
+    true,
+  );
+  expect(await $('[data-testid="workspace-web-endpoint"]').isDisplayed()).toBe(
+    false,
   );
   return { body, frame, pid: await ownedBrowserPid(body) };
 }
