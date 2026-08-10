@@ -120,9 +120,10 @@ test("balancedSlice handles nested brackets", () => {
   assert.throws(() => balancedSlice("a(b", 0, "(", ")"), /unbalanced/);
 });
 
-test("stripComments removes line and block comments", () => {
+test("stripComments masks line and block comments without shifting offsets", () => {
   const src = "// line\nfn a() { /* block\nspan */ } // tail";
-  assert.equal(stripComments(src), "\nfn a() {  } ");
+  assert.equal(stripComments(src), "       \nfn a() {         \n        }        ");
+  assert.equal(stripComments(src).length, src.length);
 });
 
 test("module path splitting: generate_handler! entries yield leaf names", async () => {
@@ -326,6 +327,64 @@ test("events: const names resolve, multi-line sites count, unknowns are loud", a
       ["MYSTERY_EVENT"],
       "an unresolvable emit name must be reported, never dropped",
     );
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("events: const-looking text inside a raw string is ignored", async () => {
+  const desktop = await makeFixture();
+  try {
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "string_literals.rs"),
+      [
+        'const STRING_EVENT: &str = "string-event";',
+        'const REAL_EVENT: &str = "workspace-web-frame";',
+        'const RAW_TEXT: &str = r#".emit(',
+        "    STRING_EVENT,",
+        '    payload)"#;',
+        "pub fn real(app: &tauri::AppHandle) {",
+        "    let _ = app.emit(REAL_EVENT, ());",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { events } = await buildInventory(desktop);
+
+    assert.equal(events.emit_sites, 1);
+    assert.deepEqual(events.names, ["workspace-web-frame"]);
+    assert.deepEqual(events.unresolved_emit_sites, []);
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("events: multiline block comments preserve unresolved site line numbers", async () => {
+  const desktop = await makeFixture();
+  try {
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "line_numbers.rs"),
+      [
+        'const REAL_EVENT: &str = "workspace-web-frame";',
+        "",
+        "/* comment starts",
+        "   comment continues",
+        "*/",
+        "pub fn real(app: &tauri::AppHandle) {",
+        "    let _ = app.emit(MISSING_EVENT, ());",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { events } = await buildInventory(desktop);
+
+    assert.deepEqual(events.unresolved_emit_sites, [
+      "src-tauri/src/line_numbers.rs:7 (MISSING_EVENT)",
+    ]);
   } finally {
     await fs.rm(desktop, { recursive: true, force: true });
   }

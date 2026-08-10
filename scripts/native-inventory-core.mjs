@@ -2,9 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const LINE_COMMENT = /\/\/[^\n]*/g;
-const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//g;
-
 const FN_SIGNATURE = /\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>(]*>)?\s*\(/g;
 const GENERATE_HANDLER = /generate_handler!\s*\[/g;
 const COMMAND_ATTR =
@@ -22,8 +19,127 @@ function toPosixPath(relativePath) {
   return relativePath.split(path.sep).join("/");
 }
 
+function rawStringEnd(src, start) {
+  let cursor = start;
+  if (src[cursor] === "b" && src[cursor + 1] === "r") cursor += 2;
+  else if (src[cursor] === "r") cursor += 1;
+  else return null;
+
+  const hashStart = cursor;
+  while (src[cursor] === "#") cursor += 1;
+  if (src[cursor] !== '"') return null;
+
+  const terminator = `"${"#".repeat(cursor - hashStart)}`;
+  const close = src.indexOf(terminator, cursor + 1);
+  return close === -1 ? src.length : close + terminator.length;
+}
+
+function quotedStringEnd(src, start) {
+  if (src[start] !== '"') return null;
+  for (let cursor = start + 1; cursor < src.length; cursor += 1) {
+    if (src[cursor] === "\\") {
+      cursor += 1;
+    } else if (src[cursor] === '"') {
+      return cursor + 1;
+    }
+  }
+  return src.length;
+}
+
+function charLiteralEnd(src, start) {
+  if (src[start] !== "'") return null;
+  let cursor = start + 1;
+  if (src[cursor] === "\\") cursor += 2;
+  else cursor += 1;
+  return src[cursor] === "'" ? cursor + 1 : null;
+}
+
+function blankSpan(chars, src, start, end) {
+  for (let cursor = start; cursor < end; cursor += 1) {
+    if (src[cursor] !== "\n" && src[cursor] !== "\r") chars[cursor] = " ";
+  }
+}
+
+function blockCommentEnd(src, start) {
+  let depth = 1;
+  let cursor = start + 2;
+  while (cursor < src.length && depth > 0) {
+    if (src[cursor] === "/" && src[cursor + 1] === "*") {
+      depth += 1;
+      cursor += 2;
+    } else if (src[cursor] === "*" && src[cursor + 1] === "/") {
+      depth -= 1;
+      cursor += 2;
+    } else {
+      cursor += 1;
+    }
+  }
+  return cursor;
+}
+
+// Comments are masked, not deleted, so every output offset and newline still
+// maps to the raw source. Strings and macro token trees remain intact here;
+// emit-const scanning applies maskStrings below to exclude string contents.
 export function stripComments(src) {
-  return src.replace(LINE_COMMENT, "").replace(BLOCK_COMMENT, "");
+  const chars = src.split("");
+  let cursor = 0;
+  while (cursor < src.length) {
+    const rawEnd = rawStringEnd(src, cursor);
+    if (rawEnd !== null) {
+      cursor = rawEnd;
+      continue;
+    }
+    const stringEnd = quotedStringEnd(src, cursor);
+    if (stringEnd !== null) {
+      cursor = stringEnd;
+      continue;
+    }
+    const charEnd = charLiteralEnd(src, cursor);
+    if (charEnd !== null) {
+      cursor = charEnd;
+      continue;
+    }
+    if (src[cursor] === "/" && src[cursor + 1] === "/") {
+      const lineEnd = src.slice(cursor).search(/[\r\n]/);
+      const end = lineEnd === -1 ? src.length : cursor + lineEnd;
+      blankSpan(chars, src, cursor, end);
+      cursor = end;
+    } else if (src[cursor] === "/" && src[cursor + 1] === "*") {
+      const end = blockCommentEnd(src, cursor);
+      blankSpan(chars, src, cursor, end);
+      cursor = end;
+    } else {
+      cursor += 1;
+    }
+  }
+  return chars.join("");
+}
+
+function maskStrings(src) {
+  const chars = src.split("");
+  let cursor = 0;
+  while (cursor < src.length) {
+    const rawEnd = rawStringEnd(src, cursor);
+    if (rawEnd !== null) {
+      blankSpan(chars, src, cursor, rawEnd);
+      cursor = rawEnd;
+      continue;
+    }
+    const stringEnd = quotedStringEnd(src, cursor);
+    if (stringEnd !== null) {
+      blankSpan(chars, src, cursor, stringEnd);
+      cursor = stringEnd;
+      continue;
+    }
+    const charEnd = charLiteralEnd(src, cursor);
+    if (charEnd !== null) {
+      blankSpan(chars, src, cursor, charEnd);
+      cursor = charEnd;
+      continue;
+    }
+    cursor += 1;
+  }
+  return chars.join("");
 }
 
 export function balancedSlice(src, start, openCh, closeCh) {
@@ -434,7 +550,13 @@ async function emittedEvents(files, projectRoot) {
       if (!out.has(name)) out.set(name, []);
       if (!out.get(name).includes(site)) out.get(name).push(site);
     }
-    for (const match of stripped.matchAll(EMIT_CONST)) {
+    // This lexical mask excludes normal, byte, raw, and raw-byte strings (and
+    // char literals) while preserving offsets. Macro token trees are not
+    // expanded: syntactic emits in a macro body are treated as sites because
+    // expansion can make them real, and full macro parsing is outside this
+    // inventory's static scope.
+    const scanSource = maskStrings(stripped);
+    for (const match of scanSource.matchAll(EMIT_CONST)) {
       const ident = match[1];
       const name = constants.get(ident);
       const lineNo = stripped.slice(0, match.index).split(/\r?\n/).length;
