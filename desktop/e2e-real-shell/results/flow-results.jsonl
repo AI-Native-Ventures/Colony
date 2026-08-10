@@ -1,1 +1,1 @@
-{"flow":"08-workspace-web","status":"pass","detail":"fixture=http://127.0.0.1:54135/ browserPid=71271","at":"2026-08-10T12:33:24.927Z"}
+{"flow":"08-workspace-web","status":"fail","detail":"fixture never reported target coordinates for a stable current viewport","at":"2026-08-10T12:52:06.379Z"}

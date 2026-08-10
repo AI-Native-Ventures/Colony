@@ -19,6 +19,7 @@ import {
   startWebFixture,
   type WebFixture,
   type WebFixturePoint,
+  type WebFixtureTargets,
 } from "../helpers/web-fixture";
 
 const RELAY_A = process.env.BUZZ_E2E_RELAY_URL ?? "ws://localhost:3040";
@@ -213,25 +214,51 @@ async function proveFixtureInput(
   fixture: WebFixture,
   frame: ChainablePromiseElement,
 ): Promise<void> {
-  const metrics = await frameMetrics(frame);
+  let previousMetrics: FrameMetrics | null = null;
+  let stableSamples = 0;
+  let accepted: { metrics: FrameMetrics; targets: WebFixtureTargets } | null =
+    null;
   await browser.waitUntil(
-    () => {
+    async () => {
+      const metrics = await frameMetrics(frame);
+      const sameAsPrevious =
+        previousMetrics !== null &&
+        metrics.nativeWidth === previousMetrics.nativeWidth &&
+        metrics.nativeHeight === previousMetrics.nativeHeight &&
+        metrics.renderedWidth === previousMetrics.renderedWidth &&
+        metrics.renderedHeight === previousMetrics.renderedHeight &&
+        metrics.left === previousMetrics.left &&
+        metrics.top === previousMetrics.top;
+      stableSamples = sameAsPrevious ? stableSamples + 1 : 1;
+      previousMetrics = metrics;
       const receipt = fixture.receipts();
-      return (
+      const viewportMatches =
         receipt.targets !== null &&
         receipt.viewport?.width === metrics.nativeWidth &&
-        receipt.viewport?.height === metrics.nativeHeight
-      );
+        receipt.viewport?.height === metrics.nativeHeight;
+      if (viewportMatches && stableSamples >= 2 && receipt.targets !== null) {
+        accepted = { metrics, targets: receipt.targets };
+        return true;
+      }
+      return false;
     },
     {
       timeout: 60_000,
-      timeoutMsg: `fixture never reported target coordinates for ${metrics.nativeWidth}x${metrics.nativeHeight}`,
+      timeoutMsg:
+        "fixture never reported target coordinates for a stable current viewport",
     },
   );
-  const targets = fixture.receipts().targets;
-  if (!targets) throw new Error("fixture target coordinates disappeared");
+  if (!accepted) {
+    throw new Error(
+      "fixture target coordinates disappeared after stabilization",
+    );
+  }
+  const acceptedResult = accepted as {
+    metrics: FrameMetrics;
+    targets: WebFixtureTargets;
+  };
 
-  await clickRemote(metrics, targets.input);
+  await clickRemote(acceptedResult.metrics, acceptedResult.targets.input);
   await browser.waitUntil(() => fixture.receipts().pointerEvents > 0, {
     timeout: 30_000,
     timeoutMsg: "remote input never received the forwarded pointer",
