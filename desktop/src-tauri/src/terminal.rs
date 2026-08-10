@@ -531,7 +531,12 @@ mod tests {
     use std::time::Duration;
 
     fn wait_for_output(manager: &TerminalManager, session_id: &str, needle: &str) {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let timeout = if cfg!(windows) {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_secs(3)
+        };
+        let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if manager
                 .output(session_id)
@@ -541,7 +546,21 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(25));
         }
-        panic!("terminal output did not contain {needle:?}");
+        let output = manager
+            .output(session_id)
+            .unwrap_or_else(|error| format!("<output unavailable: {error}>"));
+        panic!("terminal output did not contain {needle:?}; captured output: {output:?}");
+    }
+
+    fn write_test_command(manager: &TerminalManager, session_id: &str, command: &str) {
+        manager
+            .write(session_id, command.as_bytes())
+            .expect("write command to PTY");
+        #[cfg(windows)]
+        let enter = b"\r".as_slice();
+        #[cfg(not(windows))]
+        let enter = b"\n".as_slice();
+        manager.write(session_id, enter).expect("write PTY enter");
     }
 
     fn wait_for_descendants(pid: u32) -> Vec<u32> {
@@ -626,13 +645,12 @@ mod tests {
             .expect("PTY start");
         println!("terminal leader pid: {:?}", result.pid);
         #[cfg(not(windows))]
-        let command = b"printf 'terminal-proof\\n'; exit\n".as_slice();
+        let command = "printf 'terminal-proof\\n'";
         #[cfg(windows)]
-        let command = b"echo terminal-proof\r\nexit\r\n".as_slice();
-        manager
-            .write(&result.session_id, command)
-            .expect("write to PTY");
+        let command = "echo terminal-proof";
+        write_test_command(&manager, &result.session_id, command);
         wait_for_output(&manager, &result.session_id, "terminal-proof");
+        write_test_command(&manager, &result.session_id, "exit");
         if let Some(pid) = result.pid {
             wait_for_processes(&[pid]);
         }
@@ -666,15 +684,10 @@ mod tests {
             )
             .expect("PTY resize");
         #[cfg(not(windows))]
-        let (command, expected) = (b"stty size; exit\n".as_slice(), "41 121");
+        let (command, expected) = ("stty size", "41 121");
         #[cfg(windows)]
-        let (command, expected) = (
-            b"echo terminal-resize-proof\r\nexit\r\n".as_slice(),
-            "terminal-resize-proof",
-        );
-        manager
-            .write(&result.session_id, command)
-            .expect("write size command");
+        let (command, expected) = ("echo terminal-resize-proof", "terminal-resize-proof");
+        write_test_command(&manager, &result.session_id, command);
         wait_for_output(&manager, &result.session_id, expected);
         manager.close(&result.session_id).expect("close PTY");
     }
