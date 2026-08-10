@@ -160,7 +160,7 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
   const pointerEvent = React.useCallback(
     (
       eventType: "mouseMoved" | "mousePressed" | "mouseReleased",
-      event: React.PointerEvent<HTMLImageElement>,
+      event: React.MouseEvent<HTMLImageElement>,
     ) => {
       const frame = session.frame;
       const image = frameRef.current;
@@ -324,9 +324,9 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
             data-testid="workspace-web-frame"
             draggable={false}
             height={session.frame.height}
-            onPointerDown={(event) => pointerEvent("mousePressed", event)}
-            onPointerMove={(event) => pointerEvent("mouseMoved", event)}
-            onPointerUp={(event) => pointerEvent("mouseReleased", event)}
+            onMouseDown={(event) => pointerEvent("mousePressed", event)}
+            onMouseMove={(event) => pointerEvent("mouseMoved", event)}
+            onMouseUp={(event) => pointerEvent("mouseReleased", event)}
             onWheel={wheelEvent}
             ref={frameRef}
             src={`data:image/jpeg;base64,${session.frame.data}`}

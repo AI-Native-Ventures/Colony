@@ -56,26 +56,29 @@ test.describe("web workspace tab", () => {
     await page.keyboard.press("a");
 
     const frame = page.getByTestId("workspace-web-frame");
-    await frame.dispatchEvent("pointermove", {
+    await frame.dispatchEvent("mousemove", {
       button: 0,
       clientX: 1,
       clientY: 1,
       detail: 0,
     });
-    await frame.dispatchEvent("pointerdown", {
+    await frame.dispatchEvent("mousedown", {
       button: 0,
       clientX: 1,
       clientY: 1,
       detail: 1,
     });
-    await frame.dispatchEvent("pointerup", {
+    await frame.dispatchEvent("mouseup", {
       button: 0,
       clientX: 1,
       clientY: 1,
       detail: 1,
     });
-    await frame.hover();
-    await page.mouse.wheel(0, 120);
+    await frame.dispatchEvent("wheel", {
+      clientX: 1,
+      clientY: 1,
+      deltaY: 120,
+    });
 
     await expect
       .poll(async () => (await commands(page)).map((entry) => entry.command))
