@@ -16,6 +16,7 @@ export type WebSessionState = {
   targetId: string | null;
   url: string | null;
   ownsBrowserProcess: boolean;
+  browserPid: number | null;
   frame: WebFrame | null;
   error: string | null;
 };
@@ -31,6 +32,7 @@ type WebStartResult = {
   targetId: string;
   url: string;
   ownsBrowserProcess: boolean;
+  browserPid: number | null;
 };
 
 type WebFrameEvent = WebFrame & { sessionId: string };
@@ -53,6 +55,7 @@ const EMPTY_SESSION: WebSessionState = Object.freeze({
   targetId: null,
   url: null,
   ownsBrowserProcess: false,
+  browserPid: null,
   frame: null,
   error: null,
 });
@@ -63,6 +66,7 @@ const emptyState = (): WebSessionState => ({
   targetId: null,
   url: null,
   ownsBrowserProcess: false,
+  browserPid: null,
   frame: null,
   error: null,
 });
@@ -213,6 +217,7 @@ export async function ensureWebSession(
         targetId: result.targetId,
         url: result.url,
         ownsBrowserProcess: result.ownsBrowserProcess,
+        browserPid: result.browserPid,
         frame,
         error: null,
       });

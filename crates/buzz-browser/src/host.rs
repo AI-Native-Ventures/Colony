@@ -191,6 +191,14 @@ impl BrowserHost {
         self.child.is_some()
     }
 
+    /// Process identifier for a browser launched and owned by this host.
+    ///
+    /// Attached browsers return `None` because their process is externally
+    /// owned and must never be treated as Colony teardown evidence.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.as_ref().and_then(|child| child.id())
+    }
+
     /// `{base_url}/json/list` page targets.
     pub async fn list_targets(&self) -> Result<Vec<TargetInfo>, BrowserError> {
         let resp = reqwest::get(format!("{}/json/list", self.base_url))
@@ -325,6 +333,7 @@ mod tests {
             !host.owns_browser_process(),
             "an attached host must not claim ownership of the browser process"
         );
+        assert_eq!(host.process_id(), None);
         let targets = host.list_targets().await.unwrap();
         assert_eq!(targets.len(), 2, "non-page targets must be filtered out");
         assert_eq!(targets[0].id, "tab-a");

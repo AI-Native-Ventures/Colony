@@ -7,6 +7,7 @@ import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
 import {
   disposeWebSession,
   ensureWebSession,
+  getWebSession,
   resetWebSessions,
   sendWebText,
   sendWebWheel,
@@ -23,6 +24,7 @@ test("forwards wheel and text input through the native web session", async () =>
           targetId: "target-1",
           url: "about:blank",
           ownsBrowserProcess: false,
+          browserPid: null,
         };
       }
       return null;
@@ -34,6 +36,7 @@ test("forwards wheel and text input through the native web session", async () =>
     targetId: "target-1",
     url: "about:blank",
   });
+  assert.equal(getWebSession("tab-1").browserPid, null);
   await sendWebWheel("tab-1", {
     x: 32,
     y: 48,
@@ -80,6 +83,7 @@ test("does not forward hostile launch controls from a restored tab payload", asy
           targetId: "target-1",
           url: "about:blank",
           ownsBrowserProcess: true,
+          browserPid: 4242,
         };
       }
       return null;
@@ -93,6 +97,8 @@ test("does not forward hostile launch controls from a restored tab payload", asy
     binary: "/tmp/attacker-controlled-browser",
     headless: false,
   });
+  assert.equal(getWebSession("tab-hostile").browserPid, 4242);
+  assert.equal(getWebSession("tab-hostile").ownsBrowserProcess, true);
 
   assert.deepEqual(
     calls.find(({ command }) => command === "workspace_web_start"),

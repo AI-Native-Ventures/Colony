@@ -234,6 +234,7 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
   return (
     <div
       className="flex h-full min-h-0 flex-col bg-background"
+      data-browser-pid={session.browserPid ?? undefined}
       data-status={session.status}
       data-testid="workspace-web-body"
       onBeforeInput={textEvent}

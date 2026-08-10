@@ -82,7 +82,7 @@ async function invokeWeb(
       };
       sessions.set(session.sessionId, session);
       emitFrame(session.sessionId);
-      return { ...session, ownsBrowserProcess: false };
+      return { ...session, ownsBrowserProcess: false, browserPid: null };
     }
     case "workspace_web_navigate": {
       record(command, payload);

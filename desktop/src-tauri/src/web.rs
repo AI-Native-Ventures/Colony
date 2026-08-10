@@ -56,6 +56,8 @@ pub struct WebStartResult {
     pub url: String,
     /// Whether the session owns a browser process that it may terminate.
     pub owns_browser_process: bool,
+    /// Runtime-only process id for an owned launch; attached hosts return `None`.
+    pub browser_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +217,7 @@ impl WebManager {
             .map_err(|_| "browser connection timed out".to_string())?
             .map_err(|error| error.to_string())?;
         let owns_browser_process = host.owns_browser_process();
+        let browser_pid = host.process_id();
         let targets = tokio::time::timeout(START_TIMEOUT, host.list_targets())
             .await
             .map_err(|_| "browser target listing timed out".to_string())?
@@ -270,6 +273,7 @@ impl WebManager {
             target_id: target.id,
             url,
             owns_browser_process,
+            browser_pid,
         })
     }
 
