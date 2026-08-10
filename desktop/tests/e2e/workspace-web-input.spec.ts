@@ -149,6 +149,9 @@ test.describe("web workspace input contract", () => {
     expect(typed).toBe("colony-web");
   });
 
+  // Guards the React ResizeObserver and command sequence in Chromium and
+  // WebKit. The mock bridge always emits a fixed 640x360 frame, so this cannot
+  // exercise a packaged CDP frame-size feedback loop.
   test("converges after initial and viewport resize events", async ({
     page,
   }) => {
@@ -156,7 +159,7 @@ test.describe("web workspace input contract", () => {
     await commandsNamed(page, "workspace_web_resize");
 
     const settleWindowMs = 1_000;
-    const maxResizeBurst = 2;
+    const maxResizeBurst = 1;
     const initialCount = await resizeCommandCount(page);
     await page.waitForTimeout(settleWindowMs);
     expect(await resizeCommandCount(page)).toBe(initialCount);

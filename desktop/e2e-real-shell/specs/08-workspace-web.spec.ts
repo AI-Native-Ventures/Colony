@@ -34,6 +34,45 @@ type FrameMetrics = {
   top: number;
 };
 
+type ResizeTraceSample = FrameMetrics & {
+  elapsedMs: number;
+  viewport: { width: number; height: number } | null;
+};
+
+function formatResizeTrace(samples: ResizeTraceSample[]): string {
+  return samples
+    .map(
+      ({
+        elapsedMs,
+        nativeWidth,
+        nativeHeight,
+        renderedWidth,
+        renderedHeight,
+        left,
+        top,
+        viewport,
+      }) =>
+        String(elapsedMs) +
+        "ms n=" +
+        String(nativeWidth) +
+        "x" +
+        String(nativeHeight) +
+        " r=" +
+        String(renderedWidth) +
+        "x" +
+        String(renderedHeight) +
+        " p=" +
+        String(left) +
+        "," +
+        String(top) +
+        " v=" +
+        (viewport
+          ? `${String(viewport.width)}x${String(viewport.height)}`
+          : "null"),
+    )
+    .join(" | ");
+}
+
 async function enableWebPreview(): Promise<void> {
   await waitForFirstPaint();
   await browser.execute((storageKey) => {
@@ -218,36 +257,55 @@ async function proveFixtureInput(
   let stableSamples = 0;
   let accepted: { metrics: FrameMetrics; targets: WebFixtureTargets } | null =
     null;
-  await browser.waitUntil(
-    async () => {
-      const metrics = await frameMetrics(frame);
-      const sameAsPrevious =
-        previousMetrics !== null &&
-        metrics.nativeWidth === previousMetrics.nativeWidth &&
-        metrics.nativeHeight === previousMetrics.nativeHeight &&
-        metrics.renderedWidth === previousMetrics.renderedWidth &&
-        metrics.renderedHeight === previousMetrics.renderedHeight &&
-        metrics.left === previousMetrics.left &&
-        metrics.top === previousMetrics.top;
-      stableSamples = sameAsPrevious ? stableSamples + 1 : 1;
-      previousMetrics = metrics;
-      const receipt = fixture.receipts();
-      const viewportMatches =
-        receipt.targets !== null &&
-        receipt.viewport?.width === metrics.nativeWidth &&
-        receipt.viewport?.height === metrics.nativeHeight;
-      if (viewportMatches && stableSamples >= 2 && receipt.targets !== null) {
-        accepted = { metrics, targets: receipt.targets };
-        return true;
-      }
-      return false;
-    },
-    {
-      timeout: 60_000,
-      timeoutMsg:
-        "fixture never reported target coordinates for a stable current viewport",
-    },
-  );
+  const resizeTrace: ResizeTraceSample[] = [];
+  const waitStartedAt = Date.now();
+  const timeoutMessage =
+    "fixture never reported target coordinates for a stable current viewport";
+  try {
+    await browser.waitUntil(
+      async () => {
+        const metrics = await frameMetrics(frame);
+        const sameAsPrevious =
+          previousMetrics !== null &&
+          metrics.nativeWidth === previousMetrics.nativeWidth &&
+          metrics.nativeHeight === previousMetrics.nativeHeight &&
+          metrics.renderedWidth === previousMetrics.renderedWidth &&
+          metrics.renderedHeight === previousMetrics.renderedHeight &&
+          metrics.left === previousMetrics.left &&
+          metrics.top === previousMetrics.top;
+        stableSamples = sameAsPrevious ? stableSamples + 1 : 1;
+        previousMetrics = metrics;
+        const receipt = fixture.receipts();
+        resizeTrace.push({
+          ...metrics,
+          elapsedMs: Date.now() - waitStartedAt,
+          viewport: receipt.viewport,
+        });
+        if (resizeTrace.length > 20) {
+          resizeTrace.shift();
+        }
+        const viewportMatches =
+          receipt.targets !== null &&
+          receipt.viewport?.width === metrics.nativeWidth &&
+          receipt.viewport?.height === metrics.nativeHeight;
+        if (viewportMatches && stableSamples >= 2 && receipt.targets !== null) {
+          accepted = { metrics, targets: receipt.targets };
+          return true;
+        }
+        return false;
+      },
+      { timeout: 60_000, timeoutMsg: timeoutMessage },
+    );
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(
+      reason +
+        "\nlast " +
+        String(resizeTrace.length) +
+        " resize samples: " +
+        (formatResizeTrace(resizeTrace) || "none"),
+    );
+  }
   if (!accepted) {
     throw new Error(
       "fixture target coordinates disappeared after stabilization",
