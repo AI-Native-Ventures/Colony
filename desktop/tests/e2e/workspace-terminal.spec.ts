@@ -107,6 +107,9 @@ test.describe("terminal workspace tab", () => {
             .getAttribute("data-output")) ?? "",
       )
       .toContain("mock-output:h");
+    await expect(
+      page.getByTestId("workspace-terminal-body").locator(".xterm-rows"),
+    ).toContainText("mock-output:h");
 
     const rootBefore = await page.evaluate(
       () => getComputedStyle(document.documentElement).fontSize,

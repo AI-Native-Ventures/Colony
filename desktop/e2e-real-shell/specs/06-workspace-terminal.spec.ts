@@ -72,6 +72,25 @@ async function waitForTerminalOutput(needle: string): Promise<void> {
   );
 }
 
+async function waitForVisibleTerminalText(needle: string): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (expected) =>
+          document
+            .querySelector(
+              '[data-testid="workspace-terminal-body"] .xterm-rows',
+            )
+            ?.textContent?.includes(expected) ?? false,
+        needle,
+      ),
+    {
+      timeout: 30_000,
+      timeoutMsg: `xterm rows never visibly rendered ${needle}`,
+    },
+  );
+}
+
 async function openWorkspace(): Promise<void> {
   await clickTestId("channel-general");
   const toggle = await $('[data-testid="channel-workspace-toggle"]');
@@ -250,6 +269,26 @@ describe("06 packaged workspace terminal", () => {
       // than a leader PID and cleanup must reap both the shell and its child.
       await sendTerminalCommand("sleep 30 & printf 'terminal-%s-output\\n' a");
       await waitForTerminalOutput("terminal-a-output");
+      await waitForVisibleTerminalText("terminal-a-output");
+
+      // Detour through a non-terminal kind while the first PTY keeps running.
+      // Returning to the Terminal must remount xterm without restarting or
+      // blanking the buffered native output.
+      await clickTestId("workspace-new-tab");
+      await clickTestId("workspace-create-scratchpad");
+      const scratchpad = await $('[data-testid="workspace-scratchpad-body"]');
+      await scratchpad.waitForDisplayed({ timeout: 30_000 });
+      await scratchpad.setValue("Terminal process remains live across tabs");
+      expect(await scratchpad.getValue()).toContain("remains live");
+      const tabsAfterScratchpad = await $$('[role="tab"]');
+      await tabsAfterScratchpad[0].click();
+      const remountedFirst = await terminalBody();
+      expect(await terminalPid(remountedFirst)).toBe(first.pid);
+      await waitForVisibleTerminalText("terminal-a-output");
+      // eslint-disable-next-line no-console
+      console.log(
+        `[06] Scratchpad detour preserved terminal leader=${first.pid} and visible output`,
+      );
 
       await clickTestId("workspace-new-tab");
       const second = await createTerminalTab();
@@ -263,14 +302,16 @@ describe("06 packaged workspace terminal", () => {
       // The first session is inactive while the second tab is selected. Return
       // to it and prove the output survived body unmount/remount.
       const tabs = await $$('[role="tab"]');
-      expect(tabs.length).toBeGreaterThanOrEqual(2);
+      expect(tabs.length).toBeGreaterThanOrEqual(3);
       await tabs[0].click();
       await waitForTerminalOutput("terminal-a-output");
+      await waitForVisibleTerminalText("terminal-a-output");
       await browser.saveScreenshot("./e2e-real-shell/results/06-terminal.png");
 
       // Exercise the destructive tab-close boundary against the first real
-      // session before switching communities. The PTY body is active here and
-      // the second session remains the next selected tab after disposal.
+      // session before switching communities. The PTY body is active here;
+      // closing it selects the adjacent Scratchpad, so explicitly return to
+      // the remaining Terminal before checking its stable native PID.
       const firstTabPids = [
         first.pid,
         ...processTree(first.pid).map((row) => row.pid),
@@ -282,19 +323,13 @@ describe("06 packaged workspace terminal", () => {
       );
       await closeFirstTab.waitForExist({ timeout: 30_000 });
       await closeFirstTab.click();
-      await browser.waitUntil(
-        async () =>
-          Number(
-            await $('[data-testid="workspace-terminal-body"]').getAttribute(
-              "data-pid",
-            ),
-          ) === second.pid,
-        {
-          timeout: 30_000,
-          timeoutMsg:
-            "closing the first terminal did not select the second tab",
-        },
+      const remainingTerminalTab = await $(
+        '//*[@role="tab" and contains(normalize-space(.), "Terminal")]',
       );
+      await remainingTerminalTab.waitForDisplayed({ timeout: 30_000 });
+      await remainingTerminalTab.click();
+      const remainingTerminal = await terminalBody();
+      expect(await terminalPid(remainingTerminal)).toBe(second.pid);
       await waitForPidsGone(firstTabPids, 60_000, "closed A terminal tab tree");
       // eslint-disable-next-line no-console
       console.log(

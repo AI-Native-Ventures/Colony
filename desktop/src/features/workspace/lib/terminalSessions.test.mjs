@@ -130,10 +130,16 @@ test("a concurrent ensure waiter cannot resurrect a disposed start", async () =>
       .map(({ command, args }) => [command, args]),
     [
       ["workspace_terminal_start", { request }],
-      ["workspace_terminal_close", { sessionId: "waiter-dispose-late-session" }],
+      [
+        "workspace_terminal_close",
+        { sessionId: "waiter-dispose-late-session" },
+      ],
     ],
   );
-  assert.equal(sessions.getTerminalSession("tab-waiter-dispose").sessionId, null);
+  assert.equal(
+    sessions.getTerminalSession("tab-waiter-dispose").sessionId,
+    null,
+  );
 });
 
 test("an ensure waiting through reset cannot resurrect an old-community start", async () => {
@@ -144,7 +150,8 @@ test("an ensure waiting through reset cannot resurrect an old-community start", 
     createMockNativeBridge(async (command, args) => {
       calls.push({ command, args });
       if (command === "workspace_terminal_start") return startGate.promise;
-      if (command === "workspace_terminal_close_all") return closeAllGate.promise;
+      if (command === "workspace_terminal_close_all")
+        return closeAllGate.promise;
       return null;
     }),
   );

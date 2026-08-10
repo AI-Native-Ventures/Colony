@@ -89,7 +89,7 @@ impl TerminalManager {
             .map_err(|error| format!("failed to open terminal PTY: {error}"))?;
         let shell = shell_path();
         let mut command = CommandBuilder::new(shell);
-        command.arg("-i");
+        configure_shell_command(&mut command);
         command.cwd(&cwd);
         command.env("TERM", TERM);
         let child = pair
@@ -365,17 +365,28 @@ fn spawn_tree_watcher(session: Arc<TerminalSession>) {
     });
 }
 
+#[cfg(not(windows))]
+fn configure_shell_command(command: &mut CommandBuilder) {
+    command.arg("-i");
+}
+
+#[cfg(windows)]
+fn configure_shell_command(_command: &mut CommandBuilder) {}
+
+#[cfg(not(windows))]
 fn shell_path() -> String {
     std::env::var("SHELL")
         .ok()
         .filter(|shell| !shell.trim().is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(windows) {
-                "cmd.exe".to_string()
-            } else {
-                "/bin/sh".to_string()
-            }
-        })
+        .unwrap_or_else(|| "/bin/sh".to_string())
+}
+
+#[cfg(windows)]
+fn shell_path() -> String {
+    std::env::var("COMSPEC")
+        .ok()
+        .filter(|shell| !shell.trim().is_empty())
+        .unwrap_or_else(|| "cmd.exe".to_string())
 }
 
 #[cfg(unix)]
@@ -411,7 +422,16 @@ fn terminate_process_tree(pid: u32, descendants: &[u32], force: bool) {
     terminate_process_group(pid, force);
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn terminate_process_tree(pid: u32, _descendants: &[u32], _force: bool) {
+    if let Err(error) = crate::managed_agents::taskkill_tree(pid) {
+        if process_is_running(pid) {
+            eprintln!("buzz-desktop: failed to terminate terminal process tree {pid}: {error}");
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn terminate_process_tree(_pid: u32, _descendants: &[u32], _force: bool) {}
 
 #[cfg(unix)]
@@ -479,7 +499,27 @@ fn process_is_running(pid: u32) -> bool {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn process_is_running(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let filter = format!("PID eq {pid}");
+    let Ok(output) = std::process::Command::new("tasklist")
+        .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    let needle = format!(",\"{pid}\",");
+    String::from_utf8_lossy(&output.stdout).contains(&needle)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn process_is_running(_pid: u32) -> bool {
     false
 }
@@ -566,6 +606,10 @@ mod tests {
             remaining.is_empty(),
             "terminal PIDs are still live: {remaining:?}"
         );
+        #[cfg(unix)]
+        println!("terminal PID disappearance: pids={pids:?} kill-0=false ps=absent");
+        #[cfg(windows)]
+        println!("terminal PID disappearance: pids={pids:?} tasklist=absent");
     }
 
     fn fixture_manager() -> (TerminalManager, PathBuf) {
@@ -581,8 +625,12 @@ mod tests {
             .start(None, cwd, PtySize::default())
             .expect("PTY start");
         println!("terminal leader pid: {:?}", result.pid);
+        #[cfg(not(windows))]
+        let command = b"printf 'terminal-proof\\n'; exit\n".as_slice();
+        #[cfg(windows)]
+        let command = b"echo terminal-proof\r\nexit\r\n".as_slice();
         manager
-            .write(&result.session_id, b"printf 'terminal-proof\\n'; exit\n")
+            .write(&result.session_id, command)
             .expect("write to PTY");
         wait_for_output(&manager, &result.session_id, "terminal-proof");
         if let Some(pid) = result.pid {
@@ -617,13 +665,21 @@ mod tests {
                 },
             )
             .expect("PTY resize");
+        #[cfg(not(windows))]
+        let (command, expected) = (b"stty size; exit\n".as_slice(), "41 121");
+        #[cfg(windows)]
+        let (command, expected) = (
+            b"echo terminal-resize-proof\r\nexit\r\n".as_slice(),
+            "terminal-resize-proof",
+        );
         manager
-            .write(&result.session_id, b"stty size; exit\n")
+            .write(&result.session_id, command)
             .expect("write size command");
-        wait_for_output(&manager, &result.session_id, "41 121");
+        wait_for_output(&manager, &result.session_id, expected);
         manager.close(&result.session_id).expect("close PTY");
     }
 
+    #[cfg(unix)]
     #[test]
     fn terminal_close_reaps_process_tree() {
         let (manager, cwd) = fixture_manager();
@@ -643,6 +699,7 @@ mod tests {
         wait_for_processes(&pids);
     }
 
+    #[cfg(unix)]
     #[test]
     fn terminal_exit_reaps_process_tree() {
         let (manager, cwd) = fixture_manager();
@@ -664,6 +721,7 @@ mod tests {
         manager.close(&result.session_id).expect("close exited PTY");
     }
 
+    #[cfg(unix)]
     #[test]
     fn terminal_signal_reaps_process_tree() {
         let (manager, cwd) = fixture_manager();
@@ -683,6 +741,7 @@ mod tests {
         wait_for_processes(&pids);
     }
 
+    #[cfg(unix)]
     #[test]
     fn terminal_reset_reaps_all_process_trees_before_apply() {
         let (manager, cwd) = fixture_manager();

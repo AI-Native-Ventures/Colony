@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 330,
-    "rust_lines": 135584,
+    "rust_lines": 135643,
     "tauri_coupled": 140,
     "portable": 190,
     "portable_lines": 73263,
@@ -3441,8 +3441,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/workspace/lib/terminalSessions.ts:162",
-        "src/features/workspace/lib/terminalSessions.ts:286",
-        "src/features/workspace/lib/terminalSessions.ts:306"
+        "src/features/workspace/lib/terminalSessions.ts:300",
+        "src/features/workspace/lib/terminalSessions.ts:320"
       ]
     },
     "workspace_terminal_close_all": {
@@ -3451,7 +3451,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:327"
+        "src/features/workspace/lib/terminalSessions.ts:341"
       ]
     },
     "workspace_terminal_resize": {
@@ -3460,7 +3460,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:269"
+        "src/features/workspace/lib/terminalSessions.ts:283"
       ]
     },
     "workspace_terminal_start": {
@@ -3469,7 +3469,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:199"
+        "src/features/workspace/lib/terminalSessions.ts:213"
       ]
     },
     "workspace_terminal_write": {
@@ -3478,7 +3478,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:247"
+        "src/features/workspace/lib/terminalSessions.ts:261"
       ]
     }
   }

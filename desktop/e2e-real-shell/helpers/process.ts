@@ -88,6 +88,12 @@ export async function waitForPidsGone(
       `${describe} still alive by kill -0: ${remaining.join(",")}`,
     );
   }
+  // Keep the successful absence proof in the CI log; this is the teardown
+  // contract, not routine debug output.
+  // eslint-disable-next-line no-console
+  console.log(
+    `[process-proof] ${describe}: pids=${uniquePids.join(",")} kill-0=false ps=absent`,
+  );
 }
 
 export function appProcessExists(bundlePath: string): boolean {
