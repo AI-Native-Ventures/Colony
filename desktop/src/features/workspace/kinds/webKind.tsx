@@ -413,6 +413,7 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       ) : null}
       <div
         className="relative min-h-0 flex-1 overflow-hidden bg-background"
+        data-buzz-wheel-forwarding=""
         data-testid="workspace-web-surface"
         ref={surfaceRef}
       >
