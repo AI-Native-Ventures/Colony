@@ -521,7 +521,7 @@ Expected: no unused-import or unused-variable errors. If any remain, they name c
 In `desktop/e2e-real-shell/README.md`, find the flow 08 entry and replace its description with:
 
 ```markdown
-- **08 workspace web** — packaged Tauri launches an owned headless Chromium,
+- **08 workspace web**: packaged Tauri launches an owned headless Chromium,
   renders a real `Page.startScreencast` frame filling the workspace surface,
   and forwards pointer and keyboard input to a loopback fixture that reports
   exact receipts. Produces `results/08-web.png`.
