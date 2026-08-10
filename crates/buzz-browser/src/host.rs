@@ -440,6 +440,10 @@ mod tests {
         false
     }
 
+    // `Drop for BrowserHost` and `Command::kill_on_drop(true)` (line 142) each
+    // reap the child independently, so this test cannot catch a regression in
+    // one of them alone: it went red only when both were disabled. It guards
+    // the combined contract, which is the one callers depend on.
     #[tokio::test]
     #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
     async fn real_owned_launch_exposes_a_pid_and_reaps_it_on_drop() {
