@@ -13,7 +13,7 @@ flowchart LR
     APP -->|spawn/kill| SIDE[buzz-acp sidecar]
 ```
 
-## The seven flows
+## The eight flows
 
 | Flow | Spec | Reaches (nothing the mock can touch) | What it catches if it breaks |
 | --- | --- | --- | --- |
@@ -24,11 +24,29 @@ flowchart LR
 | 05 huddle + transmit | `specs/05-huddle.spec.ts` | Audio devices, the raw binary IPC path | Huddle join broken; audio capture broken; binary IPC path broken |
 | 06 terminal PTY + normal exit | `specs/06-workspace-terminal.spec.ts` | Packaged xterm renderer, real PTY prompt/input/output, inactive-tab remounts, all-session community cleanup, Cmd +/- zoom, normal Tauri exit | Terminal is mocked, sessions leak across a community boundary, zoom is not computed from the root, or RunEvent exit cleanup misses a PTY |
 | 07 terminal PTY + SIGTERM | `specs/07-workspace-terminal-sigterm.spec.ts` | Separate packaged launch, real terminal leaders/descendants, Unix SIGTERM handler | Signal shutdown leaves a terminal process tree alive |
+| 08 Web CDP screencast | `specs/08-workspace-web.spec.ts` | Packaged Tauri invokes the native Web manager, launches an owned headless Chromium, and renders one real `Page.startScreencast` frame filling the workspace surface | The signed bundle cannot cross real Tauri IPC into the browser host, or the rendered frame is mocked/blank |
+
+- **08 workspace web**: packaged Tauri launches an owned headless Chromium,
+  crosses real native IPC, and renders one real `Page.startScreencast` frame
+  filling the workspace surface. It produces exactly one proof screenshot at
+  `results/08-web.png`.
+
+  Scope note: owned-browser reaping on tab close, community reset, and app quit
+  is **not** proven here. It is proven in
+  `desktop/src-tauri/src/web_lifecycle_tests.rs` and
+  `crates/buzz-browser/src/host.rs` against a real headless Chromium, which
+  runs in seconds without a packaged build. Engine input quirks are proven by
+  the `engine-chromium` and `engine-webkit` Playwright projects. Flow 08 keeps
+  only the IPC/frame proof that requires the signed bundle; it has no input
+  receipts, coordinate-stability fixture, or PID teardown assertions.
 
 Each flow starts the app fresh (one spec per launch). State persists across
 flows inside a single run: 02 creates the identity, 03 proves it restores and
 joins the community, 04 and 05 start from the joined state, and 06/07 exercise
-the joined community with real terminal sessions.
+  the joined community with real terminal sessions. Flow 08 is also
+  prerequisite-independent: it completes isolated onboarding when run alone,
+  enables the default-off Web preview only in harness local storage, and uses a
+  loopback-only page fixture.
 
 ## How it works
 
@@ -95,6 +113,7 @@ Options:
 
 ```bash
 ./scripts/run-real-shell-e2e.sh --flow 03            # just the messaging flow
+./scripts/run-real-shell-e2e.sh --flow 08            # packaged Web/CDP proof
 ./scripts/run-real-shell-e2e.sh --no-build           # reuse an existing harness app
 BUZZ_REAL_SHELL_RELAY_MODE=nohup ./scripts/run-real-shell-e2e.sh  # skip tmux path
 ```

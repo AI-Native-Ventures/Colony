@@ -123,6 +123,8 @@ async function installE2eBridgeIfConfigured() {
     "@/testing/terminalE2eBridge"
   );
   installTerminalE2eBridge();
+  const { installWebE2eBridge } = await import("@/testing/webE2eBridge");
+  installWebE2eBridge();
 }
 
 function maybeStartParitySession() {

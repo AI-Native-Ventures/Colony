@@ -154,7 +154,8 @@ test.describe("terminal workspace tab", () => {
     await page.getByTestId("workspace-create-terminal").click();
     await expect(page.getByTestId("workspace-terminal-body")).toBeVisible();
     await page.getByRole("button", { name: "Close Terminal" }).click();
-    await expect(page.getByTestId("workspace-new-tab-page")).toBeVisible();
+    await expect(page.getByTestId("channel-workspace-pane")).toHaveCount(0);
+    await expect(page.getByTestId("channel-drop-zone")).toBeVisible();
     await expect
       .poll(async () =>
         (await terminalCommands(page)).map((entry) => entry.command),

@@ -1,5 +1,10 @@
 # Channel Workspace Phase A Implementation Plan
 
+> **Historical layout note:** Phase A implemented main-column replacement. That
+> presentation is superseded by
+> `docs/superpowers/specs/2026-08-10-channel-workspace-docked-pane-design.md`.
+> Do not reuse the replacement-mode tasks for current workspace work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use

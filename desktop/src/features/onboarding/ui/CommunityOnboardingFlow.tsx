@@ -168,6 +168,7 @@ export function CommunityOnboardingFlow({
   const nameInputRef = React.useRef<HTMLInputElement | null>(null);
   const avatarTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const avatarEditorContentRef = React.useRef<HTMLDivElement | null>(null);
+  const loadedProfileAvatarUrlRef = React.useRef("");
   const [avatarEditorDialogHeight, setAvatarEditorDialogHeight] =
     React.useState<number | null>(null);
 
@@ -292,8 +293,10 @@ export function CommunityOnboardingFlow({
   // any user edits are preserved.
   React.useEffect(() => {
     if (!isProfileStage) return;
+    loadedProfileAvatarUrlRef.current = "";
     void getProfile()
       .then((profile) => {
+        loadedProfileAvatarUrlRef.current = profile.avatarUrl?.trim() ?? "";
         if (profile.displayName) {
           setDisplayName((prev) =>
             prev === "" ? (profile.displayName ?? "") : prev,
@@ -384,6 +387,7 @@ export function CommunityOnboardingFlow({
       const presentationState = avatarPresentation?.state;
       const shouldSaveCandidate =
         candidateAvatarUrl.length > 0 &&
+        candidateAvatarUrl !== loadedProfileAvatarUrlRef.current &&
         presentationState !== "failed" &&
         presentationState !== "pending";
 

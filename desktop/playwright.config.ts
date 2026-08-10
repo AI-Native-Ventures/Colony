@@ -34,6 +34,7 @@ export default defineConfig({
         "**/channel-browser.spec.ts",
         "**/channel-workspace.spec.ts",
         "**/workspace-terminal.spec.ts",
+        "**/workspace-web.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
         "**/invites-settings-screenshots.spec.ts",
@@ -178,6 +179,25 @@ export default defineConfig({
       },
       expect: {
         timeout: process.env.CI ? 15_000 : 10_000,
+      },
+    },
+    // Engine-parity projects. The packaged macOS app renders in WKWebView, so
+    // any spec whose subject is raw engine input behaviour (pointer vs mouse
+    // events, wheel delivery, Enter-to-submit) runs on BOTH engines here.
+    // Catching those quirks costs seconds; catching them in the packaged Tauri
+    // harness costs a full release rebuild.
+    {
+      name: "engine-chromium",
+      testMatch: ["**/workspace-web-input.spec.ts"],
+      use: {
+        ...devices["Desktop Chrome"],
+      },
+    },
+    {
+      name: "engine-webkit",
+      testMatch: ["**/workspace-web-input.spec.ts"],
+      use: {
+        ...devices["Desktop Safari"],
       },
     },
   ],

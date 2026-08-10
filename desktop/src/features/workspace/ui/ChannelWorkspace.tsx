@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import {
+  setChannelSurfaceMode,
   setWorkspaceExpanded,
   useWorkspaceExpanded,
 } from "@/features/workspace/lib/channelSurfaceMode";
@@ -8,6 +9,7 @@ import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
   clearActiveTab,
   closeTab,
+  getWorkspace,
   openTab,
   setActiveTab,
   useWorkspace,
@@ -66,7 +68,13 @@ export function ChannelWorkspace({
         .catch((error: unknown) => {
           console.error("Failed to dispose workspace tab:", error);
         })
-        .finally(() => closeTab(channelId, tabId));
+        .finally(() => {
+          closeTab(channelId, tabId);
+          if (getWorkspace(channelId).tabs.length === 0) {
+            setWorkspaceExpanded(channelId, false);
+            setChannelSurfaceMode(channelId, "timeline");
+          }
+        });
     },
     [channelId, tabs],
   );

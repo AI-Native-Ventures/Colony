@@ -168,6 +168,7 @@ type AppSidebarProps = {
   starredChannelIds?: ReadonlySet<string>;
   onStarChannel?: (channelId: string) => void;
   onUnstarChannel?: (channelId: string) => void;
+  workspaceExpanded?: boolean;
 };
 export function AppSidebar({
   addCommunityPrefill,
@@ -235,6 +236,7 @@ export function AppSidebar({
   starredChannelIds,
   onStarChannel,
   onUnstarChannel,
+  workspaceExpanded = false,
 }: AppSidebarProps) {
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
   const { status: updateStatus } = useUpdaterContext();
@@ -304,11 +306,6 @@ export function AppSidebar({
     }
   }, [canShowSidebarUpdateCard]);
 
-  // Allow the create-channel dialog to be opened from outside (e.g. the
-  // ⌘⇧N global shortcut in AppShell), mirroring the controlled new-DM lift.
-  // When the external flag flips on, open the "stream" create dialog; the
-  // close direction is reported back via `onCreateChannelOpenChange` in the
-  // dialog's `onOpenChange` below.
   React.useEffect(() => {
     if (isCreateChannelOpenProp) {
       openCreateDialog("stream");
@@ -553,6 +550,7 @@ export function AppSidebar({
       className="!z-[100] !border-r-0"
       collapsible="offcanvas"
       data-testid="app-sidebar"
+      hidden={workspaceExpanded}
       onClick={(event) => {
         if (isSidebarBackgroundTarget(event.target)) {
           onBackgroundClick?.();

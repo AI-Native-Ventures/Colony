@@ -120,9 +120,10 @@ test("balancedSlice handles nested brackets", () => {
   assert.throws(() => balancedSlice("a(b", 0, "(", ")"), /unbalanced/);
 });
 
-test("stripComments removes line and block comments", () => {
+test("stripComments masks line and block comments without shifting offsets", () => {
   const src = "// line\nfn a() { /* block\nspan */ } // tail";
-  assert.equal(stripComments(src), "\nfn a() {  } ");
+  assert.equal(stripComments(src), "       \nfn a() {         \n        }        ");
+  assert.equal(stripComments(src).length, src.length);
 });
 
 test("module path splitting: generate_handler! entries yield leaf names", async () => {
@@ -282,10 +283,16 @@ test("events: const names resolve, multi-line sites count, unknowns are loud", a
       path.join(rust, "emitters.rs"),
       [
         'const STATUS_EVENT: &str = "managed-agent-runtime-status";',
+        'const MULTILINE_STATUS_EVENT: &str = "workspace-terminal-output";',
         "use tauri::Emitter;",
         "pub fn a(app: &tauri::AppHandle) {",
         // Name is an identifier, not a literal. Was invisible to the inventory.
         "    let _ = app.emit(STATUS_EVENT, 1);",
+        // The identifier can be on the line after `.emit(` too.
+        "    let _ = app.emit(",
+        "        MULTILINE_STATUS_EVENT,",
+        "        2,",
+        "    );",
         // Multi-line, and the same name is emitted on one line below, so this
         // site only counts if multi-line sites are recorded unconditionally.
         "    let _ = app.emit(",
@@ -306,16 +313,78 @@ test("events: const names resolve, multi-line sites count, unknowns are loud", a
       events.names.includes("managed-agent-runtime-status"),
       "a const event name must be resolved to its string",
     );
-    // Exactly 3 resolvable sites: the STATUS_EVENT const, the multi-line
-    // ptt-state, and the single-line ptt-state. The multi-line one only counts
-    // because sites are recorded even when the name is already known.
-    assert.equal(events.emit_sites, 3);
-    assert.deepEqual(events.names, ["managed-agent-runtime-status", "ptt-state"]);
+    // Exactly 4 resolvable sites: two const names, the multi-line ptt-state,
+    // and the single-line ptt-state. The multi-line sites only count because
+    // the scanner resolves identifiers across line boundaries.
+    assert.equal(events.emit_sites, 4);
+    assert.deepEqual(events.names, [
+      "managed-agent-runtime-status",
+      "ptt-state",
+      "workspace-terminal-output",
+    ]);
     assert.deepEqual(
       events.unresolved_emit_sites.map((s) => s.replace(/^.*\((.*)\)$/, "$1")),
       ["MYSTERY_EVENT"],
       "an unresolvable emit name must be reported, never dropped",
     );
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("events: const-looking text inside a raw string is ignored", async () => {
+  const desktop = await makeFixture();
+  try {
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "string_literals.rs"),
+      [
+        'const STRING_EVENT: &str = "string-event";',
+        'const REAL_EVENT: &str = "workspace-web-frame";',
+        'const RAW_TEXT: &str = r#".emit(',
+        "    STRING_EVENT,",
+        '    payload)"#;',
+        "pub fn real(app: &tauri::AppHandle) {",
+        "    let _ = app.emit(REAL_EVENT, ());",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { events } = await buildInventory(desktop);
+
+    assert.equal(events.emit_sites, 1);
+    assert.deepEqual(events.names, ["workspace-web-frame"]);
+    assert.deepEqual(events.unresolved_emit_sites, []);
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("events: multiline block comments preserve unresolved site line numbers", async () => {
+  const desktop = await makeFixture();
+  try {
+    const rust = path.join(desktop, "src-tauri", "src");
+    await fs.writeFile(
+      path.join(rust, "line_numbers.rs"),
+      [
+        'const REAL_EVENT: &str = "workspace-web-frame";',
+        "",
+        "/* comment starts",
+        "   comment continues",
+        "*/",
+        "pub fn real(app: &tauri::AppHandle) {",
+        "    let _ = app.emit(MISSING_EVENT, ());",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { events } = await buildInventory(desktop);
+
+    assert.deepEqual(events.unresolved_emit_sites, [
+      "src-tauri/src/line_numbers.rs:7 (MISSING_EVENT)",
+    ]);
   } finally {
     await fs.rm(desktop, { recursive: true, force: true });
   }

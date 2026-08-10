@@ -2,7 +2,7 @@
 # =============================================================================
 # run-real-shell-e2e.sh — run the real-shell E2E smoke suite
 # =============================================================================
-# Drives a PACKAGED Tauri build (real backend) through seven smoke flows:
+# Drives a PACKAGED Tauri build (real backend) through eight smoke flows:
 #   01 launch-to-first-paint    boot, keychain unlock, window creation
 #   02 onboard identity         secret_store.rs against the real OS keychain
 #   03 join + message           live relay socket and push
@@ -10,6 +10,7 @@
 #   05 huddle + brief transmit  audio devices, raw binary IPC
 #   06 terminal PTY + normal exit real shell sessions, community boundary
 #   07 terminal PTY + SIGTERM process-tree cleanup
+#   08 web CDP screencast       packaged IPC and one real browser frame
 #
 # Backend: reuses the repo's isolated relay harness
 # (scripts/start-isolated-test-relay.sh, tmux dawn-relay, port 3040,
@@ -60,7 +61,7 @@ while (($#)); do
   esac
 done
 if [[ ${#FLOWS[@]} -eq 0 ]]; then
-  FLOWS=(01 02 03 04 05 06 07)
+  FLOWS=(01 02 03 04 05 06 07 08)
 fi
 
 # ── Resolve harness configuration ────────────────────────────────────────────

@@ -5,6 +5,12 @@ Status: Design approved in brainstorming; revised twice on 2026-08-07, first for
 channel surface slotting, then for the tabbed workspace surface (see "Revision
 log")
 
+> **Layout superseded on 2026-08-10.** The workspace no longer replaces the
+> channel content column. The approved current layout is the resizable far-right
+> pane in `2026-08-10-channel-workspace-docked-pane-design.md`. The ownership,
+> approval, tab-kind, security, and persistence decisions below remain current;
+> statements about main-column replacement are historical.
+
 ## Outcome
 
 Colony gets a **channel workspace**: a tabbed surface that takes over the

@@ -88,6 +88,7 @@ import { useIdentityQuery } from "@/shared/api/hooks";
 import { useRelayAutoHeal } from "@/shared/api/useRelayAutoHeal";
 import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { useWebviewScrollBoundaryLock } from "@/shared/hooks/useWebviewScrollBoundaryLock";
+import { useWorkspaceExpanded } from "@/features/workspace/lib/channelSurfaceMode";
 import { joinChannel } from "@/shared/api/tauri";
 import type { Channel, ChannelVisibility, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
@@ -321,6 +322,7 @@ export function AppShell() {
         : null,
     [channels, selectedChannelId],
   );
+  const workspaceExpanded = useWorkspaceExpanded(activeChannel?.id);
   const managedChannel = React.useMemo(() => {
     const targetChannelId = managedChannelId ?? selectedChannelId;
     return targetChannelId
@@ -750,6 +752,7 @@ export function AppShell() {
                 onSwitchCommunity={handleSwitchCommunity}
                 onUpdateCommunity={communitiesHook.updateCommunity}
                 communities={communitiesHook.communities}
+                workspaceExpanded={workspaceExpanded}
               />
             ) : null}
             <SidebarProvider
@@ -898,6 +901,7 @@ export function AppShell() {
                         selectedChannelId={selectedChannelId}
                         selectedView={selectedView}
                         unreadChannelIds={unreadChannelIds}
+                        workspaceExpanded={workspaceExpanded}
                         unreadChannelCounts={unreadChannelCounts}
                         mutedChannelIds={mutedChannelIds}
                         onMuteChannel={muteChannel}

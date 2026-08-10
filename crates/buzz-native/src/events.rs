@@ -11,16 +11,17 @@ use serde::Serialize;
 
 /// Every event name the native layer emits.
 ///
-/// Generated from `desktop/native-inventory.json` (`events.names`): 24 names
-/// across 34 emit sites. This list is a **contract** — the frontend listens on
+/// Generated from `desktop/native-inventory.json` (`events.names`): 29 names
+/// across 39 emit sites. This list is a **contract** — the frontend listens on
 /// these exact strings, so renaming one is a breaking change disguised as a
 /// refactor.
 ///
-/// Three of these are emitted through a `const` rather than a literal
-/// (`mesh-download-progress`, `managed-agent-runtime-status`,
-/// `native-notification-activated`) and were missing from the inventory
-/// entirely until the generator learned to resolve identifiers. If you add an
-/// event, run `pnpm generate:native-inventory` from `desktop/` and add it here;
+/// Eight of these are emitted through a `const` rather than a literal
+/// (`managed-agent-runtime-status`, `mesh-download-progress`,
+/// `native-notification-activated`, `workspace-terminal-exit`,
+/// `workspace-terminal-output`, `workspace-web-closed`, `workspace-web-error`,
+/// `workspace-web-frame`). If you add an event, run
+/// `pnpm generate:native-inventory` from `desktop/` and add it here;
 /// `pnpm check` fails otherwise.
 ///
 /// `initial-render-ready` is deliberately absent. It is emitted by the frontend
@@ -51,6 +52,11 @@ pub const EVENT_NAMES: &[&str] = &[
     "prevent-sleep-expired",
     "ptt-state",
     "repos-dir-error",
+    "workspace-terminal-exit",
+    "workspace-terminal-output",
+    "workspace-web-closed",
+    "workspace-web-error",
+    "workspace-web-frame",
 ];
 
 /// An emit failed.
@@ -217,21 +223,25 @@ mod tests {
         assert_eq!(unique.len(), EVENT_NAMES.len(), "no duplicate event names");
         assert_eq!(
             EVENT_NAMES.len(),
-            24,
-            "inventory reports 24 distinct emitted events; regenerate and update both"
+            29,
+            "inventory reports 29 distinct emitted events; regenerate and update both"
         );
     }
 
     #[test]
     fn const_named_events_are_present() {
-        // These three are emitted via a `const`, not a literal, and were absent
-        // from the inventory until the generator resolved identifiers. If a
-        // future edit rebuilds this list from the old measurement they vanish
-        // again, and Phase 2's frame writer silently stops carrying them.
+        // These eight are emitted via a `const`, not a literal. If a future edit
+        // rebuilds this list from an old measurement they vanish again, and
+        // Phase 2's frame writer silently stops carrying them.
         for name in [
-            "mesh-download-progress",
             "managed-agent-runtime-status",
+            "mesh-download-progress",
             "native-notification-activated",
+            "workspace-terminal-exit",
+            "workspace-terminal-output",
+            "workspace-web-closed",
+            "workspace-web-error",
+            "workspace-web-frame",
         ] {
             assert!(EVENT_NAMES.contains(&name), "{name} missing from contract");
         }
