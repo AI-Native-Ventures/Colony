@@ -5,6 +5,11 @@
 //! frontend. A session owns its host and websocket task until an explicit tab
 //! close, community reset, app shutdown, or connection failure ends it.
 
+mod validation;
+
+use self::validation::{
+    normalize_url, validate_key, validate_mouse, validate_text, validate_viewport, validate_wheel,
+};
 use buzz_browser_pkg::{
     cdp::CdpClient,
     mcp::{open_host, pick_target, ConnectParams},
@@ -27,8 +32,6 @@ pub const WEB_ERROR_EVENT: &str = "workspace-web-error";
 /// Event emitted when a web session closes, optionally with an error.
 pub const WEB_CLOSED_EVENT: &str = "workspace-web-closed";
 
-const MAX_COMMAND_TEXT: usize = 64 * 1024;
-const MAX_COORDINATE: f64 = 100_000.0;
 const SESSION_POLL: Duration = Duration::from_millis(100);
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const START_WAIT_TIMEOUT: Duration = Duration::from_secs(25);
@@ -124,6 +127,20 @@ enum WebCommand {
     },
     Text {
         text: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Back {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Forward {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Reload {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Resize {
+        width: u32,
+        height: u32,
         reply: oneshot::Sender<Result<(), String>>,
     },
 }
@@ -282,6 +299,31 @@ impl WebManager {
         let url = normalize_url(&url)?;
         self.dispatch(session_id, |reply| WebCommand::Navigate { url, reply })
             .await
+    }
+
+    pub async fn back(&self, session_id: &str) -> Result<(), String> {
+        self.dispatch(session_id, |reply| WebCommand::Back { reply })
+            .await
+    }
+
+    pub async fn forward(&self, session_id: &str) -> Result<(), String> {
+        self.dispatch(session_id, |reply| WebCommand::Forward { reply })
+            .await
+    }
+
+    pub async fn reload(&self, session_id: &str) -> Result<(), String> {
+        self.dispatch(session_id, |reply| WebCommand::Reload { reply })
+            .await
+    }
+
+    pub async fn resize(&self, session_id: &str, width: u32, height: u32) -> Result<(), String> {
+        validate_viewport(width, height)?;
+        self.dispatch(session_id, |reply| WebCommand::Resize {
+            width,
+            height,
+            reply,
+        })
+        .await
     }
 
     /// Forward a mouse move/press/release event to the active page.
@@ -717,8 +759,63 @@ async fn execute_command(client: &mut CdpClient, command: WebCommand) -> Result<
                 .map_err(|error| error.to_string());
             let _ = reply.send(result);
         }
+        WebCommand::Back { reply } => {
+            let _ = reply.send(navigate_history(client, -1).await);
+        }
+        WebCommand::Forward { reply } => {
+            let _ = reply.send(navigate_history(client, 1).await);
+        }
+        WebCommand::Reload { reply } => {
+            let result =
+                send_command_bounded(client, "Page.reload", json!({ "ignoreCache": false }))
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+            let _ = reply.send(result);
+        }
+        WebCommand::Resize {
+            width,
+            height,
+            reply,
+        } => {
+            let result = send_command_bounded(
+                client,
+                "Emulation.setDeviceMetricsOverride",
+                json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+            let _ = reply.send(result);
+        }
     }
     Ok(())
+}
+
+async fn navigate_history(client: &mut CdpClient, delta: i64) -> Result<(), String> {
+    let history = send_command_bounded(client, "Page.getNavigationHistory", json!({}))
+        .await
+        .map_err(|error| error.to_string())?;
+    let index = history["currentIndex"].as_i64().unwrap_or(0) + delta;
+    let entry_id = history["entries"]
+        .as_array()
+        .and_then(|entries| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|index| entries.get(index))
+        })
+        .and_then(|entry| entry["id"].as_i64());
+    let Some(entry_id) = entry_id else {
+        return Ok(());
+    };
+    send_command_bounded(
+        client,
+        "Page.navigateToHistoryEntry",
+        json!({ "entryId": entry_id }),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -783,73 +880,6 @@ fn emit_error(app: &AppHandle, session_id: &str, error: &str) {
     }
 }
 
-fn normalize_url(url: &str) -> Result<String, String> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("web URL must not be empty".to_string());
-    }
-    if url.len() > 8 * 1024 {
-        return Err("web URL is too long".to_string());
-    }
-    Ok(url.to_string())
-}
-
-fn validate_mouse(input: &WebMouseInput) -> Result<(), String> {
-    if !matches!(
-        input.event_type.as_str(),
-        "mouseMoved" | "mousePressed" | "mouseReleased"
-    ) {
-        return Err("unsupported web mouse event".to_string());
-    }
-    validate_coordinate(input.x)?;
-    validate_coordinate(input.y)?;
-    if let Some(button) = input.button.as_deref() {
-        if !matches!(
-            button,
-            "none" | "left" | "middle" | "right" | "back" | "forward"
-        ) {
-            return Err("unsupported web mouse button".to_string());
-        }
-    }
-    Ok(())
-}
-
-fn validate_wheel(input: &WebWheelInput) -> Result<(), String> {
-    validate_coordinate(input.x)?;
-    validate_coordinate(input.y)?;
-    if !input.delta_x.is_finite() || !input.delta_y.is_finite() {
-        return Err("web wheel deltas must be finite".to_string());
-    }
-    Ok(())
-}
-
-fn validate_key(input: &WebKeyInput) -> Result<(), String> {
-    if !matches!(input.event_type.as_str(), "keyDown" | "keyUp") {
-        return Err("unsupported web key event".to_string());
-    }
-    if input.key.is_empty() || input.key.len() > 256 {
-        return Err("web key must be present and short".to_string());
-    }
-    if let Some(text) = input.text.as_deref() {
-        validate_text(text)?;
-    }
-    Ok(())
-}
-
-fn validate_text(text: &str) -> Result<(), String> {
-    if text.len() > MAX_COMMAND_TEXT {
-        return Err("web input text is too long".to_string());
-    }
-    Ok(())
-}
-
-fn validate_coordinate(value: f64) -> Result<(), String> {
-    if !value.is_finite() || value.abs() > MAX_COORDINATE {
-        return Err("web input coordinate is outside the supported range".to_string());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -900,6 +930,13 @@ mod tests {
             windows_virtual_key_code: None,
         })
         .is_err());
+    }
+
+    #[test]
+    fn viewport_validation_rejects_tiny_and_unbounded_surfaces() {
+        assert!(validate_viewport(1280, 720).is_ok());
+        assert!(validate_viewport(120, 720).is_err());
+        assert!(validate_viewport(1280, 8_000).is_err());
     }
 
     #[tokio::test]

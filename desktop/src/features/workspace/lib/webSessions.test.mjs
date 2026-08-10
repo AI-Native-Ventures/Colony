@@ -8,7 +8,10 @@ import {
   disposeWebSession,
   ensureWebSession,
   getWebSession,
+  goBackWeb,
+  reloadWeb,
   resetWebSessions,
+  resizeWeb,
   sendWebText,
   sendWebWheel,
 } from "./webSessions.ts";
@@ -44,6 +47,9 @@ test("forwards wheel and text input through the native web session", async () =>
     deltaY: 120,
   });
   await sendWebText("tab-1", "hello");
+  await resizeWeb("tab-1", 1280, 720);
+  await goBackWeb("tab-1");
+  await reloadWeb("tab-1");
 
   assert.deepEqual(
     calls.filter(({ command }) =>
@@ -51,6 +57,9 @@ test("forwards wheel and text input through the native web session", async () =>
         "workspace_web_mouse",
         "workspace_web_wheel",
         "workspace_web_text",
+        "workspace_web_resize",
+        "workspace_web_back",
+        "workspace_web_reload",
       ].includes(command),
     ),
     [
@@ -64,6 +73,18 @@ test("forwards wheel and text input through the native web session", async () =>
       {
         command: "workspace_web_text",
         args: { sessionId: "session-1", text: "hello" },
+      },
+      {
+        command: "workspace_web_resize",
+        args: { sessionId: "session-1", width: 1280, height: 720 },
+      },
+      {
+        command: "workspace_web_back",
+        args: { sessionId: "session-1" },
+      },
+      {
+        command: "workspace_web_reload",
+        args: { sessionId: "session-1" },
       },
     ],
   );

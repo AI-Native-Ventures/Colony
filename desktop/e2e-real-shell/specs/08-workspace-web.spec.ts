@@ -109,7 +109,7 @@ async function createOwnedWeb(url = "about:blank"): Promise<{
 }> {
   await clickTestId("workspace-create-web", 60_000);
   await fillTestId("workspace-web-url", url, 60_000);
-  await clickTestId("workspace-web-connect", 60_000);
+  await browser.keys([Key.Enter]);
   const body = await webBody();
   const frame = await $('[data-testid="workspace-web-frame"]');
   await frame.waitForDisplayed({ timeout: 120_000 });

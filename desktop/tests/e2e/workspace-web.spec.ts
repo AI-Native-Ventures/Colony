@@ -45,8 +45,16 @@ test.describe("web workspace tab", () => {
     const web = page.getByTestId("workspace-web-body");
     await expect(web).toBeVisible();
     await expect(web).toHaveAttribute("data-status", "idle");
+    await expect(page.getByTestId("workspace-web-toolbar")).toBeVisible();
+    await expect(
+      page.getByTestId("workspace-web-advanced"),
+    ).not.toHaveAttribute("open");
+    await expect(
+      page.getByText("DevTools endpoint (optional)"),
+    ).not.toBeVisible();
 
-    await page.getByTestId("workspace-web-connect").click();
+    await page.getByTestId("workspace-web-url").fill("about:blank");
+    await page.getByTestId("workspace-web-url").press("Enter");
     await expect(web).toHaveAttribute("data-status", "running");
     await expect(page.getByTestId("workspace-web-frame")).toBeVisible();
 
@@ -88,6 +96,7 @@ test.describe("web workspace tab", () => {
           "workspace_web_navigate",
           "workspace_web_key",
           "workspace_web_mouse",
+          "workspace_web_resize",
         ]),
       );
     await expect

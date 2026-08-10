@@ -46,6 +46,44 @@ pub async fn workspace_web_navigate(
     state.web_sessions.navigate(&session_id, url).await
 }
 
+/// Navigate backward in the page history when an older entry exists.
+#[tauri::command]
+pub async fn workspace_web_back(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.web_sessions.back(&session_id).await
+}
+
+/// Navigate forward in the page history when a newer entry exists.
+#[tauri::command]
+pub async fn workspace_web_forward(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.web_sessions.forward(&session_id).await
+}
+
+/// Reload the page driven by an existing web session.
+#[tauri::command]
+pub async fn workspace_web_reload(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.web_sessions.reload(&session_id).await
+}
+
+/// Resize the CDP viewport to match the visible workspace surface.
+#[tauri::command]
+pub async fn workspace_web_resize(
+    session_id: String,
+    width: u32,
+    height: u32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.web_sessions.resize(&session_id, width, height).await
+}
+
 /// Forward a pointer event to the page driven by an existing web session.
 #[tauri::command]
 pub async fn workspace_web_mouse(

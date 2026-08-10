@@ -307,6 +307,35 @@ export async function sendWebText(tabId: string, text: string): Promise<void> {
   await invoke("workspace_web_text", { sessionId, text });
 }
 
+async function invokeWebSession(tabId: string, command: string): Promise<void> {
+  const sessionId = sessions.get(tabId)?.sessionId;
+  if (!sessionId) return;
+  await invoke(command, { sessionId });
+}
+
+/** Resize the CDP viewport to the visible browser surface. */
+export async function resizeWeb(
+  tabId: string,
+  width: number,
+  height: number,
+): Promise<void> {
+  const sessionId = sessions.get(tabId)?.sessionId;
+  if (!sessionId) return;
+  await invoke("workspace_web_resize", { sessionId, width, height });
+}
+
+/** Navigate backward in the current page history. */
+export const goBackWeb = (tabId: string): Promise<void> =>
+  invokeWebSession(tabId, "workspace_web_back");
+
+/** Navigate forward in the current page history. */
+export const goForwardWeb = (tabId: string): Promise<void> =>
+  invokeWebSession(tabId, "workspace_web_forward");
+
+/** Reload the active page. */
+export const reloadWeb = (tabId: string): Promise<void> =>
+  invokeWebSession(tabId, "workspace_web_reload");
+
 /** Close one native web session before removing its tab. */
 export async function disposeWebSession(tabId: string): Promise<void> {
   const pendingStart = starts.get(tabId);

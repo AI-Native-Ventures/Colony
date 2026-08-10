@@ -95,6 +95,18 @@ async function invokeWeb(
       emitFrame(session.sessionId);
       return null;
     }
+    case "workspace_web_resize":
+    case "workspace_web_back":
+    case "workspace_web_forward":
+    case "workspace_web_reload": {
+      record(command, payload);
+      const input = payload as { sessionId?: string };
+      if (!input.sessionId || !sessions.has(input.sessionId)) {
+        throw new Error("mock web session was not found");
+      }
+      emitFrame(input.sessionId);
+      return null;
+    }
     case "workspace_web_mouse":
     case "workspace_web_wheel":
     case "workspace_web_key":
