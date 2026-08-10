@@ -974,3 +974,7 @@ mod tests {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "web_lifecycle_tests.rs"]
+mod web_lifecycle_tests;
