@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 333,
-    "rust_lines": 136884,
-    "tauri_coupled": 142,
+    "rust_total": 334,
+    "rust_lines": 137051,
+    "tauri_coupled": 143,
     "portable": 191,
     "portable_lines": 73347,
     "tauri_coupled_list": [
@@ -147,7 +147,8 @@
       "src-tauri/src/shutdown.rs",
       "src-tauri/src/templates/storage.rs",
       "src-tauri/src/terminal.rs",
-      "src-tauri/src/web.rs"
+      "src-tauri/src/web.rs",
+      "src-tauri/src/web_lifecycle_tests.rs"
     ],
     "portable_list": [
       "src-tauri/src/app_state_keyring.rs",
@@ -360,7 +361,7 @@
     ]
   },
   "params": {
-    "AppHandle": 306,
+    "AppHandle": 307,
     "State": 231,
     "Window": 7,
     "ipc::Request": 1,
@@ -375,7 +376,7 @@
       "ipc::Channel": 3
     },
     "test": {
-      "AppHandle": 0,
+      "AppHandle": 1,
       "State": 0,
       "Window": 0,
       "ipc::Request": 0,
