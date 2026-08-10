@@ -240,13 +240,11 @@ impl TerminalSession {
         let Some(app) = &self.app else {
             return;
         };
-        if let Err(error) = app.emit(
-            TERMINAL_OUTPUT_EVENT,
-            TerminalOutputEvent {
-                session_id: self.session_id.clone(),
-                data,
-            },
-        ) {
+        let event = TerminalOutputEvent {
+            session_id: self.session_id.clone(),
+            data,
+        };
+        if let Err(error) = app.emit(TERMINAL_OUTPUT_EVENT, event) {
             eprintln!("buzz-desktop: failed to emit terminal output: {error}");
         }
     }

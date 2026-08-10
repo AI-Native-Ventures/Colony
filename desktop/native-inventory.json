@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 330,
-    "rust_lines": 135587,
+    "rust_lines": 135585,
     "tauri_coupled": 140,
     "portable": 190,
     "portable_lines": 73263,
@@ -402,8 +402,8 @@
     ".exit(": 0
   },
   "events": {
-    "distinct": 25,
-    "emit_sites": 35,
+    "distinct": 26,
+    "emit_sites": 36,
     "names": [
       "agents-data-changed",
       "deep-link-add-community",
@@ -429,7 +429,8 @@
       "prevent-sleep-expired",
       "ptt-state",
       "repos-dir-error",
-      "workspace-terminal-exit"
+      "workspace-terminal-exit",
+      "workspace-terminal-output"
     ],
     "unresolved_emit_sites": []
   },
