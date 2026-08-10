@@ -26,6 +26,11 @@ use common::ask::{
 };
 use common::{query, seed_relay_owner, tag_value};
 
+/// Keep the readiness and turn-completion signals without enabling
+/// `acp::wire=debug`, which would serialize MCP environment credentials into
+/// the redirected harness log.
+const HARNESS_RUST_LOG: &str = "warn,buzz_acp=debug,acp::tool=info";
+
 /// Build an owner-signed, unrestricted NIP-OA credential for `agent`.
 ///
 /// The credential is attached to the agent's kind:0 profile so the shipped
@@ -177,11 +182,90 @@ async fn spawn_harness_as(leader: &Keys, owner: &Keys, stub_log: &Path) -> Harne
         .env("BUZZ_AUTH_TAG", auth_tag)
         .env("BUZZ_ACP_AGENT_COMMAND", &stub_bin)
         .env("BUZZ_STUB_LOG", stub_log)
-        .env("RUST_LOG", "debug")
+        .env("RUST_LOG", HARNESS_RUST_LOG)
         .env("PATH", prepend_target_to_path())
         // Keep the shipped owner-only default. Removing an ambient override is
         // not configuring a test mode; it makes this child resolve its own
         // default even when a developer shell exported the variable.
+        .env_remove("BUZZ_ACP_RESPOND_TO")
+        .env_remove("BUZZ_ACP_AGENT_OWNER")
+        .env("BUZZ_ACP_NO_METER", "true")
+        .env("BUZZ_ACP_NO_PRESENCE", "true")
+        .env("BUZZ_ACP_TURN_LIVENESS_SECS", "0")
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::from(stderr));
+    let child = command
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn buzz-acp {}: {e}", harness_bin.display()));
+
+    HarnessProcess { child, output_path }
+}
+
+/// Spawn the shipped harness with the shipped real agent, backed by DeepSeek.
+///
+/// This is local-only. The opt-in test checks the gate before reaching this
+/// function, and the API key is passed directly to the child without ever
+/// being written to the harness log.
+async fn spawn_deepseek_harness_as(leader: &Keys, owner: &Keys) -> HarnessProcess {
+    let api_key = std::env::var("DEEPSEEK_API_KEY")
+        .expect("RUN_REAL_LLM_ASK_E2E=1 requires DEEPSEEK_API_KEY");
+    let model = std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-pro".to_string());
+    let base_url = std::env::var("DEEPSEEK_BASE_URL")
+        .unwrap_or_else(|_| "https://api.deepseek.com/beta".to_string());
+
+    let output_path = std::env::temp_dir().join(format!(
+        "buzz-real-deepseek-answers-ask-harness-{}-{}.log",
+        std::process::id(),
+        Uuid::new_v4().simple()
+    ));
+    let output = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&output_path)
+        .unwrap_or_else(|e| panic!("create harness log {}: {e}", output_path.display()));
+    let stderr = output.try_clone().expect("clone harness log for stderr");
+
+    let harness_bin = target_bin("buzz-acp");
+    let agent_bin = target_bin("buzz-agent");
+    let mcp_bin = target_bin("buzz-dev-mcp");
+    for (name, path) in [
+        ("buzz-acp", &harness_bin),
+        ("buzz-agent", &agent_bin),
+        ("buzz-dev-mcp", &mcp_bin),
+    ] {
+        assert!(
+            path.is_file(),
+            "built {name} not found at {}; build it before running this ignored test",
+            path.display()
+        );
+    }
+
+    let auth_tag = nip_oa::compute_auth_tag(owner, &leader.public_key(), "")
+        .expect("owner signs the leader's NIP-OA credential");
+    let relay = relay_url();
+    let mut command = Command::new(&harness_bin);
+    command
+        .env("BUZZ_RELAY_URL", &relay)
+        .env("BUZZ_PRIVATE_KEY", leader.secret_key().to_secret_hex())
+        .env("BUZZ_AUTH_TAG", auth_tag)
+        .env("BUZZ_ACP_AGENT_COMMAND", &agent_bin)
+        .env("BUZZ_ACP_AGENT_ARGS", "")
+        .env("BUZZ_ACP_MCP_COMMAND", &mcp_bin)
+        .env("BUZZ_AGENT_PROVIDER", "openai")
+        .env("OPENAI_COMPAT_API_KEY", api_key)
+        .env("OPENAI_COMPAT_MODEL", model)
+        .env("OPENAI_COMPAT_BASE_URL", base_url)
+        .env("OPENAI_COMPAT_API", "chat")
+        .env("BUZZ_AGENT_MAX_ROUNDS", "8")
+        .env("BUZZ_AGENT_MAX_OUTPUT_TOKENS", "4096")
+        .env("BUZZ_AGENT_LLM_TIMEOUT_SECS", "240")
+        .env_remove("BUZZ_AGENT_MODEL")
+        .env_remove("BUZZ_AGENT_THINKING_EFFORT")
+        .env("RUST_LOG", HARNESS_RUST_LOG)
+        .env("PATH", prepend_target_to_path())
+        // The comprehension proof must exercise the same author gate users
+        // ship. An ambient developer override cannot weaken it.
         .env_remove("BUZZ_ACP_RESPOND_TO")
         .env_remove("BUZZ_ACP_AGENT_OWNER")
         .env("BUZZ_ACP_NO_METER", "true")
@@ -246,6 +330,68 @@ async fn await_stub_entry(stub_log: &Path, timeout: Duration) -> Value {
             );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Wait for a leader-signed model answer and for the harness to finish the
+/// corresponding turn successfully. A closure without a clean turn result is
+/// not accepted as comprehension proof.
+async fn await_real_model_resolution(
+    owner: &Keys,
+    leader: &Keys,
+    ask_id: &str,
+    harness: &mut HarnessProcess,
+    timeout: Duration,
+) -> Vec<Value> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut observed_closures = Vec::new();
+    let mut completed_without_resolution_at = None;
+
+    loop {
+        if observed_closures.is_empty() {
+            observed_closures = closures_naming(owner, &[ask_id.to_string()])
+                .await
+                .into_iter()
+                .filter(|closure| {
+                    tag_value(closure, "e") == ask_id
+                        && closure["pubkey"] == serde_json::json!(leader.public_key().to_hex())
+                })
+                .collect();
+        }
+
+        let output = output_text(&harness.output_path);
+        let turn_completed = output.contains("agent_returned") && output.contains("outcome=\"ok\"");
+        if !observed_closures.is_empty() && turn_completed {
+            return observed_closures;
+        }
+        if turn_completed && observed_closures.is_empty() {
+            let completed_at =
+                completed_without_resolution_at.get_or_insert_with(tokio::time::Instant::now);
+            if completed_at.elapsed() >= Duration::from_secs(2) {
+                panic!(
+                    "DeepSeek completed the ask turn without publishing a leader-signed resolution; \
+                     harness output:\n{output}"
+                );
+            }
+        }
+
+        match harness.child.try_wait() {
+            Ok(Some(status)) => panic!(
+                "buzz-acp exited before DeepSeek completed the ask turn ({status}); harness output:\n{output}"
+            ),
+            Ok(None) => {}
+            Err(error) => panic!("read buzz-acp process status: {error}"),
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for DeepSeek to answer ask {ask_id}; \
+                 leader closures={}; harness output:\n{}",
+                observed_closures.len(),
+                output
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -378,6 +524,104 @@ async fn a_live_harness_reads_the_ask_block_and_answers_it() {
         "the closure must be signed by the asked agent"
     );
 
+    owner_ws.disconnect().await.ok();
+    worker_ws.disconnect().await.ok();
+}
+
+/// Local-only comprehension proof: the shipped `buzz-agent`, backed by
+/// DeepSeek, reads the rendered ask block and uses the real MCP shell tool to
+/// answer it. Tier 1 above owns deterministic wiring and absorption coverage;
+/// this opt-in tier proves model behavior and deliberately never gates CI.
+#[tokio::test]
+#[ignore = "local-only: requires RUN_REAL_LLM_ASK_E2E=1 and a DeepSeek API key"]
+async fn a_real_deepseek_agent_understands_and_answers_the_ask_block() {
+    if std::env::var("RUN_REAL_LLM_ASK_E2E").as_deref() != Ok("1") {
+        eprintln!("skipped: set RUN_REAL_LLM_ASK_E2E=1 for the local DeepSeek proof");
+        return;
+    }
+
+    let community_id = ensure_test_community(&relay_host()).await;
+    let owner = Keys::generate();
+    seed_relay_owner(community_id, &owner).await;
+
+    let mut owner_ws = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("owner connect");
+    let ws = workspace(&mut owner_ws, owner.clone()).await;
+    let task_id = create_chat_task(&mut owner_ws, &ws).await;
+
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let executive = Keys::generate();
+    let (worker_role, leader_role, executive_role) =
+        employ_ladder(community_id, &owner, &worker, &leader, &executive).await;
+    publish_role_head(&mut owner_ws, &owner, &worker, &worker_role).await;
+    publish_role_head(&mut owner_ws, &owner, &leader, &leader_role).await;
+    publish_role_head(&mut owner_ws, &owner, &executive, &executive_role).await;
+
+    let mut worker_ws = connect_agent_with_owner(&worker, &owner)
+        .await
+        .expect("worker NIP-OA connect");
+    publish_agent_auth_profile(&mut worker_ws, &owner, &worker).await;
+    await_auth_profile_visible(&owner, &worker).await;
+
+    let mut harness = spawn_deepseek_harness_as(&leader, &owner).await;
+    await_ask_inbox_ready(&harness.output_path).await;
+
+    let ask_id = raise_with_window(
+        &mut worker_ws,
+        &worker,
+        &leader.public_key().to_hex(),
+        None,
+        &task_id,
+        &format!("deepseek-vendor-{}", Uuid::new_v4().simple()),
+        "Answer this ask now. Choose Alpha for the launch because Alpha is already approved.",
+        None,
+        Some(600),
+    )
+    .await;
+
+    let closures = await_real_model_resolution(
+        &owner,
+        &leader,
+        &ask_id,
+        &mut harness,
+        Duration::from_secs(300),
+    )
+    .await;
+    assert_eq!(
+        closures.len(),
+        1,
+        "DeepSeek must close the ask exactly once"
+    );
+    assert_eq!(tag_value(&closures[0], "e"), ask_id);
+    assert_eq!(
+        closures[0]["pubkey"],
+        serde_json::json!(leader.public_key().to_hex()),
+        "the real model's answer must be signed by the addressed leader"
+    );
+
+    let content: Value = serde_json::from_str(
+        closures[0]["content"]
+            .as_str()
+            .expect("resolution content is a JSON string"),
+    )
+    .expect("resolution content parses as JSON");
+    let answer = &content["answer"];
+    assert!(
+        answer["decision"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty()),
+        "DeepSeek must provide a non-empty decision; got {content}"
+    );
+    assert!(
+        answer["rationale"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty()),
+        "DeepSeek must provide a non-empty rationale; got {content}"
+    );
+
+    harness.kill().await;
     owner_ws.disconnect().await.ok();
     worker_ws.disconnect().await.ok();
 }
