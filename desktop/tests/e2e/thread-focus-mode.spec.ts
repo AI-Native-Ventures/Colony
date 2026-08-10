@@ -181,10 +181,36 @@ test("focus and split preserve reading context and interaction ownership", async
     .toBe(true);
   await expect(channel).toHaveAttribute("inert", "");
 
+  await expect
+    .poll(() =>
+      body.evaluate(
+        (element) => element.scrollHeight > element.clientHeight * 2,
+      ),
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
+      body.evaluate(
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop <= 1,
+      ),
+    )
+    .toBe(true);
+
   await body.evaluate((element) => {
     element.scrollTop = element.scrollHeight * 0.4;
     element.dispatchEvent(new Event("scroll", { bubbles: true }));
   });
+  await expect
+    .poll(() =>
+      body.evaluate(
+        (element) =>
+          element.scrollTop > 0 &&
+          element.scrollHeight - element.clientHeight - element.scrollTop >
+            element.clientHeight / 2,
+      ),
+    )
+    .toBe(true);
   const anchorId = await topVisibleMessageId(body);
 
   const focusModeToggle = page.getByRole("button", {
