@@ -1,8 +1,8 @@
-// Flow 08 — prove the packaged Web workspace tab through real Tauri/CDP.
+// Flow 08: prove the packaged Web workspace tab through real Tauri/CDP.
 //
 // No mock bridge participates: Colony launches an owned headless Chromium,
-// renders Page.startScreencast frames, forwards input, and reaps the browser
-// process tree on tab close, community reset, and normal app quit.
+// renders Page.startScreencast frames, and forwards input through real Tauri
+// IPC. Focused native tests cover owned-browser lifecycle reaping.
 import { browser, expect } from "@wdio/globals";
 import { Key, type ChainablePromiseElement } from "webdriverio";
 
@@ -13,12 +13,7 @@ import {
   waitForTestId,
 } from "../helpers/app";
 import { ensureJoinedCommunity } from "../helpers/community";
-import {
-  processTree,
-  psFindWhere,
-  waitForPidsGone,
-  waitForProcessWhere,
-} from "../helpers/process";
+import { processTree, psFindWhere, waitForPidsGone } from "../helpers/process";
 import { recordResult } from "../helpers/results";
 import {
   startWebFixture,
@@ -27,18 +22,7 @@ import {
 } from "../helpers/web-fixture";
 
 const RELAY_A = process.env.BUZZ_E2E_RELAY_URL ?? "ws://localhost:3040";
-const RELAY_B = RELAY_A.replace("localhost", "127.0.0.1");
 const FEATURE_OVERRIDES_KEY = "buzz-feature-overrides-v1";
-
-type PersistedCommunity = {
-  id: string;
-  relayUrl: string;
-};
-
-type PersistedCommunityState = {
-  activeId: string | null;
-  communities: PersistedCommunity[];
-};
 
 type FrameMetrics = {
   nativeWidth: number;
@@ -225,83 +209,6 @@ async function proveGone(label: string, pids: number[]): Promise<void> {
   );
 }
 
-async function persistedCommunityState(): Promise<PersistedCommunityState> {
-  return browser.execute(() => {
-    const parse = (key: string): unknown => {
-      try {
-        return JSON.parse(window.localStorage.getItem(key) ?? "null");
-      } catch {
-        return null;
-      }
-    };
-    const communities = parse("buzz-communities");
-    return {
-      activeId: window.localStorage.getItem("buzz-active-community-id"),
-      communities: Array.isArray(communities)
-        ? communities.flatMap((entry) => {
-            if (!entry || typeof entry !== "object") return [];
-            const candidate = entry as { id?: unknown; relayUrl?: unknown };
-            return typeof candidate.id === "string" &&
-              typeof candidate.relayUrl === "string"
-              ? [{ id: candidate.id, relayUrl: candidate.relayUrl }]
-              : [];
-          })
-        : [],
-    };
-  }) as unknown as PersistedCommunityState;
-}
-
-async function addAndSwitchToCommunityB(): Promise<string> {
-  await clickTestId("open-settings");
-  await clickTestId("community-switcher");
-  const add = await $(
-    '//*[@role="menuitem" and contains(normalize-space(.), "Add a community")]',
-  );
-  await add.waitForDisplayed({ timeout: 30_000 });
-  await add.click();
-  await clickTestId("add-community-join");
-  await fillTestId("invite-redeem-input", RELAY_B);
-  await clickTestId("invite-redeem-submit");
-
-  let communityB: PersistedCommunity | undefined;
-  await browser.waitUntil(
-    async () => {
-      const state = await persistedCommunityState();
-      communityB = state.communities.find(
-        (community) => community.relayUrl === RELAY_B,
-      );
-      return communityB !== undefined && state.activeId === communityB.id;
-    },
-    {
-      timeout: 120_000,
-      timeoutMsg: `community B was not added and activated (${RELAY_B})`,
-    },
-  );
-  if (!communityB) throw new Error("community B record disappeared");
-  return communityB.id;
-}
-
-async function waitForCommunityReady(communityId: string): Promise<void> {
-  const marker = await $(
-    `[data-testid="community-lifecycle-marker"][data-community-id="${communityId}"][data-community-state="ready"]`,
-  );
-  await marker.waitForExist({
-    timeout: 120_000,
-    timeoutMsg: `community ${communityId} never reached ready`,
-  });
-  expect(await marker.getAttribute("data-community-relay")).toBe(RELAY_B);
-}
-
-function detachWdioSession(): void {
-  const driver = (
-    globalThis as typeof globalThis & {
-      _wdioGlobals?: Map<string, unknown>;
-    }
-  )._wdioGlobals?.get("browser") as { sessionId?: string } | undefined;
-  if (!driver) throw new Error("WDIO browser instance is unavailable");
-  driver.sessionId = undefined;
-}
-
 async function proveFixtureInput(
   fixture: WebFixture,
   frame: ChainablePromiseElement,
@@ -359,69 +266,36 @@ async function proveFixtureInput(
 }
 
 describe("08 packaged workspace Web tab", () => {
-  it("proves real CDP frames, input, and owned browser cleanup", async () => {
+  it("renders a real CDP frame and forwards input inside the packaged app", async () => {
     const fixture = await startWebFixture();
     try {
       await enableWebPreview();
       await ensureJoinedCommunity(RELAY_A);
       await openWorkspace();
 
-      const first = await createOwnedWeb(fixture.url);
-      const firstTree = await trackedTree(first.pid, "tab-close browser");
-      await proveFixtureInput(fixture, first.frame);
+      // One session only. Tab-close, community-reset, and app-quit reaping are
+      // proven in desktop/src-tauri/src/web_lifecycle_tests.rs against a real
+      // headless Chromium, which does not need a packaged build and does not
+      // flash windows at whoever is watching. What is packaged-only is this:
+      // real Tauri IPC inside the signed bundle producing a real CDP frame.
+      const session = await createOwnedWeb(fixture.url);
+      const tree = await trackedTree(session.pid, "packaged browser");
+      await proveFixtureInput(fixture, session.frame);
       await browser.saveScreenshot("./e2e-real-shell/results/08-web.png");
 
-      const firstTab = await $('[data-testid^="workspace-tab-"]');
-      await firstTab.moveTo();
-      const close = await firstTab.$('button[aria-label="Close Web"]');
+      const tab = await $('[data-testid^="workspace-tab-"]');
+      await tab.moveTo();
+      const close = await tab.$('button[aria-label="Close Web"]');
       await close.waitForExist({ timeout: 30_000 });
       await close.click();
-      await proveGone("tab-close browser tree", firstTree);
+      // Kept because this run owns these processes and must not leak them,
+      // not as the lifecycle proof.
+      await proveGone("packaged browser tree", tree);
 
-      const communitySession = await createOwnedWeb();
-      const communityTree = await trackedTree(
-        communitySession.pid,
-        "community-reset browser",
-      );
-      const communityBId = await addAndSwitchToCommunityB();
-      await proveGone("community-reset browser tree", communityTree);
-      await waitForCommunityReady(communityBId);
-
-      await openWorkspace();
-      const quitSession = await createOwnedWeb();
-      const quitBrowserTree = await trackedTree(
-        quitSession.pid,
-        "app-quit browser",
-      );
-      const appBundle = process.env.BUZZ_REAL_SHELL_APP ?? "";
-      const app = await waitForProcessWhere(
-        (row) => row.command.includes(appBundle),
-        60_000,
-        "packaged Colony app before Web quit proof",
-      );
-      const appTree = processTree(app.pid).map((row) => row.pid);
-
-      await browser.tauri.execute(({ core }) => {
-        setTimeout(() => {
-          void core
-            .invoke("plugin:window|close", { label: "main" })
-            .catch(() => undefined);
-        }, 0);
-        return true;
-      });
-      detachWdioSession();
-      await proveGone("app-quit browser tree", quitBrowserTree);
-      await waitForPidsGone(
-        [app.pid, ...appTree],
-        120_000,
-        "packaged Colony app tree",
-      );
-      // eslint-disable-next-line no-console
-      console.log(`[08] app quit: appPid=${app.pid} kill-0=false ps=absent`);
       recordResult(
         "08-workspace-web",
         "pass",
-        `fixture=${fixture.url} browserPid=${quitSession.pid}`,
+        `fixture=${fixture.url} browserPid=${session.pid}`,
       );
     } catch (cause: unknown) {
       recordResult(

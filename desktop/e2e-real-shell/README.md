@@ -24,7 +24,20 @@ flowchart LR
 | 05 huddle + transmit | `specs/05-huddle.spec.ts` | Audio devices, the raw binary IPC path | Huddle join broken; audio capture broken; binary IPC path broken |
 | 06 terminal PTY + normal exit | `specs/06-workspace-terminal.spec.ts` | Packaged xterm renderer, real PTY prompt/input/output, inactive-tab remounts, all-session community cleanup, Cmd +/- zoom, normal Tauri exit | Terminal is mocked, sessions leak across a community boundary, zoom is not computed from the root, or RunEvent exit cleanup misses a PTY |
 | 07 terminal PTY + SIGTERM | `specs/07-workspace-terminal-sigterm.spec.ts` | Separate packaged launch, real terminal leaders/descendants, Unix SIGTERM handler | Signal shutdown leaves a terminal process tree alive |
-| 08 Web CDP screencast | `specs/08-workspace-web.spec.ts` | Owned headless Chromium, real `Page.startScreencast` frames, pointer/text/wheel input, tab/community/quit cleanup | Web frames are mocked or blank, input is dropped/duplicated, or owned Chromium survives a lifecycle boundary |
+| 08 Web CDP screencast | `specs/08-workspace-web.spec.ts` | Packaged Tauri launches an owned headless Chromium, renders a real `Page.startScreencast` frame filling the workspace surface, and forwards pointer and keyboard input to a loopback fixture that reports exact receipts | Web frames are mocked or blank, or input is dropped/duplicated |
+
+- **08 workspace web**: packaged Tauri launches an owned headless Chromium,
+  renders a real `Page.startScreencast` frame filling the workspace surface,
+  and forwards pointer and keyboard input to a loopback fixture that reports
+  exact receipts. Produces `results/08-web.png`.
+
+  Scope note: owned-browser reaping on tab close, community reset, and app quit
+  is **not** proven here. It is proven in
+  `desktop/src-tauri/src/web_lifecycle_tests.rs` and
+  `crates/buzz-browser/src/host.rs` against a real headless Chromium, which
+  runs in seconds without a packaged build. Engine input quirks are proven by
+  the `engine-chromium` and `engine-webkit` Playwright projects. Flow 08 keeps
+  only the proof that requires the signed bundle.
 
 Each flow starts the app fresh (one spec per launch). State persists across
 flows inside a single run: 02 creates the identity, 03 proves it restores and
