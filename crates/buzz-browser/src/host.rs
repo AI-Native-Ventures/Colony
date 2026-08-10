@@ -414,4 +414,57 @@ mod tests {
         let targets = host.list_targets().await.unwrap();
         assert!(!targets.is_empty(), "expected at least one page target");
     }
+
+    /// `ps -p` rather than a raw `kill(pid, 0)`: this crate forbids `unsafe`,
+    /// and a reaped-but-unwaited zombie must still read as gone.
+    fn process_is_alive(pid: u32) -> bool {
+        std::process::Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "stat="])
+            .output()
+            .map(|out| {
+                let stat = String::from_utf8_lossy(&out.stdout);
+                let stat = stat.trim();
+                !stat.is_empty() && !stat.starts_with('Z')
+            })
+            .unwrap_or(false)
+    }
+
+    async fn wait_for_pid_gone(pid: u32, timeout: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            if !process_is_alive(pid) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
+    async fn real_owned_launch_exposes_a_pid_and_reaps_it_on_drop() {
+        if std::env::var("BUZZ_BROWSER_REAL").is_err() {
+            return;
+        }
+        let pid = {
+            let host = launch(&HostConfig::default()).await.unwrap();
+            assert!(
+                host.owns_browser_process(),
+                "a launched host must own its browser process"
+            );
+            let pid = host
+                .process_id()
+                .expect("an owned launch must expose a browser PID");
+            assert!(
+                process_is_alive(pid),
+                "the launched browser {pid} was not running"
+            );
+            pid
+        };
+
+        assert!(
+            wait_for_pid_gone(pid, std::time::Duration::from_secs(30)).await,
+            "owned browser {pid} survived the host drop"
+        );
+    }
 }
