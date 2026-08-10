@@ -171,17 +171,31 @@ export async function ensureTerminalSession(
   tabId: string,
   request: TerminalStartRequest,
 ): Promise<void> {
-  if (resetInFlight) {
-    await resetInFlight;
-    return ensureTerminalSession(tabId, request);
+  const callerLifecycleEpoch = lifecycleEpoch;
+  const callerTabEpoch = tabEpochs.get(tabId) ?? 0;
+  const reset = resetInFlight;
+  if (reset) {
+    await reset;
+    if (
+      lifecycleEpoch !== callerLifecycleEpoch ||
+      tabEpochs.get(tabId) !== callerTabEpoch
+    ) {
+      return;
+    }
+    return;
   }
   const current = sessions.get(tabId);
   if (current?.sessionId && current.status === "running") return;
   const existing = starts.get(tabId);
   if (existing) {
     await existing.promise;
-    if (isCurrentStart(tabId, existing)) return;
-    return ensureTerminalSession(tabId, request);
+    if (
+      lifecycleEpoch !== callerLifecycleEpoch ||
+      tabEpochs.get(tabId) !== callerTabEpoch
+    ) {
+      return;
+    }
+    return;
   }
 
   const pendingStart: PendingStart = {

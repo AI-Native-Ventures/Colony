@@ -100,3 +100,79 @@ test("reset waits for every deferred start before it resolves", async () => {
     ],
   );
 });
+
+test("a concurrent ensure waiter cannot resurrect a disposed start", async () => {
+  const startGate = deferred();
+  const calls = [];
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "workspace_terminal_start") return startGate.promise;
+      return null;
+    }),
+  );
+
+  const sessions = await import("./terminalSessions.ts");
+  const first = sessions.ensureTerminalSession("tab-waiter-dispose", request);
+  await new Promise((resolve) => setImmediate(resolve));
+  const waiting = sessions.ensureTerminalSession("tab-waiter-dispose", request);
+  const dispose = sessions.disposeTerminalSession("tab-waiter-dispose");
+  startGate.resolve({
+    sessionId: "waiter-dispose-late-session",
+    cwd: "/Users/test/checkout",
+    pid: 9130,
+  });
+
+  await Promise.all([first, waiting, dispose]);
+  assert.deepEqual(
+    calls
+      .filter(({ command }) => command.startsWith("workspace_terminal_"))
+      .map(({ command, args }) => [command, args]),
+    [
+      ["workspace_terminal_start", { request }],
+      ["workspace_terminal_close", { sessionId: "waiter-dispose-late-session" }],
+    ],
+  );
+  assert.equal(sessions.getTerminalSession("tab-waiter-dispose").sessionId, null);
+});
+
+test("an ensure waiting through reset cannot resurrect an old-community start", async () => {
+  const startGate = deferred();
+  const closeAllGate = deferred();
+  const calls = [];
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "workspace_terminal_start") return startGate.promise;
+      if (command === "workspace_terminal_close_all") return closeAllGate.promise;
+      return null;
+    }),
+  );
+
+  const sessions = await import("./terminalSessions.ts");
+  const first = sessions.ensureTerminalSession("tab-waiter-reset", request);
+  await new Promise((resolve) => setImmediate(resolve));
+  const reset = sessions.resetTerminalSessions();
+  const waiting = sessions.ensureTerminalSession("tab-waiter-reset", request);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  closeAllGate.resolve(null);
+  startGate.resolve({
+    sessionId: "waiter-reset-late-session",
+    cwd: "/Users/test/checkout",
+    pid: 9131,
+  });
+
+  await Promise.all([first, waiting, reset]);
+  assert.deepEqual(
+    calls
+      .filter(({ command }) => command.startsWith("workspace_terminal_"))
+      .map(({ command, args }) => [command, args]),
+    [
+      ["workspace_terminal_start", { request }],
+      ["workspace_terminal_close_all", null],
+      ["workspace_terminal_close", { sessionId: "waiter-reset-late-session" }],
+    ],
+  );
+  assert.equal(sessions.getTerminalSession("tab-waiter-reset").sessionId, null);
+});
