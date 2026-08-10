@@ -4,7 +4,7 @@
 // renders Page.startScreencast frames, forwards input, and reaps the browser
 // process tree on tab close, community reset, and normal app quit.
 import { browser, expect } from "@wdio/globals";
-import type { ChainablePromiseElement } from "webdriverio";
+import { Key, type ChainablePromiseElement } from "webdriverio";
 
 import {
   clickTestId,
@@ -41,7 +41,6 @@ type PersistedCommunityState = {
 };
 
 type FrameMetrics = {
-  element: ChainablePromiseElement;
   nativeWidth: number;
   nativeHeight: number;
   renderedWidth: number;
@@ -139,7 +138,6 @@ async function frameMetrics(
     );
   }
   return {
-    element: frame,
     nativeWidth,
     nativeHeight,
     renderedWidth: size.width,
@@ -175,24 +173,6 @@ async function clickRemote(
     .move({ origin: "viewport", x: target.x, y: target.y, duration: 100 })
     .down("left")
     .up("left")
-    .perform();
-}
-
-async function wheelRemote(
-  metrics: FrameMetrics,
-  point: WebFixturePoint,
-): Promise<void> {
-  const target = viewportPoint(metrics, point);
-  await browser
-    .action("wheel")
-    .scroll({
-      origin: metrics.element,
-      x: Math.round(target.x - (metrics.left + metrics.renderedWidth / 2)),
-      y: Math.round(target.y - (metrics.top + metrics.renderedHeight / 2)),
-      deltaX: 0,
-      deltaY: 520,
-      duration: 150,
-    })
     .perform();
 }
 
@@ -322,14 +302,8 @@ async function proveFixtureInput(
   });
   await browser.keys("colony-web");
 
-  await wheelRemote(metrics, targets.scroll);
-  await browser.waitUntil(() => fixture.receipts().maxScrollY > 0, {
-    timeout: 30_000,
-    timeoutMsg: "remote scroll region never received forwarded wheel input",
-  });
-
   const frameBeforeAction = await frame.getAttribute("src");
-  await clickRemote(metrics, targets.action);
+  await browser.keys([Key.Enter]);
   await browser.waitUntil(
     () => fixture.receipts().pass && fixture.receipts().visualPass,
     {

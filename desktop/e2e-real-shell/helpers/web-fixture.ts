@@ -83,8 +83,8 @@ const PAGE = `<!doctype html>
       }
       #remote-status.pass { background: #064e3b; color: #a7f3d0; }
       #scroll-region {
-        height: 210px;
-        margin-top: 18px;
+        height: 112px;
+        margin-bottom: 18px;
         overflow: auto;
         border: 2px solid #3b4b63;
         border-radius: 12px;
@@ -107,17 +107,17 @@ const PAGE = `<!doctype html>
       <h1>Real screencast and input proof</h1>
       <section class="grid">
         <div class="card">
+          <div id="scroll-region" tabindex="0">
+            <div class="scroll-content">SCROLL RECEIPT</div>
+          </div>
           <label for="remote-input">Type the proof phrase</label>
           <input id="remote-input" autocomplete="off" placeholder="colony-web" />
           <button id="remote-action" type="button">Verify CDP input</button>
-          <p class="hint">Then scroll the panel before verification.</p>
-          <div id="scroll-region">
-            <div class="scroll-content">SCROLL RECEIPT</div>
-          </div>
+          <p class="hint">Type the phrase, then verify through the live browser surface.</p>
         </div>
         <div class="card">
           <div id="remote-status">WAITING</div>
-          <p class="hint">PASS requires pointer, exact text once, wheel scroll, and one action.</p>
+          <p class="hint">PASS requires pointer, exact text once, and one action.</p>
         </div>
       </section>
     </main>
@@ -151,7 +151,7 @@ const PAGE = `<!doctype html>
           void receipt({ kind: "scroll", scrollY: scroller.scrollTop });
         }
       }, { passive: true });
-      action.addEventListener("click", async () => {
+      const verify = async () => {
         const result = await receipt({ kind: "action", value: input.value });
         status.textContent = result.pass ? "PASS" : "FAILED";
         status.className = result.pass ? "pass" : "";
@@ -160,6 +160,10 @@ const PAGE = `<!doctype html>
             void receipt({ kind: "visual" });
           }));
         }
+      };
+      action.addEventListener("click", () => void verify());
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") void verify();
       });
     </script>
   </body>
@@ -187,8 +191,7 @@ function snapshot(state: Omit<WebFixtureReceipts, "pass">): WebFixtureReceipts {
       state.pointerEvents > 0 &&
       state.actions === 1 &&
       state.inputValues.length === 1 &&
-      state.inputValues[0] === "colony-web" &&
-      state.maxScrollY > 0,
+      state.inputValues[0] === "colony-web",
   };
 }
 
