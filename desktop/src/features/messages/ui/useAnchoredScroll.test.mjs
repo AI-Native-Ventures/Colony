@@ -5,6 +5,7 @@ import {
   getPinnedCenterDrift,
   settleProgrammaticBottomPin,
   shouldIgnorePinnedCenterScroll,
+  shouldReleaseProgrammaticBottomPin,
   shouldSettleForSplitPanel,
   shouldSettleVirtualizedBottom,
 } from "./anchoredScrollPolicy.ts";
@@ -124,6 +125,30 @@ test("settleProgrammaticBottomPin keeps settling when the floor is still out of 
   assert.equal(
     container.scrollHeight - container.clientHeight - container.scrollTop,
     2,
+  );
+});
+
+test("programmatic bottom pin yields only after the viewport leaves its write", () => {
+  assert.equal(
+    shouldReleaseProgrammaticBottomPin({
+      currentScrollTop: 600,
+      expectedScrollTop: 600,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldReleaseProgrammaticBottomPin({
+      currentScrollTop: 300,
+      expectedScrollTop: 600,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldReleaseProgrammaticBottomPin({
+      currentScrollTop: 300,
+      expectedScrollTop: null,
+    }),
+    false,
   );
 });
 

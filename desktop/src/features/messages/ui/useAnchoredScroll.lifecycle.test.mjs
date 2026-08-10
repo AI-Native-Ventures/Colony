@@ -376,6 +376,42 @@ test("arrival at the physical floor does not preserve a stale unread state", asy
   await act(async () => root.unmount());
 });
 
+test("reader scroll interrupts pending initial bottom settlement", async () => {
+  const refs = {
+    container: { current: null },
+    content: { current: null },
+  };
+  const root = createRoot(document.createElement("div"));
+  const nodes = makePinnedCenterNodes();
+  refs.container.current = nodes.container;
+  refs.content.current = nodes.content;
+  let state = null;
+
+  await act(async () => {
+    root.render(
+      React.createElement(BottomStateHarness, {
+        messages: [{ id: "selected" }],
+        onState: (nextState) => {
+          state = nextState;
+        },
+        refs,
+      }),
+    );
+  });
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+
+  nodes.container.scrollTop = 300;
+  await act(async () => state.onScroll());
+
+  assert.equal(
+    nodes.container.scrollTop,
+    300,
+    "the pending bottom settle must not overwrite a deliberate reader scroll",
+  );
+  assert.equal(state.isAtBottom, false);
+  await act(async () => root.unmount());
+});
+
 test("arrival does not steal an active layout target during floor-like reflow", async () => {
   const refs = {
     container: { current: null },
