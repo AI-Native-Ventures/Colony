@@ -203,6 +203,7 @@ jobs:
           # the root relay sends a fresh identity into its membership gate
           # before public community creation can run.
           unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+          unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
       - name: Verify the bundle
@@ -506,6 +507,7 @@ jobs:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
           unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+          unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           cd desktop && pnpm tauri build --verbose --target "$TARGET" --bundles nsis --config src-tauri/tauri.release.conf.json
 
       - name: Verify the built app version
