@@ -8,6 +8,12 @@ import {
 type WebCommand = {
   command: string;
   payload: unknown;
+  completedAtMs?: number;
+};
+
+type WebPerformanceControls = {
+  emitFrameBurst: (count: number) => Promise<void>;
+  setWheelDelay: (delayMs: number) => void;
 };
 
 type MockWebSession = {
@@ -19,6 +25,7 @@ type MockWebSession = {
 declare global {
   interface Window {
     __BUZZ_E2E_WEB_COMMANDS__?: () => WebCommand[];
+    __BUZZ_E2E_WEB_PERFORMANCE__?: WebPerformanceControls;
   }
 }
 
@@ -26,6 +33,8 @@ const sessions = new Map<string, MockWebSession>();
 const commands: WebCommand[] = [];
 let sequence = 0;
 let installed = false;
+let wheelDelayMs = 0;
+let wheelTail: Promise<void> = Promise.resolve();
 
 // This is a tiny valid image fixture for frontend wiring tests only. Real
 // desktop frames come from Page.startScreencast through buzz-browser.
@@ -36,10 +45,20 @@ function reset(): void {
   sessions.clear();
   commands.length = 0;
   sequence = 0;
+  wheelDelayMs = 0;
+  wheelTail = Promise.resolve();
 }
 
-function record(command: string, payload: unknown): void {
-  const entry = { command, payload: structuredClone(payload) };
+function record(
+  command: string,
+  payload: unknown,
+  completedAtMs?: number,
+): void {
+  const entry: WebCommand = {
+    command,
+    payload: structuredClone(payload),
+    ...(completedAtMs === undefined ? {} : { completedAtMs }),
+  };
   commands.push(entry);
   window.__BUZZ_E2E_COMMAND_LOG__?.push(entry);
 }
@@ -50,7 +69,7 @@ function emitLater(event: string, payload: unknown): void {
   }, 0);
 }
 
-function emitFrame(sessionId: string): void {
+function emitFrame(sessionId: string, scrollOffsetY = 0): void {
   emitLater("workspace-web-frame", {
     sessionId,
     data: MOCK_WEB_FRAME_DATA,
@@ -59,8 +78,39 @@ function emitFrame(sessionId: string): void {
     deviceScaleFactor: 1,
     offsetTop: 0,
     scrollOffsetX: 0,
-    scrollOffsetY: 0,
+    scrollOffsetY,
   });
+}
+
+async function emitFrameBurst(count: number): Promise<void> {
+  const sessionId = sessions.keys().next().value;
+  if (!sessionId) throw new Error("mock web session was not found");
+  for (let index = 1; index <= count; index += 1) {
+    await emit("workspace-web-frame", {
+      sessionId,
+      data: MOCK_WEB_FRAME_DATA,
+      width: 640,
+      height: 360,
+      deviceScaleFactor: 1,
+      offsetTop: 0,
+      scrollOffsetX: 0,
+      scrollOffsetY: index,
+    });
+  }
+}
+
+async function recordWheel(
+  command: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const completion = wheelTail.then(async () => {
+    if (wheelDelayMs > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, wheelDelayMs));
+    }
+    record(command, payload, performance.now());
+  });
+  wheelTail = completion.catch(() => undefined);
+  await completion;
 }
 
 async function invokeWeb(
@@ -107,8 +157,15 @@ async function invokeWeb(
       emitFrame(input.sessionId);
       return null;
     }
+    case "workspace_web_wheel": {
+      const input = payload as { sessionId?: string };
+      if (!input.sessionId || !sessions.has(input.sessionId)) {
+        throw new Error("mock web session was not found");
+      }
+      await recordWheel(command, payload);
+      return null;
+    }
     case "workspace_web_mouse":
-    case "workspace_web_wheel":
     case "workspace_web_key":
     case "workspace_web_text": {
       record(command, payload);
@@ -164,5 +221,11 @@ export function installWebE2eBridge(): void {
   reset();
   window.__BUZZ_E2E_WEB_COMMANDS__ = () =>
     commands.map((entry) => structuredClone(entry));
+  window.__BUZZ_E2E_WEB_PERFORMANCE__ = {
+    emitFrameBurst,
+    setWheelDelay(delayMs) {
+      wheelDelayMs = Math.max(0, delayMs);
+    },
+  };
   installed = true;
 }

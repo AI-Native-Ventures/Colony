@@ -15,13 +15,18 @@ import { expect, test } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 
 type WebInput = {
+  deltaX?: number;
   eventType?: string;
   x?: number;
   y?: number;
   text?: string;
   deltaY?: number;
 };
-type LoggedCommand = { command: string; payload: { input?: WebInput } };
+type LoggedCommand = {
+  command: string;
+  completedAtMs?: number;
+  payload: { input?: WebInput };
+};
 
 async function commands(page: Page): Promise<LoggedCommand[]> {
   return page.evaluate(
@@ -133,6 +138,73 @@ test.describe("web workspace input contract", () => {
 
     const wheel = await commandsNamed(page, "workspace_web_wheel");
     expect(wheel[0]?.payload.input?.deltaY ?? 0).toBeGreaterThan(0);
+  });
+
+  test("bounds burst wheel latency", async ({ page }) => {
+    const centre = await runningFrame(page);
+    await page.evaluate(() => {
+      window.__BUZZ_E2E_WEB_PERFORMANCE__?.setWheelDelay(25);
+    });
+    const startedAtMs = await page.evaluate(() => performance.now());
+    await page.mouse.move(centre.x, centre.y);
+    for (let index = 0; index < 12; index += 1) {
+      await page.mouse.wheel(3, 24);
+    }
+
+    await expect
+      .poll(async () => {
+        const wheel = (await commands(page)).filter(
+          (entry) => entry.command === "workspace_web_wheel",
+        );
+        return wheel.reduce(
+          (sum, entry) => sum + (entry.payload.input?.deltaY ?? 0),
+          0,
+        );
+      })
+      .toBe(288);
+
+    const wheel = (await commands(page)).filter(
+      (entry) => entry.command === "workspace_web_wheel",
+    );
+    const settledAtMs = Math.max(
+      ...wheel.map((entry) => entry.completedAtMs ?? startedAtMs),
+    );
+    const latencyMs = settledAtMs - startedAtMs;
+    const deltaX = wheel.reduce(
+      (sum, entry) => sum + (entry.payload.input?.deltaX ?? 0),
+      0,
+    );
+    console.log(
+      `web wheel burst: commands=${wheel.length} latencyMs=${latencyMs.toFixed(1)} deltaX=${deltaX}`,
+    );
+    expect(deltaX).toBe(36);
+    expect(wheel.length).toBeLessThanOrEqual(2);
+    expect(latencyMs).toBeLessThan(100);
+  });
+
+  test("publishes only the newest frame from a burst", async ({ page }) => {
+    await runningFrame(page);
+    const frame = page.getByTestId("workspace-web-frame");
+    const mutations = await frame.evaluate(async (element) => {
+      let count = 0;
+      const observer = new MutationObserver(() => {
+        count += 1;
+      });
+      observer.observe(element, {
+        attributeFilter: ["data-frame-scroll-y"],
+      });
+      await window.__BUZZ_E2E_WEB_PERFORMANCE__?.emitFrameBurst(12);
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      observer.disconnect();
+      return count;
+    });
+    await expect(frame).toHaveAttribute("data-frame-scroll-y", "12");
+    expect(mutations).toBeLessThanOrEqual(1);
   });
 
   test("forwards real typed text to the remote page", async ({ page }) => {
