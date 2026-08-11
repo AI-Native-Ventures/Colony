@@ -93,6 +93,81 @@ test("forwards wheel and text input through the native web session", async () =>
   await resetWebSessions();
 });
 
+test("coalesces wheel bursts and keeps one native call in flight", async () => {
+  const calls = [];
+  let resolveFirstWheel;
+  const firstWheel = new Promise((resolve) => {
+    resolveFirstWheel = resolve;
+  });
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      if (command === "workspace_web_start") {
+        return {
+          sessionId: "session-wheel-burst",
+          targetId: "target-1",
+          url: "about:blank",
+          ownsBrowserProcess: false,
+          browserPid: null,
+        };
+      }
+      if (command === "workspace_web_wheel") {
+        calls.push(args);
+        if (calls.length === 1) await firstWheel;
+      }
+      return null;
+    }),
+  );
+
+  try {
+    await ensureWebSession("tab-wheel-burst", {
+      endpoint: "127.0.0.1:9222",
+      targetId: "target-1",
+      url: "about:blank",
+    });
+    const firstBatch = Array.from({ length: 12 }, (_, index) =>
+      sendWebWheel("tab-wheel-burst", {
+        x: index,
+        y: index * 2,
+        deltaX: 3,
+        deltaY: 24,
+      }),
+    );
+    assert.equal(calls.length, 0);
+    await Promise.resolve();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].input, {
+      x: 11,
+      y: 22,
+      deltaX: 36,
+      deltaY: 288,
+    });
+
+    const secondBatch = Array.from({ length: 4 }, (_, index) =>
+      sendWebWheel("tab-wheel-burst", {
+        x: 20 + index,
+        y: 40 + index,
+        deltaX: 1,
+        deltaY: 10,
+      }),
+    );
+    assert.equal(calls.length, 1);
+    resolveFirstWheel();
+    await Promise.all(firstBatch);
+    await Promise.resolve();
+    await Promise.all(secondBatch);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1].input, {
+      x: 23,
+      y: 43,
+      deltaX: 4,
+      deltaY: 40,
+    });
+  } finally {
+    await disposeWebSession("tab-wheel-burst");
+    await resetWebSessions();
+  }
+});
+
 test("does not forward hostile launch controls from a restored tab payload", async () => {
   const calls = [];
   setNativeBridge(

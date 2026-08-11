@@ -1,5 +1,10 @@
 # Changelog
 
+## relay-v0.8.0
+
+- feat(relay): expose self-provisioning configuration so desktop onboarding can
+  discover the relay's community domain and provisioning limits.
+
 ## relay-v0.7.0
 
 - feat(ledger): price a call by what the provider said it charged ([`eb9761798`](https://github.com/AI-Native-Ventures/Colony/commit/eb97617987a2ed0d735701671382654c07475a5c))
