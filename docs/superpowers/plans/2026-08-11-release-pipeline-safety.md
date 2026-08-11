@@ -169,7 +169,7 @@ Expected: still non-zero until the promotion, tag, and canary changes are comple
 
 **Step 1: Add one final aggregation job**
 
-Create job `promotion-gate` with display name `Promotion Gate`, `if: always() && github.event_name == 'pull_request' && github.base_ref == 'main'`, read-only permissions, and dependencies covering:
+Create job `promotion-gate` with dynamic display name `Promotion Gate` only for a pull request targeting `main`, and `Promotion Gate (not applicable)` otherwise. GitHub emits skipped checks for false job conditions, so this name separation prevents an old skipped merge-group check from satisfying branch protection. Keep `if: always() && github.event_name == 'pull_request' && github.base_ref == 'main'`, read-only permissions, and dependencies covering:
 
 - `changes`
 - `rust-lint`

@@ -1555,7 +1555,10 @@ jobs:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
   promotion-gate:
-    name: Promotion Gate
+    # A false job-level condition still emits a skipped check run. Give
+    # non-promotion events a different context name so branch protection can
+    # never mistake an old skipped merge-group check for production proof.
+    name: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && 'Promotion Gate' || 'Promotion Gate (not applicable)' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always() && github.event_name == 'pull_request' && github.base_ref == 'main'

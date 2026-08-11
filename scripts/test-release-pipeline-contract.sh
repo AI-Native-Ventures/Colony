@@ -132,16 +132,19 @@ requireContract(relayArtifacts.includes("needs.changes.outputs.raw-"), "relay ar
 
 requireContract(/\n\s+if: \$\{\{ false \}\}/.test(job("real-shell-e2e")), "Real-shell must stay explicitly excluded until it can execute");
 
-const promotionNameCount = (ci.match(/^\s+name: Promotion Gate\s*$/gm) ?? []).length;
-requireContract(promotionNameCount === 1, `expected exactly one Promotion Gate job name, found ${promotionNameCount}`);
+const literalPromotionNameCount = (ci.match(/^\s+name: Promotion Gate\s*$/gm) ?? []).length;
+requireContract(literalPromotionNameCount === 0, "Promotion Gate must not use a literal name that also appears as skipped on non-promotion events");
 const workflowDir = path.dirname(process.env.CI_WORKFLOW);
-const repositoryPromotionNameCount = fs
+const repositoryLiteralPromotionNameCount = fs
   .readdirSync(workflowDir)
   .filter((name) => /\.ya?ml$/.test(name))
   .map((name) => fs.readFileSync(path.join(workflowDir, name), "utf8"))
   .reduce((count, workflow) => count + (workflow.match(/^\s+name: Promotion Gate\s*$/gm) ?? []).length, 0);
-requireContract(repositoryPromotionNameCount === 1, `Promotion Gate name must be unique across workflows; found ${repositoryPromotionNameCount}`);
+requireContract(repositoryLiteralPromotionNameCount === 0, `literal Promotion Gate names are unsafe outside the promotion event; found ${repositoryLiteralPromotionNameCount}`);
 const promotion = job("promotion-gate");
+requireContract(promotion.includes("'Promotion Gate'"), "promotion job must emit the exact required context for main PRs");
+requireContract(promotion.includes("'Promotion Gate (not applicable)'"), "non-promotion events must emit a different, non-required context name");
+requireContract(promotion.includes("github.base_ref == 'main'"), "dynamic Promotion Gate name must distinguish main pull requests");
 requireContract(promotion.includes("if: always()"), "Promotion Gate must run with always() so dependency failures are reported");
 requireContract(promotion.includes("github.base_ref == 'main'"), "Promotion Gate must be limited to main pull requests");
 requireContract(promotion.includes('HEAD_REF: ${{ github.head_ref }}'), "Promotion Gate must inspect the head branch");
@@ -236,6 +239,9 @@ expect_mutation_failure \
 expect_mutation_failure \
   "promotion head assertion removed" \
   "perl -0pi -e 's/^.*\"\\\$HEAD_REF\" != \"develop\".*\\n//m' '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "non-promotion check renamed to the required context" \
+  "perl -0pi -e 's/^    name: .*Promotion Gate.*$/    name: Promotion Gate/m' '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "required promotion dependency removed" \
   "perl -0pi -e 's/\\n      - rust-lint\\n/\\n/' '$tmp/ci.yml'" "$noop" "$noop"
