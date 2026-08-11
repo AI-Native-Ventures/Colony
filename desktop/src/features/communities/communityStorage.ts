@@ -70,7 +70,13 @@ export function loadCommunities(): Community[] {
 
       let cleanedEntry = entry;
       if (typeof entry.relayUrl === "string") {
-        const normalizedRelayUrl = normalizeRelayInput(entry.relayUrl);
+        // Only scheme-less values need the legacy repair. The shared input
+        // normalizer also canonicalizes loopback hosts, but an already-valid
+        // local relay URL is a test/runtime identity and must not change from
+        // localhost to 127.0.0.1 while loading persisted state.
+        const normalizedRelayUrl = entry.relayUrl.includes("://")
+          ? entry.relayUrl
+          : normalizeRelayInput(entry.relayUrl);
         if (normalizedRelayUrl && normalizedRelayUrl !== entry.relayUrl) {
           cleanedEntry = { ...cleanedEntry, relayUrl: normalizedRelayUrl };
           didChange = true;

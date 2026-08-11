@@ -78,6 +78,23 @@ test("loadCommunities repairs legacy scheme-less relay URLs", () => {
   ]);
 });
 
+test("loadCommunities preserves an already-schemed loopback relay URL", () => {
+  const storage = createMemoryStorage({
+    "buzz-communities": JSON.stringify([
+      { id: "local", name: "Local Dev", relayUrl: "ws://localhost:3000" },
+    ]),
+  });
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  const [community] = loadCommunities();
+
+  assert.equal(community.relayUrl, "ws://localhost:3000");
+  assert.deepEqual(JSON.parse(storage.getItem("buzz-communities")), [
+    { id: "local", name: "Local Dev", relayUrl: "ws://localhost:3000" },
+  ]);
+});
+
 test("signed-build relay defaults auto-connect during first-run onboarding", () => {
   assert.equal(
     shouldAutoConnectDefaultRelay("wss://buzz.block.builderlab.xyz"),
