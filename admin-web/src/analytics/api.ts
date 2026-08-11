@@ -89,7 +89,38 @@ export async function analyticsRequest<T>(
   return parsed;
 }
 
-function queryString(query: AnalyticsQuery): string {
+const queryKeys = {
+  overview: ["community", "start", "end", "family"],
+  communities: [
+    "community",
+    "start",
+    "end",
+    "family",
+    "include_archived",
+    "cursor",
+    "limit",
+  ],
+  people: [
+    "community",
+    "start",
+    "end",
+    "family",
+    "search",
+    "online",
+    "type",
+    "cursor",
+    "limit",
+  ],
+  activity: ["community", "start", "end", "family"],
+  sessions: ["community", "status", "cursor", "limit"],
+  definitions: [],
+  person: ["community", "start", "end"],
+} as const satisfies Record<string, readonly (keyof AnalyticsQuery)[]>;
+
+function queryString(
+  query: AnalyticsQuery,
+  allowed: readonly (keyof AnalyticsQuery)[],
+): string {
   const params = new URLSearchParams();
   const entries: Array<[string, string | undefined]> = [
     ["community", query.community],
@@ -110,7 +141,12 @@ function queryString(query: AnalyticsQuery): string {
     ["limit", query.limit === undefined ? undefined : String(query.limit)],
   ];
   for (const [key, value] of entries) {
-    if (value !== undefined && value !== "") params.set(key, value);
+    if (
+      allowed.includes(key as keyof AnalyticsQuery) &&
+      value !== undefined &&
+      value !== ""
+    )
+      params.set(key, value);
   }
   const serialized = params.toString();
   return serialized ? `?${serialized}` : "";
@@ -126,11 +162,11 @@ export function analyticsPath(
     | "definitions",
   query: AnalyticsQuery = {},
 ): string {
-  return `${API_PREFIX}/${resource}${queryString(query)}`;
+  return `${API_PREFIX}/${resource}${queryString(query, queryKeys[resource])}`;
 }
 
 export function personPath(pubkey: string, query: AnalyticsQuery = {}): string {
-  return `${API_PREFIX}/people/${encodeURIComponent(pubkey)}${queryString(query)}`;
+  return `${API_PREFIX}/people/${encodeURIComponent(pubkey)}${queryString(query, queryKeys.person)}`;
 }
 
 export function getAnalyticsSigner(): OperatorSigner {

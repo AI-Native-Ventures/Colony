@@ -131,10 +131,8 @@ pub async fn run_tick(state: &AppState) -> Result<RollupTickStats, buzz_db::DbEr
             stats.qualifying += qualifying;
             metrics::counter!("buzz_operator_rollup_batches_total").increment(1);
             cursor = next_cursor;
-            max_lag_seconds = max_lag_seconds.max(source_lag_seconds(
-                cursor.last_created_at.clone(),
-                Utc::now(),
-            ));
+            max_lag_seconds =
+                max_lag_seconds.max(source_lag_seconds(cursor.last_created_at, Utc::now()));
 
             if !batch_is_full(processed) {
                 break;

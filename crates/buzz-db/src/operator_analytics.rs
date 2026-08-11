@@ -173,6 +173,15 @@ pub struct OperatorActivityCursor {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Deployment/community rollup watermark used by API freshness envelopes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorActivityFreshness {
+    /// Newest source event covered by every selected cursor observation.
+    pub watermark: Option<DateTime<Utc>>,
+    /// Most recent selected cursor commit time.
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 impl OperatorActivityCursor {
     /// Construct the empty v1 cursor used before a community has any rows.
     #[must_use]
@@ -225,6 +234,19 @@ pub struct OperatorRollupBatchResult {
     /// Number of source rows mapped into a v1 family.
     pub qualifying: usize,
     /// Cursor committed with this batch.
+    pub cursor: OperatorActivityCursor,
+}
+
+/// Summary of one controlled historical rebuild.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorRebuildResult {
+    /// Source events inspected, including excluded transport/noise kinds.
+    pub source_rows: usize,
+    /// Source events admitted by the pinned activity taxonomy.
+    pub qualifying_rows: usize,
+    /// Daily person/family rows committed to the derived table.
+    pub aggregate_rows: usize,
+    /// Durable live cursor after the rebuild transaction.
     pub cursor: OperatorActivityCursor,
 }
 
@@ -290,6 +312,8 @@ pub struct OperatorAnalyticsFilter {
     pub person_type: Option<OperatorPersonType>,
     /// Optional live-state filter. Live state is overlaid by the relay session store.
     pub online: Option<bool>,
+    /// Include archived communities in fleet reads.
+    pub include_archived: bool,
     /// Optional bounded profile search term.
     pub search: Option<String>,
     /// Maximum rows for list methods.
@@ -1231,6 +1255,25 @@ async fn upsert_activity_aggregate_on(
 }
 
 impl crate::Db {
+    /// Read the aggregate source watermark for a deployment or community.
+    pub async fn operator_activity_freshness(
+        &self,
+        community_id: Option<Uuid>,
+    ) -> Result<OperatorActivityFreshness> {
+        let row = sqlx::query(
+            "SELECT MAX(last_created_at) AS watermark, MAX(updated_at) AS updated_at \
+             FROM operator_activity_cursor \
+             WHERE ($1::uuid IS NULL OR community_id = $1)",
+        )
+        .bind(community_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(OperatorActivityFreshness {
+            watermark: row.try_get("watermark")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+
     /// Read a bounded, metadata-only source batch in `(created_at,id)` order.
     ///
     /// The query intentionally selects no `events.content`, `events.sig`, or
@@ -1304,7 +1347,16 @@ impl crate::Db {
             .await?;
             next
         } else {
-            current_cursor
+            let mut observed = current_cursor;
+            observed.updated_at = Utc::now();
+            sqlx::query(
+                "UPDATE operator_activity_cursor SET updated_at = $2 WHERE community_id = $1",
+            )
+            .bind(community_id.as_uuid())
+            .bind(observed.updated_at)
+            .execute(&mut *tx)
+            .await?;
+            observed
         };
         tx.commit().await?;
         Ok(OperatorRollupBatchResult {
@@ -1324,9 +1376,32 @@ impl crate::Db {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<()> {
+        self.operator_rebuild_activity_with_batch_size(
+            community_id,
+            start,
+            end,
+            OPERATOR_ROLLUP_BATCH_LIMIT,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Rebuild a historical range using an explicitly bounded source batch.
+    pub async fn operator_rebuild_activity_with_batch_size(
+        &self,
+        community_id: CommunityId,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        batch_size: i64,
+    ) -> Result<OperatorRebuildResult> {
         if start >= end {
             return Err(DbError::InvalidData(
                 "operator activity rebuild start must precede end".to_owned(),
+            ));
+        }
+        if !(100..=OPERATOR_ROLLUP_BATCH_LIMIT).contains(&batch_size) {
+            return Err(DbError::InvalidData(
+                "operator activity rebuild batch size must be between 100 and 5000".to_owned(),
             ));
         }
         let mut tx = self.begin_transaction().await?;
@@ -1370,12 +1445,14 @@ impl crate::Db {
         let mut cursor = OperatorActivityCursor::start();
         let mut staged = HashMap::new();
         let mut saw_source_rows = false;
+        let mut source_rows = 0usize;
+        let mut qualifying_rows = 0usize;
         loop {
             let rows = fetch_activity_batch_on(
                 &mut tx,
                 community_id,
                 &cursor,
-                OPERATOR_ROLLUP_BATCH_LIMIT,
+                batch_size,
                 Some((source_start, source_end)),
             )
             .await?;
@@ -1383,7 +1460,9 @@ impl crate::Db {
                 break;
             }
             saw_source_rows = true;
-            let (batch_aggregate, last_source_cursor, _) = aggregate_rows(&rows);
+            source_rows += rows.len();
+            let (batch_aggregate, last_source_cursor, qualifying) = aggregate_rows(&rows);
+            qualifying_rows += qualifying;
             for (key, value) in batch_aggregate {
                 staged
                     .entry(key)
@@ -1402,11 +1481,12 @@ impl crate::Db {
                 break;
             };
             cursor = next;
-            if rows.len() < OPERATOR_ROLLUP_BATCH_LIMIT as usize {
+            if rows.len() < batch_size as usize {
                 break;
             }
         }
 
+        let aggregate_rows = staged.len();
         upsert_activity_aggregate_on(&mut tx, community_id, &staged, "operator_activity_stage")
             .await?;
         sqlx::query(
@@ -1427,11 +1507,13 @@ impl crate::Db {
         .execute(&mut *tx)
         .await?;
 
-        if let Some(rebuilt_cursor) = saw_source_rows.then_some(cursor.clone()) {
+        let mut committed_cursor = current_cursor.clone();
+        if let Some(mut rebuilt_cursor) = saw_source_rows.then_some(cursor.clone()) {
             let should_advance = cursor_tuple(&current_cursor)
                 .zip(cursor_tuple(&rebuilt_cursor))
                 .is_none_or(|(current, rebuilt)| rebuilt > current);
             if should_advance {
+                rebuilt_cursor.updated_at = Utc::now();
                 sqlx::query(
                     "UPDATE operator_activity_cursor SET last_created_at = $2, last_event_id = $3, \
                      definitions_version = $4, updated_at = $5 WHERE community_id = $1",
@@ -1440,13 +1522,19 @@ impl crate::Db {
                 .bind(rebuilt_cursor.last_created_at)
                 .bind(rebuilt_cursor.last_event_id.as_deref())
                 .bind(OPERATOR_ANALYTICS_DEFINITIONS_VERSION)
-                .bind(Utc::now())
+                .bind(rebuilt_cursor.updated_at)
                 .execute(&mut *tx)
                 .await?;
+                committed_cursor = rebuilt_cursor;
             }
         }
         tx.commit().await?;
-        Ok(())
+        Ok(OperatorRebuildResult {
+            source_rows,
+            qualifying_rows,
+            aggregate_rows,
+            cursor: committed_cursor,
+        })
     }
 
     /// Record one deployment-global operator request using only filter/target
@@ -1864,6 +1952,21 @@ mod tests {
             1
         );
 
+        sqlx::query("DELETE FROM events WHERE community_id = ANY($1)")
+            .bind(vec![community_a, community_b])
+            .execute(&db.pool)
+            .await
+            .expect("clean analytics fixture events");
+        sqlx::query("DELETE FROM users WHERE community_id = ANY($1)")
+            .bind(vec![community_a, community_b])
+            .execute(&db.pool)
+            .await
+            .expect("clean analytics fixture users");
+        sqlx::query("DELETE FROM relay_members WHERE community_id = ANY($1)")
+            .bind(vec![community_a, community_b])
+            .execute(&db.pool)
+            .await
+            .expect("clean analytics fixture memberships");
         sqlx::query("DELETE FROM communities WHERE id = ANY($1)")
             .bind(vec![community_a, community_b])
             .execute(&db.pool)
@@ -2355,6 +2458,7 @@ impl crate::Db {
             LEFT JOIN thread_counts t ON t.community_id = c.id
             LEFT JOIN activity a ON a.community_id = c.id
             WHERE ($1::uuid IS NULL OR c.id = $1)
+              AND ($9::boolean OR c.archived_at IS NULL)
               AND (
                   NOT $5::boolean
                   OR c.created_at < $6
@@ -2372,6 +2476,7 @@ impl crate::Db {
         .bind(cursor_timestamp)
         .bind(cursor_community)
         .bind(bounded_page_limit(filter.limit) + 1)
+        .bind(filter.include_archived)
         .fetch_all(&self.pool)
         .await?;
         let has_more = rows.len() > bounded_page_limit(filter.limit) as usize;
@@ -2562,6 +2667,7 @@ impl crate::Db {
             activity_family: None,
             person_type: None,
             online: None,
+            include_archived: false,
             search: Some(hex::encode(pubkey)),
             limit: 1,
             cursor: None,

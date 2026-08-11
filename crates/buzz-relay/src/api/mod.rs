@@ -9,6 +9,8 @@ pub mod media;
 pub mod mesh_demo;
 pub mod nip05;
 pub mod operator;
+pub mod operator_analytics;
+pub mod operator_auth;
 pub mod self_provisioning;
 
 // Re-export imeta helpers used by ingest pipeline.

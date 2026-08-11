@@ -76,7 +76,7 @@ before its dependants are merged.
 
 ### Relay and database
 
-- Create: migrations/0046_operator_analytics.sql
+- Create: migrations/0057_operator_analytics.sql
 - Modify: schema/schema.sql
 - Modify: crates/buzz-db/src/lib.rs
 - Create: crates/buzz-db/src/operator_analytics.rs
@@ -247,7 +247,7 @@ fallback family.
 
 **Files:**
 
-- Create: migrations/0046_operator_analytics.sql
+- Create: migrations/0057_operator_analytics.sql
 - Modify: schema/schema.sql
 - Modify: crates/buzz-db/src/migration.rs
 
@@ -324,7 +324,7 @@ Do not add a Redis session table or a raw event-content projection.
   the migration: update the embedded migration count from 45 to 46; assert
   migration 46 creates all three tables, registers only operator_access_log
   as global, and keeps both derived tables tenant leading.
-- [ ] Add migrations/0046_operator_analytics.sql with the exact definitions
+- [ ] Add migrations/0057_operator_analytics.sql with the exact definitions
   above, indexes, foreign keys, checks, and global-table registry insert.
 - [ ] Mirror the final schema, indexes, checks, and registry row in
   schema/schema.sql. Keep the schema mirror equivalent in column names and
@@ -872,7 +872,7 @@ and visible freshness/error states.
 
 - Document RELAY_OPERATOR_API_ORIGIN, RELAY_OPERATOR_PUBKEYS,
   POD_NAME/HOSTNAME, same-origin admin serving or a narrowly scoped reverse
-  proxy, Redis requirements, migration 0046, and the no-wide-open-CORS rule.
+  proxy, Redis requirements, migration 0057, and the no-wide-open-CORS rule.
 - Document the first-run order: migrate, run backfill, start relay workers,
   serve the admin bundle from the configured origin, connect an allowlisted
   signer, and verify the Definitions page before relying on counts.

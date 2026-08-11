@@ -443,7 +443,7 @@ admin: bootstrap _ensure-migrations
     pnpm -C admin-web build
     export BUZZ_ADMIN_HOST="${BUZZ_ADMIN_HOST:-admin.localhost:3000}"
     export BUZZ_ADMIN_WEB_DIR="${BUZZ_ADMIN_WEB_DIR:-{{justfile_directory()}}/admin-web/dist}"
-    echo "Admin dashboard: http://${BUZZ_ADMIN_HOST}/reports"
+    echo "Admin analytics: http://${BUZZ_ADMIN_HOST}/analytics"
     cargo run -p buzz-relay
 
 # Seed deterministic reports and product feedback for local admin dashboard review

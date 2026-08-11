@@ -131,6 +131,15 @@ pub struct OperatorSessionPage {
     pub next_cursor: Option<String>,
 }
 
+/// One consistent live-session observation used by analytics overlays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorSessionSnapshot {
+    /// All fresh leases in the requested scope.
+    pub rows: Vec<OperatorSessionLease>,
+    /// Counts derived from exactly the same hydrated rows.
+    pub counts: OperatorSessionCounts,
+}
+
 /// Redis-backed deployment-wide authenticated-session store.
 #[derive(Clone)]
 pub struct OperatorSessionStore {
@@ -155,6 +164,11 @@ impl OperatorSessionStore {
     #[must_use]
     pub const fn index_key() -> &'static str {
         OPERATOR_SESSIONS_INDEX_KEY
+    }
+
+    /// Validate an opaque session-list cursor without accessing Redis.
+    pub fn validate_cursor(cursor: &str) -> Result<(), PubSubError> {
+        decode_cursor(cursor).map(|_| ())
     }
 
     /// Return the sorted-set member for one community/connection pair.
@@ -272,6 +286,28 @@ impl OperatorSessionStore {
         })
     }
 
+    /// Read all fresh leases and their aggregate counts as one observation.
+    ///
+    /// This is intentionally bounded by the number of active Redis leases,
+    /// not by key scanning: [`Self::read_rows`] hydrates only members from the
+    /// deployment session index and prunes expired or malformed entries.
+    pub async fn snapshot(
+        &self,
+        scope: OperatorSessionScope,
+    ) -> Result<OperatorSessionSnapshot, PubSubError> {
+        let rows = self.read_rows(scope, None, Utc::now()).await?;
+        let distinct: HashSet<[u8; 32]> = rows.iter().map(|row| row.pubkey).collect();
+        let connections = rows.len() as u64;
+        Ok(OperatorSessionSnapshot {
+            rows,
+            counts: OperatorSessionCounts {
+                raw_connections: connections,
+                authenticated_sessions: connections,
+                distinct_pubkeys: distinct.len() as u64,
+            },
+        })
+    }
+
     async fn read_page(
         &self,
         scope: OperatorSessionScope,
@@ -369,7 +405,7 @@ impl OperatorSessionStore {
             }
             let _: i64 = zrem.query_async(&mut *conn).await?;
         }
-        rows.sort_by(|left, right| compare_rows(left, right));
+        rows.sort_by(compare_rows);
         Ok(rows)
     }
 }
@@ -449,7 +485,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     value
@@ -628,7 +664,7 @@ mod tests {
     #[test]
     fn cursor_order_is_descending_timestamp_then_ascending_member() {
         let timestamp = Utc::now();
-        let mut rows = vec![
+        let mut rows = [
             lease(2, [2; 32], timestamp),
             lease(1, [1; 32], timestamp),
             lease(3, [3; 32], timestamp - chrono::Duration::seconds(1)),

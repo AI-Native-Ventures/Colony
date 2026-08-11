@@ -274,7 +274,7 @@ async fn handle_active_connection(
             .await;
     }
     let authenticated_pubkey = match &*conn.auth_state.read().await {
-        AuthState::Authenticated(auth_ctx) => Some(auth_ctx.pubkey.clone()),
+        AuthState::Authenticated(auth_ctx) => Some(auth_ctx.pubkey),
         _ => None,
     };
     if authenticated_pubkey.is_some() {

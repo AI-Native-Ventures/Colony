@@ -38,3 +38,4 @@ url = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 chrono = { workspace = true }
+uuid = { workspace = true }

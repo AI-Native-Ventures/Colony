@@ -5,7 +5,7 @@
 # The image is the same one deploy/compose uses (docker.yml publishes it on
 # relay-v* tags). Secrets are set once via `flyctl secrets set` on the
 # colony-relay app: DATABASE_URL, REDIS_URL, BUZZ_S3_ACCESS_KEY,
-# BUZZ_S3_SECRET_KEY, RELAY_OWNER_PUBKEY.
+# BUZZ_S3_SECRET_KEY, RELAY_OWNER_PUBKEY, RELAY_OPERATOR_PUBKEYS.
 app = "colony-relay"
 primary_region = "iad"
 
@@ -18,6 +18,10 @@ BUZZ_AUTO_MIGRATE = "true"
 BUZZ_DOMAIN = "relay.colony.ainative.ventures"
 BUZZ_MEDIA_BASE_URL = "https://relay.colony.ainative.ventures/media"
 BUZZ_MEDIA_SERVER_DOMAIN = "relay.colony.ainative.ventures"
+# The private operator bundle is served by this same relay image on the admin
+# wildcard host. Analytics NIP-98 signatures bind to this exact HTTPS origin.
+BUZZ_ADMIN_HOST = "admin.colony.ainative.ventures"
+RELAY_OPERATOR_API_ORIGIN = "https://admin.colony.ainative.ventures"
 # BUZZ_CORS_ORIGINS is deliberately unset (permissive CORS). Every HTTP API
 # is NIP-98-authed with no cookie/ambient credentials, so an origin
 # allowlist adds nothing - and any allowlist here silently blocks the
