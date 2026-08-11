@@ -7,14 +7,14 @@ use std::{
     },
 };
 
+use crate::huddle::HuddleState;
+use crate::managed_agents::config_bridge::SessionConfigCache;
+use crate::managed_agents::{ManagedAgentPairRuntime, ManagedAgentRuntimeKey};
+use crate::provisioned_credits::ProvisionedCreditsManager;
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, Manager};
 #[cfg(feature = "mesh-llm")]
 use tokio::sync::Mutex as AsyncMutex;
-
-use crate::huddle::HuddleState;
-use crate::managed_agents::config_bridge::SessionConfigCache;
-use crate::managed_agents::{ManagedAgentPairRuntime, ManagedAgentRuntimeKey};
 pub struct AppState {
     pub keys: Mutex<Keys>,
     pub http_client: reqwest::Client,
@@ -39,23 +39,20 @@ pub struct AppState {
     pub managed_agent_profile_reconcile_enabled: AtomicBool,
     /// Shared shutdown signal checked by launch-time agent restoration.
     pub shutdown_started: AtomicBool,
-    /// Serializes every managed-runtime transition that changes the protected
-    /// PID set: spawn/register, adoption, stop, shutdown, and sweep snapshots.
-    /// Never perform network I/O while holding this lock.
+    /// Serializes managed-runtime transitions that change the protected PID
+    /// set; network I/O must happen after releasing this lock.
     pub managed_agent_runtime_transition: Mutex<()>,
     pub managed_agents_store_lock: Mutex<()>,
     pub channel_templates_store_lock: Mutex<()>,
     pub managed_agent_processes: Mutex<HashMap<ManagedAgentRuntimeKey, ManagedAgentPairRuntime>>,
+    pub provisioned_credits: Mutex<ProvisionedCreditsManager>,
     pub huddle_state: Mutex<HuddleState>,
+    pub huddle_audio: crate::huddle::tts_settings::HuddleAudioSettingsState,
     /// Tauri app handle — stored after setup so huddle commands can emit
     /// `huddle-state-changed` events without needing the handle threaded
     /// through every call site.
-    ///
     /// Set once during `setup()` in `lib.rs`; never cleared.
     pub app_handle: Mutex<Option<AppHandle>>,
-    /// Selected audio output device name. `None` = system default.
-    /// Used by `connect_audio_relay` and TTS pipeline when opening sinks.
-    pub audio_output_device: Mutex<Option<String>>,
     /// Port of the localhost media streaming proxy (set during setup).
     pub media_proxy_port: AtomicU16,
     /// Set when identity resolution detected a "keyring-locked" state: the
@@ -129,6 +126,8 @@ pub struct AppState {
     /// bounded and letting a later leave correctly flip the channel back to
     /// `is_member=false`.
     pub pending_owned_channels: Mutex<std::collections::HashSet<(String, String)>>,
+    /// Runtime-owned CDP sessions backing channel workspace web tabs.
+    pub web_sessions: crate::web::WebManager,
 }
 
 /// Parse the `BUZZ_PRIVATE_KEY` env var into identity keys. `Some` means the
@@ -211,10 +210,11 @@ pub fn build_app_state() -> AppState {
         managed_agents_store_lock: Mutex::new(()),
         channel_templates_store_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
+        provisioned_credits: Mutex::new(ProvisionedCreditsManager::default()),
         session_config_cache: Mutex::new(HashMap::new()),
         huddle_state: Mutex::new(HuddleState::default()),
+        huddle_audio: Default::default(),
         app_handle: Mutex::new(None),
-        audio_output_device: Mutex::new(None),
         media_proxy_port: AtomicU16::new(0),
         prevent_sleep: Arc::new(Mutex::new(
             crate::prevent_sleep::PreventSleepState::default(),
@@ -229,9 +229,9 @@ pub fn build_app_state() -> AppState {
         #[cfg(feature = "mesh-llm")]
         mesh_coordinator: AsyncMutex::new(None),
         pending_owned_channels: Mutex::new(std::collections::HashSet::new()),
+        web_sessions: crate::web::WebManager::default(),
     }
 }
-
 impl AppState {
     /// Lock the huddle state mutex, converting a poisoned-lock error to a String.
     ///
@@ -1035,7 +1035,6 @@ fn quarantine_corrupt_key(key_path: &std::path::Path, data_dir: &std::path::Path
         let _ = std::fs::remove_file(key_path);
     }
 }
-
 fn load_key_file(path: &std::path::Path) -> Result<Keys, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("read identity.key: {e}"))?;
     let trimmed = content.trim();
@@ -1044,7 +1043,6 @@ fn load_key_file(path: &std::path::Path) -> Result<Keys, String> {
     }
     Keys::parse(trimmed).map_err(|e| format!("parse identity.key: {e}"))
 }
-
 /// Atomically write the key to disk. Uses `atomic-write-file` which:
 /// 1. Writes to a temp file in the same directory
 /// 2. Calls fsync on the file

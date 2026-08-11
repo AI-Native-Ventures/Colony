@@ -80,17 +80,15 @@ async function sendChannelMessage(
       mentionPubkeys,
     }) => {
       const tauriWindow = window as Window & {
-        __TAURI_INTERNALS__?: {
-          invoke: (
-            command: string,
-            payload?: Record<string, unknown>,
-          ) => Promise<unknown>;
-        };
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+          command: string,
+          payload?: Record<string, unknown>,
+        ) => Promise<unknown>;
       };
 
-      const invoke = tauriWindow.__TAURI_INTERNALS__?.invoke;
+      const invoke = tauriWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) {
-        throw new Error("Tauri invoke bridge is unavailable.");
+        throw new Error("Mock invoke bridge is unavailable.");
       }
 
       const channels = (await invoke("get_channels")) as Array<{
@@ -121,17 +119,15 @@ async function joinChannel(
 ) {
   await page.evaluate(async (targetChannelName) => {
     const tauriWindow = window as Window & {
-      __TAURI_INTERNALS__?: {
-        invoke: (
-          command: string,
-          payload?: Record<string, unknown>,
-        ) => Promise<unknown>;
-      };
+      __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        command: string,
+        payload?: Record<string, unknown>,
+      ) => Promise<unknown>;
     };
 
-    const invoke = tauriWindow.__TAURI_INTERNALS__?.invoke;
+    const invoke = tauriWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
     if (!invoke) {
-      throw new Error("Tauri invoke bridge is unavailable.");
+      throw new Error("Mock invoke bridge is unavailable.");
     }
 
     const channels = (await invoke("get_channels")) as Array<{

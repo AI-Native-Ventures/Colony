@@ -5,6 +5,7 @@ use crate::managed_agents::{
     self, kill_stale_tracked_processes, load_managed_agents, save_managed_agents,
     sync_managed_agent_processes, BackendKind,
 };
+use crate::terminal::TerminalManager;
 use crate::{prevent_sleep, util};
 
 pub(crate) fn is_restart_request(code: Option<i32>) -> bool {
@@ -18,9 +19,17 @@ pub(crate) fn shut_down_app(app: &tauri::AppHandle, shutdown_done: &std::sync::a
         .shutdown_started
         .store(true, Ordering::SeqCst);
     if !shutdown_done.swap(true, Ordering::SeqCst) {
+        app.state::<TerminalManager>().close_all();
+        app.state::<AppState>().web_sessions.close_all();
         prevent_sleep::release(&app.state::<AppState>().prevent_sleep);
+        if let Err(error) = crate::provisioned_credits::prepare_provisioned_credits_shutdown(app) {
+            eprintln!("buzz-desktop: failed to close Colony Credits rotations: {error}");
+        }
         if let Err(error) = shutdown_managed_agents(app) {
             eprintln!("buzz-desktop: failed to stop managed agents: {error}");
+        }
+        if let Err(error) = crate::provisioned_credits::drain_provisioned_credits_blocking(app) {
+            eprintln!("buzz-desktop: failed to revoke Colony Credits leases: {error}");
         }
         #[cfg(feature = "mesh-llm")]
         shutdown_mesh_runtime(app);
@@ -40,7 +49,11 @@ pub(crate) fn install_signal_handler(
             .shutdown_started
             .store(true, Ordering::SeqCst);
         if !shutdown_done.swap(true, Ordering::SeqCst) {
+            app.state::<TerminalManager>().close_all();
+            app.state::<AppState>().web_sessions.close_all();
+            let _ = crate::provisioned_credits::prepare_provisioned_credits_shutdown(&app);
             let _ = shutdown_managed_agents(&app);
+            let _ = crate::provisioned_credits::drain_provisioned_credits_blocking(&app);
             #[cfg(feature = "mesh-llm")]
             shutdown_mesh_runtime(&app);
         }

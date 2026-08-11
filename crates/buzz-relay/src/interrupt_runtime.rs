@@ -85,7 +85,9 @@ use std::sync::Arc;
 
 use buzz_core::company::CompanyTask;
 use buzz_core::interrupt::{parse_ask, AgentTier, AskType};
-use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT};
+use buzz_core::kind::{
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT, KIND_TEAM,
+};
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::asks::AskRow;
@@ -877,22 +879,92 @@ async fn fetch_owner_authored_managed_agent_roster(
     Ok(roster)
 }
 
+/// The active `role_id` -> rank map a community's payroll defines.
+///
+/// Fetched once per caller and handed to [`unique_executive_in_roster`], which
+/// stays pure so a caller looping over many candidates does not re-query.
+type RoleRanks = std::collections::HashMap<String, AgentTier>;
+
+/// Read the community's payroll as a `role_id` -> rank map.
+///
+/// Only ACTIVE employees, for the same reason `interrupt_gate::agent_tier`
+/// scopes its role lookup that way: this grants a rank to a *different*
+/// pubkey through a role, so a vacated role must stop conferring anything.
+async fn active_role_ranks(tenant: &TenantContext, state: &AppState) -> Result<RoleRanks, String> {
+    let employees = state
+        .db
+        .list_active_employees(tenant.community())
+        .await
+        .map_err(|error| format!("database error reading the payroll: {error}"))?;
+    Ok(employees
+        .into_iter()
+        .filter_map(|employee| {
+            AgentTier::parse(&employee.rank).map(|rank| (employee.role_id, rank))
+        })
+        .collect())
+}
+
 /// Resolve the community's unique executive from an already-fetched
-/// [`ManagedAgentRoster`]: the one agent pubkey (`d` tag) whose head
-/// declares `tier: "executive"`.
+/// [`ManagedAgentRoster`]: the one agent pubkey (`d` tag) that is an
+/// executive, resolved the way `interrupt_gate::agent_tier` resolves rank.
+///
+/// # Why this reads the role and not just `tier`
+///
+/// Nothing in the product ever writes `content.tier` onto a managed-agent
+/// head, so a `tier`-only lookup found zero executives in every real
+/// workspace and leader-to-executive promotion could never happen. That is
+/// the same dead field the whole ladder used to hang on; `agent_tier` was
+/// taught to read the role instead, and this is the second reader on the
+/// escalation path. `role_ranks` comes from the payroll, so `employees`
+/// stays the single source of rank here too. `content.tier` is retained as
+/// the legacy fallback.
+///
+/// The trust boundary is unchanged and load-bearing: `roster` contains only
+/// heads authored by a CURRENT community owner
+/// ([`fetch_owner_authored_managed_agent_roster`]), so an agent cannot
+/// publish a head about itself naming the executive's role and become the
+/// promotion target. Promotion decides who reaches a human, so a forgeable
+/// target would be worse than no promotion at all.
 ///
 /// `Ok(None)` when zero or more than one distinct pubkey qualifies -- design
-/// point 3 (never guess). Pure (no I/O) so a caller looping over many
-/// candidates in the same community can call it repeatedly against ONE
+/// point 3 (never guess), unchanged. Pure (no I/O) so a caller looping over
+/// many candidates in the same community can call it repeatedly against ONE
 /// fetched roster instead of re-querying.
-fn unique_executive_in_roster(roster: &ManagedAgentRoster) -> Result<Option<PublicKey>, String> {
+/// The rank an owner-authored managed-agent head confers.
+///
+/// The role the head names, resolved against the active payroll, then the
+/// legacy `content.tier` field. This is the single place that ordering lives,
+/// because the escalation path has three readers of an agent's rank
+/// ([`interrupt_gate::agent_tier`], [`unique_executive_in_roster`], and
+/// [`team_lead_in_rosters`]) and they drifted apart once already: each was
+/// written against `content.tier`, which nothing in the product writes, so
+/// each in turn resolved to no rank at all in every real workspace.
+///
+/// The caller is responsible for the trust boundary. Every caller here reads
+/// a roster from [`fetch_owner_authored_managed_agent_roster`], so a head an
+/// agent published about itself is never in scope and a self-declared role
+/// confers nothing.
+fn head_rank(content: &serde_json::Value, role_ranks: &RoleRanks) -> Option<AgentTier> {
+    content
+        .get("role_id")
+        .and_then(|value| value.as_str())
+        .map(|role| role.trim().to_ascii_lowercase())
+        .and_then(|role| role_ranks.get(&role).copied())
+        .or_else(|| {
+            content
+                .get("tier")
+                .and_then(|value| value.as_str())
+                .and_then(AgentTier::parse)
+        })
+}
+
+fn unique_executive_in_roster(
+    roster: &ManagedAgentRoster,
+    role_ranks: &RoleRanks,
+) -> Result<Option<PublicKey>, String> {
     let mut executives: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for (d_tag, content) in roster {
-        let tier = content
-            .get("tier")
-            .and_then(|value| value.as_str())
-            .and_then(AgentTier::parse);
-        if tier != Some(AgentTier::Executive) {
+        if head_rank(content, role_ranks) != Some(AgentTier::Executive) {
             continue;
         }
         let Ok(pubkey_bytes) = hex::decode(d_tag) else {
@@ -928,7 +1000,191 @@ async fn find_unique_executive(
     state: &AppState,
 ) -> Result<Option<PublicKey>, String> {
     let roster = fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
-    unique_executive_in_roster(&roster)
+    let role_ranks = active_role_ranks(tenant, state).await?;
+    unique_executive_in_roster(&roster, &role_ranks)
+}
+
+/// An owner-authored team roster (kind [`KIND_TEAM`]): `(d_tag, content)`
+/// pairs, one per distinct team id with a CURRENT-owner-authored head --
+/// the same latest-wins / owner-authored trust rule
+/// [`fetch_owner_authored_managed_agent_roster`] applies to agent heads,
+/// over the team kind.
+type TeamRoster = Vec<(String, serde_json::Value)>;
+
+/// Fetch every owner-authored team head (kind [`KIND_TEAM`]) in `tenant`,
+/// resolved NIP-33 latest-wins per team `d` tag. Same SQL trust rule
+/// (`Db::query_latest_owner_authored_heads`'s owner `JOIN`) as the
+/// managed-agent roster, so a non-owner-authored team head can never shadow
+/// or stand in for the owner's authoritative team record.
+async fn fetch_owner_authored_teams(
+    tenant: &TenantContext,
+    state: &AppState,
+    limit: i64,
+) -> Result<TeamRoster, String> {
+    let rows = state
+        .db
+        .query_latest_owner_authored_heads(tenant.community(), KIND_TEAM as i32, limit)
+        .await
+        .map_err(|error| format!("database error scanning team roster: {error}"))?;
+
+    let mut teams = TeamRoster::new();
+    for stored in rows {
+        let Some(d_tag) = stored.event.tags.iter().find_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.len() >= 2 && parts[0] == "d").then(|| parts[1].clone())
+        }) else {
+            continue;
+        };
+        let Ok(content) = serde_json::from_str::<serde_json::Value>(&stored.event.content) else {
+            continue;
+        };
+        teams.push((d_tag, content));
+    }
+    Ok(teams)
+}
+
+/// Resolve `worker`'s own team lead from already-fetched rosters: the single
+/// Leader-tier agent whose persona is the lead of the single team whose
+/// member list contains the worker's persona.
+///
+/// `Ok(None)` under any ambiguity or gap -- the worker has no owner-authored
+/// head, its persona appears in zero or more than one team, the owning team
+/// names no lead, or the lead persona resolves to zero/several pubkeys or to
+/// an agent that is not Leader-tier. Never guess (design point 3); callers
+/// fall back to the unique executive or refuse the write.
+fn team_lead_in_rosters(
+    heads: &ManagedAgentRoster,
+    teams: &TeamRoster,
+    role_ranks: &RoleRanks,
+    worker: &PublicKey,
+) -> Result<Option<PublicKey>, String> {
+    // 1. The worker's persona id, from its own owner-authored head. A worker
+    //    with no head is untiered; nothing to route (the router checks the
+    //    tier before calling here, so this is defensive totality).
+    let Some(worker_persona) = heads.iter().find_map(|(d_tag, content)| {
+        (d_tag == &worker.to_hex())
+            .then(|| {
+                content
+                    .get("persona_id")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .flatten()
+    }) else {
+        return Ok(None);
+    };
+
+    // 2. Exactly one team must contain the worker's persona; zero or many
+    //    makes "the worker's team" unanswerable without guessing.
+    let mut owning_teams = teams.iter().filter(|(_, content)| {
+        content
+            .get("persona_ids")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(worker_persona)))
+    });
+    let (_, team) = match (owning_teams.next(), owning_teams.next()) {
+        (Some(team), None) => team,
+        _ => return Ok(None),
+    };
+
+    // 3. The team must name a lead persona. Blueprint validation requires the
+    //    lead to be a member, but the field is nullable at runtime.
+    let Some(lead_persona) = team
+        .get("lead_persona_id")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+
+    // 4. The lead persona must resolve to exactly one live agent
+    //    (`persona_pubkey_in_roster`) that is a Leader. Rank comes from
+    //    [`head_rank`], so this rung reads the role the owner's head names
+    //    exactly as the other two readers on this path do. It used to match
+    //    `content.tier` alone, which nothing in the product writes, so
+    //    `lead_tier` was `None` in every real workspace and this rung never
+    //    fired: a worker's owner-mention skipped its own team lead and went
+    //    straight to the community executive.
+    let Some(lead_pubkey) = persona_pubkey_in_roster(heads, lead_persona)? else {
+        return Ok(None);
+    };
+    let lead_tier = heads.iter().find_map(|(_, content)| {
+        (content
+            .get("persona_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(lead_persona))
+        .then(|| head_rank(content, role_ranks))
+        .flatten()
+    });
+    if lead_tier != Some(AgentTier::Leader) {
+        return Ok(None);
+    }
+
+    Ok(Some(lead_pubkey))
+}
+
+/// What an owner-bound mention from an agent should become.
+pub enum OwnerMentionRoute {
+    /// The author may address owners directly (Executive tier, or no
+    /// managed-agent head at all) -- leave the mention as a `p` tag.
+    Keep,
+    /// Route the owner mention to this next-in-line agent instead.
+    Route(PublicKey),
+}
+
+/// Resolve where an owner-bound mention from `actor` must go, per the
+/// interrupt ladder:
+///
+/// - Worker → its own team lead (Leader-tier, uniquely resolvable), else the
+///   community's unique executive.
+/// - Leader → the community's unique executive.
+/// - Executive, or no tier (human / unmanaged client) → `Keep`, matching the
+///   owner-contact gate which lets both through.
+///
+/// `Err` when a Worker/Leader's next-in-line cannot be resolved: zero or
+/// multiple teams, leads, or executives is an ambiguity the caller must not
+/// guess through (design point 3), and an owner-bound mention that cannot be
+/// routed must not silently degrade into a direct owner contact.
+pub async fn resolve_owner_mention_route(
+    tenant: &TenantContext,
+    state: &AppState,
+    actor: &PublicKey,
+) -> Result<OwnerMentionRoute, String> {
+    let Some(tier) = agent_tier(tenant, state, actor).await? else {
+        return Ok(OwnerMentionRoute::Keep);
+    };
+    match tier {
+        AgentTier::Executive => Ok(OwnerMentionRoute::Keep),
+        AgentTier::Leader => {
+            let Some(executive) = find_unique_executive(tenant, state).await? else {
+                return Err(format!(
+                    "leader {} has no unique community executive to route to (never guessing)",
+                    actor
+                ));
+            };
+            Ok(OwnerMentionRoute::Route(executive))
+        }
+        AgentTier::Worker => {
+            let heads =
+                fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
+            let teams = fetch_owner_authored_teams(tenant, state, MAX_ROSTER_HEADS).await?;
+            // One payroll read serves both rungs: the team lead's rank and,
+            // failing that, the executive's. Fetched before the team-lead
+            // scan rather than after it, because that scan needs it now too.
+            let role_ranks = active_role_ranks(tenant, state).await?;
+            if let Some(lead) = team_lead_in_rosters(&heads, &teams, &role_ranks, actor)? {
+                return Ok(OwnerMentionRoute::Route(lead));
+            }
+            // Fallback rung: the unique executive, resolved from the roster
+            // already fetched for the team-lead scan (no second round trip).
+            let Some(executive) = unique_executive_in_roster(&heads, &role_ranks)? else {
+                return Err(format!(
+                    "worker {} has no unique team lead or community executive \
+                     to route to (never guessing)",
+                    actor
+                ));
+            };
+            Ok(OwnerMentionRoute::Route(executive))
+        }
+    }
 }
 
 /// Resolve the community's unique human owner: the single pubkey currently
@@ -980,17 +1236,18 @@ pub const DEFAULT_STALL_AFTER_SECS: i64 = 6 * 60 * 60;
 /// to go silently stalled since nobody deliberately organized it under an
 /// initiative. Skipping these would carve a hole in the stall guarantee.
 ///
-/// The Ask schema requires exactly one `initiative` tag
-/// (`buzz_core::interrupt::parse_ask`) and the `asks` projection's
-/// `initiative_id` column is `NOT NULL`, so a genuine `None` cannot flow
-/// through as-is without a schema change. This is NOT a real initiative id
-/// -- it is a reserved sentinel that only ever appears as the `initiative`
-/// tag on a stall ask filed under this exact condition. Dedupe stays exact
-/// even though every no-initiative task shares this same grouping value,
-/// because [`stall_need_key`] is already unique per task on its own; the
-/// composite `(initiative_id, need_key)` uniqueness the dedupe index
-/// enforces still lands on one open row per task.
-pub const NO_INITIATIVE_SENTINEL: &str = "no-initiative";
+/// Dedupe stays exact for stall asks even though every no-initiative task
+/// shares this grouping value, because [`stall_need_key`] is already unique
+/// per task on its own; the composite `(initiative_id, need_key)` uniqueness
+/// the dedupe index enforces still lands on one open row per task.
+///
+/// The same value is what an agent files against when its own work belongs to
+/// no initiative, so the definition lives in `buzz-core` alongside the parser
+/// that requires the tag -- one reserved value, read the same way by the
+/// relay's stall sweep, the CLI's `asks raise`, and any client grouping a
+/// Needs-Me surface by initiative. See [`buzz_core::interrupt::NO_INITIATIVE`]
+/// for why it is deliberately flat rather than scoped per task.
+pub use buzz_core::interrupt::NO_INITIATIVE as NO_INITIATIVE_SENTINEL;
 
 /// Upper bound on in-progress task heads scanned per [`run_stall_tick`] pass.
 /// Status filtering already happens in SQL before this cap is applied (see
@@ -1057,6 +1314,8 @@ pub async fn run_stall_tick(
     // The trust rule itself is untouched -- see
     // `fetch_owner_authored_managed_agent_roster`'s doc comment -- this only
     // avoids redundantly re-deriving the SAME answer within one pass.
+    let mut role_ranks_cache: std::collections::HashMap<CommunityId, RoleRanks> =
+        std::collections::HashMap::new();
     let mut roster_cache: std::collections::HashMap<CommunityId, ManagedAgentRoster> =
         std::collections::HashMap::new();
 
@@ -1068,6 +1327,7 @@ pub async fn run_stall_tick(
             now_secs,
             stall_after_secs,
             &mut roster_cache,
+            &mut role_ranks_cache,
         )
         .await
         {
@@ -1104,6 +1364,7 @@ async fn process_stall_candidate(
     now_secs: i64,
     stall_after_secs: i64,
     roster_cache: &mut std::collections::HashMap<CommunityId, ManagedAgentRoster>,
+    role_ranks_cache: &mut std::collections::HashMap<CommunityId, RoleRanks>,
 ) -> Result<bool, String> {
     let task: CompanyTask = match serde_json::from_str(&candidate.content) {
         Ok(task) => task,
@@ -1150,6 +1411,18 @@ async fn process_stall_candidate(
         entry.insert(roster);
     }
     let roster = roster_cache
+        .get(&candidate.community_id)
+        .expect("just inserted or already present");
+
+    // The payroll behind the roster, memoised the same way and for the same
+    // reason: `unique_executive_in_roster` resolves rank through the role a
+    // head names, so it needs `role_id -> rank` for this community.
+    if let std::collections::hash_map::Entry::Vacant(entry) =
+        role_ranks_cache.entry(candidate.community_id)
+    {
+        entry.insert(active_role_ranks(&tenant, state).await?);
+    }
+    let role_ranks = role_ranks_cache
         .get(&candidate.community_id)
         .expect("just inserted or already present");
 
@@ -1246,7 +1519,7 @@ async fn process_stall_candidate(
 
     let audience = match persona_pubkey_in_roster(roster, &task.qa_persona_id)? {
         Some(pubkey) => pubkey,
-        None => match unique_executive_in_roster(roster)? {
+        None => match unique_executive_in_roster(roster, role_ranks)? {
             Some(pubkey) => pubkey,
             None => {
                 // Design point 2/3: a brand-new community (no appointed

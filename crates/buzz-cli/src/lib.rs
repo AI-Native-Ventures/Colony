@@ -10,11 +10,19 @@ mod validate;
 pub mod worker;
 
 use clap::{Parser, Subcommand};
-use error::CliError;
 use nostr::Keys;
 use uuid::Uuid;
 
 pub use client::BuzzClient;
+pub use error::CliError;
+
+/// The Ask event builder behind `buzz asks raise` and `buzz asks escalate`.
+///
+/// Re-exported so an end-to-end proof can construct an ask the way an agent's
+/// CLI actually does. `crates/buzz-test-client/tests/e2e_interrupts.rs` keeps
+/// its own copy of this tag shape, which is one edit away from proving a
+/// layout no agent ever sends; anything new builds from here instead.
+pub use commands::asks::{build_ask_event, AskEventFields};
 
 /// Run the Buzz CLI from raw arguments (including `argv[0]`).
 ///
@@ -191,6 +199,9 @@ enum Cmd {
     /// Create, configure, and manage channels
     #[command(subcommand)]
     Channels(ChannelsCmd),
+    /// Open and manage channel workspace tabs
+    #[command(subcommand)]
+    Workspace(WorkspaceCmd),
     /// Read the Colony company profile and request owner-authorized changes
     #[command(subcommand)]
     Company(CompanyCmd),
@@ -1422,6 +1433,47 @@ pub enum ChannelsCmd {
 }
 
 #[derive(Subcommand)]
+pub enum WorkspaceCmd {
+    /// Manage tabs in a channel workspace
+    #[command(subcommand)]
+    Tabs(WorkspaceTabsCmd),
+}
+
+#[derive(Subcommand)]
+pub enum WorkspaceTabsCmd {
+    /// Open a new channel workspace tab
+    Open {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Opaque tab coordinate
+        #[arg(long)]
+        tab: String,
+        /// Registered tab kind
+        #[arg(long = "tab-kind")]
+        tab_kind: String,
+        /// Human-readable tab title
+        #[arg(long)]
+        title: String,
+    },
+    /// Take the driver seat for an existing workspace tab
+    Take {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Opaque tab coordinate
+        #[arg(long)]
+        tab: String,
+    },
+    /// List the current projected workspace-tab heads for a channel
+    List {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum CanvasCmd {
     /// Get the canvas document for a channel
     Get {
@@ -2524,11 +2576,15 @@ pub struct AskFileArgs {
     /// community owner)
     #[arg(long)]
     pub to: String,
-    /// Initiative id this ask belongs to
+    /// Initiative id this ask belongs to. Copy it from the
+    /// `<colony-work-context>` block's `Initiative id` line. Omit it when
+    /// that line reads `none`: work with no initiative (any task created
+    /// from chat) groups under a reserved `no-initiative` value instead.
     #[arg(long)]
-    pub initiative: String,
+    pub initiative: Option<String>,
     /// Task id this ask blocks on, can be specified multiple times, at
-    /// least one is required
+    /// least one is required. Copy it from the `<colony-work-context>`
+    /// block's `Task id` line.
     #[arg(long = "task")]
     pub task: Vec<String>,
     /// Dedupe key, matching [a-z0-9-]{1,64}. Concurrent asks that share an
@@ -2902,6 +2958,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
+        Cmd::Workspace(sub) => commands::workspace::dispatch(sub, &client).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
         Cmd::Emoji(sub) => commands::emoji::dispatch(sub, &client).await,
@@ -3307,6 +3364,38 @@ mod tests {
                 "revert commit abc",
             ],
             vec!["buzz", "decisions", "list"],
+            vec![
+                "buzz",
+                "workspace",
+                "tabs",
+                "open",
+                "--channel",
+                "0d1e2f30-0000-4000-8000-000000000001",
+                "--tab",
+                "notes",
+                "--tab-kind",
+                "scratchpad",
+                "--title",
+                "Notes",
+            ],
+            vec![
+                "buzz",
+                "workspace",
+                "tabs",
+                "take",
+                "--channel",
+                "0d1e2f30-0000-4000-8000-000000000001",
+                "--tab",
+                "notes",
+            ],
+            vec![
+                "buzz",
+                "workspace",
+                "tabs",
+                "list",
+                "--channel",
+                "0d1e2f30-0000-4000-8000-000000000001",
+            ],
         ];
 
         for args in cases {
@@ -3412,6 +3501,7 @@ mod tests {
             "upload",
             "users",
             "workflows",
+            "workspace",
         ];
 
         let cmd = Cli::command();
@@ -3603,6 +3693,7 @@ mod tests {
         );
         assert_eq!(names(&cmd, "grants"), vec!["create", "list", "revoke"]);
         assert_eq!(names(&cmd, "decisions"), vec!["list", "log"]);
+        assert_eq!(names(&cmd, "workspace"), vec!["tabs"]);
     }
 
     #[test]
@@ -3627,6 +3718,7 @@ mod tests {
             ("upload", 1),
             ("users", 5),
             ("workflows", 8),
+            ("workspace", 1),
         ];
 
         let cmd = Cli::command();

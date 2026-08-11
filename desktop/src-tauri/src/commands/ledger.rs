@@ -13,22 +13,22 @@ use serde::Serialize;
 use tauri::State;
 
 use buzz_core_pkg::{
-    kind::{
-        KIND_ATTRIBUTION_RULEBOOK, KIND_CORRECTION_BOOK, KIND_LEDGER_BUDGET, KIND_PRICE_BOOK,
-        KIND_USAGE_RECORD,
-    },
+    kind::{KIND_ATTRIBUTION_RULEBOOK, KIND_CORRECTION_BOOK, KIND_LEDGER_BUDGET, KIND_PRICE_BOOK},
     ledger::{
         attribution::{CorrectionBook, Rulebook},
-        engine::{compute_ledger, LedgerReport, StoredUsageRecord},
+        engine::{compute_ledger, LedgerReport},
         prices::PriceBook,
         reconcile::diagnose,
     },
-    usage_record::decrypt_usage_record,
 };
 
 use crate::{
     app_state::AppState, commands::identity_archive::fetch_relay_self, relay::query_relay,
 };
+
+mod usage_records;
+
+use usage_records::read_usage_records;
 
 /// `d` tag addressing each singleton book. One coordinate per community.
 const PRICE_BOOK_D_TAG: &str = "pricebook";
@@ -316,9 +316,10 @@ async fn load_book<T: serde::de::DeserializeOwned + Default>(
 
 /// Compute the company's cost ledger.
 ///
-/// Reads the books, decrypts every usage record addressed to this identity,
-/// and folds them through `buzz_core::ledger`. Records that cannot be read
-/// are counted into `unreadableRecords` rather than skipped silently.
+/// Reads the books, decrypts every usage record addressed to this identity
+/// or authored by it (a seat meter authors the records it owns), and folds
+/// them through `buzz_core::ledger`. Records that cannot be read are
+/// counted into `unreadableRecords` rather than skipped silently.
 #[tauri::command]
 pub async fn ledger_report(state: State<'_, AppState>) -> Result<LedgerReportView, String> {
     let keys = state.signing_keys()?;
@@ -359,28 +360,22 @@ pub async fn ledger_report(state: State<'_, AppState>) -> Result<LedgerReportVie
         .collect::<Vec<_>>();
 
     // Usage records are addressed to their owner by `p` tag and encrypted to
-    // them, so this returns only what this identity is entitled to read.
-    let record_events = query_relay(
-        &state,
-        &[serde_json::json!({
-            "kinds": [KIND_USAGE_RECORD],
-            "#p": [keys.public_key().to_hex()],
-        })],
+    // them, so the owner read returns only what this identity is entitled to
+    // decrypt. A seat meter is the member's own machine, so the member both
+    // authors and owns the record; the relay drops a `p` tag that points at
+    // the event's own author, which makes those records invisible to the
+    // owner read. Read the author side too and dedupe on event id, exactly
+    // as the CLI report does.
+    let mine = keys.public_key().to_hex();
+    let (records, unreadable_records) = read_usage_records(
+        |filters| {
+            let state = state.clone();
+            async move { query_relay(&state, &filters).await }
+        },
+        &mine,
+        &keys,
     )
     .await?;
-
-    let mut records = Vec::with_capacity(record_events.len());
-    let mut unreadable_records = 0usize;
-    for event in record_events {
-        match decrypt_usage_record(&keys, &event) {
-            Ok(payload) => records.push(StoredUsageRecord {
-                event_id: event.id.to_hex(),
-                created_at: event.created_at.as_secs(),
-                payload,
-            }),
-            Err(_) => unreadable_records += 1,
-        }
-    }
 
     let report = compute_ledger(records, &prices, &rules, &corrections, &budgets);
     Ok(LedgerReportView::from_report(

@@ -18,6 +18,7 @@ import type {
   LeadFunnelStatus,
   LeadCounts,
   LeadPage,
+  PipelineColumn,
   LeadScope,
   LeadUpdateInput,
   OutreachDraft,
@@ -28,10 +29,14 @@ import type {
   Vertical,
   VerticalDetail,
 } from "../types";
+import { PIPELINE_COLUMN_STATUSES } from "../types";
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
 import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
-import { unsupportedDiscoveryEntitlement } from "./relayDiscoverySupport";
+import {
+  DEMO_DISCOVERY_ENTITLEMENT,
+  relaySupportsDiscovery,
+} from "./relayDiscoverySupport";
 import {
   type CampaignProjection,
   eventBase,
@@ -121,10 +126,13 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   private entitlementPromise: Promise<DiscoveryEntitlement> | null = null;
   private readonly activeRuns = new Map<string, string>();
   private readonly credentialStatus: typeof getDiscoveryCredentialStatus;
+  private readonly relaySupportsDiscovery: () => Promise<boolean>;
   constructor(dependencies: DiscoveryBrokerDependencies = DEFAULT_BROKER) {
     this.broker = new DiscoveryBroker(dependencies);
     this.credentialStatus =
       dependencies.credentialStatus ?? getDiscoveryCredentialStatus;
+    this.relaySupportsDiscovery =
+      dependencies.relaySupportsDiscovery ?? relaySupportsDiscovery;
   }
   getEntitlement(): Promise<DiscoveryEntitlement> {
     if (!this.entitlementPromise) {
@@ -144,9 +152,13 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
             experience: result.active ? ("live" as const) : ("demo" as const),
           };
         })
-        .catch((error) => {
-          const fallback = unsupportedDiscoveryEntitlement(error);
-          if (fallback) return fallback;
+        .catch(async (error) => {
+          const advertisesDiscovery = await this.relaySupportsDiscovery().catch(
+            () => null,
+          );
+          if (advertisesDiscovery === false) {
+            return DEMO_DISCOVERY_ENTITLEMENT;
+          }
           this.entitlementPromise = null;
           throw error;
         });
@@ -291,8 +303,6 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     }
     const all = await this.listLeadProjections(scope);
     let leads = all.map(mapLead);
-    if (scope.status)
-      leads = leads.filter((lead) => lead.status === scope.status);
     if (scope.search) {
       const query = scope.search.trim().toLowerCase();
       leads = leads.filter((lead) =>
@@ -311,6 +321,41 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
       pageSize,
       hasNextPage: start + pageSize < leads.length,
     };
+  }
+
+  /**
+   * The Pipeline's column data: one bounded, status-filtered `list_leads`
+   * call per column, returning the relay's `total`.
+   *
+   * This deliberately does not use `getLeads` or `listLeadProjections`:
+   * those loop to exhaustion and slice client-side, which is right for the
+   * searchable workspace but would pull every lead for six columns. Each
+   * column here is capped at one page and reports the relay total, so a
+   * large funnel stays cheap to render.
+   */
+  async getPipelineColumns(): Promise<PipelineColumn[]> {
+    if (!(await this.live())) return this.demo.getPipelineColumns();
+    return Promise.all(
+      PIPELINE_COLUMN_STATUSES.map(async (status) => {
+        const result = await this.broker.workspace("list_leads", {
+          operation: "list_leads",
+          request: {
+            campaign_id: null,
+            industry_id: null,
+            vertical_id: null,
+            status,
+            offset: 0,
+            limit: 100,
+          },
+        });
+        if (result.result !== "leads") throw new Error("Lead list failed.");
+        return {
+          status,
+          total: result.page.total,
+          leads: result.page.leads.map(mapLead),
+        };
+      }),
+    );
   }
 
   async getOutreach(campaignId: string): Promise<OutreachDraft[]> {
@@ -627,6 +672,7 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
               : null,
           industry_id: scope.industryId ?? null,
           vertical_id: scope.verticalId ?? null,
+          status: scope.status ?? null,
           offset,
           limit: 100,
         },

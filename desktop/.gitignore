@@ -14,9 +14,9 @@ dist-ssr
 playwright-report
 playwright-report.json
 test-results
+# Real-shell E2E run artifacts (ledger, wdio logs, failure screenshots)
+e2e-real-shell/results
 *.local
-playwright-report
-test-results
 
 # Editor directories and files
 .vscode/*

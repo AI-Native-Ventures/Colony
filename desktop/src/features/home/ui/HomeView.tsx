@@ -134,6 +134,7 @@ export function HomeView({
       selectedItem: selectedReminder,
       select: setSelectedReminderId,
     },
+    askItems,
   } = useHomePersonalInbox({
     allowMixedSelection: allowMixedPersonalSelection,
     currentPubkey,
@@ -354,17 +355,21 @@ export function HomeView({
   }, [feedProfiles, communityAgentPubkeys]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion invalidates the stable getChannelReadAt callback
   const inboxItems = React.useMemo(() => {
-    const items = buildInboxItems({
-      channels,
-      currentPubkey,
-      feed,
-      getChannelReadAt,
-      getMessageReadAt,
-      getThreadReadAt,
-      profiles: feedProfiles,
-    });
+    const items = [
+      ...buildInboxItems({
+        channels,
+        currentPubkey,
+        feed,
+        getChannelReadAt,
+        getMessageReadAt,
+        getThreadReadAt,
+        profiles: feedProfiles,
+      }),
+      ...askItems,
+    ].sort((left, right) => right.latestActivityAt - left.latestActivityAt);
     return filterInboxItems(items);
   }, [
+    askItems,
     channels,
     currentPubkey,
     feed,

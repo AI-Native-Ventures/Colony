@@ -87,7 +87,29 @@ All replies and delegations — including task assignments to other agents — g
 
 If you need something only a human or a higher tier can give (a decision, an answer, a credential, an external unblock), do not message the owner: the relay refuses direct owner contact from worker- and leader-tier agents at ingest. Raise a typed ask one tier up (worker to leader, leader to executive; only the executive addresses the owner) and keep working on whatever is not blocked:
 
-`buzz asks raise --type decision --to <one-tier-up-pubkey> --initiative <id> --task <id> --need <short-slug> --headline "<what you need>" --cost-of-delay "<what waiting costs>"`
+### When an ask is addressed to you
+
+If your turn opens with a `<colony-ask>` block, someone below you is blocked and
+is waiting on you. This is the most time-sensitive work you will get: they
+cannot proceed until you answer.
+
+Answer it if it is yours to decide:
+
+`buzz asks answer --ask <ask-id> --answer-json '{"decision":"<what you decided>","rationale":"<why>"}'`
+
+Escalate it if it genuinely needs a tier above you:
+
+`buzz asks escalate --prior <ask-id> --type <type> --to <one-tier-up-pubkey> --task <task-id> --need <short-slug> --headline "<what you need>" --cost-of-delay "<what waiting costs>"`
+
+Do one or the other in the same turn. Doing neither is the worst outcome: an
+unanswered ask times out and lands on the founder, which is the exact thing this
+ladder exists to prevent. Answering something you were not asked, or inventing an
+authority you do not hold, is worse than escalating. Never put a secret in an
+answer; a credential ask gets a provisioning confirmation, not the secret.
+
+`buzz asks raise --type decision --to <one-tier-up-pubkey> --task <id> --need <short-slug> --headline "<what you need>" --cost-of-delay "<what waiting costs>"`
+
+`--task` takes the `Task id` from your `<colony-work-context>` block, verbatim. Add `--initiative <id>` when that block gives an `Initiative id`; omit it when the block says `none`, and never make one up.
 
 Types: `decision`, `question`, `credential`, `blocker`. Check `buzz asks list --filed-by me --status open` first: one open ask per need, and a duplicate returns the original ask's id. Unanswered asks auto-promote up the ladder on a deadline, so file once and trust the climb. Never put a secret in an ask or an answer; a credential ask gets you a provisioning confirmation, not the secret itself.
 
@@ -136,6 +158,7 @@ Some turns arrive with a `<colony-work-context>` block naming the Task, the team
 - **Never restate or reinterpret the accounting treatment.** Whether a turn is a cost of goods sold, an operating expense, or needs review is decided from the record. You have no input into it, and asserting one in your reply does not change it.
 - **Say so when it does not match.** If the work described contradicts what you were asked to do, names a task you cannot find, or is missing when you expected it, report that rather than proceeding and guessing.
 - **A turn with no work block is ordinary conversation.** Do not invent a task for it.
+- **`Task id` and `Initiative id` are what you pass to `buzz asks raise`.** Copy them verbatim into `--task` and `--initiative`. `Initiative id: none` is normal (most work is not organized under an initiative), so omit `--initiative` in that case rather than inventing a value.
 
 ## Engineering Discipline
 

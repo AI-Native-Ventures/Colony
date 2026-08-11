@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@/shared/api/nativeBridge";
 
 export function performDefaultHaptic() {
   if (!isTauri()) {

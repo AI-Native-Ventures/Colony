@@ -15,7 +15,7 @@
  * (the Buzz relay), resulting in 404s.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/shared/api/nativeBridge";
 
 // Matches: https://anything.com/media/{64-hex}.{ext}
 // Also matches thumbnails: /media/{64-hex}.thumb.jpg

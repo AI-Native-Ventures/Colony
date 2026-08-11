@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod acp;
+pub mod ask_context;
 mod config;
 mod engram_fetch;
 mod filter;
@@ -21,7 +22,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use acp::{AcpClient, EnvVar, McpServer};
+pub use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::Result;
 use buzz_core::kind::{
     KIND_BLOCK_ACTION, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
@@ -62,8 +63,40 @@ fn is_subcommand(name: &str) -> bool {
     std::env::args().nth(1).map(|a| a == name).unwrap_or(false)
 }
 
-/// Timeout for lightweight helper subcommands (spawn + initialize + model/method probes).
-const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default timeout for lightweight helper subcommands (spawn + initialize +
+/// model/method probes).
+///
+/// 10s was measured against `claude-agent-acp`, which initializes in about two
+/// seconds. Every other adapter shipped in the harness catalog exceeded it on a
+/// normal machine, so `buzz-acp models` returned `agent timed out (10s)` for
+/// codex, opencode, and grok alike, and the desktop model dropdown rendered
+/// empty with no error surfaced. An empty dropdown reads as "this harness has
+/// no models" rather than "the probe was cut off", which is why it went
+/// unnoticed: the agent then has no model, refuses to start, and the failure
+/// surfaces three layers away as "agent needs configuration".
+///
+/// This is a probe, not an interactive path, so waiting longer costs a slower
+/// dropdown in the worst case and buys a populated one in the common case.
+const DEFAULT_MODELS_TIMEOUT_SECS: u64 = 45;
+
+/// Ceiling on the override below. Past this the desktop's own discovery call
+/// gives up first, so a larger value would only hold the subprocess open.
+const MAX_MODELS_TIMEOUT_SECS: u64 = 300;
+
+/// Timeout for lightweight helper subcommands, overridable with
+/// `BUZZ_ACP_MODELS_TIMEOUT` (whole seconds).
+///
+/// An unparseable, zero, or over-ceiling value falls back to the default rather
+/// than failing the probe: a malformed env var must not be the reason a user
+/// cannot pick a model.
+fn models_timeout() -> Duration {
+    let secs = std::env::var("BUZZ_ACP_MODELS_TIMEOUT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0 && *secs <= MAX_MODELS_TIMEOUT_SECS)
+        .unwrap_or(DEFAULT_MODELS_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
 
 /// Timeout for `buzz-acp authenticate`. Browser-based vendor auth can require
 /// human interaction, so it must not share the short probe timeout.
@@ -258,6 +291,20 @@ async fn author_allowed(
                 || is_owner_or_sibling(author, owner_cache, rest_client).await
         }
     }
+}
+
+/// Whether to open the global ask inbox.
+///
+/// Independent of channel membership: an ask is addressed to an agent, so an
+/// agent in zero channels must still receive one. This is the whole reason the
+/// inbox exists separately from channel subscriptions.
+fn should_subscribe_ask_inbox(_channel_ids: &[uuid::Uuid]) -> bool {
+    true
+}
+
+/// Whether the configured kind set includes asks.
+fn should_subscribe_ask_inbox_for_kinds(kinds: &[u32]) -> bool {
+    kinds.contains(&buzz_core::kind::KIND_ASK)
 }
 
 /// Resolve whether `channel_id` is a DM, for the inbound author gate.
@@ -1315,14 +1362,6 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
-    let mut pool = if config.lazy_pool {
-        AgentPool::from_slots((0..config.agents).map(|_| None).collect())
-    } else {
-        initialize_agent_pool(&PoolStartup::from_config(&config, observer.clone()), None).await?
-    };
-    let mut pool_ready = !config.lazy_pool;
-    let mut pool_lifecycle: PoolLifecycle<AgentPool> = PoolLifecycle::listening();
-
     // Capture a startup watermark BEFORE connecting to the relay. This timestamp
     // is used for membership notification replay (via startup_watermark) and as
     // the initial subscribe_since for channels discovered at startup. The Subscribe
@@ -1367,6 +1406,26 @@ async fn tokio_main() -> Result<()> {
 
     // Priority: BUZZ_AUTH_TAG (NIP-OA attestation) → --agent-owner flag.
     let startup_owner: Option<String> = resolve_agent_owner(&config);
+    if config.provisioned
+        && startup_owner
+            .as_deref()
+            .and_then(|owner| nostr::PublicKey::from_hex(owner).ok())
+            .is_none()
+    {
+        return Err(anyhow::anyhow!(
+            "provisioned Colony Credits requires a valid owner pubkey before metering can start"
+        ));
+    }
+    if config.provisioned
+        && config
+            .meter_openai_key
+            .as_deref()
+            .is_none_or(|key| key.trim().is_empty())
+    {
+        return Err(anyhow::anyhow!(
+            "provisioned Colony Credits requires a gateway meter credential"
+        ));
+    }
     if let Some(ref owner) = startup_owner {
         tracing::info!("agent owner: {owner}");
     } else {
@@ -1399,7 +1458,7 @@ async fn tokio_main() -> Result<()> {
     // spawn unmetered and spend money the ledger never sees. Metering needs an
     // owner to encrypt records to; without one there is nobody who could read
     // them, so it stays off rather than publishing records nobody can decrypt.
-    let mut meter_publisher_task = if config.no_meter {
+    let mut meter_publisher_task = if config.no_meter && !config.provisioned {
         tracing::warn!(
             "wire metering disabled (--no-meter): agent spend will not reach the cost ledger"
         );
@@ -1446,13 +1505,16 @@ async fn tokio_main() -> Result<()> {
         };
         match buzz_meter::start_meter(meter_config).await {
             Ok((port, mut calls, handle)) => {
-                if meter_env::set_active_meter(meter_env::ActiveMeter {
+                if let Err(_meter) = meter_env::set_active_meter(meter_env::ActiveMeter {
                     port,
                     handle,
                     metered: metered_providers,
-                })
-                .is_err()
-                {
+                }) {
+                    if config.provisioned {
+                        return Err(anyhow::anyhow!(
+                            "provisioned Colony Credits could not install its metering checkpoint"
+                        ));
+                    }
                     tracing::error!("metering checkpoint was already installed");
                 }
                 if metered_providers.none_configured() {
@@ -1513,6 +1575,11 @@ async fn tokio_main() -> Result<()> {
             }
             Err(error) => {
                 tracing::error!("metering checkpoint failed to start: {error}");
+                if config.provisioned {
+                    return Err(anyhow::anyhow!(
+                        "provisioned Colony Credits metering checkpoint failed to start"
+                    ));
+                }
                 None
             }
         }
@@ -1522,6 +1589,18 @@ async fn tokio_main() -> Result<()> {
         );
         None
     };
+
+    // The local checkpoint must be live before any underlying ACP child is
+    // spawned. Provisioned launches carry a relay token in the parent env, so
+    // initializing the pool before this point would let a child bypass the
+    // ledger when `start_meter` failed or had not run yet.
+    let mut pool = if config.lazy_pool {
+        AgentPool::from_slots((0..config.agents).map(|_| None).collect())
+    } else {
+        initialize_agent_pool(&PoolStartup::from_config(&config, observer.clone()), None).await?
+    };
+    let mut pool_ready = !config.lazy_pool;
+    let mut pool_lifecycle: PoolLifecycle<AgentPool> = PoolLifecycle::listening();
 
     let mut relay_observer_control_rx = None;
     let mut relay_observer_publisher_task = None;
@@ -1614,6 +1693,30 @@ async fn tokio_main() -> Result<()> {
             tracing::info!("subscribed to channel {channel_id}");
         }
     }
+
+    // A wildcard rule (empty `kinds`) includes asks just like an explicit
+    // KIND_ASK entry. Keep the global inbox decision independent of channel
+    // discovery: a channel-less agent can still be addressed by an ask.
+    let mut resolved_rule_kinds = Vec::new();
+    for rule in &rules {
+        if rule.kinds.is_empty() {
+            resolved_rule_kinds.push(buzz_core::kind::KIND_ASK);
+        } else {
+            resolved_rule_kinds.extend(rule.kinds.iter().copied());
+        }
+    }
+    let mut ask_events = if should_subscribe_ask_inbox(&channel_ids)
+        && should_subscribe_ask_inbox_for_kinds(&resolved_rule_kinds)
+    {
+        if let Err(e) = relay.subscribe_ask_inbox().await {
+            tracing::warn!("failed to subscribe to ask inbox: {e}");
+        } else {
+            tracing::info!("subscribed to ask inbox");
+        }
+        relay.take_ask_events()
+    } else {
+        None
+    };
 
     if let Some((observer, publisher, keys, agent_pubkey, owner_pubkey, owner)) =
         relay_observer_publisher.take()
@@ -1708,6 +1811,9 @@ async fn tokio_main() -> Result<()> {
         None
     };
     let mut heartbeat_in_flight = false;
+    // Asks have no channel queue to hold them while every agent is busy. Keep
+    // accepted asks here until the shared channel-less turn slot is available.
+    let mut pending_asks: VecDeque<(nostr::Event, String)> = VecDeque::new();
 
     let mut presence_heartbeat = if config.presence_enabled {
         let interval = Duration::from_secs(60);
@@ -1945,7 +2051,12 @@ async fn tokio_main() -> Result<()> {
             }
         }
 
+        dispatch_pending_asks(&mut pool, &ctx, &mut heartbeat_in_flight, &mut pending_asks);
+
         // Borrow result_rx and join_set simultaneously via split-borrow helper.
+        // Keep the ask receiver bounded while the shared channel-less slot is
+        // occupied; the relay can then replay any asks that wait in its queue.
+        let ask_dispatch_ready = !heartbeat_in_flight && pool.any_idle();
         let pool_event: Option<PoolEvent> = {
             let (result_rx, join_set) = pool.rx_and_join_set();
             tokio::select! {
@@ -2026,6 +2137,60 @@ async fn tokio_main() -> Result<()> {
                         None => {
                             relay_observer_control_rx = None;
                             tracing::warn!("relay observer control channel closed");
+                        }
+                    }
+                    None
+                }
+                ask_event = async {
+                    match ask_events.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                }, if ask_dispatch_ready => {
+                    let _ = result_rx;
+                    match ask_event {
+                        Some(event) => {
+                            if config.ignore_self && event.pubkey.to_hex() == pubkey_hex {
+                                tracing::debug!(
+                                    event_id = %event.id,
+                                    "dropping self-authored ask"
+                                );
+                                continue;
+                            }
+
+                            let author = event.pubkey.to_hex();
+                            let allowed = author_allowed(
+                                &config.respond_to,
+                                &config.respond_to_allowlist,
+                                &author,
+                                false,
+                                &owner_cache,
+                                &ctx.rest_client,
+                            )
+                            .await;
+                            if !allowed {
+                                tracing::info!(
+                                    author = %author,
+                                    mode = %config.respond_to,
+                                    is_dm = false,
+                                    event_id = %event.id,
+                                    "not answering: the ask author is not permitted by respond_to"
+                                );
+                                continue;
+                            }
+
+                            let Some(prompt) = pool::ask_turn_prompt(&event) else {
+                                tracing::debug!(
+                                    event_id = %event.id,
+                                    "dropping malformed ask — no turn prompt"
+                                );
+                                continue;
+                            };
+                            pending_asks.push_back((event, prompt));
+                        }
+                        None => {
+                            ask_events = None;
+                            tracing::warn!("ask inbox event stream ended");
                         }
                     }
                     None
@@ -2308,12 +2473,24 @@ async fn tokio_main() -> Result<()> {
                                 )
                                 .await;
                                 if !allowed {
-                                    tracing::debug!(
+                                    // INFO, not DEBUG: this is the difference
+                                    // between "the agent is broken" and "the
+                                    // agent was told not to answer you", and
+                                    // from the outside those look identical.
+                                    // The relay accepted the message and
+                                    // indexed the mention, so every surface
+                                    // says it was delivered; the agent then
+                                    // discards it and, at DEBUG, says nothing
+                                    // an operator running at INFO will ever
+                                    // see. Diagnosing that costs an hour and
+                                    // ends at a one-line gate.
+                                    tracing::info!(
                                         channel_id = %buzz_event.channel_id,
                                         author = %buzz_event.event.pubkey.to_hex(),
                                         mode = %config.respond_to,
                                         is_dm,
-                                        "inbound author gate — dropping event"
+                                        "not answering: the author is not permitted by respond_to; \
+                                         set --respond-to (BUZZ_ACP_RESPOND_TO) to widen it"
                                     );
                                     continue;
                                 }
@@ -3132,6 +3309,7 @@ fn dispatch_pending(
                 result_tx,
                 Some(control_rx),
                 task_turn_id,
+                PromptSource::Channel(channel_id),
             )
             .await;
         });
@@ -3184,6 +3362,63 @@ fn is_auth_error(error: &acp::AcpError) -> bool {
         return false;
     };
     message.contains("Re-authenticate") || message.contains("API Error: 401")
+}
+
+/// Stable, non-retryable denial contract emitted by the provisioned meter
+/// boundary. Only the exact canonical body marker is accepted; adapter text
+/// and unrelated HTTP status mentions never change queue/pool fate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProvisionedCreditsDenial {
+    Unauthorized,
+    Depleted,
+}
+
+fn provisioned_credits_denial(error: &acp::AcpError) -> Option<ProvisionedCreditsDenial> {
+    let acp::AcpError::AgentError { message, .. } = error else {
+        return None;
+    };
+    if contains_exact_gateway_marker(
+        message,
+        buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+    ) {
+        return Some(ProvisionedCreditsDenial::Unauthorized);
+    }
+    if contains_exact_gateway_marker(
+        message,
+        buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+    ) {
+        return Some(ProvisionedCreditsDenial::Depleted);
+    }
+    None
+}
+
+fn contains_exact_gateway_marker(message: &str, marker: &str) -> bool {
+    message.match_indices(marker).any(|(offset, _)| {
+        let before = message[..offset].chars().next_back();
+        let after = message[offset + marker.len()..].chars().next();
+        before.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+            && after.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+    })
+}
+
+fn provisioned_credits_copy(denial: ProvisionedCreditsDenial) -> &'static str {
+    match denial {
+        ProvisionedCreditsDenial::Unauthorized => {
+            "⚠️ Colony Credits authorization expired — reconnect to resume this agent."
+        }
+        ProvisionedCreditsDenial::Depleted => {
+            "⚠️ Colony Credits depleted — top up, then reconnect."
+        }
+    }
+}
+
+fn provisioned_credits_marker(denial: ProvisionedCreditsDenial) -> &'static str {
+    match denial {
+        ProvisionedCreditsDenial::Unauthorized => {
+            buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_401_MARKER
+        }
+        ProvisionedCreditsDenial::Depleted => buzz_meter::COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+    }
 }
 
 /// Spawn a task that posts a user-visible failure notice to the relay.
@@ -3306,6 +3541,24 @@ fn handle_prompt_result(
                 } else {
                     hard_timeout_fate_suffix = Some(" — requeued for retry (recently active)");
                 }
+            } else if config.provisioned
+                && matches!(&result.outcome, PromptOutcome::Error(e) if provisioned_credits_denial(e).is_some())
+            {
+                if let PromptOutcome::Error(error) = &result.outcome {
+                    if let Some(denial) = provisioned_credits_denial(error) {
+                        tracing::warn!(
+                            channel_id = %batch.channel_id,
+                            events = batch.events.len(),
+                            status = ?denial,
+                            "dead-lettering batch immediately — provisioned credits denial"
+                        );
+                        spawn_failure_notice(
+                            rest_client,
+                            &batch,
+                            provisioned_credits_copy(denial).to_string(),
+                        );
+                    }
+                }
             } else if matches!(&result.outcome, PromptOutcome::Error(e) if is_auth_error(e)) {
                 // Auth errors are non-retryable: the token won't self-repair
                 // between retries, so requeueing only wastes attempt slots and
@@ -3348,7 +3601,7 @@ fn handle_prompt_result(
 
     match &result.source {
         PromptSource::Channel(ch) => queue.mark_complete(*ch),
-        PromptSource::Heartbeat => *heartbeat_in_flight = false,
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => *heartbeat_in_flight = false,
     }
 
     // Strip sessions for channels the agent was removed from while this
@@ -3384,9 +3637,17 @@ fn handle_prompt_result(
 
     let channel_id = match &result.source {
         PromptSource::Channel(ch) => Some(*ch),
-        PromptSource::Heartbeat => None,
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
     };
     let turn_id = result.turn_id.clone();
+    let gateway_denial = if config.provisioned {
+        match &result.outcome {
+            PromptOutcome::Error(error) => provisioned_credits_denial(error),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let emit_turn_error = |error_msg: &str, error_code: Option<i64>| {
         if let Some(ref observer) = observer {
             let mut payload = serde_json::json!({
@@ -3395,6 +3656,14 @@ fn handle_prompt_result(
             });
             if let Some(code) = error_code {
                 payload["code"] = serde_json::json!(code);
+            }
+            if let Some(denial) = gateway_denial {
+                payload["gateway_status"] = serde_json::json!(match denial {
+                    ProvisionedCreditsDenial::Unauthorized => 401,
+                    ProvisionedCreditsDenial::Depleted => 402,
+                });
+                payload["gateway_marker"] = serde_json::json!(provisioned_credits_marker(denial));
+                payload["action"] = serde_json::json!("reconnect");
             }
             observer.emit(
                 "turn_error",
@@ -3560,6 +3829,14 @@ fn handle_prompt_result(
                     tracing::error!("all agents dead — exiting");
                     return LoopAction::Exit;
                 }
+            } else if let Some(denial) = gateway_denial {
+                tracing::warn!(
+                    agent = agent_index,
+                    status = ?denial,
+                    "provisioned credits denial — returning healthy agent to pool"
+                );
+                emit_turn_error(provisioned_credits_copy(denial), error_code);
+                pool.return_agent(result.agent);
             } else {
                 tracing::warn!(
                     agent = agent_index,
@@ -3745,6 +4022,7 @@ fn dispatch_heartbeat(
             result_tx,
             None,
             task_turn_id,
+            PromptSource::Heartbeat,
         )
         .await;
     });
@@ -3762,6 +4040,87 @@ fn dispatch_heartbeat(
     );
     *heartbeat_in_flight = true;
     tracing::info!(agent = agent_index, "heartbeat_fired");
+}
+
+/// Dispatch the next accepted Ask when the shared channel-less turn slot is
+/// available. Asks have no channel queue, so keep them pending until an agent
+/// is idle rather than dropping one merely because all agents are busy.
+fn dispatch_pending_asks(
+    pool: &mut AgentPool,
+    ctx: &Arc<PromptContext>,
+    heartbeat_in_flight: &mut bool,
+    pending_asks: &mut VecDeque<(nostr::Event, String)>,
+) {
+    if *heartbeat_in_flight {
+        return;
+    }
+    let Some((event, prompt)) = pending_asks.pop_front() else {
+        return;
+    };
+    if !dispatch_ask(
+        pool,
+        ctx,
+        heartbeat_in_flight,
+        event.clone(),
+        prompt.clone(),
+    ) {
+        pending_asks.push_front((event, prompt));
+    }
+}
+
+/// Spawn a channel-less turn for one addressed Ask.
+fn dispatch_ask(
+    pool: &mut AgentPool,
+    ctx: &Arc<PromptContext>,
+    heartbeat_in_flight: &mut bool,
+    event: nostr::Event,
+    prompt_text: String,
+) -> bool {
+    if *heartbeat_in_flight {
+        return false;
+    }
+    let Some(agent) = pool.try_claim(None) else {
+        return false;
+    };
+
+    let ask_event_id = event.id.to_hex();
+    let source = PromptSource::Ask {
+        ask_event_id: ask_event_id.clone(),
+    };
+    let result_tx = pool.result_tx();
+    let ctx_clone = Arc::clone(ctx);
+    let agent_index = agent.index;
+    let turn_id = Uuid::new_v4().to_string();
+    let task_turn_id = turn_id.clone();
+
+    let abort_handle = pool.join_set.spawn(async move {
+        pool::run_prompt_task(
+            agent,
+            None,
+            Some(prompt_text),
+            ctx_clone,
+            result_tx,
+            None,
+            task_turn_id,
+            source,
+        )
+        .await;
+    });
+
+    pool.task_map_mut().insert(
+        abort_handle.id(),
+        pool::TaskMeta {
+            agent_index,
+            channel_id: None,
+            turn_id,
+            recoverable_batch: None,
+            control_tx: None,
+            steer_tx: None,
+        },
+    );
+    *heartbeat_in_flight = true;
+    tracing::info!(agent = agent_index, ask_event_id, "ask_fired");
+    true
 }
 
 /// The Chief of Staff's company onboarding protocol.
@@ -3960,6 +4319,67 @@ what you already know"
         assert!(PROMPT.contains("State lives in this thread"));
         assert!(PROMPT.contains("re-read the thread"));
         assert!(PROMPT.contains("State is read from persistent thread Blocks and receipts"));
+    }
+}
+
+#[cfg(test)]
+mod ask_prompt_tests {
+    const BASE_PROMPT: &str = include_str!("base_prompt.md");
+
+    #[test]
+    fn an_ask_event_carries_its_ask_block_into_the_turn() {
+        let filer = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"type":"decision","headline":"Which vendor for SMS?","cost_of_delay":"onboarding is blocked"}"#,
+        )
+        .sign_with_keys(&filer)
+        .unwrap();
+
+        let ask = crate::ask_context::read_incoming_ask(&event)
+            .expect("an ask event must read as an ask");
+        let section = crate::ask_context::ask_context_section(&ask);
+
+        assert!(
+            section.contains(&event.id.to_hex()),
+            "the turn must carry the ask id or the agent cannot answer it"
+        );
+    }
+
+    #[test]
+    fn base_prompt_tells_an_agent_what_to_do_with_a_received_ask() {
+        assert!(
+            BASE_PROMPT.contains("<colony-ask>"),
+            "the prompt must explain the block the agent will receive"
+        );
+        assert!(
+            BASE_PROMPT.contains("buzz asks answer"),
+            "an agent told only how to raise asks will never answer one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ask_inbox_subscription_tests {
+    use super::*;
+
+    #[test]
+    fn the_ask_inbox_is_subscribed_even_with_no_channels() {
+        assert!(
+            should_subscribe_ask_inbox(&[]),
+            "an agent with no channel memberships must still receive asks \
+             addressed to it; asks are agent-addressed, not room-addressed"
+        );
+    }
+
+    #[test]
+    fn the_ask_inbox_is_skipped_when_asks_are_not_subscribed() {
+        let kinds = vec![buzz_core::kind::KIND_STREAM_MESSAGE];
+        assert!(
+            !should_subscribe_ask_inbox_for_kinds(&kinds),
+            "an operator who overrode kinds to exclude asks must not be woken \
+             by them through a side door"
+        );
     }
 }
 
@@ -4348,7 +4768,7 @@ async fn run_auth_methods(args: AuthMethodsArgs) -> Result<()> {
         }
     };
 
-    let init_result = match tokio::time::timeout(MODELS_TIMEOUT, client.initialize()).await {
+    let init_result = match tokio::time::timeout(models_timeout(), client.initialize()).await {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             client.shutdown().await;
@@ -4357,7 +4777,7 @@ async fn run_auth_methods(args: AuthMethodsArgs) -> Result<()> {
         }
         Err(_) => {
             client.shutdown().await;
-            eprintln!("error: agent timed out ({MODELS_TIMEOUT:?})");
+            eprintln!("error: agent timed out ({:?})", models_timeout());
             std::process::exit(1);
         }
     };
@@ -4396,7 +4816,7 @@ async fn run_authenticate(args: AuthenticateArgs) -> Result<()> {
         }
     };
 
-    let init_result = match tokio::time::timeout(MODELS_TIMEOUT, client.initialize()).await {
+    let init_result = match tokio::time::timeout(models_timeout(), client.initialize()).await {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             client.shutdown().await;
@@ -4405,7 +4825,7 @@ async fn run_authenticate(args: AuthenticateArgs) -> Result<()> {
         }
         Err(_) => {
             client.shutdown().await;
-            eprintln!("error: agent initialize timed out ({MODELS_TIMEOUT:?})");
+            eprintln!("error: agent initialize timed out ({:?})", models_timeout());
             std::process::exit(1);
         }
     };
@@ -4467,7 +4887,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 
     // Initialize + session/new under a timeout. Client is owned above,
     // so shutdown() runs on all paths (success, error, timeout).
-    let protocol_result = tokio::time::timeout(MODELS_TIMEOUT, async {
+    let protocol_result = tokio::time::timeout(models_timeout(), async {
         let init = client.initialize().await?;
         let session = client.session_new_full(&cwd, vec![], None, None).await?;
         Ok::<_, acp::AcpError>((init, session))
@@ -4483,7 +4903,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
         }
         Err(_) => {
             client.shutdown().await;
-            eprintln!("error: agent timed out ({MODELS_TIMEOUT:?})");
+            eprintln!("error: agent timed out ({:?})", models_timeout());
             std::process::exit(1);
         }
     };
@@ -5422,6 +5842,7 @@ mod build_mcp_servers_tests {
             channels_override: None,
             no_mention_filter: false,
             no_meter: true,
+            provisioned: false,
             meter_anthropic_key: None,
             meter_openai_key: None,
             meter_anthropic_upstream: None,
@@ -5651,6 +6072,7 @@ mod error_outcome_emission_tests {
             channels_override: None,
             no_mention_filter: false,
             no_meter: true,
+            provisioned: false,
             meter_anthropic_key: None,
             meter_openai_key: None,
             meter_anthropic_upstream: None,
@@ -6670,6 +7092,158 @@ mod error_outcome_emission_tests {
         assert!(
             !is_auth_error(&timeout),
             "WriteTimeout must not be classified as auth error"
+        );
+    }
+
+    #[test]
+    fn provisioned_credits_denial_accepts_only_canonical_meter_markers() {
+        let unauthorized_messages = [
+            "adapter error: COLONY_CREDITS_GATEWAY_STATUS_401",
+            buzz_meter::colony_credits_gateway_denial_body(401).expect("meter canonical 401 body"),
+        ];
+        for message in unauthorized_messages {
+            let error = acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                provisioned_credits_denial(&error),
+                Some(ProvisionedCreditsDenial::Unauthorized),
+                "{message} must be a non-retryable provisioned denial"
+            );
+        }
+
+        let depleted_messages = [
+            "adapter error: COLONY_CREDITS_GATEWAY_STATUS_402",
+            buzz_meter::colony_credits_gateway_denial_body(402).expect("meter canonical 402 body"),
+        ];
+        for message in depleted_messages {
+            let error = acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                provisioned_credits_denial(&error),
+                Some(ProvisionedCreditsDenial::Depleted),
+                "{message} must be a non-retryable provisioned denial"
+            );
+        }
+    }
+
+    #[test]
+    fn provisioned_credits_denial_ignores_transport_and_unrelated_statuses() {
+        let transport = acp::AcpError::Io(std::io::Error::other("connection reset"));
+        assert_eq!(provisioned_credits_denial(&transport), None);
+        let unrelated = acp::AcpError::AgentError {
+            code: -32000,
+            message: "upstream returned 500 Internal Server Error".to_string(),
+        };
+        assert_eq!(provisioned_credits_denial(&unrelated), None);
+        for message in [
+            "llm auth: upstream returned 401",
+            "API Error: 402 Payment Required",
+            "Colony Credits depleted",
+            "COLONY_CREDITS_GATEWAY_STATUS_4012",
+        ] {
+            let error = acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                provisioned_credits_denial(&error),
+                None,
+                "non-canonical adapter text must remain retryable: {message}"
+            );
+        }
+    }
+
+    async fn provisioned_denial_fate(message: &str) -> (usize, usize) {
+        let keys = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "test")
+            .sign_with_keys(&keys)
+            .unwrap();
+        let channel_id = uuid::Uuid::new_v4();
+        let batch = FlushBatch {
+            channel_id,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: std::time::Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![None]);
+        let task_id = pool.join_set.spawn(async {}).id();
+        pool.task_map_mut().insert(
+            task_id,
+            crate::pool::TaskMeta {
+                agent_index: 0,
+                channel_id: None,
+                turn_id: "test-turn-id".to_string(),
+                recoverable_batch: None,
+                control_tx: None,
+                steer_tx: None,
+            },
+        );
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let mut config = test_config();
+        config.provisioned = true;
+        let mut heartbeat_in_flight = false;
+        let removed_channels = std::collections::HashSet::new();
+        let mut crash_history = vec![SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        }];
+        let (respawn_tx, _respawn_rx) = mpsc::channel(8);
+        let mut respawn_tasks = tokio::task::JoinSet::new();
+        let result = PromptResult {
+            agent,
+            source: PromptSource::Channel(channel_id),
+            turn_id: "test-turn-id".to_string(),
+            outcome: PromptOutcome::Error(acp::AcpError::AgentError {
+                code: -32000,
+                message: message.to_string(),
+            }),
+            batch: Some(batch),
+        };
+        handle_prompt_result(
+            &mut pool,
+            &mut queue,
+            &config,
+            result,
+            &mut heartbeat_in_flight,
+            &removed_channels,
+            &mut crash_history,
+            &respawn_tx,
+            &mut respawn_tasks,
+            None,
+            None,
+        );
+        (queue.pending_channels(), pool.live_count())
+    }
+
+    #[tokio::test]
+    async fn provisioned_401_dead_letters_once_and_returns_agent_to_pool() {
+        let (pending_channels, live_agents) =
+            provisioned_denial_fate("COLONY_CREDITS_GATEWAY_STATUS_401").await;
+        assert_eq!(pending_channels, 0, "401 must not be requeued");
+        assert_eq!(
+            live_agents, 1,
+            "401 must leave the process healthy in the pool"
+        );
+    }
+
+    #[tokio::test]
+    async fn provisioned_402_dead_letters_once_and_returns_agent_to_pool() {
+        let (pending_channels, live_agents) =
+            provisioned_denial_fate("COLONY_CREDITS_GATEWAY_STATUS_402").await;
+        assert_eq!(pending_channels, 0, "402 must not be requeued");
+        assert_eq!(
+            live_agents, 1,
+            "402 must leave the process healthy in the pool"
         );
     }
 

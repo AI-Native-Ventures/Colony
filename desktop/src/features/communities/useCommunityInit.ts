@@ -10,6 +10,7 @@ import {
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
+import { resetLeadUpdateListeners } from "@/features/discovery/data/leadUpdates";
 import { resetLinkPreviewTitleCache } from "@/shared/lib/useResolvedLinkPreviews";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import {
@@ -17,6 +18,10 @@ import {
   initDraftStore,
 } from "@/features/messages/lib/useDrafts";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
+import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
+import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
+import { resetTerminalSessions } from "@/features/workspace/lib/terminalSessions";
+import { resetWebSessions } from "@/features/workspace/lib/webSessions";
 import {
   resetActiveAgentTurnsStore,
   saveActiveAgentTurnsForCommunity,
@@ -54,10 +59,14 @@ function resetCommunityState({
   resetAvatarState,
 }: {
   resetAvatarState: boolean;
-}): void {
+}): Promise<void> {
   relayClient.disconnect();
   resetRateLimitGate();
   clearAllDrafts();
+  const terminalReset = resetTerminalSessions();
+  const webReset = resetWebSessions();
+  resetWorkspaceTabs();
+  resetChannelSurfaceModes();
   resetAgentObserverStore();
   resetActiveAgentTurnsStore();
   resetAgentWorkingSignal();
@@ -74,11 +83,13 @@ function resetCommunityState({
   }
   resetSidebarRelayConnectionCardState();
   resetMediaCaches();
+  resetLeadUpdateListeners();
   resetVideoPlayerState();
   resetRenderScopedReactionHydration();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
   resetLinkPreviewTitleCache();
+  return Promise.all([terminalReset, webReset]).then(() => undefined);
 }
 
 type CommunityInitResult =
@@ -202,10 +213,26 @@ export function useCommunityInit(
           // store under the outgoing community ID and delete its snapshot.
           prevCommunityIdRef.current = null;
         }
-        resetCommunityState({
-          resetAvatarState:
-            appliedRelayUrlRef.current !== activeCommunity.relayUrl,
-        });
+        try {
+          await resetCommunityState({
+            resetAvatarState:
+              appliedRelayUrlRef.current !== activeCommunity.relayUrl,
+          });
+        } catch (error) {
+          console.error("Failed to close terminal sessions:", error);
+          if (!cancelled) {
+            setResult({
+              isReady: false,
+              needsSetup: false,
+              appliedKey: null,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to close terminal sessions",
+            });
+          }
+          return;
+        }
       }
       hasInitializedRef.current = true;
       appliedRelayUrlRef.current = activeCommunity.relayUrl;

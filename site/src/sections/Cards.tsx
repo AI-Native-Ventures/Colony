@@ -31,21 +31,23 @@ import { getActiveHue, HUE_ACCENT, HUE_SCATTER_TONES } from "@/brand/hue";
 //   -frames:v 1 site/src/assets/<name>.png
 // (the source is a ~1MB animated PNG; one frame is ~30KB, and a landing page
 // does not need three megabytes of looping avatars).
+// Order matches the in-app kickoff order (Scout, Forager, Tender per
+// STARTER_PERSONA_ORDER): the lead first, then teammates.
 const CARDS = [
   {
-    art: tenderArt,
-    title: "Communicate with your team",
-    body: "Keep people, context, decisions, and next steps in one shared room. No more chasing threads, docs, and status updates.",
-  },
-  {
     art: scoutArt,
-    title: "Bring in your agents",
-    body: "Invite specialized agents into the conversation so they compare notes, divide work, and build on your team's context.",
+    title: "Scout finds your customers",
+    body: "Researches your market and fills your pipeline with people worth talking to.",
   },
   {
     art: foragerArt,
-    title: "Manage your git projects",
-    body: "Turn the discussion into plans, code, reviews, and PRs without hopping between your tracker, chat app, and dev tools.",
+    title: "Forager brings the work home",
+    body: "Drafts the outreach and follows up, always with your sign-off.",
+  },
+  {
+    art: tenderArt,
+    title: "Tender keeps everything moving",
+    body: "Tracks the team's work and makes sure nothing stalls or slips.",
   },
 ];
 
@@ -60,10 +62,10 @@ export function Cards() {
   return (
     <section
       id="story"
-      className="relative overflow-hidden bg-colony-canvasMid px-6 py-20 sm:py-28"
+      className="relative overflow-hidden bg-colony-canvasLight px-6 py-20 sm:py-28"
     >
       <h2 className="mx-auto max-w-3xl text-center text-3xl font-semibold leading-tight tracking-tight text-colony-ink [text-wrap:balance] sm:text-4xl lg:text-5xl">
-        Your people, your agents, your project, all in one place.
+        Meet your first three hires.
       </h2>
 
       <div className="relative mx-auto mt-16 grid max-w-5xl gap-5 sm:mt-20 sm:grid-cols-3">

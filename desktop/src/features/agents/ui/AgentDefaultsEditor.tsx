@@ -37,6 +37,7 @@ import {
   AgentConfigFields,
   EMPTY_GLOBAL_CONFIG,
 } from "@/features/agents/ui/AgentConfigFields";
+import { ColonyCreditsCredentialChoice } from "@/features/agents/ui/ColonyCreditsCredentialChoice";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 
@@ -191,10 +192,18 @@ export function AgentDefaultsEditor({
     setIsCustomProvider(false);
   }
 
-  async function handleSave() {
+  /**
+   * Persist a config through the standard save path and sync the draft with
+   * the backend's canonical result. Shared by the Save button and the
+   * Connect OpenRouter auto-save; rejects after surfacing the error so
+   * callers (the connect control) can show their own message.
+   */
+  async function performSave(
+    submittedConfig: GlobalAgentConfig,
+    options?: { forceSync?: boolean },
+  ) {
     // Snapshot the config being submitted so we can detect edits that arrive
     // during the IPC round-trip and avoid clobbering the user's newer input.
-    const submittedConfig = config;
     onSavingChange?.(true);
     setSaveState("saving");
     setSaveError(null);
@@ -204,7 +213,8 @@ export function AgentDefaultsEditor({
       // IPC window. If the user edited, keep their newer value and leave dirty=true
       // so they can save again. setDirty(false) runs inside the updater so both
       // state updates batch into the same render (React 18 automatic batching).
-      const savedCurrentDraft = configRef.current === submittedConfig;
+      const savedCurrentDraft =
+        options?.forceSync === true || configRef.current === submittedConfig;
       setConfig((current) => {
         if (!savedCurrentDraft) {
           // Mid-flight edit detected — do not overwrite newer user input.
@@ -231,9 +241,26 @@ export function AgentDefaultsEditor({
     } catch (err) {
       setSaveState("error");
       setSaveError(typeof err === "string" ? err : "Couldn't save.");
+      throw err;
     } finally {
       onSavingChange?.(false);
     }
+  }
+
+  async function handleSave() {
+    try {
+      await performSave(config);
+    } catch {
+      // Error state is already surfaced by performSave.
+    }
+  }
+
+  // Connect OpenRouter persists the exchanged key immediately (the ticket's
+  // two-click flow) instead of staging a draft the user must save manually.
+  // forceSync: the OAuth key must always land in the visible draft even when
+  // `renderedConfig` injected the fallback harness (fresh-machine case).
+  function handleAutoSaveConfig(next: GlobalAgentConfig) {
+    return performSave(next, { forceSync: true });
   }
 
   const configFields = selectedRuntime ? (
@@ -248,6 +275,7 @@ export function AgentDefaultsEditor({
       onCustomModelEditingChange={setIsCustomModelEditing}
       onIsCustomProviderChange={setIsCustomProvider}
       onValidityChange={setConfigIsValid}
+      onAutoSaveConfig={handleAutoSaveConfig}
       placeholderClassName={flatLayout ? "text-muted-foreground/55" : undefined}
       runtimeFileConfig={runtimeFileConfig}
       key={selectedRuntime.id}
@@ -294,6 +322,11 @@ export function AgentDefaultsEditor({
               value={selectedRuntime?.id ?? ""}
             />
           </div>
+          <ColonyCreditsCredentialChoice
+            config={renderedConfig}
+            onConfigChange={handleConfigChange}
+            runtimeId={selectedRuntime?.id ?? ""}
+          />
           {flatLayout ? (
             <AnimatePresence initial={false}>
               {configFields ? (

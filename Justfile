@@ -316,13 +316,21 @@ test:
 # Run unit tests only (no infra needed)
 test-unit:
     #!/usr/bin/env bash
+    set -euo pipefail
     if command -v cargo-nextest &>/dev/null; then
         cargo nextest run -p buzz-core -p buzz-auth --lib
+        cargo nextest run -p buzz-voice --lib
         cargo nextest run -p buzz-cli
         # buzz-acp: agent prompt contracts and pool/queue logic. Pure unit
         # tests, no infra — they were absent from this gate, so a broken
         # base-prompt assertion sat red without CI noticing.
         cargo nextest run -p buzz-acp --lib
+        # buzz-native: the shell-agnostic core and the HostCtx seam. Pure unit
+        # tests, no infra. It is a new workspace member and this recipe is an
+        # explicit allowlist, not a workspace run, so without this line its
+        # tests exist and never execute -- which is how a seam that eleven
+        # conversion tickets code against could rot unnoticed.
+        cargo nextest run -p buzz-native --lib
         # buzz-db migrator/lint tests: pure SQL-parsing unit tests (no infra).
         # They guard the embedded-migrator invariant (exactly the consolidated
         # 0001; cutover/backfill stays an operator script, not startup state)
@@ -700,6 +708,10 @@ migrate: _ensure-migrations
 clean:
     cargo clean
     cargo clean --manifest-path desktop/src-tauri/Cargo.toml
+
+# Stop Compose stacks whose worktree is gone (dry run; pass --yes to apply)
+docker-gc *ARGS:
+    @./scripts/docker-gc.sh {{ARGS}}
 
 # Check the Rust workspace compiles without producing binaries
 check-compile:

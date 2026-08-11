@@ -1,4 +1,4 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { startDragging } from "@/shared/api/nativeBridge";
 import * as React from "react";
 
 import { performTitleBarDoubleClickAction } from "@/shared/lib/titleBarActions";
@@ -30,7 +30,7 @@ export function StartupWindowDragRegion() {
         return;
       }
 
-      void getCurrentWindow().startDragging();
+      void startDragging();
     }
 
     function stopTauriDragRegionHandler(event: MouseEvent) {

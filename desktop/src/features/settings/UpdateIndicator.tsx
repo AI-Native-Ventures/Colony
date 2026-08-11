@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/shared/api/nativeBridge";
 import type { ComponentType } from "react";
 import { ExternalLink, RefreshCcw, RotateCw } from "lucide-react";
 

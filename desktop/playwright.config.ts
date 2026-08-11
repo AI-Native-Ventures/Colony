@@ -32,6 +32,9 @@ export default defineConfig({
         "**/channel-composer-overflow.spec.ts",
         "**/badge.spec.ts",
         "**/channel-browser.spec.ts",
+        "**/channel-workspace.spec.ts",
+        "**/workspace-terminal.spec.ts",
+        "**/workspace-web.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
         "**/invites-settings-screenshots.spec.ts",
@@ -52,6 +55,7 @@ export default defineConfig({
         "**/activity-scope-label-screenshots.spec.ts",
         "**/welcome-agent-modal-screenshots.spec.ts",
         "**/local-archive-screenshots.spec.ts",
+        "**/voice-settings.spec.ts",
         "**/agent-readiness-screenshots.spec.ts",
         "**/agent-error-state-screenshots.spec.ts",
         "**/edit-agent.spec.ts",
@@ -116,6 +120,7 @@ export default defineConfig({
         "**/deep-link-invite.spec.ts",
         "**/invite-link-copy.spec.ts",
         "**/global-agent-config-screenshots.spec.ts",
+        "**/provisioned-credits-recovery.spec.ts",
         "**/doctor-states.spec.ts",
         "**/onboarding-avatar-skip.spec.ts",
         "**/onboarding-backup.spec.ts",
@@ -137,6 +142,11 @@ export default defineConfig({
         "**/discovery-scroll.spec.ts",
         "**/discovery-settings.spec.ts",
         "**/discovery-lead-detail.spec.ts",
+        "**/discovery-lead-edit.spec.ts",
+        "**/discovery-lead-status.spec.ts",
+        "**/discovery-pipeline.spec.ts",
+        "**/huddle-transcription.spec.ts",
+        "**/ask-card.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
@@ -169,6 +179,25 @@ export default defineConfig({
       },
       expect: {
         timeout: process.env.CI ? 15_000 : 10_000,
+      },
+    },
+    // Engine-parity projects. The packaged macOS app renders in WKWebView, so
+    // any spec whose subject is raw engine input behaviour (pointer vs mouse
+    // events, wheel delivery, Enter-to-submit) runs on BOTH engines here.
+    // Catching those quirks costs seconds; catching them in the packaged Tauri
+    // harness costs a full release rebuild.
+    {
+      name: "engine-chromium",
+      testMatch: ["**/workspace-web-input.spec.ts"],
+      use: {
+        ...devices["Desktop Chrome"],
+      },
+    },
+    {
+      name: "engine-webkit",
+      testMatch: ["**/workspace-web-input.spec.ts"],
+      use: {
+        ...devices["Desktop Safari"],
       },
     },
   ],

@@ -44,6 +44,8 @@ pub mod invite;
 pub mod job;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+/// Channel workspace tab action parsing and ownership protocol kinds.
+pub mod workspace_tab;
 
 /// Colony cost ledger: pricing, attribution, and the deterministic engine.
 pub mod ledger;

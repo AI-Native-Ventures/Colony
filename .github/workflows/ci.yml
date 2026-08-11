@@ -9,6 +9,11 @@ on:
     branches: [main, develop, release]
   pull_request:
     branches: [main, develop, release]
+  # Required for the develop merge queue. Without this trigger the queue creates
+  # no check runs at all, so every required check stays pending and entries sit
+  # in AWAITING_CHECKS forever -- three PRs were stuck for an hour before anyone
+  # noticed, because "pending" looks like "running".
+  merge_group:
 
 # One run per ref, newest wins. Rapid promotions to main collapse into a
 # single run that tests the cumulative state instead of billing one full
@@ -30,18 +35,37 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # In a merge_group run, paths-filter has no base to diff against:
+    # github.ref is the gh-readonly-queue branch and fetch-depth 2 does not
+    # contain the queue's base_sha. So buckets are set explicitly rather than
+    # filtered.
+    #
+    # rust / desktop / desktop-rust are forced true because between them they
+    # gate every one of the five required checks (Rust Lint, Unit Tests,
+    # Desktop Core, Desktop, and Detect Changed Paths which always runs). The
+    # queue re-tests those on the merged result, which is the whole point of it.
+    #
+    # web / mobile / blocks are NOT forced. They gate only Web, Mobile and
+    # Blocks Live Gate, none of which is required, and Mobile alone is 915
+    # Flutter tests. Running them per batch buys no gate strength and spends
+    # the queue's 60-minute check_response_timeout -- and a queue run that times
+    # out fails into exactly the stuck-forever state this commit fixes. The
+    # relay e2e chain still runs, since it hangs off `rust`; it is the longest
+    # pole in a queue run and #168 lengthened its cold build further.
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      desktop: ${{ steps.filter.outputs.desktop }}
-      desktop-rust: ${{ steps.filter.outputs.desktop-rust }}
+      rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.rust }}
+      desktop: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop }}
+      desktop-rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop-rust }}
       web: ${{ steps.filter.outputs.web }}
       mobile: ${{ steps.filter.outputs.mobile }}
+      blocks: ${{ steps.filter.outputs.blocks }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 2
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
+        if: github.event_name != 'merge_group'
         with:
           token: ''
           filters: |
@@ -55,10 +79,25 @@ jobs:
               - 'deny.toml'
               - '.github/workflows/ci.yml'
               - 'scripts/run-tests.sh'
+              # Provisioning inputs for the Postgres-backed relay suites. The
+              # `Relay Suites` required check skips with this filter, so a
+              # change to any of these could break interrupt_gate,
+              # interrupt_runtime or e2e_interrupts while the gate stayed
+              # green: create-required-extensions.sql is what puts pgcrypto in
+              # CI's database, and start-relay-for-tests.sh supplies both the
+              # schema and the durable relay key e2e_interrupts requires.
+              - 'scripts/start-relay-for-tests.sh'
+              - 'scripts/create-required-extensions.sql'
+              - 'scripts/attach-schema-partitions.sql'
               - 'justfile'
             desktop:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
+              - 'scripts/native-inventory-core.mjs'
+              - 'scripts/native-inventory-core.test.mjs'
+              - 'scripts/build-real-shell-app.sh'
+              - 'scripts/bundle-sidecars.sh'
+              - 'scripts/run-real-shell-e2e.sh'
               - 'desktop/**'
               - '!desktop/src-tauri/**'
               - 'pnpm-lock.yaml'
@@ -83,6 +122,22 @@ jobs:
               - 'scripts/test-mobile-worktree-overrides.sh'
               - '.github/workflows/mobile-release-candidate.yml'
               - '.github/workflows/ci.yml'
+            blocks:
+              - 'crates/buzz-core/src/block.rs'
+              - 'crates/buzz-core/src/kind.rs'
+              - 'crates/buzz-relay/src/blocks.rs'
+              - 'crates/buzz-relay/src/block_broker.rs'
+              - 'crates/buzz-relay/src/core_blocks.rs'
+              - 'crates/buzz-relay/src/core_blocks/**'
+              - 'desktop/src/features/blocks/**'
+              - 'desktop/tests/e2e/blocks-live.spec.ts'
+              - 'desktop/tests/e2e/fixtures/fake-acp-agent.mjs'
+              - 'desktop/src/shared/constants/kinds.ts'
+              - 'migrations/0027_block_action_claims.sql'
+              - 'migrations/0028_block_catalog_action_claims.sql'
+              - 'scripts/prove-blocks.sh'
+              - 'scripts/start-isolated-test-relay.sh'
+              - 'docker-compose.harness.yml'
       - name: Release workflow source contract
         run: scripts/test-release-ref-contract.sh
       - name: Mobile release contract
@@ -92,7 +147,22 @@ jobs:
       - name: Mobile worktree identity contract
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
-        run: node --test scripts/check-file-sizes-core.test.mjs
+        run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
+      - name: Desktop dev instance identity contract
+        # Runs in this job for the same reason the schema drift guard does:
+        # `Detect Changed Paths` is required and unconditional, so a path
+        # filter cannot skip it. A regression here is silent and expensive --
+        # the app keeps launching, just against a different, empty profile.
+        run: node --test scripts/instance-env.test.mjs
+      - name: Schema drift check
+        # CI provisions Postgres from schema/schema.sql, not from migrations/,
+        # so a table added only to migrations/ is invisible here and surfaces
+        # later as an unrelated-looking product failure. Runs in this job
+        # because `Detect Changed Paths` is required and unconditional, so the
+        # guard cannot be skipped by a path filter.
+        run: |
+          node --test scripts/check-schema-drift.test.mjs
+          node scripts/check-schema-drift.mjs
 
   rust-lint:
     name: Rust Lint
@@ -372,6 +442,8 @@ jobs:
             -p buzz-test-client \
             --lib \
             --test e2e_event_reminder \
+            --test interrupt_gate \
+            --test interrupt_runtime \
             --archive-file target/ci/backend-integration-tests.tar.zst
       - name: Save relay artifacts cache
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
@@ -504,6 +576,11 @@ jobs:
           PGSCHEMA_PLAN_PASSWORD: buzz_dev
         run: |
           ./bin/pgschema apply --file schema/schema.sql --auto-approve
+          # pgschema does not manage extensions, so schema.sql's CREATE
+          # EXTENSION line is silently ignored and the relay's digest()-based
+          # queries fail. See scripts/create-required-extensions.sql.
+          docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
+            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
           docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
@@ -586,6 +663,122 @@ jobs:
           fi
           echo "Desktop E2E Integration shards passed"
 
+  blocks-live-gate:
+    # Runs the Blocks Gate C live loop (protocol kinds 30178/40010-40012)
+    # against a real relay/CLI/ACP tuple exactly as scripts/prove-blocks.sh
+    # proves it locally: isolated Postgres/Redis/MinIO under the buzz-harness
+    # compose project, deterministic ACP fixture, real desktop E2E bundle, and
+    # the blocks-live Playwright spec. Reusing the script keeps CI and the
+    # local gate proving the same thing; tmux is installed below so the
+    # script's process supervision runs unchanged.
+    #
+    # Runner/cost: GitHub-hosted ubuntu-latest is free on this public repo
+    # (standard runners are free and unlimited for public repositories), so
+    # this job adds no billing. The self-hosted colony-mac-builder runner is
+    # the dev machine itself, where the isolated harness ports (3030/5471/6471)
+    # are owned by other work; it must not host this gate. If the repo is ever
+    # made private, re-evaluate: a cold run is ~30-50 min, which would bill
+    # roughly $2.40-4.00 at $0.08/min on ubuntu-latest.
+    name: Blocks Live Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [changes]
+    if: github.event_name == 'push' || needs.changes.outputs.blocks == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 2
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Install Tauri and tmux dependencies (Linux)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 \
+            build-essential \
+            curl \
+            file \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            tmux \
+            wget
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      - name: Get Playwright version
+        id: pw-version
+        run: echo "version=$(cd desktop && node -e "console.log(require('@playwright/test/package.json').version)")" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd desktop && pnpm exec playwright install chromium
+      - name: Install Playwright system dependencies
+        run: cd desktop && pnpm exec playwright install-deps chromium
+      - name: Create Tauri sidecar placeholders
+        # prove-blocks.sh runs `cargo test --manifest-path
+        # desktop/src-tauri/Cargo.toml agent_proposal`, and Tauri's build.rs
+        # validates externalBin at compile time. The just recipe that every
+        # other Tauri CI step depends on creates empty placeholders for the
+        # host triple; nothing executes them, so stubs are sufficient.
+        run: just _ensure-sidecar-stubs
+      - name: Run the Blocks live gate
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: ./scripts/prove-blocks.sh
+      - name: Upload Blocks gate evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: blocks-live-gate-artifacts
+          path: |
+            desktop/test-results/blocks
+            desktop/playwright-report
+            /tmp/blocks-relay-run.log
+            /tmp/blocks-acp-run.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Save pnpm store cache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+
   backend-integration:
     name: Backend Integration (relay e2e)
     runs-on: ubuntu-latest
@@ -664,6 +857,11 @@ jobs:
           PGSCHEMA_PLAN_PASSWORD: buzz_dev
         run: |
           ./bin/pgschema apply --file schema/schema.sql --auto-approve
+          # pgschema does not manage extensions, so schema.sql's CREATE
+          # EXTENSION line is silently ignored and the relay's digest()-based
+          # queries fail. See scripts/create-required-extensions.sql.
+          docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
+            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
           docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
@@ -704,6 +902,66 @@ jobs:
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
             -E '(package(buzz-db) and test(/relay_invite::tests/)) or (package(buzz-relay) and test(/api::invites::tests/))' \
+            --run-ignored ignored-only
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Owner-contact write-path guard
+        # The guard is a pure source-scanning unit test, so unlike every other
+        # step here it runs WITHOUT --run-ignored. It needs a home that already
+        # compiles buzz-relay: `just test-unit` (the unit-tests job) covers
+        # buzz-core/auth/cli/acp/db/conformance/push-gateway but not
+        # buzz-relay, and adding the workspace's largest crate to that job for
+        # one test would cost more CI time than this archive step, which is
+        # already built.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and test(/write_path_guard/)'
+      - name: Interrupt-core owner-contact gate
+        # The owner wall itself (crates/buzz-relay/tests/interrupt_gate.rs).
+        # This suite existed for months without ever executing in CI: the
+        # archive above was built `--lib --test e2e_event_reminder`, so an
+        # integration target in `tests/` was never compiled into it and no
+        # filter could reach it. Mutation testing confirmed the suite does
+        # bite (killing the wall fails 8 of 17), so it is worth running.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'binary(interrupt_gate)' \
+            --run-ignored ignored-only
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Interrupt-core runtime ladder
+        # The escalation sweep and roster resolution
+        # (crates/buzz-relay/tests/interrupt_runtime.rs), including the
+        # team-lead mapping the workflow owner-mention routing resolves
+        # against. Another integration target in tests/, so it was outside the
+        # archive and had never run in CI either.
+        #
+        # --test-threads 1 is required, unlike the sibling steps: a sweep tick
+        # processes every due ask in the database, not just the rows the
+        # calling test created, so two concurrent ticks consume each other's
+        # fixtures. Measured, not assumed — this suite goes 33/37 run
+        # concurrently and 37/37 serialized, while interrupt_gate (17/17) and
+        # the sink tests (6/6) are clean in parallel and are left alone.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'binary(interrupt_runtime)' \
+            --run-ignored ignored-only \
+            --test-threads 1
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Workflow owner-contact routing tests
+        # Regression gate for the workflow-sink owner wall: a Worker/Leader
+        # workflow send_message that mentions an owner must route the mention
+        # to the next-in-line (own team lead, else the unique executive) and
+        # must fail the step when none resolves. Postgres-gated lib tests;
+        # the archive already contains the buzz-relay lib.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and test(/workflow_sink::integration_tests/)' \
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
@@ -754,11 +1012,28 @@ jobs:
           ./scripts/start-relay-for-tests.sh --no-build
       - name: Relay E2E tests
         run: |
+          # e2e_ask_chain must run first. Its absorption gate asserts on the deadline sweep, and interrupt_runtime::find_unique_executive refuses to promote when the community holds more than one executive. Every suite in this job shares one host-bound community and one database, so any suite that seeds a ladder before this one silently disables the sweep's promotion hop and the gate's positive control times out.
+          # The climb again, but with nothing invented: a relay-authored
+          # initiative and task built by walking the real activation ladder, a
+          # rank read from the employees row, and the ask constructed by
+          # buzz-cli's own builder. e2e_interrupts passes against made-up
+          # identifiers, so it cannot catch an agent having no initiative or
+          # task to name, the state in which zero asks had ever been raised.
+          # --test-threads 1 because both cases share the relay's own
+          # community (requests bind to it by Host) and seed employees in it.
+          cargo test -p buzz-test-client --test e2e_ask_chain -- --ignored --nocapture --test-threads 1
           cargo test -p buzz-test-client --test e2e_persona --test e2e_nostr_interop -- --ignored --nocapture
           cargo test -p buzz-test-client --test e2e_relay invite -- --ignored --nocapture
           cargo test -p buzz-test-client --test e2e_relay nip43_membership_snapshots_are_rejected -- --ignored --nocapture
+          # Full interrupt-core climb (worker -> leader -> executive -> owner)
+          # against the live relay. Like interrupt_gate, this suite had never
+          # run in any CI job. It seeds its owner directly in Postgres, so it
+          # needs DATABASE_URL as well as RELAY_URL; start-relay-for-tests.sh
+          # brings up the same docker postgres the relay is pointed at.
+          cargo test -p buzz-test-client --test e2e_interrupts -- --ignored --nocapture
         env:
           RELAY_URL: ws://localhost:3000
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           GIT_CREDENTIAL_NOSTR_BIN: ${{ github.workspace }}/target/ci/git-credential-nostr
       - name: Upload relay logs
         if: failure()
@@ -767,6 +1042,114 @@ jobs:
           name: relay-e2e-artifacts
           path: /tmp/buzz-relay.log
           if-no-files-found: ignore
+
+  agent-ask-e2e:
+    name: Agent Ask E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes, desktop-e2e-relay]
+    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    permissions:
+      contents: read
+    env:
+      # start-relay-for-tests.sh consumes BUZZ_TEST_RELAY_PRIVATE_KEY and
+      # passes it to the relay as BUZZ_RELAY_PRIVATE_KEY. Keep both names
+      # explicit here so the relay identity is durable for this isolated job.
+      BUZZ_TEST_RELAY_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      BUZZ_RELAY_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      BUZZ_INTERRUPT_SWEEP_SECS: "1"
+      BUZZ_STUB_LOG: /tmp/buzz-ask-stub.log
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+      # Reuse the relay artifact, but start a fresh relay and database on this
+      # job's own runner so no other E2E suite can seed its community.
+      - name: Download relay binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-e2e-relay
+          path: target/ci
+      - name: Start relay
+        run: |
+          chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
+          ./scripts/start-relay-for-tests.sh --no-build
+      - name: Build ask E2E binaries
+        run: |
+          cargo build -p buzz-cli --bin buzz
+          cargo build -p buzz-test-client --bin ask_stub_agent
+          cargo build -p buzz-acp --bin buzz-acp
+          echo "${{ github.workspace }}/target/debug" >> "$GITHUB_PATH"
+      - name: Agent ask E2E test
+        run: cargo test -p buzz-test-client --test e2e_agent_answers_ask -- --ignored --nocapture
+        env:
+          RELAY_URL: ws://localhost:3000
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Upload agent ask E2E logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: agent-ask-e2e-artifacts
+          path: |
+            /tmp/buzz-relay.log
+            /tmp/buzz-ask-stub.log
+            /tmp/*stub*.log
+            /tmp/*ask*.log
+          if-no-files-found: ignore
+
+  relay-suites:
+    name: Relay Suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, backend-integration, relay-e2e, agent-ask-e2e]
+    # `always()` so this still reports when a dependency fails or is skipped;
+    # without it the job is skipped along with them and reports nothing, which
+    # is the state this exists to end. The path condition matches the three
+    # upstream jobs exactly, so a PR that touches no Rust skips this too and the
+    # required check is satisfied by the skip.
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
+    permissions:
+      contents: read
+    steps:
+      # One stable check name standing in for three long jobs.
+      #
+      # `Backend Integration`, `relay-e2e`, and `agent-ask-e2e` run the
+      # Postgres-gated relay suites -- `interrupt_gate`, `interrupt_runtime`,
+      # `e2e_interrupts`, the live ACP ask-answer path, the workflow
+      # owner-routing tests and the write-path guard. None of those jobs is a
+      # required check, so a PR could merge with every one of them red.
+      #
+      # That is not hypothetical. PR #174 stood at `Backend Integration: fail`,
+      # `Relay E2E: fail`, `mergeable=MERGEABLE`, and GitHub accepted it into
+      # the merge queue. Its failures were real: a missing `employees` table in
+      # schema.sql had broken the owner-contact gate outright. A change to the
+      # rule that stops agents interrupting a human was one working queue away
+      # from landing with its own tests failing.
+      #
+      # Requiring the three jobs directly would add three names to the ruleset.
+      # This adds one cheap stable name instead -- the same reasoning that keeps
+      # `Server Cross-Compile` (a varying matrix) out of the required set.
+      - name: Check relay suites
+        run: |
+          if [ "${{ needs.backend-integration.result }}" != "success" ]; then
+            echo "Backend Integration finished with: ${{ needs.backend-integration.result }}"
+            echo "The interrupt-core gate, runtime ladder, workflow owner-routing"
+            echo "tests and write-path guard run there and did not pass."
+            exit 1
+          fi
+          if [ "${{ needs.relay-e2e.result }}" != "success" ]; then
+            echo "Relay E2E finished with: ${{ needs.relay-e2e.result }}"
+            echo "e2e_interrupts runs there and did not pass."
+            exit 1
+          fi
+          if [ "${{ needs.agent-ask-e2e.result }}" != "success" ]; then
+            echo "Agent Ask E2E finished with: ${{ needs.agent-ask-e2e.result }}"
+            echo "The live harness ask-answer gate did not pass."
+            exit 1
+          fi
+          echo "Relay suites passed"
 
   web:
     name: Web
@@ -943,6 +1326,81 @@ jobs:
             -p buzz-dev-mcp \
             -p git-credential-nostr \
             -p git-sign-nostr
+
+  real-shell-e2e:
+    name: Real-shell E2E (macOS)
+    runs-on: macos-latest
+    # The mocked Playwright suite cannot detect a broken shell; this is the
+    # only job that launches the packaged app against a real backend. Cold
+    # macOS runs are expensive: desktop release build + relay + sidecars.
+    timeout-minutes: 150
+    needs: [changes]
+    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    # NON-BLOCKING in Phase 0 on purpose (desktop/e2e-real-shell/README.md):
+    # brand-new harness, cold macOS builds, real devices/keychains/audio. A red
+    # run must be read in the job log + flow-results ledger, not silently
+    # merged through; the README documents what would make it gating.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      - name: Start Docker (colima) for relay backing services
+        id: backend
+        # GitHub's hosted macOS runners do not reliably provide the nested
+        # virtualisation Lima needs, so `colima start` can fail outright:
+        #   level=fatal msg="error starting vm: error at 'creating and starting'"
+        # That is an environment limit, not a harness defect. Treat it as a
+        # loud skip rather than a failure, so a red X never means "the shell
+        # is broken" when it actually means "this runner has no Docker".
+        run: |
+          set -u
+          if docker info >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif brew install --quiet colima docker docker-compose \
+               && colima start --cpu 2 --memory 4; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+          if ! docker compose version >/dev/null 2>&1; then
+            mkdir -p "$HOME/.docker/cli-plugins"
+            ln -sfn "$(brew --prefix)/opt/docker-compose/libexec/docker/cli-plugins/docker-compose" \
+              "$HOME/.docker/cli-plugins/docker-compose" || true
+          fi
+      - name: Run real-shell E2E suite
+        if: steps.backend.outputs.available == 'true'
+        run: ./scripts/run-real-shell-e2e.sh
+      - name: Record backend-unavailable skip
+        if: steps.backend.outputs.available != 'true'
+        # Write a ledger entry so the skip is an artifact, not just a log line.
+        # A silently skipped suite reads as coverage; this one cannot.
+        run: |
+          mkdir -p desktop/e2e-real-shell/results
+          printf '%s\n' '{"flow":"ALL","status":"skip","detail":"backend unavailable: Docker/Colima could not start on this GitHub-hosted macOS runner; no flow was executed"}' \
+            > desktop/e2e-real-shell/results/ledger.jsonl
+          echo "::warning title=Real-shell E2E skipped::Docker/Colima could not start on this GitHub-hosted macOS runner. No flow ran. This job proves nothing about the shell until it runs on a macOS runner with Docker. See desktop/e2e-real-shell/README.md."
+      - name: Upload real-shell E2E results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: real-shell-e2e-results
+          path: |
+            desktop/e2e-real-shell/results
+          if-no-files-found: ignore
+          retention-days: 7
 
   windows-rust:
     name: Windows Rust (x86_64-pc-windows-msvc)

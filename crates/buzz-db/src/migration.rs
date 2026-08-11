@@ -30,6 +30,38 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+/// Apply migrations unless the database was already provisioned from
+/// `schema/schema.sql` rather than from the migration sequence.
+///
+/// Postgres-gated test harnesses run against two differently-provisioned
+/// databases and must work in both:
+///
+/// * A developer's fresh `createdb` — empty, so migrations must run.
+/// * CI's integration Postgres — provisioned by `pgschema apply --file
+///   schema/schema.sql`, with the relay started with `BUZZ_AUTO_MIGRATE` off.
+///   The schema is fully present but `_sqlx_migrations` was never created, so
+///   [`run_migrations`] would replay `0001` against live objects and abort on
+///   the first `CREATE TYPE` / `CREATE TABLE` (`42710 type "channel_type"
+///   already exists`).
+///
+/// The two are distinguished by bookkeeping, not by schema contents: a
+/// database carrying `_sqlx_migrations` is migration-managed and still runs
+/// the full migrator, so genuine version drift keeps failing loudly with
+/// `VersionMismatch` instead of being silently skipped.
+pub async fn run_migrations_unless_provisioned(pool: &PgPool) -> Result<()> {
+    let migration_bookkeeping: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
+            .fetch_one(pool)
+            .await?;
+    let schema_present: Option<String> = sqlx::query_scalar("SELECT to_regclass('events')::text")
+        .fetch_one(pool)
+        .await?;
+    if migration_bookkeeping.is_none() && schema_present.is_some() {
+        return Ok(());
+    }
+    run_migrations(pool).await
+}
+
 /// Backfill pre-multi-source paid observations with the exact runtime
 /// normalizers. The version cursor makes this bounded, restart-safe, and
 /// idempotent even when multiple relay instances start together.
@@ -427,6 +459,12 @@ mod tests {
             "push_gateway_delivery_request_replays",
             "product_feedback",
             "replica_heartbeat",
+            "accounts",
+            "credit_ledger",
+            "gateway_tokens",
+            "model_catalog",
+            "gateway_reconciliation_outcomes",
+            "gateway_settlement_intents",
         ] {
             if normalized[insert_pos..].contains(&format!("'{value}'")) {
                 globals.insert(value.to_owned());
@@ -640,7 +678,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 49);
+        assert_eq!(migrations.len(), 56);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -735,6 +773,21 @@ mod tests {
             .sql
             .as_str()
             .contains("ALTER TABLE reactions ALTER COLUMN emoji TYPE VARCHAR(66)"));
+
+        // Credits gateway settle basis (0051): additive migration recording
+        // HOW a debit's cost was determined, plus the default provisioned
+        // model catalog — never folded into 0001.
+        assert_eq!(migrations[49].version, 50);
+        assert!(migrations[49]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE accounts"));
+        assert_eq!(migrations[50].version, 51);
+        let settle_basis = migrations[50].sql.as_str();
+        assert!(settle_basis.contains("settle_basis"));
+        assert!(settle_basis.contains("'observed'"));
+        assert!(settle_basis.contains("'estimated'"));
+        assert!(settle_basis.contains("deepseek-v4-flash"));
         assert!(migrations[0]
             .sql
             .as_str()
@@ -1467,7 +1520,70 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(49));
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(50));
+    }
+
+    /// Acceptance 3 (upgrade path): migration 0050 (credit ledger) applies
+    /// cleanly on top of a populated 0049 schema — additive only.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn migration_0050_credit_ledger_applies_on_populated_0049_schema() {
+        let pool = connect_test_pool().await;
+        reset_public_schema(&pool).await;
+        MIGRATOR
+            .run_to(49, &pool)
+            .await
+            .expect("apply migrations 1-49");
+
+        // Production-like pre-0050 data: community, member, channel, event.
+        let community_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(community_id)
+            .bind(format!("pre-0050-{}.example", community_id.simple()))
+            .execute(&pool)
+            .await
+            .expect("insert community");
+        sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2)")
+            .bind(community_id)
+            .bind(vec![1_u8; 32])
+            .execute(&pool)
+            .await
+            .expect("insert user");
+        sqlx::query(
+            "INSERT INTO channels (id, community_id, name, channel_type, visibility, created_by) \
+             VALUES ($1, $2, 'pre-0050', 'stream', 'open', $3)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(community_id)
+        .bind(vec![2_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("insert channel");
+
+        run_migrations(&pool)
+            .await
+            .expect("0050 must apply additively on a populated schema");
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(50));
+
+        for table in [
+            "accounts",
+            "credit_ledger",
+            "gateway_tokens",
+            "model_catalog",
+        ] {
+            let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+                .bind(table)
+                .fetch_one(&pool)
+                .await
+                .expect("probe table");
+            assert!(exists, "{table} must exist after 0050");
+        }
+        // Pre-existing data survives.
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .expect("count users");
+        assert_eq!(users, 1, "pre-0050 rows must survive the upgrade");
     }
 
     #[tokio::test]

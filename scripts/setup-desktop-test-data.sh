@@ -54,26 +54,17 @@ run_sql "SELECT 1" >/dev/null
 # Host must match the relay's normalized bind host verbatim (non-default ports
 # are kept by normalize_host). Overridable so an isolated relay on an alternate
 # port can seed the same channels/members against its own tenant.
-COMMUNITY_HOST="${BUZZ_COMMUNITY_HOST:-localhost:3000}"
-COMMUNITY_HOST_SQL="${COMMUNITY_HOST//\'/\'\'}"
-
-run_sql "
-INSERT INTO communities (host)
-VALUES ('${COMMUNITY_HOST_SQL}')
-ON CONFLICT (lower(host)) DO NOTHING
-;
-"
-COMMUNITY_ID="$(run_sql "
-SELECT id
-FROM communities
-WHERE lower(host) = lower('${COMMUNITY_HOST_SQL}')
-LIMIT 1
-;
-")"
-if [[ ! "${COMMUNITY_ID}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-  echo "Could not resolve community id for host ${COMMUNITY_HOST}." >&2
-  exit 1
-fi
+#
+# Multiple hosts may be given comma-separated. The desktop real-shell harness
+# needs BOTH spellings of the loopback relay: the app connects via the
+# configured `localhost` URL, while the managed-agent runtime canonicalizes
+# relay URLs to 127.0.0.1 (buzz_core::relay::normalize_relay_url) before
+# injecting them into the sidecar. The relay is host-scoped, so a sidecar
+# connecting to 127.0.0.1:3030 404s unless that host is seeded too. Each host
+# resolves to its own community id; channels/members are seeded per tenant
+# (channels is keyed (community_id, id), so the same channel UUIDs may exist
+# under more than one community).
+COMMUNITY_HOSTS="${BUZZ_COMMUNITY_HOST:-localhost:3000}"
 
 UUID_GENERAL=$(uuid5_hex "buzz.channel.general")
 UUID_RANDOM=$(uuid5_hex "buzz.channel.random")
@@ -85,48 +76,78 @@ UUID_DM_ALICE_TYLER=$(uuid5_hex "buzz.channel.dm.alice-tyler")
 UUID_DM_BOB_TYLER=$(uuid5_hex "buzz.channel.dm.bob-tyler")
 UUID_DM_BOB_CHARLIE_TYLER=$(uuid5_hex "buzz.channel.dm.bob-charlie-tyler")
 
-run_sql "
+seed_community() {
+  local community_host="$1"
+  local community_host_sql="${community_host//\'/\'\'}"
+  echo "Seeding community host=${community_host}..."
+
+  run_sql "
+INSERT INTO communities (host)
+VALUES ('${community_host_sql}')
+ON CONFLICT (lower(host)) DO NOTHING
+;
+"
+  local community_id
+  community_id="$(run_sql "
+SELECT id
+FROM communities
+WHERE lower(host) = lower('${community_host_sql}')
+LIMIT 1
+;
+")"
+  if [[ ! "${community_id}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    echo "Could not resolve community id for host ${community_host}." >&2
+    exit 1
+  fi
+
+  run_sql "
 INSERT INTO channels
   (community_id, id, name, channel_type, visibility, description, created_by, topic_required)
 VALUES
-  ('${COMMUNITY_ID}', '${UUID_GENERAL}', 'general', 'stream', 'open', 'General discussion for everyone', decode('${SYSTEM_PUBKEY}','hex'), false),
-  ('${COMMUNITY_ID}', '${UUID_RANDOM}', 'random', 'stream', 'open', 'Off-topic, fun stuff', decode('${SYSTEM_PUBKEY}','hex'), false),
-  ('${COMMUNITY_ID}', '${UUID_ENGINEERING}', 'engineering', 'stream', 'open', 'Engineering discussions', decode('${SYSTEM_PUBKEY}','hex'), false),
-  ('${COMMUNITY_ID}', '${UUID_AGENTS}', 'agents', 'stream', 'open', 'AI agent testing and collaboration', decode('${SYSTEM_PUBKEY}','hex'), false),
-  ('${COMMUNITY_ID}', '${UUID_WATERCOOLER}', 'watercooler', 'forum', 'open', 'Casual forum for async discussions', decode('${SYSTEM_PUBKEY}','hex'), true),
-  ('${COMMUNITY_ID}', '${UUID_ANNOUNCEMENTS}', 'announcements', 'forum', 'open', 'Company announcements', decode('${SYSTEM_PUBKEY}','hex'), true),
-  ('${COMMUNITY_ID}', '${UUID_DM_ALICE_TYLER}', 'alice-tyler', 'dm', 'private', 'DM between alice and tyler', decode('${SYSTEM_PUBKEY}','hex'), false),
-  ('${COMMUNITY_ID}', '${UUID_DM_BOB_TYLER}', 'bob-tyler', 'dm', 'private', 'DM between bob and tyler', decode('${SYSTEM_PUBKEY}','hex'), false),
-  ('${COMMUNITY_ID}', '${UUID_DM_BOB_CHARLIE_TYLER}', 'bob-charlie-tyler', 'dm', 'private', 'Group DM: bob, charlie, tyler', decode('${SYSTEM_PUBKEY}','hex'), false)
+  ('${community_id}', '${UUID_GENERAL}', 'general', 'stream', 'open', 'General discussion for everyone', decode('${SYSTEM_PUBKEY}','hex'), false),
+  ('${community_id}', '${UUID_RANDOM}', 'random', 'stream', 'open', 'Off-topic, fun stuff', decode('${SYSTEM_PUBKEY}','hex'), false),
+  ('${community_id}', '${UUID_ENGINEERING}', 'engineering', 'stream', 'open', 'Engineering discussions', decode('${SYSTEM_PUBKEY}','hex'), false),
+  ('${community_id}', '${UUID_AGENTS}', 'agents', 'stream', 'open', 'AI agent testing and collaboration', decode('${SYSTEM_PUBKEY}','hex'), false),
+  ('${community_id}', '${UUID_WATERCOOLER}', 'watercooler', 'forum', 'open', 'Casual forum for async discussions', decode('${SYSTEM_PUBKEY}','hex'), true),
+  ('${community_id}', '${UUID_ANNOUNCEMENTS}', 'announcements', 'forum', 'open', 'Company announcements', decode('${SYSTEM_PUBKEY}','hex'), true),
+  ('${community_id}', '${UUID_DM_ALICE_TYLER}', 'alice-tyler', 'dm', 'private', 'DM between alice and tyler', decode('${SYSTEM_PUBKEY}','hex'), false),
+  ('${community_id}', '${UUID_DM_BOB_TYLER}', 'bob-tyler', 'dm', 'private', 'DM between bob and tyler', decode('${SYSTEM_PUBKEY}','hex'), false),
+  ('${community_id}', '${UUID_DM_BOB_CHARLIE_TYLER}', 'bob-charlie-tyler', 'dm', 'private', 'Group DM: bob, charlie, tyler', decode('${SYSTEM_PUBKEY}','hex'), false)
 ON CONFLICT DO NOTHING
 ;
 "
 
-run_sql "
+  run_sql "
 INSERT INTO channel_members
   (community_id, channel_id, pubkey, role, invited_by)
 VALUES
-  ('${COMMUNITY_ID}', '${UUID_GENERAL}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_GENERAL}', decode('${ALICE_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_GENERAL}', decode('${BOB_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_RANDOM}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_ENGINEERING}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_AGENTS}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_WATERCOOLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_ANNOUNCEMENTS}', decode('${TYLER_PUBKEY}','hex'), 'guest', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_DM_ALICE_TYLER}', decode('${ALICE_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_DM_ALICE_TYLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_DM_BOB_TYLER}', decode('${BOB_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_DM_BOB_TYLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_DM_BOB_CHARLIE_TYLER}', decode('${BOB_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_DM_BOB_CHARLIE_TYLER}', decode('${CHARLIE_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_DM_BOB_CHARLIE_TYLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_GENERAL}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_RANDOM}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_ENGINEERING}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex')),
-  ('${COMMUNITY_ID}', '${UUID_AGENTS}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex'))
+  ('${community_id}', '${UUID_GENERAL}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_GENERAL}', decode('${ALICE_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_GENERAL}', decode('${BOB_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_RANDOM}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_ENGINEERING}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_AGENTS}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_WATERCOOLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_ANNOUNCEMENTS}', decode('${TYLER_PUBKEY}','hex'), 'guest', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_DM_ALICE_TYLER}', decode('${ALICE_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_DM_ALICE_TYLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_DM_BOB_TYLER}', decode('${BOB_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_DM_BOB_TYLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_DM_BOB_CHARLIE_TYLER}', decode('${BOB_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_DM_BOB_CHARLIE_TYLER}', decode('${CHARLIE_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_DM_BOB_CHARLIE_TYLER}', decode('${TYLER_PUBKEY}','hex'), 'member', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_GENERAL}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_RANDOM}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_ENGINEERING}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex')),
+  ('${community_id}', '${UUID_AGENTS}', decode('${AGENT_PUBKEY}','hex'), 'bot', decode('${SYSTEM_PUBKEY}','hex'))
 ON CONFLICT DO NOTHING
 ;
 "
+}
+
+IFS=',' read -r -a COMMUNITY_HOST_LIST <<< "${COMMUNITY_HOSTS}"
+for host in "${COMMUNITY_HOST_LIST[@]}"; do
+  seed_community "$(echo "${host}" | xargs)"
+done
 
 echo "Desktop e2e data ready."

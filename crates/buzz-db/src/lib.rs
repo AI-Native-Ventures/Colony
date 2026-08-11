@@ -19,6 +19,9 @@ pub mod archived_identities;
 pub mod asks;
 /// Channel and membership persistence.
 pub mod channel;
+/// Colony Credits: accounts, the append-only credit ledger, and the atomic
+/// debit/credit API.
+pub mod credits;
 /// Private entitlement, authorization, and durable run persistence for Discovery.
 pub mod discovery;
 /// Private Discovery campaign and Lead workspace projections.
@@ -32,6 +35,8 @@ pub mod error;
 pub mod event;
 /// Home feed queries.
 pub mod feed;
+/// Colony Credits gateway: provisioned-mode tokens and the model allowlist.
+pub mod gateway;
 /// Git repository name registry (NIP-34 kind:30617).
 pub mod git_repo;
 /// The job queue: work employees owe, and the leases that arbitrate it.
@@ -62,6 +67,8 @@ pub mod usage;
 pub mod user;
 /// Workflow, run, and approval persistence.
 pub mod workflow;
+/// Relay-owned channel workspace tab state and driver compare-and-swap.
+pub mod workspace_tabs;
 
 pub use error::{DbError, Result};
 pub use event::{
@@ -934,6 +941,12 @@ pub struct TokenSummary {
 }
 
 impl Db {
+    /// Borrow the writer pool for callers that need raw SQL access (e.g.
+    /// `buzz-admin` credits commands).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// Creates a new `Db` by connecting a Postgres pool with the given config.
     ///
     /// When `config.read_database_url` is set, a second pool with the same
@@ -5717,6 +5730,16 @@ impl Db {
         pubkey: &[u8],
     ) -> Result<Option<employees::EmployeeRow>> {
         employees::find_employee(&self.pool, community, pubkey).await
+    }
+
+    /// The employee currently filling a role (see
+    /// [`employees::find_active_employee_by_role`]).
+    pub async fn find_active_employee_by_role(
+        &self,
+        community: CommunityId,
+        role_id: &str,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::find_active_employee_by_role(&self.pool, community, role_id).await
     }
 
     /// Every active employee of a community (see [`employees::list_active_employees`]).

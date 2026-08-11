@@ -62,6 +62,11 @@ pub fn git_policy_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/internal/git/policy", post(policy::hook_policy_check))
         .layer(RequestBodyLimitLayer::new(1024 * 1024)) // 1 MB
-        .layer(middleware::from_fn(require_localhost))
+        // `route_layer`, not `layer`: a `layer` also wraps this router's
+        // default fallback, and on `merge` that fallback wins for every
+        // unmatched path on the relay — turning every 404 into a 403 for
+        // non-loopback clients. The localhost guard must bind to the policy
+        // route only.
+        .route_layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }

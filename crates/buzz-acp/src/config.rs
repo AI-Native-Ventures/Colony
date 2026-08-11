@@ -3,8 +3,11 @@
 //! CLI-first: every option is a CLI flag with env var fallback.
 //! Config file (TOML) for complex subscription rules.
 
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use clap::Parser;
 use clap::ValueEnum;
@@ -169,7 +172,7 @@ impl std::fmt::Display for PermissionMode {
 /// This is a standalone `Parser` (not a subcommand variant) because the
 /// `models` path must bypass `Config::from_cli()` entirely — no relay,
 /// no private key, no harness setup.
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(
     name = "buzz-acp models",
     about = "Query available models from the configured agent"
@@ -202,7 +205,7 @@ pub struct AuthAgentArgs {
 }
 
 /// CLI args for `buzz-acp auth-methods` — query adapter-advertised login methods.
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(
     name = "buzz-acp auth-methods",
     about = "Query adapter-advertised ACP authentication methods"
@@ -231,7 +234,7 @@ pub struct AuthenticateArgs {
     pub method_id: String,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(
     name = "buzz-acp",
     about = "ACP harness that bridges Colony events to AI agents"
@@ -343,6 +346,11 @@ pub struct CliArgs {
     /// opt-out rather than a side effect of configuration.
     #[arg(long, env = "BUZZ_ACP_NO_METER")]
     pub no_meter: bool,
+
+    /// Mark a desktop-launched Colony Credits process. Provisioned mode is
+    /// fail-closed: it cannot be combined with the explicit no-meter opt-out.
+    #[arg(long, env = "BUZZ_ACP_PROVISIONED")]
+    pub provisioned: bool,
 
     /// Real Anthropic credential. Held by the metering checkpoint and never
     /// placed in an agent's environment. Optional: without it the checkpoint
@@ -536,6 +544,26 @@ pub struct CliArgs {
     pub lazy_pool: bool,
 }
 
+impl fmt::Debug for CliArgs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CliArgs")
+            .field("relay_url", &self.relay_url)
+            .field("private_key", &"<redacted>")
+            .field(
+                "meter_anthropic_key",
+                &self.meter_anthropic_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "meter_openai_key",
+                &self.meter_openai_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("no_meter", &self.no_meter)
+            .field("provisioned", &self.provisioned)
+            .finish()
+    }
+}
+
 /// Merged NIP-01 subscription filter for a single channel.
 #[derive(Debug, Clone)]
 pub struct ChannelFilter {
@@ -549,16 +577,22 @@ pub struct ChannelFilter {
 ///
 /// Receipts are intentionally absent: agents process addressed actions and
 /// publish receipts, but do not subscribe to every other processor's results.
+///
+/// `KIND_ASK` is here because an ask p-tags the agent it is addressed to, and
+/// `SubscriptionRule::require_mention` already means "this event p-tags me".
+/// Without it a leader is never told an ask is waiting, so no ask is ever
+/// answered below the owner and the deadline sweep promotes every one of them
+/// to the founder. That is the whole failure this kind fixes.
 pub fn default_channel_kinds() -> Vec<u32> {
     vec![
         buzz_core::kind::KIND_STREAM_MESSAGE,
         buzz_core::kind::KIND_BLOCK_ACTION,
         buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED,
         buzz_core::kind::KIND_STREAM_REMINDER,
+        buzz_core::kind::KIND_ASK,
     ]
 }
 
-#[derive(Debug)]
 pub struct Config {
     pub keys: Keys,
     pub relay_url: String,
@@ -605,6 +639,9 @@ pub struct Config {
     pub permission_mode: PermissionMode,
     /// Wire metering is off; agents keep their own provider credentials.
     pub no_meter: bool,
+    /// True only for a desktop Colony Credits launch. This boundary prevents
+    /// an ambient no-meter flag from bypassing the local meter.
+    pub provisioned: bool,
     /// Real Anthropic credential for the metering checkpoint.
     pub meter_anthropic_key: Option<String>,
     /// Real OpenAI credential for the metering checkpoint.
@@ -649,6 +686,27 @@ pub struct Config {
     /// `from_cli()`. `None` when using the compiled-in default or when
     /// `--no-base-prompt` is set.
     pub base_prompt_content: Option<String>,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Config")
+            .field("relay_url", &self.relay_url)
+            .field("agent_command", &self.agent_command)
+            .field("agents", &self.agents)
+            .field("no_meter", &self.no_meter)
+            .field("provisioned", &self.provisioned)
+            .field(
+                "meter_anthropic_key",
+                &self.meter_anthropic_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "meter_openai_key",
+                &self.meter_openai_key.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// Maximum length, in characters, of a session title sent to the adapter.
@@ -934,6 +992,11 @@ impl Config {
     /// tests can construct `CliArgs` via `CliArgs::try_parse_from` and exercise the full
     /// validation path without going through process args.
     pub fn from_args(mut args: CliArgs) -> Result<Self, ConfigError> {
+        if args.provisioned && args.no_meter {
+            return Err(ConfigError::ConfigFile(
+                "BUZZ_ACP_PROVISIONED cannot be combined with BUZZ_ACP_NO_METER".into(),
+            ));
+        }
         let keys = Keys::parse(&args.private_key)?;
         // Best-effort zeroize: overwrite the raw private key string to reduce
         // exposure via core dumps or heap inspection (#41). Without the `zeroize`
@@ -1182,6 +1245,7 @@ impl Config {
             channels_override: args.channels,
             no_mention_filter: args.no_mention_filter,
             no_meter: args.no_meter,
+            provisioned: args.provisioned,
             meter_anthropic_key: args.meter_anthropic_key.clone(),
             meter_openai_key: args.meter_openai_key.clone(),
             meter_anthropic_upstream: args.meter_anthropic_upstream.clone(),
@@ -1525,6 +1589,7 @@ mod tests {
     use super::*;
     use crate::filter::{ChannelScope, SubscriptionRule};
     use clap::{Parser, ValueEnum};
+    use nostr::ToBech32;
 
     /// Build a minimal Config for testing without CLI parsing.
     fn test_config(mode: SubscribeMode) -> Config {
@@ -1551,6 +1616,7 @@ mod tests {
             channels_override: None,
             no_mention_filter: false,
             no_meter: true,
+            provisioned: false,
             meter_anthropic_key: None,
             meter_openai_key: None,
             meter_anthropic_upstream: None,
@@ -2331,6 +2397,44 @@ channels = "ALL"
     fn lazy_pool_defaults_off() {
         let key = "0".repeat(64);
         assert!(!CliArgs::parse_from(["buzz-acp", "--private-key", &key]).lazy_pool);
+    }
+
+    #[test]
+    fn debug_surfaces_redact_meter_credentials() {
+        let mut config = test_config(SubscribeMode::All);
+        config.meter_openai_key = Some("gateway-token-test".to_string());
+        config.meter_anthropic_key = Some("anthropic-token-test".to_string());
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("gateway-token-test"));
+        assert!(!rendered.contains("anthropic-token-test"));
+
+        let key = nostr::Keys::generate()
+            .secret_key()
+            .to_bech32()
+            .expect("generated key encodes");
+        let args = CliArgs::parse_from([
+            "buzz-acp",
+            "--private-key",
+            key.as_str(),
+            "--meter-openai-key",
+            "gateway-token-test",
+        ]);
+        let rendered = format!("{args:?}");
+        assert!(!rendered.contains("gateway-token-test"));
+    }
+
+    #[test]
+    fn provisioned_mode_rejects_the_no_meter_opt_out() {
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--provisioned",
+            "--no-meter",
+        ])
+        .expect("clap should parse the mutually exclusive runtime flags");
+        let error = Config::from_args(args).expect_err("provisioned mode must fail closed");
+        assert!(error.to_string().contains("cannot be combined"));
     }
 
     #[test]

@@ -1,5 +1,5 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { listen, type NativeUnlisten } from "@/shared/api/nativeBridge";
+import { invoke } from "@/shared/api/nativeBridge";
 import type { StartCommunityOnboardingInput } from "@/features/onboarding/communityOnboarding";
 
 export type AddCommunityDeepLinkPayload = {
@@ -112,7 +112,7 @@ async function drainPendingCommunityDeepLinks(deps: DeepLinkDeps) {
  */
 export async function listenForDeepLinks(
   deps: DeepLinkDeps,
-): Promise<UnlistenFn> {
+): Promise<NativeUnlisten> {
   let drainRunning = false;
   let drainRequested = false;
   const drain = () => {
@@ -159,7 +159,7 @@ export async function listenForDeepLinks(
  */
 export function listenForMessageDeepLinks(
   onOpen: (payload: MessageDeepLinkPayload) => void,
-): Promise<UnlistenFn> {
+): Promise<NativeUnlisten> {
   return listen<MessageDeepLinkPayload>("deep-link-message", (event) => {
     onOpen(event.payload);
   });
@@ -167,7 +167,7 @@ export function listenForMessageDeepLinks(
 
 export function listenForNostrBindDeepLinks(
   onOpen: (payload: NostrBindDeepLinkPayload) => void,
-): Promise<UnlistenFn> {
+): Promise<NativeUnlisten> {
   return listen<NostrBindDeepLinkPayload>("deep-link-nostr-bind", (event) => {
     onOpen(event.payload);
   });

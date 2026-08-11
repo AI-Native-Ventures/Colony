@@ -1,5 +1,5 @@
 import * as React from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { startDragging } from "@/shared/api/nativeBridge";
 
 import { isWindowDragHandleEvent } from "@/app/AppShell.helpers";
 import { performTitleBarDoubleClickAction } from "@/shared/lib/titleBarActions";
@@ -15,7 +15,7 @@ export function useTauriWindowDrag() {
         return;
       }
 
-      void getCurrentWindow().startDragging();
+      void startDragging();
     }
 
     function stopTauriDragRegionHandler(event: MouseEvent) {

@@ -15,11 +15,13 @@ import { Card } from "@/shared/ui/card";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
+import { recentLeadDetail, subscribeLeadUpdates } from "../data/leadUpdates";
 import { describeExportOutcome, exportLeadsToCsv } from "../lib/exportLeads";
-import type { CampaignDetail, LeadPage } from "../types";
+import type { CampaignDetail, Lead, LeadDetail, LeadPage } from "../types";
 import {
   EMPTY_LEAD_FILTERS,
   filterLeads,
+  selectedLeadStatus,
   type LeadFilterState,
   type LeadMode,
 } from "./LeadFilters";
@@ -28,6 +30,7 @@ import { LeadTable, type LeadTableView } from "./LeadTable";
 import { PeopleLeadTable } from "./PeopleLeadTable";
 import { CampaignLeadStatsRow, GlobalLeadStatsRow } from "./LeadsStats";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import { useLeadsStatusFetch } from "./useLeadsStatusFetch";
 
 export type LeadsWorkspaceProps = {
   dataSource: DiscoveryDataSource;
@@ -47,6 +50,20 @@ export type LeadsWorkspaceProps = {
  */
 function notYetAvailable(action: string) {
   return `${action} is not available yet.`;
+}
+
+/** Editable fields from a lead update receipt, applied to a list row. */
+function leadUpdateFields(updated: LeadDetail): Partial<Lead> {
+  return {
+    website: updated.website,
+    email: updated.email,
+    phone: updated.phone,
+    linkedinUrl: updated.linkedinUrl,
+    contactName: updated.contactName,
+    contactTitle: updated.contactTitle,
+    owner: updated.owner,
+    score: updated.score,
+  };
 }
 
 function ViewToggle({
@@ -151,53 +168,33 @@ function CampaignLeads({
   initialLeads: LeadPage | null | undefined;
   search: DiscoverySearch;
 }) {
-  const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
-  const [isLoading, setIsLoading] = React.useState(!initialLeads);
   const [filters, setFilters] =
     React.useState<LeadFilterState>(EMPTY_LEAD_FILTERS);
   const [view, setView] = React.useState<LeadTableView>("list");
   const [message, setMessage] = React.useState<string | null>(null);
+  const { page, isLoading } = useLeadsStatusFetch({
+    campaignId: campaign.id,
+    dataSource,
+    initialLeads,
+    scope: "campaign",
+    status: selectedLeadStatus(filters),
+    targetType: campaign.targetType,
+  });
 
+  const [leadUpdateTick, setLeadUpdateTick] = React.useState(0);
   React.useEffect(() => {
-    let cancelled = false;
-    if (initialLeads) {
-      setPage(initialLeads);
-      setIsLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-    setIsLoading(true);
-    void dataSource
-      .getLeads({
-        scope: "campaign",
-        campaignId: campaign.id,
-        page: 1,
-        pageSize: 100,
-      })
-      .then((nextPage) => {
-        if (cancelled) return;
-        setPage(nextPage);
-        setIsLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPage({
-            leads: [],
-            total: 0,
-            page: 1,
-            pageSize: 100,
-            hasNextPage: false,
-          });
-          setIsLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaign.id, dataSource, initialLeads]);
+    return subscribeLeadUpdates(() => setLeadUpdateTick((tick) => tick + 1));
+  }, []);
 
-  const leads = page?.leads ?? [];
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recentLeadDetail reads a module-level cache, so the memo must re-run when a receipt lands.
+  const leads = React.useMemo(
+    () =>
+      (page?.leads ?? []).map((row) => {
+        const updated = recentLeadDetail(row.id);
+        return updated ? { ...row, ...leadUpdateFields(updated) } : row;
+      }),
+    [leadUpdateTick, page],
+  );
   const visibleLeads = filterLeads(leads, filters);
   const people = campaign.targetType === "individual";
   if (isLoading) {
@@ -277,52 +274,35 @@ function GlobalLeads({
   initialMode: LeadMode;
   search: DiscoverySearch;
 }) {
-  const [page, setPage] = React.useState<LeadPage | null>(initialLeads ?? null);
-  const [isLoading, setIsLoading] = React.useState(!initialLeads);
   const [filters, setFilters] =
     React.useState<LeadFilterState>(EMPTY_LEAD_FILTERS);
   const [mode, setMode] = React.useState<LeadMode>(initialMode);
   const [view, setView] = React.useState<LeadTableView>("list");
   const [message, setMessage] = React.useState<string | null>(null);
   const { goDiscovery } = useAppNavigation();
+  const { page, isLoading } = useLeadsStatusFetch({
+    dataSource,
+    initialLeads,
+    scope: "global",
+    status: selectedLeadStatus(filters),
+  });
 
   React.useEffect(() => setMode(initialMode), [initialMode]);
 
+  const [leadUpdateTick, setLeadUpdateTick] = React.useState(0);
   React.useEffect(() => {
-    let cancelled = false;
-    if (initialLeads) {
-      setPage(initialLeads);
-      setIsLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-    setIsLoading(true);
-    void dataSource
-      .getLeads({ scope: "global", page: 1, pageSize: 500 })
-      .then((nextPage) => {
-        if (cancelled) return;
-        setPage(nextPage);
-        setIsLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPage({
-            leads: [],
-            total: 0,
-            page: 1,
-            pageSize: 100,
-            hasNextPage: false,
-          });
-          setIsLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dataSource, initialLeads]);
+    return subscribeLeadUpdates(() => setLeadUpdateTick((tick) => tick + 1));
+  }, []);
 
-  const leads = page?.leads ?? [];
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recentLeadDetail reads a module-level cache, so the memo must re-run when a receipt lands.
+  const leads = React.useMemo(
+    () =>
+      (page?.leads ?? []).map((row) => {
+        const updated = recentLeadDetail(row.id);
+        return updated ? { ...row, ...leadUpdateFields(updated) } : row;
+      }),
+    [leadUpdateTick, page],
+  );
   const modeLeads = leads.filter((lead) =>
     mode === "people"
       ? lead.entityType === "person"

@@ -30,6 +30,13 @@
       "name": "Agent-managed profiles",
       "description": "Let agents manage their own relay name and avatar instead of restoring the desktop copy",
       "platforms": ["desktop"]
+    },
+    {
+      "id": "workspaceWebTab",
+      "name": "Workspace web tab",
+      "description": "Attach a workspace tab to a local Chromium DevTools page",
+      "defaultEnabled": false,
+      "platforms": ["desktop"]
     }
   ]
 }

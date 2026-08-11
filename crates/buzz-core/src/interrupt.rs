@@ -40,6 +40,28 @@ pub fn is_hard_list_category(category: &str) -> bool {
 /// legitimate slow-moving ask; nothing in the spec calls for longer.
 pub const MAX_ASK_WINDOW_SECS: u64 = 30 * 24 * 60 * 60;
 
+/// The `initiative` tag value for an ask about work that belongs to no
+/// initiative.
+///
+/// Not an initiative id: a reserved grouping value. [`parse_ask`] requires
+/// exactly one `initiative` tag and the relay's `asks` projection column is
+/// `NOT NULL`, so a genuinely absent initiative cannot flow through as-is.
+/// A task with no initiative is an ordinary, common state -- every
+/// chat-derived implicit task has `initiative_id: None`
+/// (`buzz_sdk::implicit_task`) -- so without this value an agent doing the
+/// most ordinary kind of work could never file an ask at all, which is
+/// exactly the condition that kept the interrupt ladder empty.
+///
+/// Deliberately flat rather than scoped per task. Ask dedupe keys on
+/// `(initiative, need)`, and "five agents blocked on one missing API key
+/// produce one ask, not five" is the behaviour that pairing is for. Making
+/// the value task-scoped would split those five back into five, which is
+/// the outcome the dedupe exists to prevent. The cost is that two unrelated
+/// initiative-less tasks naming the same `need` slug converge on one ask;
+/// that is the same convergence they would get inside a shared initiative,
+/// and the `need` slug is what states the identity of the need.
+pub const NO_INITIATIVE: &str = "no-initiative";
+
 /// The type of a Colony Ask event (tag `ask-type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskType {

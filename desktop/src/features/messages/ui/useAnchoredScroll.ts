@@ -2,26 +2,18 @@ import * as React from "react";
 
 import { classifyTimelineMessageDelta } from "@/features/messages/lib/timelineSnapshot";
 import {
+  type AnchorState,
+  AT_BOTTOM_THRESHOLD_PX,
+  computeAnchor,
   getPinnedCenterDrift,
+  isAtBottomNow,
   settleProgrammaticBottomPin,
   shouldIgnorePinnedCenterScroll,
+  shouldReleaseProgrammaticBottomPin,
   shouldSettleForSplitPanel,
   shouldSettleVirtualizedBottom,
 } from "./anchoredScrollPolicy";
 import { useVirtualizedViewportResize } from "./useVirtualizedViewportResize";
-
-/**
- * Distance (in CSS pixels) below which we consider the scroll position
- * "at the bottom" of the message list. Tight enough that the user has to
- * actually scroll down to re-pin; permissive enough to tolerate sub-pixel
- * rounding from the layout engine.
- */
-const AT_BOTTOM_THRESHOLD_PX = 32;
-
-type AnchorState =
-  | { kind: "at-bottom" }
-  | { kind: "message"; messageId: string; topOffset: number }
-  | { kind: "pinned-center"; messageId: string; contentTop: number };
 
 type UseAnchoredScrollOptions = {
   /** Scroll container. Owned by the parent so external refs still compose. */
@@ -89,64 +81,6 @@ type UseAnchoredScrollResult = {
   onVirtualizerAtBottomStateChange: (atBottom: boolean) => void;
 };
 
-function isAtBottomNow(
-  container: Pick<
-    HTMLDivElement,
-    "scrollHeight" | "clientHeight" | "scrollTop"
-  >,
-) {
-  return (
-    container.scrollHeight - container.clientHeight - container.scrollTop <=
-    AT_BOTTOM_THRESHOLD_PX
-  );
-}
-
-/**
- * Pick an anchor for the current scroll position.
- *
- * Top-crossing walk: chronological children, top-down. The first
- * `data-message-id` row whose bottom edge has crossed below the container
- * top is the anchor — that's the row the reader's eye is on when they've
- * scrolled up through history. `topOffset` is the row's top relative to
- * the container's top and may be negative when the row straddles the edge.
- *
- * If no such row exists (e.g. nothing scrolled past the top, list shorter
- * than the viewport, etc.) the anchor is `at-bottom`.
- *
- * Algorithm credit: Sami's [13] in the buzz-bugs scroll-redesign thread,
- * supersedes the Matrix-style bottom-up walk in [7]. The top-crossing
- * choice is what keeps the row the reader is *reading* fixed under
- * in-viewport reflow (image-load, embed expansion).
- */
-function computeAnchor(
-  container: HTMLDivElement,
-  treatNearBottomAsBottom = true,
-): AnchorState {
-  if (treatNearBottomAsBottom && isAtBottomNow(container)) {
-    return { kind: "at-bottom" };
-  }
-
-  const containerTop = container.getBoundingClientRect().top;
-  const rows = container.querySelectorAll<HTMLElement>("[data-message-id]");
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const rect = row.getBoundingClientRect();
-    if (rect.bottom > containerTop) {
-      const messageId = row.dataset.messageId;
-      if (messageId) {
-        return {
-          kind: "message",
-          messageId,
-          topOffset: rect.top - containerTop,
-        };
-      }
-    }
-  }
-
-  return { kind: "at-bottom" };
-}
-
 export function useAnchoredScroll({
   scrollContainerRef,
   contentRef,
@@ -203,6 +137,10 @@ export function useAnchoredScroll({
   // ignores transient gaps and keeps chasing the floor. A `ref`, not state — the
   // guard runs on a native scroll event, outside React's render cycle.
   const settlingRef = React.useRef(false);
+  // The physical position written by the current bottom-pin operation. A
+  // matching scroll event belongs to that operation; a different position
+  // means the reader moved and takes ownership of the viewport.
+  const bottomPinScrollTopRef = React.useRef<number | null>(null);
   // Pinned-center corrections write scroll position themselves. Keep the next
   // matching scroll event from being mistaken for a user releasing the pin.
   const programmaticScrollTopRef = React.useRef<number | null>(null);
@@ -228,6 +166,7 @@ export function useAnchoredScroll({
     handledTargetIdRef.current = null;
     forceBottomOnNextAppendRef.current = false;
     settlingRef.current = false;
+    bottomPinScrollTopRef.current = null;
     programmaticScrollTopRef.current = null;
     isWritingScrollRef.current = false;
     if (programmaticScrollRafRef.current !== null) {
@@ -247,6 +186,32 @@ export function useAnchoredScroll({
       mountPinRafIdRef.current = null;
     }
   }, [channelId]);
+
+  const releaseBottomPinIfReaderMoved = React.useCallback(
+    (container: HTMLDivElement) => {
+      if (
+        anchorRef.current.kind === "pinned-center" ||
+        !shouldReleaseProgrammaticBottomPin({
+          currentScrollTop: container.scrollTop,
+          expectedScrollTop: bottomPinScrollTopRef.current,
+        })
+      ) {
+        return false;
+      }
+      settlingRef.current = false;
+      bottomPinScrollTopRef.current = null;
+      if (mountPinRafIdRef.current !== null) {
+        cancelAnimationFrame(mountPinRafIdRef.current);
+        mountPinRafIdRef.current = null;
+      }
+      anchorRef.current = computeAnchor(container);
+      const atBottom = anchorRef.current.kind === "at-bottom";
+      setIsAtBottom(atBottom);
+      if (atBottom) setNewMessageCount(0);
+      return true;
+    },
+    [],
+  );
 
   const noteProgrammaticScroll = React.useCallback(
     (container: HTMLDivElement, scrollTopBefore: number) => {
@@ -366,8 +331,10 @@ export function useAnchoredScroll({
       settlingRef.current = true;
       if (virtualizerOwnsPrependAnchoring && virtualScrollToBottom) {
         virtualScrollToBottom(behavior);
+        bottomPinScrollTopRef.current = null;
       } else {
         container.scrollTo({ top: container.scrollHeight, behavior });
+        bottomPinScrollTopRef.current = container.scrollTop;
       }
       setIsAtBottom(true);
       setNewMessageCount(0);
@@ -389,6 +356,7 @@ export function useAnchoredScroll({
   const settleAtBottomAfterLayout = React.useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return false;
+    if (releaseBottomPinIfReaderMoved(container)) return true;
     if (anchorRef.current.kind === "pinned-center") {
       repinPinnedCenter();
       const atBottom = isAtBottomNow(container);
@@ -409,6 +377,7 @@ export function useAnchoredScroll({
     }
     return true;
   }, [
+    releaseBottomPinIfReaderMoved,
     repinPinnedCenter,
     schedulePinnedTargetSettle,
     scrollContainerRef,
@@ -559,10 +528,12 @@ export function useAnchoredScroll({
     // above the true bottom. `computeAnchor` would read that as a deliberate
     // scroll-up and latch a message anchor, freezing the view short of bottom.
     // While settling, keep the anchor at-bottom and chase the physical floor.
+    if (releaseBottomPinIfReaderMoved(container)) return;
     if (settlingRef.current) {
       if (settleProgrammaticBottomPin(container)) {
         settlingRef.current = false;
       } else {
+        bottomPinScrollTopRef.current = container.scrollTop;
         if (virtualizerOwnsPrependAnchoring) {
           settlingRef.current = false;
         }
@@ -592,6 +563,7 @@ export function useAnchoredScroll({
       setNewMessageCount(0);
     }
   }, [
+    releaseBottomPinIfReaderMoved,
     releasePinnedCenter,
     scrollContainerRef,
     virtualizerOwnsPrependAnchoring,
@@ -607,6 +579,7 @@ export function useAnchoredScroll({
   React.useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
+    releaseBottomPinIfReaderMoved(container);
 
     // First render after a reset (channel switch or initial mount): jump
     // to the requested target message, or to the bottom by default.
@@ -626,6 +599,12 @@ export function useAnchoredScroll({
         scrollToBottomImperative("auto");
         mountPinRafIdRef.current = requestAnimationFrame(() => {
           mountPinRafIdRef.current = null;
+          const currentContainer = scrollContainerRef.current;
+          if (
+            currentContainer &&
+            releaseBottomPinIfReaderMoved(currentContainer)
+          )
+            return;
           scrollToBottomImperative("auto");
         });
       };
@@ -685,8 +664,10 @@ export function useAnchoredScroll({
       settlingRef.current = true;
       if (virtualizerOwnsPrependAnchoring && virtualScrollToBottom) {
         virtualScrollToBottom("auto");
+        bottomPinScrollTopRef.current = null;
       } else {
         container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+        bottomPinScrollTopRef.current = container.scrollTop;
       }
       setIsAtBottom(true);
       setNewMessageCount(0);
@@ -766,6 +747,7 @@ export function useAnchoredScroll({
     isLoading,
     messages,
     onTargetReached,
+    releaseBottomPinIfReaderMoved,
     repinPinnedCenter,
     scrollContainerRef,
     scrollToBottomImperative,

@@ -50,6 +50,7 @@ type CommunityRailProps = {
   ) => void;
   onRemoveCommunity: (id: string) => void;
   onReorderCommunities: (orderedIds: string[]) => void;
+  workspaceExpanded?: boolean;
 };
 
 const MAX_BADGE = 99;
@@ -307,6 +308,7 @@ export function CommunityRail({
   onUpdateCommunity,
   onRemoveCommunity,
   onReorderCommunities,
+  workspaceExpanded = false,
 }: CommunityRailProps) {
   const { unreadByCommunity, markCommunityRead } = useCommunityUnread(
     communities,
@@ -370,8 +372,9 @@ export function CommunityRail({
   return (
     <nav
       aria-label="Communities"
-      className="relative z-20 flex w-14 shrink-0 flex-col items-center gap-2 overflow-y-auto bg-sidebar px-2.5 pb-5 pt-[calc(var(--buzz-top-chrome-height,40px)+7px)]"
+      className="relative z-0 flex w-14 shrink-0 flex-col items-center gap-2 overflow-y-auto bg-sidebar px-2.5 pb-5 pt-[calc(var(--buzz-top-chrome-height,40px)+7px)]"
       data-testid="community-rail"
+      hidden={workspaceExpanded}
     >
       <DndContext
         onDragEnd={handleDragEnd}

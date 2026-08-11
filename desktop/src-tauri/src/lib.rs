@@ -9,7 +9,9 @@ mod discovery_credentials;
 mod discovery_worker;
 mod event_sync;
 mod events;
+mod host;
 mod huddle;
+mod initial_window;
 mod managed_agents;
 mod media_proxy;
 #[cfg(feature = "mesh-llm")]
@@ -24,6 +26,7 @@ mod native_websocket;
 mod nostr_bind;
 pub mod nostr_convert;
 mod prevent_sleep;
+mod provisioned_credits;
 mod ptt_shortcut;
 mod relay;
 mod relay_admission;
@@ -31,7 +34,9 @@ mod reset;
 mod secret_store;
 mod shutdown;
 mod templates;
+mod terminal;
 mod util;
+mod web;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
@@ -47,11 +52,14 @@ use huddle::audio_output::{
 };
 use huddle::reconnect::reconnect_huddle_audio;
 use huddle::{
-    add_agent_to_huddle, check_pipeline_hotstart, confirm_huddle_active, download_voice_models,
-    end_huddle, get_huddle_agent_pubkeys, get_huddle_state, get_model_status, get_voice_input_mode,
-    join_huddle, leave_huddle, push_audio_pcm, set_huddle_transcription_enabled, set_tts_enabled,
-    set_voice_input_mode, speak_agent_message, start_huddle, start_stt_pipeline,
+    add_agent_to_huddle, check_pipeline_hotstart, close_huddle_companion, confirm_huddle_active,
+    download_voice_models, end_huddle, get_huddle_agent_pubkeys, get_huddle_state,
+    get_model_status, get_voice_input_mode, interrupt_huddle_speech, join_huddle, leave_huddle,
+    open_huddle_window, push_audio_pcm, remove_agent_from_huddle, set_huddle_manual_mic_unmuted,
+    set_huddle_transcription_enabled, set_tts_enabled, set_voice_input_mode, speak_agent_message,
+    start_huddle, start_stt_pipeline, HuddlePhase,
 };
+use initial_window::*;
 use managed_agents::{
     backfill_persona_snapshots, ensure_nest, list_managed_agent_runtimes,
     put_managed_agent_runtime_lifecycle, reconcile_managed_agent_runtimes,
@@ -69,75 +77,8 @@ use std::sync::{
 };
 #[cfg(target_os = "macos")]
 use tauri::Listener;
-use tauri::{Emitter, Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
-
-#[cfg(target_os = "macos")]
-const INITIAL_RENDER_READY_EVENT: &str = "initial-render-ready";
-
-fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
-    if let Err(error) = window.show() {
-        eprintln!("buzz-desktop: failed to reveal main window: {error}");
-        return;
-    }
-    if let Err(error) = window.set_focus() {
-        eprintln!("buzz-desktop: failed to focus main window: {error}");
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn set_initial_window_backing<R: tauri::Runtime>(window: &tauri::Window<R>) {
-    // The window remains transparent at runtime for vibrancy. Use an opaque
-    // native backing only across the first visible frames so the previous app
-    // cannot show through before WebKit has submitted its first surface.
-    if let Err(error) = window.set_background_color(Some(tauri::window::Color(17, 21, 24, 255))) {
-        eprintln!("buzz-desktop: failed to set initial window backing: {error}");
-    }
-}
-
-#[cfg(target_os = "macos")]
-async fn clear_initial_window_backing<R: tauri::Runtime>(window: &tauri::Window<R>) {
-    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    if let Err(error) = window.set_background_color(None) {
-        eprintln!("buzz-desktop: failed to clear initial window backing: {error}");
-    }
-}
-
-#[cfg(target_os = "macos")]
-async fn wait_for_stable_initial_window_geometry<R: tauri::Runtime>(window: &tauri::Window<R>) {
-    const MAX_POLLS: usize = 120;
-    const REQUIRED_STABLE_POLLS: usize = 4;
-
-    let mut previous_bounds = None;
-    let mut stable_polls = 0;
-
-    for _ in 0..MAX_POLLS {
-        // Accept whatever geometry the window-state plugin restores — maximized
-        // or a normal saved size. macOS applies the restore asynchronously, so
-        // we only need consecutive identical outer bounds to know it settled.
-        // Gating on `is_maximized()` here would leave `bounds` permanently
-        // `None` for restored non-maximized windows and stall the reveal until
-        // the poll timeout.
-        let bounds = match (window.outer_position(), window.outer_size()) {
-            (Ok(position), Ok(size)) => Some((position.x, position.y, size.width, size.height)),
-            _ => None,
-        };
-
-        if bounds.is_some() && bounds == previous_bounds {
-            stable_polls += 1;
-            if stable_polls >= REQUIRED_STABLE_POLLS {
-                return;
-            }
-        } else {
-            stable_polls = 0;
-        }
-        previous_bounds = bounds;
-
-        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-    }
-
-    eprintln!("buzz-desktop: initial window geometry did not settle before reveal timeout");
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -245,6 +186,14 @@ pub fn run() {
         .plugin(native_websocket::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
+
+    // WebDriverIO test harness (feature-gated, never in shipping builds):
+    // embeds a W3C WebDriver server (macOS-capable without external drivers)
+    // and the wdio execute/mock/log surface used by desktop/e2e-real-shell.
+    #[cfg(feature = "wdio-harness")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
 
     // The global-shortcut plugin is omitted from test builds: linking it into
     // the lib-test binary makes it fail to load on Windows
@@ -372,6 +321,7 @@ pub fn run() {
             });
         })
         .manage(build_app_state())
+        .manage(terminal::TerminalManager::default())
         .manage(ClipboardState::new())
         .manage(PendingCommunityDeepLinks::default())
         .manage(commands::pairing::PairingHandle::new())
@@ -480,9 +430,25 @@ pub fn run() {
 
             // Store the AppHandle so huddle commands can emit `huddle-state-changed`
             // events via `huddle::emit_huddle_state` without threading the handle
-            // through every call site.
+            // through every call site. Superseded by the HostCtx installed below;
+            // 3 readers remain, each owned by another Phase 1 ticket.
             if let Ok(mut guard) = state.app_handle.lock() {
                 *guard = Some(app_handle.clone());
+            }
+
+            // The Phase 1 seam: converted commands take `&Ctx` as managed state.
+            host::install_ctx(&app_handle);
+
+            let (tts_settings, tts_settings_load_error) =
+                huddle::tts_settings::load_for_app(&app_handle);
+            if let Ok(mut guard) = state.huddle_audio.tts.lock() {
+                *guard = tts_settings.clone();
+            }
+            if let Ok(mut guard) = state.huddle_audio.tts_load_error.lock() {
+                *guard = tts_settings_load_error;
+            }
+            if let Ok(mut huddle) = state.huddle_state.lock() {
+                huddle.tts_enabled = tts_settings.agent_text_to_speech;
             }
 
             // Bring up the runtime-owned shared-compute coordinator before
@@ -677,6 +643,7 @@ pub fn run() {
             colony_check_community_name,
             colony_create_community,
             colony_list_my_communities,
+            colony_provisioning_config,
             title_bar_double_click,
             get_identity,
             save_discovery_credential,
@@ -709,6 +676,23 @@ pub fn run() {
             merge_project_pull_request,
             open_project_terminal,
             open_project_merge_recovery_terminal,
+            workspace_terminal_start,
+            workspace_terminal_write,
+            workspace_terminal_resize,
+            workspace_terminal_close,
+            workspace_terminal_close_all,
+            workspace_web_start,
+            workspace_web_navigate,
+            workspace_web_back,
+            workspace_web_forward,
+            workspace_web_reload,
+            workspace_web_resize,
+            workspace_web_mouse,
+            workspace_web_wheel,
+            workspace_web_key,
+            workspace_web_text,
+            workspace_web_close,
+            workspace_web_close_all,
             search_users,
             get_presence,
             get_os_idle_seconds,
@@ -776,6 +760,8 @@ pub fn run() {
             upload_media,
             pick_and_upload_media,
             pick_and_upload_image,
+            commands::workspace_files::read_workspace_file,
+            commands::workspace_files::pick_workspace_file,
             upload_media_bytes,
             download_image,
             save_png_data_url,
@@ -794,6 +780,7 @@ pub fn run() {
             unarchive_identity,
             list_archived_identities,
             get_relay_self,
+            get_relay_discovery_support,
             resolve_oa_owner,
             list_relay_agents,
             list_managed_agents,
@@ -821,6 +808,9 @@ pub fn run() {
             put_agent_session_config,
             get_global_agent_config,
             set_global_agent_config,
+            get_colony_credits_account,
+            reconnect_colony_credits,
+            connect_openrouter,
             mesh_start_node,
             mesh_stop_node,
             mesh_node_status,
@@ -887,6 +877,8 @@ pub fn run() {
             leave_huddle,
             end_huddle,
             get_huddle_state,
+            close_huddle_companion,
+            open_huddle_window,
             push_audio_pcm,
             reconnect_huddle_audio,
             start_stt_pipeline,
@@ -894,14 +886,27 @@ pub fn run() {
             download_voice_models,
             get_model_status,
             set_tts_enabled,
+            huddle::tts_settings::get_tts_settings,
+            huddle::tts_settings::list_voice_registry,
+            huddle::tts_settings::set_pocket_voice,
+            huddle::tts_settings::preview_pocket_voice,
+            huddle::tts_settings::import_pocket_voice,
+            huddle::tts_settings::delete_pocket_voice,
+            huddle::agent_voice::ensure_huddle_agent_voice_settings,
+            huddle::agent_voice::set_huddle_agent_tts_enabled,
+            huddle::agent_voice::set_huddle_agent_voice,
             speak_agent_message,
+            interrupt_huddle_speech,
             add_agent_to_huddle,
+            remove_agent_from_huddle,
+            huddle::agents::sync_agents_to_active_huddle,
             check_pipeline_hotstart,
             confirm_huddle_active,
             perform_sidebar_default_haptic,
             get_huddle_agent_pubkeys,
             set_voice_input_mode,
             get_voice_input_mode,
+            set_huddle_manual_mic_unmuted,
             list_audio_output_devices,
             set_audio_output_device,
             get_audio_output_device,
@@ -943,6 +948,29 @@ pub fn run() {
     let run_shutdown_done = Arc::clone(&shutdown_done);
     let restart_requested = Arc::new(AtomicBool::new(false));
     app.run(move |app_handle, event| match event {
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { .. },
+            ..
+        } if label.starts_with("huddle-") => {
+            let is_active_huddle_window =
+                app_handle
+                    .state::<AppState>()
+                    .huddle()
+                    .ok()
+                    .is_some_and(|huddle| {
+                        !matches!(huddle.phase, HuddlePhase::Idle | HuddlePhase::Leaving)
+                            && huddle
+                                .ephemeral_channel_id
+                                .as_deref()
+                                .is_some_and(|channel_id| label == format!("huddle-{channel_id}"))
+                    });
+            if is_active_huddle_window {
+                if let Err(error) = app_handle.emit("huddle-companion-returned", ()) {
+                    eprintln!("buzz-desktop: failed to restore huddle drawer: {error}");
+                }
+            }
+        }
         RunEvent::ExitRequested { code, .. } => {
             if is_restart_request(code) {
                 restart_requested.store(true, Ordering::SeqCst);

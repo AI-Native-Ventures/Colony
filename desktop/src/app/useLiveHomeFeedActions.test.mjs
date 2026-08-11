@@ -31,3 +31,27 @@ test("home feed live filters refresh durable Block attention on instances and re
     since: 123,
   });
 });
+
+import { homeFeedChannelLiveFilters } from "./useLiveHomeFeedActions.ts";
+
+test("channel-scoped home feed filters carry the channel h tag", () => {
+  const filters = homeFeedChannelLiveFilters(
+    "channel-123",
+    "owner-pubkey",
+    456,
+  );
+
+  assert.deepEqual(filters.action, {
+    kinds: [KIND_APPROVAL_REQUEST, KIND_REMINDER, KIND_STREAM_MESSAGE],
+    "#p": ["owner-pubkey"],
+    "#h": ["channel-123"],
+    limit: 50,
+    since: 456,
+  });
+  assert.deepEqual(filters.receipt, {
+    kinds: [KIND_BLOCK_RECEIPT],
+    "#h": ["channel-123"],
+    limit: 50,
+    since: 456,
+  });
+});

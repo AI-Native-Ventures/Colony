@@ -22,7 +22,9 @@ use chrono::{SecondsFormat, Utc};
 use nostr::{EventBuilder, Kind, Tag};
 use tokio::time::sleep;
 
-use crate::client::{extract_tag_value, BuzzClient};
+use crate::client::{
+    extract_tag_value, head_is_newer, head_rank, report_malformed_head, BuzzClient,
+};
 use crate::error::CliError;
 use crate::llm::call_llm;
 use crate::seat::SeatConfig;
@@ -247,20 +249,57 @@ struct OpenJob {
     instruction: String,
 }
 
-/// Keep only the newest head per job (`d` tag), in the relay's original order.
+/// The newest head under NIP-16 ordering, or `None` when every head is
+/// malformed.
+fn newest_head(events: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    events
+        .iter()
+        .filter(|event| {
+            if head_rank(event).is_none() {
+                report_malformed_head(&extract_tag_value(event, "d"), event);
+                false
+            } else {
+                true
+            }
+        })
+        .reduce(|best, event| {
+            if head_is_newer(event, best) {
+                event
+            } else {
+                best
+            }
+        })
+}
+
+/// Keep only the newest head per job (`d` tag), in the relay's original
+/// order.
 ///
 /// The relay returns every revision it has stored, so a job that was just
 /// finished appears twice: an "open" head and a "done" head. Without this
 /// dedup the worker finds the stale open one first, claims it, loses (it's
 /// done), and loops forever on a job that no longer needs it.
+///
+/// Two separate facts, both load-bearing:
+/// - The returned slice keeps the relay's row order; `first_open_job` walks
+///   it and takes the first open head.
+/// - The winner per job is chosen by NIP-16 (`created_at DESC, id ASC`),
+///   the relay's own per-`d_tag` head selection
+///   (`crates/buzz-db/src/event.rs:1946`).
+///
+/// A head whose `created_at` or `id` is missing or the wrong JSON type is
+/// malformed: it is skipped, reported once, and never compared as if it were
+/// epoch zero. A job whose every head is malformed produces no winner.
 fn newest_head_per_job(events: &[serde_json::Value]) -> Vec<&serde_json::Value> {
     let mut newest: std::collections::HashMap<String, &serde_json::Value> =
         std::collections::HashMap::new();
     for event in events {
         let job = extract_tag_value(event, "d");
-        let created = event["created_at"].as_i64().unwrap_or(0);
+        if head_rank(event).is_none() {
+            report_malformed_head(&job, event);
+            continue;
+        }
         match newest.get(&job) {
-            Some(seen) if seen["created_at"].as_i64().unwrap_or(0) >= created => {}
+            Some(seen) if !head_is_newer(event, seen) => {}
             _ => {
                 newest.insert(job, event);
             }
@@ -330,9 +369,7 @@ async fn read_attempt(client: &BuzzClient, job: &str) -> Option<i32> {
             .await
             .ok()?;
 
-        let newest = events
-            .iter()
-            .max_by_key(|e| e["created_at"].as_i64().unwrap_or(0));
+        let newest = newest_head(&events);
 
         if let Some(head) = newest {
             let status = extract_tag_value(head, "status");
@@ -522,6 +559,9 @@ async fn publish_usage(
 mod tests {
     use super::*;
     use serde_json::json;
+    // Convergence: the shared NIP-16 rule lives in
+    // `crate::client::tests::shared_head_comparator_selects_the_relays_head`;
+    // these tests pin worker-specific selection on top of it.
 
     fn job_head(id: &str, status: &str, created_at: i64) -> serde_json::Value {
         json!({
@@ -534,6 +574,18 @@ mod tests {
             ],
             "content": json!({ "instruction": format!("{status} {id}") }).to_string(),
         })
+    }
+
+    /// Like `job_head`, but with `created_at` replaced by an arbitrary JSON
+    /// value so a test can simulate a malformed head.
+    fn job_head_with_created_at(
+        id: &str,
+        status: &str,
+        created_at: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut head = job_head(id, status, 0);
+        head["created_at"] = created_at;
+        head
     }
 
     #[test]
@@ -574,5 +626,77 @@ mod tests {
 
         assert_eq!(open.job_id, "job-1");
         assert_eq!(open.instruction, "open job-1");
+    }
+
+    /// Gate 1: two heads for one job with identical `created_at` must resolve
+    /// by lower `id` (NIP-16), in both relay orders. "done" sorts before
+    /// "open", so the done head has the lower id and must win both times, and
+    /// the worker must never see the finished job as open.
+    #[test]
+    fn tied_heads_win_by_lower_id_in_both_relay_orders() {
+        let done = job_head("job-1", "done", 100);
+        let open = job_head("job-1", "open", 100);
+
+        for events in [vec![done.clone(), open.clone()], vec![open, done]] {
+            let newest = newest_head_per_job(&events);
+            assert_eq!(newest.len(), 1);
+            assert_eq!(newest[0]["id"].as_str(), Some("job-1-done-100"));
+            assert!(first_open_job(&events).is_none());
+        }
+    }
+
+    /// Gate 2: a head with a missing, string, or float `created_at` is
+    /// malformed and must lose to a valid head wherever it sits. Today the
+    /// malformed head is ranked as epoch zero and beats a valid head with a
+    /// negative timestamp.
+    #[test]
+    fn malformed_created_at_never_beats_a_valid_head() {
+        let mut missing = job_head("job-1", "open", 1);
+        missing.as_object_mut().unwrap().remove("created_at");
+        let malformed = [
+            missing,
+            job_head_with_created_at(
+                "job-1",
+                "open",
+                serde_json::Value::String("yesterday".to_string()),
+            ),
+            job_head_with_created_at("job-1", "open", serde_json::Value::from(1.5)),
+        ];
+
+        for bad in malformed {
+            for order in [0usize, 1usize] {
+                let good = job_head("job-1", "done", -5);
+                let events = if order == 0 {
+                    vec![bad.clone(), good]
+                } else {
+                    vec![good, bad.clone()]
+                };
+
+                let newest = newest_head_per_job(&events);
+                assert_eq!(newest.len(), 1, "one winner per job");
+                assert_eq!(
+                    newest[0]["id"].as_str(),
+                    Some("job-1-done--5"),
+                    "the valid head must win regardless of relay order"
+                );
+            }
+        }
+    }
+
+    /// Gate 3: `read_attempt` and `newest_head_per_job` must select the same
+    /// head for one input. Both go through the shared `head_is_newer`, so a
+    /// tie resolves to the lower id at both sites.
+    #[test]
+    fn read_attempt_and_newest_head_per_job_agree_on_tied_heads() {
+        let events = vec![
+            job_head("job-1", "done", 100),
+            job_head("job-1", "open", 100),
+        ];
+
+        let attempt_winner = newest_head(&events).expect("a head should be selected");
+        let deduped = newest_head_per_job(&events);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0]["id"], attempt_winner["id"]);
     }
 }

@@ -7,8 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri, onWindowThemeChanged } from "@/shared/api/nativeBridge";
 import { invokeTauri } from "@/shared/api/tauri";
 import { isMacPlatform } from "@/shared/lib/platform";
 import { createThemeVars, hexToHsl } from "./adaptive-theme";
@@ -564,10 +563,9 @@ export function ThemeProvider({
     // immediately when macOS appearance changes, so use it as the reliable app
     // signal while retaining matchMedia for the browser build.
     if (isTauri()) {
-      void getCurrentWindow()
-        .onThemeChanged(({ payload }) => {
-          if (!disposed) setSystemIsDark(payload === "dark");
-        })
+      void onWindowThemeChanged((theme) => {
+        if (!disposed) setSystemIsDark(theme === "dark");
+      })
         .then((unlisten) => {
           if (disposed) {
             unlisten();

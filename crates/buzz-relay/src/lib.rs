@@ -17,6 +17,8 @@ mod discovery_worker_broker;
 mod discovery_workspace_broker;
 mod employee_broker;
 pub mod employee_key;
+/// Colony Credits hosted gateway (provisioned mode).
+pub mod gateway;
 mod job_broker;
 mod ledger_broker;
 mod party_broker;
@@ -80,6 +82,8 @@ pub mod tunnel;
 pub mod webhook_secret;
 /// Workflow action sink — relay-side implementation of [`buzz_workflow::ActionSink`].
 pub mod workflow_sink;
+/// Relay-owned channel workspace-tab ownership broker.
+pub mod workspace_tab_broker;
 
 pub use config::Config;
 pub use error::{RelayError, Result};

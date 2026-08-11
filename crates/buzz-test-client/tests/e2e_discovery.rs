@@ -74,6 +74,33 @@ async fn relay_pubkey() -> nostr::PublicKey {
     .expect("valid relay pubkey")
 }
 
+/// Wire-contract pin shared with the desktop entitlement gate: the running
+/// relay's NIP-11 document must advertise the `colony-discovery` extension
+/// token. The desktop constant and this test are two spellings of one token;
+/// if either side drifts, this test fails.
+#[tokio::test]
+async fn relay_nip11_advertises_colony_discovery() {
+    let info: Value = reqwest::Client::new()
+        .get(relay_http_url())
+        .header("Accept", "application/nostr+json")
+        .send()
+        .await
+        .expect("fetch NIP-11")
+        .json()
+        .await
+        .expect("parse NIP-11");
+    let extensions = info
+        .get("supported_extensions")
+        .and_then(Value::as_array)
+        .expect("NIP-11 document must carry supported_extensions");
+    assert!(
+        extensions
+            .iter()
+            .any(|extension| extension.as_str() == Some("colony-discovery")),
+        "NIP-11 supported_extensions must advertise colony-discovery, got {extensions:?}"
+    );
+}
+
 async fn submit_worker_action(
     client: &mut BuzzTestClient,
     actor: &Keys,

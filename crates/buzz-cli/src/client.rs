@@ -1392,6 +1392,54 @@ pub fn extract_p_tags(event: &serde_json::Value) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// NIP-16 rank of a head: `(created_at, id)`, or `None` when either field
+/// is missing or the wrong JSON type. A malformed head must not be laundered
+/// into epoch zero: `None` means "skip it", not "1970".
+pub fn head_rank(event: &serde_json::Value) -> Option<(i64, &str)> {
+    let created_at = event["created_at"].as_i64()?;
+    let id = event["id"].as_str()?;
+    Some((created_at, id))
+}
+
+/// Is `candidate` the newer of two heads?
+///
+/// NIP-16: the higher `created_at` wins; on a tie, the lexicographically
+/// lower `id` wins. This is the relay's own per-`d_tag` head selection
+/// (`crates/buzz-db/src/event.rs:1946`), so callers pick the same revision
+/// the relay would. Returns `false` when either head is malformed; callers
+/// skip malformed heads before comparing.
+pub fn head_is_newer(candidate: &serde_json::Value, incumbent: &serde_json::Value) -> bool {
+    match (head_rank(candidate), head_rank(incumbent)) {
+        (Some((candidate_at, candidate_id)), Some((incumbent_at, incumbent_id))) => {
+            candidate_at > incumbent_at
+                || (candidate_at == incumbent_at && candidate_id < incumbent_id)
+        }
+        _ => false,
+    }
+}
+
+/// Report a malformed head once per process, so a broken relay cannot flood
+/// stderr on every poll or command run.
+///
+/// `context` names what the head belongs to (a job id, a grant `d` tag, ...)
+/// so the message stays readable wherever the comparator is used.
+pub fn report_malformed_head(context: &str, event: &serde_json::Value) {
+    let key = match event["id"].as_str() {
+        Some(id) => format!("{context}:{id}"),
+        None => format!("{context}:{}", event["created_at"]),
+    };
+    static REPORTED_MALFORMED_HEADS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashSet<String>>,
+    > = std::sync::OnceLock::new();
+    let reported = REPORTED_MALFORMED_HEADS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    if let Ok(mut seen) = reported.lock() {
+        if seen.insert(key) {
+            eprintln!("skipping malformed head for {context}");
+        }
+    }
+}
+
 /// Return a create-command response, injecting the entity ID **only** when the
 /// relay accepted the event (`"accepted": true`). When the relay rejected the
 /// event, emitting the locally-computed link would be misleading — callers
@@ -2518,7 +2566,7 @@ mod retry_policy_tests {
 mod tests {
     use super::{
         advance_query_cursor, create_response_with_id_if_accepted, extract_relay_response_field,
-        BuzzClient,
+        head_is_newer, head_rank, BuzzClient,
     };
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
@@ -2548,6 +2596,45 @@ mod tests {
             &[serde_json::json!({"id": "not-an-event-id", "created_at": 10})]
         )
         .is_err());
+    }
+
+    /// Convergence: the one NIP-16 head rule every consumer shares. Three
+    /// sites route their head selection through `head_rank` and
+    /// `head_is_newer`: `worker.rs` (`newest_head`, `newest_head_per_job`),
+    /// `commands/grants.rs` (`newest_head`, `newest_heads_by_d_tag`), and
+    /// `commands/jobs.rs` (`newest_per_job`). Their tests cite this test by
+    /// name; if a future edit makes any site disagree with this winner, that
+    /// site's tests are the ones that say so.
+    #[test]
+    fn shared_head_comparator_selects_the_relays_head() {
+        let head = |id: &str, created_at: i64| {
+            serde_json::json!({
+                "id": id,
+                "created_at": created_at,
+                "tags": [["d", "job-1"]],
+            })
+        };
+        let oldest = head("aa", 100);
+        let tied_low = head("bb", 200);
+        let tied_high = head("cc", 200);
+
+        for events in [
+            vec![&tied_high, &oldest, &tied_low],
+            vec![&tied_low, &tied_high, &oldest],
+        ] {
+            let winner = events
+                .iter()
+                .filter(|event| head_rank(event).is_some())
+                .reduce(|best, event| {
+                    if head_is_newer(event, best) {
+                        event
+                    } else {
+                        best
+                    }
+                })
+                .expect("a winner should be selected");
+            assert_eq!(head_rank(winner), Some((200, "bb")));
+        }
     }
 
     #[test]

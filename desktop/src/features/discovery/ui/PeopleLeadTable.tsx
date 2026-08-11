@@ -26,9 +26,11 @@ function initials(name: string) {
 }
 
 function statusVariant(status: Lead["status"]) {
-  if (status === "qualified") return "success" as const;
-  if (status === "rejected") return "destructive" as const;
-  if (status === "enriched") return "info" as const;
+  if (status === "qualified" || status === "client_active")
+    return "success" as const;
+  if (status === "accepted") return "info" as const;
+  if (status === "dormant") return "warning" as const;
+  if (status === "disqualified") return "destructive" as const;
   return "secondary" as const;
 }
 

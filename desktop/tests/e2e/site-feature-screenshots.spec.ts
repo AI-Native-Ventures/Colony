@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import { seedActiveIdentity } from "../helpers/onboarding";
 
 // Source of the marketing site's feature imagery (site/public/feature-*.png).
 //
@@ -457,4 +458,267 @@ test("capture: git built in", async ({ page }) => {
     path: `${SHOTS}/feature-git.png`,
     clip: { x: 290, y: 0, width: 990, height: 350 },
   });
+});
+
+// The Discovery pipeline and outreach-approval shots ride the e2e fixture
+// data source (FixtureDiscoveryDataSource): MODE === "e2e" swaps it in at
+// DiscoveryRouteScreen, so the campaigns below are pre-seeded product
+// fixtures, not bridge mocks. Deep links are the seeding mechanism.
+test("capture: discovery pipeline", async ({ page }) => {
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
+  await installMockBridge(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(
+    "/#/discovery?surface=campaign&industryId=automotive" +
+      "&verticalId=auto-repair&campaignId=auto-repair-johannesburg&tab=leads",
+    { waitUntil: "domcontentloaded" },
+  );
+  await expect(page.getByTestId("campaign-lead-table")).toBeVisible();
+  await expect(page.getByText("Rosebank Auto Care")).toBeVisible();
+  // Grid view, not the list: the list's table scrolls horizontally inside
+  // the panel at any viewport width, so its STATUS pills always render
+  // sliced mid-word. The card grid keeps every score and status chip
+  // inside the frame.
+  await page.getByRole("button", { name: "Grid view" }).click();
+  await expect(
+    page.locator('[data-testid^="lead-card-"]').first(),
+  ).toBeVisible();
+  await waitForAnimations(page);
+  // Full window, sidebar included: the client's call. The shot shows the
+  // whole product surface, not a crop of one panel.
+  await page.screenshot({ path: `${SHOTS}/discovery-pipeline.png` });
+});
+
+test("capture: outreach approval queue", async ({ page }) => {
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
+  await installMockBridge(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(
+    "/#/discovery?surface=campaign&entity=people&fieldId=marketing" +
+      "&roleId=marketing-director&campaignId=marketing-directors-united-states" +
+      "&tab=outreach",
+    { waitUntil: "domcontentloaded" },
+  );
+  await expect(
+    page.getByRole("heading", { name: "Outreach", exact: true }),
+  ).toBeVisible();
+  // The seeded queue lists Approved and Scheduled cards first, which pushes
+  // every card with an Approve button below the fold. The WhatsApp channel
+  // filter isolates the one WhatsApp draft, so the full window holds the
+  // metric strip ("Drafts Ready / Awaiting approval") and a Draft card with
+  // its Approve button together: the whole claim in one screen.
+  await page.getByRole("button", { name: "WhatsApp", exact: true }).click();
+  const draftCard = page
+    .locator('[data-testid^="outreach-draft-"]')
+    .filter({ has: page.getByRole("button", { name: "Approve" }) })
+    .first();
+  await expect(draftCard).toBeVisible();
+  await waitForAnimations(page);
+  // Full window, sidebar included: the client's call.
+  await page.screenshot({ path: `${SHOTS}/outreach-approval.png` });
+});
+
+// The delivered-work shot reuses the hero-shot channel machinery: build a
+// website channel, seed the finished-work exchange as history, read it once,
+// come back, capture the message cluster.
+const TENDER = {
+  pubkey: "7e19c4a8d2f6503b1e87ac40d5b92f634a01c8e7f52d3b96e0847ad1c5f29b60",
+  name: "Tender",
+  avatarUrl: "/onboarding/starter-team/tender.png",
+};
+const ID_DELIVERED = "5e".repeat(32);
+
+test("capture: work delivered in a channel", async ({ page }) => {
+  await installMockBridge(page, {
+    searchProfiles: [
+      { pubkey: MAYA.pubkey, displayName: MAYA.name },
+      { pubkey: AISHA.pubkey, displayName: AISHA.name },
+      {
+        pubkey: TENDER.pubkey,
+        displayName: TENDER.name,
+        avatarUrl: TENDER.avatarUrl,
+        isAgent: true,
+        ownerPubkey: MAYA.pubkey,
+      },
+    ],
+  });
+  // 1280x820, same as the hero shot: with the seeded history this fills the
+  // scrollback and keeps the empty-channel onboarding cards out of frame.
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () =>
+      typeof (
+        window as unknown as { __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown }
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function",
+  );
+
+  await page.evaluate(
+    async ({ members }) => {
+      const w = window as unknown as {
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__: (
+          command: string,
+          payload: Record<string, unknown>,
+        ) => Promise<unknown>;
+        __BUZZ_E2E_INVALIDATE_CHANNELS__: () => void;
+      };
+      const channel = (await w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__(
+        "create_channel",
+        {
+          name: "website",
+          channelType: "stream",
+          visibility: "open",
+          description: "The studio site and everything on it",
+        },
+      )) as { id: string };
+      await w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__("add_channel_members", {
+        channelId: channel.id,
+        pubkeys: members,
+      });
+      w.__BUZZ_E2E_INVALIDATE_CHANNELS__();
+    },
+    { members: [AISHA.pubkey, TENDER.pubkey] },
+  );
+
+  await page.evaluate(
+    ({ maya, aisha, tender, idDelivered, t0 }) => {
+      const emit = (
+        window as unknown as {
+          __BUZZ_E2E_EMIT_MOCK_MESSAGE__: (
+            input: Record<string, unknown>,
+          ) => void;
+        }
+      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      // Three earlier messages so the seeded history fills the viewport:
+      // with only the delivery exchange, the empty-channel "Create agent" /
+      // "Add people" onboarding cards and the channel intro sit in the top
+      // half of the frame (the hero-shot spec hit the same thing).
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 3100,
+        content:
+          "Quick one: can we add a WhatsApp button next to the phone number?",
+      });
+      emit({
+        channelName: "website",
+        pubkey: tender,
+        createdAt: t0 - 2900,
+        content: "Yes. I'll add it when I do the refresh.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 2600,
+        content:
+          "Renewal for the domain went through, so we're set for the year.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: aisha,
+        createdAt: t0 - 2400,
+        content:
+          "Good. And the new booking calendar is connected, so link it wherever it makes sense.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: aisha,
+        createdAt: t0 - 2100,
+        content:
+          "New price list is final. Three packages, same names as before.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: tender,
+        createdAt: t0 - 1900,
+        content:
+          "Got it. I'll fold the new prices into the services page when I do the refresh.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 1600,
+        content:
+          "Also swap the hero photo. The workshop floor one from Tuesday is much better.",
+      });
+      emit({
+        channelName: "website",
+        pubkey: maya,
+        createdAt: t0 - 700,
+        content:
+          "The services page still says we do consultations on Saturdays. We stopped that in June. Can we get the whole page brought up to date?",
+      });
+      emit({
+        channelName: "website",
+        pubkey: tender,
+        id: idDelivered,
+        createdAt: t0,
+        content: [
+          "Done. Every page is current again:",
+          "",
+          "- Services page: Saturday consultations removed, the three packages match the new price list",
+          "- Homepage: headline now leads with the 48-hour turnaround, new photo of the workshop floor",
+          "- Contact page: the old landline is gone, the booking link goes straight to your calendar",
+          "",
+          "Preview is live. One look from you and it publishes.",
+        ].join("\n"),
+      });
+      // Top level, not a thread reply: a reply collapses into a "1 reply"
+      // summary, and the owner signing off is the moment this shot exists
+      // to show.
+      emit({
+        channelName: "website",
+        pubkey: aisha,
+        createdAt: t0 + 240,
+        content: "Checked all three. Publish it.",
+      });
+      for (const [reactor, emoji, offset] of [
+        [maya, "🎉", 300],
+        [aisha, "👍", 320],
+      ] as const) {
+        emit({
+          channelName: "website",
+          pubkey: reactor,
+          kind: 7,
+          createdAt: t0 + offset,
+          content: emoji,
+          extraTags: [
+            ["e", idDelivered],
+            ["p", tender],
+          ],
+        });
+      }
+    },
+    {
+      maya: MAYA.pubkey,
+      aisha: AISHA.pubkey,
+      tender: TENDER.pubkey,
+      idDelivered: ID_DELIVERED,
+      t0: T0,
+    },
+  );
+
+  // First visit marks history read; return trip captures without the NEW rule.
+  await page.getByTestId("channel-website").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("website");
+  await expect(page.getByText("Publish it.")).toBeVisible();
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-website").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("website");
+  await expect(page.getByText("Preview is live")).toBeVisible();
+  // Gate on the agent PNG and the human initial fallbacks: Radix delays
+  // fallbacks ~200ms, and a capture that beats them ships empty avatar
+  // discs (the first take of this shot did exactly that).
+  await expect(
+    page.locator(`img[src="${TENDER.avatarUrl}"]`).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("message-avatar-fallback").first(),
+  ).toBeVisible();
+  await waitForAnimations(page);
+
+  // Full window, sidebar included: the client's call. Same framing as the
+  // hero product shot, just a different channel and story.
+  await page.screenshot({ path: `${SHOTS}/work-delivered.png` });
 });

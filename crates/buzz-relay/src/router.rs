@@ -105,6 +105,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/communities/availability",
             get(api::self_provisioning::community_availability),
         )
+        .route(
+            "/api/communities/config",
+            get(api::self_provisioning::provisioning_config),
+        )
         .route("/api/invites", post(api::invites::mint_invite))
         .route("/api/join-policy", get(api::invites::join_policy))
         // Policy documents as standalone pages — desktop opens these in the
@@ -149,6 +153,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(media_router)
         .merge(git_router)
         .merge(git_policy_router);
+    if let Some(gateway) = state.gateway.get() {
+        // Colony Credits hosted gateway: mounted only when configured, so an
+        // unconfigured deployment answers 404 for the gateway paths exactly
+        // as if the routes did not exist.
+        merged = merged.merge(crate::gateway::router(state.clone(), Arc::clone(gateway)));
+    }
     if let Some(admin_router) = admin_router {
         merged = merged.merge(admin_router);
     }

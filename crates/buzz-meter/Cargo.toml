@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 buzz-core    = { workspace = true }
+buzz-meter-core = { workspace = true }
 axum         = { workspace = true }
 tokio        = { workspace = true }
 reqwest      = { workspace = true, features = ["stream"] }

@@ -14,12 +14,14 @@
 //! A background tokio task owns the WebSocket stream. It:
 //! - Responds to Ping frames with Pong (preventing relay disconnect on long turns)
 //! - Forwards `BuzzEvent`s through an `mpsc` channel
+//! - Forwards channel-less Ask events through their own `mpsc` channel
 //! - Handles reconnection with `since` filters to avoid event loss
 //! - Responds to mid-session AUTH challenges
 //! - Publishes ephemeral events (typing indicators) via `PublishEvent` commands
 //!
 //! `HarnessRelay` communicates with the background task via a `RelayCommand`
-//! channel. `next_event()` reads from the event receiver.
+//! channel. `next_event()` reads channel events and `take_ask_events()` hands
+//! the main loop the dedicated Ask receiver.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
@@ -537,6 +539,13 @@ enum RelayMessage {
 
 /// Subscription ID for the global membership notification subscription.
 const MEMBERSHIP_NOTIF_SUB_ID: &str = "membership-notif";
+/// Subscription id for the agent's global Ask inbox.
+///
+/// Distinct from `ch-<uuid>` channel subscriptions because an Ask is addressed
+/// to an *agent*, not to a room. A real ask raised without `--channel` carries
+/// no `h` tag and is stored with a NULL channel, so a channel-scoped REQ can
+/// never return it.
+const ASK_INBOX_SUB_ID: &str = "ask-inbox";
 /// Subscription ID for encrypted owner-to-agent observer control frames.
 const OBSERVER_CONTROL_SUB_ID: &str = "agent-observer-control";
 
@@ -556,6 +565,8 @@ enum RelayCommand {
     Shutdown,
     /// Subscribe to global membership notifications.
     SubscribeMembership,
+    /// Subscribe to this agent's global Ask inbox.
+    SubscribeAskInbox,
     /// Subscribe to encrypted observer control frames addressed to this agent.
     SubscribeObserverControls,
     /// Publish a signed event to the relay (for typing indicators, etc.).
@@ -576,6 +587,8 @@ type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub struct HarnessRelay {
     /// Receiver for events forwarded by the background task.
     event_rx: mpsc::Receiver<Option<BuzzEvent>>,
+    /// Receiver for channel-less Ask events addressed to this agent.
+    ask_events: Option<mpsc::Receiver<Event>>,
     /// Receiver for encrypted observer control events addressed to this agent.
     observer_control_rx: Option<mpsc::Receiver<Event>>,
     /// Sender for commands to the background task.
@@ -650,6 +663,7 @@ impl HarnessRelay {
             retry_initial_connect(|| do_connect(relay_url, keys, auth_tag.as_ref())).await?;
 
         let (event_tx, event_rx) = mpsc::channel::<Option<BuzzEvent>>(event_channel_capacity());
+        let (ask_tx, ask_rx) = mpsc::channel::<Event>(event_channel_capacity());
         let (observer_control_tx, observer_control_rx) =
             mpsc::channel::<Event>(event_channel_capacity());
         let (cmd_tx, cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
@@ -664,6 +678,7 @@ impl HarnessRelay {
                 ws,
                 handshake_buffer,
                 event_tx,
+                ask_tx,
                 observer_control_tx,
                 cmd_rx,
                 bg_keys,
@@ -676,6 +691,7 @@ impl HarnessRelay {
 
         Ok(Self {
             event_rx,
+            ask_events: Some(ask_rx),
             observer_control_rx: Some(observer_control_rx),
             cmd_tx,
             http: reqwest::Client::builder()
@@ -815,6 +831,15 @@ impl HarnessRelay {
         Ok(())
     }
 
+    /// Subscribe to channel-less Ask events addressed to this agent.
+    pub async fn subscribe_ask_inbox(&mut self) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::SubscribeAskInbox)
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)?;
+        Ok(())
+    }
+
     /// Subscribe to encrypted observer control frames addressed to this agent.
     pub async fn subscribe_observer_controls(&mut self) -> Result<(), RelayError> {
         self.cmd_tx
@@ -827,6 +852,11 @@ impl HarnessRelay {
     /// Take the observer-control receiver for polling outside this relay object.
     pub fn take_observer_control_rx(&mut self) -> Option<mpsc::Receiver<Event>> {
         self.observer_control_rx.take()
+    }
+
+    /// Take the receiver for channel-less Ask events addressed to this agent.
+    pub fn take_ask_events(&mut self) -> Option<mpsc::Receiver<Event>> {
+        self.ask_events.take()
     }
 
     /// Return a cloneable publisher handle for signed relay events.
@@ -1033,6 +1063,14 @@ struct BgState {
     membership_last_seen: Option<u64>,
     /// Whether the membership notification subscription is active.
     membership_sub_active: bool,
+    /// Whether the global Ask inbox subscription is active.
+    ask_sub_active: bool,
+    /// Newest successfully-enqueued Ask timestamp.
+    ask_last_seen: Option<u64>,
+    /// Oldest timestamp of an Ask dropped due to backpressure.
+    ask_dropped_since: Option<u64>,
+    /// Set when a rate-limited CLOSED arrives for the Ask inbox subscription.
+    ask_resub_needed: bool,
     /// Whether the observer control subscription is active.
     observer_control_sub_active: bool,
     /// Oldest dropped channel-event timestamp per channel, keyed by channel_id.
@@ -1111,6 +1149,10 @@ impl BgState {
             membership_dropped_since: None,
             membership_last_seen: None,
             membership_sub_active: false,
+            ask_sub_active: false,
+            ask_last_seen: None,
+            ask_dropped_since: None,
+            ask_resub_needed: false,
             observer_control_sub_active: false,
             channel_dropped_since: HashMap::new(),
             proactive_resubscribe_needed: false,
@@ -1166,6 +1208,16 @@ impl BgState {
                 .get(channel_id)
                 .copied()
                 .or(self.startup_watermark),
+        }
+    }
+
+    /// Compute the replay floor for the global Ask inbox.
+    fn ask_since(&self) -> Option<u64> {
+        match (self.ask_dropped_since, self.ask_last_seen) {
+            (Some(d), Some(l)) => Some(d.min(l)),
+            (Some(d), None) => Some(d),
+            (None, Some(l)) => Some(l),
+            (None, None) => None,
         }
     }
 
@@ -1310,6 +1362,9 @@ fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
         RelayCommand::SubscribeMembership => {
             state.membership_sub_active = true;
         }
+        RelayCommand::SubscribeAskInbox => {
+            state.ask_sub_active = true;
+        }
         RelayCommand::SubscribeObserverControls => {
             state.observer_control_sub_active = true;
         }
@@ -1378,7 +1433,7 @@ fn retain_deferred_command_intent(
 /// Execute a command on a live WebSocket connection.
 ///
 /// Handles the five data commands: Subscribe, Unsubscribe,
-/// SubscribeMembership, PublishEvent, SetStartupWatermark. Callers handle
+/// SubscribeMembership, SubscribeAskInbox, PublishEvent, SetStartupWatermark. Callers handle
 /// Shutdown and Reconnect for control flow before dispatching here.
 ///
 /// Returns `true` if the command succeeded (or was a no-op). Returns `false`
@@ -1490,6 +1545,23 @@ async fn execute_connected_command(
                 false
             }
         }
+        RelayCommand::SubscribeAskInbox => {
+            state.ask_sub_active = true;
+            if state.check_rate_gate().is_some() {
+                debug!("rate-gated: deferring Ask inbox subscription");
+                state.ask_resub_needed = true;
+                return true;
+            }
+            let sent = send_ask_inbox_subscribe(ws, agent_pubkey_hex, state.ask_since()).await;
+            if sent {
+                state.ask_resub_needed = false;
+                true
+            } else {
+                warn!("Ask inbox subscribe REQ failed — recording intent for reconnect");
+                state.ask_resub_needed = true;
+                false
+            }
+        }
         RelayCommand::SubscribeObserverControls => {
             state.observer_control_sub_active = true;
             if state.check_rate_gate().is_some() {
@@ -1577,6 +1649,7 @@ async fn run_background_task(
     mut ws: WsStream,
     initial_handshake_buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: mpsc::Sender<Option<BuzzEvent>>,
+    ask_tx: mpsc::Sender<Event>,
     observer_control_tx: mpsc::Sender<Event>,
     mut cmd_rx: mpsc::Receiver<RelayCommand>,
     keys: Keys,
@@ -1590,6 +1663,7 @@ async fn run_background_task(
         &mut ws,
         initial_handshake_buffer,
         &event_tx,
+        &ask_tx,
         &observer_control_tx,
         &mut state,
         &keys,
@@ -1611,6 +1685,7 @@ async fn run_background_task(
             &relay_url,
             &agent_pubkey_hex,
             &event_tx,
+            &ask_tx,
             &observer_control_tx,
             auth_tag.as_ref(),
         )
@@ -1635,6 +1710,7 @@ async fn run_background_task(
                         &relay_url,
                         &agent_pubkey_hex,
                         &event_tx,
+                        &ask_tx,
                         &observer_control_tx,
                         true,
                         auth_tag.as_ref(),
@@ -1694,6 +1770,7 @@ async fn run_background_task(
                         &relay_url,
                         &agent_pubkey_hex,
                         &event_tx,
+                        &ask_tx,
                         &observer_control_tx,
                         auth_tag.as_ref(),
                     )
@@ -1724,6 +1801,7 @@ async fn run_background_task(
                                     &relay_url,
                                     &agent_pubkey_hex,
                                     &event_tx,
+                                    &ask_tx,
                                     &observer_control_tx,
                                     true,
                                     auth_tag.as_ref(),
@@ -1770,6 +1848,17 @@ async fn run_background_task(
                         warn!(
                             "membership control resub after rate-limit failed — will retry next drain"
                         );
+                    }
+                }
+                if state.ask_resub_needed && budget > 0 {
+                    if send_ask_inbox_subscribe(&mut ws, &agent_pubkey_hex, state.ask_since()).await
+                    {
+                        state.ask_resub_needed = false;
+                        state.ask_dropped_since = None;
+                        budget = budget.saturating_sub(1);
+                        any_sent = true;
+                    } else {
+                        warn!("Ask inbox resub after rate-limit failed — will retry next drain");
                     }
                 }
                 if state.observer_resub_needed && budget > 0 {
@@ -1837,6 +1926,7 @@ async fn run_background_task(
                                        msg,
                                        &mut ws,
                                        &event_tx,
+                                       &ask_tx,
                                        &observer_control_tx,
                                        &mut state,
                                        &keys,
@@ -1870,6 +1960,7 @@ async fn run_background_task(
                                &relay_url,
                                &agent_pubkey_hex,
                                &event_tx,
+                               &ask_tx,
                            &observer_control_tx,
             auth_tag.as_ref(),
                            )
@@ -1891,7 +1982,7 @@ async fn run_background_task(
                                if matches!(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
@@ -1911,7 +2002,7 @@ async fn run_background_task(
                                if matches!(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
@@ -1945,7 +2036,7 @@ async fn run_background_task(
                                    let _ = event_tx.try_send(None);
                                    match try_autonomous_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx,
+        &agent_pubkey_hex, &event_tx, &ask_tx,
                                    &observer_control_tx,
             auth_tag.as_ref(),
                                    ).await {
@@ -1960,7 +2051,7 @@ async fn run_background_task(
                                            if matches!(
                                                wait_for_reconnect(
                                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                                ).await,
                                                ReconnectOutcome::Shutdown
@@ -1984,7 +2075,7 @@ async fn run_background_task(
                            let _ = event_tx.try_send(None);
                            match try_autonomous_reconnect(
                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx,
+        &agent_pubkey_hex, &event_tx, &ask_tx,
                            &observer_control_tx,
             auth_tag.as_ref(),
                            ).await {
@@ -1999,7 +2090,7 @@ async fn run_background_task(
                                    if matches!(
                                        wait_for_reconnect(
                                            &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                        ).await,
                                        ReconnectOutcome::Shutdown
@@ -2017,7 +2108,7 @@ async fn run_background_task(
                                let _ = event_tx.try_send(None);
                                match try_autonomous_reconnect(
                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx,
+        &agent_pubkey_hex, &event_tx, &ask_tx,
                                &observer_control_tx,
             auth_tag.as_ref(),
                                ).await {
@@ -2032,7 +2123,7 @@ async fn run_background_task(
                                        if matches!(
                                            wait_for_reconnect(
                                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                            ).await,
                                            ReconnectOutcome::Shutdown
@@ -2086,6 +2177,7 @@ async fn handle_ws_message(
     msg: Message,
     ws: &mut WsStream,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
+    ask_tx: &mpsc::Sender<Event>,
     observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
@@ -2174,6 +2266,48 @@ async fn handle_ws_message(
                                     channel_id = %channel_uuid,
                                     ts,
                                     "membership notification dropped (backpressure) — proactive resubscribe queued"
+                                );
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+                        }
+                    } else if subscription_id == ASK_INBOX_SUB_ID {
+                        // An Ask has no channel, so it never becomes a
+                        // `BuzzEvent`. It rides its own queue and is turned
+                        // into a channel-less prompt by the main loop.
+                        let event_id_hex = event.id.to_hex();
+                        if !state.seen_ids.insert(event_id_hex.clone()) {
+                            debug!(
+                                event_id = %event_id_hex,
+                                "duplicate Ask inbox event — skipping"
+                            );
+                            return true;
+                        }
+                        let ts = event.created_at.as_secs();
+                        let cap = ask_tx.max_capacity();
+                        let used = cap - ask_tx.capacity();
+                        if used >= (cap * 4 / 5) {
+                            warn!(
+                                used,
+                                capacity = cap,
+                                "Ask inbox channel at ≥80% capacity — backpressure imminent"
+                            );
+                        }
+                        match ask_tx.try_send(*event) {
+                            Ok(()) => {
+                                state.ask_last_seen =
+                                    Some(state.ask_last_seen.unwrap_or(0).max(ts));
+                            }
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                // Remove from dedup so reconnect replay can
+                                // re-deliver this event (it was never forwarded
+                                // to the harness).
+                                state.seen_ids.remove(&event_id_hex);
+                                state.ask_dropped_since =
+                                    Some(state.ask_dropped_since.map_or(ts, |d| d.min(ts)));
+                                state.proactive_resubscribe_needed = true;
+                                warn!(
+                                    ts,
+                                    "Ask inbox event dropped (backpressure) — proactive resubscribe queued"
                                 );
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => return false,
@@ -2282,6 +2416,11 @@ async fn handle_ws_message(
                             // this REQ before registering it, so the sub does not exist
                             // server-side — the drain must re-send it.
                             state.membership_resub_needed = true;
+                        } else if subscription_id == ASK_INBOX_SUB_ID {
+                            // Mark the Ask inbox for drain recovery. The relay rejected
+                            // this REQ before registering it, so the sub does not exist
+                            // server-side — the drain must re-send it.
+                            state.ask_resub_needed = true;
                         } else if subscription_id == OBSERVER_CONTROL_SUB_ID {
                             state.observer_resub_needed = true;
                         }
@@ -2335,6 +2474,18 @@ async fn handle_ws_message(
                             // Keep membership_sub_active = true so reconnect restores it.
                             warn!(
                                 "membership resubscribe failed after CLOSED — triggering reconnect"
+                            );
+                            return false;
+                        }
+                    } else if subscription_id == ASK_INBOX_SUB_ID {
+                        let sent =
+                            send_ask_inbox_subscribe(ws, agent_pubkey_hex, state.ask_since()).await;
+                        if sent {
+                            state.ask_dropped_since = None;
+                            state.ask_resub_needed = false;
+                        } else {
+                            warn!(
+                                "Ask inbox resubscribe failed after CLOSED — triggering reconnect"
                             );
                             return false;
                         }
@@ -2436,6 +2587,7 @@ async fn process_handshake_buffer(
     ws: &mut WsStream,
     buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
+    ask_tx: &mpsc::Sender<Event>,
     observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
@@ -2479,6 +2631,7 @@ async fn process_handshake_buffer(
                 Message::Text(text.into()),
                 ws,
                 event_tx,
+                ask_tx,
                 observer_control_tx,
                 state,
                 keys,
@@ -2591,9 +2744,10 @@ async fn resubscribe_after_reconnect(
         }
     }
 
-    // Membership and observer-control are control-plane subscriptions: a silent
-    // failure breaks join notifications and agent pause/resume. A shared quota
-    // gate parks their intent for the main-loop drain just like channel REQs.
+    // Membership, Ask inbox, and observer-control are control-plane
+    // subscriptions: a silent failure breaks join notifications, Ask delivery,
+    // or agent pause/resume. A shared quota gate parks their intent for the
+    // main-loop drain just like channel REQs.
     if state.membership_sub_active {
         if state.check_rate_gate().is_some() {
             debug!("rate-gated: parking membership resubscribe after reconnect");
@@ -2616,6 +2770,28 @@ async fn resubscribe_after_reconnect(
                 state.membership_resub_needed = false;
             } else {
                 warn!("failed to resubscribe membership after reconnect");
+                retain_deferred_command_intent(state, &mut deferred_commands);
+                return ResubscribeResult::RetryConnection;
+            }
+        }
+    }
+
+    if state.ask_sub_active {
+        if state.check_rate_gate().is_some() {
+            debug!("rate-gated: parking Ask inbox resubscribe after reconnect");
+            state.ask_resub_needed = true;
+        } else {
+            if (!state.active_subscriptions.is_empty() || state.membership_sub_active)
+                && !pacing_sleep(cmd_rx, &mut deferred_commands, REQ_PACING_INTERVAL).await
+            {
+                return ResubscribeResult::Shutdown;
+            }
+            let sent = send_ask_inbox_subscribe(ws, agent_pubkey_hex, state.ask_since()).await;
+            if sent {
+                state.ask_dropped_since = None;
+                state.ask_resub_needed = false;
+            } else {
+                warn!("failed to resubscribe Ask inbox after reconnect");
                 retain_deferred_command_intent(state, &mut deferred_commands);
                 return ResubscribeResult::RetryConnection;
             }
@@ -2875,6 +3051,7 @@ async fn drain_commands(
             }
             RelayCommand::Subscribe { .. }
             | RelayCommand::SubscribeMembership
+            | RelayCommand::SubscribeAskInbox
             | RelayCommand::SubscribeObserverControls => {
                 // A gated subscription is only parked in state; pace only an
                 // actual live send attempt.
@@ -2940,6 +3117,7 @@ async fn try_autonomous_reconnect(
     relay_url: &str,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
+    ask_tx: &mpsc::Sender<Event>,
     observer_control_tx: &mpsc::Sender<Event>,
     auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
@@ -2971,6 +3149,7 @@ async fn try_autonomous_reconnect(
                     ws,
                     handshake_buffer,
                     event_tx,
+                    ask_tx,
                     observer_control_tx,
                     state,
                     keys,
@@ -3069,6 +3248,7 @@ async fn wait_for_reconnect(
     relay_url: &str,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
+    ask_tx: &mpsc::Sender<Event>,
     observer_control_tx: &mpsc::Sender<Event>,
     skip_drain: bool,
     auth_tag: Option<&nostr::Tag>,
@@ -3109,6 +3289,7 @@ async fn wait_for_reconnect(
                     ws,
                     handshake_buffer,
                     event_tx,
+                    ask_tx,
                     observer_control_tx,
                     state,
                     keys,
@@ -3190,6 +3371,71 @@ async fn wait_for_reconnect(
     }
 }
 
+/// The NIP-01 filter for the global Ask inbox.
+///
+/// Deliberately carries no `#h`: an ask is agent-addressed and usually has no
+/// channel at all. `#p` is what scopes it, and it is mandatory. Without it an
+/// agent would be woken by every ask in the community.
+pub(crate) fn ask_inbox_req_filter(
+    agent_pubkey_hex: &str,
+    since: Option<u64>,
+) -> serde_json::Value {
+    let mut filter = serde_json::Map::new();
+    filter.insert("kinds".into(), json!([buzz_core::kind::KIND_ASK]));
+    filter.insert("#p".into(), json!([agent_pubkey_hex]));
+    match since {
+        Some(since) => {
+            filter.insert("since".into(), json!(since.saturating_sub(SINCE_SKEW_SECS)));
+        }
+        None => {
+            filter.insert("since".into(), json!(unix_now_secs()));
+        }
+    }
+    serde_json::Value::Object(filter)
+}
+
+/// Send a NIP-01 REQ for this agent's global Ask inbox.
+///
+/// Unlike channel subscriptions, the filter deliberately has no `#h` tag:
+/// channel-less Asks are stored with a NULL channel and are scoped only by
+/// their recipient `#p` tag.
+async fn send_ask_inbox_subscribe(
+    ws: &mut WsStream,
+    agent_pubkey_hex: &str,
+    since: Option<u64>,
+) -> bool {
+    let req = json!([
+        "REQ",
+        ASK_INBOX_SUB_ID,
+        ask_inbox_req_filter(agent_pubkey_hex, since)
+    ]);
+    match serde_json::to_string(&req) {
+        Ok(text) => {
+            match ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await {
+                Ok(()) => {
+                    debug!(
+                        "subscribed to Ask inbox{}",
+                        if since.is_some() {
+                            " (with since filter)"
+                        } else {
+                            " (since=now)"
+                        }
+                    );
+                    true
+                }
+                Err(e) => {
+                    warn!("failed to send Ask inbox REQ: {e}");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            warn!("failed to serialize Ask inbox REQ: {e}");
+            false
+        }
+    }
+}
+
 /// Send a NIP-01 REQ for a channel, built from a [`ChannelFilter`].
 ///
 /// - `kinds` is included only when `filter.kinds` is `Some`; `None` = wildcard.
@@ -3228,10 +3474,7 @@ async fn send_subscribe(
     // subtract skew buffer to catch events missed during the disconnect window.
     let since_ts = match since {
         Some(ts) => ts.saturating_sub(SINCE_SKEW_SECS),
-        None => std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        None => unix_now_secs(),
     };
     req_filter.insert("since".into(), json!(since_ts));
 
@@ -4107,6 +4350,119 @@ mod tests {
     #[test]
     fn channel_id_from_sub_id_empty() {
         assert!(channel_id_from_sub_id("").is_none());
+    }
+
+    #[test]
+    fn the_ask_inbox_filter_is_global_and_p_tagged() {
+        let agent = "a".repeat(64);
+        let filter = ask_inbox_req_filter(&agent, None);
+
+        assert_eq!(
+            filter["kinds"],
+            serde_json::json!([buzz_core::kind::KIND_ASK]),
+            "the ask inbox subscribes to asks and nothing else"
+        );
+        assert_eq!(
+            filter["#p"],
+            serde_json::json!([agent]),
+            "an agent must only be woken by asks addressed to it"
+        );
+        assert!(
+            filter.get("#h").is_none(),
+            "an ask carries no h tag when it is raised without a channel, which \
+             is the common case; adding #h here reintroduces the bug that no ask \
+             ever reaches the harness"
+        );
+    }
+
+    #[test]
+    fn the_ask_inbox_filter_replays_from_since_on_reconnect() {
+        let agent = "b".repeat(64);
+        let filter = ask_inbox_req_filter(&agent, Some(1_000));
+        assert_eq!(
+            filter["since"],
+            serde_json::json!(1_000 - SINCE_SKEW_SECS),
+            "a reconnect must not silently drop an ask raised while disconnected"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_inbox_events_use_a_dedicated_queue_without_a_channel_event() {
+        let (mut client, _server) = test_ws_pair().await;
+        let (event_tx, mut event_rx) = mpsc::channel::<Option<BuzzEvent>>(1);
+        let (ask_tx, mut ask_rx) = mpsc::channel::<Event>(1);
+        let (observer_control_tx, _observer_control_rx) = mpsc::channel::<Event>(1);
+        let mut state = BgState::new();
+        let keys = nostr::Keys::generate();
+        let event = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_ASK as u16),
+            "{\"headline\":\"Which vendor?\"}",
+        )
+        .sign_with_keys(&keys)
+        .expect("signing test ask");
+        let event_id = event.id;
+        let frame = serde_json::to_string(&json!(["EVENT", ASK_INBOX_SUB_ID, event]))
+            .expect("serialize test ask frame");
+
+        assert!(
+            handle_ws_message(
+                Message::Text(frame.into()),
+                &mut client,
+                &event_tx,
+                &ask_tx,
+                &observer_control_tx,
+                &mut state,
+                &keys,
+                "ws://relay.test",
+                "agent-pubkey",
+                None,
+            )
+            .await
+        );
+
+        let ask = ask_rx.recv().await.expect("ask should use its own queue");
+        assert_eq!(ask.id, event_id);
+        assert!(
+            event_rx.try_recv().is_err(),
+            "a channel-less ask must never become a BuzzEvent"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_inbox_subscription_emits_a_global_req() {
+        let (mut client, mut server) = test_ws_pair().await;
+        let agent = "a".repeat(64);
+
+        assert!(send_ask_inbox_subscribe(&mut client, &agent, Some(1_000)).await);
+
+        let frame = next_test_frame(&mut server).await;
+        assert_eq!(frame[0], "REQ");
+        assert_eq!(frame[1], ASK_INBOX_SUB_ID);
+        assert_eq!(frame[2]["kinds"], json!([buzz_core::kind::KIND_ASK]));
+        assert_eq!(frame[2]["#p"], json!([agent]));
+        assert!(frame[2].get("#h").is_none());
+        assert_eq!(frame[2]["since"], json!(1_000 - SINCE_SKEW_SECS));
+    }
+
+    #[tokio::test]
+    async fn ask_inbox_resubscribe_replays_the_earliest_seen_timestamp() {
+        let (mut client, mut server) = test_ws_pair().await;
+        let (_cmd_tx, mut cmd_rx) = mpsc::channel(1);
+        let mut state = BgState::new();
+        apply_command_to_state(&mut state, RelayCommand::SubscribeAskInbox);
+        state.ask_last_seen = Some(1_000);
+        state.ask_dropped_since = Some(900);
+
+        let result =
+            resubscribe_after_reconnect(&mut client, &mut cmd_rx, &mut state, "agent-pubkey", true)
+                .await;
+
+        assert!(matches!(result, ResubscribeResult::Ok));
+        let frame = next_test_frame(&mut server).await;
+        assert_eq!(frame[0], "REQ");
+        assert_eq!(frame[1], ASK_INBOX_SUB_ID);
+        assert_eq!(frame[2]["since"], json!(900 - SINCE_SKEW_SECS));
+        assert!(state.ask_dropped_since.is_none());
     }
 
     fn meta_event(uuid: Uuid, name: &str, extra: &[&str]) -> serde_json::Value {

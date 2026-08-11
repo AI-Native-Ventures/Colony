@@ -520,6 +520,26 @@ impl AcpClient {
             cmd.env("CODEX_CONFIG", merged);
         }
 
+        // A metered launch owns the checkpoint boundary. Never let an
+        // ambient no-meter/provisioned marker or raw gateway credential cross
+        // into the underlying agent process, even when the ACP parent itself
+        // inherited it from the desktop shell. The no-meter path remains
+        // untouched so BYOK/subscription launches keep their existing env.
+        if meter.is_some() {
+            cmd.env_remove("BUZZ_ACP_NO_METER");
+            cmd.env_remove("BUZZ_ACP_PROVISIONED");
+            for key in [
+                "BUZZ_METER_OPENAI_KEY",
+                "BUZZ_METER_ANTHROPIC_KEY",
+                "BUZZ_METER_OPENAI_UPSTREAM",
+                "BUZZ_METER_ANTHROPIC_UPSTREAM",
+                "BUZZ_METER_OPENAI_PROVIDER",
+                "BUZZ_METER_ANTHROPIC_PROVIDER",
+            ] {
+                cmd.env_remove(key);
+            }
+        }
+
         // Metering env is applied last and unconditionally, overriding both
         // persona `extra_env` and anything inherited from the parent process.
         // Every other key here lets an inherited value win, which is correct
@@ -701,6 +721,56 @@ impl AcpClient {
         }
         if let Some(title) = session_title {
             params["_meta"] = serde_json::json!({ "sessionTitle": title });
+        }
+        let result = self.send_request("session/new", params).await?;
+        let session_id = result["sessionId"]
+            .as_str()
+            .ok_or_else(|| AcpError::Protocol("session/new response missing sessionId".into()))?
+            .to_owned();
+        tracing::info!(target: "acp::session", "session created: {session_id}");
+        Ok(SessionNewResponse {
+            session_id,
+            raw: result,
+        })
+    }
+
+    /// Like [`session_new_full`], but with a caller-supplied `_meta` object
+    /// merged alongside the optional `session_title`.
+    ///
+    /// `_meta` is an ACP escape hatch: adapters read adapter-specific keys
+    /// from it (e.g. `claude-agent-acp` honors `_meta.claudeCode.options`,
+    /// a pass-through of claude-agent-sdk options such as `disallowedTools`
+    /// and `env`). Callers that need session-level tool or env control
+    /// should use this and pass their adapter's meta shape; the extra keys
+    /// are ignored by adapters that do not use them.
+    pub async fn session_new_with_meta(
+        &mut self,
+        cwd: &str,
+        mcp_servers: Vec<McpServer>,
+        system_prompt: Option<&str>,
+        session_title: Option<&str>,
+        meta: Option<serde_json::Value>,
+    ) -> Result<SessionNewResponse, AcpError> {
+        let mut params = serde_json::json!({
+            "cwd": cwd,
+            "mcpServers": mcp_servers,
+        });
+        if let Some(sp) = system_prompt {
+            params["systemPrompt"] = serde_json::Value::String(sp.to_owned());
+        }
+        if session_title.is_some() || meta.is_some() {
+            let mut m = meta
+                .unwrap_or_else(|| serde_json::json!({}))
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            if let Some(title) = session_title {
+                m.insert(
+                    "sessionTitle".to_owned(),
+                    serde_json::Value::String(title.to_owned()),
+                );
+            }
+            params["_meta"] = serde_json::Value::Object(m);
         }
         let result = self.send_request("session/new", params).await?;
         let session_id = result["sessionId"]
@@ -3032,6 +3102,42 @@ mod tests {
         );
     }
 
+    /// A provisioned ACP child cannot bypass the checkpoint with an ambient
+    /// no-meter flag or inherit the raw gateway credential used to configure
+    /// that checkpoint. This probes the actual spawned child environment.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn metered_child_scrubs_no_meter_marker_and_raw_gateway_key() {
+        std::env::set_var("BUZZ_ACP_NO_METER", "true");
+        std::env::set_var("BUZZ_METER_OPENAI_KEY", "gateway-token-test");
+        let meter = crate::meter_env::MeterEnv {
+            port: 51998,
+            virtual_key: "colony-vk-test".to_string(),
+            metered: crate::meter_env::MeteredProviders {
+                anthropic: false,
+                openai: true,
+            },
+        };
+        let no_meter = spawn_named_and_read_child_env_metered(
+            "scrub-no-meter",
+            "BUZZ_ACP_NO_METER",
+            &[],
+            Some(&meter),
+        )
+        .await;
+        let raw_key = spawn_named_and_read_child_env_metered(
+            "scrub-gateway-key",
+            "BUZZ_METER_OPENAI_KEY",
+            &[],
+            Some(&meter),
+        )
+        .await;
+        std::env::remove_var("BUZZ_ACP_NO_METER");
+        std::env::remove_var("BUZZ_METER_OPENAI_KEY");
+        assert_eq!(no_meter, "<unset>");
+        assert_eq!(raw_key, "<unset>");
+    }
+
     /// With metering off, nothing changes: the parent value is inherited
     /// exactly as it always was.
     #[cfg(unix)]
@@ -3137,31 +3243,77 @@ mod tests {
         );
     }
 
+    /// Valid JSON notifications must push the idle deadline out; non-JSON lines
+    /// do not. The distinguishing observation is timing: without resets the call
+    /// returns after `IDLE` alone, with resets only after the producer stops
+    /// (`ACTIVITY`) plus `IDLE`.
+    ///
+    /// The constants are a *ratio*, not tuned magic numbers, because this asserts
+    /// on a wall clock while a real `bash` subprocess produces the input:
+    ///
+    /// - `GAP` must be far below `IDLE`, so a CPU-starved producer cannot trip
+    ///   the idle timer between two messages. 10x headroom here.
+    /// - `FLOOR` must sit between `IDLE` (the no-reset outcome) and
+    ///   `ACTIVITY + IDLE` (the reset outcome), so the test cannot pass for the
+    ///   wrong reason. Placed at the midpoint.
+    /// - `CEILING` and `MAX_DUR` are generous, because contention only ever makes
+    ///   `ACTIVITY` *longer*; a starved producer inflates elapsed time, it does
+    ///   not shorten it.
+    ///
+    /// The previous version used `GAP` 50ms against `IDLE` 200ms (4x) with a
+    /// hard-coded 400ms floor. Concurrent cargo builds starved the producer past
+    /// the 200ms timer, idle fired before enough activity arrived, and the test
+    /// failed while the code under test was correct. That matters more than it
+    /// used to: `Unit Tests` is a required check under a *batched* merge queue,
+    /// where one flake blocks every PR in the batch rather than just its own.
     #[tokio::test]
     async fn idle_resets_on_stdout_activity() {
-        // Send valid JSON (session/update notifications) to reset the idle timer.
-        // Non-JSON lines no longer reset idle — only valid JSON notifications do.
-        let mut client = spawn_script(
-            r#"for i in $(seq 1 10); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"thinking"}}}}'; sleep 0.05; done; sleep 10"#,
-        )
-        .await;
-        let max_dur = std::time::Duration::from_secs(10);
+        use std::time::Duration;
+
+        let gap = Duration::from_millis(100);
+        let messages: u32 = 10;
+        let idle = Duration::from_secs(1);
+        let activity = gap * messages;
+        let floor = idle + activity / 2;
+        let ceiling = Duration::from_secs(15);
+        let max_dur = Duration::from_secs(30);
+
+        assert!(
+            gap * 10 <= idle,
+            "GAP must sit far below IDLE or a starved producer trips the idle timer"
+        );
+        assert!(
+            floor > idle && floor < idle + activity,
+            "FLOOR must distinguish the no-reset outcome from the reset outcome"
+        );
+
+        let script = format!(
+            r#"for i in $(seq 1 {messages}); do echo '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_thought_chunk","content":{{"text":"thinking"}}}}}}}}'; sleep {gap_secs}; done; sleep 60"#,
+            messages = messages,
+            gap_secs = gap.as_secs_f32(),
+        );
+        let mut client = spawn_script(&script).await;
+
         let hard_deadline = tokio::time::Instant::now() + max_dur;
         let start = std::time::Instant::now();
         let result = client
-            .read_until_response_with_idle_timeout(
-                "test",
-                999,
-                std::time::Duration::from_millis(200),
-                hard_deadline,
-                max_dur,
-            )
+            .read_until_response_with_idle_timeout("test", 999, idle, hard_deadline, max_dur)
             .await;
         let elapsed = start.elapsed();
-        // 10 messages × 50ms = ~500ms of activity, then idle timeout fires after 200ms more
-        assert!(elapsed >= std::time::Duration::from_millis(400));
-        assert!(elapsed < std::time::Duration::from_secs(3));
-        assert!(matches!(result, Err(AcpError::IdleTimeout(_))));
+
+        assert!(
+            matches!(result, Err(AcpError::IdleTimeout(_))),
+            "expected IdleTimeout, got {result:?}"
+        );
+        assert!(
+            elapsed >= floor,
+            "idle fired after {elapsed:?}, below the {floor:?} floor: activity did not \
+             reset the idle deadline (or the producer was starved past IDLE={idle:?})"
+        );
+        assert!(
+            elapsed < ceiling,
+            "took {elapsed:?}, over the {ceiling:?} ceiling"
+        );
     }
 
     #[tokio::test]
@@ -3872,6 +4024,73 @@ mod tests {
         assert!(
             received["params"].get("_meta").is_none(),
             "_meta should be absent entirely, not an empty object or null"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_new_with_meta_merges_caller_meta_and_title() {
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"ses_test","_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+
+        let meta = serde_json::json!({
+            "claudeCode": {
+                "options": {
+                    "disallowedTools": ["Bash", "Read"]
+                }
+            }
+        });
+        let resp = client
+            .session_new_with_meta("/tmp", vec![], None, Some("Titled"), Some(meta))
+            .await
+            .expect("session_new_with_meta should succeed");
+
+        let received = &resp.raw["_receivedRequest"];
+        assert_eq!(
+            received["params"]["_meta"]["claudeCode"]["options"]["disallowedTools"][0].as_str(),
+            Some("Bash"),
+            "caller meta should ride through untouched"
+        );
+        assert_eq!(
+            received["params"]["_meta"]["sessionTitle"].as_str(),
+            Some("Titled"),
+            "sessionTitle should merge alongside caller meta"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_new_with_meta_omits_meta_when_both_none() {
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"ses_test","_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+
+        let resp = client
+            .session_new_with_meta("/tmp", vec![], None, None, None)
+            .await
+            .expect("session_new_with_meta should succeed");
+
+        let received = &resp.raw["_receivedRequest"];
+        assert!(
+            received["params"].get("_meta").is_none(),
+            "_meta should be absent when both title and meta are None"
         );
     }
 

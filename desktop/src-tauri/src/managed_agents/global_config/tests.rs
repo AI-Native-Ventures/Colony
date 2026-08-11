@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::{
     normalize_global_config_fields, resolve_effective_model_provider, strip_empty_env_vars,
-    validate_global_config, GlobalAgentConfig,
+    validate_global_config, CredentialMode, GlobalAgentConfig,
 };
 use crate::managed_agents::{AgentDefinition, BackendKind, ManagedAgentRecord, RespondTo};
 
@@ -267,10 +267,49 @@ fn roundtrip_serialization() {
         provider: Some("anthropic".to_string()),
         model: Some("claude-opus-4".to_string()),
         preferred_runtime: Some("claude".to_string()),
+        credential_mode: CredentialMode::Byok,
     };
     let json = serde_json::to_string(&config).expect("serialize");
     let back: GlobalAgentConfig = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(config, back);
+}
+
+#[test]
+fn missing_credential_mode_defaults_to_byok() {
+    let config: GlobalAgentConfig = serde_json::from_str(
+        r#"{"env_vars":{"OPENAI_API_KEY":"saved"},"provider":"openai","model":"gpt-4o"}"#,
+    )
+    .expect("legacy config without credential_mode must deserialize");
+    assert_eq!(config.credential_mode, CredentialMode::Byok);
+    assert_eq!(
+        config.env_vars.get("OPENAI_API_KEY"),
+        Some(&"saved".to_string())
+    );
+}
+
+#[test]
+fn unknown_credential_mode_is_rejected() {
+    let error = serde_json::from_str::<GlobalAgentConfig>(r#"{"credential_mode":"future_mode"}"#)
+        .expect_err("unknown credential modes must fail closed");
+    assert!(error.to_string().contains("credential_mode"));
+}
+
+#[test]
+fn credential_mode_roundtrip_preserves_provider_credentials() {
+    let config: GlobalAgentConfig = serde_json::from_str(
+        r#"{"credential_mode":"colony_credits","env_vars":{"OPENAI_API_KEY":"saved"},"provider":"openai","model":"gpt-4o"}"#,
+    )
+    .expect("provisioned config must deserialize");
+    assert_eq!(config.credential_mode, CredentialMode::ColonyCredits);
+    assert_eq!(
+        config.env_vars.get("OPENAI_API_KEY"),
+        Some(&"saved".to_string())
+    );
+    assert_eq!(config.provider.as_deref(), Some("openai"));
+    assert_eq!(config.model.as_deref(), Some("gpt-4o"));
+    let encoded = serde_json::to_string(&config).expect("serialize");
+    assert!(encoded.contains("colony_credits"));
+    assert!(encoded.contains("OPENAI_API_KEY"));
 }
 
 #[test]
@@ -591,6 +630,7 @@ fn resolve_each_field_resolves_independently_through_tiers() {
 #[test]
 fn populated_global_config_round_trips() {
     let original = GlobalAgentConfig {
+        credential_mode: CredentialMode::Byok,
         env_vars: [("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string())]
             .into_iter()
             .collect(),

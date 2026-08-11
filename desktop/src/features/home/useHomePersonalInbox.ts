@@ -1,6 +1,10 @@
 import * as React from "react";
 
+import { askToInboxItem } from "@/features/asks/lib/askInboxItem";
+import { useOpenAsks } from "@/features/asks/useOpenAsks";
 import { useHomeDrafts } from "@/features/home/useHomeDrafts";
+import { resolveUserLabel } from "@/features/profile/lib/identity";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import {
   countDueReminders,
   useRemindersQuery,
@@ -25,6 +29,29 @@ export function useHomePersonalInbox({
   viewportWidthPx,
 }: UseHomePersonalInboxOptions) {
   const remindersQuery = useRemindersQuery(currentPubkey);
+  const openAsks = useOpenAsks();
+  const askPubkeys = React.useMemo(
+    () => [...new Set(openAsks.asks.map((ask) => ask.filerPubkey))],
+    [openAsks.asks],
+  );
+  const askProfilesQuery = useUsersBatchQuery(askPubkeys, {
+    enabled: askPubkeys.length > 0,
+  });
+  const askProfiles = askProfilesQuery.data?.profiles;
+  const askItems = React.useMemo(
+    () =>
+      openAsks.asks.map((ask) =>
+        askToInboxItem(
+          ask,
+          resolveUserLabel({
+            currentPubkey,
+            profiles: askProfiles,
+            pubkey: ask.filerPubkey,
+          }),
+        ),
+      ),
+    [askProfiles, currentPubkey, openAsks.asks],
+  );
   const dueReminderCount = countDueReminders(remindersQuery.data ?? []);
   const pendingReminders = React.useMemo(
     () =>
@@ -78,6 +105,7 @@ export function useHomePersonalInbox({
   });
 
   return {
+    askItems,
     drafts,
     dueReminderCount,
     pendingReminders,

@@ -30,6 +30,7 @@
  */
 export type FriendlyAgentLastError =
   | { severity: "denied"; copy: string }
+  | { severity: "actionable"; action: "reconnect"; copy: string }
   | { severity: "generic"; copy: string };
 
 /**
@@ -44,6 +45,17 @@ export const MODEL_NOT_FOUND_COPY =
 
 export const CLI_ACP_INTERNAL_ERROR_COPY =
   "The agent's harness reported an internal error. For Codex agents this can mean the configured model isn't supported by your installed codex-acp — check the model in `~/.codex/config.toml` or upgrade the adapter (`brew upgrade codex-acp`).";
+
+export const COLONY_CREDITS_RECONNECT_COPY =
+  "Colony Credits authorization expired — reconnect to resume this agent.";
+export const COLONY_CREDITS_DEPLETED_COPY =
+  "Colony Credits depleted — top up, then reconnect.";
+
+/** Exact denial markers emitted by the local Colony Credits meter. */
+export const COLONY_CREDITS_GATEWAY_STATUS_401_MARKER =
+  "COLONY_CREDITS_GATEWAY_STATUS_401";
+export const COLONY_CREDITS_GATEWAY_STATUS_402_MARKER =
+  "COLONY_CREDITS_GATEWAY_STATUS_402";
 
 const EMBEDDED_CODE_RE = /^Agent reported error \(code (-?\d+)\): /;
 /** Bare form of the standard JSON-RPC -32603 message (after stripping the ACP wrapper prefix). */
@@ -68,6 +80,35 @@ export function friendlyAgentLastError(
   if (raw == null) return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
+
+  // Only the exact body markers emitted by the local meter can become a
+  // Colony Credits denial. Ordinary adapter text containing 401/402 (or
+  // words such as "depleted") must remain generic so a provider error cannot
+  // accidentally offer the destructive reconnect action.
+  if (
+    containsExactColonyCreditsMarker(
+      trimmed,
+      COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+    )
+  ) {
+    return {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_RECONNECT_COPY,
+    };
+  }
+  if (
+    containsExactColonyCreditsMarker(
+      trimmed,
+      COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+    )
+  ) {
+    return {
+      severity: "actionable",
+      action: "reconnect",
+      copy: COLONY_CREDITS_DEPLETED_COPY,
+    };
+  }
 
   // Structured code first; a code embedded in the message string is the
   // same signal recovered from a record that lost the field.
@@ -114,6 +155,19 @@ export function friendlyAgentLastError(
   }
 
   return { severity: "generic", copy: trimmed };
+}
+
+function containsExactColonyCreditsMarker(
+  raw: string,
+  marker: string,
+): boolean {
+  const offset = raw.indexOf(marker);
+  if (offset < 0) return false;
+  const before = raw[offset - 1];
+  const after = raw[offset + marker.length];
+  const isMarkerBoundary = (character: string | undefined) =>
+    character === undefined || !/[A-Za-z0-9_]/.test(character);
+  return isMarkerBoundary(before) && isMarkerBoundary(after);
 }
 
 /**

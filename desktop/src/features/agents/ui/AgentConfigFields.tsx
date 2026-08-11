@@ -42,7 +42,7 @@ import {
   AgentDropdownSelect,
   AgentModelField,
 } from "@/features/agents/ui/agentConfigControls";
-import { PersonaProviderApiKeyField } from "@/features/agents/ui/PersonaProviderApiKeyField";
+import { ProviderCredentialField } from "@/features/agents/ui/ProviderCredentialField";
 import { usePersonaModelDiscovery } from "@/features/agents/ui/usePersonaModelDiscovery";
 import {
   BUZZ_AGENT_THINKING_EFFORT,
@@ -57,6 +57,7 @@ import { AdvancedRequiredBadge } from "./AdvancedRequiredBadge";
 import { getGlobalAgentCredentialState } from "./globalAgentCredentialState";
 
 export const EMPTY_GLOBAL_CONFIG: GlobalAgentConfig = {
+  credential_mode: "byok",
   env_vars: {},
   provider: null,
   model: null,
@@ -201,6 +202,16 @@ export type AgentConfigFieldsProps = {
   onCustomModelEditingChange: (value: boolean) => void;
   onIsCustomProviderChange: (value: boolean) => void;
   onValidityChange?: (valid: boolean) => void;
+  /**
+   * Persist a config immediately (bypassing the draft/Save flow).
+   *
+   * Supplied by AgentDefaultsEditor so Connect OpenRouter / Disconnect store
+   * the key through the existing `set_global_agent_config` path (with agent
+   * restart semantics) the moment the browser flow completes. When omitted,
+   * the flow stages the config through `onConfigChange` instead (onboarding
+   * persists via its coalescer).
+   */
+  onAutoSaveConfig?: (next: GlobalAgentConfig) => Promise<unknown>;
   runtimeFileConfig?: RuntimeFileConfigSubset | null;
   placeholderClassName?: string;
   selectClassName?: string;
@@ -237,6 +248,7 @@ export function AgentConfigFields({
   onCustomModelEditingChange,
   onIsCustomProviderChange,
   onValidityChange,
+  onAutoSaveConfig,
   runtimeFileConfig,
   placeholderClassName,
   selectClassName,
@@ -743,31 +755,18 @@ export function AgentConfigFields({
 
   const dependentContent = (
     <>
-      {providerFieldVisible && apiKeyEnvVar ? (
-        <div className={blockClassName}>
-          <PersonaProviderApiKeyField
-            disabled={false}
-            inheritedLabel={
-              apiKeyFileSatisfied
-                ? "Set in runtime config"
-                : "Provided by this build"
-            }
-            isInherited={apiKeyInherited}
-            isRequired={!apiKeyInherited && apiKeyValue.length === 0}
-            label={
-              effectiveProvider === "anthropic"
-                ? "Anthropic API Key"
-                : "OpenAI API Key"
-            }
-            onValueChange={(value) =>
-              onConfigChange({
-                ...config,
-                env_vars: { ...config.env_vars, [apiKeyEnvVar]: value },
-              })
-            }
-            value={apiKeyValue}
-          />
-        </div>
+      {providerFieldVisible ? (
+        <ProviderCredentialField
+          apiKeyEnvVar={apiKeyEnvVar}
+          apiKeyFileSatisfied={apiKeyFileSatisfied}
+          apiKeyInherited={apiKeyInherited}
+          apiKeyValue={apiKeyValue}
+          blockClassName={blockClassName}
+          config={config}
+          effectiveProvider={effectiveProvider}
+          onAutoSaveConfig={onAutoSaveConfig}
+          onConfigChange={onConfigChange}
+        />
       ) : null}
 
       {/* Model field — omitted only after confirmed successful empty discovery */}

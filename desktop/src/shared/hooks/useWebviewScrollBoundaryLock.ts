@@ -2,6 +2,10 @@ import * as React from "react";
 
 const BOUNDARY_EPSILON_PX = 1;
 const CONVERSATION_SCROLL_SELECTOR = "[data-buzz-conversation-scroll]";
+// Surfaces that consume wheel gestures themselves instead of scrolling any
+// local DOM: the workspace browser forwards them to a remote CDP page, so it
+// has nothing scrollable in the event path and would otherwise be locked out.
+const WHEEL_FORWARDING_SELECTOR = "[data-buzz-wheel-forwarding]";
 const SCROLLABLE_OVERFLOW_VALUES = new Set(["auto", "scroll", "overlay"]);
 
 function isHTMLElement(value: EventTarget | null): value is HTMLElement {
@@ -60,6 +64,10 @@ function isConversationScroller(element: HTMLElement) {
   return Boolean(element.closest(CONVERSATION_SCROLL_SELECTOR));
 }
 
+function forwardsWheelItself(element: HTMLElement) {
+  return Boolean(element.closest(WHEEL_FORWARDING_SELECTOR));
+}
+
 /**
  * Stops macOS/WKWebView rubber-band gestures from escaping into the viewport.
  *
@@ -100,6 +108,13 @@ export function useWebviewScrollBoundaryLock(enabled = true) {
       for (const target of path) {
         if (!isHTMLElement(target)) {
           continue;
+        }
+
+        // A surface that forwards the gesture somewhere else (the workspace
+        // browser sends it to the remote page over CDP) is never a rubber-band
+        // risk, and it has no local scroller for the checks below to find.
+        if (forwardsWheelItself(target)) {
+          return;
         }
 
         const scrollableY = deltaY !== 0 && isScrollableY(target);

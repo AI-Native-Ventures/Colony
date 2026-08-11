@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/shared/api/nativeBridge";
 import { Headphones } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";

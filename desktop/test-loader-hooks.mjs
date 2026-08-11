@@ -164,15 +164,21 @@ export async function load(url, context, nextLoad) {
     };
   }
 
-  if (url.endsWith(".tsx")) {
-    const source = fs.readFileSync(fileURLToPath(url), "utf8");
+  // A `?test=N` cache-buster query keeps repeated dynamic imports of the same
+  // module distinct between test cases. It is not part of the file path, so
+  // resolve back to the path before deciding whether this needs JSX transpiling
+  // — otherwise `./foo.tsx?test=0` falls through to node, which cannot parse JSX.
+  const filePath = url.startsWith("file:") ? fileURLToPath(url) : url;
+
+  if (filePath.endsWith(".tsx")) {
+    const source = fs.readFileSync(filePath, "utf8");
     const transpiled = ts.transpileModule(source, {
       compilerOptions: {
         jsx: ts.JsxEmit.ReactJSX,
         module: ts.ModuleKind.ESNext,
         target: ts.ScriptTarget.ES2020,
       },
-      fileName: fileURLToPath(url),
+      fileName: filePath,
     });
 
     return {

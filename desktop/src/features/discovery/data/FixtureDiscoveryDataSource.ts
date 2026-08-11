@@ -2,6 +2,7 @@ import type {
   DiscoveryEntitlement,
   DiscoveryEntitlementState,
 } from "../entitlement";
+import { canMoveLead, relationshipLabel } from "../lib/pipelineTransitions";
 import {
   resolveSourceConfig,
   type CampaignSourceConfig,
@@ -18,6 +19,7 @@ import type {
   LeadDetail,
   LeadCounts,
   LeadPage,
+  PipelineColumn,
   LeadScope,
   LeadUpdateInput,
   OutreachDraft,
@@ -28,6 +30,7 @@ import type {
   Vertical,
   VerticalDetail,
 } from "../types";
+import { PIPELINE_COLUMN_STATUSES } from "../types";
 import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import {
   CAMPAIGN_FIXTURE,
@@ -53,6 +56,11 @@ export type FixtureDiscoveryDataSourceOptions = {
   scenario?: FixtureScenario;
   /** Return an empty global Leads page so the empty state is browser-testable. */
   emptyLeads?: boolean;
+  /**
+   * Make `updateLead` reject with this message, simulating a relay refusal
+   * so the drawer's inline rejection path is browser-testable in demo mode.
+   */
+  updateLeadReject?: string;
 };
 
 export type CreateFixtureDiscoveryDataSourceOptions =
@@ -193,6 +201,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   >();
   private readonly leadProfiles = new Map<string, Partial<LeadDetail>>();
   private readonly emptyLeads: boolean;
+  private readonly updateLeadReject?: string;
   private nextCampaignNumber = 1;
   private nextRunToken = 1;
 
@@ -200,6 +209,7 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     this.entitlement = normalizeEntitlement(options.entitlement);
     this.defaultScenario = options.scenario ?? "concurrent";
     this.emptyLeads = options.emptyLeads ?? false;
+    this.updateLeadReject = options.updateLeadReject;
 
     const fixtureCampaign = clone(CAMPAIGN_FIXTURE);
     fixtureCampaign.run = createIdleDiscoveryRun(fixtureCampaign);
@@ -282,9 +292,16 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       throw new Error(`Unknown Discovery lead: ${leadId}`);
     }
     const profile = this.leadProfiles.get(leadId) ?? {};
+    // The lead's own status is the fallback, not `candidate`. Hardcoding the
+    // entry state here made the detail disagree with the list for any fixture
+    // lead that starts further along: the drawer showed Candidate while the
+    // row showed Qualified, and `updateLead`'s transition guard, which reads
+    // the lead's status, then refused a move the drawer had just offered. The
+    // relay defaults an absent profile row to Candidate because it has nothing
+    // else to go on; here there is something else to go on.
     return {
       ...lead,
-      status: profile.status ?? "candidate",
+      status: profile.status ?? lead.status ?? "candidate",
       ...profile,
     } as LeadDetail;
   }
@@ -293,14 +310,55 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     leadId: string,
     input: LeadUpdateInput,
   ): Promise<LeadDetail> {
+    if (this.updateLeadReject) {
+      throw new Error(this.updateLeadReject);
+    }
     await this.getLead(leadId);
     const current = this.leadProfiles.get(leadId) ?? {};
+    const base = this.getGlobalLeads().find((lead) => lead.id === leadId);
+    const from = current.status ?? base?.status ?? "candidate";
+    const to = input.status ?? from;
+    if (!canMoveLead(from, to)) {
+      throw new Error(
+        `invalid: Lead status transition ${relationshipLabel(from)} -> ${relationshipLabel(to)} is not allowed`,
+      );
+    }
+    // `update_lead` is a full-profile upsert on the relay: every editable
+    // column is overwritten from the request, and a field the caller omits
+    // binds NULL and wipes the stored value. Only `status` falls back to the
+    // previous value. Spreading `input` over `current` would preserve omitted
+    // fields and make demo disagree with live, so each field is written
+    // explicitly. A caller that sends a partial profile must lose data here
+    // too, otherwise the demo path and Playwright are blind to the one hazard
+    // this whole edit flow is built around.
     this.leadProfiles.set(leadId, {
-      ...current,
-      ...input,
+      status: to,
+      website: input.website,
+      email: input.email,
+      phone: input.phone,
+      linkedinUrl: input.linkedinUrl,
+      contactName: input.contactName,
+      contactTitle: input.contactTitle,
+      owner: input.owner,
+      score: input.score,
+      notes: input.notes,
       updatedAt: new Date().toISOString(),
     });
     return this.getLead(leadId);
+  }
+
+  async getPipelineColumns(): Promise<PipelineColumn[]> {
+    return Promise.all(
+      PIPELINE_COLUMN_STATUSES.map(async (status) => {
+        const page = await this.getLeads({
+          scope: "global",
+          status,
+          page: 1,
+          pageSize: 100,
+        });
+        return { status, total: page.total, leads: page.leads };
+      }),
+    );
   }
 
   async getVerticals(industryId: string): Promise<Vertical[]> {
@@ -392,7 +450,11 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       scopeKind === "campaign"
         ? clone(this.campaignLeads.get(scope.campaignId ?? "") ?? [])
         : this.getGlobalLeads();
-    let leads = sourceLeads.filter((lead) => {
+    let leads = sourceLeads.map((lead) => {
+      const profile = this.leadProfiles.get(lead.id);
+      return profile ? { ...lead, ...profile } : lead;
+    });
+    leads = leads.filter((lead) => {
       if (scopeKind === "campaign" && scope.campaignId) {
         return lead.campaignIds.includes(scope.campaignId);
       }

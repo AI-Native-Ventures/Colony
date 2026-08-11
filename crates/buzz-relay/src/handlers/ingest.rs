@@ -37,8 +37,9 @@ use buzz_core::kind::{
     KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
     KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USAGE_RECORD,
-    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER,
-    RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, KIND_WORKSPACE_TAB_ACTION,
+    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -554,6 +555,10 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         KIND_DM_OPEN | KIND_DM_ADD_MEMBER | KIND_DM_HIDE => Ok(Scope::MessagesWrite),
         KIND_WORKFLOW_DEF | KIND_WORKFLOW_TRIGGER => Ok(Scope::MessagesWrite),
         KIND_APPROVAL_GRANT | KIND_APPROVAL_DENY => Ok(Scope::MessagesWrite),
+        // Workspace-tab actions are client-signed channel commands. The
+        // brokered action is excluded from the generic command executor below
+        // so it reaches the workspace-tab broker after channel gates.
+        KIND_WORKSPACE_TAB_ACTION => Ok(Scope::MessagesWrite),
         // Colony interrupt Ask, resolution, and withdrawal (44300-44302) are
         // ordinary message-shaped writes; the ask_broker enforces altitude,
         // dedupe, and resolver/withdrawer authorization past this gate.
@@ -675,6 +680,7 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
         && kind != KIND_DISCOVERY_ACTION
         && kind != KIND_DISCOVERY_WORKER_ACTION
         && kind != KIND_DISCOVERY_WORKSPACE_ACTION
+        && kind != KIND_WORKSPACE_TAB_ACTION
         && kind != KIND_DM_OPEN
         && kind != KIND_DM_ADD_MEMBER
 }
@@ -814,6 +820,9 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             // Block actions and receipts are channel-scoped protocol events.
             | KIND_BLOCK_ACTION
             | KIND_BLOCK_RECEIPT
+            // Workspace-tab actions carry the channel UUID in their h tag;
+            // relay-only heads and receipts never enter this client registry.
+            | KIND_WORKSPACE_TAB_ACTION
     )
 }
 
@@ -2980,6 +2989,40 @@ async fn ingest_event_inner(
         return Ok(IngestResult::stored(event_id_hex));
     }
 
+    // Workspace-tab actions are client-signed requests, but the canonical row,
+    // submitted action, relay-signed head, and relay-signed receipt must be
+    // committed by the broker's single transaction. The broker parses the
+    // signed event itself, so malformed JSON never reaches storage or fan-out.
+    if kind_u32 == KIND_WORKSPACE_TAB_ACTION {
+        let Some(channel_id) = channel_id else {
+            return Err(IngestError::Rejected(
+                "invalid: channel-scoped events must include an h tag".into(),
+            ));
+        };
+        let outcome =
+            crate::workspace_tab_broker::handle_workspace_tab_action(state, tenant, &event)
+                .await
+                .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
+        let receipt_event_id = match outcome {
+            crate::workspace_tab_broker::TabActionOutcome::Applied { receipt, .. } => {
+                receipt.event.id.to_hex()
+            }
+        };
+        emit(
+            tracer,
+            TraceAction::WriteInsert {
+                msg_id: msg_id_label(event.id.as_bytes()),
+                channel: channel_label(channel_id),
+                claimed_community: claimed_community_from_event(&event),
+            },
+            state_for_request(tenant, auth.pubkey()),
+        );
+        return Ok(IngestResult::stored_with_message(
+            event_id_hex,
+            serde_json::json!({"receipt_event_id": receipt_event_id}).to_string(),
+        ));
+    }
+
     let imeta_tags: Vec<Vec<String>> = event
         .tags
         .iter()
@@ -3894,6 +3937,8 @@ mod tests {
             buzz_core::kind::KIND_TASK,
             buzz_core::kind::KIND_COMPANY_RECEIPT,
             buzz_core::kind::KIND_DISCOVERY_WORKER_RECEIPT,
+            buzz_core::kind::KIND_WORKSPACE_TAB_RECEIPT,
+            buzz_core::kind::KIND_WORKSPACE_TAB_HEAD,
         ] {
             assert!(
                 buzz_core::kind::is_relay_only_kind(kind),
@@ -3907,7 +3952,8 @@ mod tests {
         assert!(!buzz_core::kind::is_relay_only_kind(KIND_COMPANY_ACTION));
     }
 
-    /// Company, Party, and Discovery Actions are command kinds, but they must
+    /// Company, Party, Discovery, and workspace-tab Actions are command kinds,
+    /// but they must
     /// NOT take the
     /// generic command branch: that branch returns before the ban/timeout
     /// write-block, so routing them there would let a banned owner mutate
@@ -3925,6 +3971,7 @@ mod tests {
             KIND_DISCOVERY_WORKER_ACTION,
             KIND_DISCOVERY_WORKSPACE_ACTION,
             buzz_core::kind::KIND_LEDGER_ACTION,
+            KIND_WORKSPACE_TAB_ACTION,
             KIND_DM_OPEN,
             KIND_DM_ADD_MEMBER,
         ];

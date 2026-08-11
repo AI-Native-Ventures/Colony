@@ -1,11 +1,17 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { UserAttentionType, getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  isPermissionGranted,
-  onAction,
-  requestPermission,
-} from "@tauri-apps/plugin-notification";
+  invoke,
+  isTauri,
+  listen,
+  notificationPermissionGranted,
+  onNotificationAction,
+  requestNotificationPermission,
+  requestUserAttention,
+  setBadgeCount,
+  setBadgeLabel,
+  setFocus,
+  showWindow,
+  unminimize,
+} from "@/shared/api/nativeBridge";
 import { isLinuxPlatform, isMacPlatform } from "@/shared/lib/platform";
 
 // Backend event emitted when the user clicks a native (Linux) notification.
@@ -134,7 +140,7 @@ export async function getDesktopNotificationPermissionState(): Promise<DesktopNo
   }
 
   try {
-    return (await isPermissionGranted()) ? "granted" : "default";
+    return (await notificationPermissionGranted()) ? "granted" : "default";
   } catch {
     return "default";
   }
@@ -152,7 +158,7 @@ export async function requestDesktopNotificationAccess(): Promise<DesktopNotific
     return pendingPermissionRequest;
   }
 
-  pendingPermissionRequest = requestPermission().finally(() => {
+  pendingPermissionRequest = requestNotificationPermission().finally(() => {
     pendingPermissionRequest = null;
   });
 
@@ -181,7 +187,7 @@ export async function listenForDesktopNotificationActions(
 
   if (isTauri()) {
     try {
-      pluginListener = await onAction((notification) => {
+      pluginListener = await onNotificationAction((notification) => {
         const target = parseNotificationTarget(
           notification.extra?.buzzNotificationTarget,
         );
@@ -238,14 +244,14 @@ export async function setDesktopAppBadge(state: AppBadgeState): Promise<void> {
 
   try {
     if (state.kind === "count") {
-      await getCurrentWindow().setBadgeCount(state.count);
+      await setBadgeCount(state.count);
     } else if (state.kind === "dot" && isMacPlatform()) {
-      await getCurrentWindow().setBadgeLabel(" ");
+      await setBadgeLabel(" ");
     } else {
       if (isMacPlatform()) {
-        await getCurrentWindow().setBadgeLabel("");
+        await setBadgeLabel("");
       }
-      await getCurrentWindow().setBadgeCount(undefined);
+      await setBadgeCount(undefined);
     }
   } catch {
     // Ignore unsupported platforms and best-effort badge sync failures.
@@ -260,9 +266,7 @@ export async function requestDockBounce(): Promise<void> {
     return;
   }
   try {
-    await getCurrentWindow().requestUserAttention(
-      UserAttentionType.Informational,
-    );
+    await requestUserAttention("Informational");
   } catch {
     // Best effort; ignore unsupported platforms.
   }
@@ -277,10 +281,9 @@ export async function revealDesktopAppWindow(): Promise<void> {
   }
 
   try {
-    const currentWindow = getCurrentWindow();
-    await currentWindow.unminimize();
-    await currentWindow.show();
-    await currentWindow.setFocus();
+    await unminimize();
+    await showWindow();
+    await setFocus();
   } catch {
     // Best effort only.
   }

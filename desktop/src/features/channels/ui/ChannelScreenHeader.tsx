@@ -1,4 +1,4 @@
-import { LogIn } from "lucide-react";
+import { LayoutGrid, LogIn } from "lucide-react";
 import type * as React from "react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
@@ -13,8 +13,14 @@ import {
   ProfileAvatarWithStatus,
   scaleProfileAvatarStatusGeometry,
 } from "@/features/profile/ui/ProfileAvatarWithStatus";
+import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
+import {
+  setChannelSurfaceMode,
+  useChannelSurfaceMode,
+} from "@/features/workspace/lib/channelSurfaceMode";
 import { Button } from "@/shared/ui/button";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const DM_HEADER_AVATAR_SIZE = 32;
@@ -25,6 +31,7 @@ const DM_HEADER_AVATAR_STATUS_GEOMETRY = scaleProfileAvatarStatusGeometry(
 
 type ChannelScreenHeaderProps = {
   activeChannel: Channel | null;
+  channelId?: string;
   activeChannelEphemeralDisplay: EphemeralChannelDisplay | null;
   activeChannelTitle: string;
   actionsVariant?: "inline" | "compact";
@@ -45,6 +52,7 @@ type ChannelScreenHeaderProps = {
 
 export function ChannelScreenHeader({
   activeChannel,
+  channelId,
   activeChannelEphemeralDisplay,
   activeChannelTitle,
   actionsVariant = "inline",
@@ -62,9 +70,11 @@ export function ChannelScreenHeader({
   onManageChannel,
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
+  const surfaceMode = useChannelSurfaceMode(channelId);
   const isGroupDm =
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
+  const activeDmParticipant = activeDmHeaderParticipants[0] ?? null;
   const showJoinButton =
     activeChannel !== null &&
     !activeChannel.isMember &&
@@ -72,29 +82,55 @@ export function ChannelScreenHeader({
     !activeChannel.archivedAt &&
     onJoinChannel;
 
-  const actions = activeChannel ? (
-    showJoinButton ? (
-      <Button
-        disabled={isJoining}
-        onClick={() => void onJoinChannel()}
-        size="sm"
-        variant="default"
-      >
-        <LogIn className="mr-1.5 h-4 w-4" />
-        {isJoining ? "Joining…" : "Join"}
-      </Button>
-    ) : (
-      <ChannelMembersBar
-        channel={activeChannel}
-        currentPubkey={currentPubkey}
-        isAddBotOpen={isAddBotOpen}
-        onAddBotOpenChange={onAddBotOpenChange}
-        onManageChannel={onManageChannel}
-        onToggleMembers={onToggleMembers}
-        variant={actionsVariant}
-      />
-    )
-  ) : null;
+  const actions = (
+    <div className="flex items-center gap-1">
+      {channelId ? (
+        <button
+          aria-label={
+            surfaceMode === "workspace" ? "Close workspace" : "Open workspace"
+          }
+          aria-pressed={surfaceMode === "workspace"}
+          className={cn(
+            "rounded-md p-1.5 text-muted-foreground hover:bg-muted",
+            surfaceMode === "workspace" && "bg-muted text-foreground",
+          )}
+          data-testid="channel-workspace-toggle"
+          onClick={() =>
+            setChannelSurfaceMode(
+              channelId,
+              surfaceMode === "workspace" ? "timeline" : "workspace",
+            )
+          }
+          type="button"
+        >
+          <LayoutGrid aria-hidden className="size-4" />
+        </button>
+      ) : null}
+      {activeChannel ? (
+        showJoinButton ? (
+          <Button
+            disabled={isJoining}
+            onClick={() => void onJoinChannel()}
+            size="sm"
+            variant="default"
+          >
+            <LogIn className="mr-1.5 h-4 w-4" />
+            {isJoining ? "Joining…" : "Join"}
+          </Button>
+        ) : (
+          <ChannelMembersBar
+            channel={activeChannel}
+            currentPubkey={currentPubkey}
+            isAddBotOpen={isAddBotOpen}
+            onAddBotOpenChange={onAddBotOpenChange}
+            onManageChannel={onManageChannel}
+            onToggleMembers={onToggleMembers}
+            variant={actionsVariant}
+          />
+        )
+      ) : null}
+    </div>
+  );
 
   if (!showHeaderContent) {
     return null;
@@ -113,6 +149,25 @@ export function ChannelScreenHeader({
             <DmHeaderParticipantStack
               participants={activeDmHeaderParticipants}
             />
+          ) : activeDmParticipant ? (
+            <UserProfilePopover
+              pubkey={activeDmParticipant.pubkey}
+              triggerAriaLabel={`Open profile for ${activeChannelTitle}`}
+              triggerElement="span"
+            >
+              <ProfileAvatarWithStatus
+                avatarClassName="text-xs"
+                avatarUrl={activeDmAvatarUrl}
+                className="mr-1.5 h-8 w-8"
+                geometry={DM_HEADER_AVATAR_STATUS_GEOMETRY}
+                iconClassName="h-4 w-4"
+                label={activeChannelTitle}
+                size={DM_HEADER_AVATAR_SIZE}
+                status={activeDmPresenceStatus ?? "offline"}
+                statusTestId="chat-presence-badge"
+                testId="chat-header-dm-avatar"
+              />
+            </UserProfilePopover>
           ) : (
             <ProfileAvatarWithStatus
               avatarClassName="text-xs"
@@ -152,31 +207,36 @@ function DmHeaderParticipantStack({
 
   return (
     <div
-      aria-hidden="true"
       className="mr-1.5 flex shrink-0 items-center"
       data-testid="chat-header-dm-avatar-stack"
     >
       {visibleParticipants.map((participant, index) => (
-        <div
-          className={index > 0 ? "-ml-2" : ""}
-          data-testid="chat-header-dm-avatar-stack-participant"
+        <UserProfilePopover
           key={participant.pubkey}
-          style={{
-            zIndex: index + 1,
-            ...(index < stackItemCount - 1 && {
-              mask: "radial-gradient(circle 18px at calc(100% + 4px) 50%, transparent 99%, #fff 100%)",
-              WebkitMask:
-                "radial-gradient(circle 18px at calc(100% + 4px) 50%, transparent 99%, #fff 100%)",
-            }),
-          }}
+          pubkey={participant.pubkey}
+          triggerAriaLabel={`Open profile for ${participant.displayName}`}
+          triggerElement="span"
         >
-          <UserAvatar
-            avatarUrl={participant.avatarUrl}
-            className="h-8 w-8 text-xs"
-            displayName={participant.displayName}
-            size="sm"
-          />
-        </div>
+          <span
+            className={index > 0 ? "-ml-2" : ""}
+            data-testid="chat-header-dm-avatar-stack-participant"
+            style={{
+              zIndex: index + 1,
+              ...(index < stackItemCount - 1 && {
+                mask: "radial-gradient(circle 18px at calc(100% + 4px) 50%, transparent 99%, #fff 100%)",
+                WebkitMask:
+                  "radial-gradient(circle 18px at calc(100% + 4px) 50%, transparent 99%, #fff 100%)",
+              }),
+            }}
+          >
+            <UserAvatar
+              avatarUrl={participant.avatarUrl}
+              className="h-8 w-8 text-xs"
+              displayName={participant.displayName}
+              size="sm"
+            />
+          </span>
+        </UserProfilePopover>
       ))}
       {hiddenCount > 0 ? (
         <div
