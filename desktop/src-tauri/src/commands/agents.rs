@@ -14,7 +14,7 @@ use crate::{
         CreateManagedAgentResponse, ManagedAgentRecord, ManagedAgentSummary, RelayMeshConfig,
         DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
     },
-    relay::{relay_ws_url_with_override, sync_managed_agent_profile},
+    relay::{effective_agent_relay_url, relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
 };
 
@@ -302,7 +302,7 @@ pub(super) async fn start_local_agent_with_preflight(
         );
     ensure_relay_mesh_for_record(app, mesh_model_id.as_deref(), allow_fresh_create_start).await?;
 
-    let (relay_url, personas) = {
+    let (record_relay_pin, personas) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -327,16 +327,16 @@ pub(super) async fn start_local_agent_with_preflight(
                 }
             }
         }
-        let relay_url = record.relay_url.clone();
+        let record_relay_pin = record.relay_url.clone();
         save_managed_agents(app, &records)?;
         if let Some(saved_record) = records.iter().find(|r| r.pubkey == pubkey) {
             retain_managed_agent_pending(app, state, saved_record);
         }
-        (relay_url, personas)
+        (record_relay_pin, personas)
     };
     crate::managed_agents::start_managed_agent_runtime_pair_lazy(
         pubkey.to_string(),
-        relay_url,
+        effective_agent_relay_url(&record_relay_pin, &relay_ws_url_with_override(state)),
         app.clone(),
     )?;
     let _store_guard = state

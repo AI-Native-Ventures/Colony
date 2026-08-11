@@ -35,6 +35,8 @@ use clap::{Parser, Subcommand};
 use nostr::{EventBuilder, Keys, Kind, Tag};
 use tracing::warn;
 
+mod operator_analytics;
+
 #[derive(Parser)]
 #[command(name = "buzz-admin", about = "Buzz instance administration")]
 struct Cli {
@@ -84,6 +86,11 @@ enum Command {
     ProductFeedback {
         #[command(subcommand)]
         command: ProductFeedbackCommand,
+    },
+    /// Build the deployment-wide operator analytics read model.
+    OperatorAnalytics {
+        #[command(subcommand)]
+        command: operator_analytics::Command,
     },
     /// Emit kind:39000/39002 events for channels missing them.
     ///
@@ -198,6 +205,7 @@ async fn run(cli: Cli) -> Result<i32> {
         Command::ProductFeedback {
             command: ProductFeedbackCommand::List { limit },
         } => cmd_list_product_feedback(limit).await,
+        Command::OperatorAnalytics { command } => operator_analytics::run(command).await,
         Command::ReconcileChannels { relay_key } => {
             reconcile_channels(relay_key).await?;
             Ok(0)

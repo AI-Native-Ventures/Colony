@@ -22,7 +22,10 @@ use crate::handlers::community_provisioning::{
 };
 use crate::state::AppState;
 
-use super::{api_error, bridge, internal_error};
+use super::{
+    api_error, internal_error,
+    operator_auth::{authorize_operator_request, OPERATOR_MANAGEMENT_REPLAY_SCOPE},
+};
 
 /// Query parameters for `GET /operator/communities`.
 #[derive(Debug, Deserialize)]
@@ -52,88 +55,6 @@ struct TransferCommunityResponse {
     previous_owner: Option<String>,
 }
 
-const OPERATOR_REPLAY_SCOPE: &str = "operator-management";
-
-/// Shared deployment-global operator auth prelude. The canonical management
-/// origin and replay namespace are configuration, never tenant registry state
-/// or an inbound proxy `Host` header.
-async fn authorize_operator_request(
-    state: &Arc<AppState>,
-    headers: &HeaderMap,
-    method: &str,
-    path: &str,
-    raw_query: Option<&str>,
-    body: Option<&[u8]>,
-) -> Result<nostr::PublicKey, (StatusCode, Json<Value>)> {
-    let origin = state
-        .config
-        .relay_operator_api_origin
-        .as_deref()
-        .ok_or_else(|| internal_error("operator API origin is not configured"))?;
-    let path_with_query = match raw_query {
-        Some(q) if !q.is_empty() => format!("{path}?{q}"),
-        _ => path.to_string(),
-    };
-    let url = format!("{origin}{path_with_query}");
-    let (pubkey, event_id_bytes) = bridge::verify_bridge_auth_with_options(
-        headers,
-        method,
-        &url,
-        body,
-        true, // operator endpoints always require NIP-98; no X-Pubkey dev fallback
-        body.is_some(),
-    )?;
-    check_operator_replay(state, event_id_bytes).await?;
-
-    let pubkey_hex = pubkey.to_hex();
-    if !state
-        .config
-        .relay_operator_pubkeys
-        .iter()
-        .any(|pk| pk == &pubkey_hex)
-    {
-        return Err(api_error(
-            StatusCode::FORBIDDEN,
-            "actor not authorized: not a relay operator",
-        ));
-    }
-
-    Ok(pubkey)
-}
-
-async fn check_operator_replay(
-    state: &AppState,
-    event_id_bytes: [u8; 32],
-) -> Result<(), (StatusCode, Json<Value>)> {
-    let event_id = nostr::EventId::from_byte_array(event_id_bytes);
-    match state
-        .nip98_replay
-        .try_mark_in_scope(
-            OPERATOR_REPLAY_SCOPE,
-            &event_id,
-            buzz_auth::DEFAULT_REPLAY_TTL_SECS,
-        )
-        .await
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(api_error(
-            StatusCode::UNAUTHORIZED,
-            "NIP-98: replay detected",
-        )),
-        Err(error) => {
-            tracing::warn!(
-                scope = OPERATOR_REPLAY_SCOPE,
-                error = %error,
-                "operator NIP-98 replay guard failed; rejecting request fail-closed"
-            );
-            Err(api_error(
-                StatusCode::UNAUTHORIZED,
-                "NIP-98: replay check unavailable",
-            ))
-        }
-    }
-}
-
 /// Create a community host and atomically bootstrap its initial owner.
 ///
 /// `POST /operator/communities`, NIP-98 signed by a pubkey in
@@ -158,6 +79,7 @@ pub async fn provision_community(
         "/operator/communities",
         None,
         Some(&body),
+        OPERATOR_MANAGEMENT_REPLAY_SCOPE,
     )
     .await?;
 
@@ -206,7 +128,16 @@ pub async fn archive_community(
     body: axum::body::Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     const PATH: &str = "/operator/communities/archive";
-    authorize_operator_request(&state, &headers, "POST", PATH, None, Some(&body)).await?;
+    authorize_operator_request(
+        &state,
+        &headers,
+        "POST",
+        PATH,
+        None,
+        Some(&body),
+        OPERATOR_MANAGEMENT_REPLAY_SCOPE,
+    )
+    .await?;
     let request: ArchiveCommunityRequest = serde_json::from_slice(&body).map_err(|e| {
         api_error(
             StatusCode::BAD_REQUEST,
@@ -268,7 +199,16 @@ pub async fn unarchive_community(
     body: axum::body::Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     const PATH: &str = "/operator/communities/unarchive";
-    authorize_operator_request(&state, &headers, "POST", PATH, None, Some(&body)).await?;
+    authorize_operator_request(
+        &state,
+        &headers,
+        "POST",
+        PATH,
+        None,
+        Some(&body),
+        OPERATOR_MANAGEMENT_REPLAY_SCOPE,
+    )
+    .await?;
     let request: ArchiveCommunityRequest = serde_json::from_slice(&body).map_err(|e| {
         api_error(
             StatusCode::BAD_REQUEST,
@@ -312,6 +252,7 @@ pub async fn list_owned_communities(
         "/operator/communities",
         raw_query.as_deref(),
         None,
+        OPERATOR_MANAGEMENT_REPLAY_SCOPE,
     )
     .await?;
 
@@ -363,6 +304,7 @@ pub async fn transfer_community(
         "/operator/communities/transfer",
         None,
         Some(&body),
+        OPERATOR_MANAGEMENT_REPLAY_SCOPE,
     )
     .await?;
 
@@ -478,6 +420,7 @@ pub async fn community_availability(
         "/operator/communities/availability",
         raw_query.as_deref(),
         None,
+        OPERATOR_MANAGEMENT_REPLAY_SCOPE,
     )
     .await?;
 

@@ -51,6 +51,54 @@ fn legacy_relay_pin_is_ignored_for_fan_out() {
 }
 
 #[test]
+fn empty_relay_pin_must_be_resolved_before_it_becomes_a_runtime_key() {
+    // The failure a start path hits when it passes a record's raw pin instead
+    // of the resolved workspace relay. Records written before #2122 carry an
+    // empty pin, and an empty string is not a relative URL with any base, so
+    // the key constructor rejects it with a message that blames the relay
+    // rather than the stale record. Resolving first is what makes it work, so
+    // pin both halves: the raw pin fails, the resolved value succeeds.
+    let record = record_with_relay("");
+    let pubkey = "aa".repeat(32);
+
+    let raw = ManagedAgentRuntimeKey::new(pubkey.clone(), &record.relay_url);
+    let message = raw.expect_err("an empty relay pin cannot form a runtime key");
+    assert!(
+        message.contains("relative URL without a base"),
+        "expected the url-parse failure users see, got {message:?}"
+    );
+
+    let resolved = crate::relay::effective_agent_relay_url(&record.relay_url, "wss://two.example");
+    let key = ManagedAgentRuntimeKey::new(pubkey, &resolved)
+        .expect("the resolved workspace relay forms a key");
+    assert_eq!(key.relay_url, "wss://two.example");
+}
+
+#[test]
+fn start_path_resolves_the_relay_instead_of_reading_the_record_pin() {
+    // `effective_agent_relay_url` is documented as the one choke point all
+    // agent relay resolution flows through, but nothing enforced that, and
+    // `start_local_agent_with_preflight` bound the raw pin instead. That is
+    // unreachable from a unit test (it needs a live AppHandle), and the
+    // symptom only appears on a pre-#2122 record, so the invariant is pinned
+    // at the source. If a start path legitimately needs the raw field, widen
+    // this check deliberately rather than deleting it.
+    const START_COMMANDS: &str = include_str!("../../commands/agents.rs");
+    assert!(
+        !START_COMMANDS.contains("let relay_url = record.relay_url.clone();"),
+        "a start path is binding the record's relay pin directly; resolve it \
+         through effective_agent_relay_url so an empty pin on a legacy record \
+         cannot fail the start with \"invalid relay URL\""
+    );
+    assert!(
+        START_COMMANDS.contains("effective_agent_relay_url(&record_relay_pin"),
+        "the single-agent start path no longer resolves its relay pin; it must \
+         pass the pin through effective_agent_relay_url before the value can \
+         reach ManagedAgentRuntimeKey"
+    );
+}
+
+#[test]
 fn unkeyable_relay_degrades_to_failed_row() {
     // A requested URL that cannot form a pair key must still yield a
     // Failed row keyed by the raw requested string, so one bad community

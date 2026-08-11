@@ -12,11 +12,13 @@
 use std::sync::Arc;
 
 use axum::extract::ws::Message as WsMessage;
+use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
+use buzz_pubsub::operator_sessions::make_lease;
 
 /// Extract a NIP-OA `auth` tag from a verified AUTH event and serialize it as
 /// the JSON-array string that [`buzz_sdk::nip_oa::verify_auth_tag`] expects.
@@ -279,6 +281,25 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             state
                 .conn_manager
                 .set_authenticated_pubkey(conn_id, pubkey.to_bytes().to_vec());
+            let now = Utc::now();
+            let lease = make_lease(
+                conn.tenant.community(),
+                conn_id,
+                &pubkey,
+                now,
+                now,
+                state.config.operator_instance_id.clone(),
+                Some(conn.remote_addr),
+                None,
+            );
+            if let Err(error) = state.operator_sessions.register(&lease).await {
+                metrics::counter!("buzz_operator_session_register_errors_total").increment(1);
+                warn!(
+                    conn_id = %conn_id,
+                    error = %error,
+                    "operator session lease registration failed after authentication"
+                );
+            }
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }
         Err(e) => {

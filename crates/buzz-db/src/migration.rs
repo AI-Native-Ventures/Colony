@@ -465,6 +465,7 @@ mod tests {
             "model_catalog",
             "gateway_reconciliation_outcomes",
             "gateway_settlement_intents",
+            "operator_access_log",
         ] {
             if normalized[insert_pos..].contains(&format!("'{value}'")) {
                 globals.insert(value.to_owned());
@@ -678,7 +679,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 56);
+        assert_eq!(migrations.len(), 57);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -788,6 +789,27 @@ mod tests {
         assert!(settle_basis.contains("'observed'"));
         assert!(settle_basis.contains("'estimated'"));
         assert!(settle_basis.contains("deepseek-v4-flash"));
+        assert_eq!(migrations[56].version, 57);
+        let operator_analytics = migrations[56].sql.as_str();
+        for table in [
+            "CREATE TABLE operator_activity_daily",
+            "CREATE TABLE operator_activity_cursor",
+            "CREATE TABLE operator_access_log",
+        ] {
+            assert!(
+                operator_analytics.contains(table),
+                "migration 46 must contain {table}"
+            );
+        }
+        assert!(operator_analytics
+            .contains("PRIMARY KEY (community_id, utc_day, pubkey, activity_family)"));
+        assert!(operator_analytics.contains("PRIMARY KEY (community_id)"));
+        assert!(operator_analytics.contains("('operator_access_log'"));
+        assert!(!operator_analytics.contains("('operator_activity_daily'"));
+        assert!(!operator_analytics.contains("('operator_activity_cursor'"));
+        assert!(operator_analytics.contains("operator_activity_daily_day_idx"));
+        assert!(operator_analytics.contains("operator_activity_daily_person_idx"));
+        assert!(operator_analytics.contains("operator_activity_daily_deployment_idx"));
         assert!(migrations[0]
             .sql
             .as_str()
@@ -1160,6 +1182,16 @@ mod tests {
             desired_schema.contains("idx_channels_id_live"),
             "desired-state schema must carry the channel-id lookup covering index",
         );
+        for table in [
+            "CREATE TABLE operator_activity_daily",
+            "CREATE TABLE operator_activity_cursor",
+            "CREATE TABLE operator_access_log",
+        ] {
+            assert!(
+                desired_schema.contains(table),
+                "schema mirror must contain {table}"
+            );
+        }
 
         // Replica heartbeat (this branch, renumbered to 0026 after
         // 0025_relay_invites landed on main): the fence's portable read-side
@@ -2411,6 +2443,9 @@ mod tests {
             "channels",
             "scheduled_workflow_fires",
             "audit_log",
+            "operator_activity_daily",
+            "operator_activity_cursor",
+            "operator_access_log",
         ] {
             let exists = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
@@ -2425,6 +2460,49 @@ mod tests {
             );
             assert!(exists, "migration should create {table}");
         }
+
+        let global_reason: Option<String> = sqlx::query_scalar(
+            "SELECT reason FROM _operator_global_tables WHERE table_name = 'operator_access_log'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("read operator analytics global registry");
+        assert!(
+            global_reason.is_some(),
+            "access log must be globally registered"
+        );
+        for table in ["operator_activity_daily", "operator_activity_cursor"] {
+            let registered: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM _operator_global_tables WHERE table_name = $1)",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .expect("read operator analytics global registry membership");
+            assert!(!registered, "{table} must remain tenant-scoped");
+        }
+
+        let daily_pk: Vec<String> = sqlx::query_scalar(
+            "SELECT a.attname
+             FROM pg_index i
+             JOIN pg_attribute a ON a.attrelid = i.indrelid
+                                AND a.attnum = ANY(i.indkey)
+             WHERE i.indrelid = 'operator_activity_daily'::regclass
+               AND i.indisprimary
+             ORDER BY array_position(i.indkey, a.attnum)",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read operator activity primary key order");
+        assert_eq!(
+            daily_pk,
+            vec![
+                "community_id".to_owned(),
+                "utc_day".to_owned(),
+                "pubkey".to_owned(),
+                "activity_family".to_owned(),
+            ]
+        );
 
         let search_expression: String = sqlx::query_scalar(
             "SELECT pg_get_expr(adbin, adrelid) \

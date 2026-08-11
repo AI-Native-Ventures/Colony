@@ -1,5 +1,11 @@
 # Changelog
 
+## relay-v0.8.1
+
+- feat(operator): add the private deployment analytics portal, exact-URL
+  NIP-98 authorization, metadata-only rollups, controlled historical backfill,
+  and audited cross-community operator views.
+
 ## relay-v0.8.0
 
 - feat(relay): expose self-provisioning configuration so desktop onboarding can

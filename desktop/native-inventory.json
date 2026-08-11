@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 334,
-    "rust_lines": 137206,
+    "rust_lines": 137254,
     "tauri_coupled": 143,
     "portable": 191,
-    "portable_lines": 73347,
+    "portable_lines": 73395,
     "tauri_coupled_list": [
       "src-tauri/src/app_state.rs",
       "src-tauri/src/archive/mod.rs",
@@ -2057,9 +2057,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/communityStorage.ts:62",
         "src/features/communities/useCommunityInit.ts:244",
-        "src/parity/session/script.ts:321"
+        "src/parity/session/script.ts:321",
+        "src/shared/api/tauriIdentity.ts:32"
       ]
     },
     "import_pocket_voice": {

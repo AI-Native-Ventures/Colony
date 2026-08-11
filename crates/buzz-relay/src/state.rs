@@ -24,7 +24,7 @@ use buzz_media::MediaStorage;
 use buzz_pubsub::cache_invalidation::CacheInvalidation;
 use buzz_pubsub::conn_control::ConnControl;
 use buzz_pubsub::rate_limiter::RedisRateLimiter;
-use buzz_pubsub::{PubSubManager, RedisNip98ReplayGuard};
+use buzz_pubsub::{operator_sessions::OperatorSessionStore, PubSubManager, RedisNip98ReplayGuard};
 use buzz_search::SearchService;
 use buzz_workflow::WorkflowEngine;
 use deadpool_redis;
@@ -496,6 +496,8 @@ pub struct AppState {
     pub audit: Option<Arc<AuditService>>,
     /// Pub/sub manager for broadcasting events to subscribers.
     pub pubsub: Arc<PubSubManager>,
+    /// Deployment-wide Redis authority for authenticated operator sessions.
+    pub operator_sessions: Arc<OperatorSessionStore>,
     /// Authentication service.
     pub auth: Arc<AuthService>,
     /// Full-text search service.
@@ -510,6 +512,8 @@ pub struct AppState {
     pub community_revalidator_cancel: CancellationToken,
     /// Test/telemetry counter for archive disconnect publication attempts.
     pub community_disconnect_publish_attempts: Arc<AtomicU64>,
+    /// Cancellation token for the deployment-wide operator rollup worker.
+    pub operator_analytics_cancel: CancellationToken,
     /// Semaphore limiting total concurrent connections.
     pub conn_semaphore: Arc<Semaphore>,
     /// Semaphore limiting concurrent message handler tasks.
@@ -740,6 +744,7 @@ impl AppState {
         let nip98_replay: Arc<dyn Nip98ReplayGuard> =
             Arc::new(RedisNip98ReplayGuard::new(redis_pool.clone()));
         let admission_rate_limiter = Arc::new(RedisRateLimiter::new(redis_pool.clone()));
+        let operator_sessions = Arc::new(OperatorSessionStore::new(redis_pool.clone()));
         let audit_enabled = audit_arc.is_some();
         let state = Self {
             config: Arc::new(config),
@@ -747,6 +752,7 @@ impl AppState {
             redis_pool,
             audit: audit_arc,
             pubsub,
+            operator_sessions,
             auth: Arc::new(auth),
             search: search_arc,
             sub_registry: Arc::new(SubscriptionRegistry::new()),
@@ -754,6 +760,7 @@ impl AppState {
             community_connections: Arc::new(CommunityConnectionRegistry::new()),
             community_revalidator_cancel: CancellationToken::new(),
             community_disconnect_publish_attempts: Arc::new(AtomicU64::new(0)),
+            operator_analytics_cancel: CancellationToken::new(),
             conn_semaphore: Arc::new(Semaphore::new(max_connections)),
             handler_semaphore: Arc::new(Semaphore::new(max_concurrent_handlers)),
             git_semaphore: Arc::new(Semaphore::new(git_max_concurrent_ops)),

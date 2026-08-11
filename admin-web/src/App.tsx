@@ -8,6 +8,14 @@ import {
   useState,
 } from "react";
 import { ApiFailure, request } from "./api";
+import { AnalyticsLayout } from "./analytics/AnalyticsLayout";
+import { ActivityPage } from "./analytics/ActivityPage";
+import { CommunitiesPage } from "./analytics/CommunitiesPage";
+import { DefinitionsPage } from "./analytics/DefinitionsPage";
+import { OverviewPage } from "./analytics/OverviewPage";
+import { PeoplePage } from "./analytics/PeoplePage";
+import { PersonDetailPage } from "./analytics/PersonDetailPage";
+import { SessionsPage } from "./analytics/SessionsPage";
 import type {
   FeedbackDetail,
   FeedbackSummary,
@@ -714,7 +722,12 @@ function AntMark() {
           <circle cx="335" cy="136" r="11" fill="#000" />
         </mask>
       </defs>
-      <g fill="none" stroke="currentColor" strokeWidth="14" strokeLinecap="round">
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="14"
+        strokeLinecap="round"
+      >
         <path d="M202 203 L136 292" />
         <path d="M220 210 L196 298" />
         <path d="M235 209 L246 300" />
@@ -722,7 +735,12 @@ function AntMark() {
         <path d="M257 198 L336 282" />
         <path d="M164 215 L112 272" />
       </g>
-      <g fill="none" stroke="currentColor" strokeWidth="14" strokeLinecap="round">
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="14"
+        strokeLinecap="round"
+      >
         <path d="M327 114 Q345 64 397 50" />
         <path d="M343 126 Q377 86 427 80" />
       </g>
@@ -827,16 +845,80 @@ function ArrowIcon() {
   );
 }
 
+function AnalyticsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 19V5M4 19h16" />
+      <path d="m7 15 3-4 3 2 5-6" />
+    </svg>
+  );
+}
+
 export function App() {
   const { path } = usePath();
   const report = path.match(/^\/reports\/([^/]+)$/);
   const feedback = path.match(/^\/feedback\/([^/]+)$/);
+  const person = path.match(/^\/analytics\/people\/([^/]+)$/);
+  const analyticsRoute = path.startsWith("/analytics");
+  const analyticsContent =
+    path === "/analytics" ? (
+      <AnalyticsLayout
+        title="Overview"
+        description="Deployment-wide people, activity, and live reach in one command center."
+      >
+        <OverviewPage />
+      </AnalyticsLayout>
+    ) : path === "/analytics/communities" ? (
+      <AnalyticsLayout
+        title="Communities"
+        description="Fleet health, membership, activity, and live reach by community."
+      >
+        <CommunitiesPage />
+      </AnalyticsLayout>
+    ) : path === "/analytics/people" ? (
+      <AnalyticsLayout
+        title="People"
+        description="Metadata-only directory of identities observed across the deployment."
+      >
+        <PeoplePage />
+      </AnalyticsLayout>
+    ) : person ? (
+      <AnalyticsLayout
+        title="Person detail"
+        description="Profile, memberships, activity metadata, and current session diagnostics."
+      >
+        <PersonDetailPage pubkey={decodeURIComponent(person[1])} />
+      </AnalyticsLayout>
+    ) : path === "/analytics/activity" ? (
+      <AnalyticsLayout
+        title="Activity"
+        description="Meaningful accepted activity over time, with versioned family definitions."
+      >
+        <ActivityPage />
+      </AnalyticsLayout>
+    ) : path === "/analytics/sessions" ? (
+      <AnalyticsLayout
+        title="Sessions"
+        description="Fresh authenticated connection leases across every relay pod."
+      >
+        <SessionsPage />
+      </AnalyticsLayout>
+    ) : path === "/analytics/definitions" ? (
+      <AnalyticsLayout
+        title="Definitions"
+        description="Sources, freshness, identity deduplication, and privacy boundaries."
+      >
+        <DefinitionsPage />
+      </AnalyticsLayout>
+    ) : null;
   const content = report ? (
     <ReportDetail id={report[1]} />
   ) : feedback ? (
     <FeedbackDetailView id={feedback[1]} />
   ) : path === "/feedback" ? (
     <FeedbackList />
+  ) : analyticsRoute && analyticsContent ? (
+    analyticsContent
   ) : (
     <Reports />
   );
@@ -857,6 +939,9 @@ export function App() {
           </Link>
           <Link href="/feedback" className="nav-link" activeWhenNested>
             <FeedbackIcon /> Feedback
+          </Link>
+          <Link href="/analytics" className="nav-link" activeWhenNested>
+            <AnalyticsIcon /> Analytics
           </Link>
         </nav>
       </header>

@@ -92,6 +92,34 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/operator/communities/transfer",
             post(api::operator::transfer_community),
         )
+        .route(
+            "/operator/analytics/overview",
+            get(api::operator_analytics::overview),
+        )
+        .route(
+            "/operator/analytics/communities",
+            get(api::operator_analytics::communities),
+        )
+        .route(
+            "/operator/analytics/people",
+            get(api::operator_analytics::people),
+        )
+        .route(
+            "/operator/analytics/people/{pubkey}",
+            get(api::operator_analytics::person),
+        )
+        .route(
+            "/operator/analytics/activity",
+            get(api::operator_analytics::activity),
+        )
+        .route(
+            "/operator/analytics/sessions",
+            get(api::operator_analytics::sessions),
+        )
+        .route(
+            "/operator/analytics/definitions",
+            get(api::operator_analytics::definitions),
+        )
         // Relay invites: mint (owner/admin) + claim (membership-gate exempt)
         .route(
             "/api/communities",
@@ -233,6 +261,8 @@ fn is_admin_spa_path(path: &str) -> bool {
         || path.starts_with("/reports/")
         || path == "/feedback"
         || path.starts_with("/feedback/")
+        || path == "/analytics"
+        || path.starts_with("/analytics/")
 }
 
 fn is_invite_landing_path(path: &str) -> bool {
@@ -499,6 +529,15 @@ mod tests {
         assert!(!is_git_web_gui_path("/repository"));
         assert!(!is_git_web_gui_path("/arbitrary"));
         assert!(!is_git_web_gui_path("/api/invites"));
+    }
+
+    #[test]
+    fn admin_spa_includes_analytics_deep_links_only() {
+        assert!(is_admin_spa_path("/analytics"));
+        assert!(is_admin_spa_path("/analytics/people/abc"));
+        assert!(is_admin_spa_path("/reports"));
+        assert!(!is_admin_spa_path("/operator/analytics/overview"));
+        assert!(!is_admin_spa_path("/arbitrary"));
     }
 
     #[test]
