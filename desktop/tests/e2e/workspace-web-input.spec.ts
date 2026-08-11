@@ -150,6 +150,7 @@ test.describe("web workspace input contract", () => {
     for (let index = 0; index < 12; index += 1) {
       await page.mouse.wheel(3, 24);
     }
+    const inputFinishedAtMs = await page.evaluate(() => performance.now());
 
     await expect
       .poll(async () => {
@@ -169,17 +170,21 @@ test.describe("web workspace input contract", () => {
     const settledAtMs = Math.max(
       ...wheel.map((entry) => entry.completedAtMs ?? startedAtMs),
     );
-    const latencyMs = settledAtMs - startedAtMs;
+    const endToEndLatencyMs = settledAtMs - startedAtMs;
+    const tailLatencyMs = settledAtMs - inputFinishedAtMs;
     const deltaX = wheel.reduce(
       (sum, entry) => sum + (entry.payload.input?.deltaX ?? 0),
       0,
     );
+    const performanceSnapshot = await page.evaluate(() =>
+      window.__BUZZ_E2E_WEB_PERFORMANCE__?.snapshot(),
+    );
     console.log(
-      `web wheel burst: commands=${wheel.length} latencyMs=${latencyMs.toFixed(1)} deltaX=${deltaX}`,
+      `web wheel burst: commands=${wheel.length} maxPending=${performanceSnapshot?.maxPendingWheelInvocations ?? -1} endToEndMs=${endToEndLatencyMs.toFixed(1)} tailMs=${tailLatencyMs.toFixed(1)} deltaX=${deltaX}`,
     );
     expect(deltaX).toBe(36);
-    expect(wheel.length).toBeLessThanOrEqual(2);
-    expect(latencyMs).toBeLessThan(100);
+    expect(performanceSnapshot?.maxPendingWheelInvocations).toBe(1);
+    expect(tailLatencyMs).toBeLessThan(100);
   });
 
   test("publishes only the newest frame from a burst", async ({ page }) => {

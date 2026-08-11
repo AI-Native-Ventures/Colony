@@ -13,6 +13,7 @@ type WebCommand = {
 
 type WebPerformanceControls = {
   emitFrameBurst: (count: number) => Promise<void>;
+  snapshot: () => { maxPendingWheelInvocations: number };
   setWheelDelay: (delayMs: number) => void;
 };
 
@@ -33,6 +34,8 @@ const sessions = new Map<string, MockWebSession>();
 const commands: WebCommand[] = [];
 let sequence = 0;
 let installed = false;
+let maxPendingWheelInvocations = 0;
+let pendingWheelInvocations = 0;
 let wheelDelayMs = 0;
 let wheelTail: Promise<void> = Promise.resolve();
 
@@ -45,6 +48,8 @@ function reset(): void {
   sessions.clear();
   commands.length = 0;
   sequence = 0;
+  maxPendingWheelInvocations = 0;
+  pendingWheelInvocations = 0;
   wheelDelayMs = 0;
   wheelTail = Promise.resolve();
 }
@@ -103,14 +108,25 @@ async function recordWheel(
   command: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const completion = wheelTail.then(async () => {
-    if (wheelDelayMs > 0) {
-      await new Promise((resolve) => window.setTimeout(resolve, wheelDelayMs));
-    }
-    record(command, payload, performance.now());
-  });
-  wheelTail = completion.catch(() => undefined);
-  await completion;
+  pendingWheelInvocations += 1;
+  maxPendingWheelInvocations = Math.max(
+    maxPendingWheelInvocations,
+    pendingWheelInvocations,
+  );
+  try {
+    const completion = wheelTail.then(async () => {
+      if (wheelDelayMs > 0) {
+        await new Promise((resolve) =>
+          window.setTimeout(resolve, wheelDelayMs),
+        );
+      }
+      record(command, payload, performance.now());
+    });
+    wheelTail = completion.catch(() => undefined);
+    await completion;
+  } finally {
+    pendingWheelInvocations -= 1;
+  }
 }
 
 async function invokeWeb(
@@ -223,6 +239,7 @@ export function installWebE2eBridge(): void {
     commands.map((entry) => structuredClone(entry));
   window.__BUZZ_E2E_WEB_PERFORMANCE__ = {
     emitFrameBurst,
+    snapshot: () => ({ maxPendingWheelInvocations }),
     setWheelDelay(delayMs) {
       wheelDelayMs = Math.max(0, delayMs);
     },

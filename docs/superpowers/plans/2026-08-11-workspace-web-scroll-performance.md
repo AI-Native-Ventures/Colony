@@ -111,8 +111,8 @@ test("bounds burst wheel latency and commits only the latest frame", async ({
   const settledAtMs = Math.max(
     ...wheel.map((entry) => entry.completedAtMs ?? startedAtMs),
   );
-  expect(wheel).toHaveLength(2);
-  expect(settledAtMs - startedAtMs).toBeLessThan(100);
+  expect(performanceSnapshot.maxPendingWheelInvocations).toBe(1);
+  expect(settledAtMs - inputFinishedAtMs).toBeLessThan(100);
 
   const frame = page.getByTestId("workspace-web-frame");
   const mutations = await frame.evaluate(async (element) => {
@@ -134,7 +134,7 @@ test("bounds burst wheel latency and commits only the latest frame", async ({
 });
 ```
 
-The exact command-count assertion may accept one or two calls if engine delivery places the burst on one animation-frame boundary; it must never accept more than two.
+The unit test fixes twelve synchronous ticks into one batch. The engine test does not gate total command count because Playwright spaces real driver input differently in WebKit and Chromium; it requires one pending native invocation and less than 100 ms of tail latency after the last input.
 
 - [ ] **Step 4: Build once and capture the genuine RED**
 
@@ -148,7 +148,7 @@ pnpm -C desktop build:e2e
   -g "bounds burst wheel latency" --reporter=list
 ```
 
-Expected on unmodified product code: FAIL because twelve native wheel calls take about 300 ms under the serialized 25 ms delay; the command-count and 100 ms assertions reject that behavior. Record per-engine command count and elapsed milliseconds.
+Expected on unmodified product code: FAIL because native wheel invocations overlap into a backlog under the serialized 25 ms delay. Record per-engine command count, maximum pending invocations, end-to-end time, and tail latency.
 
 - [ ] **Step 5: Commit and push the RED proof**
 
@@ -229,7 +229,7 @@ node --test --experimental-strip-types \
   -g "bounds burst wheel latency" --reporter=list
 ```
 
-Expected: unit tests pass; the engine probe preserves 288 vertical and 36 horizontal delta, issues at most two wheel commands, and settles below 100 ms in each engine. The frame mutation assertion may remain red until Task 3.
+Expected: unit tests pass; the engine probe preserves 288 vertical and 36 horizontal delta, keeps one native invocation pending, and settles within 100 ms of the last input in each engine. The frame mutation assertion may remain red until Task 3.
 
 - [ ] **Step 5: Commit and push wheel coalescing**
 

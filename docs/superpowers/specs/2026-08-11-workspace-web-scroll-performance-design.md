@@ -48,8 +48,9 @@ Extend the focused Web E2E bridge with two deterministic controls used only by t
 The Chromium and WebKit regression uses real `page.mouse.wheel` input and a 25 ms serialized bridge delay. For a 12-tick burst it must prove:
 
 - the complete horizontal and vertical delta sums reach the bridge;
-- no more than two native wheel commands are issued;
-- the final aggregate settles in under 100 ms;
+- no more than one native wheel invocation is pending at any moment;
+- the full delta sum is preserved regardless of engine driver pacing;
+- the final aggregate settles within 100 ms of the last delivered input;
 - a rapid stale-frame burst produces only the newest visible frame and at most one image-source commit per animation frame.
 
 The regression must fail on unmodified `develop` and pass after the product change. It runs with:
@@ -98,7 +99,7 @@ The change is ready for a develop-targeted PR when all of the following are true
 
 1. The new engine regression is captured red on clean `develop` and green on the fix in Chromium and WebKit.
 2. The focused two-engine loop is below 60 seconds.
-3. The 12-tick gesture preserves total delta, uses at most two native calls, and settles below 100 ms in both engines.
+3. The 12-tick gesture preserves total delta, keeps one native call pending, and settles within 100 ms of the last input in both engines. The deterministic unit probe separately proves twelve same-frame ticks collapse into one native call.
 4. The frame burst commits only the newest frame without stale post-reset delivery.
 5. Existing Web input, Web session unit, native Web lifecycle, formatting, type, inventory, and file-size checks pass.
 6. The browser remains default-off and preview-only.

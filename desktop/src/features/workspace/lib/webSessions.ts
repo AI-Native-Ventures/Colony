@@ -38,16 +38,39 @@ type WebStartResult = {
 type WebFrameEvent = WebFrame & { sessionId: string };
 type WebErrorEvent = { sessionId: string; error: string };
 type WebClosedEvent = { sessionId: string; error: string | null };
+type WebWheelInput = {
+  x: number;
+  y: number;
+  deltaX: number;
+  deltaY: number;
+};
+type WheelWaiter = {
+  reject: (cause: unknown) => void;
+  resolve: () => void;
+};
+type PendingWheel = {
+  input: WebWheelInput;
+  waiters: WheelWaiter[];
+};
+type WheelDispatcher = {
+  inFlight: boolean;
+  pending: PendingWheel | null;
+  scheduled: boolean;
+};
 
 const sessions = new Map<string, WebSessionState>();
 const nativeToTab = new Map<string, string>();
 const pendingFrames = new Map<string, WebFrame>();
+const queuedFrames = new Map<string, WebFrame>();
 const starts = new Map<string, Promise<void>>();
 const startTokens = new Map<string, symbol>();
 const listeners = new Map<string, Set<() => void>>();
 const tabGenerations = new Map<string, number>();
+const wheelDispatchers = new Map<string, WheelDispatcher>();
 let nativeListeners: Promise<NativeUnlisten[]> | null = null;
 let resetGeneration = 0;
+let frameFlushGeneration = 0;
+let frameFlushScheduled = false;
 
 const EMPTY_SESSION: WebSessionState = Object.freeze({
   status: "idle",
@@ -78,6 +101,103 @@ function emit(tabId: string): void {
 function setSession(tabId: string, state: WebSessionState): void {
   sessions.set(tabId, state);
   emit(tabId);
+}
+
+function scheduleAnimationFrame(callback: () => void): void {
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => callback());
+    return;
+  }
+  queueMicrotask(callback);
+}
+
+function flushQueuedFrames(generation: number): void {
+  if (generation !== frameFlushGeneration) return;
+  frameFlushScheduled = false;
+  const frames = [...queuedFrames.entries()];
+  queuedFrames.clear();
+  for (const [sessionId, frame] of frames) {
+    const tabId = nativeToTab.get(sessionId);
+    if (!tabId) continue;
+    const current = sessions.get(tabId);
+    if (!current || current.sessionId !== sessionId) continue;
+    setSession(tabId, { ...current, frame });
+  }
+}
+
+function queueFrame(sessionId: string, frame: WebFrame): void {
+  queuedFrames.set(sessionId, frame);
+  if (frameFlushScheduled) return;
+  frameFlushScheduled = true;
+  const generation = frameFlushGeneration;
+  scheduleAnimationFrame(() => flushQueuedFrames(generation));
+}
+
+function clearQueuedFrames(): void {
+  queuedFrames.clear();
+  frameFlushGeneration += 1;
+  frameFlushScheduled = false;
+}
+
+function getWheelDispatcher(tabId: string): WheelDispatcher {
+  const existing = wheelDispatchers.get(tabId);
+  if (existing) return existing;
+  const dispatcher: WheelDispatcher = {
+    inFlight: false,
+    pending: null,
+    scheduled: false,
+  };
+  wheelDispatchers.set(tabId, dispatcher);
+  return dispatcher;
+}
+
+function settlePendingWheel(pending: PendingWheel): void {
+  for (const waiter of pending.waiters) waiter.resolve();
+}
+
+function clearWheelDispatcher(tabId: string): void {
+  const dispatcher = wheelDispatchers.get(tabId);
+  wheelDispatchers.delete(tabId);
+  if (dispatcher?.pending) settlePendingWheel(dispatcher.pending);
+}
+
+function clearWheelDispatchers(): void {
+  for (const tabId of wheelDispatchers.keys()) clearWheelDispatcher(tabId);
+}
+
+function scheduleWheelFlush(tabId: string, dispatcher: WheelDispatcher): void {
+  if (dispatcher.inFlight || dispatcher.scheduled || !dispatcher.pending)
+    return;
+  dispatcher.scheduled = true;
+  queueMicrotask(() => {
+    if (wheelDispatchers.get(tabId) !== dispatcher) return;
+    dispatcher.scheduled = false;
+    void flushWheel(tabId, dispatcher);
+  });
+}
+
+async function flushWheel(
+  tabId: string,
+  dispatcher: WheelDispatcher,
+): Promise<void> {
+  if (dispatcher.inFlight || !dispatcher.pending) return;
+  const pending = dispatcher.pending;
+  dispatcher.pending = null;
+  dispatcher.inFlight = true;
+  try {
+    const sessionId = sessions.get(tabId)?.sessionId;
+    if (sessionId) {
+      await invoke("workspace_web_wheel", { sessionId, input: pending.input });
+    }
+    settlePendingWheel(pending);
+  } catch (cause: unknown) {
+    for (const waiter of pending.waiters) waiter.reject(cause);
+  } finally {
+    dispatcher.inFlight = false;
+    if (wheelDispatchers.get(tabId) === dispatcher) {
+      scheduleWheelFlush(tabId, dispatcher);
+    }
+  }
 }
 
 function advanceTabGeneration(tabId: string): number {
@@ -116,9 +236,7 @@ async function ensureNativeListeners(): Promise<void> {
           pendingFrames.set(event.payload.sessionId, frame);
           return;
         }
-        const current = sessions.get(tabId);
-        if (!current) return;
-        setSession(tabId, { ...current, frame });
+        queueFrame(event.payload.sessionId, frame);
       }),
       listen<WebErrorEvent>("workspace-web-error", (event) => {
         const tabId = nativeToTab.get(event.payload.sessionId);
@@ -143,6 +261,7 @@ async function ensureNativeListeners(): Promise<void> {
         }
         nativeToTab.delete(event.payload.sessionId);
         pendingFrames.delete(event.payload.sessionId);
+        queuedFrames.delete(event.payload.sessionId);
       }),
     ]);
   }
@@ -276,11 +395,26 @@ export async function sendWebMouse(
 /** Forward a wheel event to the active CDP page. */
 export async function sendWebWheel(
   tabId: string,
-  input: { x: number; y: number; deltaX: number; deltaY: number },
+  input: WebWheelInput,
 ): Promise<void> {
   const sessionId = sessions.get(tabId)?.sessionId;
   if (!sessionId) return;
-  await invoke("workspace_web_wheel", { sessionId, input });
+  const dispatcher = getWheelDispatcher(tabId);
+  return new Promise<void>((resolve, reject) => {
+    const waiter = { reject, resolve };
+    if (dispatcher.pending) {
+      dispatcher.pending.input = {
+        x: input.x,
+        y: input.y,
+        deltaX: dispatcher.pending.input.deltaX + input.deltaX,
+        deltaY: dispatcher.pending.input.deltaY + input.deltaY,
+      };
+      dispatcher.pending.waiters.push(waiter);
+    } else {
+      dispatcher.pending = { input: { ...input }, waiters: [waiter] };
+    }
+    scheduleWheelFlush(tabId, dispatcher);
+  });
 }
 
 /** Forward keydown/keyup and optional printable text to the active page. */
@@ -340,6 +474,7 @@ export const reloadWeb = (tabId: string): Promise<void> =>
 export async function disposeWebSession(tabId: string): Promise<void> {
   const pendingStart = starts.get(tabId);
   advanceTabGeneration(tabId);
+  clearWheelDispatcher(tabId);
   const session = sessions.get(tabId);
   let failure: unknown = null;
   if (session?.sessionId) {
@@ -350,6 +485,7 @@ export async function disposeWebSession(tabId: string): Promise<void> {
     } finally {
       nativeToTab.delete(session.sessionId);
       pendingFrames.delete(session.sessionId);
+      queuedFrames.delete(session.sessionId);
     }
   }
   if (pendingStart) {
@@ -367,6 +503,8 @@ export async function disposeWebSession(tabId: string): Promise<void> {
 /** Drain every native web session at a community boundary. */
 export async function resetWebSessions(): Promise<void> {
   resetGeneration += 1;
+  clearWheelDispatchers();
+  clearQueuedFrames();
   const pendingStarts = [...starts.values()];
   let failure: unknown = null;
   try {
