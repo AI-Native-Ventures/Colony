@@ -1,4 +1,5 @@
 import type { Community } from "./types";
+import { normalizeRelayUrl as normalizeRelayInput } from "./relayProbe";
 import { homeDir } from "@/shared/api/nativeBridge";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
@@ -57,22 +58,34 @@ export function loadCommunities(): Community[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    // Migration: older builds stored the user's `nsec` in localStorage and
-    // re-applied it to the backend on every reload, which silently overwrote
-    // any `import_identity` result with the original generated key. The
-    // on-disk `identity.key` file is the only source of truth now. Strip
-    // any lingering `nsec` from existing entries on read and persist the
-    // cleaned list back so it cannot leak into future sessions.
-    let didStrip = false;
+    // Migrate two pieces of legacy state in one read. Older builds could leave
+    // a scheme-less relay host in localStorage; the runtime key and reqwest
+    // both require an absolute URL, so repair it before the value reaches the
+    // Tauri boundary. Older builds also stored the user's `nsec` here and
+    // re-applied it on every reload, silently overwriting imported identities.
+    // The on-disk `identity.key` file is the only source of truth now.
+    let didChange = false;
     const cleaned = (parsed as Array<Record<string, unknown>>).map((entry) => {
-      if (entry && typeof entry === "object" && "nsec" in entry) {
-        const { nsec: _nsec, ...rest } = entry;
-        didStrip = true;
-        return rest;
+      if (!entry || typeof entry !== "object") return entry;
+
+      let cleanedEntry = entry;
+      if (typeof entry.relayUrl === "string") {
+        const normalizedRelayUrl = normalizeRelayInput(entry.relayUrl);
+        if (normalizedRelayUrl && normalizedRelayUrl !== entry.relayUrl) {
+          cleanedEntry = { ...cleanedEntry, relayUrl: normalizedRelayUrl };
+          didChange = true;
+        }
       }
-      return entry;
+
+      if ("nsec" in cleanedEntry) {
+        const { nsec: _nsec, ...rest } = cleanedEntry;
+        cleanedEntry = rest;
+        didChange = true;
+      }
+
+      return cleanedEntry;
     }) as Community[];
-    if (didStrip) {
+    if (didChange) {
       setLocalStorageItemWithRecovery(COMMUNITIES_KEY, JSON.stringify(cleaned));
     }
     return cleaned;

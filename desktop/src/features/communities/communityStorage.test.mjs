@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   clearCommunityStorage,
   initFirstCommunity,
+  loadCommunities,
   migrateLegacyCommunityStorage,
   shouldAutoConnectDefaultRelay,
 } from "./communityStorage.ts";
@@ -47,6 +48,34 @@ test("migrateLegacyCommunityStorage does not overwrite new community state", () 
 
   assert.equal(storage.getItem("buzz-communities"), '[{"id":"new"}]');
   assert.equal(storage.getItem("buzz-active-community-id"), "new");
+});
+
+test("loadCommunities repairs legacy scheme-less relay URLs", () => {
+  const storage = createMemoryStorage({
+    "buzz-communities": JSON.stringify([
+      {
+        id: "legacy",
+        name: "Colony",
+        relayUrl: "relay.colony.ainative.ventures",
+        nsec: "nsec1-legacy-secret",
+      },
+    ]),
+    "buzz-active-community-id": "legacy",
+  });
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  const [community] = loadCommunities();
+
+  assert.equal(community.relayUrl, "wss://relay.colony.ainative.ventures");
+  assert.equal("nsec" in community, false);
+  assert.deepEqual(JSON.parse(storage.getItem("buzz-communities")), [
+    {
+      id: "legacy",
+      name: "Colony",
+      relayUrl: "wss://relay.colony.ainative.ventures",
+    },
+  ]);
 });
 
 test("signed-build relay defaults auto-connect during first-run onboarding", () => {
