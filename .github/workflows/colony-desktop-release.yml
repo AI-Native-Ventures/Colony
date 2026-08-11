@@ -78,6 +78,13 @@ env:
   # at build time.
   UPDATER_ENDPOINT: https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json
 
+  # These are compile-time defaults for the packaged Colony app. Keep them at
+  # workflow scope so the macOS and Windows build steps cannot silently drift
+  # onto different relays (or back to the desktop development default).
+  COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures
+  COLONY_PRODUCTION_RELAY_HTTP_URL: https://relay.colony.ainative.ventures
+  COLONY_PRODUCTION_RELAY_AUTO_CONNECT: "1"
+
 jobs:
   publish-macos:
     name: Publish macOS (Apple Silicon)
@@ -168,6 +175,12 @@ jobs:
 
       - name: Build desktop app
         env:
+          # build.rs embeds these values in the packaged binary. Without all
+          # three, a fresh install falls back to ws://localhost:3000 and does
+          # not auto-connect to Colony on first run.
+          BUZZ_RELAY_URL: ${{ env.COLONY_PRODUCTION_RELAY_WS_URL }}
+          BUZZ_RELAY_HTTP: ${{ env.COLONY_PRODUCTION_RELAY_HTTP_URL }}
+          BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY: ${{ env.COLONY_PRODUCTION_RELAY_AUTO_CONNECT }}
           # build.rs reads these two, not just the config generator: it only
           # emits cfg(buzz_updater_enabled) when both are present, and without
           # that cfg lib.rs compiles the updater plugin out of the binary
@@ -453,6 +466,11 @@ jobs:
       # not compiled or tested for Windows in CI.
       - name: Build Windows NSIS installer (unsigned)
         env:
+          # Keep the Windows artifact on the same production relay contract as
+          # macOS; these are compiled by desktop/src-tauri/build.rs.
+          BUZZ_RELAY_URL: ${{ env.COLONY_PRODUCTION_RELAY_WS_URL }}
+          BUZZ_RELAY_HTTP: ${{ env.COLONY_PRODUCTION_RELAY_HTTP_URL }}
+          BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY: ${{ env.COLONY_PRODUCTION_RELAY_AUTO_CONNECT }}
           BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
