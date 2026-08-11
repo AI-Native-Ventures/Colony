@@ -7,6 +7,13 @@ use crate::managed_agents::{is_npm_global_install, InstallStepResult};
 
 const MANAGED_NODE_VERSION: &str = "v24.18.0";
 const MANAGED_NODE_MAX_BYTES: u64 = 90 * 1024 * 1024;
+/// Whole-request ceiling for the managed Node download. Paired with
+/// `MANAGED_NODE_MAX_BYTES`, this sets the slowest line the first-run install
+/// can survive; see `node_download_timeout_tolerates_a_slow_home_line`.
+const MANAGED_NODE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Fail fast when the host is unreachable rather than waiting out the
+/// whole-request ceiling on an offline machine.
+const MANAGED_NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy)]
 struct ManagedNodeArtifact {
@@ -233,8 +240,20 @@ fn download_managed_node_archive(
     dest: &std::path::Path,
     expected_sha256: &str,
 ) -> Result<(), String> {
+    // `timeout` is a deadline for the whole request, body included, so the
+    // previous 5 minutes silently required ~2.4 Mbit/s sustained for an
+    // archive allowed to reach 90 MB. Slower lines are normal in much of the
+    // world, and this download is the first thing a new user's machine does,
+    // so the failure lands on the first screen they ever see and reads as
+    // "the app is broken". At 60 minutes the same 90 MB needs ~0.2 Mbit/s,
+    // which is below any connection that could have downloaded the installer
+    // in the first place. `read_timeout` would express "stalled, not slow"
+    // more precisely, but reqwest's blocking builder does not expose it.
+    // connect_timeout still fails fast when the host is unreachable, so an
+    // offline machine does not wait an hour to find out.
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5 * 60))
+        .connect_timeout(MANAGED_NODE_CONNECT_TIMEOUT)
+        .timeout(MANAGED_NODE_DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|e| format!("build Node.js download client: {e}"))?;
     let response = client
@@ -541,6 +560,25 @@ pub(super) fn npm_eacces_hint(stderr: &str, _command: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_download_timeout_tolerates_a_slow_home_line() {
+        // The whole-request timeout and the size cap together imply a minimum
+        // sustained bandwidth, and anyone below it can never finish the
+        // first-run install. At 5 minutes for a 90 MB cap that floor was
+        // ~2.4 Mbit/s, which rejected ordinary home connections on the very
+        // first screen. Assert the floor stays under half a megabit so the
+        // pairing cannot silently drift back into excluding real users.
+        let secs = MANAGED_NODE_DOWNLOAD_TIMEOUT.as_secs();
+        assert!(secs > 0, "a zero timeout would reject every download");
+        let required_mbit = (MANAGED_NODE_MAX_BYTES as f64 * 8.0) / (secs as f64 * 1_000_000.0);
+        assert!(
+            required_mbit < 0.5,
+            "first-run Node download needs {required_mbit:.2} Mbit/s sustained \
+             ({MANAGED_NODE_MAX_BYTES} bytes in {secs}s); that excludes normal \
+             home connections on the first screen a new user sees"
+        );
+    }
 
     #[test]
     fn test_npm_eacces_hint_guidance_mentions_buzz_private_dir() {
