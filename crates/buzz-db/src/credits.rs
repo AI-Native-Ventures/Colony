@@ -461,10 +461,22 @@ pub async fn resolve_gateway_settlement_intent(
     } else {
         None
     };
+    let normal_debit_exists = existing_reference.is_some();
     let correction_ref = existing_reference
         .or_else(|| intent.correction_ref.clone())
-        .unwrap_or_else(|| format!("gateway-intent:{}", intent.id));
-    if correction_ref.starts_with("gateway-intent:") {
+        .unwrap_or_else(|| {
+            if usage.provider_request_id.is_none() {
+                // Normal settlement also uses the durable intent reference
+                // when the provider omits its request id. Recovery must use
+                // that same ledger idempotency key so a committed debit, a
+                // missing debit, and a concurrent replay all converge on one
+                // `(pubkey, ref)` row and one balance change.
+                intent.reference.clone()
+            } else {
+                format!("gateway-intent:{}", intent.id)
+            }
+        });
+    if !normal_debit_exists {
         debit_observed_applied(
             pool,
             &intent.pubkey,
