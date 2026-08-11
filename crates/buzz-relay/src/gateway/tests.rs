@@ -762,6 +762,78 @@ async fn pending_gateway_intent_resolver_requires_exact_identity_and_is_idempote
     assert!(resolved_at.is_some(), "outcome is closed by the resolver");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn resolver_restart_without_provider_id_reuses_committed_intent_reference() {
+    let state = crate::state::tests::test_state_with_redis("redis://127.0.0.1:1").await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    let intent = buzz_db::credits::create_gateway_settlement_intent(
+        &pool,
+        &TEST_PUBKEY,
+        "gateway:lost-ack-without-provider-id",
+        "deepseek-v4-flash",
+    )
+    .await
+    .expect("create intent");
+    buzz_db::credits::mark_gateway_provider_completed(
+        &pool,
+        intent.id,
+        None,
+        Some(125_000_000),
+        200,
+    )
+    .await
+    .expect("provider completion");
+
+    buzz_db::credits::debit_observed(
+        &pool,
+        &TEST_PUBKEY,
+        125_000_000,
+        &intent.reference,
+        Some("deepseek-v4-flash"),
+        None,
+    )
+    .await
+    .expect("normal debit commits before acknowledgement is lost");
+    assert_eq!(ledger_rows(&pool).await.len(), 1);
+    assert_eq!(balance(&pool).await, 875_000_000);
+
+    pool.close().await;
+    drop(state);
+    let restarted = crate::state::tests::test_state_with_redis("redis://127.0.0.1:1").await;
+    let restarted_pool = restarted.db.pool().clone();
+    let resolved = buzz_db::credits::resolve_gateway_settlement_intent(
+        &restarted_pool,
+        intent.id,
+        &buzz_db::credits::GatewayProviderUsage {
+            pubkey: TEST_PUBKEY.to_vec(),
+            reference: intent.reference.clone(),
+            model: "deepseek-v4-flash".to_string(),
+            cost_nanousd: 125_000_000,
+            provider_request_id: None,
+        },
+    )
+    .await
+    .expect("resolve after restart")
+    .expect("intent exists");
+
+    assert_eq!(resolved.state, "resolved");
+    assert_eq!(
+        ledger_rows(&restarted_pool).await.len(),
+        1,
+        "lost acknowledgement recovery must not insert a second debit"
+    );
+    assert_eq!(
+        balance(&restarted_pool).await,
+        875_000_000,
+        "lost acknowledgement recovery must not debit the account twice"
+    );
+    assert_eq!(
+        resolved.correction_ref.as_deref(),
+        Some(intent.reference.as_str())
+    );
+}
+
 #[test]
 fn missing_id_settle_job_reuses_one_fallback_reference() {
     let parsed = buzz_meter_core::ParsedUsage {
