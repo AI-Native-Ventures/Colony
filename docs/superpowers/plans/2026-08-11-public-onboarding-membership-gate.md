@@ -48,7 +48,7 @@
 
 - [ ] **Step 4: Run the focused E2E baseline**
 
-  Run from `desktop/`: `pnpm test:e2e:smoke --grep "non-local runtime override keeps community selection without release flag|non-local default auto-connects when the release flag is enabled|first-community owner can create and connect a hosted community"`
+  Run from `desktop/`: `pnpm test:e2e:integration --grep "non-local runtime override keeps community selection without release flag|non-local default auto-connects when the release flag is enabled|first-community owner can create and connect a hosted community"`
 
   Expected: all selected tests pass before the workflow change, proving the
   client behavior for flag-off and flag-on builds is already deterministic.
@@ -168,8 +168,12 @@
   - version `0.10.14` in `Info.plist`;
   - `wss://relay.colony.ainative.ventures` present;
   - `https://relay.colony.ainative.ventures` present;
-  - `ws://localhost:3000` absent;
-  - `BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY`'s compiled marker absent.
+  - `ws://localhost:3000` absent.
+
+  The auto-connect input name is consumed at compile time and is not a reliable
+  binary marker. Prove that invariant with the workflow contract (the flag is
+  rejected and explicitly unset in both platform build steps) plus the reset
+  first-run UI proof below.
 
 - [ ] **Step 6: Obtain live first-run proof**
 
@@ -177,4 +181,3 @@
   it reaches `Join or create a community`, opens `Create a community`, and does
   not show `Membership required`. Do not create production data solely for the
   proof unless a disposable identity and cleanup path are explicitly approved.
-
