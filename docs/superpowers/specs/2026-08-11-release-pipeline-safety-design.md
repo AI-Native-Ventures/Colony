@@ -93,7 +93,7 @@ The gate runs for every pull request whose base is `main`. Its script first requ
 - a non-relevant secondary dependency may equal `skipped`;
 - `failure`, `cancelled`, or an unexpected/missing result fails the gate.
 
-The job name is unique across the repository's workflows so branch protection cannot be satisfied by an unrelated workflow reporting the same context.
+The exact job name is unique across the repository's workflows so branch protection cannot be satisfied by an unrelated workflow reporting the same context. Because GitHub emits skipped check runs even when a job-level condition is false, non-promotion events use a different display name (`Promotion Gate (not applicable)`); only a pull request targeting `main` can emit the exact required `Promotion Gate` context.
 
 ## Publication Defense in Depth
 
