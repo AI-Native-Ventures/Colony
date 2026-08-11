@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message as WsMessage, WebSocket};
+use chrono::Utc;
 use futures_util::{Sink, SinkExt, StreamExt};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -21,6 +22,7 @@ use nostr::Filter;
 use crate::handlers;
 use crate::protocol::{ClientMessage, RelayMessage};
 use crate::state::{run_registered_community_connection, AppState};
+use buzz_pubsub::operator_sessions::OperatorSessionStore;
 use buzz_pubsub::EventTopic;
 
 /// Maximum time a new socket may hold a connection slot without completing NIP-42 auth.
@@ -223,6 +225,9 @@ async fn handle_active_connection(
         ctrl_tx,
         Arc::clone(&missed_pongs),
         heartbeat_cancel,
+        Arc::clone(&state.operator_sessions),
+        conn.tenant.community(),
+        conn.conn_id,
     ));
 
     let auth_timeout_conn = Arc::clone(&conn);
@@ -268,17 +273,31 @@ async fn handle_active_connection(
             .release_topic(&conn.tenant, topic_for_subscription(removed.channel_id))
             .await;
     }
+    let authenticated_pubkey = match &*conn.auth_state.read().await {
+        AuthState::Authenticated(auth_ctx) => Some(auth_ctx.pubkey),
+        _ => None,
+    };
+    if authenticated_pubkey.is_some() {
+        if let Err(error) = state
+            .operator_sessions
+            .clear(conn.tenant.community(), conn.conn_id)
+            .await
+        {
+            tracing::warn!(
+                conn_id = %conn.conn_id,
+                error = %error,
+                "failed to clear operator session lease during connection cleanup"
+            );
+        }
+    }
     state.conn_manager.deregister(conn.conn_id);
-    if let AuthState::Authenticated(ref auth_ctx) = *conn.auth_state.read().await {
+    if let Some(pubkey) = authenticated_pubkey {
         let remaining = state.conn_manager.connection_ids_for_pubkey_in_community(
             conn.tenant.community(),
-            auth_ctx.pubkey.to_bytes().as_slice(),
+            pubkey.to_bytes().as_slice(),
         );
         if remaining.is_empty() {
-            let _ = state
-                .pubsub
-                .clear_presence(&conn.tenant, &auth_ctx.pubkey)
-                .await;
+            let _ = state.pubsub.clear_presence(&conn.tenant, &pubkey).await;
         }
     }
     metrics::gauge!("buzz_ws_connections_active").decrement(1.0);
@@ -379,6 +398,9 @@ async fn heartbeat_loop(
     ctrl_tx: mpsc::Sender<WsMessage>,
     missed_pongs: Arc<AtomicU8>,
     cancel: CancellationToken,
+    operator_sessions: Arc<OperatorSessionStore>,
+    community_id: buzz_core::CommunityId,
+    connection_id: Uuid,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(30));
     loop {
@@ -398,6 +420,18 @@ async fn heartbeat_loop(
                     warn!("control channel full — cannot send Ping, closing");
                     cancel.cancel();
                     break;
+                }
+                if let Err(error) = operator_sessions
+                    .refresh(community_id, connection_id, Utc::now())
+                    .await
+                {
+                    metrics::counter!("buzz_operator_session_refresh_errors_total").increment(1);
+                    warn!(
+                        %community_id,
+                        %connection_id,
+                        error = %error,
+                        "operator session heartbeat refresh failed"
+                    );
                 }
             }
             _ = cancel.cancelled() => break,

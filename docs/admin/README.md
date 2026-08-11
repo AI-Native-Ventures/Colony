@@ -1,7 +1,8 @@
 # Read-only deployment moderation dashboard
 
 Buzz can expose a private, deployment-wide read-only dashboard from the existing
-relay process. It shows open moderation reports and recent product feedback.
+relay process. It shows operator analytics, open moderation reports, and recent
+product feedback.
 
 Configure `BUZZ_ADMIN_HOST` to activate the dashboard. A private ingress limits
 access to the operator VPN or approved source IPs.
@@ -11,11 +12,18 @@ Required configuration:
 ```text
 BUZZ_ADMIN_HOST=admin.example.com
 BUZZ_ADMIN_WEB_DIR=/srv/buzz/admin-web
+RELAY_OPERATOR_API_ORIGIN=https://admin.example.com
+RELAY_OPERATOR_PUBKEYS=<64-char operator pubkey>
 ```
 
 The relay requires the configured admin host and matching browser origin.
 Requests and responses are bounded and uncached. The deployment routes admin
 traffic through the private ingress.
+
+Operator analytics additionally requires a fresh request-bound NIP-98
+signature from an allowlisted operator key. See
+[Operator analytics](operator-analytics.md) for its routes, privacy boundary,
+backfill procedure, and first-run checklist.
 
 When the UI runs in a separate pod, proxy `/api/admin/v1/*` to the relay while
 preserving the admin `Host` header. A `NetworkPolicy` grants the admin pod access

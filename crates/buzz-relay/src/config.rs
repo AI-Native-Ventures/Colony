@@ -6,6 +6,7 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tracing::warn;
+use uuid::Uuid;
 
 /// Default maximum inbound WebSocket frame size in bytes.
 ///
@@ -116,6 +117,12 @@ pub struct Config {
     pub db_read_pool_size: Option<u32>,
     /// Public WebSocket URL of this relay, advertised in NIP-11.
     pub relay_url: String,
+    /// Deployment instance label used in operator session diagnostics.
+    ///
+    /// This is a label only, never an authority key. It resolves from
+    /// `POD_NAME`, then `HOSTNAME`, then a boot UUID generated while parsing
+    /// configuration.
+    pub operator_instance_id: String,
     /// Public WebSocket URL of the dedicated device-pairing relay, when configured.
     pub pairing_relay_url: Option<String>,
     /// Maximum number of concurrent WebSocket connections.
@@ -520,6 +527,18 @@ fn parse_optional_bool(name: &str) -> Result<bool, ConfigError> {
     parse_bool(name, false)
 }
 
+fn operator_instance_id_from_env() -> String {
+    for name in ["POD_NAME", "HOSTNAME"] {
+        if let Ok(value) = std::env::var(name) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    Uuid::new_v4().to_string()
+}
+
 fn ensure_git_repo_path(
     raw: impl Into<std::path::PathBuf>,
 ) -> Result<std::path::PathBuf, ConfigError> {
@@ -598,6 +617,7 @@ impl Config {
 
         let relay_url =
             std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
+        let operator_instance_id = operator_instance_id_from_env();
 
         let pairing_relay_url = std::env::var("BUZZ_PAIRING_RELAY_URL")
             .ok()
@@ -1133,6 +1153,7 @@ impl Config {
             db_pool_size,
             db_read_pool_size,
             relay_url,
+            operator_instance_id,
             pairing_relay_url,
             max_connections,
             max_concurrent_handlers,
@@ -1256,6 +1277,48 @@ mod tests {
             config.huddle_audio_available,
             "huddle_audio_available should default to true so single-pod (N=1) keeps today's huddle behavior"
         );
+        assert!(!config.operator_instance_id.is_empty());
+    }
+
+    #[test]
+    fn operator_instance_id_prefers_pod_name_then_hostname_then_boot_uuid() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let previous_pod = std::env::var_os("POD_NAME");
+        let previous_hostname = std::env::var_os("HOSTNAME");
+
+        std::env::set_var("POD_NAME", "  analytics-pod-7  ");
+        std::env::set_var("HOSTNAME", "node-host");
+        let pod = Config::from_env().expect("pod config").operator_instance_id;
+        assert_eq!(pod, "analytics-pod-7");
+
+        std::env::set_var("POD_NAME", "   ");
+        let whitespace_pod = Config::from_env()
+            .expect("whitespace pod config")
+            .operator_instance_id;
+        assert_eq!(whitespace_pod, "node-host");
+
+        std::env::remove_var("POD_NAME");
+        let host = Config::from_env()
+            .expect("hostname config")
+            .operator_instance_id;
+        assert_eq!(host, "node-host");
+
+        std::env::remove_var("HOSTNAME");
+        let fallback = Config::from_env()
+            .expect("fallback config")
+            .operator_instance_id;
+        assert!(Uuid::parse_str(&fallback).is_ok());
+
+        if let Some(value) = previous_pod {
+            std::env::set_var("POD_NAME", value);
+        } else {
+            std::env::remove_var("POD_NAME");
+        }
+        if let Some(value) = previous_hostname {
+            std::env::set_var("HOSTNAME", value);
+        } else {
+            std::env::remove_var("HOSTNAME");
+        }
     }
 
     #[test]
