@@ -21,7 +21,6 @@ expect_line() {
 # workflow must not silently inherit the OSS desktop default (localhost).
 expect_line "  COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures"
 expect_line "  COLONY_PRODUCTION_RELAY_HTTP_URL: https://relay.colony.ainative.ventures"
-expect_line '  COLONY_PRODUCTION_RELAY_AUTO_CONNECT: "1"'
 
 if grep -Eiq \
   '^[[:space:]]+(BUZZ_RELAY_(URL|HTTP)|COLONY_PRODUCTION_RELAY_(WS_URL|HTTP_URL)):[[:space:]].*localhost' \
@@ -48,8 +47,11 @@ expect_build_env() {
     fail "${name} does not inject the production relay WebSocket URL"
   grep -Fqx -- '          BUZZ_RELAY_HTTP: ${{ env.COLONY_PRODUCTION_RELAY_HTTP_URL }}' <<<"${block}" ||
     fail "${name} does not inject the production relay HTTP URL"
-  grep -Fqx -- '          BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY: ${{ env.COLONY_PRODUCTION_RELAY_AUTO_CONNECT }}' <<<"${block}" ||
-    fail "${name} does not enable the production default-relay auto-connect flag"
+  if grep -Fq -- 'BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY:' <<<"${block}"; then
+    fail "${name} auto-connects fresh users to the membership-gated root relay"
+  fi
+  grep -Fqx -- '          unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY' <<<"${block}" ||
+    fail "${name} does not clear an ambient default-relay auto-connect flag"
 }
 
 expect_build_env "Build desktop app"

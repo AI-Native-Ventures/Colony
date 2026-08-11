@@ -78,12 +78,13 @@ env:
   # at build time.
   UPDATER_ENDPOINT: https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json
 
-  # These are compile-time defaults for the packaged Colony app. Keep them at
-  # workflow scope so the macOS and Windows build steps cannot silently drift
-  # onto different relays (or back to the desktop development default).
+  # These are compile-time provisioning defaults for the packaged Colony app.
+  # Keep them at workflow scope so the macOS and Windows build steps cannot
+  # silently drift onto different relays (or back to the desktop development
+  # default). The public build must NOT auto-connect this root relay: a fresh
+  # identity is not a member there yet and must reach community creation first.
   COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures
   COLONY_PRODUCTION_RELAY_HTTP_URL: https://relay.colony.ainative.ventures
-  COLONY_PRODUCTION_RELAY_AUTO_CONNECT: "1"
 
 jobs:
   publish-macos:
@@ -175,12 +176,10 @@ jobs:
 
       - name: Build desktop app
         env:
-          # build.rs embeds these values in the packaged binary. Without all
-          # three, a fresh install falls back to ws://localhost:3000 and does
-          # not auto-connect to Colony on first run.
+          # build.rs embeds these values in the packaged binary. Without them,
+          # community provisioning falls back to ws://localhost:3000.
           BUZZ_RELAY_URL: ${{ env.COLONY_PRODUCTION_RELAY_WS_URL }}
           BUZZ_RELAY_HTTP: ${{ env.COLONY_PRODUCTION_RELAY_HTTP_URL }}
-          BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY: ${{ env.COLONY_PRODUCTION_RELAY_AUTO_CONNECT }}
           # build.rs reads these two, not just the config generator: it only
           # emits cfg(buzz_updater_enabled) when both are present, and without
           # that cfg lib.rs compiles the updater plugin out of the binary
@@ -199,6 +198,11 @@ jobs:
           # in every artifact the build emits.
           echo "updater public key present: ${BUZZ_UPDATER_PUBLIC_KEY:+yes}"
           echo "updater endpoint present:   ${BUZZ_UPDATER_ENDPOINT:+yes}"
+          # A self-hosted runner may retain ambient environment variables.
+          # Fail-safe the public build into community selection: auto-joining
+          # the root relay sends a fresh identity into its membership gate
+          # before public community creation can run.
+          unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
       - name: Verify the bundle
@@ -495,13 +499,13 @@ jobs:
           # macOS; these are compiled by desktop/src-tauri/build.rs.
           BUZZ_RELAY_URL: ${{ env.COLONY_PRODUCTION_RELAY_WS_URL }}
           BUZZ_RELAY_HTTP: ${{ env.COLONY_PRODUCTION_RELAY_HTTP_URL }}
-          BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY: ${{ env.COLONY_PRODUCTION_RELAY_AUTO_CONNECT }}
           BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
+          unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           cd desktop && pnpm tauri build --verbose --target "$TARGET" --bundles nsis --config src-tauri/tauri.release.conf.json
 
       - name: Verify the built app version

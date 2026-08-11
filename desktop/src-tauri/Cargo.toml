@@ -2,7 +2,7 @@
 
 [package]
 name = "buzz-desktop"
-version = "0.10.13"
+version = "0.10.14"
 description = "Buzz desktop app"
 authors = ["you"]
 edition = "2021"
