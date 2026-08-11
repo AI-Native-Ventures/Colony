@@ -421,6 +421,7 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
           <img
             alt={`Live browser page${session.url ? `: ${session.url}` : ""}`}
             className="block h-full w-full select-none"
+            data-frame-scroll-y={session.frame.scrollOffsetY}
             data-testid="workspace-web-frame"
             draggable={false}
             height={session.frame.height}
