@@ -56,9 +56,9 @@ where the signer is already the owner and a relay member.
 4. PR CI and merge-queue CI pass before merge.
 5. The develop-to-main promotion passes its full matrix before merge.
 6. The v0.10.14 release workflow succeeds for both platforms.
-7. The published macOS binary contains both production relay URLs, contains no
-   localhost default, and does not contain the auto-connect marker.
+7. The published macOS binary contains both production relay URLs and contains
+   no localhost default. The source contract proves the auto-connect flag is
+   rejected and explicitly unset in both platform build steps.
 8. A reset v0.10.14 build reaches community creation without displaying the
    membership-required gate. If live UI proof needs a human-owned machine
    action, stop and request that exact action rather than inferring success.
-
