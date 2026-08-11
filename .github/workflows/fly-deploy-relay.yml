@@ -48,3 +48,8 @@ jobs:
           docker push "$DST"
           flyctl deploy --config deploy/fly/fly.toml --app colony-relay \
             --image "$DST" --strategy immediate --yes
+
+      - name: Verify live relay readiness and version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: scripts/verify-relay-live.sh "$TAG"

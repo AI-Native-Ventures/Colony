@@ -1,9 +1,9 @@
 name: CI
-# CI gates every integration point now: PRs targeting `develop` run the
-# path-filtered suite (so schema/code drift can't land silently and pile up
-# for the promotion gate), and pushes to develop run the full relevant matrix
-# on the merged result. Full CI still gates production: PRs that promote
-# develop into main (or release), and pushes to those branches.
+# CI gates every integration point without repeating the same proof. PRs to
+# `develop` are path-filtered, the merge queue always runs its six required
+# contexts, and the resulting `develop` push runs only path-selected secondary
+# coverage. PRs from `develop` to `main` always run the six required contexts
+# plus relevant secondary jobs and report one production Promotion Gate.
 on:
   push:
     branches: [main, develop, release]
@@ -40,10 +40,11 @@ jobs:
     # contain the queue's base_sha. So buckets are set explicitly rather than
     # filtered.
     #
-    # rust / desktop / desktop-rust are forced true because between them they
-    # gate every one of the five required checks (Rust Lint, Unit Tests,
-    # Desktop Core, Desktop, and Detect Changed Paths which always runs). The
-    # queue re-tests those on the merged result, which is the whole point of it.
+    # rust / desktop / desktop-rust are forced true for merge groups and
+    # production promotion PRs because between them they gate every one of the
+    # six required contexts. Release pushes retain their established full
+    # matrix. Raw outputs stay separate so forcing core proof never turns on
+    # every secondary suite.
     #
     # web / mobile / blocks are NOT forced. They gate only Web, Mobile and
     # Blocks Live Gate, none of which is required, and Mobile alone is 915
@@ -53,9 +54,22 @@ jobs:
     # relay e2e chain still runs, since it hangs off `rust`; it is the longest
     # pole in a queue run and #168 lengthened its cold build further.
     outputs:
-      rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.rust }}
-      desktop: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop }}
-      desktop-rust: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.desktop-rust }}
+      core-enabled: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/release') && 'true' || 'false' }}
+      secondary-enabled: ${{ (github.event_name != 'merge_group' && github.ref != 'refs/heads/main') && 'true' || 'false' }}
+      release-push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || 'false' }}
+      rust: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/release')) && 'true' || steps.filter.outputs.rust }}
+      desktop: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/release')) && 'true' || steps.filter.outputs.desktop }}
+      desktop-rust: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/release')) && 'true' || steps.filter.outputs.desktop-rust }}
+      raw-rust: ${{ steps.filter.outputs.rust }}
+      raw-desktop: ${{ steps.filter.outputs.desktop }}
+      raw-desktop-rust: ${{ steps.filter.outputs.desktop-rust }}
+      raw-web: ${{ steps.filter.outputs.web }}
+      raw-mobile: ${{ steps.filter.outputs.mobile }}
+      raw-blocks: ${{ steps.filter.outputs.blocks }}
+      raw-desktop-integration: ${{ steps.filter.outputs.desktop-integration }}
+      raw-windows: ${{ steps.filter.outputs.windows }}
+      raw-security: ${{ steps.filter.outputs.security }}
+      raw-cross-compile: ${{ steps.filter.outputs.cross-compile }}
       web: ${{ steps.filter.outputs.web }}
       mobile: ${{ steps.filter.outputs.mobile }}
       blocks: ${{ steps.filter.outputs.blocks }}
@@ -101,13 +115,16 @@ jobs:
               - 'desktop/**'
               - '!desktop/src-tauri/**'
               - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
             desktop-rust:
               - 'desktop/src-tauri/**'
+              - '.github/workflows/ci.yml'
             web:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
               - 'web/**'
               - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
             mobile:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
@@ -138,6 +155,43 @@ jobs:
               - 'scripts/prove-blocks.sh'
               - 'scripts/start-isolated-test-relay.sh'
               - 'docker-compose.harness.yml'
+              - '.github/workflows/ci.yml'
+            desktop-integration:
+              - 'desktop/**'
+              - 'crates/**'
+              - 'migrations/**'
+              - 'schema/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'pnpm-lock.yaml'
+              - 'scripts/start-relay-for-tests.sh'
+              - 'scripts/create-required-extensions.sql'
+              - 'scripts/attach-schema-partitions.sql'
+              - '.github/workflows/ci.yml'
+            windows:
+              - 'crates/**'
+              - 'desktop/src-tauri/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.github/workflows/ci.yml'
+            security:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
+              - 'crates/**/Cargo.toml'
+              - 'desktop/src-tauri/Cargo.toml'
+              - '.github/workflows/ci.yml'
+            cross-compile:
+              - 'crates/**'
+              - 'migrations/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.github/workflows/ci.yml'
       - name: Release workflow source contract
         run: scripts/test-release-ref-contract.sh
       - name: Mobile release contract
@@ -154,6 +208,18 @@ jobs:
         # filter cannot skip it. A regression here is silent and expensive --
         # the app keeps launching, just against a different, empty profile.
         run: node --test scripts/instance-env.test.mjs
+      - name: Dead token reference guard
+        run: |
+          # Relay crates are excluded because they still use token auth
+          # internally. Client surfaces must not regain the retired API token.
+          PATTERNS='TokenScope|MintTokenResponse|hasApiToken|spr_tok_'
+          PATHS='desktop/src/ desktop/tests/ mobile/test/ mobile/lib/ .env.example'
+          EXCLUDES='--exclude-dir=node_modules --exclude-dir=.dart_tool'
+          if grep -rn $EXCLUDES -E "$PATTERNS" $PATHS 2>/dev/null; then
+            echo "::error::Dead API token references found in client code. See above."
+            exit 1
+          fi
+          echo "No dead token references found."
       - name: Schema drift check
         # CI provisions Postgres from schema/schema.sql, not from migrations/,
         # so a table added only to migrations/ is invisible here and surfaces
@@ -169,7 +235,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
+    if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true')
     permissions:
       contents: read
     steps:
@@ -190,7 +256,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -212,7 +278,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     steps:
@@ -307,7 +373,7 @@ jobs:
     # two shards that were making progress. Warm runs finish far below it.
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -373,7 +439,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, desktop-core, desktop-smoke-e2e]
-    if: always() && (github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: always() && needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     steps:
@@ -399,7 +465,11 @@ jobs:
     # headroom exists for cold builds only; a cache hit skips every build step.
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: >
+      (needs.changes.outputs.core-enabled == 'true' &&
+        (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')) ||
+      (needs.changes.outputs.secondary-enabled == 'true' &&
+        (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true'))
     permissions:
       contents: read
     steps:
@@ -470,7 +540,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    if: >
+      needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -651,7 +723,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, desktop-e2e-integration-shard]
-    if: always() && (github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: >
+      always() && needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')
     permissions:
       contents: read
     steps:
@@ -683,7 +757,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.blocks == 'true'
+    if: >
+      needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-blocks == 'true')
     permissions:
       contents: read
     steps:
@@ -784,7 +860,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -990,7 +1066,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -1048,7 +1124,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes, desktop-e2e-relay]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     env:
@@ -1109,7 +1185,7 @@ jobs:
     # is the state this exists to end. The path condition matches the three
     # upstream jobs exactly, so a PR that touches no Rust skips this too and the
     # required check is satisfied by the skip.
-    if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
+    if: always() && needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -1156,7 +1232,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+    if: >
+      needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-web == 'true')
     permissions:
       contents: read
     steps:
@@ -1194,7 +1272,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.mobile == 'true'
+    if: >
+      needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-mobile == 'true')
     permissions:
       contents: read
     steps:
@@ -1255,7 +1335,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: >
+      needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-security == 'true')
     permissions:
       contents: read
     steps:
@@ -1263,27 +1345,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
       - name: Dependency policy
         run: cargo-deny check
-
-  dead-token-guard:
-    name: Dead Token Reference Guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - name: Check for dead API token references in client code
-        run: |
-          # Fail if dead API token patterns reappear in desktop, mobile, docs, or config.
-          # Relay crates are excluded — they still use token auth internally.
-          PATTERNS='TokenScope|MintTokenResponse|hasApiToken|spr_tok_'
-          PATHS='desktop/src/ desktop/tests/ mobile/test/ mobile/lib/ .env.example'
-          EXCLUDES='--exclude-dir=node_modules --exclude-dir=.dart_tool'
-          if grep -rn $EXCLUDES -E "$PATTERNS" $PATHS 2>/dev/null; then
-            echo "::error::Dead API token references found in client code. See above."
-            exit 1
-          fi
-          echo "No dead token references found."
 
   server-cross-compile:
     # Stays on GitHub-hosted x86_64: the musl cross toolchain setup assumes an
@@ -1293,7 +1354,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    if: >
+      needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-cross-compile == 'true')
     permissions:
       contents: read
     strategy:
@@ -1335,7 +1398,9 @@ jobs:
     # macOS runs are expensive: desktop release build + relay + sidecars.
     timeout-minutes: 150
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
+    # Excluded until the hosted macOS environment can actually execute the
+    # suite. A green skipped job is not promotion proof.
+    if: ${{ false }}
     # NON-BLOCKING in Phase 0 on purpose (desktop/e2e-real-shell/README.md):
     # brand-new harness, cold macOS builds, real devices/keychains/audio. A red
     # run must be read in the job log + flow-results ledger, not silently
@@ -1409,7 +1474,9 @@ jobs:
     # cold across four steps; budget generously.
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
+    if: >
+      needs.changes.outputs.secondary-enabled == 'true' &&
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-windows == 'true')
     permissions:
       contents: read
     env:
@@ -1486,3 +1553,101 @@ jobs:
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --target $env:TARGET
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+  promotion-gate:
+    name: Promotion Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always() && github.event_name == 'pull_request' && github.base_ref == 'main'
+    needs:
+      - changes
+      - rust-lint
+      - unit-tests
+      - desktop-core
+      - desktop
+      - relay-suites
+      - desktop-e2e-integration
+      - windows-rust
+      - security
+      - server-cross-compile
+      - web
+      - mobile
+      - blocks-live-gate
+    permissions:
+      contents: read
+    env:
+      HEAD_REF: ${{ github.head_ref }}
+      CHANGES_RESULT: ${{ needs.changes.result }}
+      RUST_LINT_RESULT: ${{ needs.rust-lint.result }}
+      UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+      DESKTOP_CORE_RESULT: ${{ needs.desktop-core.result }}
+      DESKTOP_RESULT: ${{ needs.desktop.result }}
+      RELAY_SUITES_RESULT: ${{ needs.relay-suites.result }}
+      DESKTOP_INTEGRATION_RESULT: ${{ needs.desktop-e2e-integration.result }}
+      WINDOWS_RESULT: ${{ needs.windows-rust.result }}
+      SECURITY_RESULT: ${{ needs.security.result }}
+      CROSS_COMPILE_RESULT: ${{ needs.server-cross-compile.result }}
+      WEB_RESULT: ${{ needs.web.result }}
+      MOBILE_RESULT: ${{ needs.mobile.result }}
+      BLOCKS_RESULT: ${{ needs.blocks-live-gate.result }}
+      RAW_WEB: ${{ needs.changes.outputs.raw-web }}
+      RAW_MOBILE: ${{ needs.changes.outputs.raw-mobile }}
+      RAW_BLOCKS: ${{ needs.changes.outputs.raw-blocks }}
+      RAW_DESKTOP_INTEGRATION: ${{ needs.changes.outputs.raw-desktop-integration }}
+      RAW_WINDOWS: ${{ needs.changes.outputs.raw-windows }}
+      RAW_SECURITY: ${{ needs.changes.outputs.raw-security }}
+      RAW_CROSS_COMPILE: ${{ needs.changes.outputs.raw-cross-compile }}
+    steps:
+      - name: Require complete develop promotion proof
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          require_success() {
+            local name=$1 result=$2
+            if [ "$result" != "success" ]; then
+              fail "$name finished with '$result'; expected success"
+            fi
+          }
+
+          require_optional() {
+            local name=$1 relevant=$2 result=$3
+            case "$relevant" in
+              true|false) ;;
+              *) fail "$name relevance was '$relevant'; expected true or false" ;;
+            esac
+            if [ "$relevant" = "true" ]; then
+              require_success "$name" "$result"
+              return
+            fi
+            case "$result" in
+              success|skipped) ;;
+              *) fail "$name was not relevant but finished with '$result'" ;;
+            esac
+          }
+
+          if [ "$HEAD_REF" != "develop" ]; then
+            fail "Production promotions must come from develop; got '$HEAD_REF'"
+          fi
+
+          require_success "Detect Changed Paths" "$CHANGES_RESULT"
+          require_success "Rust Lint" "$RUST_LINT_RESULT"
+          require_success "Unit Tests" "$UNIT_TESTS_RESULT"
+          require_success "Desktop Core" "$DESKTOP_CORE_RESULT"
+          require_success "Desktop" "$DESKTOP_RESULT"
+          require_success "Relay Suites" "$RELAY_SUITES_RESULT"
+
+          require_optional "Desktop Integration" "$RAW_DESKTOP_INTEGRATION" "$DESKTOP_INTEGRATION_RESULT"
+          require_optional "Windows" "$RAW_WINDOWS" "$WINDOWS_RESULT"
+          require_optional "Security" "$RAW_SECURITY" "$SECURITY_RESULT"
+          require_optional "Server Cross-Compile" "$RAW_CROSS_COMPILE" "$CROSS_COMPILE_RESULT"
+          require_optional "Web" "$RAW_WEB" "$WEB_RESULT"
+          require_optional "Mobile" "$RAW_MOBILE" "$MOBILE_RESULT"
+          require_optional "Blocks" "$RAW_BLOCKS" "$BLOCKS_RESULT"
+
+          echo "Promotion from develop has complete required and path-selected proof."

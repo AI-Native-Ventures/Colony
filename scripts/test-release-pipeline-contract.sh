@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ci_workflow=${CI_WORKFLOW:-"$repo_root/.github/workflows/ci.yml"}
+auto_tag_workflow=${AUTO_TAG_WORKFLOW:-"$repo_root/.github/workflows/auto-tag-on-release-pr-merge.yml"}
+fly_workflow=${FLY_WORKFLOW:-"$repo_root/.github/workflows/fly-deploy-relay.yml"}
+
+CI_WORKFLOW="$ci_workflow" \
+AUTO_TAG_WORKFLOW="$auto_tag_workflow" \
+FLY_WORKFLOW="$fly_workflow" \
+node <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const ci = fs.readFileSync(process.env.CI_WORKFLOW, "utf8");
+const ciWithSentinel = `${ci}\n  __contract_end__:\n`;
+const autoTag = fs.readFileSync(process.env.AUTO_TAG_WORKFLOW, "utf8");
+const fly = fs.readFileSync(process.env.FLY_WORKFLOW, "utf8");
+
+function requireContract(condition, message) {
+  if (!condition) {
+    console.error(`release pipeline contract failed: ${message}`);
+    process.exit(1);
+  }
+}
+
+function job(name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = ciWithSentinel.match(
+    new RegExp(`^  ${escaped}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:\\n)`, "m"),
+  );
+  requireContract(match, `CI job '${name}' is missing`);
+  return match[0];
+}
+
+function filter(name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = ci.match(
+    new RegExp(`^            ${escaped}:\\n([\\s\\S]*?)(?=^            [a-zA-Z0-9_-]+:\\n|^      - name:|\\Z)`, "m"),
+  );
+  requireContract(match, `path filter '${name}' is missing`);
+  return match[0];
+}
+
+requireContract(/^  merge_group:\s*$/m.test(ci), "CI must keep the merge_group trigger");
+
+const changes = job("changes");
+for (const output of [
+  "raw-rust",
+  "raw-desktop",
+  "raw-desktop-rust",
+  "raw-web",
+  "raw-mobile",
+  "raw-blocks",
+  "raw-desktop-integration",
+  "raw-windows",
+  "raw-security",
+  "raw-cross-compile",
+  "core-enabled",
+  "secondary-enabled",
+  "release-push",
+]) {
+  requireContract(
+    new RegExp(`^      ${output}:`, "m").test(changes),
+    `Detect Changed Paths must expose '${output}'`,
+  );
+}
+for (const output of ["rust", "desktop", "desktop-rust"]) {
+  const line = changes.match(new RegExp(`^      ${output}:.*$`, "m"))?.[0] ?? "";
+  requireContract(line.includes("github.event_name == 'merge_group'"), `${output} must be forced for merge_group`);
+  requireContract(line.includes("github.base_ref == 'main'"), `${output} must be forced for main promotion PRs`);
+  requireContract(line.includes("refs/heads/release"), `${output} must preserve full release push coverage`);
+}
+
+for (const bucket of [
+  "rust",
+  "desktop",
+  "desktop-rust",
+  "web",
+  "mobile",
+  "blocks",
+  "desktop-integration",
+  "windows",
+  "security",
+  "cross-compile",
+]) {
+  requireContract(
+    filter(bucket).includes("'.github/workflows/ci.yml'"),
+    `.github/workflows/ci.yml must exercise the '${bucket}' lane`,
+  );
+}
+
+const coreJobs = [
+  "rust-lint",
+  "unit-tests",
+  "desktop-core",
+  "desktop-smoke-e2e",
+  "desktop",
+  "backend-integration",
+  "relay-e2e",
+  "agent-ask-e2e",
+  "relay-suites",
+];
+for (const name of coreJobs) {
+  const block = job(name);
+  requireContract(block.includes("needs.changes.outputs.core-enabled == 'true'"), `${name} must use core event routing`);
+  requireContract(!block.includes("github.event_name == 'push' ||"), `${name} must not rerun on every push`);
+}
+
+const secondaryJobs = [
+  "desktop-e2e-integration-shard",
+  "desktop-e2e-integration",
+  "blocks-live-gate",
+  "web",
+  "mobile",
+  "security",
+  "server-cross-compile",
+  "windows-rust",
+];
+for (const name of secondaryJobs) {
+  const block = job(name);
+  requireContract(block.includes("needs.changes.outputs.secondary-enabled == 'true'"), `${name} must exclude merge_group and main push routing`);
+  requireContract(block.includes("needs.changes.outputs.raw-"), `${name} must use raw path relevance`);
+  requireContract(!block.includes("github.event_name == 'push' ||"), `${name} must not run unconditionally on push`);
+}
+
+const relayArtifacts = job("desktop-e2e-relay");
+requireContract(relayArtifacts.includes("needs.changes.outputs.core-enabled == 'true'"), "relay artifact prerequisite must support required core jobs");
+requireContract(relayArtifacts.includes("needs.changes.outputs.secondary-enabled == 'true'"), "relay artifact prerequisite must support path-selected Desktop Integration");
+requireContract(relayArtifacts.includes("needs.changes.outputs.raw-"), "relay artifact prerequisite must use raw relevance for secondary work");
+
+requireContract(/\n\s+if: \$\{\{ false \}\}/.test(job("real-shell-e2e")), "Real-shell must stay explicitly excluded until it can execute");
+
+const promotionNameCount = (ci.match(/^\s+name: Promotion Gate\s*$/gm) ?? []).length;
+requireContract(promotionNameCount === 1, `expected exactly one Promotion Gate job name, found ${promotionNameCount}`);
+const workflowDir = path.dirname(process.env.CI_WORKFLOW);
+const repositoryPromotionNameCount = fs
+  .readdirSync(workflowDir)
+  .filter((name) => /\.ya?ml$/.test(name))
+  .map((name) => fs.readFileSync(path.join(workflowDir, name), "utf8"))
+  .reduce((count, workflow) => count + (workflow.match(/^\s+name: Promotion Gate\s*$/gm) ?? []).length, 0);
+requireContract(repositoryPromotionNameCount === 1, `Promotion Gate name must be unique across workflows; found ${repositoryPromotionNameCount}`);
+const promotion = job("promotion-gate");
+requireContract(promotion.includes("if: always()"), "Promotion Gate must run with always() so dependency failures are reported");
+requireContract(promotion.includes("github.base_ref == 'main'"), "Promotion Gate must be limited to main pull requests");
+requireContract(promotion.includes('HEAD_REF: ${{ github.head_ref }}'), "Promotion Gate must inspect the head branch");
+requireContract(promotion.includes('"$HEAD_REF" != "develop"'), "Promotion Gate must reject heads other than develop");
+requireContract(promotion.includes('true|false)'), "Promotion Gate must reject missing or malformed path relevance");
+
+for (const dependency of [
+  "changes",
+  "rust-lint",
+  "unit-tests",
+  "desktop-core",
+  "desktop",
+  "relay-suites",
+  "desktop-e2e-integration",
+  "windows-rust",
+  "security",
+  "server-cross-compile",
+  "web",
+  "mobile",
+  "blocks-live-gate",
+]) {
+  requireContract(new RegExp(`(^|[\\s,\\[])${dependency}([\\s,\\]]|$)`, "m").test(promotion), `Promotion Gate must depend on '${dependency}'`);
+}
+for (const result of [
+  "needs.changes.result",
+  "needs.rust-lint.result",
+  "needs.unit-tests.result",
+  "needs.desktop-core.result",
+  "needs.desktop.result",
+  "needs.relay-suites.result",
+  "needs.desktop-e2e-integration.result",
+  "needs.windows-rust.result",
+  "needs.security.result",
+  "needs.server-cross-compile.result",
+  "needs.web.result",
+  "needs.mobile.result",
+  "needs.blocks-live-gate.result",
+]) {
+  requireContract(promotion.includes(result), `Promotion Gate must evaluate '${result}'`);
+}
+
+requireContract(autoTag.includes("checks: read"), "auto-tag must have check-run read permission");
+requireContract(autoTag.includes("Verify Promotion Gate"), "auto-tag must verify the promotion gate before tagging");
+requireContract(autoTag.includes("github.event.pull_request.head.sha"), "auto-tag must verify the reviewed promotion head SHA");
+requireContract(autoTag.includes('select(.name == "Promotion Gate")'), "auto-tag must filter the exact Promotion Gate name");
+requireContract(autoTag.includes('${#gate_conclusions[@]}" -ne 1'), "auto-tag must require exactly one Promotion Gate result");
+requireContract(autoTag.includes('gate_conclusions[0]}" != "success"'), "auto-tag must require Promotion Gate success");
+requireContract(autoTag.indexOf("Verify Promotion Gate") < autoTag.indexOf("Resolve release lane and version"), "auto-tag must verify before resolving or creating release tags");
+
+requireContract(fly.includes("Verify live relay readiness and version"), "Fly deploy must expose a distinct live-proof step");
+requireContract(fly.includes("scripts/verify-relay-live.sh"), "Fly deploy must invoke the relay live canary");
+requireContract(fly.indexOf("flyctl deploy") < fly.indexOf("scripts/verify-relay-live.sh"), "the live canary must run after flyctl deploy");
+NODE
+
+"$repo_root/scripts/test-verify-relay-live.sh"
+
+if [[ ${RELEASE_PIPELINE_MUTATION_MODE:-0} == 1 ]]; then
+  exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+expect_mutation_failure() {
+  local label=$1 ci_mutation=$2 auto_tag_mutation=$3 fly_mutation=$4
+  cp "$ci_workflow" "$tmp/ci.yml"
+  cp "$auto_tag_workflow" "$tmp/auto-tag.yml"
+  cp "$fly_workflow" "$tmp/fly.yml"
+  eval "$ci_mutation"
+  eval "$auto_tag_mutation"
+  eval "$fly_mutation"
+  if RELEASE_PIPELINE_MUTATION_MODE=1 \
+    CI_WORKFLOW="$tmp/ci.yml" \
+    AUTO_TAG_WORKFLOW="$tmp/auto-tag.yml" \
+    FLY_WORKFLOW="$tmp/fly.yml" \
+    "$repo_root/scripts/test-release-pipeline-contract.sh" >/dev/null 2>&1; then
+    echo "release pipeline mutation was not detected: $label" >&2
+    exit 1
+  fi
+}
+
+noop=':'
+expect_mutation_failure \
+  "merge_group trigger removed" \
+  "sed -i.bak '/^  merge_group:$/d' '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "core push rerun restored" \
+  "perl -0pi -e \"s/needs\\.changes\\.outputs\\.core-enabled == 'true'/github.event_name == 'push'/\" '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "secondary merge_group routing restored" \
+  "perl -0pi -e \"s/needs\\.changes\\.outputs\\.secondary-enabled == 'true'/github.event_name == 'merge_group'/\" '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "promotion head assertion removed" \
+  "perl -0pi -e 's/^.*\"\\\$HEAD_REF\" != \"develop\".*\\n//m' '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "required promotion dependency removed" \
+  "perl -0pi -e 's/\\n      - rust-lint\\n/\\n/' '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "tag promotion verification removed" \
+  "$noop" "sed -i.bak '/Verify Promotion Gate/d' '$tmp/auto-tag.yml'" "$noop"
+expect_mutation_failure \
+  "live canary invocation removed" \
+  "$noop" "$noop" "sed -i.bak '/scripts\/verify-relay-live.sh/d' '$tmp/fly.yml'"
+
+echo "release pipeline contract passed"
