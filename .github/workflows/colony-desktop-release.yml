@@ -237,6 +237,31 @@ jobs:
           fi
           echo "Updater plugin present in the shipped binary"
 
+      - name: Check the production relay is actually in the binary
+        # relay_ws_url() falls back to ws://localhost:3000 when build.rs saw no
+        # BUZZ_RELAY_URL, so a release built without it produces a perfectly
+        # signed, perfectly versioned app whose first-run community creation
+        # posts to http://localhost:3000/api/communities and fails with "relay
+        # unreachable" on a machine that never ran a relay. 0.10.11 shipped
+        # that way and beta testers hit it. Nothing else in the release
+        # artifacts reveals the difference, so pin it here.
+        run: |
+          set -euo pipefail
+          BIN=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop
+          # `grep -c`, not `grep -q` — see the updater gate above for why.
+          FOUND=$(strings -a "$BIN" | grep -c "$COLONY_PRODUCTION_RELAY_WS_URL" || true)
+          LOOPBACK=$(strings -a "$BIN" | grep -c "ws://localhost:3000" || true)
+          echo "production relay occurrences: ${FOUND:-0}"
+          echo "loopback default occurrences: ${LOOPBACK:-0}"
+          if [ "${FOUND:-0}" -eq 0 ]; then
+            echo "::error::This build has no compiled-in relay URL, so the app \
+          defaults to ws://localhost:3000 and first-run community creation \
+          fails for every user. build.rs needs BUZZ_RELAY_URL in the build \
+          step's environment."
+            exit 1
+          fi
+          echo "Production relay compiled into the shipped binary"
+
       - name: Locate the updater archive
         # Tauri writes Colony.app.tar.gz next to the .app and signs it with the
         # updater key. An unsigned or missing archive means the build silently
@@ -491,6 +516,25 @@ jobs:
             exit 1
           }
           Write-Output "App version matches: $env:VERSION"
+
+      - name: Check the production relay is actually in the binary
+        # Same gate as the macOS job. Without a compiled-in BUZZ_RELAY_URL the
+        # app falls back to ws://localhost:3000 and every first-run community
+        # creation fails, while the installer, version and signature all look
+        # correct. See the macOS step for the failure this caught.
+        shell: pwsh
+        run: |
+          $bin = "desktop/src-tauri/target/$env:TARGET/release/buzz-desktop.exe"
+          if (-not (Test-Path $bin)) { Write-Error "Missing $bin"; exit 1 }
+          # ISO-8859-1 maps every byte to one char, so the compiled-in ASCII
+          # string survives the decode and .Contains is a single native scan.
+          $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+          $text = $latin1.GetString([System.IO.File]::ReadAllBytes($bin))
+          if (-not $text.Contains($env:COLONY_PRODUCTION_RELAY_WS_URL)) {
+            Write-Error "This build has no compiled-in relay URL, so the app defaults to ws://localhost:3000 and first-run community creation fails for every user. build.rs needs BUZZ_RELAY_URL in the build step's environment."
+            exit 1
+          }
+          Write-Output "Production relay compiled into the shipped binary"
 
       - name: Locate Windows build artifacts
         run: |
