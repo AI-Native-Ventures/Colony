@@ -1,4 +1,4 @@
-import { LayoutGrid, LogIn } from "lucide-react";
+import { LogIn, SquareTerminal } from "lucide-react";
 import type * as React from "react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
@@ -14,14 +14,13 @@ import {
   scaleProfileAvatarStatusGeometry,
 } from "@/features/profile/ui/ProfileAvatarWithStatus";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
-import {
-  setChannelSurfaceMode,
-  useChannelSurfaceMode,
-} from "@/features/workspace/lib/channelSurfaceMode";
 import { Button } from "@/shared/ui/button";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
-import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import {
+  toggleTerminalPanel,
+  useTerminalPanel,
+} from "@/features/terminal/terminalPanelStore";
 
 const DM_HEADER_AVATAR_SIZE = 32;
 const DM_HEADER_AVATAR_STATUS_GEOMETRY = scaleProfileAvatarStatusGeometry(
@@ -31,7 +30,6 @@ const DM_HEADER_AVATAR_STATUS_GEOMETRY = scaleProfileAvatarStatusGeometry(
 
 type ChannelScreenHeaderProps = {
   activeChannel: Channel | null;
-  channelId?: string;
   activeChannelEphemeralDisplay: EphemeralChannelDisplay | null;
   activeChannelTitle: string;
   actionsVariant?: "inline" | "compact";
@@ -52,7 +50,6 @@ type ChannelScreenHeaderProps = {
 
 export function ChannelScreenHeader({
   activeChannel,
-  channelId,
   activeChannelEphemeralDisplay,
   activeChannelTitle,
   actionsVariant = "inline",
@@ -70,7 +67,6 @@ export function ChannelScreenHeader({
   onManageChannel,
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
-  const surfaceMode = useChannelSurfaceMode(channelId);
   const isGroupDm =
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
@@ -82,55 +78,50 @@ export function ChannelScreenHeader({
     !activeChannel.archivedAt &&
     onJoinChannel;
 
-  const actions = (
+  const terminalPanel = useTerminalPanel();
+  const terminalButton = activeChannel ? (
+    <Button
+      aria-label={
+        terminalPanel.mode === "closed" ? "Open Buzz Term" : "Hide Buzz Term"
+      }
+      onClick={toggleTerminalPanel}
+      size="icon"
+      title="Buzz Term (⌘J)"
+      type="button"
+      variant={terminalPanel.mode === "closed" ? "outline" : "secondary"}
+    >
+      <SquareTerminal />
+    </Button>
+  ) : null;
+  const channelActions = activeChannel ? (
+    showJoinButton ? (
+      <Button
+        disabled={isJoining}
+        onClick={() => void onJoinChannel()}
+        size="sm"
+        variant="default"
+      >
+        <LogIn className="mr-1.5 h-4 w-4" />
+        {isJoining ? "Joining…" : "Join"}
+      </Button>
+    ) : (
+      <ChannelMembersBar
+        channel={activeChannel}
+        currentPubkey={currentPubkey}
+        isAddBotOpen={isAddBotOpen}
+        onAddBotOpenChange={onAddBotOpenChange}
+        onManageChannel={onManageChannel}
+        onToggleMembers={onToggleMembers}
+        variant={actionsVariant}
+      />
+    )
+  ) : null;
+  const actions = activeChannel ? (
     <div className="flex items-center gap-1">
-      {channelId ? (
-        <button
-          aria-label={
-            surfaceMode === "workspace" ? "Close workspace" : "Open workspace"
-          }
-          aria-pressed={surfaceMode === "workspace"}
-          className={cn(
-            "rounded-md p-1.5 text-muted-foreground hover:bg-muted",
-            surfaceMode === "workspace" && "bg-muted text-foreground",
-          )}
-          data-testid="channel-workspace-toggle"
-          onClick={() =>
-            setChannelSurfaceMode(
-              channelId,
-              surfaceMode === "workspace" ? "timeline" : "workspace",
-            )
-          }
-          type="button"
-        >
-          <LayoutGrid aria-hidden className="size-4" />
-        </button>
-      ) : null}
-      {activeChannel ? (
-        showJoinButton ? (
-          <Button
-            disabled={isJoining}
-            onClick={() => void onJoinChannel()}
-            size="sm"
-            variant="default"
-          >
-            <LogIn className="mr-1.5 h-4 w-4" />
-            {isJoining ? "Joining…" : "Join"}
-          </Button>
-        ) : (
-          <ChannelMembersBar
-            channel={activeChannel}
-            currentPubkey={currentPubkey}
-            isAddBotOpen={isAddBotOpen}
-            onAddBotOpenChange={onAddBotOpenChange}
-            onManageChannel={onManageChannel}
-            onToggleMembers={onToggleMembers}
-            variant={actionsVariant}
-          />
-        )
-      ) : null}
+      {terminalButton}
+      {channelActions}
     </div>
-  );
+  ) : null;
 
   if (!showHeaderContent) {
     return null;
