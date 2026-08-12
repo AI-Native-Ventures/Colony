@@ -521,7 +521,7 @@ pub const KIND_MANAGED_AGENT: u32 = 30177;
 /// the event carries exactly `["shared", "true"]`. Content carries only
 /// sanitized fields: no env vars, no `respond_to` allowlist pubkeys, no
 /// source or local ids, no filesystem paths, no secrets.
-pub const KIND_TEAM_CATALOG: u32 = 30184;
+pub const KIND_TEAM_CATALOG: u32 = 30193;
 
 /// NIP-PMA: owner-encrypted private managed-agent aggregate.
 ///
@@ -530,7 +530,7 @@ pub const KIND_TEAM_CATALOG: u32 = 30184;
 /// active/deleted state required for relay enforcement. Content is NIP-44 v2
 /// encrypted from the owner's key to itself and contains the runnable
 /// identity/configuration plus exact public projection bindings.
-pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30185;
+pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30194;
 
 // NIP-56 reporting
 /// NIP-56: Report an event, pubkey, or blob to relay moderators (kind:1984).
@@ -1204,8 +1204,8 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PARTY)); // 30182 ∈ 30
 const _: () = assert!(is_parameterized_replaceable(KIND_PARTY_RELATIONSHIP)); // 30183 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
-const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30184 ∈ 30000–39999
-const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30185 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30193 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30194 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_PROJECT)); // 30621 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
