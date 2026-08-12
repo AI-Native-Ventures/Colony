@@ -14,7 +14,7 @@
 
 - `crates/buzz-core/src/kind.rs`: reserve `KIND_JOB_CHECKPOINT`.
 - `crates/buzz-core/src/job.rs`: checkpoint/artifact types, strict parsers, Task linkage, extended head.
-- `migrations/0064_task_run_durability.sql`: additive Task-run persistence.
+- `migrations/0058_task_run_durability.sql`: additive Task-run persistence.
 - `crates/buzz-db/src/migration.rs`: register and structurally test migration 0064.
 - `crates/buzz-db/src/jobs.rs` and `src/lib.rs`: row fields and fenced checkpoint/delivery updates.
 - `crates/buzz-relay/src/job_broker.rs`: Task existence, checkpoint arbitration, delivery gate, head projection.
@@ -63,14 +63,14 @@ Run both commands from Step 2. Then `git add crates/buzz-core/src/kind.rs crates
 
 **Files:**
 
-- Create: `migrations/0064_task_run_durability.sql`
+- Create: `migrations/0058_task_run_durability.sql`
 - Modify: `crates/buzz-db/src/migration.rs`
 - Modify: `crates/buzz-db/src/jobs.rs`
 - Modify: `crates/buzz-db/src/lib.rs`
 
 - [ ] **Step 1: Write failing migration/database tests**
 
-Require the migration to add `task_id`, `checkpoint_seq`, `checkpoint`, `checkpoint_event`, `checkpoint_at`, `artifacts`, and `outcome_event`; 32-byte checks for event receipts; a non-negative sequence; and a community/Task index. Add database proof that attempt 1 sequence 1 succeeds once, duplicate sequence loses, stale attempt loses, and Task delivery cannot store an empty artifact list.
+Require migration 0058 to add `task_id`, `checkpoint_seq`, `checkpoint`, `checkpoint_event`, `checkpoint_at`, `artifacts`, and `outcome_event`; 32-byte checks for event receipts; a non-negative sequence; and a community/Task index. Add database proof that attempt 1 sequence 1 succeeds once, duplicate sequence loses, stale attempt loses, and Task delivery cannot store an empty artifact list.
 
 - [ ] **Step 2: Run red tests**
 

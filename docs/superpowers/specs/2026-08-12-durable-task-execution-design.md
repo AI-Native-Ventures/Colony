@@ -72,7 +72,7 @@ ordering is not a mutex, so it cannot provide truthful ownership.
 
 ## Data model
 
-Migration `0064_task_run_durability.sql` adds nullable fields to `jobs` so
+Migration `0058_task_run_durability.sql` adds nullable fields to `jobs` so
 legacy filings remain valid:
 
 | Field | Meaning |
