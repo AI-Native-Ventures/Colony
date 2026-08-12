@@ -406,6 +406,24 @@ pub enum IngestError {
     Internal(String),
 }
 
+/// Convert checkpoint broker truth into the transport result contract.
+fn require_checkpoint_applied(
+    outcome: Result<crate::job_broker::JobOutcome, String>,
+) -> Result<(), IngestError> {
+    match outcome {
+        Ok(crate::job_broker::JobOutcome::Checkpointed) => Ok(()),
+        Ok(crate::job_broker::JobOutcome::CheckpointIgnored) => Err(IngestError::Rejected(
+            "invalid: checkpoint was not applied to the current lease".to_string(),
+        )),
+        Ok(other) => Err(IngestError::Internal(format!(
+            "error: checkpoint broker returned unexpected outcome {other:?}"
+        ))),
+        Err(error) => Err(IngestError::Internal(format!(
+            "error: checkpoint was not durably recorded: {error}"
+        ))),
+    }
+}
+
 fn map_relay_admin_error(error: super::relay_admin::RelayAdminError) -> IngestError {
     use super::relay_admin::RelayAdminError;
     match error {
@@ -3293,6 +3311,12 @@ async fn ingest_event_inner(
         }
     }
 
+    if kind_u32 == KIND_JOB_CHECKPOINT {
+        buzz_core::job::parse_job_checkpoint(&event).map_err(|error| {
+            IngestError::Rejected(format!("invalid: malformed job checkpoint: {error}"))
+        })?;
+    }
+
     let (stored_event, replace_outcome) = if buzz_core::kind::is_replaceable(kind_u32) {
         // NIP-16 replaceable event — atomic replace with stale-write protection.
         // channel_id is None for global kinds (0, 1, 3) due to step 5b above.
@@ -3365,6 +3389,16 @@ async fn ingest_event_inner(
     let was_inserted = replace_outcome.was_inserted();
 
     if !was_inserted {
+        if kind_u32 == KIND_JOB_CHECKPOINT
+            && matches!(&replace_outcome, buzz_db::ReplaceOutcome::AlreadyStored)
+        {
+            let outcome = crate::job_broker::handle_job_event(tenant, state, &event).await;
+            require_checkpoint_applied(outcome)?;
+            return Ok(IngestResult::already_stored(
+                event_id_hex,
+                "identical checkpoint already durably applied",
+            ));
+        }
         // The write stored nothing. Which of the two reasons it was decides
         // whether the client's event is nonetheless present: an identical
         // repeat landed earlier, a dominated write never landed at all. These
@@ -3389,12 +3423,9 @@ async fn ingest_event_inner(
         // The legacy job side-effect range ends at outcome kind 43013. Route
         // the additive checkpoint kind explicitly so rolling upgrades do not
         // widen an unrelated classifier while this protocol is introduced.
-        match crate::job_broker::handle_job_event(tenant, state, &event).await {
-            Ok(outcome) => info!(?outcome, kind = kind_u32, "job checkpoint handled"),
-            Err(error) => {
-                error!(event_id = %event_id_hex, kind = kind_u32, %error, "job checkpoint refused")
-            }
-        }
+        let outcome = crate::job_broker::handle_job_event(tenant, state, &event).await;
+        require_checkpoint_applied(outcome)?;
+        info!(kind = kind_u32, "job checkpoint handled");
     } else if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
         if let Err(e) =
             crate::handlers::side_effects::handle_side_effects(tenant, kind_u32, &event, state)
@@ -3563,6 +3594,21 @@ mod tests {
         assert!(
             unmapped.is_empty(),
             "these client-written kinds have no ingest scope and are unreachable over the wire: {unmapped:?}"
+        );
+    }
+
+    #[test]
+    fn checkpoint_broker_failures_are_never_acknowledged_as_durable() {
+        assert!(matches!(
+            require_checkpoint_applied(Err("database unavailable".to_string())),
+            Err(IngestError::Internal(message)) if message.contains("database unavailable")
+        ));
+        assert!(matches!(
+            require_checkpoint_applied(Ok(crate::job_broker::JobOutcome::CheckpointIgnored)),
+            Err(IngestError::Rejected(message)) if message.contains("not applied")
+        ));
+        assert!(
+            require_checkpoint_applied(Ok(crate::job_broker::JobOutcome::Checkpointed)).is_ok()
         );
     }
 

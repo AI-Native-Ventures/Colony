@@ -369,7 +369,22 @@ async fn handle_checkpoint(
             publish_job_head(tenant, state, &job_id).await;
             Ok(JobOutcome::Checkpointed)
         }
-        None => Ok(JobOutcome::CheckpointIgnored),
+        None => {
+            let already_recorded = state
+                .db
+                .find_job(tenant.community(), &job_id)
+                .await
+                .map_err(|error| format!("database error reading the checkpoint: {error}"))?
+                .is_some_and(|job| {
+                    job.checkpoint_event.as_deref() == Some(event.id.as_bytes().as_slice())
+                });
+            if already_recorded {
+                publish_job_head(tenant, state, &job_id).await;
+                Ok(JobOutcome::Checkpointed)
+            } else {
+                Ok(JobOutcome::CheckpointIgnored)
+            }
+        }
     }
 }
 
