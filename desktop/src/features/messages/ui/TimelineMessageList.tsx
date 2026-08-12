@@ -62,6 +62,10 @@ type TimelineMessageListProps = {
   firstUnreadMessageId?: string | null;
   followThreadById?: (rootId: string) => void;
   highlightedMessageId?: string | null;
+  /** Event id of the thread whose panel is open; its root message row is
+   *  highlighted with the accent tint so the open thread is visible from the
+   *  channel side. */
+  openThreadHeadId?: string | null;
   isFollowingThreadById?: (rootId: string) => boolean;
   isMessageUnreadById?: (messageId: string) => boolean;
   entranceMessageId?: string | null;
@@ -136,6 +140,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   firstUnreadMessageId = null,
   followThreadById,
   highlightedMessageId = null,
+  openThreadHeadId = null,
   huddleMemberPubkeys,
   huddleMemberPubkeysPending = false,
   isFollowingThreadById,
@@ -274,6 +279,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               followThreadById={followThreadById}
               footer={messageFooters?.[item.entry.message.id] ?? null}
               highlightedMessageId={highlightedMessageId}
+              openThreadHeadId={openThreadHeadId}
               huddleMemberPubkeys={huddleMemberPubkeys}
               huddleMemberPubkeysPending={huddleMemberPubkeysPending}
               hideAgentAccessBadges={hideAgentAccessBadges}
@@ -314,6 +320,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       currentPubkey,
       followThreadById,
       highlightedMessageId,
+      openThreadHeadId,
       huddleMemberPubkeys,
       huddleMemberPubkeysPending,
       hideAgentAccessBadges,
@@ -742,6 +749,7 @@ type MessageRowItemProps = Pick<
   | "currentPubkey"
   | "followThreadById"
   | "highlightedMessageId"
+  | "openThreadHeadId"
   | "huddleMemberPubkeys"
   | "huddleMemberPubkeysPending"
   | "hideAgentAccessBadges"
@@ -776,6 +784,7 @@ function MessageRowItem({
   followThreadById,
   footer,
   highlightedMessageId,
+  openThreadHeadId,
   huddleMemberPubkeys,
   huddleMemberPubkeysPending,
   hideAgentAccessBadges,
@@ -800,6 +809,7 @@ function MessageRowItem({
   videoReviewContext,
 }: MessageRowItemProps) {
   const { message, summary } = entry;
+  const isOpenThreadRoot = message.id === openThreadHeadId;
   const canManage = canManageMessageForCurrentUser(
     message,
     currentPubkey,
@@ -814,6 +824,8 @@ function MessageRowItem({
       <div
         className={cn(
           "group/message relative mx-1 mb-1 flex flex-col gap-0 rounded-2xl px-0 py-1 transition-colors hover:bg-muted/50 focus-within:bg-muted/50",
+          isOpenThreadRoot &&
+            "bg-primary/[0.07] ring-1 ring-inset ring-primary/20",
           isHighlighted &&
             "-mx-4 px-4 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-6",
         )}
@@ -880,6 +892,7 @@ function MessageRowItem({
       <MessageRow
         channelId={channelId}
         highlighted={message.id === highlightedMessageId || isSearchActive}
+        isOpenThreadRoot={isOpenThreadRoot}
         huddleMemberPubkeys={huddleMemberPubkeys}
         huddleMemberPubkeysPending={huddleMemberPubkeysPending}
         hideAgentAccessBadge={hideAgentAccessBadges}
