@@ -1206,6 +1206,8 @@ declare global {
       event: string,
       payload?: unknown,
     ) => Promise<void>;
+    /** Report whether the app has finished subscribing to a native event. */
+    __BUZZ_E2E_HAS_NATIVE_EVENT_LISTENER__?: (event: string) => boolean;
     /** Subscribe to the backend-signal registry mock command handlers fire. */
     __BUZZ_E2E_LISTEN_NATIVE_EVENT__?: (
       event: string,
@@ -13577,6 +13579,8 @@ export function maybeInstallE2eTauriMocks() {
   const e2eNativeBridge = new E2eNativeBridge(handleMockCommand);
   window.__BUZZ_E2E_EMIT_NATIVE_EVENT__ = (event, payload) =>
     e2eNativeBridge.emit(event, payload);
+  window.__BUZZ_E2E_HAS_NATIVE_EVENT_LISTENER__ = (event) =>
+    (nativeEventListeners.get(event)?.size ?? 0) > 0;
   window.__BUZZ_E2E_LISTEN_NATIVE_EVENT__ = async (event, cb) => {
     let listeners = nativeEventListeners.get(event);
     if (!listeners) {
