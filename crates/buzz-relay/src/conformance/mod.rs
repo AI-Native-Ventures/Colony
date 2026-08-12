@@ -465,6 +465,52 @@ mod tests {
         }
     }
 
+    /// Discarding tracer that reports `enabled() == false`, standing in
+    /// for the production `NoopTracer`.
+    #[derive(Debug, Default)]
+    struct DisabledTracer;
+
+    impl Tracer for DisabledTracer {
+        fn record(&self, _step: TraceStep) {}
+        fn enabled(&self) -> bool {
+            false
+        }
+    }
+
+    /// `CountingTracer` must forward `enabled()` to the tracer it wraps
+    /// rather than inherit the trait's `true` default. Both directions
+    /// matter, and getting either wrong is silent:
+    ///
+    /// - over a disabled tracer, answering `true` would keep the hot-path
+    ///   read-seam `channels` lookup running in production — the overhead
+    ///   the gate exists to remove;
+    /// - over a live tracer, answering `false` would make gated emitters
+    ///   skip emits during conformance runs, so the `EmitGuard` would
+    ///   report `ImplBug` for seams that are in fact correct (or, worse,
+    ///   mask a real breach behind an expected one).
+    #[test]
+    fn counting_tracer_delegates_enabled_to_inner() {
+        let (_guard, counting) = EmitGuard::arm(
+            Arc::new(DisabledTracer),
+            dummy_state(),
+            "delegates_disabled",
+        );
+        assert!(
+            !counting.enabled(),
+            "CountingTracer must report disabled when wrapping a discarding tracer"
+        );
+
+        let (_guard, counting) = EmitGuard::arm(
+            Arc::new(VecTracer::default()),
+            dummy_state(),
+            "delegates_live",
+        );
+        assert!(
+            counting.enabled(),
+            "CountingTracer must report enabled when wrapping an observing tracer"
+        );
+    }
+
     fn dummy_state() -> AbstractState {
         AbstractState {
             resolved_community: CommunityLabel::from_uuid(Uuid::from_u128(0xA)),

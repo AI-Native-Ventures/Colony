@@ -2,16 +2,18 @@ import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 
 import {
-  blockStateEqual,
   depthGuideActionsEqual,
   numberArrayEqual,
   reactionsEqual,
   tagsEqual,
 } from "@/features/messages/lib/messageRowEquality";
+import {
+  assertCanSendMessageToChannel,
+  canSendMessageToChannel,
+} from "@/features/messages/lib/canSendToChannel";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
-import { BlockFallback } from "@/features/blocks/ui/BlockFallback";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -28,7 +30,6 @@ import {
 } from "@/features/messages/lib/threadTreeLayout";
 import {
   KIND_HUDDLE_STARTED,
-  KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_DIFF,
 } from "@/shared/constants/kinds";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
@@ -43,18 +44,22 @@ import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedB
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
+import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
+import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
+import { VideoReviewTimecodeButton } from "@/shared/ui/VideoReviewTimecodeButton";
 import { MessageActionBar } from "./MessageActionBar";
+import { editMessage } from "@/shared/api/tauri";
+import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
+import { toast } from "sonner";
 import { MessageAgentOwner } from "./MessageAgentOwner";
 import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
 import { MessageTimestamp } from "./MessageTimestamp";
+import { SentFromThreadLine } from "./SentFromThreadLine";
 import { WaveMessageAttachment } from "./WaveMessageAttachment";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
-const BlockMessage = React.lazy(
-  () => import("@/features/blocks/ui/BlockMessage"),
-);
 
 export type ThreadDepthGuideAction = {
   active?: boolean;
@@ -66,6 +71,7 @@ export type ThreadDepthGuideAction = {
 export const MessageRow = React.memo(
   function MessageRow({
     channelId = null,
+    currentPubkey,
     collapseDepthGuideActions,
     connectDescendants = false,
     depthGuideDepths,
@@ -95,15 +101,18 @@ export const MessageRow = React.memo(
     onMarkRead,
     onToggleReaction,
     onReply,
+    onSendToChannel,
     onEntranceComplete,
     playEntrance = false,
     onUnfollowThread,
     profiles,
     searchQuery,
     showDepthGuides = true,
+    videoReviewCommentRootId,
     videoReviewContext,
   }: {
     channelId?: string | null;
+    currentPubkey?: string;
     collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
     connectDescendants?: boolean;
     depthGuideDepths?: ReadonlyArray<number>;
@@ -143,17 +152,46 @@ export const MessageRow = React.memo(
       remove: boolean,
     ) => Promise<void>;
     onReply?: (message: TimelineMessage) => void;
+    onSendToChannel?: (message: TimelineMessage) => Promise<void>;
     onUnfollowThread?: (message: TimelineMessage) => void;
     onEntranceComplete?: (messageId: string) => void;
     playEntrance?: boolean;
     profiles?: UserProfileLookup;
     searchQuery?: string;
     showDepthGuides?: boolean;
+    videoReviewCommentRootId?: string;
     videoReviewContext?: VideoReviewContext;
   }) {
+    // Keep the transient send state with its timestamp rather than collapsing
+    // it into a grouped message row with no header.
+    const isDisplayedAsContinuation = isContinuation && !message.pending;
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
+    const linkPreviewsSuppressed = hasLinkPreviewSuppression(message.tags);
+    const removeLinkPreviewsForEveryone =
+      channelId && onEdit && !message.pending && !linkPreviewsSuppressed
+        ? async () => {
+            const tags = message.tags ?? [];
+            try {
+              await editMessage(
+                channelId,
+                message.id,
+                message.body,
+                tags.filter((tag) => tag[0] === "imeta"),
+                tags.filter((tag) => tag[0] === "emoji"),
+                undefined,
+                true,
+                tags.filter((tag) => tag[0] === "mention"),
+              );
+            } catch (error) {
+              toast.error(
+                `Failed to remove previews: ${error instanceof Error ? error.message : String(error)}`,
+              );
+              throw error;
+            }
+          }
+        : undefined;
     const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
       null,
     );
@@ -187,6 +225,18 @@ export const MessageRow = React.memo(
         });
       },
       [channelId, openReminder],
+    );
+    const sendToChannelAllowed = canSendMessageToChannel(
+      message,
+      currentPubkey,
+      profiles,
+    );
+    const handleSendToChannel = React.useCallback(
+      async (target: TimelineMessage) => {
+        assertCanSendMessageToChannel(target, currentPubkey, profiles);
+        await onSendToChannel?.(target);
+      },
+      [currentPubkey, onSendToChannel, profiles],
     );
     const { mentionNames, mentionPubkeysByName } = React.useMemo(
       () => resolveMentionProps(message.tags, profiles),
@@ -247,6 +297,7 @@ export const MessageRow = React.memo(
     const bodyOffsetClass = emojiOnly ? "mt-1" : "-mt-0.5";
 
     const { nonDmChannelNames: channelNames } = useChannelNavigation();
+    const openVideoReviewAt = useOpenVideoReviewAt();
 
     const indentRem = getThreadReplyIndentRem(message.depth);
     const descendantGuideOffsetRem = connectDescendants
@@ -343,34 +394,24 @@ export const MessageRow = React.memo(
               message={message}
             />
           );
-        default:
-          if (
-            message.kind === KIND_STREAM_MESSAGE &&
-            message.tags?.some((tag) => tag[0] === "block")
-          ) {
+        default: {
+          const waveMessage = parseWaveMessageContent(message.body);
+          if (waveMessage) {
             return (
-              <React.Suspense
-                fallback={<BlockFallback state="loading" text={message.body} />}
-              >
-                <BlockMessage message={message} />
-              </React.Suspense>
+              <WaveMessageAttachment
+                channelId={channelId}
+                fallbackText={waveMessage.fallbackText}
+                huddleMemberPubkeys={huddleMemberPubkeys}
+                huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+              />
             );
           }
-          {
-            const waveMessage = parseWaveMessageContent(message.body);
-            if (waveMessage) {
-              return (
-                <WaveMessageAttachment
-                  channelId={channelId}
-                  fallbackText={waveMessage.fallbackText}
-                  huddleMemberPubkeys={huddleMemberPubkeys}
-                  huddleMemberPubkeysPending={huddleMemberPubkeysPending}
-                />
-              );
-            }
-          }
 
-          return (
+          const reviewRootEventId = videoReviewCommentRootId;
+          const reviewTimecode = reviewRootEventId
+            ? parseVideoReviewTimecode(message.body)
+            : null;
+          const markdown = (
             <Markdown
               channelNames={channelNames}
               className={cn(
@@ -386,7 +427,11 @@ export const MessageRow = React.memo(
                 message,
                 isKnownAgentPubkey,
               )}
-              content={message.body}
+              content={reviewTimecode?.text ?? message.body}
+              messageId={message.id}
+              linkPreviewsSuppressed={linkPreviewsSuppressed}
+              linkPreviewTags={message.tags}
+              onRemoveLinkPreviewsForEveryone={removeLinkPreviewsForEveryone}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
               agentMentionPubkeysByName={agentMentionPubkeysByName}
@@ -397,6 +442,24 @@ export const MessageRow = React.memo(
               videoReviewContext={videoReviewContext}
             />
           );
+          if (!reviewRootEventId || !reviewTimecode || !openVideoReviewAt) {
+            return markdown;
+          }
+
+          return (
+            <div className="flex min-w-0 items-start gap-1.5">
+              <VideoReviewTimecodeButton
+                surface="message"
+                timecode={reviewTimecode.timecode}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openVideoReviewAt(reviewRootEventId, reviewTimecode.seconds);
+                }}
+              />
+              <div className="min-w-0 flex-1">{markdown}</div>
+            </div>
+          );
+        }
       }
     };
 
@@ -452,8 +515,8 @@ export const MessageRow = React.memo(
       <div
         aria-hidden="true"
         className={cn(
-          "flex w-9 shrink-0 items-start justify-end pt-0.5",
-          isThreadReplyLayout ? "min-h-9 self-start" : "self-stretch",
+          "flex w-9 shrink-0 justify-end items-start pt-0.5",
+          isThreadReplyLayout ? "self-start" : "self-stretch",
         )}
       >
         <MessageTimestamp
@@ -465,7 +528,7 @@ export const MessageRow = React.memo(
       </div>
     );
 
-    const avatarGutterNode = isContinuation ? (
+    const avatarGutterNode = isDisplayedAsContinuation ? (
       continuationTimestampGutter
     ) : message.pubkey ? (
       <UserProfilePopover
@@ -504,7 +567,9 @@ export const MessageRow = React.memo(
         className={cn(
           "absolute right-2 top-1 z-10 sm:pointer-events-none",
           actionBarPlacement === "floating"
-            ? "sm:top-0 sm:-translate-y-1/2"
+            ? isContinuation
+              ? "sm:-top-3 sm:-translate-y-1/2"
+              : "sm:top-0 sm:-translate-y-1/2"
             : "sm:top-1 sm:translate-y-0",
         )}
       >
@@ -526,6 +591,11 @@ export const MessageRow = React.memo(
           }
           onRemindLater={handleRemindLater}
           onReply={onReply}
+          onSendToChannel={
+            onSendToChannel && sendToChannelAllowed
+              ? handleSendToChannel
+              : undefined
+          }
           onUnfollowThread={onUnfollowThread}
           reactionErrorMessage={reactionErrorMessage}
           reactions={reactions}
@@ -537,7 +607,12 @@ export const MessageRow = React.memo(
       message.pending || message.edited ? (
         <>
           {message.pending ? (
-            <p className="font-medium text-primary/80">Sending</p>
+            <p
+              className="font-normal text-muted-foreground/70"
+              data-testid="message-send-status"
+            >
+              Sending…
+            </p>
           ) : null}
           {message.edited ? (
             <Tooltip>
@@ -558,13 +633,13 @@ export const MessageRow = React.memo(
     );
 
     const continuationMetadataNode =
-      isContinuation && statusMetadataNode ? (
+      isDisplayedAsContinuation && statusMetadataNode ? (
         <div className="mt-0.5 flex items-baseline gap-2 text-xs">
           {statusMetadataNode}
         </div>
       ) : null;
 
-    const headerNode = isContinuation ? null : (
+    const headerNode = isDisplayedAsContinuation ? null : (
       <MessageHeaderRow>
         {message.pubkey ? (
           <UserProfilePopover
@@ -592,10 +667,13 @@ export const MessageRow = React.memo(
         ) : null}
       </MessageHeaderRow>
     );
-    const bodyContainerClass = isContinuation ? "mt-0" : bodyOffsetClass;
+    const bodyContainerClass = isDisplayedAsContinuation
+      ? "mt-0"
+      : bodyOffsetClass;
 
     const messageBodyNode = (
       <>
+        <SentFromThreadLine channelId={channelId} tags={message.tags} />
         {renderBody()}
         {continuationMetadataNode}
         <MessageReactions
@@ -810,7 +888,7 @@ export const MessageRow = React.memo(
                 ? "mx-1 px-2"
                 : "px-2",
             "flex gap-2.5",
-            isContinuation ? "items-center" : "items-start",
+            isDisplayedAsContinuation ? "items-center" : "items-start",
             hasActiveReminder ? "bg-blue-500/10" : "",
             highlighted
               ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
@@ -865,9 +943,9 @@ export const MessageRow = React.memo(
     // thread (see messageRowEquality.ts).
     reactionsEqual(prev.message.reactions, next.message.reactions) &&
     tagsEqual(prev.message.tags, next.message.tags) &&
-    blockStateEqual(prev.message.blockState, next.message.blockState) &&
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
+    prev.currentPubkey === next.currentPubkey &&
     depthGuideActionsEqual(
       prev.collapseDepthGuideActions,
       next.collapseDepthGuideActions,
@@ -898,8 +976,10 @@ export const MessageRow = React.memo(
       next.onCollapseDescendantsHoverChange &&
     prev.onEntranceComplete === next.onEntranceComplete &&
     prev.playEntrance === next.playEntrance &&
+    prev.onSendToChannel === next.onSendToChannel &&
     prev.profiles === next.profiles &&
     prev.searchQuery === next.searchQuery &&
+    prev.videoReviewCommentRootId === next.videoReviewCommentRootId &&
     prev.videoReviewContext === next.videoReviewContext,
 );
 

@@ -7,6 +7,10 @@ import { putAgentSessionConfig } from "@/shared/api/tauri";
 import { putManagedAgentRuntimeLifecycle } from "@/shared/api/tauriManagedAgents";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { decryptObserverEvent } from "@/shared/api/tauriObserver";
+import {
+  parseAgentManagementRequest,
+  type AgentManagementRequest,
+} from "./agentManagement";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useQueryClient } from "@tanstack/react-query";
 import { agentConfigSurfaceQueryKey } from "@/features/agents/hooks";
@@ -97,6 +101,10 @@ const controlResultListeners = new Map<
   Set<(frame: ControlResultFrame) => void>
 >();
 
+const agentManagementListeners = new Set<
+  (agentPubkey: string, request: AgentManagementRequest) => void
+>();
+
 // Normalized pubkeys of agents we are actively managing. Only events whose
 // "agent" tag matches an entry here will be decrypted (defense-in-depth).
 //
@@ -185,44 +193,63 @@ function observerTag(event: RelayEvent, tagName: string) {
   return event.tags.find((tag) => tag[0] === tagName)?.[1] ?? null;
 }
 
-function appendAgentEvent(agentPubkey: string, event: ObserverEvent) {
+function appendAgentEvents(
+  agentPubkey: string,
+  events: readonly ObserverEvent[],
+): boolean {
+  if (events.length === 0) return false;
+
   const key = normalizePubkey(agentPubkey);
   const current = eventsByAgent.get(key) ?? [];
-  if (
-    current.some(
-      (existing) =>
-        existing.seq === event.seq && existing.timestamp === event.timestamp,
-    )
-  ) {
-    return;
+  const seen = new Set(
+    current.map(
+      (event) => `${event.timestamp.length}:${event.timestamp}:${event.seq}`,
+    ),
+  );
+  const added: ObserverEvent[] = [];
+  for (const event of events) {
+    const eventKey = `${event.timestamp.length}:${event.timestamp}:${event.seq}`;
+    if (seen.has(eventKey)) continue;
+    seen.add(eventKey);
+    added.push(event);
   }
+  if (added.length === 0) return false;
 
-  const sorted = [...current, event].sort(compareObserverEvents);
+  const sortedAdded = added.sort(compareObserverEvents);
+  const sorted = [...current, ...sortedAdded].sort(compareObserverEvents);
   const trimmed = sorted.length > MAX_OBSERVER_EVENTS;
   const final = trimmed
     ? sorted.slice(sorted.length - MAX_OBSERVER_EVENTS)
     : sorted;
   eventsByAgent.set(key, final);
 
-  // Determine whether the new event landed at the end of the sorted array.
-  // If it did (common case), we can incrementally process just this event.
-  // If not (out-of-order arrival) or if we trimmed, fall back to full rebuild.
-  const eventAtEnd = sorted[sorted.length - 1] === event;
-
-  if (eventAtEnd && !trimmed) {
-    // Fast path: incremental update
-    const transcriptState =
+  // The common live path appends a sorted batch after the retained window. Fold
+  // that batch through the transcript state once without rebuilding history.
+  // Out-of-order arrivals and cap eviction rebuild from the final window so
+  // stateful tool/permission relationships remain correct.
+  const currentLast = current.at(-1);
+  const allAtEnd =
+    !currentLast ||
+    sortedAdded.every((event) => compareObserverEvents(event, currentLast) > 0);
+  if (allAtEnd && !trimmed) {
+    let transcriptState =
       transcriptByAgent.get(key) ?? createEmptyTranscriptState();
-    const updatedTranscript = processTranscriptEvent(transcriptState, event);
-    transcriptByAgent.set(key, updatedTranscript);
+    for (const event of sortedAdded) {
+      transcriptState = processTranscriptEvent(transcriptState, event);
+    }
+    transcriptByAgent.set(key, transcriptState);
   } else {
-    // Slow path: full rebuild (out-of-order insertion or trim fired)
     transcriptByAgent.set(key, buildTranscriptState(final));
   }
 
   invalidateSnapshot(key);
+  return true;
+}
 
-  notifyListeners();
+function appendAgentEvent(agentPubkey: string, event: ObserverEvent) {
+  if (appendAgentEvents(agentPubkey, [event])) {
+    notifyListeners();
+  }
 }
 
 /**
@@ -330,6 +357,87 @@ export function isObserverEventAfter(
   return candidate.seq > stored.seq;
 }
 
+// Observer event kind for a batch envelope wrapping multiple events. The ACP
+// harness publishes one frame per second; everything that accumulated between
+// ticks arrives as `{ kind: "batch", payload: { events: [...] } }` with every
+// inner event carrying its own seq/timestamp. Inner events are processed
+// exactly as unbatched ones; the envelope itself is never stored.
+const OBSERVER_BATCH_KIND = "batch";
+
+// Expand a decrypted observer event into its inner events when it is a batch
+// envelope; a non-batch event passes through as a single-element array. A
+// malformed envelope (no events array) degrades to the envelope itself so a
+// harness bug cannot silently blank the session viewer.
+function unwrapObserverBatch(parsed: ObserverEvent): ObserverEvent[] {
+  if (parsed.kind !== OBSERVER_BATCH_KIND) {
+    return [parsed];
+  }
+  const payload = parsed.payload as { events?: unknown } | null;
+  const events = Array.isArray(payload?.events)
+    ? (payload.events as ObserverEvent[])
+    : null;
+  return events && events.length > 0 ? events : [parsed];
+}
+
+// Per-event processing shared by every event a live frame carries (one for a
+// plain frame, many for a batch envelope).
+function processLiveObserverEvents(
+  agentPubkey: string,
+  events: readonly ObserverEvent[],
+) {
+  // Commit the full envelope before dispatching synchronous specialized
+  // callbacks. Those callbacks historically observed their triggering frame
+  // in the raw/transcript stores; batching must preserve that visibility while
+  // deferring only the global external-store publication.
+  const observerChanged = appendAgentEvents(agentPubkey, events);
+
+  for (const parsed of events) {
+    // Track the latest-live-session-id per (agent, channel) on the live path.
+    // Only set when the parsed event carries both a sessionId and channelId,
+    // so we never attribute a session to the wrong channel.
+    if (parsed.sessionId && parsed.channelId) {
+      const key = liveSessionKey(agentPubkey, parsed.channelId);
+      const stored = latestLiveSessionByAgentChannel.get(key);
+      // Advance only when this event sorts strictly AFTER the stored one via
+      // isObserverEventAfter (timestamp then seq — same ordering as
+      // compareObserverEvents). This prevents late-arriving live frames from
+      // older sessions from regressing the latest-live id, while also
+      // correctly advancing on a same-timestamp frame with a higher seq.
+      if (!stored || isObserverEventAfter(parsed, stored)) {
+        latestLiveSessionByAgentChannel.set(key, {
+          sessionId: parsed.sessionId,
+          timestamp: parsed.timestamp,
+          seq: parsed.seq,
+        });
+      }
+    }
+    const managementRequest = parseAgentManagementRequest(parsed.payload);
+    if (managementRequest) {
+      for (const listener of agentManagementListeners) {
+        listener(agentPubkey, managementRequest);
+      }
+    }
+    if (parsed.kind === "session_config_captured") {
+      void putAgentSessionConfig(agentPubkey, parsed.payload);
+      onSessionConfigCaptured?.(agentPubkey);
+    } else if (parsed.kind === "control_result") {
+      dispatchControlResult(agentPubkey, parsed.payload);
+    } else if (parsed.kind === "managed_agent_runtime_lifecycle") {
+      void putManagedAgentRuntimeLifecycle(agentPubkey, parsed.payload).catch(
+        (error) => {
+          console.debug("Late/untracked lifecycle frame dropped:", error);
+        },
+      );
+    }
+  }
+
+  // Preserve the harness's envelope backpressure: retained state was committed
+  // before specialized callbacks, but external-store subscribers publish once.
+  if (observerChanged) {
+    notifyListeners();
+  }
+}
+
 async function handleRelayObserverEvent(
   event: RelayEvent,
   activeGeneration: number,
@@ -364,38 +472,7 @@ async function handleRelayObserverEvent(
     if (activeGeneration !== generation) {
       return;
     }
-    // Track the latest-live-session-id per (agent, channel) on the live path.
-    // Only set when the parsed event carries both a sessionId and channelId,
-    // so we never attribute a session to the wrong channel.
-    if (parsed.sessionId && parsed.channelId) {
-      const key = liveSessionKey(agentPubkey, parsed.channelId);
-      const stored = latestLiveSessionByAgentChannel.get(key);
-      // Advance only when this event sorts strictly AFTER the stored one via
-      // isObserverEventAfter (timestamp then seq — same ordering as
-      // compareObserverEvents). This prevents late-arriving live frames from
-      // older sessions from regressing the latest-live id, while also
-      // correctly advancing on a same-timestamp frame with a higher seq.
-      if (!stored || isObserverEventAfter(parsed, stored)) {
-        latestLiveSessionByAgentChannel.set(key, {
-          sessionId: parsed.sessionId,
-          timestamp: parsed.timestamp,
-          seq: parsed.seq,
-        });
-      }
-    }
-    appendAgentEvent(agentPubkey, parsed);
-    if (parsed.kind === "session_config_captured") {
-      void putAgentSessionConfig(agentPubkey, parsed.payload);
-      onSessionConfigCaptured?.(agentPubkey);
-    } else if (parsed.kind === "control_result") {
-      dispatchControlResult(agentPubkey, parsed.payload);
-    } else if (parsed.kind === "managed_agent_runtime_lifecycle") {
-      void putManagedAgentRuntimeLifecycle(agentPubkey, parsed.payload).catch(
-        (error) => {
-          console.debug("Late/untracked lifecycle frame dropped:", error);
-        },
-      );
-    }
+    processLiveObserverEvents(agentPubkey, unwrapObserverBatch(parsed));
   } catch (error) {
     if (activeGeneration !== generation) {
       return;
@@ -499,6 +576,15 @@ function dispatchControlResult(agentPubkey: string, payload: unknown) {
  * unsubscribe function. Used by the ModelPicker to learn the async outcome of
  * a `switch_model` frame.
  */
+export function subscribeAgentManagementRequests(
+  listener: (agentPubkey: string, request: AgentManagementRequest) => void,
+) {
+  agentManagementListeners.add(listener);
+  return () => {
+    agentManagementListeners.delete(listener);
+  };
+}
+
 export function subscribeControlResults(
   agentPubkey: string,
   listener: (frame: ControlResultFrame) => void,
@@ -548,49 +634,6 @@ export function getAgentObserverSnapshot(
   };
   snapshotByAgent.set(key, snapshot);
   return snapshot;
-}
-
-/**
- * Return the newest live Colony Credits denial for an agent, if any.
- *
- * Provisioned denials intentionally leave the ACP process healthy, so they do
- * not populate the persisted `ManagedAgent.lastError` field. The observer
- * frame is therefore the row's live recovery signal. A subsequent turn start
- * or completion clears the signal; unrelated wire frames leave it intact.
- */
-export function getLatestColonyCreditsDenial(
-  agentPubkey?: string | null,
-): ObserverEvent | null {
-  if (!agentPubkey) return null;
-  let denial: ObserverEvent | null = null;
-  for (const event of getAgentObserverSnapshot(agentPubkey).events) {
-    if (event.kind === "turn_started" || event.kind === "turn_completed") {
-      denial = null;
-      continue;
-    }
-    if (event.kind !== "turn_error") continue;
-    const payload = event.payload;
-    if (typeof payload !== "object" || payload === null) continue;
-    const status = Number(
-      (payload as { gateway_status?: unknown }).gateway_status,
-    );
-    const marker = (payload as { gateway_marker?: unknown }).gateway_marker;
-    const action = (payload as { action?: unknown }).action;
-    const expectedMarker =
-      status === 401
-        ? "COLONY_CREDITS_GATEWAY_STATUS_401"
-        : status === 402
-          ? "COLONY_CREDITS_GATEWAY_STATUS_402"
-          : null;
-    if (
-      expectedMarker !== null &&
-      marker === expectedMarker &&
-      action === "reconnect"
-    ) {
-      denial = event;
-    }
-  }
-  return denial;
 }
 
 export function getAgentTranscript(
@@ -696,20 +739,22 @@ export async function ingestArchivedObserverEvents(
     }
     try {
       const parsed = (await _decryptFn(event)) as ObserverEvent;
-      // Route archived events to the channel-scoped archive window (no cap)
-      // rather than the per-agent live-relay store (MAX_OBSERVER_EVENTS cap).
-      // Events without a channelId fall through to the live store so they
-      // remain visible in the agent's general transcript.
-      if (parsed.channelId) {
-        const added = appendArchivedChannelEvent(
-          agentPubkey,
-          parsed.channelId,
-          parsed,
-        );
-        if (added) archiveChanged = true;
-      } else {
-        // Live path already calls notifyListeners() inside appendAgentEvent.
-        appendAgentEvent(agentPubkey, parsed);
+      for (const inner of unwrapObserverBatch(parsed)) {
+        // Route archived events to the channel-scoped archive window (no cap)
+        // rather than the per-agent live-relay store (MAX_OBSERVER_EVENTS cap).
+        // Events without a channelId fall through to the live store so they
+        // remain visible in the agent's general transcript.
+        if (inner.channelId) {
+          const added = appendArchivedChannelEvent(
+            agentPubkey,
+            inner.channelId,
+            inner,
+          );
+          if (added) archiveChanged = true;
+        } else {
+          // Live path already calls notifyListeners() inside appendAgentEvent.
+          appendAgentEvent(agentPubkey, inner);
+        }
       }
     } catch {
       // Silently drop decrypt failures — same as live path error handling.
@@ -736,10 +781,9 @@ export function injectObserverEventsForE2E(
   agentPubkey: string,
   events: ObserverEvent[],
 ) {
-  for (const event of events) {
-    appendAgentEvent(agentPubkey, event);
+  if (appendAgentEvents(agentPubkey, events)) {
+    notifyListeners();
   }
-  notifyListeners();
 }
 
 /**
@@ -750,8 +794,8 @@ export function syncAgentObserverEvents(
   agentPubkey: string,
   events: ObserverEvent[],
 ) {
-  for (const event of events) {
-    appendAgentEvent(agentPubkey, event);
+  if (appendAgentEvents(agentPubkey, events)) {
+    notifyListeners();
   }
 }
 
@@ -769,6 +813,7 @@ export function resetAgentObserverStore() {
   knownAgentsBySubscription.clear();
   pendingUnknownAgentFrames.length = 0;
   latestLiveSessionByAgentChannel.clear();
+  agentManagementListeners.clear();
   onSessionConfigCaptured = null;
   connectionState = "idle";
   errorMessage = null;
@@ -786,6 +831,14 @@ export function _testRegisterKnownAgents(
   pubkeys: readonly string[],
 ): void {
   registerKnownAgents(subscriptionId, pubkeys);
+}
+
+/** Test-only: exercise live envelope ordering without relay/decryption setup. */
+export function _testProcessLiveObserverEvents(
+  agentPubkey: string,
+  events: readonly ObserverEvent[],
+): void {
+  processLiveObserverEvents(agentPubkey, events);
 }
 
 /**
