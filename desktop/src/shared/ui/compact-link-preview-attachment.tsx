@@ -12,7 +12,7 @@ import {
   AttachmentTrigger,
 } from "@/shared/ui/attachment";
 import { LinkPreviewControls } from "@/shared/ui/link-preview-controls";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { AntMark } from "@/shared/ui/colony-logo/AntMark";
 
 function getHostname(preview: ResolvedLinkPreview): string {
   if (preview.href.startsWith("buzz://")) return preview.provider;
@@ -132,7 +132,7 @@ export function CompactLinkPreviewAttachment({
                 className="flex size-3 shrink-0 items-center text-foreground/70"
                 data-link-preview-hostname-buzz-mark=""
               >
-                <BuzzMark className="h-auto w-full" />
+                <AntMark className="h-auto w-full" />
               </span>
             ) : preview.faviconDataUrl ? (
               <img

@@ -27,8 +27,6 @@ import {
   KIND_JOB_REQUEST,
   KIND_JOB_RESULT,
   KIND_HUDDLE_STARTED,
-  KIND_BLOCK_ACTION,
-  KIND_BLOCK_RECEIPT,
   KIND_DELETION,
   KIND_NIP29_DELETE_EVENT,
   KIND_REACTION,
@@ -37,6 +35,8 @@ import {
   KIND_STREAM_MESSAGE_EDIT,
   KIND_STREAM_MESSAGE_DIFF,
   KIND_SYSTEM_MESSAGE,
+  KIND_BLOCK_ACTION,
+  KIND_BLOCK_RECEIPT,
 } from "@/shared/constants/kinds";
 import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -385,9 +385,9 @@ export function formatTimelineMessages(
   const visibleEvents = events.filter(
     (event) => isTimelineContentEvent(event) && !deletedEventIds.has(event.id),
   );
+  const eventsById = new Map(visibleEvents.map((event) => [event.id, event]));
   const { actionsByInstance, receiptsByInstance } =
     buildBlockStateByInstance(events);
-  const eventsById = new Map(visibleEvents.map((event) => [event.id, event]));
   const reactionPresence = new Map<
     string,
     {
