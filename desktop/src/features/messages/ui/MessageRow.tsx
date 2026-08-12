@@ -82,6 +82,7 @@ export const MessageRow = React.memo(
     isFollowingThread,
     isContinuation = false,
     isUnread,
+    isOpenThreadRoot = false,
     layoutVariant = "default",
     message,
     onCollapseDepthGuide,
@@ -120,6 +121,10 @@ export const MessageRow = React.memo(
     isFollowingThread?: boolean;
     isContinuation?: boolean;
     isUnread?: boolean;
+    /** True when this message is the root of the currently open thread; the row
+     *  is highlighted with the accent tint so the open thread is visible from
+     *  the channel side. */
+    isOpenThreadRoot?: boolean;
     layoutVariant?: "default" | "thread-reply";
     message: TimelineMessage;
     onCollapseDepthGuide?: (message: TimelineMessage) => void;
@@ -811,6 +816,9 @@ export const MessageRow = React.memo(
                 : "px-2",
             "flex gap-2.5",
             isContinuation ? "items-center" : "items-start",
+            isOpenThreadRoot
+              ? "bg-primary/[0.07] ring-1 ring-inset ring-primary/20"
+              : "",
             hasActiveReminder ? "bg-blue-500/10" : "",
             highlighted
               ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
