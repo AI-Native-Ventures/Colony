@@ -28,6 +28,8 @@ type EditCommunityDialogProps = {
       Pick<Community, "name" | "relayUrl" | "token" | "reposDir">
     >,
   ) => void;
+  onRemove?: (id: string) => void;
+  canRemove?: boolean;
   showIconEditor?: boolean;
 };
 
@@ -36,6 +38,8 @@ export function EditCommunityDialog({
   open,
   onOpenChange,
   onSave,
+  onRemove,
+  canRemove,
   showIconEditor = false,
 }: EditCommunityDialogProps) {
   const [name, setName] = React.useState("");
@@ -117,6 +121,12 @@ export function EditCommunityDialog({
     },
     [community, name, relayUrl, token, reposDir, onSave, handleClose],
   );
+  const handleRemove = React.useCallback(() => {
+    if (community && onRemove) {
+      onRemove(community.id);
+      handleClose();
+    }
+  }, [community, onRemove, handleClose]);
 
   if (!community) {
     return null;
@@ -224,13 +234,28 @@ export function EditCommunityDialog({
               the default location.
             </p>
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button onClick={handleClose} type="button" variant="outline">
-              Cancel
-            </Button>
-            <Button disabled={!name.trim() || !relayUrl.trim()} type="submit">
-              Save Changes
-            </Button>
+          <div className="flex items-center justify-between pt-2">
+            <div>
+              {canRemove && onRemove ? (
+                <Button
+                  className="text-destructive hover:text-destructive"
+                  onClick={handleRemove}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  Remove Community
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleClose} type="button" variant="outline">
+                Cancel
+              </Button>
+              <Button disabled={!name.trim() || !relayUrl.trim()} type="submit">
+                Save Changes
+              </Button>
+            </div>
           </div>
         </form>
       </DialogContent>

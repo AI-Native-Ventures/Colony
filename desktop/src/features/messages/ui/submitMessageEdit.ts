@@ -1,7 +1,10 @@
 import type { QueuedMediaAttachment } from "@/features/messages/lib/backgroundMediaUploadStore";
 import { enqueueBackgroundMediaUpload } from "@/features/messages/lib/backgroundMediaUploadStore";
 import { hasMention } from "@/features/messages/lib/hasMention";
-import type { DraftMentionRef } from "@/features/messages/lib/useDrafts";
+import type {
+  DraftActorMentionRef,
+  DraftMentionRef,
+} from "@/features/messages/lib/useDrafts";
 import type { MessageComposerEditTarget } from "@/features/messages/ui/MessageComposer.types";
 import {
   buildOutgoingMessage,
@@ -117,7 +120,9 @@ export async function submitMessageEdit({
         buildCustomEmojiTags(finalContent, customEmoji),
       ),
       [
-        ...draft.mentionRefs.map(({ pubkey }) => pubkey),
+        ...draft.mentionRefs
+          .filter((ref): ref is DraftActorMentionRef => "pubkey" in ref)
+          .map(({ pubkey }) => pubkey),
         ...draft.unresolvedMentionPubkeys,
       ],
     );

@@ -6,9 +6,12 @@ import {
   initFirstCommunity,
   hasLegacyAutoConnectRecovery,
   loadCommunities,
+  loadCommunityDiscoveryAfterLeave,
+  markCommunityDiscoveryAfterLeave,
   migrateLegacyCommunityStorage,
   quarantineLegacyAutoConnectedCommunity,
   restoreLegacyAutoConnectedCommunity,
+  saveCommunities,
   shouldAutoConnectDefaultRelay,
   shouldRecoverLegacyAutoConnectedCommunity,
 } from "./communityStorage.ts";
@@ -491,4 +494,44 @@ test("clearCommunityStorage removes new and legacy state", () => {
   migrateLegacyCommunityStorage(storage);
 
   assert.equal(storage.length, 0);
+});
+
+test("loading an existing community clears stale final-leave discovery", () => {
+  const storage = createMemoryStorage({
+    "buzz-communities": '[{"id":"joined"}]',
+    "buzz-community-discovery-after-leave": "1",
+  });
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.deepEqual(loadCommunities(), [{ id: "joined" }]);
+  assert.equal(loadCommunityDiscoveryAfterLeave(storage), false);
+});
+
+test("completed final leave persists discovery until a community is saved", () => {
+  const storage = createMemoryStorage();
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(markCommunityDiscoveryAfterLeave(storage), true);
+  assert.equal(loadCommunityDiscoveryAfterLeave(storage), true);
+
+  assert.equal(saveCommunities([{ id: "joined" }]), true);
+  assert.equal(loadCommunityDiscoveryAfterLeave(storage), false);
+});
+
+test("clearCommunityStorage preserves completed final-leave discovery", () => {
+  const storage = createMemoryStorage({
+    "buzz-communities": "new",
+    "buzz-active-community-id": "new",
+    "buzz-workspaces": "old",
+    "buzz-active-workspace-id": "old",
+    "buzz-community-discovery-after-leave": "1",
+  });
+
+  clearCommunityStorage(storage);
+  migrateLegacyCommunityStorage(storage);
+
+  assert.equal(storage.length, 1);
+  assert.equal(loadCommunityDiscoveryAfterLeave(storage), true);
 });

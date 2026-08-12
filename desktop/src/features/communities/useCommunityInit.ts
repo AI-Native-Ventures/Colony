@@ -325,6 +325,7 @@ export function useCommunityInit(
     activeCommunity?.token,
     activeCommunity?.reposDir,
     isSharedIdentity,
+    suppressAutoConnect,
     communityKey,
   ]);
 

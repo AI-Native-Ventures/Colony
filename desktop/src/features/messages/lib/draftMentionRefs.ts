@@ -1,6 +1,9 @@
 import { hasMention } from "@/features/messages/lib/hasMention";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
-import type { DraftMentionRef } from "@/features/messages/lib/useDrafts";
+import type {
+  DraftActorMentionRef,
+  DraftMentionRef,
+} from "@/features/messages/lib/useDrafts";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { MessageComposerEditTarget } from "@/features/messages/ui/MessageComposer.types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -46,7 +49,11 @@ function unresolvedEditMentionPubkeys(
     return [];
   }
 
-  const resolved = new Set(refs.map((ref) => normalizePubkey(ref.pubkey)));
+  const resolved = new Set(
+    refs
+      .filter((ref): ref is DraftActorMentionRef => "pubkey" in ref)
+      .map((ref) => normalizePubkey(ref.pubkey)),
+  );
   return [
     ...new Set(
       (tags ?? [])
