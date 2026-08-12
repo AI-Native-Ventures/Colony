@@ -1,5 +1,12 @@
 # Changelog
 
+## relay-v0.8.2
+
+- fix(credits): prevent a completed provider call from being debited twice
+  after restart when the provider omits its request ID. Recovery now reuses
+  the durable settlement-intent ledger reference, preserving exactly-once
+  debit semantics across a lost acknowledgement and replay.
+
 ## relay-v0.8.1
 
 - feat(operator): add the private deployment analytics portal, exact-URL
