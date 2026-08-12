@@ -12,6 +12,7 @@
 
 use std::time::Duration;
 
+use buzz_core::job::{TaskArtifact, TaskArtifactKind, MAX_ARTIFACT_TEXT};
 use buzz_core::kind::{
     KIND_JOB_CLAIM, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_USAGE_RECORD,
 };
@@ -158,12 +159,15 @@ pub async fn run_worker_once(client: &BuzzClient, config: &SeatConfig) -> Result
         Ok(reply) => {
             let outcome = sign_finish(
                 client,
-                &open.job_id,
-                attempt,
-                "done",
-                &reply.text,
-                Some(&reply.provider),
-                Some(&reply.model),
+                OutcomeInput {
+                    job: &open.job_id,
+                    attempt,
+                    status: "done",
+                    detail: &reply.text,
+                    provider: Some(&reply.provider),
+                    model: Some(&reply.model),
+                    task_id: open.task_id.as_deref(),
+                },
             )?;
             client.submit_event(outcome).await?;
             publish_usage(client, &open, attempt, &reply).await;
@@ -174,8 +178,18 @@ pub async fn run_worker_once(client: &BuzzClient, config: &SeatConfig) -> Result
         }
         Err(e) => {
             let detail = format!("worker could not run this: {e}");
-            let outcome =
-                sign_finish(client, &open.job_id, attempt, "failed", &detail, None, None)?;
+            let outcome = sign_finish(
+                client,
+                OutcomeInput {
+                    job: &open.job_id,
+                    attempt,
+                    status: "failed",
+                    detail: &detail,
+                    provider: None,
+                    model: None,
+                    task_id: open.task_id.as_deref(),
+                },
+            )?;
             client.submit_event(outcome).await?;
             eprintln!("worker: job {} failed: {e}", open.job_id);
         }
@@ -247,6 +261,7 @@ struct OpenJob {
     job_id: String,
     employee: String,
     instruction: String,
+    task_id: Option<String>,
 }
 
 /// The newest head under NIP-16 ordering, or `None` when every head is
@@ -341,6 +356,10 @@ fn first_open_job(events: &[serde_json::Value]) -> Option<OpenJob> {
             job_id,
             employee: extract_tag_value(event, "employee"),
             instruction,
+            task_id: match extract_tag_value(event, "task") {
+                task if task.is_empty() => None,
+                task => Some(task),
+            },
         });
     }
     None
@@ -420,33 +439,56 @@ fn sign_heartbeat(client: &BuzzClient, job: &str, attempt: i32) -> Result<nostr:
         .map_err(|e| CliError::Other(format!("failed to sign heartbeat: {e}")))
 }
 
-fn sign_finish(
-    client: &BuzzClient,
-    job: &str,
+struct OutcomeInput<'a> {
+    job: &'a str,
     attempt: i32,
-    status: &str,
-    detail: &str,
-    provider: Option<&str>,
-    model: Option<&str>,
-) -> Result<nostr::Event, CliError> {
-    let attempt_str = attempt.to_string();
+    status: &'a str,
+    detail: &'a str,
+    provider: Option<&'a str>,
+    model: Option<&'a str>,
+    task_id: Option<&'a str>,
+}
+
+fn sign_finish(client: &BuzzClient, input: OutcomeInput<'_>) -> Result<nostr::Event, CliError> {
+    let attempt_str = input.attempt.to_string();
     let mut parsed = vec![
-        Tag::parse(["job", job]),
+        Tag::parse(["job", input.job]),
         Tag::parse(["attempt", &attempt_str]),
-        Tag::parse(["status", status]),
+        Tag::parse(["status", input.status]),
     ];
-    if let Some(provider) = provider {
+    if let Some(provider) = input.provider {
         parsed.push(Tag::parse(["provider", provider]));
     }
-    if let Some(model) = model {
+    if let Some(model) = input.model {
         parsed.push(Tag::parse(["model", model]));
+    }
+    let artifact_json = input
+        .task_id
+        .filter(|_| input.status == "done")
+        .map(|task_id| {
+            let mut end = input.detail.len().min(MAX_ARTIFACT_TEXT);
+            while end > 0 && !input.detail.is_char_boundary(end) {
+                end -= 1;
+            }
+            TaskArtifact {
+                kind: TaskArtifactKind::Text,
+                reference: input.detail[..end].to_string(),
+                label: Some(format!("Primary deliverable for Task {task_id}")),
+            }
+            .canonical_json()
+        });
+    if let Some(task_id) = input.task_id {
+        parsed.push(Tag::parse(["task", task_id]));
+    }
+    if let Some(artifact) = artifact_json.as_deref() {
+        parsed.push(Tag::parse(["artifact", artifact]));
     }
     let tags = parsed
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| CliError::Other(format!("tag error: {e}")))?;
 
-    EventBuilder::new(Kind::Custom(KIND_JOB_OUTCOME as u16), detail)
+    EventBuilder::new(Kind::Custom(KIND_JOB_OUTCOME as u16), input.detail)
         .tags(tags)
         .sign_with_keys(client.keys())
         .map_err(|e| CliError::Other(format!("failed to sign outcome: {e}")))

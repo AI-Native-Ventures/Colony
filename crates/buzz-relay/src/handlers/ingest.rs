@@ -24,9 +24,9 @@ use buzz_core::kind::{
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
     KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HIRE_REQUEST, KIND_HUDDLE_ENDED,
     KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT,
-    KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_JOB_CLAIM,
-    KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_LEDGER_ACTION,
-    KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_JOB_CHECKPOINT,
+    KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME,
+    KIND_LEDGER_ACTION, KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT,
     KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST,
     KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
@@ -581,11 +581,15 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // key. Only a registered employee may author one; that check runs
         // past this gate, in the employee-head arm of `validate_event`.
         KIND_EMPLOYEE => Ok(Scope::UsersWrite),
-        // Colony job queue (43010-43013): a member asking an employee for
+        // Colony job queue (43010-43014): a member asking an employee for
         // work, and a worker moving a job it holds. All message-shaped
         // writes; who may claim, heartbeat, and finish is decided past this
         // gate, in `job_broker`, against the queue rather than the event.
-        KIND_JOB_FILING | KIND_JOB_CLAIM | KIND_JOB_HEARTBEAT | KIND_JOB_OUTCOME => {
+        KIND_JOB_FILING
+        | KIND_JOB_CLAIM
+        | KIND_JOB_HEARTBEAT
+        | KIND_JOB_OUTCOME
+        | KIND_JOB_CHECKPOINT => {
             Ok(Scope::MessagesWrite)
         }
         // Colony job head (30191): the relay's account of a job, signed by
@@ -3381,7 +3385,17 @@ async fn ingest_event_inner(
         });
     }
 
-    if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
+    if kind_u32 == KIND_JOB_CHECKPOINT {
+        // The legacy job side-effect range ends at outcome kind 43013. Route
+        // the additive checkpoint kind explicitly so rolling upgrades do not
+        // widen an unrelated classifier while this protocol is introduced.
+        match crate::job_broker::handle_job_event(tenant, state, &event).await {
+            Ok(outcome) => info!(?outcome, kind = kind_u32, "job checkpoint handled"),
+            Err(error) => {
+                error!(event_id = %event_id_hex, kind = kind_u32, %error, "job checkpoint refused")
+            }
+        }
+    } else if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
         if let Err(e) =
             crate::handlers::side_effects::handle_side_effects(tenant, kind_u32, &event, state)
                 .await
@@ -3531,6 +3545,7 @@ mod tests {
             buzz_core::kind::KIND_JOB_CLAIM,
             buzz_core::kind::KIND_JOB_HEARTBEAT,
             buzz_core::kind::KIND_JOB_OUTCOME,
+            buzz_core::kind::KIND_JOB_CHECKPOINT,
             buzz_core::kind::KIND_JOB_HEAD,
         ]
         .into_iter()

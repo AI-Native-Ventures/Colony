@@ -411,10 +411,11 @@ pub async fn checkpoint_job(
 ///
 /// `status` is `done` or `failed`; the caller has already refused anything
 /// else. Deliberately does not care whether the lease has expired, only
-/// whether this caller still holds the lease it names: work that finished a
-/// second late is still work, and throwing it away would be worse than
-/// accepting it. What it will not accept is an outcome from a superseded
-/// lease, because then somebody else owns the answer.
+/// whether this caller still holds the lease it names. Legacy non-Task jobs
+/// retain the historical grace period for a result that arrives after the
+/// deadline but before another claim. Task-linked delivery is stricter: an
+/// expired lease is no longer execution authority, even before a replacement
+/// claims it. Neither path accepts an outcome from a superseded attempt.
 pub async fn finish_job(
     pool: &PgPool,
     community: CommunityId,
@@ -444,6 +445,7 @@ pub async fn finish_job(
                          updated_at = $7 \
          WHERE community_id = $1 AND job_id = $2 AND status = 'leased' \
            AND lease_holder = $3 AND attempts = $4 \
+           AND (task_id IS NULL OR lease_expires_at >= $7) \
            AND ($5 <> 'done' OR task_id IS NULL OR ( \
                 $10 IS NOT NULL AND jsonb_typeof($10) = 'array' \
                 AND jsonb_array_length($10) > 0 AND $11 IS NOT NULL)) \

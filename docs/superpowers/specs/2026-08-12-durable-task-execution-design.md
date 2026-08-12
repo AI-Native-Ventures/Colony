@@ -130,8 +130,10 @@ Phase 1 adds `43014` Job Checkpoint.
 
 A Task-linked filing adds exactly one `task` tag containing the stable Task ID.
 The relay requires that a current relay-authored `KIND_TASK` head exists at that
-ID before inserting the job. The existing `p` tag remains the accountable
-employee. Existing filings without `task` remain valid legacy jobs.
+ID before inserting the job. It also requires the filing's `h` tag to match the
+Task's home channel and requires one `e` thread-root tag as the canonical task
+thread. The existing `p` tag remains the accountable employee. Existing filings
+without `task` remain valid legacy jobs.
 
 ### Claim and heartbeat
 
@@ -159,8 +161,10 @@ whose lease expired changes nothing.
 A Task-linked `done` outcome must carry one or more `artifact` tags, each
 containing canonical artifact JSON. The relay validates and stores the artifact
 list and exact outcome event ID in the same fenced update that marks the job
-done. A Task-linked outcome with no artifact is rejected before any state
-change. Legacy non-Task jobs retain their existing result-only completion.
+done. The Task lease must still be unexpired. A Task-linked outcome with no
+artifact, or from an expired lease, is rejected before any state change. Legacy
+non-Task jobs retain their existing result-only completion and late-result
+grace period.
 
 The job head includes `task`, `checkpoint-seq`, `checkpoint-event`, and
 `outcome-event` tags when present. Its JSON content contains the latest
