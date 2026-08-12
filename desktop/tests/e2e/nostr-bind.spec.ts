@@ -60,6 +60,15 @@ async function openNostrBind(
         }
       ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function",
   );
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __BUZZ_E2E_HAS_NATIVE_EVENT_LISTENER__?: (event: string) => boolean;
+        }
+      ).__BUZZ_E2E_HAS_NATIVE_EVENT_LISTENER__?.("deep-link-nostr-bind") ===
+      true,
+  );
   await emitNostrBind(page, payload);
   await expect(page.getByTestId("nostr-bind-page")).toBeVisible();
 }
