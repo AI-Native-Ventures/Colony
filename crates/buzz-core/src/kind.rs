@@ -120,6 +120,7 @@ pub const KIND_PUSH_LEASE: u32 = 30350;
 pub const AUTHOR_ONLY_KINDS: &[u32] = &[
     KIND_EVENT_REMINDER,
     KIND_PUSH_LEASE,
+    KIND_PRIVATE_MANAGED_AGENT,
     KIND_DISCOVERY_ACTION,
     KIND_DISCOVERY_WORKER_ACTION,
     KIND_DISCOVERY_WORKSPACE_ACTION,
@@ -425,6 +426,76 @@ pub fn persona_event_is_shared(event: &nostr::Event) -> bool {
     count == 1
 }
 
+/// Kinds that use the author-only-unless-shared read model.
+///
+/// Events of these kinds may only be delivered to foreign readers when the
+/// event carries exactly `["shared", "true"]`. Every relay read chokepoint
+/// consults this set: REQ historical delivery, live fan-out, COUNT fallback,
+/// the `ids`-lookup result gate, both HTTP surfaces, and the pre-`LIMIT` SQL
+/// visibility pushdown in `buzz-db`.
+///
+/// Membership is a privacy decision, not a convenience: adding a kind here
+/// makes its events invisible to foreign readers until their author opts in,
+/// and the opt-in must be a `shared` TAG (not a content field) so that
+/// toggling it leaves content bytes - and any content hash derived from them -
+/// unchanged.
+///
+/// `KIND_TEAM` (30176) is deliberately NOT a member. Its writers never emit
+/// `shared`, so catalog opt-in semantics do not describe it; it needs
+/// owner-private read semantics instead, which is a separate change.
+pub const SHARED_GATED_KINDS: &[u32] = &[KIND_PERSONA, KIND_TEAM_CATALOG];
+
+/// Returns `true` if `kind` uses the author-only-unless-shared read model
+/// (see [`SHARED_GATED_KINDS`]).
+pub fn is_shared_gated_kind(kind: u32) -> bool {
+    SHARED_GATED_KINDS.contains(&kind)
+}
+
+/// Returns `true` if the event is a shared-gated kind AND the requester is NOT
+/// the author AND the event does NOT carry `["shared", "true"]`. All three
+/// conditions must hold to withhold the event.
+///
+/// This is the per-event gate used by REQ historical delivery, live fan-out,
+/// and COUNT fallback paths. It is intentionally independent of
+/// `is_author_only_event` - shared-gated events with `["shared", "true"]` MUST
+/// reach foreign readers; stripping them at the author-only layer would break
+/// the catalog query.
+pub fn is_unshared_gated_event(event: &nostr::Event, requester_pubkey_bytes: &[u8]) -> bool {
+    let kind = event.kind.as_u16() as u32;
+    if !is_shared_gated_kind(kind) {
+        return false;
+    }
+    // Author reads are always allowed.
+    if event.pubkey.to_bytes() == requester_pubkey_bytes {
+        return false;
+    }
+    // Foreign reader: allowed only if the event is explicitly shared.
+    !event_is_shared(event)
+}
+
+/// Returns `true` if the event carries exactly one `["shared", "true"]` tag.
+///
+/// Kind-agnostic: this is purely the tag-shape predicate. The kind check lives
+/// in [`is_shared_gated_kind`], so callers that need "is this event shared"
+/// for a kind they already know (e.g. a client deciding whether its own
+/// retained head is published) can use this directly.
+pub fn event_is_shared(event: &nostr::Event) -> bool {
+    let mut count = 0usize;
+    for tag in event.tags.iter() {
+        let parts = tag.as_slice();
+        if parts.len() == 2 && parts[0].as_str() == "shared" {
+            if parts[1].as_str() != "true" {
+                return false;
+            }
+            count += 1;
+        } else if !parts.is_empty() && parts[0].as_str() == "shared" {
+            // Non-exact shape (wrong length) - fail closed: not shared.
+            return false;
+        }
+    }
+    count == 1
+}
+
 /// NIP-AP: Agent Team (parameterized replaceable, owner-authored).
 ///
 /// Team definition event published by the workspace owner. Addressed by
@@ -442,6 +513,24 @@ pub const KIND_TEAM: u32 = 30176;
 /// carry the agent's secret key, NIP-OA auth tag, env vars, or runtime fields,
 /// since these events are world-readable on the relay.
 pub const KIND_MANAGED_AGENT: u32 = 30177;
+
+/// NIP-AP: Agent Team Catalog (parameterized replaceable, owner-authored).
+///
+/// A shareable projection of a [`KIND_TEAM`]: name, description, and member
+/// display projections. Member of [`SHARED_GATED_KINDS`]: author-only unless
+/// the event carries exactly `["shared", "true"]`. Content carries only
+/// sanitized fields: no env vars, no `respond_to` allowlist pubkeys, no
+/// source or local ids, no filesystem paths, no secrets.
+pub const KIND_TEAM_CATALOG: u32 = 30184;
+
+/// NIP-PMA: owner-encrypted private managed-agent aggregate.
+///
+/// Addressed by `(owner pubkey, kind, agent pubkey)`. The signed outer tags
+/// expose only the agent coordinate, CAS generation/predecessor, and
+/// active/deleted state required for relay enforcement. Content is NIP-44 v2
+/// encrypted from the owner's key to itself and contains the runnable
+/// identity/configuration plus exact public projection bindings.
+pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30185;
 
 // NIP-56 reporting
 /// NIP-56: Report an event, pubkey, or blob to relay moderators (kind:1984).
@@ -809,6 +898,15 @@ pub const KIND_GIT_STATUS_CLOSED: u32 = 1632;
 /// NIP-34: Status — Draft.
 pub const KIND_GIT_STATUS_DRAFT: u32 = 1633;
 
+/// NIP-MP: Multi-repo project — a named grouping of `kind:30617` repository
+/// announcements (parameterized replaceable, d=project slug).
+///
+/// Members are `a` tags holding `30617:<owner-hex>:<repo-d>` coordinates, so one
+/// project may span repositories owned by different pubkeys. The signer gains no
+/// authority over any member: push policy reads the repository's own
+/// announcement, never a project. See `docs/nips/NIP-MP.md`.
+pub const KIND_PROJECT: u32 = 30621;
+
 /// All registered kind constants — used for duplicate detection and iteration.
 pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
@@ -869,6 +967,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_LEDGER_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
+    KIND_TEAM_CATALOG,
+    KIND_PRIVATE_MANAGED_AGENT,
     KIND_REPORT,
     KIND_PRODUCT_FEEDBACK,
     KIND_NIP29_PUT_USER,
@@ -979,6 +1079,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_GIT_STATUS_MERGED,
     KIND_GIT_STATUS_CLOSED,
     KIND_GIT_STATUS_DRAFT,
+    KIND_PROJECT,
 ];
 
 /// Returns `true` if `kind` is in the ephemeral range (20000–29999).
@@ -1103,6 +1204,9 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PARTY)); // 30182 ∈ 30
 const _: () = assert!(is_parameterized_replaceable(KIND_PARTY_RELATIONSHIP)); // 30183 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30184 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30185 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PROJECT)); // 30621 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999

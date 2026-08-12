@@ -398,7 +398,7 @@ export const SESSION_STEPS: SessionStep[] = [
   ),
 
   // ── channels ──────────────────────────────────────────────────────────────
-  step("channels-list", "get_channels", () => getChannels(), {
+  step("channels-list", "get_channels", () => getChannels(null), {
     replayable: false,
     reason:
       "the record-phase fixture channel is deleted by teardown before replay and the replay's own channel is created after; the channel table differs by design",
@@ -1045,8 +1045,8 @@ export const SESSION_STEPS: SessionStep[] = [
   ),
 
   // ── link preview / media ──────────────────────────────────────────────────
-  step("link-preview", "fetch_link_preview_title", () =>
-    invokeTauri("fetch_link_preview_title", { href: "https://example.com" }),
+  step("link-preview", "fetch_link_preview_metadata", () =>
+    invokeTauri("fetch_link_preview_metadata", { href: "https://example.com" }),
   ),
   step("media-upload-bytes", "upload_media_bytes", (ctx) =>
     uploadMediaBytes(

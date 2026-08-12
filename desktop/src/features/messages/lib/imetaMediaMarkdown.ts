@@ -350,30 +350,35 @@ export function mergeOutgoingTags(
 /**
  * Inverse of `mergeOutgoingTags`: split a merged outgoing tag set back into
  * imeta media tags, NIP-30 `["emoji", ...]` tags, reference-only mention tags,
- * and typed Block address tags, so the send path can route each to its own
- * validated Tauri arg. Any other prefix stays with `mediaTags` — the imeta
- * guard will reject it, which is the intended injection defense.
+ * link-preview snapshot tags (`["link-preview", ...]`), and typed Block
+ * address tags, so the send path can route each to its own validated Tauri
+ * arg. Any other prefix stays with `mediaTags`; the imeta guard will reject
+ * it, which is the intended injection defense.
  */
 export function splitOutgoingTags(tags: string[][] | undefined): {
   mediaTags: string[][];
   emojiTags: string[][];
   mentionTags: string[][];
   referenceTags: string[][];
+  linkPreviewTags: string[][];
 } {
   const mediaTags: string[][] = [];
   const emojiTags: string[][] = [];
   const mentionTags: string[][] = [];
   const referenceTags: string[][] = [];
+  const linkPreviewTags: string[][] = [];
   for (const tag of tags ?? []) {
     if (tag[0] === "emoji") {
       emojiTags.push(tag);
     } else if (tag[0] === "mention") {
       mentionTags.push(tag);
+    } else if (tag[0] === "link-preview") {
+      linkPreviewTags.push(tag);
     } else if (tag[0] === "a" && tag[3] === "block") {
       referenceTags.push(tag);
     } else {
       mediaTags.push(tag);
     }
   }
-  return { mediaTags, emojiTags, mentionTags, referenceTags };
+  return { mediaTags, emojiTags, mentionTags, referenceTags, linkPreviewTags };
 }

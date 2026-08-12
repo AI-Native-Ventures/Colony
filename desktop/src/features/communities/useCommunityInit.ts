@@ -11,7 +11,7 @@ import { getIdentity } from "@/shared/api/tauriIdentity";
 import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { resetLeadUpdateListeners } from "@/features/discovery/data/leadUpdates";
-import { resetLinkPreviewTitleCache } from "@/shared/lib/useResolvedLinkPreviews";
+import { resetLinkPreviewMetadataCache } from "@/shared/lib/useResolvedLinkPreviews";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import {
   clearAllDrafts,
@@ -88,7 +88,7 @@ function resetCommunityState({
   resetRenderScopedReactionHydration();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
-  resetLinkPreviewTitleCache();
+  resetLinkPreviewMetadataCache();
   return Promise.all([terminalReset, webReset]).then(() => undefined);
 }
 

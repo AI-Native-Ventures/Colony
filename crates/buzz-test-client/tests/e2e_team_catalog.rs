@@ -1,6 +1,7 @@
-//! End-to-end tests for kind:30178 team-catalog events (NIP-AP).
+//! End-to-end tests for team-catalog events (NIP-AP).
 //!
-//! Kind 30178 is the shareable projection of a team. It joins kind:30175 in
+//! Kind 30184 (Colony-bridged from upstream's 30178, renumbered to avoid a
+//! collision with Colony's block/company kinds) is the shareable projection of a team. It joins kind:30175 in
 //! `SHARED_GATED_KINDS`, so these tests assert the wire behaviour of that gate
 //! at every read chokepoint (REQ, `ids` lookup, COUNT, live fan-out) plus the
 //! ingest envelope rules that make the gate sound:
@@ -21,7 +22,7 @@ use std::time::Duration;
 use buzz_test_client::{BuzzTestClient, RelayMessage};
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag, Timestamp};
 
-const TEAM_CATALOG_KIND: u16 = 30178;
+const TEAM_CATALOG_KIND: u16 = buzz_core::kind::KIND_TEAM_CATALOG as u16;
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
@@ -35,7 +36,7 @@ fn catalog_content(name: &str) -> String {
     serde_json::json!({ "v": 1, "name": name, "members": [] }).to_string()
 }
 
-/// Build a kind:30178 event, optionally carrying the `["shared","true"]` opt-in.
+/// Build a team-catalog event, optionally carrying the `["shared","true"]` opt-in.
 fn catalog_event(keys: &Keys, d_tag: &str, shared: bool) -> nostr::Event {
     catalog_event_at(keys, d_tag, shared, Timestamp::now().as_secs())
 }
@@ -136,7 +137,7 @@ async fn test_team_catalog_accepts_builtin_colon_d_tag() {
 }
 
 /// Ingest refuses an empty `d` tag: generic NIP-33 storage maps it to the empty
-/// coordinate, collapsing every team into one `(pubkey, 30178, "")` slot.
+/// coordinate, collapsing every team into one `(pubkey, TEAM_CATALOG_KIND, "")` slot.
 #[tokio::test]
 #[ignore]
 async fn test_team_catalog_rejects_empty_d_tag() {
@@ -338,7 +339,7 @@ async fn test_team_catalog_ids_lookup_unshared_returns_nothing_to_foreign() {
     foreign.disconnect().await.expect("disconnect foreign");
 }
 
-/// COUNT must take the per-event fallback for kind:30178 so the aggregate does
+/// COUNT must take the per-event fallback for the team-catalog kind so the aggregate does
 /// not leak the existence of unshared projections.
 #[tokio::test]
 #[ignore]
@@ -405,7 +406,7 @@ async fn test_team_catalog_live_fanout_and_unshare_retracts() {
     let (t0, t1, t2) = (now.saturating_sub(2), now.saturating_sub(1), now);
 
     // Subscribe BEFORE publishing, scoped to this author so parallel tests
-    // publishing their own 30178s cannot trip the leak assertion.
+    // publishing their own catalog events cannot trip the leak assertion.
     let mut foreign = BuzzTestClient::connect(&url, &foreign_keys)
         .await
         .expect("connect foreign");
