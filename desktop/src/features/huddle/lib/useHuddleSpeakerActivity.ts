@@ -1,4 +1,4 @@
-import { listen } from "@/shared/api/nativeBridge";
+import { listen } from "@tauri-apps/api/event";
 import * as React from "react";
 
 type TtsSpeakerActivity = { pubkey: string; level: number };
