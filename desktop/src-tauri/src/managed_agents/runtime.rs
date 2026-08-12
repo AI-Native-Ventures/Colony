@@ -905,6 +905,7 @@ fn spawn_agent_child_inner(
             system_prompt: effective_prompt.as_deref(),
             model: effective_model.as_deref(),
             provider: effective_provider.as_deref(),
+            credential_mode: global.credential_mode,
         },
     );
 
