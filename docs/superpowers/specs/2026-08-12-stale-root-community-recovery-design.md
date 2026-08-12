@@ -21,13 +21,22 @@ true:
 
 - the public build reports default-relay auto-connect disabled;
 - exactly one community is saved and active;
-- its relay URL equals the compiled default relay URL after canonicalization;
+- its stored pubkey equals the active identity;
+- its relay URL equals the immutable compiled default relay URL after
+  canonicalization; runtime overrides are not trusted for recovery;
 - it has no invite token or repository override;
 - its name equals the name derived by the old `initFirstCommunity` path.
 
-For that exact state, clear community and community-navigation storage, disconnect
-from the relay, and reload. The persisted identity, keyring item, machine-onboarding
-completion, provider configuration, and unrelated local data remain untouched.
+For that exact state, first quarantine a restorable snapshot, then clear community
+and community-navigation storage, disconnect from the relay, and reload. The
+persisted identity, keyring item, machine-onboarding completion, provider
+configuration, and unrelated local data remain untouched. If quarantine fails or
+the live storage shape changes while configuration is read, fail closed and keep
+the membership recovery screen. For the same active identity, the Create/Join
+screen exposes a restore action that reinstates the quarantined community and
+its navigation destination. Restore writes navigation and the active ID before
+the community list, so an interrupted write remains on setup and resumes safely
+without accepting divergent live state.
 The reload must land on `WelcomeSetup`, where Create and Join are both available.
 
 If any condition does not match, preserve the current `MembershipDenied` recovery

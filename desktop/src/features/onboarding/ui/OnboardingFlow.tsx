@@ -23,6 +23,10 @@ import { MembershipDenied } from "./MembershipDenied";
 import { NostrKeyImportForm } from "./NostrKeyImportForm";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
+import { quarantineLegacyAutoConnectedCommunity } from "@/features/communities/communityStorage";
+import { clearCommunityDestinations } from "@/features/communities/communityNavigationStorage";
+import { autoConnectDefaultRelayEnabled } from "@/shared/api/tauri";
+import { getBuildDefaultRelayUrl } from "@/shared/api/buildConfig";
 import {
   type OnboardingTransitionDirection,
   OnboardingSlideTransition,
@@ -221,6 +225,61 @@ export function OnboardingFlow({
     setCurrentPage("key-import");
   }, []);
 
+  const recoverLegacyDefaultCommunity = React.useCallback(async () => {
+    if (!activeCommunity) {
+      return false;
+    }
+
+    try {
+      const [defaultRelayUrl, autoConnectDefaultRelay, identity] =
+        await Promise.all([
+          getBuildDefaultRelayUrl(),
+          autoConnectDefaultRelayEnabled(),
+          getIdentity(),
+        ]);
+      if (!defaultRelayUrl) {
+        return false;
+      }
+      if (
+        !quarantineLegacyAutoConnectedCommunity({
+          activePubkey: identity.pubkey,
+          autoConnectDefaultRelay,
+          defaultRelayUrl,
+        })
+      ) {
+        return false;
+      }
+
+      relayClient.disconnect();
+      clearCommunityDestinations();
+      window.location.reload();
+      return true;
+    } catch {
+      return false;
+    }
+  }, [activeCommunity]);
+
+  const showMembershipDenied = React.useCallback(
+    async (nextPage: OnboardingPage | "complete") => {
+      if (await recoverLegacyDefaultCommunity()) {
+        return;
+      }
+
+      try {
+        const identity = await getIdentity();
+        setDeniedPubkey(identity.pubkey);
+      } catch {
+        setDeniedPubkey("");
+      }
+      setDeniedFromPage((prev) =>
+        currentPage === "membership-denied" ? prev : currentPage,
+      );
+      setMembershipRetryPage(nextPage);
+      setCurrentPage("membership-denied");
+    },
+    [currentPage, recoverLegacyDefaultCommunity],
+  );
+
   const saveProfileAndContinue = React.useCallback(
     async (nextPage: OnboardingPage | "complete") => {
       if (isProfileAdvancePending) {
@@ -241,17 +300,7 @@ export function OnboardingFlow({
         setMembershipError(null);
 
         if (membershipStatus === "denied") {
-          try {
-            const identity = await getIdentity();
-            setDeniedPubkey(identity.pubkey);
-          } catch {
-            setDeniedPubkey("");
-          }
-          setDeniedFromPage((prev) =>
-            currentPage === "membership-denied" ? prev : currentPage,
-          );
-          setMembershipRetryPage(nextPage);
-          setCurrentPage("membership-denied");
+          await showMembershipDenied(nextPage);
           return;
         }
 
@@ -278,17 +327,7 @@ export function OnboardingFlow({
             await profileUpdateMutation.mutateAsync(updatePayload);
           } catch (error) {
             if (isRelayMembershipDeniedError(error)) {
-              try {
-                const identity = await getIdentity();
-                setDeniedPubkey(identity.pubkey);
-              } catch {
-                setDeniedPubkey("");
-              }
-              setDeniedFromPage((prev) =>
-                currentPage === "membership-denied" ? prev : currentPage,
-              );
-              setMembershipRetryPage(nextPage);
-              setCurrentPage("membership-denied");
+              await showMembershipDenied(nextPage);
               return;
             }
 
@@ -307,12 +346,12 @@ export function OnboardingFlow({
       }
     },
     [
-      currentPage,
       isProfileAdvancePending,
       profileDraft,
       profileUpdateMutation,
       savedProfile,
       complete,
+      showMembershipDenied,
       showAvatarPage,
     ],
   );

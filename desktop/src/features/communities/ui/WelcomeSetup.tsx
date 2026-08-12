@@ -3,6 +3,10 @@ import { Check, Copy } from "lucide-react";
 
 import { HostedCommunityOnboarding } from "@/features/communities/ui/HostedCommunityOnboarding";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
+import {
+  hasLegacyAutoConnectRecovery,
+  restoreLegacyAutoConnectedCommunity,
+} from "@/features/communities/communityStorage";
 import { InviteRedeemForm } from "@/features/onboarding/ui/InviteRedeemForm";
 import { OnboardingChrome } from "@/features/onboarding/ui/OnboardingChrome";
 import {
@@ -47,6 +51,9 @@ export function WelcomeSetup({
   const communityOnboarding = useCommunityOnboarding();
   const identityQuery = useIdentityQuery();
   const systemColorScheme = useSystemColorScheme();
+  const activePubkey = identityQuery.data?.pubkey;
+  const canRestorePreviousCommunity =
+    hasLegacyAutoConnectRecovery(activePubkey);
   const npub = identityQuery.data?.pubkey
     ? pubkeyToNpub(identityQuery.data.pubkey)
     : "";
@@ -163,6 +170,24 @@ export function WelcomeSetup({
                 </Card>
               </div>
               <OnboardingFooter>
+                {canRestorePreviousCommunity ? (
+                  <Button
+                    className="h-9 rounded-full bg-foreground/10 px-6 hover:bg-foreground/15"
+                    data-testid="restore-previous-community"
+                    onClick={() => {
+                      if (
+                        activePubkey &&
+                        restoreLegacyAutoConnectedCommunity(activePubkey)
+                      ) {
+                        window.location.reload();
+                      }
+                    }}
+                    type="button"
+                    variant="ghost"
+                  >
+                    Restore previous community
+                  </Button>
+                ) : null}
                 <Button
                   className="h-9 rounded-full bg-foreground/10 px-6 hover:bg-foreground/15"
                   data-testid="welcome-setup-back"

@@ -4,9 +4,13 @@ import test from "node:test";
 import {
   clearCommunityStorage,
   initFirstCommunity,
+  hasLegacyAutoConnectRecovery,
   loadCommunities,
   migrateLegacyCommunityStorage,
+  quarantineLegacyAutoConnectedCommunity,
+  restoreLegacyAutoConnectedCommunity,
   shouldAutoConnectDefaultRelay,
+  shouldRecoverLegacyAutoConnectedCommunity,
 } from "./communityStorage.ts";
 
 function createMemoryStorage(initial = {}) {
@@ -111,6 +115,346 @@ test("signed-build relay defaults auto-connect during first-run onboarding", () 
   );
   assert.equal(shouldAutoConnectDefaultRelay("relay.example.com"), false);
   assert.equal(shouldAutoConnectDefaultRelay("not a valid relay"), false);
+});
+
+test("legacy default community recovery requires the exact obsolete record shape", () => {
+  const defaultRelayUrl = "wss://relay.colony.ainative.ventures";
+  const community = {
+    id: "legacy-default",
+    name: "colony",
+    relayUrl: `${defaultRelayUrl}/`,
+    pubkey: "legacy-pubkey",
+    addedAt: "2026-08-11T12:00:00.000Z",
+  };
+  const candidate = {
+    activePubkey: community.pubkey,
+    activeCommunityId: community.id,
+    autoConnectDefaultRelay: false,
+    communities: [community],
+    defaultRelayUrl,
+  };
+
+  assert.equal(shouldRecoverLegacyAutoConnectedCommunity(candidate), true);
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      activePubkey: "replacement-identity",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      autoConnectDefaultRelay: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      activeCommunityId: "another-community",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      communities: [
+        community,
+        { ...community, id: "second", relayUrl: "wss://elsewhere.example" },
+      ],
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      communities: [{ ...community, relayUrl: "wss://elsewhere.example" }],
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      communities: [{ ...community, name: "My Colony" }],
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      communities: [{ ...community, token: "invite-token" }],
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRecoverLegacyAutoConnectedCommunity({
+      ...candidate,
+      communities: [{ ...community, reposDir: "/Users/example/code" }],
+    }),
+    false,
+  );
+});
+
+test("legacy default community quarantine preserves a restorable snapshot", () => {
+  const community = {
+    id: "legacy-default",
+    name: "colony",
+    relayUrl: "wss://relay.colony.ainative.ventures",
+    pubkey: "legacy-pubkey",
+    addedAt: "2026-08-11T12:00:00.000Z",
+  };
+  const storage = createMemoryStorage({
+    "buzz-communities": JSON.stringify([community]),
+    "buzz-active-community-id": community.id,
+    "buzz-community-destinations": JSON.stringify({
+      [community.id]: { kind: "home" },
+    }),
+  });
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(
+    quarantineLegacyAutoConnectedCommunity({
+      activePubkey: community.pubkey,
+      autoConnectDefaultRelay: false,
+      defaultRelayUrl: community.relayUrl,
+    }),
+    true,
+  );
+  assert.equal(storage.getItem("buzz-communities"), null);
+  assert.equal(storage.getItem("buzz-active-community-id"), null);
+  assert.deepEqual(
+    JSON.parse(storage.getItem("buzz-legacy-auto-connect-recovery.v1")),
+    {
+      activeCommunityId: community.id,
+      communities: [community],
+      communityDestinations: JSON.stringify({
+        [community.id]: { kind: "home" },
+      }),
+      version: 1,
+    },
+  );
+  assert.equal(hasLegacyAutoConnectRecovery(community.pubkey), true);
+  assert.equal(hasLegacyAutoConnectRecovery("different-pubkey"), false);
+  assert.equal(restoreLegacyAutoConnectedCommunity("different-pubkey"), false);
+  assert.equal(restoreLegacyAutoConnectedCommunity(community.pubkey), true);
+  assert.deepEqual(JSON.parse(storage.getItem("buzz-communities")), [
+    community,
+  ]);
+  assert.equal(storage.getItem("buzz-active-community-id"), community.id);
+  assert.deepEqual(JSON.parse(storage.getItem("buzz-community-destinations")), {
+    [community.id]: { kind: "home" },
+  });
+  assert.equal(hasLegacyAutoConnectRecovery(community.pubkey), false);
+
+  storage.setItem("buzz-communities", JSON.stringify([community]));
+  storage.setItem("buzz-active-community-id", community.id);
+  storage.setItem(
+    "buzz-legacy-auto-connect-recovery.v1",
+    JSON.stringify({ sentinel: true }),
+  );
+  assert.equal(
+    quarantineLegacyAutoConnectedCommunity({
+      activePubkey: community.pubkey,
+      autoConnectDefaultRelay: false,
+      defaultRelayUrl: community.relayUrl,
+    }),
+    false,
+  );
+  assert.deepEqual(JSON.parse(storage.getItem("buzz-communities")), [
+    community,
+  ]);
+  assert.deepEqual(
+    JSON.parse(storage.getItem("buzz-legacy-auto-connect-recovery.v1")),
+    { sentinel: true },
+  );
+});
+
+test("legacy community restore resumes after each interrupted write", () => {
+  const community = {
+    id: "legacy-default",
+    name: "colony",
+    relayUrl: "wss://relay.colony.ainative.ventures",
+    pubkey: "legacy-pubkey",
+    addedAt: "2026-08-11T12:00:00.000Z",
+  };
+  const destinations = JSON.stringify({
+    [community.id]: { kind: "home" },
+  });
+  const recovery = JSON.stringify({
+    activeCommunityId: community.id,
+    communities: [community],
+    communityDestinations: destinations,
+    version: 1,
+  });
+
+  for (const failedKey of [
+    "buzz-community-destinations",
+    "buzz-active-community-id",
+    "buzz-communities",
+  ]) {
+    const storage = createMemoryStorage({
+      "buzz-legacy-auto-connect-recovery.v1": recovery,
+    });
+    const setItem = storage.setItem;
+    storage.setItem = (key, value) => {
+      if (key === failedKey) throw new Error("simulated interruption");
+      setItem(key, value);
+    };
+    globalThis.localStorage = storage;
+    globalThis.window = { localStorage: storage };
+
+    assert.equal(
+      restoreLegacyAutoConnectedCommunity(community.pubkey),
+      false,
+      failedKey,
+    );
+    assert.equal(
+      storage.getItem("buzz-legacy-auto-connect-recovery.v1"),
+      recovery,
+      failedKey,
+    );
+
+    storage.setItem = setItem;
+    assert.equal(
+      restoreLegacyAutoConnectedCommunity(community.pubkey),
+      true,
+      failedKey,
+    );
+    assert.equal(
+      storage.getItem("buzz-communities"),
+      JSON.stringify([community]),
+      failedKey,
+    );
+    assert.equal(
+      storage.getItem("buzz-active-community-id"),
+      community.id,
+      failedKey,
+    );
+    assert.equal(
+      storage.getItem("buzz-community-destinations"),
+      destinations,
+      failedKey,
+    );
+    assert.equal(
+      storage.getItem("buzz-legacy-auto-connect-recovery.v1"),
+      null,
+      failedKey,
+    );
+  }
+});
+
+test("failed quarantine write leaves the live community untouched", () => {
+  const community = {
+    id: "legacy-default",
+    name: "colony",
+    relayUrl: "wss://relay.colony.ainative.ventures",
+    pubkey: "legacy-pubkey",
+    addedAt: "2026-08-11T12:00:00.000Z",
+  };
+  const storage = createMemoryStorage({
+    "buzz-communities": JSON.stringify([community]),
+    "buzz-active-community-id": community.id,
+  });
+  storage.setItem = (key, value) => {
+    if (key === "buzz-legacy-auto-connect-recovery.v1") {
+      throw new Error("QuotaExceededError");
+    }
+    storage.values.set(key, String(value));
+  };
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(
+    quarantineLegacyAutoConnectedCommunity({
+      activePubkey: community.pubkey,
+      autoConnectDefaultRelay: false,
+      defaultRelayUrl: community.relayUrl,
+    }),
+    false,
+  );
+  assert.deepEqual(JSON.parse(storage.getItem("buzz-communities")), [
+    community,
+  ]);
+  assert.equal(storage.getItem("buzz-active-community-id"), community.id);
+});
+
+test("legacy default community quarantine revalidates live storage before clearing", () => {
+  const community = {
+    id: "legacy-default",
+    name: "colony",
+    relayUrl: "wss://relay.colony.ainative.ventures",
+    pubkey: "legacy-pubkey",
+    addedAt: "2026-08-11T12:00:00.000Z",
+  };
+  const newerCommunity = {
+    ...community,
+    id: "newer-community",
+    relayUrl: "wss://newer.example.com",
+  };
+  const storage = createMemoryStorage({
+    "buzz-communities": JSON.stringify([community, newerCommunity]),
+    "buzz-active-community-id": community.id,
+  });
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(
+    quarantineLegacyAutoConnectedCommunity({
+      activePubkey: community.pubkey,
+      autoConnectDefaultRelay: false,
+      defaultRelayUrl: community.relayUrl,
+    }),
+    false,
+  );
+  assert.deepEqual(JSON.parse(storage.getItem("buzz-communities")), [
+    community,
+    newerCommunity,
+  ]);
+  assert.equal(storage.getItem("buzz-active-community-id"), community.id);
+  assert.equal(storage.getItem("buzz-legacy-auto-connect-recovery.v1"), null);
+});
+
+test("legacy default community quarantine resumes an interrupted matching recovery", () => {
+  const community = {
+    id: "legacy-default",
+    name: "colony",
+    relayUrl: "wss://relay.colony.ainative.ventures",
+    pubkey: "legacy-pubkey",
+    addedAt: "2026-08-11T12:00:00.000Z",
+  };
+  const destinations = JSON.stringify({
+    [community.id]: { kind: "home" },
+  });
+  const storage = createMemoryStorage({
+    "buzz-communities": JSON.stringify([community]),
+    "buzz-active-community-id": community.id,
+    "buzz-community-destinations": destinations,
+    "buzz-legacy-auto-connect-recovery.v1": JSON.stringify({
+      activeCommunityId: community.id,
+      communities: [community],
+      communityDestinations: destinations,
+      version: 1,
+    }),
+  });
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(
+    quarantineLegacyAutoConnectedCommunity({
+      activePubkey: community.pubkey,
+      autoConnectDefaultRelay: false,
+      defaultRelayUrl: community.relayUrl,
+    }),
+    true,
+  );
+  assert.equal(storage.getItem("buzz-communities"), null);
+  assert.equal(storage.getItem("buzz-active-community-id"), null);
+  assert.equal(
+    storage.getItem("buzz-legacy-auto-connect-recovery.v1") !== null,
+    true,
+  );
 });
 
 test("failed first-community write preserves existing community data", () => {

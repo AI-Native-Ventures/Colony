@@ -688,12 +688,162 @@ test("non-local runtime override keeps community selection without release flag"
   ).toBeVisible();
   await expect(page.getByTestId("community-choice-create")).toBeVisible();
   await expect(page.getByTestId("membership-denied")).toHaveCount(0);
+  await expect(page.getByTestId("restore-previous-community")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Change community" }),
   ).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("buzz-communities")))
     .toBeNull();
+});
+
+test("recovers legacy auto-connected default community after membership denial", async ({
+  page,
+}) => {
+  const defaultRelayUrl = "wss://relay.colony.ainative.ventures";
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript(
+    ({ pubkey, relayUrl }) => {
+      if (window.sessionStorage.getItem("legacy-community-seeded")) {
+        return;
+      }
+      window.sessionStorage.setItem("legacy-community-seeded", "true");
+      window.localStorage.setItem(
+        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        "true",
+      );
+      window.localStorage.setItem(
+        "buzz-communities",
+        JSON.stringify([
+          {
+            id: "46d6cd45-6f36-46c5-8fcb-a210a69b2f16",
+            name: "colony",
+            relayUrl,
+            pubkey,
+            addedAt: "2026-08-11T12:00:00.000Z",
+          },
+        ]),
+      );
+      window.localStorage.setItem(
+        "buzz-active-community-id",
+        "46d6cd45-6f36-46c5-8fcb-a210a69b2f16",
+      );
+      window.localStorage.setItem(
+        "buzz-community-destinations",
+        JSON.stringify({
+          "46d6cd45-6f36-46c5-8fcb-a210a69b2f16": {
+            kind: "home",
+          },
+        }),
+      );
+    },
+    { pubkey: BLANK_TYLER_IDENTITY.pubkey, relayUrl: defaultRelayUrl },
+  );
+  await retainE2eCommandHistoryAcrossReloads(page);
+  await installMockBridge(
+    page,
+    {
+      relayRequiresMembership: true,
+      relayRole: null,
+    },
+    {
+      autoConnectDefaultRelay: false,
+      relayWsUrl: defaultRelayUrl,
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(
+    page.getByRole("button", { name: /Create a community/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Join a community/ }),
+  ).toBeVisible();
+  await expect(page.getByTestId("membership-denied")).toHaveCount(0);
+  await expect
+    .poll(async () =>
+      (await readE2eCommandHistory(page)).allCommands.includes(
+        "plugin:websocket|disconnect",
+      ),
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ identityKey, machineKey }) => ({
+          activeCommunityId: window.localStorage.getItem(
+            "buzz-active-community-id",
+          ),
+          communities: window.localStorage.getItem("buzz-communities"),
+          communityDestinations: window.localStorage.getItem(
+            "buzz-community-destinations",
+          ),
+          identityRetained: window.localStorage.getItem(identityKey) !== null,
+          quarantine: window.localStorage.getItem(
+            "buzz-legacy-auto-connect-recovery.v1",
+          ),
+          machineOnboardingRetained:
+            window.localStorage.getItem(machineKey) === "true",
+        }),
+        {
+          identityKey: E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
+          machineKey: `buzz-machine-onboarding-complete.v2:${BLANK_TYLER_IDENTITY.pubkey}`,
+        },
+      ),
+    )
+    .toEqual({
+      activeCommunityId: null,
+      communities: null,
+      communityDestinations: null,
+      identityRetained: true,
+      quarantine: expect.stringContaining(
+        "46d6cd45-6f36-46c5-8fcb-a210a69b2f16",
+      ),
+      machineOnboardingRetained: true,
+    });
+
+  await expect(page.getByTestId("restore-previous-community")).toBeVisible();
+  await page.addInitScript(() => {
+    if (window.sessionStorage.getItem("restore-legacy-community")) {
+      if (window.__BUZZ_E2E__?.mock) {
+        window.__BUZZ_E2E__.mock.relayRequiresMembership = false;
+      }
+    }
+  });
+  await page.evaluate(() => {
+    window.sessionStorage.setItem("restore-legacy-community", "true");
+  });
+  await page.getByTestId("restore-previous-community").click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        activeCommunityId: window.localStorage.getItem(
+          "buzz-active-community-id",
+        ),
+        communities: window.localStorage.getItem("buzz-communities"),
+        communityDestinations: window.localStorage.getItem(
+          "buzz-community-destinations",
+        ),
+        quarantine: window.localStorage.getItem(
+          "buzz-legacy-auto-connect-recovery.v1",
+        ),
+      })),
+    )
+    .toEqual({
+      activeCommunityId: "46d6cd45-6f36-46c5-8fcb-a210a69b2f16",
+      communities: expect.stringContaining(
+        "46d6cd45-6f36-46c5-8fcb-a210a69b2f16",
+      ),
+      communityDestinations: expect.stringContaining(
+        "46d6cd45-6f36-46c5-8fcb-a210a69b2f16",
+      ),
+      quarantine: null,
+    });
 });
 
 test("non-local default auto-connects when the release flag is enabled", async ({
