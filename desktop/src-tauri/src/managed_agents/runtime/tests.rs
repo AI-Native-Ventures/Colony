@@ -270,6 +270,8 @@ fn persona_with_provider(
     provider: Option<&str>,
 ) -> crate::managed_agents::AgentDefinition {
     crate::managed_agents::AgentDefinition {
+        role_id: None,
+        role_title: None,
         id: id.to_string(),
         display_name: id.to_string(),
         avatar_url: None,
@@ -1255,6 +1257,7 @@ fn make_pair_runtime_placeholder() -> crate::managed_agents::ManagedAgentPairRun
         .spawn()
         .expect("spawn true for placeholder");
     let process = crate::managed_agents::ManagedAgentProcess {
+        provisioned_lease: None,
         child,
         log_path: std::path::PathBuf::new(),
         spawn_config: crate::managed_agents::spawn_snapshot::prospective_spawn_config_snapshot(

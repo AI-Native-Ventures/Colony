@@ -8,11 +8,17 @@ mod deep_link;
 mod discovery_credentials;
 mod discovery_worker;
 mod event_sync;
+mod egress_guard;
 mod events;
 mod host;
 mod huddle;
+mod identity_storage;
 mod initial_window;
+mod key_backup;
+mod link_preview_tags;
 mod managed_agents;
+#[cfg(target_os = "macos")]
+mod macos_notifications;
 mod media_proxy;
 #[cfg(feature = "mesh-llm")]
 mod mesh_llm;
@@ -32,6 +38,8 @@ mod relay;
 mod relay_admission;
 mod reset;
 mod secret_store;
+#[cfg(target_os = "macos")]
+mod tray_menu;
 mod shutdown;
 mod templates;
 mod terminal;

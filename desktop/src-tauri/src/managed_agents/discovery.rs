@@ -6,12 +6,13 @@ use std::time::{Duration, Instant};
 
 use crate::managed_agents::{
     buzz_managed_command_path, buzz_managed_node_bin_dir, buzz_managed_npm_bin_dir,
-    AcpAvailabilityStatus, AcpRuntimeCatalogEntry, AuthStatus, CommandAvailabilityInfo,
-    HarnessSource,
+    harness_max_parallelism, AcpAvailabilityStatus, AcpRuntimeCatalogEntry, AuthStatus,
+    CommandAvailabilityInfo, HarnessSource,
 };
 
 mod nvm;
 mod runtime_metadata;
+mod presets;
 
 // Re-exported so every existing path to these keeps working: `runtime.rs`
 // reaches `find_nvm_default_bin` through `managed_agents`, and the tests reach
@@ -21,6 +22,9 @@ pub use nvm::find_nvm_default_bin;
 pub(crate) use nvm::{is_safe_nvm_tag, parse_semver_tag};
 
 pub(crate) use runtime_metadata::KnownAcpRuntime;
+// `persona_events` (upstream snapshot-apply path) classifies pins through
+// these two; `parallelism` keys caps on the normalizer below.
+pub(crate) use presets::{canonical_harness_command, command_for_runtime_id};
 
 const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
@@ -108,6 +112,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         thinking_env_var: Some("GOOSE_THINKING_EFFORT"),
         max_tokens_env_var: Some("GOOSE_MAX_TOKENS"),
         context_limit_env_var: Some("GOOSE_CONTEXT_LIMIT"),
+        max_rounds_env_var: None,
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
         auth_probe_args: None,
@@ -140,6 +145,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         thinking_env_var: None,
         max_tokens_env_var: None,
         context_limit_env_var: None,
+        max_rounds_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run the Claude CLI to complete authentication."),
         auth_probe_args: Some(&["claude", "auth", "status"]),
@@ -172,6 +178,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         thinking_env_var: None,
         max_tokens_env_var: None,
         context_limit_env_var: None,
+        max_rounds_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run `codex login` to authenticate."),
         // Verified: `codex login status` exits 0 when logged in, non-zero otherwise.
@@ -205,6 +212,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         thinking_env_var: Some("BUZZ_AGENT_THINKING_EFFORT"),
         max_tokens_env_var: Some("BUZZ_AGENT_MAX_OUTPUT_TOKENS"),
         context_limit_env_var: Some("BUZZ_AGENT_MAX_CONTEXT_TOKENS"),
+        max_rounds_env_var: Some("BUZZ_AGENT_MAX_ROUNDS"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
         auth_probe_args: None,
@@ -234,7 +242,7 @@ fn executable_basename(command: &str) -> String {
     }
 }
 
-fn normalize_command_identity(command: &str) -> String {
+pub(crate) fn normalize_command_identity(command: &str) -> String {
     let normalized = command.trim().replace('\\', "/");
     let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     let lower = basename
@@ -1370,6 +1378,9 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             model_env_var: runtime.model_env_var.map(str::to_string),
             provider_env_var: runtime.provider_env_var.map(str::to_string),
             thinking_env_var: runtime.thinking_env_var.map(str::to_string),
+            max_tokens_env_var: runtime.max_tokens_env_var.map(str::to_string),
+            context_limit_env_var: runtime.context_limit_env_var.map(str::to_string),
+            max_rounds_env_var: runtime.max_rounds_env_var.map(str::to_string),
             install_hint,
             install_instructions_url: install_instructions_url.to_string(),
             can_auto_install,
@@ -1382,6 +1393,7 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             source: HarnessSource::Builtin,
             // Builtin entries have no user-editable env; definition_env is empty.
             definition_env: Default::default(),
+            max_parallelism: harness_max_parallelism(runtime.id),
         },
     }
 }
@@ -1478,6 +1490,9 @@ fn preset_catalog_entry(
         model_env_var: None,
         provider_env_var: None,
         thinking_env_var: None,
+        max_tokens_env_var: None,
+        context_limit_env_var: None,
+        max_rounds_env_var: None,
         install_hint: def.install_hint.to_string(),
         install_instructions_url: def.install_instructions_url.to_string(),
         can_auto_install: false,
@@ -1494,6 +1509,7 @@ fn preset_catalog_entry(
         source: HarnessSource::Preset,
         // Preset entries have static, non-editable env; definition_env is empty.
         definition_env: Default::default(),
+        max_parallelism: harness_max_parallelism(def.command),
     }
 }
 
@@ -1747,6 +1763,9 @@ pub fn discover_acp_runtimes_from(
                 model_env_var: None,
                 provider_env_var: None,
                 thinking_env_var: None,
+                max_tokens_env_var: None,
+                context_limit_env_var: None,
+                max_rounds_env_var: None,
                 install_hint: def.install_hint.clone(),
                 install_instructions_url: def.install_instructions_url.clone(),
                 // Security line: custom definitions carry no install scripts.
@@ -1761,6 +1780,7 @@ pub fn discover_acp_runtimes_from(
                 // Carry definition env into the catalog so the edit form can
                 // read it back — prevents silently erasing env on save.
                 definition_env: def.env.clone(),
+                max_parallelism: harness_max_parallelism(&def.command),
             });
         }
     }

@@ -596,6 +596,24 @@ fn should_reselect_constructed_voice(constructed_voice: &str, latest_voice: &str
     constructed_voice != latest_voice
 }
 
+
+/// Sign an STT transcript event and produce the guarded POST body.
+///
+/// Factored out of the transcription loop so egress boundary 5 (huddle STT)
+/// has a directly testable seam: the NIP-49 egress guard runs here, before
+/// any bytes can reach the network.
+pub(crate) fn sign_and_guard_stt_body(
+    builder: nostr::EventBuilder,
+    keys: &nostr::Keys,
+) -> Result<Vec<u8>, String> {
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| format!("sign event: {e}"))?;
+    let body_bytes = event.as_json().into_bytes();
+    crate::egress_guard::assert_no_key_backup_bytes(&body_bytes, "huddle STT publish")?;
+    Ok(body_bytes)
+}
+
 /// Spawn a tokio task that reads text_rx and posts kind:9 events.
 ///
 /// Fix 1: `agent_pubkeys_arc` is an `Arc<Mutex<Vec<String>>>` cloned from
@@ -642,8 +660,18 @@ pub(crate) fn spawn_transcription_task(
                 .clone();
 
             let p_tags: Vec<&str> = agent_pubkeys.iter().map(|s| s.as_str()).collect();
-            let builder =
-                match events::build_message(channel_uuid, &t, None, &p_tags, &[], &[], &[]) {
+            let builder = match events::build_message(
+                channel_uuid,
+                &t,
+                None,
+                &p_tags,
+                &[],
+                &[],
+                &[],
+                &[],
+                None,
+                &crate::relay::relay_api_base_url(),
+            ) {
                     Ok(b) => b,
                     Err(e) => {
                         eprintln!("buzz-desktop: STT build_message: {e}");

@@ -36,6 +36,9 @@ pub(super) fn fixture(
     auth_tag: Option<String>,
 ) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        creation_request_id: None,
+        role_id: None,
+        role_title: None,
         pubkey: "p".into(),
         name: "n".into(),
         persona_id: None,

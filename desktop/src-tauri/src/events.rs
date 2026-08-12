@@ -303,8 +303,11 @@ pub fn build_message(
     media_tags: &[Vec<String>],
     custom_emoji_tags: &[Vec<String>],
     mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
 ) -> Result<EventBuilder, String> {
-    build_message_with_reference_tags(
+    build_message_with_client_tags(
         channel_id,
         content,
         thread_ref,
@@ -312,6 +315,9 @@ pub fn build_message(
         media_tags,
         custom_emoji_tags,
         mention_ref_tags,
+        link_preview_tags,
+        sent_from_thread_tag,
+        relay_base,
         &[],
     )
 }
@@ -337,6 +343,9 @@ pub fn build_message_with_reference_tags(
         custom_emoji_tags,
         mention_ref_tags,
         &[],
+        None,
+        &crate::relay::relay_api_base_url(),
+        &[],
         reference_tags,
     )
 }
@@ -355,8 +364,14 @@ pub fn build_message_with_client_tags(
     media_tags: &[Vec<String>],
     custom_emoji_tags: &[Vec<String>],
     mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
     client_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
+    if sent_from_thread_tag.is_some() && thread_ref.is_some() {
+        return Err("sent-from-thread provenance requires a top-level message".into());
+    }
     build_message_with_client_and_reference_tags(
         channel_id,
         content,
@@ -365,6 +380,9 @@ pub fn build_message_with_client_tags(
         media_tags,
         custom_emoji_tags,
         mention_ref_tags,
+        link_preview_tags,
+        sent_from_thread_tag,
+        relay_base,
         client_tags,
         &[],
     )
@@ -379,6 +397,9 @@ fn build_message_with_client_and_reference_tags(
     media_tags: &[Vec<String>],
     custom_emoji_tags: &[Vec<String>],
     mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
     client_tags: &[Vec<String>],
     reference_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
@@ -391,6 +412,8 @@ fn build_message_with_client_and_reference_tags(
     imeta_tags(media_tags, &mut tags)?;
     emoji_tags(custom_emoji_tags, &mut tags)?;
     mention_reference_tags(mention_ref_tags, &mut tags)?;
+    crate::link_preview_tags::append(link_preview_tags, relay_base, &mut tags)?;
+    append_sent_from_thread_tag(sent_from_thread_tag, &mut tags)?;
     append_client_tags(client_tags, &mut tags)?;
     append_block_reference_tags(reference_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
@@ -477,6 +500,41 @@ fn append_block_reference_tags(
     Ok(())
 }
 
+const SENT_FROM_THREAD_TAG: &str = "buzz:sent-from-thread";
+const MAX_THREAD_ROOT_EXCERPT_CHARS: usize = 64;
+
+/// Attach a validated `buzz:sent-from-thread` provenance tag, or nothing when
+/// the message was sent from the thread it belongs to.
+fn append_sent_from_thread_tag(
+    source_tag: Option<&[String]>,
+    tags: &mut Vec<Tag>,
+) -> Result<(), String> {
+    let Some(source_tag) = source_tag else {
+        return Ok(());
+    };
+    if !matches!(source_tag.len(), 2 | 3)
+        || source_tag.first().map(String::as_str) != Some(SENT_FROM_THREAD_TAG)
+    {
+        return Err("invalid sent-from-thread tag shape".into());
+    }
+
+    EventId::from_hex(source_tag[1].trim())
+        .map_err(|_| "sent-from-thread tag has invalid root event ID")?;
+
+    if let Some(excerpt) = source_tag.get(2) {
+        if excerpt.trim().is_empty()
+            || excerpt.chars().count() > MAX_THREAD_ROOT_EXCERPT_CHARS
+            || excerpt.chars().any(char::is_control)
+        {
+            return Err("sent-from-thread tag has invalid root excerpt".into());
+        }
+    }
+
+    let parts: Vec<&str> = source_tag.iter().map(String::as_str).collect();
+    tags.push(Tag::parse(parts).map_err(|e| format!("invalid sent-from-thread tag: {e}"))?);
+    Ok(())
+}
+
 fn append_client_tags(client_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
     for client_tag in client_tags {
         if client_tag.first().map(String::as_str) != Some("client") {
@@ -540,22 +598,38 @@ pub fn build_forum_comment(
 /// edit that leaves the mention set unchanged emits no `p` tags and never
 /// re-wakes anyone. This mirrors the send path's `mention_tags` (dedup +
 /// lowercase); the receiver overlays these onto the original event's audience.
+/// Edit tags grouped so the edit path and its callers share one shape.
+pub struct MessageEditTags<'a> {
+    pub media: &'a [Vec<String>],
+    pub custom_emoji: &'a [Vec<String>],
+    pub mentions: &'a [&'a str],
+    pub mention_refs: Option<&'a [Vec<String>]>,
+}
+
+/// Kind 40003 — edit a message with full content, media, emoji, mentions,
+/// and optional monotonic link-preview suppression.
 pub fn build_message_edit(
     channel_id: Uuid,
     target_event_id: EventId,
     content: &str,
-    media_tags: &[Vec<String>],
-    custom_emoji_tags: &[Vec<String>],
-    mentions: &[&str],
+    edit_tags: MessageEditTags<'_>,
+    suppress_link_previews: bool,
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![
         tag(vec!["h", &channel_id.to_string()])?,
         tag(vec!["e", &target_event_id.to_hex()])?,
     ];
-    tags.extend(mention_tags(mentions)?);
-    imeta_tags(media_tags, &mut tags)?;
-    emoji_tags(custom_emoji_tags, &mut tags)?;
+    tags.extend(mention_tags(edit_tags.mentions)?);
+    imeta_tags(edit_tags.media, &mut tags)?;
+    emoji_tags(edit_tags.custom_emoji, &mut tags)?;
+    if let Some(mention_refs) = edit_tags.mention_refs {
+        mention_reference_tags(mention_refs, &mut tags)?;
+        tags.push(tag(vec!["buzz:mention-snapshot"])?);
+    }
+    if suppress_link_previews {
+        tags.push(tag(vec!["link-preview", "none"])?);
+    }
     Ok(EventBuilder::new(Kind::Custom(40003), content).tags(tags))
 }
 
