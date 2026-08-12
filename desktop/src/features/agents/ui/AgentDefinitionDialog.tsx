@@ -102,6 +102,8 @@ type AgentDefinitionDialogProps = {
   isPending: boolean;
   runtimes: AcpRuntimeCatalogEntry[];
   runtimeCatalogStatus?: "loading" | "ready" | "error";
+  runtimesLoading?: boolean;
+  secondaryAction?: { label: string; onSelect: () => void };
   onDirtyChange?: (dirty: boolean) => void;
   onOpenChange: (open: boolean) => void;
   onSubmit: (
@@ -130,6 +132,8 @@ export function AgentDefinitionDialog({
   isPending,
   runtimes,
   runtimeCatalogStatus = "ready" as const,
+  runtimesLoading: propRuntimesLoading = false,
+  secondaryAction,
   onDirtyChange,
   onOpenChange,
   onSubmit,
@@ -137,7 +141,8 @@ export function AgentDefinitionDialog({
   createRunSection,
   createSubmitBlocked = false,
 }: AgentDefinitionDialogProps) {
-  const runtimesLoading = runtimeCatalogStatus === "loading";
+  const runtimesLoading =
+    runtimeCatalogStatus === "loading" || propRuntimesLoading;
   const [displayName, setDisplayName] = React.useState("");
   const [aiDefaultsOpen, setAiDefaultsOpen] = React.useState(false);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -739,6 +744,7 @@ export function AgentDefinitionDialog({
       isPending={isPending}
       onCancel={() => handleOpenChange(false)}
       publishesCatalogUpdates={publishCatalogUpdatesOnSave && hasUserChanges}
+      secondaryAction={secondaryAction}
       submitBlockReason={null}
       submitLabel={submitLabel}
     />

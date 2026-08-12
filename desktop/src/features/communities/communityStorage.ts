@@ -9,6 +9,8 @@ const LEGACY_WORKSPACES_KEY = "buzz-workspaces";
 const LEGACY_ACTIVE_WORKSPACE_KEY = "buzz-active-workspace-id";
 const LEGACY_AUTO_CONNECT_RECOVERY_KEY = "buzz-legacy-auto-connect-recovery.v1";
 const COMMUNITY_DESTINATIONS_KEY = "buzz-community-destinations";
+const COMMUNITY_DISCOVERY_AFTER_LEAVE_KEY =
+  "buzz-community-discovery-after-leave";
 
 type LegacyAutoConnectRecovery = {
   activeCommunityId: string;
@@ -67,6 +69,9 @@ export function loadCommunities(): Community[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
+    if (parsed.length > 0) {
+      localStorage.removeItem(COMMUNITY_DISCOVERY_AFTER_LEAVE_KEY);
+    }
     // Migrate two pieces of legacy state in one read. Older builds could leave
     // a scheme-less relay host in localStorage; the runtime key and reqwest
     // both require an absolute URL, so repair it before the value reaches the
@@ -110,10 +115,47 @@ export function loadCommunities(): Community[] {
 }
 
 export function saveCommunities(communities: Community[]): boolean {
-  return setLocalStorageItemWithRecovery(
+  const didSave = setLocalStorageItemWithRecovery(
     COMMUNITIES_KEY,
     JSON.stringify(communities),
   );
+  if (didSave && communities.length > 0) {
+    localStorage.removeItem(COMMUNITY_DISCOVERY_AFTER_LEAVE_KEY);
+  }
+  return didSave;
+}
+
+export function loadCommunityDiscoveryAfterLeave(
+  storage: Storage = localStorage,
+): boolean {
+  try {
+    return storage.getItem(COMMUNITY_DISCOVERY_AFTER_LEAVE_KEY) === "1";
+  } catch (error) {
+    // Storage access can be denied for the origin; degrade to the default
+    // ("didn't just leave") instead of crashing the boot path.
+    console.warn(
+      "[communityStorage] loadCommunityDiscoveryAfterLeave failed:",
+      error,
+    );
+    return false;
+  }
+}
+
+export function markCommunityDiscoveryAfterLeave(
+  storage: Storage = localStorage,
+): boolean {
+  if (typeof window !== "undefined" && storage === window.localStorage) {
+    return setLocalStorageItemWithRecovery(
+      COMMUNITY_DISCOVERY_AFTER_LEAVE_KEY,
+      "1",
+    );
+  }
+  try {
+    storage.setItem(COMMUNITY_DISCOVERY_AFTER_LEAVE_KEY, "1");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function clearCommunityStorage(storage: Storage = localStorage): void {

@@ -635,6 +635,48 @@ export function getAgentObserverSnapshot(
   snapshotByAgent.set(key, snapshot);
   return snapshot;
 }
+/**
+ * Return the newest live Colony Credits denial for an agent, if any.
+ *
+ * Provisioned denials intentionally leave the ACP process healthy, so they do
+ * not populate the persisted `ManagedAgent.lastError` field. The observer
+ * frame is therefore the row's live recovery signal. A subsequent turn start
+ * or completion clears the signal; unrelated wire frames leave it intact.
+ */
+export function getLatestColonyCreditsDenial(
+  agentPubkey?: string | null,
+): ObserverEvent | null {
+  if (!agentPubkey) return null;
+  let denial: ObserverEvent | null = null;
+  for (const event of getAgentObserverSnapshot(agentPubkey).events) {
+    if (event.kind === "turn_started" || event.kind === "turn_completed") {
+      denial = null;
+      continue;
+    }
+    if (event.kind !== "turn_error") continue;
+    const payload = event.payload;
+    if (typeof payload !== "object" || payload === null) continue;
+    const status = Number(
+      (payload as { gateway_status?: unknown }).gateway_status,
+    );
+    const marker = (payload as { gateway_marker?: unknown }).gateway_marker;
+    const action = (payload as { action?: unknown }).action;
+    const expectedMarker =
+      status === 401
+        ? "COLONY_CREDITS_GATEWAY_STATUS_401"
+        : status === 402
+          ? "COLONY_CREDITS_GATEWAY_STATUS_402"
+          : null;
+    if (
+      expectedMarker !== null &&
+      marker === expectedMarker &&
+      action === "reconnect"
+    ) {
+      denial = event;
+    }
+  }
+  return denial;
+}
 
 export function getAgentTranscript(
   agentPubkey?: string | null,

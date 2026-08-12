@@ -37,7 +37,12 @@ type AgentDialogCreateProps = {
   definitionError: Error | null;
   isDefinitionPending: boolean;
   runtimes: AcpRuntimeCatalogEntry[];
-  runtimeCatalogStatus: "loading" | "ready" | "error";
+  runtimeCatalogStatus?: "loading" | "ready" | "error";
+  runtimesLoading?: boolean;
+  secondaryAction?: {
+    label: string;
+    onSelect: () => void;
+  };
   onSubmitDefinition: (
     input: CreatePersonaInput | UpdatePersonaInput,
     intent: AgentCreateIntent,
@@ -72,6 +77,11 @@ type AgentDialogDefinitionEditProps = {
   isPending: boolean;
   runtimes: AcpRuntimeCatalogEntry[];
   runtimeCatalogStatus?: "loading" | "ready" | "error";
+  runtimesLoading?: boolean;
+  secondaryAction?: {
+    label: string;
+    onSelect: () => void;
+  };
   onOpenChange: (open: boolean) => void;
   onSubmit: (
     input: CreatePersonaInput | UpdatePersonaInput,
@@ -130,6 +140,8 @@ function AgentCreateDialogRouter({
   isDefinitionPending,
   runtimes,
   runtimeCatalogStatus,
+  runtimesLoading,
+  secondaryAction,
   submitLabel,
   onDirtyChange,
   onSubmitDefinition,
@@ -178,7 +190,10 @@ function AgentCreateDialogRouter({
         }}
         open
         runtimes={runtimes}
-        runtimeCatalogStatus={runtimeCatalogStatus}
+        runtimeCatalogStatus={
+          runtimeCatalogStatus ?? (runtimesLoading ? "loading" : "ready")
+        }
+        secondaryAction={secondaryAction}
         submitLabel={submitLabel ?? copy.submitLabel}
         title={copy.title}
       />
