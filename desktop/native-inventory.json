@@ -1,9 +1,9 @@
 {
   "files": {
-    "rust_total": 334,
+    "rust_total": 336,
     "rust_lines": 137305,
-    "tauri_coupled": 143,
-    "portable": 191,
+    "tauri_coupled": 144,
+    "portable": 192,
     "portable_lines": 73433,
     "tauri_coupled_list": [
       "src-tauri/src/app_state.rs",
@@ -124,6 +124,7 @@
       "src-tauri/src/managed_agents/runtime/provisioned.rs",
       "src-tauri/src/managed_agents/runtime/stop.rs",
       "src-tauri/src/managed_agents/runtime_commands.rs",
+      "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
       "src-tauri/src/managed_agents/storage.rs",
       "src-tauri/src/managed_agents/teams.rs",
       "src-tauri/src/media_proxy.rs",
@@ -295,8 +296,9 @@
       "src-tauri/src/managed_agents/runtime_commands/tests.rs",
       "src-tauri/src/managed_agents/runtime_types.rs",
       "src-tauri/src/managed_agents/snapshot_avatar.rs",
-      "src-tauri/src/managed_agents/spawn_hash.rs",
-      "src-tauri/src/managed_agents/spawn_hash/tests.rs",
+      "src-tauri/src/managed_agents/spawn_snapshot.rs",
+      "src-tauri/src/managed_agents/spawn_snapshot/diff/tests.rs",
+      "src-tauri/src/managed_agents/spawn_snapshot/tests.rs",
       "src-tauri/src/managed_agents/storage_tests.rs",
       "src-tauri/src/managed_agents/team_events.rs",
       "src-tauri/src/managed_agents/team_repair.rs",

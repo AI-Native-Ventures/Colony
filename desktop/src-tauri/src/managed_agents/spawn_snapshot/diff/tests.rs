@@ -1,4 +1,5 @@
 use super::*;
+use crate::managed_agents::CredentialMode;
 use std::collections::{BTreeMap, BTreeSet};
 
 const SECRET: &str = "sk-live-SENTINEL-0000";
@@ -21,6 +22,7 @@ fn base() -> SpawnConfigSnapshot {
         system_prompt: Some("You are a test agent.".into()),
         model: Some("gpt-5".into()),
         provider: Some("openai".into()),
+        credential_mode: CredentialMode::Byok,
         session_title: Some("Fizz".into()),
         auth_tag: Some("tag-abcdefgh".into()),
         respond_to: "owner-only".into(),
@@ -61,6 +63,7 @@ fn mutations() -> Vec<Mutation> {
         ("system_prompt", |s| s.system_prompt = None),
         ("model", |s| s.model = None),
         ("provider", |s| s.provider = None),
+        ("credential_mode", |s| s.credential_mode = CredentialMode::ColonyCredits),
         ("session_title", |s| s.session_title = None),
         ("auth_tag", |s| s.auth_tag = None),
         ("respond_to", |s| s.respond_to = "anyone".into()),

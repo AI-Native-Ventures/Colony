@@ -37,7 +37,7 @@ use super::{
     readiness::EffectiveHarnessDescriptor,
     runtime::{resolve_session_title, SESSION_TITLE_ENV_VAR},
     types::{AgentDefinition, ManagedAgentRecord, TeamRecord},
-    GlobalAgentConfig,
+    CredentialMode, GlobalAgentConfig,
 };
 
 pub(crate) mod diff;
@@ -72,6 +72,8 @@ pub(crate) struct SpawnConfigInputs<'a> {
     pub system_prompt: Option<&'a str>,
     pub model: Option<&'a str>,
     pub provider: Option<&'a str>,
+    /// Global credential source — decides how spawn pays for the runtime.
+    pub credential_mode: CredentialMode,
 }
 
 /// The effective spawn configuration of one managed-agent process.
@@ -107,6 +109,10 @@ pub(crate) struct SpawnConfigSnapshot {
     pub system_prompt: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
+    /// Which credential source a spawn uses. Changes the meter seam even when
+    /// the user-facing provider/model/env fields stay identical, so a running
+    /// pair must badge and receive the new lease on restart.
+    pub credential_mode: CredentialMode,
     /// `None` when a user env override shadows `BUZZ_ACP_SESSION_TITLE`: spawn
     /// writes the title BEFORE the user env layer, so the override is what
     /// actually runs and it already reaches this snapshot through `env`.
@@ -136,6 +142,7 @@ impl SpawnConfigSnapshot {
             system_prompt,
             model,
             provider,
+            credential_mode,
         } = inputs;
         Self {
             acp_command: record.acp_command.clone(),
@@ -151,6 +158,7 @@ impl SpawnConfigSnapshot {
             system_prompt: system_prompt.map(str::to_string),
             model: model.map(str::to_string),
             provider: provider.map(str::to_string),
+            credential_mode,
             session_title: (!descriptor.env.contains_key(SESSION_TITLE_ENV_VAR))
                 .then(|| resolve_session_title(record.display_name.as_deref(), &record.name))
                 .flatten(),
@@ -262,6 +270,7 @@ pub(crate) fn prospective_spawn_config_snapshot(
         system_prompt: prompt.as_deref(),
         model: model.as_deref(),
         provider: provider.as_deref(),
+        credential_mode: global.credential_mode,
     })
 }
 
