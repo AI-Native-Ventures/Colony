@@ -25,6 +25,12 @@ import {
 import { buildVideoReviewPresentationByMessageId } from "@/features/messages/lib/videoReviewContext";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
+import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
+import { ChannelWorkspaceDock } from "@/features/workspace/ui/ChannelWorkspaceDock";
+import {
+  useChannelSurfaceMode,
+  useWorkspaceExpanded,
+} from "@/features/workspace/lib/channelSurfaceMode";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
@@ -32,7 +38,7 @@ import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggl
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { THREAD_SURFACE_KEY } from "@/features/channels/lib/threadFocusLayout";
 import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout";
-import { useThreadViewMode } from "@/features/channels/lib/threadViewModePreference";
+import { useEffectiveThreadViewMode } from "@/features/workspace/lib/effectiveThreadViewMode";
 import { useThreadViewModeSwitch } from "@/features/channels/ui/useThreadViewModeSwitch";
 import { useFocusDrawerPresence } from "@/features/channels/ui/useFocusDrawerPresence";
 import { useChannelWorkingAgentPubkeys } from "@/features/agents/agentWorkingSignal";
@@ -72,6 +78,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   autoSendDraftKey = null,
   onAutoSendComplete = null,
   botTypingEntries,
+  channelFind,
   channelManagementOpen = false,
   currentPubkey,
   editTarget = null,
@@ -161,6 +168,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   typingPubkeys,
 }: ChannelPaneProps) {
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
+  const layoutRef = React.useRef<HTMLDivElement>(null);
   const messageTimelineRef = React.useRef<MessageTimelineHandle>(null);
   const composerWrapperRef = React.useRef<HTMLDivElement>(null);
   const { goChannel } = useAppNavigation();
@@ -439,8 +447,12 @@ export const ChannelPane = React.memo(function ChannelPane({
   ]);
 
   const isOverlay = useIsThreadPanelOverlay();
-  const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
-  const threadViewMode = useThreadViewMode();
+  const workspaceOpen =
+    useChannelSurfaceMode(activeChannel?.id) === "workspace";
+  const workspaceExpanded = useWorkspaceExpanded(activeChannel?.id);
+  const useSplitAuxiliaryPane =
+    !isSinglePanelView && (!isOverlay || workspaceOpen);
+  const threadViewMode = useEffectiveThreadViewMode(activeChannel?.id);
   const useFocusThreadDrawer =
     threadViewMode === "focus" &&
     useSplitAuxiliaryPane &&
@@ -518,6 +530,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   return (
     <div
       className="relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden"
+      data-workspace-expanded={workspaceExpanded}
+      ref={layoutRef}
       style={isHuddleTranscript ? HUDDLE_TRANSCRIPT_ROOT_STYLE : undefined}
     >
       {!isSinglePanelView && !isHuddleTranscript ? (
@@ -534,7 +548,7 @@ export const ChannelPane = React.memo(function ChannelPane({
       {!isSinglePanelView ? (
         <section
           aria-label="Channel messages and composer"
-          className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          hidden={workspaceExpanded}
           inert={channelIsCovered ? true : undefined}
           data-testid="channel-drop-zone"
           onDragEnter={
@@ -555,6 +569,19 @@ export const ChannelPane = React.memo(function ChannelPane({
           }
         >
           {isHuddleTranscript ? null : header}
+          {channelFind.isOpen ? (
+            <div className={cn("absolute inset-x-0 z-40", channelChrome.top)}>
+              <ChannelFindBar
+                matchCount={channelFind.matchCount}
+                matchIndex={channelFind.activeIndex}
+                onClose={channelFind.close}
+                onNext={channelFind.goToNext}
+                onPrevious={channelFind.goToPrevious}
+                onQueryChange={channelFind.setQuery}
+                query={channelFind.query}
+              />
+            </div>
+          ) : null}
           <MessageTimeline
             ref={messageTimelineRef}
             channelId={activeChannel?.id}
@@ -616,6 +643,9 @@ export const ChannelPane = React.memo(function ChannelPane({
             }
             onTargetReached={onTargetReached}
             onToggleReaction={onToggleReaction}
+            searchActiveMessageId={channelFind.activeMatch?.messageId ?? null}
+            searchMatchingMessageIds={channelFind.matchingMessageIds}
+            searchQuery={channelFind.query}
             targetMessageId={targetMessageId}
             splitThreadPanelOpen={
               useSplitAuxiliaryPane &&
@@ -923,6 +953,11 @@ export const ChannelPane = React.memo(function ChannelPane({
           })()
         ) : null}
       </AnimatePresence>
+      <ChannelWorkspaceDock
+        channelId={activeChannelId}
+        hasAuxiliaryPane={useSplitAuxiliaryPane}
+        layoutRef={layoutRef}
+      />
     </div>
   );
 });
