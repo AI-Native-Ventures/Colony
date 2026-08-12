@@ -30,17 +30,21 @@ test("delayed project data does not start home, then starts the linked checkout"
     dtag: "colony",
     name: "Colony",
     description: "",
-    cloneUrls: ["https://example.test/colony.git"],
-    webUrl: null,
     owner: "owner",
-    contributors: [],
     createdAt: 0,
     projectChannelId: channelId,
     status: "open",
-    defaultBranch: "main",
-    repoAddress: "30617:owner:colony",
+    projectAddress: "30617:owner:colony",
+    primaryRepositoryAddress: "30617:owner:colony",
+    repositoryAddresses: ["30617:owner:colony"],
+    repositories: [
+      {
+        repoAddress: "30617:owner:colony",
+        cloneUrls: ["https://example.test/colony.git"],
+      },
+    ],
+    legacy: false,
   };
-
   const pending = buildTerminalStartRequest({
     channelId,
     project: null,

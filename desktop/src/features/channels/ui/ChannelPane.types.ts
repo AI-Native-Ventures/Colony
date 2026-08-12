@@ -12,6 +12,7 @@ import type {
   ProfilePanelTab,
   ProfilePanelView,
 } from "@/features/profile/ui/UserProfilePanel";
+import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { Channel } from "@/shared/api/types";
 export type ChannelPaneProps = {
   activeChannel: Channel | null;
@@ -34,6 +35,7 @@ export type ChannelPaneProps = {
    */
   onAutoSendComplete?: (() => void) | null;
   botTypingEntries: TypingIndicatorEntry[];
+  channelFind: ReturnType<typeof useChannelFind>;
   channelManagementOpen?: boolean;
   currentPubkey?: string;
   editTarget?: {

@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useAppShellReadFrontier } from "@/app/useAppShellReadFrontier";
 import { useThreadActivityFeedItems } from "@/app/useThreadActivityFeedItems";
 import {
   maxReadAt,
@@ -49,42 +50,19 @@ export function useChannelActivityProjection({
   threadActivityItems,
   mutedRootIds,
 }: UseChannelActivityProjectionOptions) {
-  const getThreadReadAt = React.useCallback(
-    (rootId: string, channelId?: string | null) => {
-      const threadReadAt = getOwnReadAt(`thread:${rootId}`);
-      if (!channelId) return threadReadAt;
-
-      const channelReadAt = getChannelReadAt(channelId);
-      if (threadReadAt === null) return channelReadAt;
-      if (channelReadAt === null) return threadReadAt;
-      return Math.max(threadReadAt, channelReadAt);
-    },
-    [getChannelReadAt, getOwnReadAt],
-  );
-  const markThreadRead = React.useCallback(
-    (rootId: string, timestamp: number) =>
-      markChannelRead(
-        `thread:${rootId}`,
-        new Date(timestamp * 1_000).toISOString(),
-      ),
-    [markChannelRead],
-  );
-  const getMessageReadAt = React.useCallback(
-    (messageId: string) => getChannelReadAt(msgContextKey(messageId)),
-    [getChannelReadAt],
-  );
+  // Thread and per-message read frontiers come from Colony's read-frontier
+  // hook so every surface keeps folding through the channel marker (LP4 v3)
+  // in exactly the same way the shell always has.
+  const { getThreadReadAt, markThreadRead, getMessageReadAt, markMessageRead } =
+    useAppShellReadFrontier({
+      getChannelReadAt,
+      getOwnReadAt,
+      markChannelRead,
+    });
   const getChannelActivityItemReadAt = React.useCallback(
     (item: Pick<FeedItem, "channelId" | "id">) =>
       resolveChannelActivityFeedItemReadAt(item, getOwnReadAt),
     [getOwnReadAt],
-  );
-  const markMessageRead = React.useCallback(
-    (messageId: string, timestamp: number) =>
-      markChannelRead(
-        msgContextKey(messageId),
-        new Date(timestamp * 1_000).toISOString(),
-      ),
-    [markChannelRead],
   );
   const threadActivityFeedItems = useThreadActivityFeedItems(
     threadActivityItems,

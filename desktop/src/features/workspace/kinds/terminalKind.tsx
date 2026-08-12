@@ -55,10 +55,14 @@ export function buildTerminalStartRequest({
   reposDir: string | null;
 }): TerminalStartRequest | null {
   if (!projectsSettled) return null;
+  const primaryRepository =
+    project?.repositories.find(
+      (candidate) => candidate.repoAddress === project.primaryRepositoryAddress,
+    ) ?? project?.repositories[0];
   return {
     channelId,
     projectDtag: project?.dtag ?? null,
-    cloneUrl: project?.cloneUrls[0] ?? null,
+    cloneUrl: primaryRepository?.cloneUrls[0] ?? null,
     reposDir,
     cols: 80,
     rows: 24,

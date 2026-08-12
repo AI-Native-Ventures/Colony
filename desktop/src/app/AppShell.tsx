@@ -1,14 +1,14 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
-import { deriveShellRoute } from "@/app/AppShell.helpers";
+import { deriveShellRoute, markAllReadSources } from "@/app/AppShell.helpers";
 import { AppShellProvider } from "@/app/AppShellContext";
 import { AppShellOverlays } from "@/app/AppShellOverlays";
 import { AppShellChannelSurface } from "@/app/AppShellChannelSurface";
 import { AppHuddleShell } from "@/app/AppHuddleShell";
 import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
-import { useAppShellReadFrontier } from "@/app/useAppShellReadFrontier";
+import { useChannelActivityProjection } from "@/app/useChannelActivityProjection";
 import { useSettingsPanelHandlers } from "@/app/useSettingsPanelHandlers";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useCommunityNavigationTransitions } from "@/app/useCommunityNavigationTransitions";
@@ -18,7 +18,6 @@ import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useAppShellDesktopNotifications } from "@/app/useAppShellDesktopNotifications";
 import { useAppShellLifecycleEffects } from "@/app/useAppShellLifecycleEffects";
-import { useThreadActivityFeedItems } from "@/app/useThreadActivityFeedItems";
 import { useTauriWindowDrag } from "@/app/useTauriWindowDrag";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import { useHuddlePresentation } from "@/app/useHuddlePresentation";
@@ -353,10 +352,12 @@ export function AppShell() {
   } = useThreadFollows(identityQuery.data?.pubkey);
 
   const {
-    markAllChannelsRead,
+    markAllChannelsRead: markAllChannelReadMarkers,
     markChannelRead,
     markChannelUnread,
+    clearChannelUnreadSource,
     unreadChannelIds,
+    topLevelUnreadChannelIds,
     unreadChannelCounts,
     highPriorityUnreadChannelIds,
     unreadChannelNotificationCount,
@@ -367,6 +368,7 @@ export function AppShell() {
     participatedRootIds,
     authoredRootIds,
     mentionedRootIds,
+    recordThreadInteraction,
     threadActivityItems,
     mutedRootIds,
     muteThread,
@@ -389,18 +391,45 @@ export function AppShell() {
     },
   );
 
-  const { getMessageReadAt, getThreadReadAt, markMessageRead, markThreadRead } =
-    useAppShellReadFrontier({
-      getChannelReadAt,
-      getOwnReadAt,
-      markChannelRead,
-    });
-  const threadActivityFeedItems = useThreadActivityFeedItems(
+  const {
+    getThreadReadAt,
+    markThreadRead,
+    getMessageReadAt,
+    getChannelActivityItemReadAt,
+    markMessageRead,
+    threadActivityFeedItems,
+    locallyUnreadFeedItems,
+    unreadThreadFeedItems,
+    unreadThreadChannelIds,
+  } = useChannelActivityProjection({
+    channels,
+    feed: homeFeedQuery.data?.feed,
+    unreadFeedItemIds: feedItemState.unreadSet,
+    getChannelReadAt,
+    getOwnReadAt,
+    markChannelRead,
+    readStateVersion,
     threadActivityItems,
     mutedRootIds,
-    channels,
-  );
-
+  });
+  const markAllChannelsRead = React.useCallback(() => {
+    markAllReadSources({
+      activeChannelId: activeChannel?.id ?? null,
+      channelActivityItems: unreadThreadFeedItems,
+      markAllChannelReadMarkers,
+      markActiveChannelRead: (channelId, createdAt) =>
+        markChannelRead(channelId, new Date(createdAt * 1_000).toISOString()),
+      undoUnreadFeedItem: feedItemState.undoUnread,
+      unreadFeedItemIds: feedItemState.unreadSet,
+    });
+  }, [
+    activeChannel?.id,
+    feedItemState.undoUnread,
+    feedItemState.unreadSet,
+    markAllChannelReadMarkers,
+    markChannelRead,
+    unreadThreadFeedItems,
+  ]);
   const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
     useHomeFeedNotificationState(
       homeFeedQuery.data,
@@ -705,6 +734,7 @@ export function AppShell() {
             markAllChannelsRead,
             markChannelRead,
             markChannelUnread,
+            clearChannelUnreadSource,
             openBrowseChannels: handleOpenBrowseChannels,
             openCreateChannel: handleOpenCreateChannel,
             openChannelManagement: (channelId?: string) => {
@@ -718,16 +748,23 @@ export function AppShell() {
             markThreadRead,
             getMessageReadAt,
             markMessageRead,
+            getChannelActivityItemReadAt,
             readStateVersion,
             setContextParentResolver,
             followThread: handleFollowThread,
             unfollowThread: handleUnfollowThread,
             isFollowingThread,
             isNotifiedForThread,
+            recordThreadInteraction,
             isThreadMuted: (rootId) => mutedRootIds.has(rootId),
             threadActivityItems,
             threadActivityFeedItems,
             feedItemState,
+            locallyUnreadFeedItems,
+            unreadThreadFeedItems,
+            unreadThreadChannelIds,
+            topLevelUnreadChannelIds,
+            hasSidebarUnreadProjections: true,
             onOpenSettings: handleOpenSettings,
           }}
         >
@@ -747,12 +784,10 @@ export function AppShell() {
               <CommunityRail
                 activeCommunityId={communitiesHook.activeCommunity?.id ?? null}
                 onAddCommunity={addCommunityDialog.openDialog}
-                onRemoveCommunity={(id) => void handleRemoveCommunity(id)}
                 onReorderCommunities={communitiesHook.reorderCommunities}
                 onSwitchCommunity={handleSwitchCommunity}
                 onUpdateCommunity={communitiesHook.updateCommunity}
                 communities={communitiesHook.communities}
-                workspaceExpanded={workspaceExpanded}
               />
             ) : null}
             <SidebarProvider
