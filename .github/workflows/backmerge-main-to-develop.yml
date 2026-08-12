@@ -10,11 +10,11 @@ name: Back-merge main into develop
 # nothing in the diff saying so. It was caught by hand, by comparing lockfile
 # versions. This workflow is what makes that a control rather than luck.
 #
-# On every push to `main` it tries a fast-forward-or-merge back into
-# `develop`. When the merge is clean it pushes directly. When it conflicts it
-# opens a PR instead, because a conflicted back-merge needs a human and a
-# silent failure here recreates the exact problem the workflow exists to
-# prevent.
+# On every push to `main` it first compares the branch trees. Promotions often
+# produce different histories with identical trees; those are synchronized and
+# require no write. Genuine drift always goes through a PR to protected
+# `develop`: clean merges are queued automatically, while conflicts open a PR
+# but fail loudly for human resolution.
 
 on:
   push:
@@ -28,7 +28,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # One back-merge at a time. Two overlapping runs would race the same push.
+  # One back-merge at a time. Two overlapping runs would race the same PR.
   group: backmerge-main-to-develop
   cancel-in-progress: false
 
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           # Both branches and their common ancestry are needed to merge.
           fetch-depth: 0
@@ -48,68 +48,92 @@ jobs:
           git config user.name "buzz-backmerge-bot"
           git config user.email "buzz-backmerge-bot@users.noreply.github.com"
 
-      - name: Merge main into develop
-        id: merge
+      - name: Classify and prepare the back-merge
+        id: prepare
         run: |
           set -euo pipefail
           git fetch origin main develop
+          status=$(scripts/backmerge-main-to-develop.sh origin/main origin/develop)
+          main_sha=$(git rev-parse origin/main)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "branch=backmerge/main-to-develop-${main_sha::12}" >> "$GITHUB_OUTPUT"
 
-          if git merge-base --is-ancestor origin/main origin/develop; then
-            echo "develop already contains main; nothing to back-merge"
-            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if git merge --no-edit origin/main; then
-            echo "status=merged" >> "$GITHUB_OUTPUT"
-          else
-            # Leave the working tree clean so the conflict PR step starts from
-            # a known state rather than a half-finished merge.
-            git merge --abort || true
-            echo "status=conflict" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Push the back-merge
-        if: steps.merge.outputs.status == 'merged'
-        run: git push origin HEAD:develop
-
-      - name: Open a PR when the back-merge conflicts
-        if: steps.merge.outputs.status == 'conflict'
+      - name: Create or reuse the protected back-merge PR
+        id: pull-request
+        if: steps.prepare.outputs.status != 'synchronized'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BACKMERGE_MAINTAINER_TOKEN }}
+          STATUS: ${{ steps.prepare.outputs.status }}
+          BRANCH: ${{ steps.prepare.outputs.branch }}
         run: |
           set -euo pipefail
-          branch="backmerge/main-to-develop-${GITHUB_SHA::12}"
-          git checkout -B "$branch" origin/main
-          git push --force-with-lease origin "$branch"
-
-          if gh pr list --base develop --head "$branch" --state open \
-               --json number --jq 'length' | grep -qv '^0$'; then
-            echo "a back-merge PR for this commit is already open"
-            exit 0
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::BACKMERGE_MAINTAINER_TOKEN is not configured"
+            exit 1
           fi
 
-          {
-            echo '`main` moved and the automatic back-merge into `develop` hit'
-            echo 'conflicts, so it needs a human.'
-            echo
-            echo 'Until this merges, `develop` is missing something `main` has.'
-            echo 'The next promotion of `develop` to `main` would revert it, and'
-            echo 'the diff would not obviously say so. That is the drift this'
-            echo 'automation exists to prevent, so please resolve rather than'
-            echo 'close.'
-          } > backmerge-body.md
-
-          gh pr create \
+          pr_number=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
             --base develop \
-            --head "$branch" \
-            --title "back-merge: main into develop (conflicts)" \
-            --body-file backmerge-body.md
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [[ -n "$pr_number" ]]; then
+            echo "reusing open back-merge PR #$pr_number"
+          else
+            # Never overwrite an unexplained branch. A prior open PR is the
+            # only state this workflow is allowed to reuse.
+            if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH" \
+                 >/dev/null 2>&1; then
+              echo "::error::Back-merge branch $BRANCH exists without an open PR"
+              exit 1
+            fi
+
+            git switch -c "$BRANCH"
+            git push origin "HEAD:refs/heads/$BRANCH"
+
+            body="$RUNNER_TEMP/backmerge-body.md"
+            if [[ "$STATUS" == clean ]]; then
+              title="back-merge: main into develop"
+              {
+                echo '`main` contains clean drift that is missing from `develop`.'
+                echo
+                echo 'This PR was prepared automatically and will enter the normal'
+                echo '`develop` merge queue after its required checks pass.'
+              } >"$body"
+            else
+              title="back-merge: main into develop (conflicts)"
+              {
+                echo '`main` contains drift that conflicts with `develop`.'
+                echo
+                echo 'Resolve this PR rather than closing it. Until it merges, the'
+                echo 'next promotion of `develop` could silently revert production.'
+              } >"$body"
+            fi
+
+            pr_url=$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base develop \
+              --head "$BRANCH" \
+              --title "$title" \
+              --body-file "$body")
+            pr_number=${pr_url##*/}
+            echo "opened back-merge PR #$pr_number"
+          fi
+
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+          if [[ "$STATUS" == clean ]]; then
+            gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --merge --auto
+            echo "armed PR #$pr_number for the protected develop merge queue"
+          fi
 
       - name: Report
         run: |
-          case "${{ steps.merge.outputs.status }}" in
-            up-to-date) echo "develop already contained main" ;;
-            merged)     echo "back-merged main into develop" ;;
-            conflict)   echo "conflicts: opened a back-merge PR" ; exit 1 ;;
+          case "${{ steps.prepare.outputs.status }}" in
+            synchronized) echo "main and develop are synchronized; no write needed" ;;
+            clean)        echo "clean drift opened or reused PR #${{ steps.pull-request.outputs.number }} and armed auto-merge" ;;
+            conflict)     echo "::error::Conflicting drift opened or reused PR #${{ steps.pull-request.outputs.number }} for human resolution"; exit 1 ;;
+            *)            echo "::error::Unknown back-merge status"; exit 1 ;;
           esac
