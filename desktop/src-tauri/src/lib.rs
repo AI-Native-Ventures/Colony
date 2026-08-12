@@ -7,6 +7,7 @@ mod company;
 mod deep_link;
 mod discovery_credentials;
 mod discovery_worker;
+mod egress_guard;
 mod event_sync;
 mod events;
 mod host;

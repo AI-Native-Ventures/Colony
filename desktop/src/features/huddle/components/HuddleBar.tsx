@@ -1,4 +1,6 @@
-import { closeWindow, invoke, listen } from "@/shared/api/nativeBridge";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Bot,
   Captions,
@@ -20,6 +22,7 @@ import type { RelayEvent } from "@/shared/api/types";
 import { KIND_HUDDLE_REACTION } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { useDocumentVisible } from "@/shared/lib/useDocumentVisible";
 import { Button } from "@/shared/ui/button";
 import { useEmojiBurst } from "@/shared/ui/EmojiBurstProvider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
@@ -148,6 +151,7 @@ export function HuddleBar({
   onOpenHuddleWindow,
   onVisibilityChange,
 }: HuddleBarProps) {
+  const documentVisible = useDocumentVisible();
   const {
     leaveHuddle,
     micConnected,
@@ -236,7 +240,7 @@ export function HuddleBar({
       }
     }
 
-    void fetchState();
+    if (documentVisible) void fetchState();
 
     // Primary: listen for Rust-emitted state change events
     listen<HuddleState>("huddle-state-changed", (event) => {
@@ -251,21 +255,27 @@ export function HuddleBar({
 
     // Fallback in case events are missed; keep it slow so normal huddle use is
     // event-driven and does not keep a sync IPC command warm on the main thread.
-    const id = window.setInterval(
-      () => void fetchState(),
-      HUDDLE_STATE_FALLBACK_INTERVAL_MS,
-    );
+    const id = documentVisible
+      ? window.setInterval(
+          () => void fetchState(),
+          HUDDLE_STATE_FALLBACK_INTERVAL_MS,
+        )
+      : null;
 
     return () => {
       cancelled = true;
       unlisten?.();
-      window.clearInterval(id);
+      if (id !== null) window.clearInterval(id);
     };
-  }, [applyIncomingState]);
+  }, [applyIncomingState, documentVisible]);
 
   const huddlePhase = state?.phase;
   React.useEffect(() => {
-    if (huddlePhase !== "active" && huddlePhase !== "connected") return;
+    if (
+      !documentVisible ||
+      (huddlePhase !== "active" && huddlePhase !== "connected")
+    )
+      return;
 
     let cancelled = false;
 
@@ -308,8 +318,12 @@ export function HuddleBar({
     return () => {
       cancelled = true;
       window.clearInterval(id);
-      setModelStatus(null); // Clear stale status on huddle end/phase change.
     };
+  }, [documentVisible, huddlePhase]);
+
+  React.useEffect(() => {
+    if (huddlePhase === "active" || huddlePhase === "connected") return;
+    setModelStatus(null);
   }, [huddlePhase]);
 
   const isHuddleVisible = isVisibleHuddleState(state);
@@ -332,7 +346,7 @@ export function HuddleBar({
       return;
     }
     if (companionHadActiveHuddleRef.current) {
-      void closeWindow();
+      void getCurrentWindow().close();
     }
   }, [isHuddleVisible, mode]);
 
@@ -502,7 +516,7 @@ export function HuddleBar({
         // viewer. Close it immediately after it ends instead of depending on
         // an asynchronous state event to arrive first.
         if (mode === "room") {
-          void closeWindow();
+          void getCurrentWindow().close();
         }
       } else {
         locallyLeavingChannelRef.current = null;

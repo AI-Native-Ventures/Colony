@@ -1,4 +1,5 @@
-import { isTauri, windowLabel } from "@/shared/api/nativeBridge";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const HUDDLE_WINDOW_LABEL_PREFIX = "huddle-";
 const UUID_PATTERN =
@@ -10,7 +11,7 @@ export function huddleWindowChannelId(): string | null {
 
   let label: string;
   try {
-    label = windowLabel();
+    label = getCurrentWindow().label;
   } catch {
     // Browser previews can expose the Tauri IPC mock without window metadata.
     return null;
