@@ -686,6 +686,11 @@ test("non-local runtime override keeps community selection without release flag"
   await expect(
     page.getByRole("button", { name: /Join a community/ }),
   ).toBeVisible();
+  await expect(page.getByTestId("community-choice-create")).toBeVisible();
+  await expect(page.getByTestId("membership-denied")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Change community" }),
+  ).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("buzz-communities")))
     .toBeNull();
