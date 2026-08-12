@@ -15,14 +15,16 @@
 //! announce its own death, because the failure this exists to survive is
 //! exactly the one where it cannot.
 //!
-//! This module owns the wire format for the five events that make that real:
-//! the four requests a client sends ([`crate::kind::KIND_JOB_FILING`],
-//! `KIND_JOB_CLAIM`, `KIND_JOB_HEARTBEAT`, `KIND_JOB_OUTCOME`) and the one
+//! This module owns the wire format for the six events that make that real:
+//! the five requests a client sends ([`crate::kind::KIND_JOB_FILING`],
+//! `KIND_JOB_CLAIM`, `KIND_JOB_HEARTBEAT`, `KIND_JOB_OUTCOME`,
+//! `crate::kind::KIND_JOB_CHECKPOINT`) and the one
 //! reply the relay publishes ([`crate::kind::KIND_JOB_HEAD`]). Arbitration
 //! itself is the relay's, in `buzz_relay::job_broker`; everything here is
 //! shape, so the relay, the CLI, and the desktop agree on one definition.
 
 use crate::event_tags::TagLookupError;
+use serde::{Deserialize, Serialize};
 
 /// How long a lease survives without a heartbeat, in seconds.
 ///
@@ -71,6 +73,10 @@ pub const MAX_JOB_DETAIL: usize = 16_000;
 /// The stamp names the seat binding that produced a result. It is bounded so
 /// a misconfigured binding cannot stuff an arbitrary payload into the head.
 pub const MAX_JOB_STAMP: usize = 256;
+/// Longest accepted checkpoint summary or resume token, in characters.
+pub const MAX_CHECKPOINT_TEXT: usize = 4_000;
+/// Longest accepted artifact reference or label, in characters.
+pub const MAX_ARTIFACT_TEXT: usize = 4_000;
 
 /// Where a job is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +150,12 @@ pub enum JobParseError {
     InvalidNumber(&'static str),
     /// The head's content is not the JSON object the format calls for.
     InvalidHeadContent,
+    /// A checkpoint body is malformed or exceeds its bounds.
+    InvalidCheckpoint,
+    /// An artifact declaration is malformed or exceeds its bounds.
+    InvalidArtifact,
+    /// A Task-linked successful outcome declared no delivery evidence.
+    MissingArtifact,
 }
 
 impl std::fmt::Display for JobParseError {
@@ -166,6 +178,9 @@ impl std::fmt::Display for JobParseError {
             }
             Self::InvalidNumber(field) => write!(f, "{field} must be a number"),
             Self::InvalidHeadContent => write!(f, "job head content must be a JSON object"),
+            Self::InvalidCheckpoint => write!(f, "invalid durable checkpoint"),
+            Self::InvalidArtifact => write!(f, "invalid task artifact"),
+            Self::MissingArtifact => write!(f, "a delivered Task requires an artifact"),
         }
     }
 }
@@ -190,6 +205,67 @@ pub struct ParsedJobFiling {
     /// employee filing with no parent has no accountable human, and the relay
     /// refuses it.
     pub parent_job_hex: Option<String>,
+    /// Canonical Company Task this durable run executes.
+    pub task_id: Option<String>,
+}
+
+/// Resumable state durably accepted from the current lease holder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskCheckpoint {
+    /// Human-readable statement of completed work and the next step.
+    pub summary: String,
+    /// Optional opaque, non-secret resume cursor understood by the worker.
+    pub resume_token: Option<String>,
+    /// Optional integer completion estimate from 0 through 100.
+    pub progress: Option<u8>,
+}
+
+/// Supported evidence reference classes for Task delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskArtifactKind {
+    /// A signed event stored by the relay.
+    Event,
+    /// An external URL declared by the worker.
+    Url,
+    /// A local or workspace path declared by the worker.
+    Path,
+    /// A bounded inline textual deliverable reference.
+    Text,
+}
+
+/// One declared primary or supporting delivery artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskArtifact {
+    /// Reference class.
+    pub kind: TaskArtifactKind,
+    /// Stable artifact reference. Serialized as `ref` on the wire.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// Optional human-readable label.
+    pub label: Option<String>,
+}
+
+impl TaskArtifact {
+    /// Serialize with the canonical field order used by event tags.
+    pub fn canonical_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+/// A lease holder's fenced request to persist resumable work state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedJobCheckpoint {
+    /// Job whose recovery state changes.
+    pub job_hex: String,
+    /// Current lease attempt fencing token.
+    pub attempt: i32,
+    /// Strictly increasing checkpoint sequence.
+    pub sequence: i64,
+    /// Validated checkpoint body.
+    pub checkpoint: TaskCheckpoint,
 }
 
 /// A worker asking for the lease on a job.
@@ -244,6 +320,25 @@ pub struct ParsedJobOutcome {
     pub provider: Option<String>,
     /// Which model on that provider produced the result, when stamped.
     pub model: Option<String>,
+    /// Delivery artifacts declared by this outcome.
+    pub artifacts: Vec<TaskArtifact>,
+}
+
+/// Durable execution projection derived solely from the relay job row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskRunStatus {
+    /// Awaiting its first claim.
+    Queued,
+    /// A fenced worker currently holds the lease.
+    Executing,
+    /// A prior lease was lost and the run may be reclaimed.
+    Recoverable,
+    /// Completed with declared artifact evidence.
+    Delivered,
+    /// Current holder reported failure.
+    Failed,
+    /// Retry cap was exhausted.
+    Abandoned,
 }
 
 /// The relay's account of one job, signed by the employee that owes it.
@@ -278,6 +373,20 @@ pub struct ParsedJobHead {
     pub provider: Option<String>,
     /// The model stamp on a finished head, when the worker set one.
     pub model: Option<String>,
+    /// Canonical Task this run executes.
+    pub task_id: Option<String>,
+    /// Durable Task-run state, when Task-linked.
+    pub run_status: Option<TaskRunStatus>,
+    /// Latest accepted checkpoint sequence.
+    pub checkpoint_sequence: i64,
+    /// Latest durable checkpoint.
+    pub checkpoint: Option<TaskCheckpoint>,
+    /// Signed checkpoint event used as its receipt.
+    pub checkpoint_event_hex: Option<String>,
+    /// Delivery artifacts on a delivered run.
+    pub artifacts: Vec<TaskArtifact>,
+    /// Signed outcome event used as the delivery receipt.
+    pub outcome_event_hex: Option<String>,
 }
 
 fn tag(event: &nostr::Event, name: &'static str) -> Result<String, JobParseError> {
@@ -343,6 +452,64 @@ fn detail(content: &str) -> Result<String, JobParseError> {
     Ok(trimmed.to_string())
 }
 
+fn bounded_text(value: &str, cap: usize) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && trimmed.chars().count() <= cap
+}
+
+fn validate_task_id(value: String) -> Result<String, JobParseError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 128 {
+        return Err(JobParseError::InvalidCheckpoint);
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn validate_checkpoint(value: TaskCheckpoint) -> Result<TaskCheckpoint, JobParseError> {
+    if !bounded_text(&value.summary, MAX_CHECKPOINT_TEXT)
+        || value
+            .resume_token
+            .as_deref()
+            .is_some_and(|text| !bounded_text(text, MAX_CHECKPOINT_TEXT))
+        || value.progress.is_some_and(|progress| progress > 100)
+    {
+        return Err(JobParseError::InvalidCheckpoint);
+    }
+    Ok(value)
+}
+
+fn artifact_tags(event: &nostr::Event) -> Result<Vec<TaskArtifact>, JobParseError> {
+    event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let parts = tag.as_slice();
+            (parts
+                .first()
+                .is_some_and(|value| value.as_str() == "artifact"))
+            .then_some(parts)
+        })
+        .map(|parts| {
+            if parts.len() != 2 {
+                return Err(JobParseError::InvalidArtifact);
+            }
+            let artifact: TaskArtifact = serde_json::from_str(parts[1].as_str())
+                .map_err(|_| JobParseError::InvalidArtifact)?;
+            if !bounded_text(&artifact.reference, MAX_ARTIFACT_TEXT)
+                || artifact
+                    .label
+                    .as_deref()
+                    .is_some_and(|label| !bounded_text(label, MAX_ARTIFACT_TEXT))
+                || matches!(artifact.kind, TaskArtifactKind::Event)
+                    && hex64("artifact.ref", &artifact.reference).is_err()
+            {
+                return Err(JobParseError::InvalidArtifact);
+            }
+            Ok(artifact)
+        })
+        .collect()
+}
+
 /// Read a job filing.
 ///
 /// Does not check that the target is a real employee or that the filer may
@@ -355,6 +522,7 @@ pub fn parse_job_filing(event: &nostr::Event) -> Result<ParsedJobFiling, JobPars
         channel: optional(event, "h")?,
         thread_hex: optional_hex64(event, "e")?,
         parent_job_hex: optional_hex64(event, "job")?,
+        task_id: optional(event, "task")?.map(validate_task_id).transpose()?,
     })
 }
 
@@ -384,6 +552,26 @@ pub fn parse_job_heartbeat(event: &nostr::Event) -> Result<ParsedJobHeartbeat, J
     Ok(ParsedJobHeartbeat { job_hex, attempt })
 }
 
+/// Read and validate one durable checkpoint request.
+pub fn parse_job_checkpoint(event: &nostr::Event) -> Result<ParsedJobCheckpoint, JobParseError> {
+    let (job_hex, attempt) = lease_reference(event)?;
+    let sequence = tag(event, "sequence")?
+        .parse::<i64>()
+        .map_err(|_| JobParseError::InvalidNumber("sequence"))?;
+    if sequence < 1 {
+        return Err(JobParseError::InvalidNumber("sequence"));
+    }
+    let checkpoint = serde_json::from_str::<TaskCheckpoint>(&event.content)
+        .map_err(|_| JobParseError::InvalidCheckpoint)
+        .and_then(validate_checkpoint)?;
+    Ok(ParsedJobCheckpoint {
+        job_hex,
+        attempt,
+        sequence,
+        checkpoint,
+    })
+}
+
 /// Read an outcome.
 pub fn parse_job_outcome(event: &nostr::Event) -> Result<ParsedJobOutcome, JobParseError> {
     let raw = tag(event, "status")?;
@@ -392,6 +580,10 @@ pub fn parse_job_outcome(event: &nostr::Event) -> Result<ParsedJobOutcome, JobPa
         return Err(JobParseError::NotAnOutcome(raw));
     }
     let (job_hex, attempt) = lease_reference(event)?;
+    let artifacts = artifact_tags(event)?;
+    if status == JobStatus::Done && optional(event, "task")?.is_some() && artifacts.is_empty() {
+        return Err(JobParseError::MissingArtifact);
+    }
     Ok(ParsedJobOutcome {
         job_hex,
         attempt,
@@ -399,6 +591,7 @@ pub fn parse_job_outcome(event: &nostr::Event) -> Result<ParsedJobOutcome, JobPa
         detail: detail(&event.content)?,
         provider: optional_stamp(event, "provider")?,
         model: optional_stamp(event, "model")?,
+        artifacts,
     })
 }
 
@@ -428,6 +621,38 @@ pub fn parse_job_head(event: &nostr::Event) -> Result<ParsedJobHead, JobParseErr
         .ok_or(JobParseError::InvalidHeadContent)?;
     let text = |key: &str| object.get(key).and_then(|value| value.as_str());
 
+    let task_id = optional(event, "task")?.map(validate_task_id).transpose()?;
+    let checkpoint_sequence = optional(event, "checkpoint-seq")?
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| JobParseError::InvalidNumber("checkpoint-seq"))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let checkpoint = object
+        .get("checkpoint")
+        .cloned()
+        .map(serde_json::from_value::<TaskCheckpoint>)
+        .transpose()
+        .map_err(|_| JobParseError::InvalidHeadContent)?
+        .map(validate_checkpoint)
+        .transpose()?;
+    let artifacts = object
+        .get("artifacts")
+        .cloned()
+        .map(serde_json::from_value::<Vec<TaskArtifact>>)
+        .transpose()
+        .map_err(|_| JobParseError::InvalidHeadContent)?
+        .unwrap_or_default();
+    let run_status = task_id.as_ref().map(|_| match status {
+        JobStatus::Open if attempts == 0 => TaskRunStatus::Queued,
+        JobStatus::Open => TaskRunStatus::Recoverable,
+        JobStatus::Leased => TaskRunStatus::Executing,
+        JobStatus::Done => TaskRunStatus::Delivered,
+        JobStatus::Failed => TaskRunStatus::Failed,
+        JobStatus::Abandoned => TaskRunStatus::Abandoned,
+    });
     Ok(ParsedJobHead {
         job_hex: hex64("d", &tag(event, "d")?)?,
         employee_hex: hex64("employee", &tag(event, "employee")?)?,
@@ -442,6 +667,13 @@ pub fn parse_job_head(event: &nostr::Event) -> Result<ParsedJobHead, JobParseErr
         failure: text("failure").map(detail).transpose()?,
         provider: optional_stamp(event, "provider")?,
         model: optional_stamp(event, "model")?,
+        task_id,
+        run_status,
+        checkpoint_sequence,
+        checkpoint,
+        checkpoint_event_hex: optional_hex64(event, "checkpoint-event")?,
+        artifacts,
+        outcome_event_hex: optional_hex64(event, "outcome-event")?,
     })
 }
 
@@ -473,6 +705,7 @@ pub fn job_head_content(instruction: &str, result: Option<&str>, failure: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kind::KIND_JOB_CHECKPOINT;
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
     const EMPLOYEE: &str = "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66";
@@ -499,6 +732,121 @@ mod tests {
         assert_eq!(parsed.instruction, "Draft the investor update");
         assert_eq!(parsed.channel, None);
         assert_eq!(parsed.parent_job_hex, None);
+        assert_eq!(parsed.task_id, None);
+    }
+
+    #[test]
+    fn reads_a_task_linked_filing() {
+        let parsed = parse_job_filing(&event(
+            43010,
+            "Draft the investor update",
+            vec![vec!["p", EMPLOYEE], vec!["task", "task-investor-update"]],
+        ))
+        .unwrap();
+        assert_eq!(parsed.task_id.as_deref(), Some("task-investor-update"));
+    }
+
+    #[test]
+    fn reads_a_well_formed_checkpoint() {
+        let parsed = parse_job_checkpoint(&event(
+            KIND_JOB_CHECKPOINT as u16,
+            r#"{"summary":"Audited sources","resumeToken":"synthesis","progress":55}"#,
+            vec![
+                vec!["job", JOB],
+                vec!["attempt", "1"],
+                vec!["sequence", "2"],
+            ],
+        ))
+        .unwrap();
+        assert_eq!(parsed.job_hex, JOB);
+        assert_eq!(parsed.attempt, 1);
+        assert_eq!(parsed.sequence, 2);
+        assert_eq!(parsed.checkpoint.summary, "Audited sources");
+        assert_eq!(parsed.checkpoint.resume_token.as_deref(), Some("synthesis"));
+        assert_eq!(parsed.checkpoint.progress, Some(55));
+    }
+
+    #[test]
+    fn rejects_malformed_checkpoint_tags_and_content() {
+        let valid_content = r#"{"summary":"Audited sources","progress":55}"#;
+        for (tags, expected) in [
+            (
+                vec![vec!["attempt", "1"], vec!["sequence", "1"]],
+                JobParseError::MissingTag("job"),
+            ),
+            (
+                vec![vec!["job", JOB], vec!["sequence", "1"]],
+                JobParseError::MissingTag("attempt"),
+            ),
+            (
+                vec![vec!["job", JOB], vec!["attempt", "1"]],
+                JobParseError::MissingTag("sequence"),
+            ),
+            (
+                vec![
+                    vec!["job", JOB],
+                    vec!["attempt", "1"],
+                    vec!["sequence", "1"],
+                    vec!["sequence", "2"],
+                ],
+                JobParseError::DuplicateTag("sequence"),
+            ),
+            (
+                vec![
+                    vec!["job", JOB],
+                    vec!["attempt", "1"],
+                    vec!["sequence", "0"],
+                ],
+                JobParseError::InvalidNumber("sequence"),
+            ),
+        ] {
+            assert_eq!(
+                parse_job_checkpoint(&event(KIND_JOB_CHECKPOINT as u16, valid_content, tags,))
+                    .unwrap_err(),
+                expected
+            );
+        }
+
+        for content in [
+            r#"{"summary":"Audited sources","progress":101}"#,
+            r#"{"summary":"Audited sources","progress":-1}"#,
+            r#"{"summary":"Audited sources","extra":true}"#,
+            r#"{"summary":""}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                parse_job_checkpoint(&event(
+                    KIND_JOB_CHECKPOINT as u16,
+                    content,
+                    vec![
+                        vec!["job", JOB],
+                        vec!["attempt", "1"],
+                        vec!["sequence", "1"],
+                    ],
+                ))
+                .unwrap_err(),
+                JobParseError::InvalidCheckpoint
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_checkpoint_text_past_the_cap() {
+        let long = "x".repeat(MAX_CHECKPOINT_TEXT + 1);
+        let content = serde_json::json!({ "summary": long }).to_string();
+        assert_eq!(
+            parse_job_checkpoint(&event(
+                KIND_JOB_CHECKPOINT as u16,
+                &content,
+                vec![
+                    vec!["job", JOB],
+                    vec!["attempt", "1"],
+                    vec!["sequence", "1"],
+                ],
+            ))
+            .unwrap_err(),
+            JobParseError::InvalidCheckpoint
+        );
     }
 
     #[test]
@@ -670,7 +1018,78 @@ mod tests {
             assert_eq!(parsed.detail, "the detail");
             assert_eq!(parsed.provider, None);
             assert_eq!(parsed.model, None);
+            assert!(parsed.artifacts.is_empty());
         }
+    }
+
+    #[test]
+    fn a_done_outcome_carries_canonical_artifacts() {
+        let parsed = parse_job_outcome(&event(
+            43013,
+            "the result",
+            vec![
+                vec!["job", JOB],
+                vec!["attempt", "1"],
+                vec!["status", "done"],
+                vec![
+                    "artifact",
+                    r#"{"kind":"event","ref":"2222222222222222222222222222222222222222222222222222222222222222","label":"Phase 1 design"}"#,
+                ],
+            ],
+        ))
+        .unwrap();
+        assert_eq!(parsed.artifacts.len(), 1);
+        assert_eq!(parsed.artifacts[0].kind, TaskArtifactKind::Event);
+        assert_eq!(parsed.artifacts[0].reference, JOB);
+        assert_eq!(parsed.artifacts[0].label.as_deref(), Some("Phase 1 design"));
+        assert_eq!(
+            parsed.artifacts[0].canonical_json(),
+            r#"{"kind":"event","ref":"2222222222222222222222222222222222222222222222222222222222222222","label":"Phase 1 design"}"#
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_artifacts() {
+        for artifact in [
+            "not json",
+            r#"{"kind":"unknown","ref":"somewhere"}"#,
+            r#"{"kind":"url","ref":""}"#,
+            r#"{"kind":"event","ref":"not-an-event-id"}"#,
+            r#"{"kind":"text","ref":"result","extra":true}"#,
+        ] {
+            assert_eq!(
+                parse_job_outcome(&event(
+                    43013,
+                    "the result",
+                    vec![
+                        vec!["job", JOB],
+                        vec!["attempt", "1"],
+                        vec!["status", "done"],
+                        vec!["artifact", artifact],
+                    ],
+                ))
+                .unwrap_err(),
+                JobParseError::InvalidArtifact
+            );
+        }
+    }
+
+    #[test]
+    fn a_task_linked_done_requires_an_artifact() {
+        assert_eq!(
+            parse_job_outcome(&event(
+                43013,
+                "the result",
+                vec![
+                    vec!["job", JOB],
+                    vec!["attempt", "1"],
+                    vec!["status", "done"],
+                    vec!["task", "task-investor-update"],
+                ],
+            ))
+            .unwrap_err(),
+            JobParseError::MissingArtifact
+        );
     }
 
     #[test]

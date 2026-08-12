@@ -34,14 +34,15 @@
 use std::sync::Arc;
 
 use buzz_core::job::{
-    job_head_content, parse_job_claim, parse_job_filing, parse_job_heartbeat, parse_job_outcome,
-    JOB_LEASE_SECS, MAX_JOB_ATTEMPTS,
+    job_head_content, parse_job_checkpoint, parse_job_claim, parse_job_filing, parse_job_heartbeat,
+    parse_job_outcome, JOB_LEASE_SECS, MAX_JOB_ATTEMPTS,
 };
 use buzz_core::kind::{
-    KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME,
+    KIND_JOB_CHECKPOINT, KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT,
+    KIND_JOB_OUTCOME, KIND_TASK,
 };
 use buzz_core::tenant::TenantContext;
-use buzz_db::jobs::{FinishedJob, JobRow, NewJob};
+use buzz_db::jobs::{FinishedJob, JobCheckpoint, JobRow, NewJob};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 use tracing::warn;
 
@@ -62,6 +63,10 @@ pub enum JobOutcome {
     ClaimLost,
     /// The lease deadline was pushed out.
     LeaseExtended,
+    /// A durable checkpoint was recorded and its lease extended.
+    Checkpointed,
+    /// A stale, expired, or duplicate checkpoint changed nothing.
+    CheckpointIgnored,
     /// The heartbeat named a lease that has since been superseded.
     LeaseGone,
     /// The job was recorded as done or failed.
@@ -70,7 +75,7 @@ pub enum JobOutcome {
     OutcomeIgnored,
 }
 
-/// Handle one of the four client events the queue accepts.
+/// Handle one of the five client events the queue accepts.
 ///
 /// Refuses rather than guesses: an unknown employee, a filing from an employee
 /// with no parent job, or a claim from anyone but the job's own human all
@@ -84,6 +89,7 @@ pub async fn handle_job_event(
         KIND_JOB_FILING => handle_filing(tenant, state, event).await,
         KIND_JOB_CLAIM => handle_claim(tenant, state, event).await,
         KIND_JOB_HEARTBEAT => handle_heartbeat(tenant, state, event).await,
+        KIND_JOB_CHECKPOINT => handle_checkpoint(tenant, state, event).await,
         KIND_JOB_OUTCOME => handle_outcome(tenant, state, event).await,
         other => Err(format!("kind {other} is not a job event")),
     }
@@ -118,6 +124,23 @@ async fn handle_filing(
     let filed_by = event.pubkey.to_bytes().to_vec();
     let originator = resolve_originator(tenant, state, &filed_by, &filing.parent_job_hex).await?;
 
+    if let Some(task_id) = filing.task_id.as_deref() {
+        let task = require_task_head(tenant, state, task_id).await?;
+        let channel = filing
+            .channel
+            .as_deref()
+            .ok_or_else(|| "Task run refused: missing home channel".to_string())?;
+        if channel != task.source_channel_id {
+            return Err(format!(
+                "Task run refused: channel {channel} does not match Task home {}",
+                task.source_channel_id
+            ));
+        }
+        if filing.thread_hex.is_none() {
+            return Err("Task run refused: missing canonical thread".to_string());
+        }
+    }
+
     let job_id = event.id.as_bytes().to_vec();
     let thread = filing
         .thread_hex
@@ -145,6 +168,7 @@ async fn handle_filing(
                 originator: &originator,
                 channel_id,
                 thread: thread.as_deref(),
+                task_id: filing.task_id.as_deref(),
                 instruction: &filing.instruction,
             },
         )
@@ -159,6 +183,32 @@ async fn handle_filing(
         Some(_) => JobOutcome::Filed,
         None => JobOutcome::AlreadyFiled,
     })
+}
+
+/// Require a readable canonical relay-authored Task head before linking work.
+async fn require_task_head(
+    tenant: &TenantContext,
+    state: &AppState,
+    task_id: &str,
+) -> Result<buzz_core::company::CompanyTask, String> {
+    let rows = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_TASK as i32]),
+            pubkey: Some(state.relay_keypair.public_key().to_bytes().to_vec()),
+            d_tag: Some(task_id.to_owned()),
+            global_only: true,
+            limit: Some(1),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| format!("database error loading Task {task_id}: {error}"))?;
+    let head = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("job refused: no canonical Task {task_id}"))?;
+    buzz_sdk::company::parse_task_event(&head.event)
+        .map_err(|error| format!("job refused: stored Task {task_id} is unreadable: {error}"))
 }
 
 /// Decide whose work a filing is.
@@ -285,6 +335,59 @@ async fn handle_heartbeat(
     }
 }
 
+async fn handle_checkpoint(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    event: &Event,
+) -> Result<JobOutcome, String> {
+    let parsed =
+        parse_job_checkpoint(event).map_err(|error| format!("invalid job checkpoint: {error}"))?;
+    let job_id = hex32("job", &parsed.job_hex)?;
+    let checkpoint = serde_json::to_value(&parsed.checkpoint)
+        .map_err(|error| format!("checkpoint could not be encoded: {error}"))?;
+    let now = chrono::Utc::now().timestamp();
+    let accepted = state
+        .db
+        .checkpoint_job(
+            tenant.community(),
+            JobCheckpoint {
+                job_id: &job_id,
+                holder: &event.pubkey.to_bytes(),
+                attempt: parsed.attempt,
+                sequence: parsed.sequence,
+                checkpoint: &checkpoint,
+                checkpoint_event: event.id.as_bytes(),
+                now,
+                lease_expires_at: now + JOB_LEASE_SECS,
+            },
+        )
+        .await
+        .map_err(|error| format!("database error recording the checkpoint: {error}"))?;
+
+    match accepted {
+        Some(_) => {
+            publish_job_head(tenant, state, &job_id).await;
+            Ok(JobOutcome::Checkpointed)
+        }
+        None => {
+            let already_recorded = state
+                .db
+                .find_job(tenant.community(), &job_id)
+                .await
+                .map_err(|error| format!("database error reading the checkpoint: {error}"))?
+                .is_some_and(|job| {
+                    job.checkpoint_event.as_deref() == Some(event.id.as_bytes().as_slice())
+                });
+            if already_recorded {
+                publish_job_head(tenant, state, &job_id).await;
+                Ok(JobOutcome::Checkpointed)
+            } else {
+                Ok(JobOutcome::CheckpointIgnored)
+            }
+        }
+    }
+}
+
 async fn handle_outcome(
     tenant: &TenantContext,
     state: &Arc<AppState>,
@@ -293,6 +396,17 @@ async fn handle_outcome(
     let outcome =
         parse_job_outcome(event).map_err(|error| format!("invalid job outcome: {error}"))?;
     let job_id = hex32("job", &outcome.job_hex)?;
+    let job = load_job(tenant, state, &job_id, &outcome.job_hex).await?;
+    if job.task_id.is_some()
+        && outcome.status == buzz_core::job::JobStatus::Done
+        && outcome.artifacts.is_empty()
+    {
+        return Err("outcome refused: a delivered Task requires an artifact".to_string());
+    }
+    let artifacts = (!outcome.artifacts.is_empty())
+        .then(|| serde_json::to_value(&outcome.artifacts))
+        .transpose()
+        .map_err(|error| format!("outcome artifacts could not be encoded: {error}"))?;
 
     let finished = state
         .db
@@ -306,6 +420,8 @@ async fn handle_outcome(
                 detail: &outcome.detail,
                 provider: outcome.provider.as_deref(),
                 model: outcome.model.as_deref(),
+                artifacts: artifacts.as_ref(),
+                outcome_event: Some(event.id.as_bytes()),
                 now: chrono::Utc::now().timestamp(),
             },
         )
@@ -471,6 +587,31 @@ fn build_job_head(keys: &Keys, job: &JobRow, head_at: i64) -> Result<Event, Stri
     if let Some(model) = &job.model {
         tags.push(vec!["model".to_string(), model.clone()]);
     }
+    if let Some(task_id) = &job.task_id {
+        tags.push(vec!["task".to_string(), task_id.clone()]);
+        let run_status = match job.status.as_str() {
+            "open" if job.attempts == 0 => "queued",
+            "open" => "recoverable",
+            "leased" => "executing",
+            "done" => "delivered",
+            "failed" => "failed",
+            "abandoned" => "abandoned",
+            other => return Err(format!("unknown Task run status {other}")),
+        };
+        tags.push(vec!["run-status".to_string(), run_status.to_string()]);
+    }
+    if job.checkpoint_seq > 0 {
+        tags.push(vec![
+            "checkpoint-seq".to_string(),
+            job.checkpoint_seq.to_string(),
+        ]);
+    }
+    if let Some(event_id) = &job.checkpoint_event {
+        tags.push(vec!["checkpoint-event".to_string(), hex::encode(event_id)]);
+    }
+    if let Some(event_id) = &job.outcome_event {
+        tags.push(vec!["outcome-event".to_string(), hex::encode(event_id)]);
+    }
 
     let tags = tags
         .into_iter()
@@ -478,11 +619,22 @@ fn build_job_head(keys: &Keys, job: &JobRow, head_at: i64) -> Result<Event, Stri
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("job head tags could not be built: {error}"))?;
 
-    let content = job_head_content(
+    let mut content: serde_json::Value = serde_json::from_str(&job_head_content(
         &job.instruction,
         job.result.as_deref(),
         job.failure.as_deref(),
-    );
+    ))
+    .map_err(|error| format!("job head content could not be built: {error}"))?;
+    let object = content
+        .as_object_mut()
+        .ok_or_else(|| "job head content was not an object".to_string())?;
+    if let Some(checkpoint) = &job.checkpoint {
+        object.insert("checkpoint".to_string(), checkpoint.clone());
+    }
+    if let Some(artifacts) = &job.artifacts {
+        object.insert("artifacts".to_string(), artifacts.clone());
+    }
+    let content = content.to_string();
 
     EventBuilder::new(Kind::Custom(KIND_JOB_HEAD as u16), content)
         .tags(tags)
@@ -504,6 +656,7 @@ mod tests {
             originator: vec![0x33; 32],
             channel_id: None,
             thread: None,
+            task_id: None,
             instruction: "Draft the investor update".to_string(),
             status: status.to_string(),
             lease_holder: None,
@@ -513,6 +666,12 @@ mod tests {
             failure: None,
             provider: None,
             model: None,
+            checkpoint_seq: 0,
+            checkpoint: None,
+            checkpoint_event: None,
+            checkpoint_at: None,
+            artifacts: None,
+            outcome_event: None,
             escalated_ask: None,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
@@ -571,6 +730,61 @@ mod tests {
 
         assert_eq!(parsed.provider.as_deref(), Some("deepseek"));
         assert_eq!(parsed.model.as_deref(), Some("deepseek-chat"));
+    }
+
+    #[test]
+    fn a_task_run_head_round_trips_recovery_and_delivery_evidence() {
+        let mut row = job("done");
+        row.task_id = Some("task-investor-update".to_string());
+        row.attempts = 2;
+        row.result = Some("Delivered the investor update".to_string());
+        row.checkpoint_seq = 1;
+        row.checkpoint = Some(serde_json::json!({
+            "summary": "Research complete",
+            "resumeToken": "draft",
+            "progress": 60
+        }));
+        row.checkpoint_event = Some(vec![0x44; 32]);
+        row.checkpoint_at = Some(1_700_000_060);
+        row.artifacts = Some(serde_json::json!([{
+            "kind": "event",
+            "ref": hex::encode([0x55; 32]),
+            "label": "Investor update"
+        }]));
+        row.outcome_event = Some(vec![0x66; 32]);
+
+        let event = build_job_head(&Keys::generate(), &row, 1_700_000_100).unwrap();
+        let parsed = parse_job_head(&event).unwrap();
+
+        assert_eq!(parsed.task_id.as_deref(), Some("task-investor-update"));
+        assert_eq!(
+            event
+                .tags
+                .iter()
+                .find_map(|tag| {
+                    let values = tag.as_slice();
+                    (values.first().map(String::as_str) == Some("run-status"))
+                        .then(|| values.get(1).cloned())
+                        .flatten()
+                })
+                .as_deref(),
+            Some("delivered"),
+        );
+        assert_eq!(
+            parsed.run_status,
+            Some(buzz_core::job::TaskRunStatus::Delivered)
+        );
+        assert_eq!(parsed.checkpoint_sequence, 1);
+        assert_eq!(
+            parsed
+                .checkpoint
+                .as_ref()
+                .map(|value| value.summary.as_str()),
+            Some("Research complete")
+        );
+        assert_eq!(parsed.checkpoint_event_hex, Some(hex::encode([0x44; 32])));
+        assert_eq!(parsed.artifacts.len(), 1);
+        assert_eq!(parsed.outcome_event_hex, Some(hex::encode([0x66; 32])));
     }
 
     #[test]

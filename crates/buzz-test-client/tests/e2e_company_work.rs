@@ -27,14 +27,17 @@ use buzz_core::company::{
     CompanyTeamRef, CostCentre, CostCentreKind, Initiative, InitiativeStatus, TaskStatus,
     COMPANY_SCHEMA, INITIATIVE_SCHEMA,
 };
+use buzz_core::job::{TaskArtifact, TaskArtifactKind, TaskCheckpoint};
 use buzz_core::kind::{
-    KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
-    KIND_TEAM,
+    KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_EMPLOYEE,
+    KIND_HIRE_REQUEST, KIND_INITIATIVE, KIND_JOB_CHECKPOINT, KIND_JOB_CLAIM, KIND_JOB_FILING,
+    KIND_JOB_HEAD, KIND_JOB_OUTCOME, KIND_TASK, KIND_TEAM,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, CompanyAction, CompanyActionOperation,
     CompanyActionPayload, CompanyReceiptOutcome,
 };
+use buzz_sdk::implicit_task::plan_implicit_task;
 use buzz_sdk::initiative_activation::{next_step, InitiativeIntent, InitiativeStep};
 use buzz_test_client::BuzzTestClient;
 use nostr::{EventBuilder, Filter, Keys, Kind, Tag, Timestamp};
@@ -282,6 +285,128 @@ fn now() -> i64 {
     Timestamp::now().as_secs() as i64
 }
 
+async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
+    let role = format!("task-runner-{}", Uuid::new_v4().simple());
+    let request = EventBuilder::new(Kind::Custom(KIND_HIRE_REQUEST as u16), "")
+        .tags(vec![
+            Tag::parse(["role", role.as_str()]).expect("role tag"),
+            Tag::parse(["name", "Durable task runner"]).expect("name tag"),
+            Tag::parse(["rank", "worker"]).expect("rank tag"),
+        ])
+        .sign_with_keys(owner)
+        .expect("hire request signs");
+    let request_id = request.id;
+    let accepted = client
+        .send_event(request)
+        .await
+        .expect("hire request response");
+    assert!(
+        accepted.accepted,
+        "hire request rejected: {:?}",
+        accepted.message
+    );
+
+    for _ in 0..40 {
+        let id = sub_id("employee");
+        let filter = Filter::new()
+            .kind(Kind::Custom(KIND_EMPLOYEE as u16))
+            .event(request_id)
+            .limit(1);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        let events = client
+            .collect_until_eose(&id, Duration::from_secs(5))
+            .await
+            .expect("collect");
+        let _ = client.close_subscription(&id).await;
+        if let Some(event) = events.first() {
+            return event.pubkey.to_hex();
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("employee was not created for hire request {request_id}");
+}
+
+fn job_event(keys: &Keys, kind: u32, content: &str, tags: Vec<Vec<String>>) -> nostr::Event {
+    let tags = tags
+        .into_iter()
+        .map(Tag::parse)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("job tags parse");
+    EventBuilder::new(Kind::Custom(kind as u16), content)
+        .tags(tags)
+        .sign_with_keys(keys)
+        .expect("job event signs")
+}
+
+async fn current_job_head(client: &mut BuzzTestClient, job_id: &str) -> Option<nostr::Event> {
+    let id = sub_id("job-head");
+    let filter = Filter::new()
+        .kind(Kind::Custom(KIND_JOB_HEAD as u16))
+        .identifier(job_id)
+        .limit(1);
+    client
+        .subscribe(&id, vec![filter])
+        .await
+        .expect("subscribe");
+    let events = client
+        .collect_until_eose(&id, Duration::from_secs(5))
+        .await
+        .expect("collect");
+    let _ = client.close_subscription(&id).await;
+    events.into_iter().next()
+}
+
+async fn await_job_head(
+    client: &mut BuzzTestClient,
+    job_id: &str,
+    description: &str,
+    predicate: impl Fn(&nostr::Event) -> bool,
+) -> nostr::Event {
+    let mut last = None;
+    for _ in 0..40 {
+        if let Some(event) = current_job_head(client, job_id).await {
+            if predicate(&event) {
+                return event;
+            }
+            last = Some(event);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("job {job_id} never became {description}; last head: {last:?}");
+}
+
+fn event_tag(event: &nostr::Event, key: &str) -> String {
+    event
+        .tags
+        .iter()
+        .find_map(|tag| {
+            let values = tag.as_slice();
+            (values.first().map(String::as_str) == Some(key))
+                .then(|| values.get(1).cloned())
+                .flatten()
+        })
+        .unwrap_or_default()
+}
+
+async fn expire_job_lease(job_id: &str) {
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect to relay Postgres");
+    let result = sqlx::query("UPDATE jobs SET lease_expires_at = 1 WHERE job_id = $1")
+        .bind(hex::decode(job_id).expect("job id hex"))
+        .execute(&pool)
+        .await
+        .expect("expire lease");
+    assert_eq!(result.rows_affected(), 1, "exactly one lease expires");
+}
+
 /// One owner, one company, one team: the fixture every assertion runs against.
 struct Fixture {
     owner: Keys,
@@ -306,6 +431,313 @@ async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
         company_id,
         team,
     }
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres and BUZZ_EMPLOYEE_KEK"]
+async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_delivery() {
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let fixture = setup(&mut client, owner.clone()).await;
+    let stamp = now();
+
+    let profile = company(&fixture.company_id, stamp);
+    let create_company = action(
+        &fixture.relay,
+        CompanyActionOperation::Create,
+        CompanyActionPayload::Company(profile.clone()),
+        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+        None,
+    );
+    assert_eq!(
+        broker(&mut client, &fixture.owner, &fixture.relay, &create_company,)
+            .await
+            .0,
+        CompanyReceiptOutcome::Applied
+    );
+
+    // The isolated relay seed makes the fixed owner a member of `general`.
+    // A random UUID would exercise the membership refusal rather than the
+    // Task-run protocol this scenario is proving.
+    let channel_id = "9f28288a-d724-587a-9709-92dc7f967110".to_string();
+    let chat_root = Keys::generate().public_key().to_hex();
+    let plan = plan_implicit_task(
+        &profile,
+        std::slice::from_ref(&fixture.team),
+        &fixture.team.lead_persona_id,
+        &channel_id,
+        &chat_root,
+        "Prepare the interruption-safe investor update",
+        None,
+        &fixture.relay,
+        stamp + 1,
+    )
+    .expect("implicit chat task plans");
+    assert_eq!(plan.owning_team_id, fixture.team.id);
+    let planned_task = match &plan.action.payload {
+        CompanyActionPayload::Task(task) => task,
+        other => panic!("implicit plan produced {other:?}"),
+    };
+    assert_eq!(
+        planned_task.assignee_persona_ids,
+        vec![fixture.team.lead_persona_id.clone()],
+        "the implicit Task has one accountable assigned persona"
+    );
+    let task_id = plan.task_id.clone();
+    let create_task = *plan.action;
+    let (task_outcome, task_head_id) =
+        broker(&mut client, &fixture.owner, &fixture.relay, &create_task).await;
+    assert_eq!(task_outcome, CompanyReceiptOutcome::Applied);
+    let task_head_id = task_head_id.expect("implicit Task receipt names its head");
+    assert_eq!(
+        head(&mut client, &fixture.relay, KIND_TASK, &task_id)
+            .await
+            .expect("implicit Task head exists")
+            .id
+            .to_hex(),
+        task_head_id,
+        "the chat-created Task receipt names the canonical head"
+    );
+
+    let employee = hire_employee(&mut client, &fixture.owner).await;
+    let filing = job_event(
+        &fixture.owner,
+        KIND_JOB_FILING,
+        "Prepare the interruption-safe investor update",
+        vec![
+            vec!["p".to_string(), employee.clone()],
+            vec!["task".to_string(), task_id.clone()],
+            vec!["h".to_string(), channel_id.clone()],
+            vec!["e".to_string(), chat_root.clone()],
+        ],
+    );
+    let job_id = filing.id.to_hex();
+    let filed = client.send_event(filing).await.expect("filing response");
+    assert!(
+        filed.accepted,
+        "Task run filing rejected: {:?}",
+        filed.message
+    );
+    let open = await_job_head(&mut client, &job_id, "queued", |head| {
+        event_tag(head, "status") == "open"
+    })
+    .await;
+    assert_eq!(event_tag(&open, "task"), task_id);
+    assert_eq!(event_tag(&open, "employee"), employee);
+
+    let claim_one = job_event(
+        &fixture.owner,
+        KIND_JOB_CLAIM,
+        "",
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["nonce".to_string(), Uuid::new_v4().to_string()],
+        ],
+    );
+    assert!(
+        client
+            .send_event(claim_one)
+            .await
+            .expect("claim one")
+            .accepted
+    );
+    let lease_one = await_job_head(&mut client, &job_id, "executing attempt one", |head| {
+        event_tag(head, "status") == "leased" && event_tag(head, "attempts") == "1"
+    })
+    .await;
+    assert_eq!(event_tag(&lease_one, "task"), task_id);
+
+    let checkpoint_body = serde_json::to_string(&TaskCheckpoint {
+        summary: "Research complete; resume by drafting".to_string(),
+        resume_token: Some("phase:draft".to_string()),
+        progress: Some(55),
+    })
+    .expect("checkpoint JSON");
+    let checkpoint_one = job_event(
+        &fixture.owner,
+        KIND_JOB_CHECKPOINT,
+        &checkpoint_body,
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "1".to_string()],
+            vec!["sequence".to_string(), "1".to_string()],
+        ],
+    );
+    let checkpoint_one_id = checkpoint_one.id.to_hex();
+    assert!(
+        client
+            .send_event(checkpoint_one)
+            .await
+            .expect("checkpoint one")
+            .accepted
+    );
+    let checkpointed = await_job_head(&mut client, &job_id, "checkpointed", |head| {
+        event_tag(head, "checkpoint-seq") == "1"
+    })
+    .await;
+    assert_eq!(
+        event_tag(&checkpointed, "checkpoint-event"),
+        checkpoint_one_id
+    );
+
+    expire_job_lease(&job_id).await;
+
+    let stale_checkpoint = job_event(
+        &fixture.owner,
+        KIND_JOB_CHECKPOINT,
+        &checkpoint_body,
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "1".to_string()],
+            vec!["sequence".to_string(), "2".to_string()],
+        ],
+    );
+    let _ = client
+        .send_event(stale_checkpoint)
+        .await
+        .expect("stale checkpoint response");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        event_tag(
+            &current_job_head(&mut client, &job_id)
+                .await
+                .expect("head after stale checkpoint"),
+            "checkpoint-seq"
+        ),
+        "1",
+        "an expired holder cannot advance recovery state"
+    );
+
+    let artifact = TaskArtifact {
+        kind: TaskArtifactKind::Text,
+        reference: "Investor update delivered".to_string(),
+        label: Some("Primary investor update".to_string()),
+    };
+    let expired_delivery = job_event(
+        &fixture.owner,
+        KIND_JOB_OUTCOME,
+        "Late result from the interrupted worker",
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "1".to_string()],
+            vec!["status".to_string(), "done".to_string()],
+            vec!["task".to_string(), task_id.clone()],
+            vec!["artifact".to_string(), artifact.canonical_json()],
+        ],
+    );
+    let _ = client
+        .send_event(expired_delivery)
+        .await
+        .expect("expired delivery response");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        event_tag(
+            &current_job_head(&mut client, &job_id)
+                .await
+                .expect("head after expired delivery"),
+            "status"
+        ),
+        "leased",
+        "an expired Task lease cannot deliver even before a replacement claims it"
+    );
+
+    let claim_two = job_event(
+        &fixture.owner,
+        KIND_JOB_CLAIM,
+        "",
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["nonce".to_string(), Uuid::new_v4().to_string()],
+        ],
+    );
+    assert!(
+        client
+            .send_event(claim_two)
+            .await
+            .expect("claim two")
+            .accepted
+    );
+    let recovered = await_job_head(&mut client, &job_id, "recovered attempt two", |head| {
+        event_tag(head, "status") == "leased" && event_tag(head, "attempts") == "2"
+    })
+    .await;
+    assert_eq!(event_tag(&recovered, "checkpoint-seq"), "1");
+    assert_eq!(event_tag(&recovered, "checkpoint-event"), checkpoint_one_id);
+    assert_eq!(event_tag(&recovered, "task"), task_id);
+    assert_eq!(event_tag(&recovered, "run-status"), "executing");
+
+    let no_artifact = job_event(
+        &fixture.owner,
+        KIND_JOB_OUTCOME,
+        "Draft prepared but no deliverable declared",
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "2".to_string()],
+            vec!["status".to_string(), "done".to_string()],
+            vec!["task".to_string(), task_id.clone()],
+        ],
+    );
+    let _ = client
+        .send_event(no_artifact)
+        .await
+        .expect("missing-artifact response");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        event_tag(
+            &current_job_head(&mut client, &job_id)
+                .await
+                .expect("head after missing artifact"),
+            "status"
+        ),
+        "leased",
+        "work without declared delivery evidence cannot become Delivered"
+    );
+
+    let delivered = job_event(
+        &fixture.owner,
+        KIND_JOB_OUTCOME,
+        "Investor update delivered",
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "2".to_string()],
+            vec!["status".to_string(), "done".to_string()],
+            vec!["task".to_string(), task_id.clone()],
+            vec!["artifact".to_string(), artifact.canonical_json()],
+        ],
+    );
+    let delivered_id = delivered.id.to_hex();
+    assert!(
+        client
+            .send_event(delivered)
+            .await
+            .expect("delivery response")
+            .accepted
+    );
+    let delivered_head = await_job_head(&mut client, &job_id, "delivered", |head| {
+        event_tag(head, "status") == "done"
+    })
+    .await;
+    let parsed = buzz_core::job::parse_job_head(&delivered_head).expect("delivered head parses");
+    assert_eq!(event_tag(&delivered_head, "run-status"), "delivered");
+    assert_eq!(parsed.task_id.as_deref(), Some(task_id.as_str()));
+    assert_eq!(
+        parsed.run_status,
+        Some(buzz_core::job::TaskRunStatus::Delivered)
+    );
+    assert_eq!(parsed.checkpoint_sequence, 1);
+    assert_eq!(
+        parsed.checkpoint_event_hex.as_deref(),
+        Some(checkpoint_one_id.as_str())
+    );
+    assert_eq!(
+        parsed.outcome_event_hex.as_deref(),
+        Some(delivered_id.as_str())
+    );
+    assert_eq!(parsed.artifacts, vec![artifact]);
+
+    client.disconnect().await.ok();
 }
 
 #[tokio::test]
