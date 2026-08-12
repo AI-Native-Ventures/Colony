@@ -27,27 +27,47 @@
 //! to prevent. The parent is checked against the queue rather than believed,
 //! so naming somebody else's job does not borrow their name.
 //!
-//! Side effects run best effort and may run twice, so every path here is
+//! Most side effects run best effort and may run twice, so every path here is
 //! idempotent: filing conflicts on the event id, claiming is a compare-and-set,
-//! and republishing a head is harmless by construction.
+//! and republishing a head is harmless by construction. Outcomes are the one
+//! synchronous exception because delivery evidence must be validated before
+//! the relay tells the worker its outcome was accepted.
 
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::Arc;
 
 use buzz_core::job::{
     job_head_content, parse_job_checkpoint, parse_job_claim, parse_job_filing, parse_job_heartbeat,
-    parse_job_outcome, JOB_LEASE_SECS, MAX_JOB_ATTEMPTS,
+    parse_job_outcome, TaskArtifactKind, JOB_LEASE_SECS, MAX_JOB_ATTEMPTS,
 };
 use buzz_core::kind::{
-    KIND_JOB_CHECKPOINT, KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT,
-    KIND_JOB_OUTCOME, KIND_TASK,
+    KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_JOB_CHECKPOINT, KIND_JOB_CLAIM,
+    KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_V2, KIND_TASK,
 };
 use buzz_core::tenant::TenantContext;
+use buzz_core::StoredEvent;
 use buzz_db::jobs::{FinishedJob, JobCheckpoint, JobRow, NewJob};
+use buzz_db::thread::ThreadMetadataRecord;
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 use tracing::warn;
 
 use crate::state::AppState;
 use buzz_pubsub::EventTopic;
+
+// This is the delivery-evidence subset of the desktop's bounded artifact
+// reader. Relay-authored system rows are renderable there, but remain
+// control-plane bookkeeping and cannot prove a worker delivered content.
+const TASK_ARTIFACT_EVENT_KINDS: &[u32] = &[
+    KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_MESSAGE_DIFF,
+    KIND_CANVAS,
+    KIND_FORUM_POST,
+    KIND_FORUM_COMMENT,
+];
+const MAX_TASK_EVENT_ARTIFACTS: usize = 16;
 
 /// What handling a job event did, so the caller can log one line that says
 /// which.
@@ -71,8 +91,26 @@ pub enum JobOutcome {
     LeaseGone,
     /// The job was recorded as done or failed.
     Finished,
-    /// The outcome named a superseded lease, or the job had already ended.
+    /// An exact retry named the outcome already recorded for the job.
     OutcomeIgnored,
+}
+
+/// A broker refusal is safe to return as a client error; an internal failure is
+/// retryable server state and must retain that distinction at the ingest edge.
+#[derive(Debug)]
+pub enum JobEventError {
+    /// The signed event does not satisfy the job protocol.
+    Rejected(String),
+    /// Durable state could not be read or changed.
+    Internal(String),
+}
+
+impl fmt::Display for JobEventError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rejected(message) | Self::Internal(message) => formatter.write_str(message),
+        }
+    }
 }
 
 /// Handle one of the five client events the queue accepts.
@@ -84,14 +122,24 @@ pub async fn handle_job_event(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     event: &Event,
-) -> Result<JobOutcome, String> {
+) -> Result<JobOutcome, JobEventError> {
     match event.kind.as_u16() as u32 {
-        KIND_JOB_FILING => handle_filing(tenant, state, event).await,
-        KIND_JOB_CLAIM => handle_claim(tenant, state, event).await,
-        KIND_JOB_HEARTBEAT => handle_heartbeat(tenant, state, event).await,
-        KIND_JOB_CHECKPOINT => handle_checkpoint(tenant, state, event).await,
+        KIND_JOB_FILING => handle_filing(tenant, state, event)
+            .await
+            .map_err(JobEventError::Rejected),
+        KIND_JOB_CLAIM => handle_claim(tenant, state, event)
+            .await
+            .map_err(JobEventError::Rejected),
+        KIND_JOB_HEARTBEAT => handle_heartbeat(tenant, state, event)
+            .await
+            .map_err(JobEventError::Rejected),
+        KIND_JOB_CHECKPOINT => handle_checkpoint(tenant, state, event)
+            .await
+            .map_err(JobEventError::Rejected),
         KIND_JOB_OUTCOME => handle_outcome(tenant, state, event).await,
-        other => Err(format!("kind {other} is not a job event")),
+        other => Err(JobEventError::Rejected(format!(
+            "kind {other} is not a job event"
+        ))),
     }
 }
 
@@ -392,21 +440,57 @@ async fn handle_outcome(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     event: &Event,
-) -> Result<JobOutcome, String> {
-    let outcome =
-        parse_job_outcome(event).map_err(|error| format!("invalid job outcome: {error}"))?;
-    let job_id = hex32("job", &outcome.job_hex)?;
-    let job = load_job(tenant, state, &job_id, &outcome.job_hex).await?;
+) -> Result<JobOutcome, JobEventError> {
+    let outcome = parse_job_outcome(event)
+        .map_err(|error| JobEventError::Rejected(format!("invalid job outcome: {error}")))?;
+    let job_id = hex32("job", &outcome.job_hex).map_err(JobEventError::Rejected)?;
+    let job = state
+        .db
+        .find_job(tenant.community(), &job_id)
+        .await
+        .map_err(|error| {
+            JobEventError::Internal(format!("database error reading the job: {error}"))
+        })?
+        .ok_or_else(|| {
+            JobEventError::Rejected(format!("no job {} in this community", outcome.job_hex))
+        })?;
+    if is_recorded_outcome(&job, event) {
+        return Ok(JobOutcome::OutcomeIgnored);
+    }
     if job.task_id.is_some()
         && outcome.status == buzz_core::job::JobStatus::Done
         && outcome.artifacts.is_empty()
     {
-        return Err("outcome refused: a delivered Task requires an artifact".to_string());
+        return Err(JobEventError::Rejected(
+            "outcome refused: a delivered Task requires an artifact".to_string(),
+        ));
+    }
+    let lease_checked_at = chrono::Utc::now().timestamp();
+    if outcome.status == buzz_core::job::JobStatus::Done {
+        if let Some(task_id) = job.task_id.as_deref() {
+            if !task_outcome_holds_current_lease(
+                &job,
+                &event.pubkey.to_bytes(),
+                outcome.attempt,
+                lease_checked_at,
+            ) {
+                return Err(JobEventError::Rejected(
+                    "outcome refused: Task delivery does not hold the current lease".to_string(),
+                ));
+            }
+            validate_task_event_artifacts(tenant, state, event, &job, task_id, &outcome).await?;
+        }
     }
     let artifacts = (!outcome.artifacts.is_empty())
         .then(|| serde_json::to_value(&outcome.artifacts))
         .transpose()
-        .map_err(|error| format!("outcome artifacts could not be encoded: {error}"))?;
+        .map_err(|error| {
+            JobEventError::Internal(format!("outcome artifacts could not be encoded: {error}"))
+        })?;
+    // Artifact lookup can cross the lease deadline. Refresh the fence time
+    // immediately before the atomic update so validation work never extends
+    // a worker's authority past the lease it actually holds.
+    let finished_at = chrono::Utc::now().timestamp();
 
     let finished = state
         .db
@@ -422,11 +506,13 @@ async fn handle_outcome(
                 model: outcome.model.as_deref(),
                 artifacts: artifacts.as_ref(),
                 outcome_event: Some(event.id.as_bytes()),
-                now: chrono::Utc::now().timestamp(),
+                now: finished_at,
             },
         )
         .await
-        .map_err(|error| format!("database error recording the outcome: {error}"))?;
+        .map_err(|error| {
+            JobEventError::Internal(format!("database error recording the outcome: {error}"))
+        })?;
 
     match finished {
         Some(_) => {
@@ -434,9 +520,214 @@ async fn handle_outcome(
             Ok(JobOutcome::Finished)
         }
         // A seat that lost its lease does not get to overwrite the answer of
-        // whoever finished the job, and a job cannot end twice.
-        None => Ok(JobOutcome::OutcomeIgnored),
+        // whoever finished the job. Only an exact retry of the outcome that
+        // won the final CAS is acknowledged as idempotent.
+        None => {
+            let current = state
+                .db
+                .find_job(tenant.community(), &job_id)
+                .await
+                .map_err(|error| {
+                    JobEventError::Internal(format!(
+                        "database error checking the recorded outcome: {error}"
+                    ))
+                })?;
+            if current
+                .as_ref()
+                .is_some_and(|job| is_recorded_outcome(job, event))
+            {
+                Ok(JobOutcome::OutcomeIgnored)
+            } else {
+                Err(JobEventError::Rejected(
+                    "outcome refused: the lease was superseded or the job already ended"
+                        .to_string(),
+                ))
+            }
+        }
     }
+}
+
+fn is_recorded_outcome(job: &JobRow, event: &Event) -> bool {
+    job.outcome_event.as_deref() == Some(event.id.as_bytes().as_slice())
+}
+
+async fn validate_task_event_artifacts(
+    tenant: &TenantContext,
+    state: &AppState,
+    outcome_event: &Event,
+    job: &JobRow,
+    task_id: &str,
+    outcome: &buzz_core::job::ParsedJobOutcome,
+) -> Result<(), JobEventError> {
+    let references =
+        unique_task_event_references(&outcome.artifacts).map_err(JobEventError::Rejected)?;
+    let stored_by_id = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            ids: Some(references.iter().map(|(_, id)| id.clone()).collect()),
+            limit: Some(references.len() as i64),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| {
+            JobEventError::Internal(format!("database error loading Task artifacts: {error}"))
+        })?
+        .into_iter()
+        .map(|stored| (stored.event.id.to_hex(), stored))
+        .collect::<HashMap<_, _>>();
+
+    for (reference, _) in references {
+        let stored = stored_by_id.get(&reference);
+        let thread_metadata = match stored.as_ref() {
+            Some(stored) => state
+                .db
+                .get_thread_metadata_by_event(tenant.community(), stored.event.id.as_bytes())
+                .await
+                .map_err(|error| {
+                    JobEventError::Internal(format!(
+                        "database error loading Task artifact thread {}: {error}",
+                        reference
+                    ))
+                })?,
+            None => None,
+        };
+
+        validate_task_event_artifact(
+            &reference,
+            stored,
+            thread_metadata.as_ref(),
+            job,
+            task_id,
+            &outcome_event.pubkey.to_bytes(),
+            outcome.attempt,
+        )
+        .map_err(JobEventError::Rejected)?;
+    }
+    Ok(())
+}
+
+fn task_outcome_holds_current_lease(job: &JobRow, author: &[u8], attempt: i32, now: i64) -> bool {
+    job.status == "leased"
+        && job.lease_holder.as_deref() == Some(author)
+        && job.attempts == attempt
+        && job.lease_expires_at.is_some_and(|deadline| deadline >= now)
+}
+
+fn unique_task_event_references(
+    artifacts: &[buzz_core::job::TaskArtifact],
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let event_artifacts = artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == TaskArtifactKind::Event)
+        .collect::<Vec<_>>();
+    if event_artifacts.len() > MAX_TASK_EVENT_ARTIFACTS {
+        return Err(format!(
+            "outcome refused: at most {MAX_TASK_EVENT_ARTIFACTS} event artifacts are allowed"
+        ));
+    }
+
+    let mut seen = HashSet::with_capacity(event_artifacts.len());
+    let mut references = Vec::with_capacity(event_artifacts.len());
+    for artifact in event_artifacts {
+        let normalized = artifact.reference.to_ascii_lowercase();
+        if seen.insert(normalized.clone()) {
+            references.push((normalized, hex32("artifact.ref", &artifact.reference)?));
+        }
+    }
+    Ok(references)
+}
+
+fn validate_task_event_artifact(
+    reference: &str,
+    stored: Option<&StoredEvent>,
+    thread_metadata: Option<&ThreadMetadataRecord>,
+    job: &JobRow,
+    task_id: &str,
+    outcome_author: &[u8],
+    attempt: i32,
+) -> Result<(), String> {
+    let stored = stored.ok_or_else(|| {
+        format!("outcome refused: Task artifact {reference} was not found in this community")
+    })?;
+    if stored.event.id.to_hex() != reference.to_ascii_lowercase() {
+        return Err(format!(
+            "outcome refused: Task artifact {reference} did not resolve to the exact event"
+        ));
+    }
+    if !stored.is_verified() || !stored.event.verify_id() || !stored.event.verify_signature() {
+        return Err(format!(
+            "outcome refused: Task artifact {reference} has an invalid signature"
+        ));
+    }
+    let kind = stored.event.kind.as_u16() as u32;
+    if !TASK_ARTIFACT_EVENT_KINDS.contains(&kind) {
+        return Err(format!(
+            "outcome refused: Task artifact {reference} is not a content event"
+        ));
+    }
+    if stored.event.pubkey.to_bytes().as_slice() != outcome_author {
+        return Err(format!(
+            "outcome refused: Task artifact {reference} was not signed by the delivering worker"
+        ));
+    }
+
+    let channel_id = job
+        .channel_id
+        .ok_or_else(|| "outcome refused: Task run has no canonical channel".to_string())?;
+    if stored.channel_id != Some(channel_id) {
+        return Err(format!(
+            "outcome refused: Task artifact {reference} belongs to a different channel"
+        ));
+    }
+    let expected_thread = job
+        .thread
+        .as_deref()
+        .ok_or_else(|| "outcome refused: Task run has no canonical thread".to_string())?;
+    let thread_metadata = thread_metadata.ok_or_else(|| {
+        format!("outcome refused: Task artifact {reference} is not in the canonical thread")
+    })?;
+    if thread_metadata.channel_id != channel_id
+        || thread_metadata.root_event_id.as_deref() != Some(expected_thread)
+    {
+        return Err(format!(
+            "outcome refused: Task artifact {reference} belongs to a different thread"
+        ));
+    }
+
+    let expected_job = hex::encode(&job.job_id);
+    require_exact_artifact_tag(&stored.event, "task", task_id, "Task", reference)?;
+    require_exact_artifact_tag(&stored.event, "job", &expected_job, "job", reference)?;
+    require_exact_artifact_tag(
+        &stored.event,
+        "attempt",
+        &attempt.to_string(),
+        "attempt",
+        reference,
+    )?;
+    Ok(())
+}
+
+fn require_exact_artifact_tag(
+    event: &Event,
+    name: &str,
+    expected: &str,
+    label: &str,
+    reference: &str,
+) -> Result<(), String> {
+    let mut tags = event.tags.iter().filter(|tag| {
+        let parts = tag.as_slice();
+        parts.first().map(String::as_str) == Some(name)
+    });
+    let exact = tags.next().is_some_and(|tag| {
+        let parts = tag.as_slice();
+        parts.len() == 2 && parts[1] == expected
+    });
+    if !exact || tags.next().is_some() {
+        return Err(format!(
+            "outcome refused: Task artifact {reference} has the wrong {label} fence"
+        ));
+    }
+    Ok(())
 }
 
 async fn load_job(
@@ -646,7 +937,10 @@ fn build_job_head(keys: &Keys, job: &JobRow, head_at: i64) -> Result<Event, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::job::{parse_job_head, JobStatus};
+    use buzz_core::job::{parse_job_head, JobStatus, TaskArtifact};
+    use chrono::{TimeZone, Utc};
+    use nostr::JsonUtil;
+    use uuid::Uuid;
 
     fn job(status: &str) -> JobRow {
         JobRow {
@@ -676,6 +970,273 @@ mod tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
         }
+    }
+
+    fn task_artifact_fixture(kind: u32) -> (StoredEvent, ThreadMetadataRecord, JobRow, Keys) {
+        let holder = Keys::generate();
+        let channel_id = Uuid::new_v4();
+        let thread = vec![0x44; 32];
+        let mut row = job("leased");
+        row.channel_id = Some(channel_id);
+        row.thread = Some(thread.clone());
+        row.task_id = Some("task-investor-update".to_string());
+        row.lease_holder = Some(holder.public_key().to_bytes().to_vec());
+        row.attempts = 2;
+
+        let tags = [
+            vec!["h".to_string(), channel_id.to_string()],
+            vec![
+                "e".to_string(),
+                hex::encode(&thread),
+                String::new(),
+                "root".to_string(),
+            ],
+            vec!["task".to_string(), "task-investor-update".to_string()],
+            vec!["job".to_string(), hex::encode(&row.job_id)],
+            vec!["attempt".to_string(), "2".to_string()],
+        ]
+        .into_iter()
+        .map(Tag::parse)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("artifact tags");
+        let event = EventBuilder::new(Kind::Custom(kind as u16), "Reviewed investor update")
+            .tags(tags)
+            .custom_created_at(nostr::Timestamp::from(1_700_000_100))
+            .sign_with_keys(&holder)
+            .expect("signed artifact event");
+        let stored = StoredEvent::with_received_at(
+            event.clone(),
+            Utc.timestamp_opt(1_700_000_101, 0).unwrap(),
+            Some(channel_id),
+            true,
+        );
+        let metadata = ThreadMetadataRecord {
+            event_id: event.id.as_bytes().to_vec(),
+            event_created_at: Utc.timestamp_opt(1_700_000_100, 0).unwrap(),
+            channel_id,
+            parent_event_id: Some(thread.clone()),
+            root_event_id: Some(thread),
+            depth: 1,
+            reply_count: 0,
+            descendant_count: 0,
+            broadcast: false,
+        };
+        (stored, metadata, row, holder)
+    }
+
+    #[test]
+    fn a_real_signed_content_event_is_valid_task_delivery_evidence() {
+        let (stored, metadata, row, holder) = task_artifact_fixture(KIND_STREAM_MESSAGE_V2);
+
+        validate_task_event_artifact(
+            &stored.event.id.to_hex(),
+            Some(&stored),
+            Some(&metadata),
+            &row,
+            "task-investor-update",
+            &holder.public_key().to_bytes(),
+            2,
+        )
+        .expect("matching signed event evidence");
+    }
+
+    #[test]
+    fn task_event_lookup_is_bounded_deduplicated_and_lease_authorized_first() {
+        let (_, _, mut row, holder) = task_artifact_fixture(KIND_STREAM_MESSAGE_V2);
+        row.lease_expires_at = Some(1_700_000_120);
+        assert!(task_outcome_holds_current_lease(
+            &row,
+            &holder.public_key().to_bytes(),
+            2,
+            1_700_000_100,
+        ));
+        assert!(!task_outcome_holds_current_lease(
+            &row,
+            &holder.public_key().to_bytes(),
+            1,
+            1_700_000_100,
+        ));
+        assert!(!task_outcome_holds_current_lease(
+            &row,
+            &holder.public_key().to_bytes(),
+            2,
+            1_700_000_121,
+        ));
+
+        let reference = hex::encode([0x55; 32]);
+        let duplicate = TaskArtifact {
+            kind: TaskArtifactKind::Event,
+            reference: reference.clone(),
+            label: None,
+        };
+        assert_eq!(
+            unique_task_event_references(&[duplicate.clone(), duplicate.clone()])
+                .expect("bounded duplicate references")
+                .len(),
+            1,
+        );
+        assert!(
+            unique_task_event_references(&vec![duplicate; MAX_TASK_EVENT_ARTIFACTS + 1])
+                .unwrap_err()
+                .contains("at most")
+        );
+    }
+
+    #[test]
+    fn only_the_recorded_outcome_is_an_idempotent_retry() {
+        let (stored, _, mut row, _) = task_artifact_fixture(KIND_STREAM_MESSAGE_V2);
+        row.outcome_event = Some(stored.event.id.as_bytes().to_vec());
+        assert!(is_recorded_outcome(&row, &stored.event));
+
+        let different = EventBuilder::new(Kind::Custom(KIND_JOB_OUTCOME as u16), "different")
+            .sign_with_keys(&Keys::generate())
+            .expect("different signed outcome");
+        assert!(!is_recorded_outcome(&row, &different));
+    }
+
+    #[test]
+    fn task_event_evidence_rejects_missing_invalid_and_control_plane_events() {
+        let (stored, metadata, row, holder) = task_artifact_fixture(KIND_STREAM_MESSAGE_V2);
+        let reference = stored.event.id.to_hex();
+        let author = holder.public_key().to_bytes();
+
+        assert!(validate_task_event_artifact(
+            &reference,
+            None,
+            None,
+            &row,
+            "task-investor-update",
+            &author,
+            2,
+        )
+        .unwrap_err()
+        .contains("not found"));
+
+        let mut json: serde_json::Value =
+            serde_json::from_str(&stored.event.as_json()).expect("event JSON");
+        json["sig"] = serde_json::Value::String("0".repeat(128));
+        let invalid = nostr::Event::from_json(json.to_string()).expect("tampered event");
+        let invalid =
+            StoredEvent::with_received_at(invalid, stored.received_at, stored.channel_id, true);
+        assert!(validate_task_event_artifact(
+            &reference,
+            Some(&invalid),
+            Some(&metadata),
+            &row,
+            "task-investor-update",
+            &author,
+            2,
+        )
+        .unwrap_err()
+        .contains("signature"));
+
+        let (control, control_metadata, _, _) = task_artifact_fixture(KIND_JOB_CHECKPOINT);
+        assert!(validate_task_event_artifact(
+            &control.event.id.to_hex(),
+            Some(&control),
+            Some(&control_metadata),
+            &row,
+            "task-investor-update",
+            &author,
+            2,
+        )
+        .unwrap_err()
+        .contains("content event"));
+    }
+
+    #[test]
+    fn task_event_evidence_is_fenced_to_exact_channel_thread_job_task_and_attempt() {
+        let (stored, metadata, row, holder) = task_artifact_fixture(KIND_STREAM_MESSAGE_V2);
+        let reference = stored.event.id.to_hex();
+        let author = holder.public_key().to_bytes();
+
+        let mut wrong_channel = stored.clone();
+        wrong_channel.channel_id = Some(Uuid::new_v4());
+        assert!(validate_task_event_artifact(
+            &reference,
+            Some(&wrong_channel),
+            Some(&metadata),
+            &row,
+            "task-investor-update",
+            &author,
+            2,
+        )
+        .unwrap_err()
+        .contains("channel"));
+
+        let mut wrong_thread = metadata.clone();
+        wrong_thread.root_event_id = Some(vec![0x77; 32]);
+        assert!(validate_task_event_artifact(
+            &reference,
+            Some(&stored),
+            Some(&wrong_thread),
+            &row,
+            "task-investor-update",
+            &author,
+            2,
+        )
+        .unwrap_err()
+        .contains("thread"));
+
+        for (tag, expected, error_fragment) in [
+            ("job", "wrong-job", "job"),
+            ("task", "wrong-task", "Task"),
+            ("attempt", "1", "attempt"),
+        ] {
+            let tags = stored
+                .event
+                .tags
+                .iter()
+                .map(|current| {
+                    let mut values = current.as_slice().to_vec();
+                    if values.first().map(String::as_str) == Some(tag) {
+                        values[1] = expected.to_string();
+                    }
+                    Tag::parse(values).expect("mutated tag")
+                })
+                .collect::<Vec<_>>();
+            let changed = EventBuilder::new(stored.event.kind, stored.event.content.clone())
+                .tags(tags)
+                .custom_created_at(stored.event.created_at)
+                .sign_with_keys(&holder)
+                .expect("signed mismatched artifact");
+            let changed =
+                StoredEvent::with_received_at(changed, stored.received_at, stored.channel_id, true);
+            assert!(validate_task_event_artifact(
+                &changed.event.id.to_hex(),
+                Some(&changed),
+                Some(&metadata),
+                &row,
+                "task-investor-update",
+                &author,
+                2,
+            )
+            .unwrap_err()
+            .contains(error_fragment));
+        }
+
+        let mut duplicate_tags = stored.event.tags.iter().cloned().collect::<Vec<_>>();
+        duplicate_tags.push(
+            Tag::parse(["task", "wrong-task", "ambiguous"]).expect("extended duplicate Task fence"),
+        );
+        let duplicate = EventBuilder::new(stored.event.kind, stored.event.content.clone())
+            .tags(duplicate_tags)
+            .custom_created_at(stored.event.created_at)
+            .sign_with_keys(&holder)
+            .expect("signed duplicate-fence artifact");
+        let duplicate =
+            StoredEvent::with_received_at(duplicate, stored.received_at, stored.channel_id, true);
+        assert!(validate_task_event_artifact(
+            &duplicate.event.id.to_hex(),
+            Some(&duplicate),
+            Some(&metadata),
+            &row,
+            "task-investor-update",
+            &author,
+            2,
+        )
+        .unwrap_err()
+        .contains("Task"));
     }
 
     #[test]

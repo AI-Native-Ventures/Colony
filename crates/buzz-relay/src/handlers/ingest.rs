@@ -408,7 +408,7 @@ pub enum IngestError {
 
 /// Convert checkpoint broker truth into the transport result contract.
 fn require_checkpoint_applied(
-    outcome: Result<crate::job_broker::JobOutcome, String>,
+    outcome: Result<crate::job_broker::JobOutcome, crate::job_broker::JobEventError>,
 ) -> Result<(), IngestError> {
     match outcome {
         Ok(crate::job_broker::JobOutcome::Checkpointed) => Ok(()),
@@ -421,6 +421,24 @@ fn require_checkpoint_applied(
         Err(error) => Err(IngestError::Internal(format!(
             "error: checkpoint was not durably recorded: {error}"
         ))),
+    }
+}
+
+fn require_outcome_validated(
+    outcome: Result<crate::job_broker::JobOutcome, crate::job_broker::JobEventError>,
+) -> Result<(), IngestError> {
+    match outcome {
+        Ok(crate::job_broker::JobOutcome::Finished)
+        | Ok(crate::job_broker::JobOutcome::OutcomeIgnored) => Ok(()),
+        Ok(other) => Err(IngestError::Rejected(format!(
+            "invalid: unexpected job outcome result {other:?}"
+        ))),
+        Err(crate::job_broker::JobEventError::Rejected(error)) => {
+            Err(IngestError::Rejected(format!("invalid: {error}")))
+        }
+        Err(crate::job_broker::JobEventError::Internal(error)) => {
+            Err(IngestError::Internal(format!("error: {error}")))
+        }
     }
 }
 
@@ -3399,6 +3417,16 @@ async fn ingest_event_inner(
                 "identical checkpoint already durably applied",
             ));
         }
+        if kind_u32 == KIND_JOB_OUTCOME
+            && matches!(&replace_outcome, buzz_db::ReplaceOutcome::AlreadyStored)
+        {
+            let outcome = crate::job_broker::handle_job_event(tenant, state, &event).await;
+            require_outcome_validated(outcome)?;
+            return Ok(IngestResult::already_stored(
+                event_id_hex,
+                "identical outcome already durably applied",
+            ));
+        }
         // The write stored nothing. Which of the two reasons it was decides
         // whether the client's event is nonetheless present: an identical
         // repeat landed earlier, a dominated write never landed at all. These
@@ -3426,6 +3454,14 @@ async fn ingest_event_inner(
         let outcome = crate::job_broker::handle_job_event(tenant, state, &event).await;
         require_checkpoint_applied(outcome)?;
         info!(kind = kind_u32, "job checkpoint handled");
+    } else if kind_u32 == KIND_JOB_OUTCOME {
+        // Delivery validation is part of the synchronous ingest result. A
+        // caller must never receive `accepted: true` for missing, forged, or
+        // cross-task event evidence merely because the outcome envelope was
+        // stored successfully before its broker side effect ran.
+        let outcome = crate::job_broker::handle_job_event(tenant, state, &event).await;
+        require_outcome_validated(outcome)?;
+        info!(kind = kind_u32, "job outcome handled");
     } else if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
         if let Err(e) =
             crate::handlers::side_effects::handle_side_effects(tenant, kind_u32, &event, state)
@@ -3600,7 +3636,9 @@ mod tests {
     #[test]
     fn checkpoint_broker_failures_are_never_acknowledged_as_durable() {
         assert!(matches!(
-            require_checkpoint_applied(Err("database unavailable".to_string())),
+            require_checkpoint_applied(Err(crate::job_broker::JobEventError::Internal(
+                "database unavailable".to_string()
+            ))),
             Err(IngestError::Internal(message)) if message.contains("database unavailable")
         ));
         assert!(matches!(
@@ -3610,6 +3648,22 @@ mod tests {
         assert!(
             require_checkpoint_applied(Ok(crate::job_broker::JobOutcome::Checkpointed)).is_ok()
         );
+    }
+
+    #[test]
+    fn outcome_broker_preserves_rejections_and_retryable_internal_failures() {
+        assert!(matches!(
+            require_outcome_validated(Err(crate::job_broker::JobEventError::Rejected(
+                "wrong attempt fence".to_string()
+            ))),
+            Err(IngestError::Rejected(message)) if message.contains("wrong attempt fence")
+        ));
+        assert!(matches!(
+            require_outcome_validated(Err(crate::job_broker::JobEventError::Internal(
+                "database unavailable".to_string()
+            ))),
+            Err(IngestError::Internal(message)) if message.contains("database unavailable")
+        ));
     }
 
     /// A banned relay admin must be refused with the same wire prefix and
