@@ -2,6 +2,8 @@ import * as React from "react";
 import { ArrowDown } from "lucide-react";
 
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { TaskThreadContext } from "@/features/company/ui/TaskThreadContext";
+import { extractCanonicalTaskId } from "@/features/company/taskThreadModel";
 import { HuddleTranscriptIntro } from "@/features/huddle/components/HuddleTranscriptIntro";
 import { orderMentionPubkeysByText } from "@/features/messages/lib/orderMentionPubkeys";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -550,6 +552,8 @@ export function MessageThreadPanel({
     return null;
   }
 
+  const canonicalTaskId = extractCanonicalTaskId(threadHead.tags ?? []);
+
   const threadScrollRegion = (
     <AuxiliaryPanelBody
       className="overflow-y-auto overflow-x-hidden overscroll-contain pb-24"
@@ -629,6 +633,18 @@ export function MessageThreadPanel({
             data-testid="message-thread-head-divider"
           >
             <Separator className="bg-border/60" />
+          </div>
+        ) : null}
+
+        {canonicalTaskId && channelId ? (
+          <div className={cn(THREAD_PANEL_MESSAGE_GUTTER_CLASS)}>
+            <TaskThreadContext
+              channelId={channelId}
+              channelName={channelName}
+              profiles={profiles}
+              taskId={canonicalTaskId}
+              threadId={threadHead.id}
+            />
           </div>
         ) : null}
 

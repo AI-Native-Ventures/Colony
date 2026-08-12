@@ -14,7 +14,7 @@ import {
   setActiveTab,
   useWorkspace,
 } from "@/features/workspace/lib/workspaceTabs";
-import { getTabBody, registerAllTabKinds } from "@/features/workspace/kinds";
+import { getTabBody } from "@/features/workspace/kinds";
 import { NewTabPage } from "@/features/workspace/ui/NewTabPage";
 import { WorkspaceTabStrip } from "@/features/workspace/ui/WorkspaceTabStrip";
 import { cn } from "@/shared/lib/cn";
@@ -34,8 +34,6 @@ type ChannelWorkspaceProps = {
 export function ChannelWorkspace({
   channelId,
 }: ChannelWorkspaceProps): React.JSX.Element {
-  registerAllTabKinds();
-
   const { tabs, activeTabId } = useWorkspace(channelId);
   const isExpanded = useWorkspaceExpanded(channelId);
 

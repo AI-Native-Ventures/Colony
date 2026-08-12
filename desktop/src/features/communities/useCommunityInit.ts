@@ -20,6 +20,7 @@ import {
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
 import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
+import { resetTaskArtifactOpeningState } from "@/features/workspace/lib/openTaskArtifact";
 import { resetTerminalSessions } from "@/features/workspace/lib/terminalSessions";
 import { resetWebSessions } from "@/features/workspace/lib/webSessions";
 import {
@@ -34,6 +35,7 @@ import { resetBlockActionQueue } from "@/features/blocks/blockActionQueue";
 import { resetInFlightBlockActions } from "@/features/blocks/blockActions";
 import { resetBlockRepository } from "@/features/blocks/blockRepository";
 import { resetCompanyRepositoryState } from "@/features/company/companyRepository";
+import { resetTaskRunRepositoryState } from "@/features/company/taskRunRepository";
 import { resetLedgerRepositoryState } from "@/features/ledger/ledgerRepository";
 import { resetPartyRepositoryState } from "@/features/parties/partyRepository";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
@@ -66,6 +68,7 @@ function resetCommunityState({
   const terminalReset = resetTerminalSessions();
   const webReset = resetWebSessions();
   resetWorkspaceTabs();
+  resetTaskArtifactOpeningState();
   resetChannelSurfaceModes();
   resetAgentObserverStore();
   resetActiveAgentTurnsStore();
@@ -75,6 +78,7 @@ function resetCommunityState({
   resetBlockActionQueue();
   resetBlockRepository();
   resetCompanyRepositoryState();
+  resetTaskRunRepositoryState();
   resetPartyRepositoryState();
   resetLedgerRepositoryState();
   if (resetAvatarState) {
