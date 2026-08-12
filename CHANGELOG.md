@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Rebrand: the app is now Colony. New ant mark, landing, loading animations, icons, and marketing site. Internal names (crates, env vars, protocol) are unchanged.
+
 ## v0.5.10
 
 ### Desktop and shared changes
