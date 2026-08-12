@@ -24,6 +24,10 @@ import {
 import { getProfile, updateProfile } from "@/shared/api/tauriProfiles";
 import { getIdentity, importIdentity } from "@/shared/api/tauriIdentity";
 import { listPersonas } from "@/shared/api/tauriPersonas";
+import {
+  STARTER_PERSONA_ORDER,
+  starterPersonaAnimation,
+} from "@/shared/constants/starterPersonas";
 import { relayClient } from "@/shared/api/relayClient";
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -52,12 +56,6 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
     error.message.includes("invalid: you are not a relay member")
   );
 }
-
-const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
-  Fizz: "/onboarding/starter-team/fizz.png",
-  Honey: "/onboarding/starter-team/honey.png",
-  Bumble: "/onboarding/starter-team/bumble.png",
-};
 
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
@@ -205,9 +203,9 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          ["Fizz", "Honey", "Bumble"].flatMap((name) => {
+          STARTER_PERSONA_ORDER.flatMap((personaId) => {
             const persona = personas.find(
-              (candidate) => candidate.displayName === name,
+              (candidate) => candidate.id === personaId,
             );
             return persona ? [persona] : [];
           }),
@@ -751,15 +749,16 @@ export function CommunityOnboardingFlow({
                   Meet your starter team
                 </h1>
                 <p className="mx-auto mt-3 max-w-[400px] text-sm leading-6 text-foreground/80">
-                  Buzz lets you bring multiple agents into the same workspace.
-                  Your team will help you get started using Buzz.
+                  Colony lets you bring multiple agents into the same workspace.
+                  Your team will help you get started using Colony.
                 </p>
                 <div className="flex w-full flex-1 items-center justify-center py-10">
                   {starterPersonas.length > 0 ? (
                     <div className="flex flex-wrap justify-center gap-8">
                       {starterPersonas.map((persona) => {
-                        const animationUrl =
-                          STARTER_PERSONA_ANIMATIONS[persona.displayName];
+                        const animationUrl = starterPersonaAnimation(
+                          persona.id,
+                        );
                         return (
                           <div
                             className="flex w-40 flex-col items-center gap-3"
@@ -804,7 +803,7 @@ export function CommunityOnboardingFlow({
                     {isPending || transaction.stage === "entering" ? (
                       <LoadingDots label="Preparing Welcome" />
                     ) : (
-                      "Take me to Buzz"
+                      "Take me to Colony"
                     )}
                   </Button>
                   {starterChannelFailureCount >= 2 ? (
