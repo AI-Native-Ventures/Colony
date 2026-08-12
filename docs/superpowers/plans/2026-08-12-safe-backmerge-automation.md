@@ -69,4 +69,3 @@ The normal Colony CI and develop merge queue remain the only path into
 4. Inspect the triggered back-merge run and prove its terminal status and
    effects: successful no-op with no branch/PR for identical trees, or the
    expected protected PR behavior for genuine drift.
-

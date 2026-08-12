@@ -64,4 +64,3 @@ the appropriate PR, and arms auto-merge only for a clean merge.
 - Live automation: the resulting `main` push starts the updated workflow and
   it succeeds as an identical-tree no-op (or, if real drift exists, produces
   the correctly queued/non-auto-merged PR for its classification).
-
