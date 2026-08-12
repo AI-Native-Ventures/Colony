@@ -10,6 +10,7 @@ import {
   pickWelcomeGuideAgentForRelay,
   pickWelcomeTeamStarterAgentForRelay,
   welcomeStarterRuntimeUpdate,
+  welcomeTeammateHasExpectedAccess,
   WELCOME_GUIDE_AGENT_NAME,
   WELCOME_GUIDE_PERSONA_ID,
   WELCOME_TEAM_ID,
@@ -59,6 +60,30 @@ function makeAgent(overrides = {}) {
     ...overrides,
   };
 }
+
+test("owner-only-access policy accepts local Welcome teammates", () => {
+  const teammate = makeAgent({
+    respondTo: "owner-only",
+    respondToAllowlist: [],
+  });
+  assert.equal(welcomeTeammateHasExpectedAccess(teammate, PUB_B, true), true);
+  assert.equal(welcomeTeammateHasExpectedAccess(teammate, PUB_B, false), false);
+});
+
+test("allowlist access accepts a teammate that lists the lead", () => {
+  const allowlisted = makeAgent({
+    respondTo: "allowlist",
+    respondToAllowlist: [PUB_B],
+  });
+  assert.equal(
+    welcomeTeammateHasExpectedAccess(allowlisted, PUB_B, false),
+    true,
+  );
+  assert.equal(
+    welcomeTeammateHasExpectedAccess(allowlisted, PUB_C, false),
+    false,
+  );
+});
 
 test("pickWelcomeGuideAgent reuses a legacy Kit guide", () => {
   const legacyKit = makeAgent({
