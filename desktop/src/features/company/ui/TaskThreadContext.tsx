@@ -13,11 +13,9 @@ import {
   splitDeliveryArtifacts,
 } from "@/features/company/taskThreadModel";
 import {
-  decideTaskArtifactOpening,
+  canOpenTaskArtifact,
   openTaskArtifact,
 } from "@/features/workspace/lib/openTaskArtifact";
-import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
-import { registerAllTabKinds } from "@/features/workspace/kinds";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { cn } from "@/shared/lib/cn";
 import { Badge } from "@/shared/ui/badge";
@@ -62,10 +60,6 @@ export function TaskThreadContext({
   taskId: string;
   threadId: string;
 }) {
-  // The workspace shell registers the same idempotent set when it mounts. A
-  // task card must know whether feature-gated web support exists before it
-  // switches the channel into workspace mode, so register at this entry too.
-  registerAllTabKinds();
   const { taskQuery, runQuery } = useTaskThreadContext({
     taskId,
     channelId,
@@ -76,7 +70,13 @@ export function TaskThreadContext({
   const run = runQuery.data ?? null;
   const task = taskQuery.data ?? null;
   const now = useExecutionClock(run?.leaseExpiresAt);
-  const execution = deriveTaskExecutionState(run, now);
+  const execution = runQuery.isError
+    ? {
+        key: "unavailable" as const,
+        label: "State unavailable",
+        tone: "warning" as const,
+      }
+    : deriveTaskExecutionState(run, now);
   const delivery = splitDeliveryArtifacts(run);
   const [opening, setOpening] = React.useState(false);
   const [openMessage, setOpenMessage] = React.useState<string | null>(null);
@@ -108,10 +108,7 @@ export function TaskThreadContext({
       run.leaseHolderPubkey.slice(0, 10))
     : null;
   const openDecision = delivery.primary
-    ? decideTaskArtifactOpening(
-        delivery.primary,
-        (kind) => getTabKind(kind) !== undefined,
-      )
+    ? canOpenTaskArtifact(delivery.primary)
     : null;
 
   const handleOpen = async () => {

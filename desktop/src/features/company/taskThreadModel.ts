@@ -1,6 +1,7 @@
 import type { TaskArtifact, TaskRunHead } from "./taskRunContracts";
 
 export type TaskExecutionStateKey =
+  | "unavailable"
   | "untracked"
   | "waiting"
   | "executing"

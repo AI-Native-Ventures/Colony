@@ -92,10 +92,10 @@ async function seedTaskRun(
   input: {
     channelId: string;
     threadId: string;
-    mode: "expired" | "delivered";
+    mode: "expired" | "delivered" | "delivered-path";
   },
 ) {
-  const delivered = input.mode === "delivered";
+  const delivered = input.mode !== "expired";
   const now = Math.floor(Date.now() / 1_000);
   const tags: string[][] = [
     ["d", "a".repeat(64)],
@@ -137,11 +137,17 @@ async function seedTaskRun(
                 progress: 90,
               },
               artifacts: [
-                {
-                  kind: "text",
-                  ref: "# Launch memo\n\nThe reviewed launch plan is ready.",
-                  label: "Reviewed launch memo",
-                },
+                input.mode === "delivered-path"
+                  ? {
+                      kind: "path",
+                      ref: "/worker/output/final.md",
+                      label: "Worker-local result",
+                    }
+                  : {
+                      kind: "text",
+                      ref: "# Launch memo\n\nThe reviewed launch plan is ready.",
+                      label: "Reviewed launch memo",
+                    },
                 {
                   kind: "path",
                   ref: "/worker/output/source-notes.md",
@@ -235,4 +241,29 @@ test("accepted checkpoint and delivery open a read-only workspace artifact", asy
   await expect(workspace).toBeVisible();
   await expect(workspace).toContainText("Read-only task evidence");
   await expect(workspace).toContainText("The reviewed launch plan is ready.");
+});
+
+test("worker-local primary evidence stays visible but cannot open on this device", async ({
+  page,
+}) => {
+  const instruction = "prepare the local-path brief";
+  const { message, channelId } = await createCanonicalTaskThread(
+    page,
+    instruction,
+  );
+  await seedTaskRun(page, {
+    channelId,
+    threadId: message.id,
+    mode: "delivered-path",
+  });
+  await openTaskThread(page, instruction);
+
+  const deliverable = page.getByTestId("task-primary-deliverable");
+  await expect(deliverable).toContainText("Worker-local result");
+  await expect(
+    deliverable.getByRole("button", { name: "Open in workspace" }),
+  ).toBeDisabled();
+  await expect(page.getByTestId("task-artifact-fallback")).toContainText(
+    "belongs to the worker workspace",
+  );
 });

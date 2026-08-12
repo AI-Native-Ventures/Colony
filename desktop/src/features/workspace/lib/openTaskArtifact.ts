@@ -1,7 +1,11 @@
+import { verifyEvent } from "nostr-tools/pure";
+
 import type { TaskArtifact } from "../../company/taskRunContracts.ts";
-import { getEventById } from "../../../shared/api/tauri.ts";
+import type { RelayEvent } from "../../../shared/api/types.ts";
+import { taskArtifactPayload } from "./artifactPayload.ts";
 import { setChannelSurfaceMode } from "./channelSurfaceMode.ts";
 import { getTabKind } from "./tabKindRegistry.ts";
+import { getTaskArtifactEvent } from "./taskArtifactEvent.ts";
 import { openTab } from "./workspaceTabs.ts";
 
 type ArtifactOpenDecision =
@@ -14,21 +18,19 @@ export type TaskArtifactOpenResult =
 
 type ArtifactOpenDependencies = {
   getKind: (kind: string) => unknown;
-  getEvent: (eventId: string) => Promise<{
-    id: string;
-    pubkey: string;
-    content: string;
-  }>;
+  getEvent: (eventId: string) => Promise<RelayEvent>;
   openTab: typeof openTab;
   setSurfaceMode: typeof setChannelSurfaceMode;
 };
 
 const DEFAULT_DEPENDENCIES: ArtifactOpenDependencies = {
   getKind: getTabKind,
-  getEvent: getEventById,
+  getEvent: getTaskArtifactEvent,
   openTab,
   setSurfaceMode: setChannelSurfaceMode,
 };
+
+let artifactOpenGeneration = 0;
 
 function validWebUrl(reference: string): boolean {
   try {
@@ -71,6 +73,32 @@ export function decideTaskArtifactOpening(
   }
 }
 
+/** Read the initialized workspace registry when rendering an open affordance. */
+export function canOpenTaskArtifact(
+  artifact: TaskArtifact,
+): ArtifactOpenDecision {
+  return decideTaskArtifactOpening(
+    artifact,
+    (kind) => getTabKind(kind) !== undefined,
+  );
+}
+
+function validSignedEvent(event: RelayEvent): boolean {
+  try {
+    return verifyEvent({
+      id: event.id,
+      pubkey: event.pubkey,
+      created_at: event.created_at,
+      kind: event.kind,
+      tags: event.tags.map((tag) => [...tag]),
+      content: event.content,
+      sig: event.sig,
+    });
+  } catch {
+    return false;
+  }
+}
+
 /** Open accepted evidence through the existing per-channel workspace registry. */
 export async function openTaskArtifact(
   input: {
@@ -80,6 +108,7 @@ export async function openTaskArtifact(
   },
   dependencies: ArtifactOpenDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<TaskArtifactOpenResult> {
+  const generation = artifactOpenGeneration;
   const decision = decideTaskArtifactOpening(
     input.artifact,
     (kind) => dependencies.getKind(kind) !== undefined,
@@ -101,35 +130,41 @@ export async function openTaskArtifact(
       });
     } else if (input.artifact.kind === "event") {
       const event = await dependencies.getEvent(input.artifact.reference);
-      if (event.id.toLowerCase() !== input.artifact.reference.toLowerCase()) {
+      if (
+        generation !== artifactOpenGeneration ||
+        event.id.toLowerCase() !== input.artifact.reference.toLowerCase() ||
+        !validSignedEvent(event)
+      ) {
         return {
           ok: false,
           message:
-            "The relay returned a different event than the accepted artifact reference.",
+            generation !== artifactOpenGeneration
+              ? "Artifact opening was cancelled because the active community changed."
+              : "The relay did not return the exact signed event named by the accepted artifact reference.",
         };
       }
       dependencies.openTab(input.channelId, {
         kind: "artifact",
         title,
         createdBy: event.pubkey,
-        payload: {
+        payload: taskArtifactPayload({
           content: event.content,
           reference: input.artifact.reference,
           sourceEventId: event.id,
           sourceKind: "event",
-        },
+        }),
       });
     } else {
       dependencies.openTab(input.channelId, {
         kind: "artifact",
         title,
         createdBy: input.createdBy,
-        payload: {
+        payload: taskArtifactPayload({
           content: input.artifact.reference,
           reference: input.artifact.reference,
           sourceEventId: null,
           sourceKind: "text",
-        },
+        }),
       });
     }
     dependencies.setSurfaceMode(input.channelId, "workspace");
@@ -140,4 +175,9 @@ export async function openTaskArtifact(
       message: `This artifact could not be opened in-app: ${String(error)}`,
     };
   }
+}
+
+/** Cancel event-artifact reads that crossed an active-community boundary. */
+export function resetTaskArtifactOpeningState(): void {
+  artifactOpenGeneration += 1;
 }

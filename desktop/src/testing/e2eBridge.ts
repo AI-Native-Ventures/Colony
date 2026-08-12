@@ -13176,6 +13176,11 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetEvent>[0],
           activeConfig,
         );
+      case "get_task_artifact_event":
+        return handleGetEvent(
+          payload as Parameters<typeof handleGetEvent>[0],
+          activeConfig,
+        );
       case "ensure_chat_task": {
         // The Rust command decides which team owns the work and what it is
         // charged to; that decision is proven in `implicit_task.rs`. What the

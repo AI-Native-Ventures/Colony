@@ -14,6 +14,26 @@ const RUN_STATUSES = [
 ] as const;
 const ARTIFACT_KINDS = ["event", "url", "path", "text"] as const;
 
+function expectedRunStatus(
+  status: string,
+  attempts: number,
+): TaskRunStatus | null {
+  switch (status) {
+    case "open":
+      return attempts === 0 ? "queued" : "recoverable";
+    case "leased":
+      return "executing";
+    case "done":
+      return "delivered";
+    case "failed":
+      return "failed";
+    case "abandoned":
+      return "abandoned";
+    default:
+      return null;
+  }
+}
+
 export type TaskRunStatus = (typeof RUN_STATUSES)[number];
 export type TaskArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
@@ -147,6 +167,7 @@ export function parseTaskRunHead(
     taskId: singleTag(event, "task"),
     channelId: singleTag(event, "h"),
     threadId: singleTag(event, "e"),
+    originatorP: singleTag(event, "p"),
     runStatus: singleTag(event, "run-status"),
   };
   if (
@@ -156,6 +177,8 @@ export function parseTaskRunHead(
     !HEX_64.test(required.employee) ||
     !required.originator ||
     !HEX_64.test(required.originator) ||
+    event.pubkey.toLowerCase() !== required.employee.toLowerCase() ||
+    required.originatorP !== required.originator ||
     !required.filedBy ||
     !HEX_64.test(required.filedBy) ||
     !required.taskId ||
@@ -171,21 +194,9 @@ export function parseTaskRunHead(
   if (!Number.isSafeInteger(attempts) || attempts < 0) {
     return failure("Job attempts are invalid");
   }
-  const expectedRunStatus =
-    required.status === "open"
-      ? attempts === 0
-        ? "queued"
-        : "recoverable"
-      : required.status === "leased"
-        ? "executing"
-        : required.status === "done"
-          ? "delivered"
-          : required.status === "failed"
-            ? "failed"
-            : required.status === "abandoned"
-              ? "abandoned"
-              : null;
-  if (expectedRunStatus !== required.runStatus) {
+  if (
+    expectedRunStatus(required.status ?? "", attempts) !== required.runStatus
+  ) {
     return failure("Job status and Task run status disagree");
   }
 
@@ -310,6 +321,9 @@ export function parseTaskRunHead(
     (outcomeEventId === null || artifacts.length === 0)
   ) {
     return failure("Delivered Job requires accepted artifact evidence");
+  }
+  if (required.runStatus !== "delivered" && artifacts.length > 0) {
+    return failure("Only a delivered Job may expose artifact evidence");
   }
 
   return {

@@ -20,6 +20,7 @@ import {
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
 import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
+import { resetTaskArtifactOpeningState } from "@/features/workspace/lib/openTaskArtifact";
 import { resetTerminalSessions } from "@/features/workspace/lib/terminalSessions";
 import { resetWebSessions } from "@/features/workspace/lib/webSessions";
 import {
@@ -67,6 +68,7 @@ function resetCommunityState({
   const terminalReset = resetTerminalSessions();
   const webReset = resetWebSessions();
   resetWorkspaceTabs();
+  resetTaskArtifactOpeningState();
   resetChannelSurfaceModes();
   resetAgentObserverStore();
   resetActiveAgentTurnsStore();

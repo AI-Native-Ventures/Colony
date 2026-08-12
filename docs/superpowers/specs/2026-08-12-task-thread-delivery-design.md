@@ -100,7 +100,8 @@ Artifact opening goes through the existing channel workspace tab registry:
 
 - `text`: open a new read-only `artifact` tab containing the accepted inline
   text and provenance.
-- `event`: fetch the exact event ID from the active relay, confirm the ID, and
+- `event`: fetch the exact event ID from the active relay through a bounded
+  content-kind allowlist, confirm its hash and signature as well as its ID, and
   open its content in the read-only `artifact` tab with event provenance.
 - `url`: open a `web` tab only when that kind is registered in the current
   build. Otherwise keep the URL visible and state that this build cannot open
@@ -115,7 +116,8 @@ of the relay reference. It is never published or treated as delivery proof.
 
 Opening a supported artifact creates the tab, selects it, and switches that
 channel to workspace mode. Failures leave the evidence card intact and surface
-an inline error/fallback.
+an inline error/fallback. An event fetch invalidated by a community switch is
+cancelled before it can mutate workspace state in the new community.
 
 ## Task detail sheet
 

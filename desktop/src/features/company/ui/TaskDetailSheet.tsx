@@ -52,6 +52,16 @@ function ArtifactRow({
   );
 }
 
+function keyedArtifacts(artifacts: TaskArtifact[]) {
+  const occurrences = new Map<string, number>();
+  return artifacts.map((artifact) => {
+    const identity = `${artifact.kind}:${artifact.reference}:${artifact.label ?? ""}`;
+    const occurrence = occurrences.get(identity) ?? 0;
+    occurrences.set(identity, occurrence + 1);
+    return { artifact, key: `${identity}:${occurrence}` };
+  });
+}
+
 export function TaskDetailSheet({
   channelId,
   channelName,
@@ -104,10 +114,10 @@ export function TaskDetailSheet({
               Delivery evidence
             </h3>
             <ul className="mt-2 space-y-2">
-              {run.artifacts.map((artifact, index) => (
+              {keyedArtifacts(run.artifacts).map(({ artifact, key }, index) => (
                 <ArtifactRow
                   artifact={artifact}
-                  key={`${artifact.kind}:${artifact.reference}:${artifact.label ?? ""}`}
+                  key={key}
                   primary={index === 0}
                 />
               ))}

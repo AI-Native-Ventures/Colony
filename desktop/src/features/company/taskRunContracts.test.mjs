@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
+import {
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+} from "nostr-tools/pure";
 
 import {
   collapseAndSelectCurrentTaskRun,
@@ -10,7 +14,7 @@ import {
 
 const SECRET = generateSecretKey();
 const JOB = "a".repeat(64);
-const EMPLOYEE = "b".repeat(64);
+const EMPLOYEE = getPublicKey(SECRET);
 const ORIGINATOR = "c".repeat(64);
 const FILER = "d".repeat(64);
 const HOLDER = "e".repeat(64);
@@ -33,6 +37,7 @@ function jobHead({
   runStatus = "queued",
   status = "open",
   taskId = TASK,
+  secret = SECRET,
 } = {}) {
   const tags = [
     ["d", jobId],
@@ -68,7 +73,7 @@ function jobHead({
         ...(artifacts ? { artifacts } : {}),
       }),
     },
-    SECRET,
+    secret,
   );
 }
 
@@ -140,6 +145,15 @@ test("refuses cross-context, duplicate singleton, and inconsistent run states", 
       false,
     );
   }
+});
+
+test("refuses a valid signature when the signer is not the assigned employee", () => {
+  const parsed = parseTaskRunHead(jobHead({ secret: generateSecretKey() }), {
+    taskId: TASK,
+    channelId: CHANNEL,
+    threadId: THREAD,
+  });
+  assert.equal(parsed.ok, false);
 });
 
 test("collapses each d coordinate then selects the newest current head", () => {

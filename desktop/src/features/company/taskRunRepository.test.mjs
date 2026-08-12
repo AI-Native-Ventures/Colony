@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
+import {
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+} from "nostr-tools/pure";
 
 import {
   createTaskRunRepository,
@@ -10,7 +14,7 @@ import {
 
 const SECRET = generateSecretKey();
 const JOB = "a".repeat(64);
-const PERSON = "b".repeat(64);
+const PERSON = getPublicKey(SECRET);
 const THREAD = "c".repeat(64);
 
 function head({
