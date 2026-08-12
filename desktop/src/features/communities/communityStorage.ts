@@ -7,6 +7,15 @@ const COMMUNITIES_KEY = "buzz-communities";
 const ACTIVE_COMMUNITY_KEY = "buzz-active-community-id";
 const LEGACY_WORKSPACES_KEY = "buzz-workspaces";
 const LEGACY_ACTIVE_WORKSPACE_KEY = "buzz-active-workspace-id";
+const LEGACY_AUTO_CONNECT_RECOVERY_KEY = "buzz-legacy-auto-connect-recovery.v1";
+const COMMUNITY_DESTINATIONS_KEY = "buzz-community-destinations";
+
+type LegacyAutoConnectRecovery = {
+  activeCommunityId: string;
+  communities: Community[];
+  communityDestinations: string | null;
+  version: 1;
+};
 
 /**
  * Expand a leading `~` to the user's home directory. The backend rejects
@@ -168,6 +177,212 @@ export function deriveCommunityName(relayUrl: string): string {
   } catch {
     return "Community";
   }
+}
+
+function canonicalRelayUrl(relayUrl: string): string | null {
+  try {
+    const parsed = new URL(normalizeRelayUrl(relayUrl));
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return null;
+    }
+    if (parsed.pathname === "/") {
+      parsed.pathname = "";
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Identify the exact community record written by the obsolete public-build
+ * default-relay auto-connect path. Callers must additionally have a confirmed
+ * membership denial before clearing the record.
+ */
+export function shouldRecoverLegacyAutoConnectedCommunity({
+  activePubkey,
+  activeCommunityId,
+  autoConnectDefaultRelay,
+  communities,
+  defaultRelayUrl,
+}: {
+  activePubkey: string;
+  activeCommunityId: string | null;
+  autoConnectDefaultRelay: boolean;
+  communities: Community[];
+  defaultRelayUrl: string;
+}): boolean {
+  if (autoConnectDefaultRelay || communities.length !== 1) {
+    return false;
+  }
+
+  const [community] = communities;
+  const canonicalDefaultRelayUrl = canonicalRelayUrl(defaultRelayUrl);
+  return (
+    community.id === activeCommunityId &&
+    community.pubkey === activePubkey &&
+    canonicalDefaultRelayUrl !== null &&
+    canonicalRelayUrl(community.relayUrl) === canonicalDefaultRelayUrl &&
+    community.name === deriveCommunityName(defaultRelayUrl) &&
+    !community.token?.trim() &&
+    !community.reposDir?.trim()
+  );
+}
+
+/**
+ * Preserve a restorable snapshot before clearing the obsolete community.
+ * Existing snapshots are never overwritten; recovery fails closed instead.
+ */
+export function quarantineLegacyAutoConnectedCommunity({
+  activePubkey,
+  autoConnectDefaultRelay,
+  defaultRelayUrl,
+}: {
+  activePubkey: string;
+  autoConnectDefaultRelay: boolean;
+  defaultRelayUrl: string;
+}): boolean {
+  const communities = loadCommunities();
+  const activeCommunityId = loadActiveCommunityId();
+  if (
+    activeCommunityId === null ||
+    !shouldRecoverLegacyAutoConnectedCommunity({
+      activePubkey,
+      activeCommunityId,
+      autoConnectDefaultRelay,
+      communities,
+      defaultRelayUrl,
+    })
+  ) {
+    return false;
+  }
+  const existingRecovery = loadLegacyAutoConnectRecovery();
+  if (localStorage.getItem(LEGACY_AUTO_CONNECT_RECOVERY_KEY) !== null) {
+    const currentDestinations = localStorage.getItem(
+      COMMUNITY_DESTINATIONS_KEY,
+    );
+    if (
+      !existingRecovery ||
+      existingRecovery.activeCommunityId !== activeCommunityId ||
+      JSON.stringify(existingRecovery.communities) !==
+        JSON.stringify(communities) ||
+      existingRecovery.communityDestinations !== currentDestinations
+    ) {
+      return false;
+    }
+
+    clearCommunityStorage();
+    return true;
+  }
+
+  const didSave = setLocalStorageItemWithRecovery(
+    LEGACY_AUTO_CONNECT_RECOVERY_KEY,
+    JSON.stringify({
+      activeCommunityId,
+      communities,
+      communityDestinations: localStorage.getItem(COMMUNITY_DESTINATIONS_KEY),
+      version: 1,
+    } satisfies LegacyAutoConnectRecovery),
+  );
+  if (!didSave) {
+    return false;
+  }
+
+  clearCommunityStorage();
+  return true;
+}
+
+function loadLegacyAutoConnectRecovery(): LegacyAutoConnectRecovery | null {
+  try {
+    const raw = localStorage.getItem(LEGACY_AUTO_CONNECT_RECOVERY_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<LegacyAutoConnectRecovery>;
+    return candidate.version === 1 &&
+      typeof candidate.activeCommunityId === "string" &&
+      Array.isArray(candidate.communities) &&
+      (candidate.communityDestinations === null ||
+        typeof candidate.communityDestinations === "string")
+      ? (candidate as LegacyAutoConnectRecovery)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function recoveryMatchesIdentity(
+  recovery: LegacyAutoConnectRecovery,
+  activePubkey: string,
+): boolean {
+  if (recovery.communities.length !== 1) return false;
+  const [community] = recovery.communities;
+  return (
+    community.id === recovery.activeCommunityId &&
+    community.pubkey === activePubkey
+  );
+}
+
+export function hasLegacyAutoConnectRecovery(
+  activePubkey: string | undefined,
+): boolean {
+  const recovery = loadLegacyAutoConnectRecovery();
+  return Boolean(
+    recovery && activePubkey && recoveryMatchesIdentity(recovery, activePubkey),
+  );
+}
+
+/**
+ * Restore the quarantined community for the same identity. Writes the active
+ * ID and destinations before communities so an interrupted restore remains on
+ * setup, where the same operation can safely resume.
+ */
+export function restoreLegacyAutoConnectedCommunity(
+  activePubkey: string,
+): boolean {
+  const recovery = loadLegacyAutoConnectRecovery();
+  if (!recovery || !recoveryMatchesIdentity(recovery, activePubkey)) {
+    return false;
+  }
+
+  const expectedCommunities = JSON.stringify(recovery.communities);
+  const liveCommunities = localStorage.getItem(COMMUNITIES_KEY);
+  const liveActiveCommunityId = localStorage.getItem(ACTIVE_COMMUNITY_KEY);
+  const liveDestinations = localStorage.getItem(COMMUNITY_DESTINATIONS_KEY);
+  if (
+    (liveCommunities !== null && liveCommunities !== expectedCommunities) ||
+    (liveActiveCommunityId !== null &&
+      liveActiveCommunityId !== recovery.activeCommunityId) ||
+    (recovery.communityDestinations === null
+      ? liveDestinations !== null
+      : liveDestinations !== null &&
+        liveDestinations !== recovery.communityDestinations)
+  ) {
+    return false;
+  }
+
+  if (
+    recovery.communityDestinations !== null &&
+    liveDestinations === null &&
+    !setLocalStorageItemWithRecovery(
+      COMMUNITY_DESTINATIONS_KEY,
+      recovery.communityDestinations,
+    )
+  ) {
+    return false;
+  }
+  if (
+    liveActiveCommunityId === null &&
+    !saveActiveCommunityId(recovery.activeCommunityId)
+  ) {
+    return false;
+  }
+  if (liveCommunities === null && !saveCommunities(recovery.communities)) {
+    return false;
+  }
+
+  localStorage.removeItem(LEGACY_AUTO_CONNECT_RECOVERY_KEY);
+  return true;
 }
 
 export function initFirstCommunity(

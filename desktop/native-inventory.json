@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 334,
-    "rust_lines": 137292,
+    "rust_lines": 137305,
     "tauri_coupled": 143,
     "portable": 191,
     "portable_lines": 73433,
@@ -348,10 +348,10 @@
     ]
   },
   "commands": {
-    "registered": 302,
-    "defined": 302,
+    "registered": 303,
+    "defined": 303,
     "by_reach": {
-      "frontend": 298,
+      "frontend": 299,
       "frontend-plugin-prefixed": 2,
       "NO CALLER FOUND": 2
     },
@@ -442,7 +442,7 @@
     "unresolved_emit_sites": []
   },
   "commands_per_module": {
-    "src-tauri/src/commands/identity.rs": 18,
+    "src-tauri/src/commands/identity.rs": 19,
     "src-tauri/src/commands/channels.rs": 16,
     "src-tauri/src/huddle/mod.rs": 14,
     "src-tauri/src/commands/messages.rs": 14,
@@ -1463,6 +1463,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1364",
         "src/shared/api/tauri.ts:1079"
+      ]
+    },
+    "get_build_default_relay_url": {
+      "defining_file": "src-tauri/src/commands/identity.rs",
+      "module": "identity",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/buildConfig.ts:5"
       ]
     },
     "get_canvas": {

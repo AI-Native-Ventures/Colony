@@ -109,7 +109,6 @@ pub fn run() {
             eprintln!("buzz-mesh: failed to build big-stack tokio runtime, using default: {error}");
         }
     }
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Focus the existing window when a duplicate instance launches.
@@ -697,6 +696,7 @@ pub fn run() {
             get_presence,
             get_os_idle_seconds,
             get_default_relay_url,
+            get_build_default_relay_url,
             auto_connect_default_relay_enabled,
             get_legacy_workspace_storage,
             is_shared_identity,
