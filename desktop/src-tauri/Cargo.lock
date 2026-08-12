@@ -1048,6 +1048,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "buzz-acp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "buzz-core",
+ "buzz-meter",
+ "buzz-persona",
+ "buzz-sdk",
+ "chrono",
+ "clap",
+ "evalexpr",
+ "futures-util",
+ "hex",
+ "nix 0.31.3",
+ "nostr 0.44.6",
+ "reqwest 0.13.4",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "buzz-agent"
 version = "0.1.0"
 dependencies = [
@@ -1071,6 +1104,25 @@ dependencies = [
  "url",
  "urlencoding",
  "webbrowser",
+]
+
+[[package]]
+name = "buzz-browser"
+version = "0.1.0"
+dependencies = [
+ "buzz-acp",
+ "futures-util",
+ "reqwest 0.13.4",
+ "rmcp",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1108,6 +1160,7 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "buzz-agent",
+ "buzz-browser",
  "buzz-core",
  "buzz-media",
  "buzz-native",
@@ -1223,6 +1276,35 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid",
+]
+
+[[package]]
+name = "buzz-meter"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "buzz-core",
+ "buzz-meter-core",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures-util",
+ "hex",
+ "rand 0.10.2",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "buzz-meter-core"
+version = "0.1.0"
+dependencies = [
+ "buzz-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -2335,6 +2417,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
+dependencies = [
+ "cfg-if 1.0.4",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2873,6 +2969,12 @@ checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "evalexpr"
+version = "11.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aff27af350e7b53e82aac3e5ab6389abd8f280640ac034508dff0608c4c7e5"
 
 [[package]]
 name = "event-listener"
