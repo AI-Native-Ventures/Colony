@@ -56,6 +56,11 @@ pub fn get_default_relay_url() -> String {
 }
 
 #[tauri::command]
+pub fn get_build_default_relay_url() -> Option<String> {
+    option_env!("BUZZ_DESKTOP_BUILD_RELAY_URL").map(str::to_string)
+}
+
+#[tauri::command]
 pub fn auto_connect_default_relay_enabled() -> bool {
     option_env!("BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY").is_some()
 }
