@@ -22,6 +22,8 @@ pub mod channel;
 /// Colony Credits: accounts, the append-only credit ledger, and the atomic
 /// debit/credit API.
 pub mod credits;
+/// Durable whole-community deletion lifecycle and PostgreSQL adapter.
+pub mod deletion;
 /// Private entitlement, authorization, and durable run persistence for Discovery.
 pub mod discovery;
 /// Private Discovery campaign and Lead workspace projections.
@@ -76,7 +78,7 @@ pub use error::{DbError, Result};
 pub use event::{
     BlockActionInsert, BlockCatalogActionApply, CompanyActionApply, CompanyActionClaim, EventQuery,
     LedgerActionApply, LedgerActionClaim, PartyActionApply, PartyActionClaim,
-    ReactionEventInsertOutcome, ReplaceOutcome,
+    ReactionEventInsertOutcome, ReplaceOutcome, DEFAULT_MAX_PAGE_LIMIT,
 };
 
 use chrono::{DateTime, Utc};
@@ -1490,6 +1492,21 @@ impl Db {
         usage::community_hosts(&self.pool).await
     }
 
+    /// Validate the minimum deletion fence catalog required by serving paths.
+    pub async fn validate_deletion_serving_catalog(&self) -> Result<()> {
+        self.deletion_store().validate_serving_catalog().await
+    }
+
+    /// Validate the exact live community-deletion tenant catalog for destruction.
+    pub async fn validate_deletion_catalog(&self) -> Result<()> {
+        self.deletion_store().validate_catalog().await
+    }
+
+    /// Return the shared durable whole-community deletion adapter.
+    pub fn deletion_store(&self) -> deletion::DeletionStore {
+        deletion::DeletionStore::new(self.pool.clone())
+    }
+
     /// Return every active community for relay-owned startup reconciliation.
     ///
     /// This is an operator/runtime-plane read. Tenant data paths must continue
@@ -1967,6 +1984,49 @@ impl Db {
         Ok(result)
     }
 
+    /// Insert an event while holding and validating an admitted serving-write
+    /// lease under the community ordering lock through commit.
+    ///
+    /// External side effects use a durable lease rather than one long-lived DB
+    /// transaction. Their final database mutation presents that exact lease so
+    /// it may finish during quiescing without admitting any new serving work.
+    pub async fn insert_event_with_serving_write_guard(
+        &self,
+        lease: &deletion::ServingWriteLease,
+        event: &nostr::Event,
+        channel_id: Option<Uuid>,
+    ) -> Result<(StoredEvent, bool)> {
+        let community_id = lease.community_id;
+        let kind_u16 = event.kind.as_u16();
+        let kind_u32 = u32::from(kind_u16);
+        if kind_u32 == buzz_core::kind::KIND_AUTH {
+            return Err(DbError::AuthEventRejected);
+        }
+        if buzz_core::kind::is_ephemeral(kind_u32) {
+            return Err(DbError::EphemeralEventRejected(kind_u16));
+        }
+
+        let mut tx = self.pool.begin().await?;
+        self.deletion_store()
+            .guard_transaction_with_serving_lease(&mut tx, lease)
+            .await?;
+        let result = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community_id,
+            event,
+            channel_id,
+            None,
+        )
+        .await?;
+        tx.commit().await?;
+        if result.1 {
+            if let Err(e) = insert_mentions(&self.pool, community_id, event, channel_id).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
+        }
+        Ok(result)
+    }
+
     /// Queries events matching the given filter parameters.
     ///
     /// Always reads from the WRITER pool. If the result influences a write
@@ -2165,7 +2225,9 @@ impl Db {
         event::soft_delete_event(&self.pool, community_id, event_id).await
     }
 
-    /// Soft-delete the live row for an addressable coordinate `(kind, pubkey, d_tag)`.
+    /// Soft-delete the live row for an addressable coordinate `(kind, pubkey, d_tag)`,
+    /// scoped to heads created at or before `deletion_created_at_secs` (NIP-09
+    /// at-or-before semantics: a stale tombstone never erases a newer head).
     /// Used by NIP-09 a-tag deletion for parameterized-replaceable kinds.
     pub async fn soft_delete_by_coordinate(
         &self,
@@ -2173,8 +2235,17 @@ impl Db {
         kind: i32,
         pubkey: &[u8],
         d_tag: &str,
+        deletion_created_at_secs: i64,
     ) -> Result<bool> {
-        event::soft_delete_by_coordinate(&self.pool, community_id, kind, pubkey, d_tag).await
+        event::soft_delete_by_coordinate(
+            &self.pool,
+            community_id,
+            kind,
+            pubkey,
+            d_tag,
+            deletion_created_at_secs,
+        )
+        .await
     }
 
     /// Atomically soft-delete an event and decrement thread reply counters.
@@ -5573,6 +5644,12 @@ impl Db {
     /// Returns `true` if `pubkey` (64-char hex) is a member of `community`.
     pub async fn is_relay_member(&self, community: CommunityId, pubkey: &str) -> Result<bool> {
         relay_members::is_relay_member(&self.pool, community, pubkey).await
+    }
+
+    /// Returns `true` if any member of `community` holds the `admin` or
+    /// `owner` role. See [`relay_members::has_admin_or_owner`].
+    pub async fn has_admin_or_owner(&self, community: CommunityId) -> Result<bool> {
+        relay_members::has_admin_or_owner(&self.pool, community).await
     }
 
     /// Returns the relay member record for `pubkey` in `community`, or `None` if not found.

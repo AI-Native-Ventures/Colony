@@ -8,19 +8,34 @@ use buzz_core::discovery_worker::{
     canonical_business_domain_digest, normalized_business_name_locality_digest,
     normalized_business_phone_digest,
 };
-use sqlx::{PgPool, Row};
+use std::future::Future;
 
+use sqlx::{Connection, PgConnection, PgPool, Row};
+
+use crate::deletion::SCHEMA_DESTRUCTION_LOCK_KEY;
 use crate::Result;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 /// Run all pending Buzz database migrations.
+///
+/// The entire run holds the exclusive [`SCHEMA_DESTRUCTION_LOCK_KEY`] session
+/// advisory lock, so migrations can never interleave with a community
+/// destruction that drops or rewrites schema objects.
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
+    with_exclusive_schema_destruction_lock(pool, |lock_conn| async move {
+        let outcome = run_migrations_locked(pool).await;
+        (lock_conn, outcome)
+    })
+    .await
+}
+
+async fn run_migrations_locked(pool: &PgPool) -> Result<()> {
     reject_legacy_nip_rs_cardinality_ambiguity(pool).await?;
     MIGRATOR.run(pool).await?;
     backfill_discovery_dedupe_digests(pool).await?;
     // The replica-fence proof (see `replica_fence`) requires the commit-time
-    // `created_at` floor trigger from migration 0021 — correctly shaped — on
+    // `created_at` floor trigger from migration 0021 - correctly shaped - on
     // the `events` parent and every partition. `CREATE TABLE .. PARTITION OF`
     // clones parent triggers, but a partition attached with `ATTACH
     // PARTITION` or created by an older code path would silently escape the
@@ -28,6 +43,39 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     // re-runs this same check at startup on non-migrating relays.)
     crate::replica_fence::verify_floor_guard_catalog(pool).await?;
     Ok(())
+}
+
+/// Run `op` on a dedicated pool-detached connection while holding the
+/// exclusive session advisory lock [`SCHEMA_DESTRUCTION_LOCK_KEY`].
+///
+/// Destructive migration statements must run under this lock: it serializes
+/// them against community destruction, whose catalog drop/rewrite steps take
+/// the same lock. The connection is detached from the pool, so the lock lives
+/// for the duration of `op` regardless of pool contention, and is released
+/// explicitly on completion (success and error alike) before the connection
+/// is closed, never returning a locked session to the pool.
+pub(crate) async fn with_exclusive_schema_destruction_lock<T, F, Fut>(
+    pool: &PgPool,
+    op: F,
+) -> Result<T>
+where
+    F: FnOnce(PgConnection) -> Fut,
+    Fut: Future<Output = (PgConnection, Result<T>)>,
+{
+    let mut lock_conn = pool.acquire().await?.detach();
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(SCHEMA_DESTRUCTION_LOCK_KEY)
+        .execute(&mut lock_conn)
+        .await?;
+    let (mut lock_conn, outcome) = op(lock_conn).await;
+    let unlock = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(SCHEMA_DESTRUCTION_LOCK_KEY)
+        .execute(&mut lock_conn)
+        .await;
+    let _ = lock_conn.close().await;
+    let value = outcome?;
+    unlock?;
+    Ok(value)
 }
 
 /// Apply migrations unless the database was already provisioned from

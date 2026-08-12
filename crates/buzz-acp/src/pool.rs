@@ -138,7 +138,7 @@ impl SessionState {
             PromptSource::Channel(cid) => {
                 self.invalidate_channel(cid);
             }
-            PromptSource::Heartbeat => {
+            PromptSource::Heartbeat | PromptSource::Ask { .. } => {
                 self.heartbeat_session = None;
                 self.heartbeat_turn_count = 0;
                 self.heartbeat_standing_context_sent = false;
@@ -283,11 +283,43 @@ pub struct PromptResult {
     pub batch: Option<FlushBatch>,
 }
 
-/// Whether the prompt came from a channel event or a heartbeat.
+/// Whether the prompt came from a channel event, a heartbeat, or an addressed ask.
 #[derive(Debug)]
 pub enum PromptSource {
     Channel(Uuid),
     Heartbeat,
+    /// A turn woken by an Ask addressed to this agent.
+    ///
+    /// Carries no channel: an ask is addressed to an agent, and a real ask
+    /// raised without `--channel` has no `h` tag at all. The agent answers by
+    /// running `buzz asks answer` with the id from its `<colony-ask>` block,
+    /// not by posting into a room.
+    Ask {
+        ask_event_id: String,
+    },
+}
+
+/// Return the optional channel associated with a prompt source.
+fn prompt_source_channel(source: &PromptSource) -> Option<Uuid> {
+    match source {
+        PromptSource::Channel(channel_id) => Some(*channel_id),
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
+    }
+}
+
+/// Return the human-facing kind label for a prompt source.
+fn prompt_source_label(source: &PromptSource) -> &'static str {
+    match source {
+        PromptSource::Channel(_) => "channel",
+        PromptSource::Heartbeat => "heartbeat",
+        PromptSource::Ask { .. } => "ask",
+    }
+}
+
+/// The prompt text for a turn woken by an Ask.
+pub(crate) fn ask_turn_prompt(event: &nostr::Event) -> Option<String> {
+    let ask = crate::ask_context::read_incoming_ask(event)?;
+    Some(crate::ask_context::ask_context_section(&ask))
 }
 
 /// Apply state effects for Race 1, where a control signal arrives just after the
@@ -1459,16 +1491,9 @@ pub async fn run_prompt_task(
     result_tx: mpsc::UnboundedSender<PromptResult>,
     control_rx: Option<tokio::sync::oneshot::Receiver<ControlSignal>>,
     turn_id: String,
+    source: PromptSource,
 ) {
-    // Is this a channel prompt or a heartbeat?
-    let source = match &batch {
-        Some(b) => PromptSource::Channel(b.channel_id),
-        None => PromptSource::Heartbeat,
-    };
-    let observer_channel_id = match &source {
-        PromptSource::Channel(channel_id) => Some(*channel_id),
-        PromptSource::Heartbeat => None,
-    };
+    let observer_channel_id = prompt_source_channel(&source);
     let turn_started_at = chrono::Utc::now().to_rfc3339();
     agent.acp.set_observer_context(observer::context_for_turn(
         observer_channel_id,
@@ -1476,17 +1501,17 @@ pub async fn run_prompt_task(
         turn_id.clone(),
         turn_started_at.clone(),
     ));
-    let triggering_event_ids: Vec<String> = batch
-        .as_ref()
-        .map(|b| b.events.iter().map(|be| be.event.id.to_hex()).collect())
-        .unwrap_or_default();
+    let triggering_event_ids: Vec<String> = match &source {
+        PromptSource::Ask { ask_event_id } => vec![ask_event_id.clone()],
+        _ => batch
+            .as_ref()
+            .map(|b| b.events.iter().map(|be| be.event.id.to_hex()).collect())
+            .unwrap_or_default(),
+    };
     agent.acp.observe(
         "turn_started",
         serde_json::json!({
-            "source": match &source {
-                PromptSource::Channel(_) => "channel",
-                PromptSource::Heartbeat => "heartbeat",
-            },
+            "source": prompt_source_label(&source),
             "triggeringEventIds": triggering_event_ids,
         }),
     );
@@ -1642,7 +1667,7 @@ pub async fn run_prompt_task(
     // Channel-scoped; heartbeats carry no owner core.
     let agent_core: Option<String> = match &source {
         PromptSource::Channel(cid) => agent.state.core_sections.get(cid).cloned(),
-        PromptSource::Heartbeat => None,
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
     };
 
     // The canvas metadata section — channel-scoped, absent for heartbeats/DMs.
@@ -1654,7 +1679,7 @@ pub async fn run_prompt_task(
             .get(cid)
             .cloned()
             .or_else(|| pending_canvas.as_ref().map(|(_, s)| s.clone())),
-        PromptSource::Heartbeat => None,
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
     };
 
     let (session_id, is_new_session) = match &source {
@@ -1724,7 +1749,7 @@ pub async fn run_prompt_task(
                 }
             }
         }
-        PromptSource::Heartbeat => {
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => {
             if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
@@ -1809,7 +1834,9 @@ pub async fn run_prompt_task(
             .deliveries
             .get(cid)
             .is_some_and(|delivery| delivery.standing_context_sent),
-        PromptSource::Heartbeat => agent.state.heartbeat_standing_context_sent,
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => {
+            agent.state.heartbeat_standing_context_sent
+        }
     };
 
     if is_new_session {
@@ -2088,7 +2115,7 @@ pub async fn run_prompt_task(
     let prompt_bytes: usize = prompt_blocks.iter().map(|block| block.len()).sum();
     let has_standing_context = match &source {
         PromptSource::Channel(_) => !standing.sections().is_empty(),
-        PromptSource::Heartbeat => ctx.base_prompt.is_some(),
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => ctx.base_prompt.is_some(),
     };
     let standing_context_included =
         !agent.has_system_prompt_support() && !standing_context_sent && has_standing_context;
@@ -2324,7 +2351,7 @@ pub async fn run_prompt_task(
                             *count += 1;
                             *count >= limit
                         }
-                        PromptSource::Heartbeat => {
+                        PromptSource::Heartbeat | PromptSource::Ask { .. } => {
                             agent.state.heartbeat_turn_count += 1;
                             agent.state.heartbeat_turn_count >= limit
                         }
@@ -3637,6 +3664,7 @@ fn prompt_label(source: &PromptSource) -> String {
     match source {
         PromptSource::Channel(cid) => format!("channel {cid}"),
         PromptSource::Heartbeat => "heartbeat".to_string(),
+        PromptSource::Ask { .. } => "ask".to_string(),
     }
 }
 
@@ -3993,9 +4021,10 @@ async fn publish_agent_turn_metric(
         timestamp,
         turn: turn_counts,
         cumulative: cumulative_counts,
+        pricing_identity: usage.pricing_identity.clone(),
+        work_context: None,
         delta_reliable: usage.delta_reliable,
         stop_reason,
-        pricing_identity: usage.pricing_identity.clone(),
     };
     let ciphertext = match buzz_core::agent_turn_metric::encrypt_agent_turn_metric(
         &ctx.agent_keys,
@@ -5514,7 +5543,7 @@ while IFS= read -r line; do
   fi
 done"#
         );
-        let acp = AcpClient::spawn("bash", &["-c".to_string(), script], &[], false)
+        let acp = AcpClient::spawn("bash", &["-c".to_string(), script], &[], false, None)
             .await
             .expect("spawn lifecycle ACP script");
         let mut agent = OwnedAgent {
@@ -5544,6 +5573,7 @@ done"#
                 result_tx.clone(),
                 None,
                 format!("turn-{turn}"),
+                PromptSource::Heartbeat,
             )
             .await;
             let result = result_rx.recv().await.expect("prompt result");
@@ -5607,7 +5637,7 @@ while IFS= read -r line; do
   fi
 done"#
         );
-        let acp = AcpClient::spawn("bash", &["-c".to_string(), script], &[], false)
+        let acp = AcpClient::spawn("bash", &["-c".to_string(), script], &[], false, None)
             .await
             .expect("spawn channel lifecycle ACP script");
         let channel_id = Uuid::new_v4();
@@ -5659,6 +5689,7 @@ done"#
                 result_tx.clone(),
                 None,
                 format!("turn-{turn}"),
+                PromptSource::Channel(channel_id),
             )
             .await;
             let result = result_rx.recv().await.expect("prompt result");
@@ -5780,7 +5811,7 @@ while IFS= read -r line; do
   count=$((count + 1))
 done"#
         );
-        let acp = AcpClient::spawn("bash", &["-c".into(), script], &[], false)
+        let acp = AcpClient::spawn("bash", &["-c".into(), script], &[], false, None)
             .await
             .expect("spawn wire-capture ACP");
         let mut agent = OwnedAgent {
@@ -5834,6 +5865,7 @@ done"#
                 result_tx.clone(),
                 None,
                 turn_id.into(),
+                PromptSource::Channel(channel_id),
             )
             .await;
             let result = result_rx.recv().await.expect("prompt result");
@@ -5930,7 +5962,7 @@ done"#
 printf '%s\n' "$line" > '{quoted_capture}'
 printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"#
         );
-        let acp = AcpClient::spawn("bash", &["-c".into(), script], &[], false)
+        let acp = AcpClient::spawn("bash", &["-c".into(), script], &[], false, None)
             .await
             .expect("spawn wire-capture ACP");
         let mut agent = OwnedAgent {
@@ -5993,6 +6025,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             result_tx,
             None,
             "next-turn".into(),
+            PromptSource::Channel(channel_id),
         )
         .await;
         let mut result = result_rx.recv().await.expect("next prompt result");
@@ -6917,6 +6950,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             &["-c".to_string(), "sleep 10".to_string()],
             &[],
             false,
+            None,
         )
         .await
         .expect("failed to spawn test agent");
@@ -6975,6 +7009,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             &["-c".to_string(), "sleep 10".to_string()],
             &[],
             false,
+            None,
         )
         .await
         .expect("failed to spawn test agent");

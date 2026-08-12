@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use buzz_acp::{AcpClient, McpServer};
+use buzz_acp::{AcpClient, McpServer, SystemPromptTransport};
 
 use crate::contracts::BrowserError;
 
@@ -80,7 +80,7 @@ pub async fn run_agent_proof(
         .session_new_with_meta(
             &cwd,
             vec![browser_mcp_server(daemon_path)],
-            Some(
+            Some(SystemPromptTransport::Field(
                 "You have a browser MCP server whose tools are browser_connect, \
                  browser_navigate, browser_snapshot, browser_click, browser_type, \
                  browser_wait_for, browser_scroll, browser_screenshot, \
@@ -90,7 +90,7 @@ pub async fn run_agent_proof(
                  http://127.0.0.1:8777/interaction.html, call browser_connect \
                  first, fill the name field with colony-agent, submit, verify \
                  PASS appears, then call context_budget_report.",
-            ),
+            )),
             Some("browser-agent-proof"),
             Some(locked_down),
         )

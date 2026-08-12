@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use acp::{AcpClient, EnvVar, McpServer};
+pub use acp::{AcpClient, EnvVar, McpServer, SystemPromptTransport};
 use anyhow::Result;
 use buzz_core::kind::{
     KIND_BLOCK_ACTION, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
@@ -4764,6 +4764,7 @@ fn dispatch_ask(
             recoverable_batch: None,
             control_tx: None,
             steer_tx: None,
+            successful_steer_deliveries: HashSet::new(),
         },
     );
     *heartbeat_in_flight = true;
@@ -8956,6 +8957,7 @@ mod error_outcome_emission_tests {
                 recoverable_batch: None,
                 control_tx: None,
                 steer_tx: None,
+                successful_steer_deliveries: HashSet::new(),
             },
         );
         let mut queue = EventQueue::new(config::DedupMode::Queue);

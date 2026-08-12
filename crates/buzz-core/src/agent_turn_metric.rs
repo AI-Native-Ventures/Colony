@@ -78,6 +78,32 @@ impl<'de> Deserialize<'de> for StopReason {
     }
 }
 
+/// Billing identity for a turn - present only when the publisher can prove
+/// applicability from the actual endpoint and actually-requested model.
+///
+/// NIP-AM: this is OPTIONAL but NOT nullable. When present, `authority` and
+/// `model` MUST be non-null strings; `cache_class` is omitted (not null) when
+/// not applicable.
+///
+/// Consumers MUST treat omission as "price unknown" and MUST NOT infer a price
+/// from the session `model` field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingIdentity {
+    /// Registered billing-namespace identifier: exact lowercase hostname, no
+    /// scheme, no path, no trailing slash. Registered values: `api.anthropic.com`,
+    /// `api.openai.com`, `openrouter.ai`. Set extends only by NIP amendment.
+    pub authority: String,
+
+    /// The billable model identifier as resolved at request time - the
+    /// actually-requested model, not the configured/session model alias.
+    pub model: String,
+
+    /// Cache-write class (e.g. `"ephemeral"`). Omitted when not applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_class: Option<String>,
+}
+
 /// Decrypted payload of a `kind:44200` Agent Turn Metric event.
 ///
 /// `harness` and `timestamp` are REQUIRED. All other fields are optional or
@@ -126,6 +152,13 @@ pub struct AgentTurnMetricPayload {
 
     /// Why the turn ended. Unrecognized values MUST be treated as `Unknown`.
     pub stop_reason: Option<StopReason>,
+    /// Billing identity, present only when the publisher can prove it from the
+    /// actual endpoint (official provider API) and the actually-requested model.
+    ///
+    /// Omit (never null) when applicability cannot be proven. Consumers MUST
+    /// treat omission as "price unknown".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing_identity: Option<PricingIdentity>,
 
     /// Optional encrypted snapshot linking this paid turn to canonical work.
     #[serde(default)]
@@ -250,6 +283,7 @@ mod tests {
             }),
             delta_reliable: true,
             stop_reason: Some(StopReason::EndTurn),
+            pricing_identity: None,
             work_context: Some(sample_work_context()),
         }
     }
@@ -464,6 +498,7 @@ mod tests {
             cumulative: None,
             delta_reliable: true,
             stop_reason: None,
+            pricing_identity: None,
             work_context: None,
         }
     }
@@ -488,6 +523,7 @@ mod tests {
             }),
             delta_reliable: true,
             stop_reason: None,
+            pricing_identity: None,
             work_context: None,
         }
     }
