@@ -52,7 +52,7 @@ type AuxiliaryPanelHeaderTitleBlockProps = {
 };
 type AuxiliaryPanelTitleProps = Omit<React.ComponentProps<"h2">, "className">;
 type AuxiliaryPanelTitleContentProps = React.ComponentProps<"h2">;
-type AuxiliaryPanelSurface = "default" | "soft" | "transparent";
+type AuxiliaryPanelSurface = "default" | "soft" | "transparent" | "tinted";
 
 const AUXILIARY_PANEL_HEADER_HEIGHT_CLASS = "pt-13";
 const AUXILIARY_PANEL_CLOSE_LABEL = "Close panel";
@@ -74,6 +74,14 @@ export function getAuxiliaryPanelMode(
 function getAuxiliaryPanelSurfaceClass(surface: AuxiliaryPanelSurface) {
   if (surface === "transparent") {
     return "bg-transparent";
+  }
+
+  if (surface === "tinted") {
+    // The thread panel paints its accent tint on the panel root; the header
+    // chrome keeps its frosted background for legibility and layers the same
+    // 7% accent wash on top so it reads as part of the tinted surface. See
+    // globals/thread-panel.css.
+    return "thread-panel-accent-tint-header";
   }
 
   if (surface === "soft") {
