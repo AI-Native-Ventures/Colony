@@ -1,4 +1,4 @@
-import { LogIn, SquareTerminal } from "lucide-react";
+import { LayoutGrid, LogIn, SquareTerminal } from "lucide-react";
 import type * as React from "react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
@@ -17,6 +17,11 @@ import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { Button } from "@/shared/ui/button";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import { cn } from "@/shared/lib/cn";
+import {
+  setChannelSurfaceMode,
+  useChannelSurfaceMode,
+} from "@/features/workspace/lib/channelSurfaceMode";
 import {
   toggleTerminalPanel,
   useTerminalPanel,
@@ -30,6 +35,7 @@ const DM_HEADER_AVATAR_STATUS_GEOMETRY = scaleProfileAvatarStatusGeometry(
 
 type ChannelScreenHeaderProps = {
   activeChannel: Channel | null;
+  channelId?: string;
   activeChannelEphemeralDisplay: EphemeralChannelDisplay | null;
   activeChannelTitle: string;
   actionsVariant?: "inline" | "compact";
@@ -50,6 +56,7 @@ type ChannelScreenHeaderProps = {
 
 export function ChannelScreenHeader({
   activeChannel,
+  channelId,
   activeChannelEphemeralDisplay,
   activeChannelTitle,
   actionsVariant = "inline",
@@ -67,6 +74,7 @@ export function ChannelScreenHeader({
   onManageChannel,
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
+  const surfaceMode = useChannelSurfaceMode(channelId);
   const isGroupDm =
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
@@ -79,6 +87,28 @@ export function ChannelScreenHeader({
     onJoinChannel;
 
   const terminalPanel = useTerminalPanel();
+  const workspaceToggle = channelId ? (
+    <button
+      aria-label={
+        surfaceMode === "workspace" ? "Close workspace" : "Open workspace"
+      }
+      aria-pressed={surfaceMode === "workspace"}
+      className={cn(
+        "rounded-md p-1.5 text-muted-foreground hover:bg-muted",
+        surfaceMode === "workspace" && "bg-muted text-foreground",
+      )}
+      data-testid="channel-workspace-toggle"
+      onClick={() =>
+        setChannelSurfaceMode(
+          channelId,
+          surfaceMode === "workspace" ? "timeline" : "workspace",
+        )
+      }
+      type="button"
+    >
+      <LayoutGrid aria-hidden className="size-4" />
+    </button>
+  ) : null;
   const terminalButton = activeChannel ? (
     <Button
       aria-label={
@@ -118,6 +148,7 @@ export function ChannelScreenHeader({
   ) : null;
   const actions = activeChannel ? (
     <div className="flex items-center gap-1">
+      {workspaceToggle}
       {terminalButton}
       {channelActions}
     </div>

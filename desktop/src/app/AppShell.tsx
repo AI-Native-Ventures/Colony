@@ -788,6 +788,7 @@ export function AppShell() {
                 onSwitchCommunity={handleSwitchCommunity}
                 onUpdateCommunity={communitiesHook.updateCommunity}
                 communities={communitiesHook.communities}
+                onRemoveCommunity={(id) => void handleRemoveCommunity(id)}
               />
             ) : null}
             <SidebarProvider
@@ -876,9 +877,7 @@ export function AppShell() {
                         onOpenAddCommunity={addCommunityDialog.openDialog}
                         onSendFeedback={() => setIsSendFeedbackOpen(true)}
                         onUpdateCommunity={communitiesHook.updateCommunity}
-                        onRemoveCommunity={(id) =>
-                          void handleRemoveCommunity(id)
-                        }
+                        onRemoveCommunity={handleRemoveCommunity}
                         onSwitchCommunity={handleSwitchCommunity}
                         onCreateAgent={() => requestOpenCreateAgent()}
                         selfPresenceStatus={presenceSession.currentStatus}

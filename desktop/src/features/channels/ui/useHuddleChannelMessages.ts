@@ -19,6 +19,7 @@ export function useIsHuddleTranscript(activeChannelId: string | null) {
 
 type HuddleChannelMessagesOptions = {
   activeChannel: Channel | null;
+  findEvents: RelayEvent[];
   isHuddleTranscript: boolean;
   messages: RelayEvent[];
   targetMessageEvents: RelayEvent[];
@@ -27,16 +28,17 @@ type HuddleChannelMessagesOptions = {
 
 export function useHuddleChannelMessages({
   activeChannel,
+  findEvents,
   isHuddleTranscript,
   messages,
   targetMessageEvents,
   windowStore,
 }: HuddleChannelMessagesOptions) {
   const resolvedChannelMessages = React.useMemo(() => {
-    const extraEvents = targetMessageEvents;
+    const extraEvents = [...targetMessageEvents, ...findEvents];
     if (!activeChannel || extraEvents.length === 0) return messages;
     return extraEvents.reduce(mergeMessages, messages);
-  }, [activeChannel, messages, targetMessageEvents]);
+  }, [activeChannel, findEvents, messages, targetMessageEvents]);
 
   const threadSummaries = React.useMemo(
     () => (windowStore ? channelWindowThreadSummaries(windowStore) : new Map()),
