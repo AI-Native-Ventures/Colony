@@ -51,13 +51,16 @@ pre-push:
     branch-skew:
       run: ./scripts/check-branch-skew.sh
     rust-tests:
+      files: ./scripts/list-pre-push-files.sh
       glob: ["crates/**", "migrations/**", "schema/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "scripts/run-tests.sh", "justfile"]
       run: just test-unit
     desktop-check:
+      files: ./scripts/list-pre-push-files.sh
       glob: ["desktop/**", "pnpm-lock.yaml"]
       exclude: ["desktop/src-tauri/**"]
       run: just desktop-check
     desktop-test:
+      files: ./scripts/list-pre-push-files.sh
       glob: ["desktop/**", "pnpm-lock.yaml"]
       exclude: ["desktop/src-tauri/**"]
       run: just desktop-test
@@ -68,14 +71,17 @@ pre-push:
       # files grew past their limits and landed on develop unchecked, and only
       # a later full `just ci` on develop found it. This entry is the missing
       # half: the same guard, on the paths the other hook skips.
+      files: ./scripts/list-pre-push-files.sh
       glob: ["desktop/src-tauri/**"]
       run: just desktop-file-sizes
     desktop-tauri-checks:
       # Keep local lint parity with Desktop Core CI for every path that can
       # affect the Tauri crate or its path dependencies. Run clippy and tests
       # serially so parallel pre-push hooks do not contend for Cargo's lock.
+      files: ./scripts/list-pre-push-files.sh
       glob: ["desktop/src-tauri/**", "crates/**", "migrations/**", "schema/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "scripts/run-tests.sh", "justfile"]
       run: just desktop-tauri-clippy && just desktop-tauri-test
     mobile-test:
+      files: ./scripts/list-pre-push-files.sh
       glob: ["mobile/**"]
       run: just mobile-test
