@@ -18,6 +18,7 @@ import {
 } from "@/features/workspace/lib/openTaskArtifact";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { cn } from "@/shared/lib/cn";
+import { truncatePubkey } from "@/shared/lib/pubkey";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 
@@ -105,7 +106,7 @@ export function TaskThreadContext({
       ?.displayName ?? task.qaPersonaId;
   const workerLabel = run?.leaseHolderPubkey
     ? (profiles?.[run.leaseHolderPubkey]?.displayName ??
-      run.leaseHolderPubkey.slice(0, 10))
+      truncatePubkey(run.leaseHolderPubkey))
     : null;
   const openDecision = delivery.primary
     ? canOpenTaskArtifact(delivery.primary)
