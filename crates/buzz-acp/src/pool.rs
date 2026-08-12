@@ -2571,6 +2571,42 @@ pub async fn run_prompt_task(
         _ => None,
     };
 
+    // What this turn is charged to, resolved from the relay's own records
+    // before a single token is spent.
+    //
+    // Resolution failure is not fatal here, and that is deliberate rather than
+    // lax: a message with no work reference is ordinary chat, and refusing to
+    // answer it would break every conversation that is not company work. What
+    // a failure does cost is the attribution -- the metric goes out without a
+    // work context, which is visible as unattributed spend rather than as a
+    // confident wrong number.
+    let work_context = match batch
+        .as_ref()
+        .and_then(|b| b.events.last())
+        .map(|batch_event| &batch_event.event)
+    {
+        Some(event) => {
+            match crate::work_context::resolve_for_event(
+                &ctx.rest_client,
+                event,
+                &ctx.agent_keys.public_key(),
+            )
+            .await
+            {
+                Ok(context) => context,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "pool::work_context",
+                        turn_id,
+                        "work context could not be established: {error}"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(scope) => {
             // Session lookup is per SCOPE: a channel's top-level conversation
@@ -2809,6 +2845,17 @@ pub async fn run_prompt_task(
                             .state
                             .mark_scope_delivery_success(scope.clone(), true, []);
                     }
+                    let usage = agent.acp.take_turn_usage();
+                    publish_agent_turn_metric(
+                        &ctx,
+                        usage,
+                        Some(*cid),
+                        &session_id,
+                        &format!("{turn_id}:initial"),
+                        Some(acp_stop_to_core(&stop_reason)),
+                        work_context.as_ref().map(|context| &context.metric),
+                    )
+                    .await;
                 }
                 Err(AcpError::AgentExited) => {
                     agent.state.invalidate_all();
@@ -2834,7 +2881,18 @@ pub async fn run_prompt_task(
                         .cancel_with_cleanup(&session_id, ctx.idle_timeout)
                         .await
                     {
-                        Ok(_) => {
+                        Ok(stop_reason) => {
+                            let usage = agent.acp.take_turn_usage();
+                            publish_agent_turn_metric(
+                                &ctx,
+                                usage,
+                                Some(*cid),
+                                &session_id,
+                                &format!("{turn_id}:initial"),
+                                Some(acp_stop_to_core(&stop_reason)),
+                                work_context.as_ref().map(|context| &context.metric),
+                            )
+                            .await;
                             agent.state.invalidate(&source);
                         }
                         Err(AcpError::AgentExited) => {
@@ -2908,42 +2966,6 @@ pub async fn run_prompt_task(
             }
         }
     }
-
-    // What this turn is charged to, resolved from the relay's own records
-    // before a single token is spent.
-    //
-    // Resolution failure is not fatal here, and that is deliberate rather than
-    // lax: a message with no work reference is ordinary chat, and refusing to
-    // answer it would break every conversation that is not company work. What
-    // a failure does cost is the attribution -- the metric goes out without a
-    // work context, which is visible as unattributed spend rather than as a
-    // confident wrong number.
-    let work_context = match batch
-        .as_ref()
-        .and_then(|b| b.events.last())
-        .map(|batch_event| &batch_event.event)
-    {
-        Some(event) => {
-            match crate::work_context::resolve_for_event(
-                &ctx.rest_client,
-                event,
-                &ctx.agent_keys.public_key(),
-            )
-            .await
-            {
-                Ok(context) => context,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "pool::work_context",
-                        turn_id,
-                        "work context could not be established: {error}"
-                    );
-                    None
-                }
-            }
-        }
-        None => None,
-    };
 
     // When the batch is a single slash-command message (e.g. "@Eva /goal …"),
     // `slash_command` holds the bare command. It is sent as the FIRST prompt
