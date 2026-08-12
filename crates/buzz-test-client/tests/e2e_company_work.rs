@@ -31,7 +31,7 @@ use buzz_core::job::{TaskArtifact, TaskArtifactKind, TaskCheckpoint};
 use buzz_core::kind::{
     KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_EMPLOYEE,
     KIND_HIRE_REQUEST, KIND_INITIATIVE, KIND_JOB_CHECKPOINT, KIND_JOB_CLAIM, KIND_JOB_FILING,
-    KIND_JOB_HEAD, KIND_JOB_OUTCOME, KIND_TASK, KIND_TEAM,
+    KIND_JOB_HEAD, KIND_JOB_OUTCOME, KIND_STREAM_MESSAGE_V2, KIND_TASK, KIND_TEAM,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, CompanyAction, CompanyActionOperation,
@@ -462,7 +462,21 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
     // A random UUID would exercise the membership refusal rather than the
     // Task-run protocol this scenario is proving.
     let channel_id = "9f28288a-d724-587a-9709-92dc7f967110".to_string();
-    let chat_root = Keys::generate().public_key().to_hex();
+    let chat_root_event = job_event(
+        &fixture.owner,
+        KIND_STREAM_MESSAGE_V2,
+        "Prepare the interruption-safe investor update",
+        vec![vec!["h".to_string(), channel_id.clone()]],
+    );
+    let chat_root = chat_root_event.id.to_hex();
+    assert!(
+        client
+            .send_event(chat_root_event)
+            .await
+            .expect("canonical task thread root")
+            .accepted,
+        "the Task proof needs a real stored canonical thread root"
+    );
     let plan = plan_implicit_task(
         &profile,
         std::slice::from_ref(&fixture.team),
@@ -610,7 +624,7 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
         "an expired holder cannot advance recovery state"
     );
 
-    let artifact = TaskArtifact {
+    let late_artifact = TaskArtifact {
         kind: TaskArtifactKind::Text,
         reference: "Investor update delivered".to_string(),
         label: Some("Primary investor update".to_string()),
@@ -624,7 +638,7 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
             vec!["attempt".to_string(), "1".to_string()],
             vec!["status".to_string(), "done".to_string()],
             vec!["task".to_string(), task_id.clone()],
-            vec!["artifact".to_string(), artifact.canonical_json()],
+            vec!["artifact".to_string(), late_artifact.canonical_json()],
         ],
     );
     let _ = client
@@ -693,6 +707,118 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
         ),
         "leased",
         "work without declared delivery evidence cannot become Delivered"
+    );
+
+    let stale_evidence_event = job_event(
+        &fixture.owner,
+        KIND_STREAM_MESSAGE_V2,
+        "Stale attempt evidence",
+        vec![
+            vec!["h".to_string(), channel_id.clone()],
+            vec![
+                "e".to_string(),
+                chat_root.clone(),
+                String::new(),
+                "root".to_string(),
+            ],
+            vec![
+                "e".to_string(),
+                chat_root.clone(),
+                String::new(),
+                "reply".to_string(),
+            ],
+            vec!["task".to_string(), task_id.clone()],
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "1".to_string()],
+        ],
+    );
+    let stale_artifact = TaskArtifact {
+        kind: TaskArtifactKind::Event,
+        reference: stale_evidence_event.id.to_hex(),
+        label: Some("Stale investor update".to_string()),
+    };
+    assert!(
+        client
+            .send_event(stale_evidence_event)
+            .await
+            .expect("store stale-attempt evidence")
+            .accepted
+    );
+    let stale_evidence_delivery = job_event(
+        &fixture.owner,
+        KIND_JOB_OUTCOME,
+        "Attempt two must not cite attempt one evidence",
+        vec![
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "2".to_string()],
+            vec!["status".to_string(), "done".to_string()],
+            vec!["task".to_string(), task_id.clone()],
+            vec!["artifact".to_string(), stale_artifact.canonical_json()],
+        ],
+    );
+    let stale_response = client
+        .send_event(stale_evidence_delivery.clone())
+        .await
+        .expect("stale-evidence delivery response");
+    assert!(
+        !stale_response.accepted,
+        "wrong-attempt evidence was accepted"
+    );
+    assert!(stale_response.message.contains("wrong attempt fence"));
+    let stale_retry = client
+        .send_event(stale_evidence_delivery)
+        .await
+        .expect("stale-evidence retry response");
+    assert!(
+        !stale_retry.accepted && stale_retry.message.contains("wrong attempt fence"),
+        "a stored invalid outcome must remain rejected when retried: {stale_retry:?}"
+    );
+    assert_eq!(
+        event_tag(
+            &current_job_head(&mut client, &job_id)
+                .await
+                .expect("head after stale evidence"),
+            "status"
+        ),
+        "leased",
+        "wrong-attempt evidence cannot finish the live lease"
+    );
+
+    let artifact_event = job_event(
+        &fixture.owner,
+        KIND_STREAM_MESSAGE_V2,
+        "Investor update delivered",
+        vec![
+            vec!["h".to_string(), channel_id.clone()],
+            vec![
+                "e".to_string(),
+                chat_root.clone(),
+                String::new(),
+                "root".to_string(),
+            ],
+            vec![
+                "e".to_string(),
+                chat_root.clone(),
+                String::new(),
+                "reply".to_string(),
+            ],
+            vec!["task".to_string(), task_id.clone()],
+            vec!["job".to_string(), job_id.clone()],
+            vec!["attempt".to_string(), "2".to_string()],
+        ],
+    );
+    let artifact = TaskArtifact {
+        kind: TaskArtifactKind::Event,
+        reference: artifact_event.id.to_hex(),
+        label: Some("Primary investor update".to_string()),
+    };
+    assert!(
+        client
+            .send_event(artifact_event)
+            .await
+            .expect("store signed delivery evidence")
+            .accepted,
+        "the accepted artifact must be a real signed relay event"
     );
 
     let delivered = job_event(

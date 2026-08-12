@@ -9,7 +9,7 @@ use uuid::Uuid;
 use buzz_core::kind::{
     event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_DM_VISIBILITY,
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_HIRE_REQUEST, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST,
-    KIND_IA_UNARCHIVED, KIND_JOB_FILING, KIND_JOB_OUTCOME, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_IA_UNARCHIVED, KIND_JOB_FILING, KIND_JOB_HEARTBEAT, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
     KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION, KIND_THREAD_SUMMARY,
 };
@@ -33,7 +33,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 /// handled in `ingest_event()` before storage so we can short-circuit on
 /// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | KIND_HIRE_REQUEST | KIND_JOB_FILING..=KIND_JOB_OUTCOME | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | KIND_HIRE_REQUEST | KIND_JOB_FILING..=KIND_JOB_HEARTBEAT | 41001..=41003 | 40099)
 }
 
 async fn evict_live_channel_subscriptions(
@@ -224,7 +224,7 @@ pub async fn handle_side_effects(
         // answers by republishing the job head, so a worker learns whether it
         // won a lease by watching the head rather than by a private reply
         // that could disagree with what everyone else sees.
-        KIND_JOB_FILING..=KIND_JOB_OUTCOME => {
+        KIND_JOB_FILING..=KIND_JOB_HEARTBEAT => {
             match crate::job_broker::handle_job_event(tenant, state, event).await {
                 Ok(outcome) => info!(?outcome, kind, "job event handled"),
                 Err(error) => warn!(error = %error, kind, "job event refused"),
