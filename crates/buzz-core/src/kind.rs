@@ -108,6 +108,18 @@ pub const KIND_EVENT_REMINDER: u32 = 30300;
 /// dedicated push lease tables.
 pub const KIND_PUSH_LEASE: u32 = 30350;
 
+/// NIP-PMA: owner-encrypted private managed-agent aggregate.
+///
+/// Addressed by `(owner pubkey, kind, agent pubkey)`. The signed outer tags
+/// expose only the agent coordinate, CAS generation/predecessor, and active/deleted
+/// state required for relay enforcement. Content is NIP-44 v2 encrypted from
+/// the owner's key to itself and contains the runnable identity/configuration
+/// plus exact public projection bindings. See `docs/nips/NIP-PMA.md`.
+///
+/// Colony renumber: upstream uses 30179 for this kind, which collides with
+/// Colony's deployed [`KIND_COMPANY_PROFILE`]. Registered as 30194 here.
+pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30194;
+
 /// Kinds whose stored events are readable only by their author.
 ///
 /// The relay must never reveal the existence, count, tags, content, schedule,
@@ -120,6 +132,7 @@ pub const KIND_PUSH_LEASE: u32 = 30350;
 pub const AUTHOR_ONLY_KINDS: &[u32] = &[
     KIND_EVENT_REMINDER,
     KIND_PUSH_LEASE,
+    KIND_PRIVATE_MANAGED_AGENT,
     KIND_DISCOVERY_ACTION,
     KIND_DISCOVERY_WORKER_ACTION,
     KIND_DISCOVERY_WORKSPACE_ACTION,
@@ -367,29 +380,43 @@ pub const KIND_LEDGER_ACTION: u32 = 40023;
 /// Colony cost ledger: relay-signed receipt for a ledger action.
 pub const KIND_LEDGER_RECEIPT: u32 = 40024;
 
-/// Returns `true` if `kind` uses the author-only-unless-shared read model
-/// (currently only `KIND_PERSONA` / 30175).
+/// Kinds that use the author-only-unless-shared read model.
 ///
 /// Events of these kinds may only be delivered to foreign readers when the
-/// event carries exactly `["shared", "true"]`. Used by all relay read
-/// chokepoints: REQ historical delivery, live fan-out, COUNT fallback,
-/// and the `ids`-lookup result gate.
-pub fn is_persona_shared_kind(kind: u32) -> bool {
-    kind == KIND_PERSONA
+/// event carries exactly `["shared", "true"]`. Every relay read chokepoint
+/// consults this set: REQ historical delivery, live fan-out, COUNT fallback,
+/// the `ids`-lookup result gate, both HTTP surfaces, and the pre-`LIMIT` SQL
+/// visibility pushdown in `buzz-db`.
+///
+/// Membership is a privacy decision, not a convenience: adding a kind here
+/// makes its events invisible to foreign readers until their author opts in,
+/// and the opt-in must be a `shared` TAG (not a content field) so that
+/// toggling it leaves content bytes, and any content hash derived from them,
+/// unchanged.
+///
+/// `KIND_TEAM` (30176) is deliberately NOT a member. Its writers never emit
+/// `shared`, so catalog opt-in semantics do not describe it; it needs
+/// owner-private read semantics instead, which is a separate change.
+pub const SHARED_GATED_KINDS: &[u32] = &[KIND_PERSONA, KIND_TEAM_CATALOG];
+
+/// Returns `true` if `kind` uses the author-only-unless-shared read model
+/// (see [`SHARED_GATED_KINDS`]).
+pub fn is_shared_gated_kind(kind: u32) -> bool {
+    SHARED_GATED_KINDS.contains(&kind)
 }
 
-/// Returns `true` if the event is a persona-shared-catalog kind AND the
-/// requester is NOT the author AND the event does NOT carry `["shared",
-/// "true"]`. All three conditions must hold to withhold the event.
+/// Returns `true` if the event is a shared-gated kind AND the requester is NOT
+/// the author AND the event does NOT carry `["shared", "true"]`. All three
+/// conditions must hold to withhold the event.
 ///
 /// This is the per-event gate used by REQ historical delivery, live fan-out,
 /// and COUNT fallback paths. It is intentionally independent of
-/// `is_author_only_event` — persona events with `["shared", "true"]` MUST
+/// `is_author_only_event` - shared-gated events with `["shared", "true"]` MUST
 /// reach foreign readers; stripping them at the author-only layer would break
 /// the catalog query.
-pub fn is_unshared_persona_event(event: &nostr::Event, requester_pubkey_bytes: &[u8]) -> bool {
+pub fn is_unshared_gated_event(event: &nostr::Event, requester_pubkey_bytes: &[u8]) -> bool {
     let kind = event.kind.as_u16() as u32;
-    if !is_persona_shared_kind(kind) {
+    if !is_shared_gated_kind(kind) {
         return false;
     }
     // Author reads are always allowed.
@@ -397,10 +424,15 @@ pub fn is_unshared_persona_event(event: &nostr::Event, requester_pubkey_bytes: &
         return false;
     }
     // Foreign reader: allowed only if the event is explicitly shared.
-    !persona_event_is_shared(event)
+    !event_is_shared(event)
 }
 
 /// Returns `true` if the event carries exactly one `["shared", "true"]` tag.
+///
+/// Kind-agnostic: this is purely the tag-shape predicate. The kind check lives
+/// in [`is_shared_gated_kind`], so callers that need "is this event shared"
+/// for a kind they already know (e.g. a client deciding whether its own
+/// retained head is published) can use this directly.
 ///
 /// Requires the tag to have exactly two elements so that a three-element shape
 /// like `["shared","true","extra"]` is NOT treated as shared. Ingest enforces
@@ -408,7 +440,7 @@ pub fn is_unshared_persona_event(event: &nostr::Event, requester_pubkey_bytes: &
 /// (author-only) or exactly one with precisely two elements and value `"true"`
 /// (community-readable). This helper fails closed on any non-exact shape
 /// independently of ingest guarantees.
-pub fn persona_event_is_shared(event: &nostr::Event) -> bool {
+pub fn event_is_shared(event: &nostr::Event) -> bool {
     let mut count = 0usize;
     for tag in event.tags.iter() {
         let parts = tag.as_slice();
@@ -418,7 +450,7 @@ pub fn persona_event_is_shared(event: &nostr::Event) -> bool {
             }
             count += 1;
         } else if !parts.is_empty() && parts[0].as_str() == "shared" {
-            // Non-exact shape (wrong length) — fail closed: not shared.
+            // Non-exact shape (wrong length) - fail closed: not shared.
             return false;
         }
     }
@@ -442,6 +474,37 @@ pub const KIND_TEAM: u32 = 30176;
 /// carry the agent's secret key, NIP-OA auth tag, env vars, or runtime fields,
 /// since these events are world-readable on the relay.
 pub const KIND_MANAGED_AGENT: u32 = 30177;
+
+/// NIP-AP: Team Catalog projection (parameterized replaceable, owner-authored).
+///
+/// The shareable projection of a team, addressed by `(pubkey, kind, d_tag)`
+/// where `d_tag` is the team's stable id. Content is a versioned JSON body
+/// carrying sanitized team fields plus ordered, EMBEDDED member definition
+/// projections.
+///
+/// # Why this is not a `shared` tag on [`KIND_TEAM`]
+///
+/// A team's members live in kind 30175 events that are author-only unless
+/// individually shared, so a foreign reader of a shared team could never
+/// hydrate its members. This kind therefore embeds the member projections
+/// rather than referencing them: the share is atomic, it covers built-in
+/// members that have no 30175 head at all, it is immune to local-id/d-tag
+/// divergence, and an unshared 30175 stays private. Kind 30176's wire body is
+/// untouched, so device sync keeps its contract.
+///
+/// # Access control
+///
+/// Member of [`SHARED_GATED_KINDS`]: author-only unless the event carries
+/// exactly `["shared", "true"]`. Ingest additionally requires exactly one
+/// non-empty, bounded `d` tag - generic NIP-33 storage maps a missing `d` to
+/// the empty coordinate, which would collapse every team into one slot.
+///
+/// Content carries only sanitized fields: no env vars, no `respond_to`
+/// allowlist pubkeys, no source or local ids, no filesystem paths, no secrets.
+///
+/// Colony renumber: upstream uses 30178 for this kind, which collides with
+/// Colony's deployed [`KIND_BLOCK_CATALOG_ENTRY`]. Registered as 30193 here.
+pub const KIND_TEAM_CATALOG: u32 = 30193;
 
 // NIP-56 reporting
 /// NIP-56: Report an event, pubkey, or blob to relay moderators (kind:1984).
@@ -809,6 +872,15 @@ pub const KIND_GIT_STATUS_CLOSED: u32 = 1632;
 /// NIP-34: Status — Draft.
 pub const KIND_GIT_STATUS_DRAFT: u32 = 1633;
 
+/// NIP-MP: Multi-repo project - a named grouping of `kind:30617` repository
+/// announcements (parameterized replaceable, d=project slug).
+///
+/// Members are `a` tags holding `30617:<owner-hex>:<repo-d>` coordinates, so one
+/// project may span repositories owned by different pubkeys. The signer gains no
+/// authority over any member: push policy reads the repository's own
+/// announcement, never a project. See `docs/nips/NIP-MP.md`.
+pub const KIND_PROJECT: u32 = 30621;
+
 /// All registered kind constants — used for duplicate detection and iteration.
 pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
@@ -869,6 +941,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_LEDGER_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
+    KIND_TEAM_CATALOG,
+    KIND_PRIVATE_MANAGED_AGENT,
     KIND_REPORT,
     KIND_PRODUCT_FEEDBACK,
     KIND_NIP29_PUT_USER,
@@ -979,6 +1053,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_GIT_STATUS_MERGED,
     KIND_GIT_STATUS_CLOSED,
     KIND_GIT_STATUS_DRAFT,
+    KIND_PROJECT,
 ];
 
 /// Returns `true` if `kind` is in the ephemeral range (20000–29999).
@@ -1103,7 +1178,10 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PARTY)); // 30182 ∈ 30
 const _: () = assert!(is_parameterized_replaceable(KIND_PARTY_RELATIONSHIP)); // 30183 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30193 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30194 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PROJECT)); // 30621 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
@@ -1511,7 +1589,7 @@ mod tests {
         }
     }
 
-    // ── persona_event_is_shared / is_unshared_persona_event ──────────────
+    // ── event_is_shared / is_unshared_gated_event ──────────────
 
     fn make_persona_event(tags: &[&[&str]]) -> nostr::Event {
         use nostr::{EventBuilder, Keys, Kind, Tag};
@@ -1527,48 +1605,48 @@ mod tests {
     }
 
     #[test]
-    fn persona_event_is_shared_true_tag() {
+    fn event_is_shared_true_tag() {
         let ev = make_persona_event(&[&["d", "my-agent"], &["shared", "true"]]);
-        assert!(persona_event_is_shared(&ev));
+        assert!(event_is_shared(&ev));
     }
 
     #[test]
-    fn persona_event_is_shared_no_tag() {
+    fn event_is_shared_no_tag() {
         let ev = make_persona_event(&[&["d", "my-agent"]]);
-        assert!(!persona_event_is_shared(&ev));
+        assert!(!event_is_shared(&ev));
     }
 
     #[test]
-    fn persona_event_is_shared_wrong_value() {
+    fn event_is_shared_wrong_value() {
         let ev = make_persona_event(&[&["d", "my-agent"], &["shared", "false"]]);
-        assert!(!persona_event_is_shared(&ev));
+        assert!(!event_is_shared(&ev));
     }
 
     #[test]
-    fn persona_event_is_shared_duplicate_shared_tags() {
+    fn event_is_shared_duplicate_shared_tags() {
         // Two ["shared","true"] tags → ambiguous; not considered shared.
         let ev =
             make_persona_event(&[&["d", "my-agent"], &["shared", "true"], &["shared", "true"]]);
-        assert!(!persona_event_is_shared(&ev));
+        assert!(!event_is_shared(&ev));
     }
 
     #[test]
-    fn persona_event_is_shared_three_element_tag_not_shared() {
+    fn event_is_shared_three_element_tag_not_shared() {
         // ["shared","true","extra"] — three elements — must NOT be treated as shared.
         // The helper fails closed on any non-exact shape independently of ingest guarantees.
         let ev = make_persona_event(&[&["d", "my-agent"], &["shared", "true", "extra"]]);
-        assert!(!persona_event_is_shared(&ev));
+        assert!(!event_is_shared(&ev));
     }
 
     #[test]
-    fn persona_event_is_shared_one_element_tag_not_shared() {
+    fn event_is_shared_one_element_tag_not_shared() {
         // ["shared"] — only one element — not shared (fails the == 2 check).
         let ev = make_persona_event(&[&["d", "my-agent"], &["shared"]]);
-        assert!(!persona_event_is_shared(&ev));
+        assert!(!event_is_shared(&ev));
     }
 
     #[test]
-    fn is_unshared_persona_event_author_always_allowed() {
+    fn is_unshared_gated_event_author_always_allowed() {
         // Even without a shared tag the event author should not be blocked.
         use nostr::{EventBuilder, Keys, Kind, Tag};
         let keys = Keys::generate();
@@ -1577,25 +1655,25 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
         let author_bytes = keys.public_key().to_bytes();
-        assert!(!is_unshared_persona_event(&ev, &author_bytes));
+        assert!(!is_unshared_gated_event(&ev, &author_bytes));
     }
 
     #[test]
-    fn is_unshared_persona_event_foreign_no_tag() {
+    fn is_unshared_gated_event_foreign_no_tag() {
         let ev = make_persona_event(&[&["d", "my-agent"]]);
         let foreign = [0u8; 32];
-        assert!(is_unshared_persona_event(&ev, &foreign));
+        assert!(is_unshared_gated_event(&ev, &foreign));
     }
 
     #[test]
-    fn is_unshared_persona_event_foreign_shared_tag() {
+    fn is_unshared_gated_event_foreign_shared_tag() {
         let ev = make_persona_event(&[&["d", "my-agent"], &["shared", "true"]]);
         let foreign = [0u8; 32];
-        assert!(!is_unshared_persona_event(&ev, &foreign));
+        assert!(!is_unshared_gated_event(&ev, &foreign));
     }
 
     #[test]
-    fn is_unshared_persona_event_non_persona_kind_passthrough() {
+    fn is_unshared_gated_event_non_persona_kind_passthrough() {
         use nostr::{EventBuilder, Keys, Kind};
         let keys = Keys::generate();
         let ev = EventBuilder::new(Kind::Custom(KIND_TEAM as u16), "")
@@ -1603,6 +1681,6 @@ mod tests {
             .unwrap();
         let foreign = [0u8; 32];
         // Non-persona kinds are never blocked by this gate.
-        assert!(!is_unshared_persona_event(&ev, &foreign));
+        assert!(!is_unshared_gated_event(&ev, &foreign));
     }
 }

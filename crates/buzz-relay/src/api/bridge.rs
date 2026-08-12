@@ -839,12 +839,12 @@ async fn submit_event_authed(
     match crate::handlers::ingest::ingest_event(state, tenant, event, auth).await {
         Ok(result) => {
             let response = Json(serde_json::json!({
-                "event_id": result.event_id,
-                "accepted": result.accepted,
-                "message": result.message,
+                "event_id": result.event_id(),
+                "accepted": result.accepted(),
+                "message": result.message(),
             }));
             SubmitOutcome::Ok {
-                accepted: result.accepted,
+                accepted: result.accepted(),
                 kind: kind_u32,
                 response,
             }
