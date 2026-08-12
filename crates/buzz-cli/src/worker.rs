@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use buzz_core::job::{TaskArtifact, TaskArtifactKind, MAX_ARTIFACT_TEXT};
+use buzz_core::job::{TaskArtifact, TaskArtifactKind, TaskCheckpoint, MAX_ARTIFACT_TEXT};
 use buzz_core::kind::{
     KIND_JOB_CLAIM, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME, KIND_USAGE_RECORD,
 };
@@ -146,14 +146,24 @@ pub async fn run_worker_once(client: &BuzzClient, config: &SeatConfig) -> Result
     // concurrently without spawning: whichever completes first, the other
     // is cancelled. When the heartbeat fires, we renew the lease and loop
     // back to the select.
+    let execution_instruction = open.execution_instruction();
     let result = run_with_heartbeats(
         client,
         &open.job_id,
         attempt,
-        &open.instruction,
+        &execution_instruction,
         &bindings[usable..],
     )
-    .await;
+    .await
+    .and_then(|reply| {
+        if open.task_id.is_some() && reply.text.trim().is_empty() {
+            Err(CliError::Other(
+                "provider returned an empty Task deliverable".to_string(),
+            ))
+        } else {
+            Ok(reply)
+        }
+    });
 
     match result {
         Ok(reply) => {
@@ -262,6 +272,30 @@ struct OpenJob {
     employee: String,
     instruction: String,
     task_id: Option<String>,
+    checkpoint: Option<TaskCheckpoint>,
+}
+
+impl OpenJob {
+    /// Build the provider instruction for an initial or recovered execution.
+    fn execution_instruction(&self) -> String {
+        let Some(checkpoint) = &self.checkpoint else {
+            return self.instruction.clone();
+        };
+
+        let resume_token = checkpoint
+            .resume_token
+            .as_deref()
+            .map(|token| format!("\nResume token: {token}"))
+            .unwrap_or_default();
+        let progress = checkpoint
+            .progress
+            .map(|value| format!("\nRecorded progress: {value}%"))
+            .unwrap_or_default();
+        format!(
+            "{}\n\nDurable recovery checkpoint:\nSummary: {}{}{}\nContinue from this checkpoint without repeating completed work.",
+            self.instruction, checkpoint.summary, resume_token, progress
+        )
+    }
 }
 
 /// The newest head under NIP-16 ordering, or `None` when every head is
@@ -352,6 +386,17 @@ fn first_open_job(events: &[serde_json::Value]) -> Option<OpenJob> {
         if instruction.is_empty() {
             continue;
         }
+        let checkpoint_sequence = extract_tag_value(event, "checkpoint-seq")
+            .parse::<i64>()
+            .unwrap_or(0);
+        let checkpoint = content
+            .get("checkpoint")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<TaskCheckpoint>(value).ok());
+        if checkpoint_sequence > 0 && checkpoint.is_none() {
+            report_malformed_head(&job_id, event);
+            continue;
+        }
         return Some(OpenJob {
             job_id,
             employee: extract_tag_value(event, "employee"),
@@ -360,6 +405,7 @@ fn first_open_job(events: &[serde_json::Value]) -> Option<OpenJob> {
                 task if task.is_empty() => None,
                 task => Some(task),
             },
+            checkpoint,
         });
     }
     None
@@ -450,6 +496,12 @@ struct OutcomeInput<'a> {
 }
 
 fn sign_finish(client: &BuzzClient, input: OutcomeInput<'_>) -> Result<nostr::Event, CliError> {
+    let artifact_detail = input.detail.trim();
+    if input.task_id.is_some() && input.status == "done" && artifact_detail.is_empty() {
+        return Err(CliError::Other(
+            "Task delivery requires a non-empty artifact".to_string(),
+        ));
+    }
     let attempt_str = input.attempt.to_string();
     let mut parsed = vec![
         Tag::parse(["job", input.job]),
@@ -466,13 +518,13 @@ fn sign_finish(client: &BuzzClient, input: OutcomeInput<'_>) -> Result<nostr::Ev
         .task_id
         .filter(|_| input.status == "done")
         .map(|task_id| {
-            let mut end = input.detail.len().min(MAX_ARTIFACT_TEXT);
-            while end > 0 && !input.detail.is_char_boundary(end) {
+            let mut end = artifact_detail.len().min(MAX_ARTIFACT_TEXT);
+            while end > 0 && !artifact_detail.is_char_boundary(end) {
                 end -= 1;
             }
             TaskArtifact {
                 kind: TaskArtifactKind::Text,
-                reference: input.detail[..end].to_string(),
+                reference: artifact_detail[..end].to_string(),
                 label: Some(format!("Primary deliverable for Task {task_id}")),
             }
             .canonical_json()
@@ -668,6 +720,63 @@ mod tests {
 
         assert_eq!(open.job_id, "job-1");
         assert_eq!(open.instruction, "open job-1");
+    }
+
+    #[test]
+    fn a_recovered_job_feeds_its_checkpoint_back_into_execution() {
+        let mut head = job_head("job-1", "open", 100);
+        head["tags"] = json!([
+            ["d", "job-1"],
+            ["status", "open"],
+            ["employee", "employee-1"],
+            ["task", "company-1:task-1"],
+            ["checkpoint-seq", "1"],
+        ]);
+        head["content"] = json!({
+            "instruction": "Draft the investor update",
+            "checkpoint": {
+                "summary": "Research is complete; drafting remains",
+                "resumeToken": "phase:draft",
+                "progress": 60,
+            },
+        })
+        .to_string()
+        .into();
+
+        let open = first_open_job(&[head]).expect("recovered job should be found");
+        let execution = open.execution_instruction();
+
+        assert!(execution.contains("Draft the investor update"));
+        assert!(execution.contains("Research is complete; drafting remains"));
+        assert!(execution.contains("phase:draft"));
+        assert!(execution.contains("60%"));
+        assert!(execution.contains("Continue from this checkpoint"));
+    }
+
+    #[test]
+    fn a_task_worker_cannot_declare_an_empty_delivery_artifact() {
+        let client = BuzzClient::new(
+            "http://127.0.0.1:1".to_string(),
+            nostr::Keys::generate(),
+            None,
+            None,
+        )
+        .expect("test client");
+
+        let result = sign_finish(
+            &client,
+            OutcomeInput {
+                job: &"11".repeat(32),
+                attempt: 1,
+                status: "done",
+                detail: "  \n\t ",
+                provider: Some("provider"),
+                model: Some("model"),
+                task_id: Some("company-1:task-1"),
+            },
+        );
+
+        assert!(result.is_err(), "empty delivery must fail before publish");
     }
 
     /// Gate 1: two heads for one job with identical `created_at` must resolve
