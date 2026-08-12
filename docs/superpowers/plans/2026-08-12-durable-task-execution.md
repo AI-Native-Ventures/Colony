@@ -15,12 +15,12 @@
 - `crates/buzz-core/src/kind.rs`: reserve `KIND_JOB_CHECKPOINT`.
 - `crates/buzz-core/src/job.rs`: checkpoint/artifact types, strict parsers, Task linkage, extended head.
 - `migrations/0058_task_run_durability.sql`: additive Task-run persistence.
-- `crates/buzz-db/src/migration.rs`: register and structurally test migration 0064.
+- `crates/buzz-db/src/migration.rs`: register and structurally test migration 0058.
 - `crates/buzz-db/src/jobs.rs` and `src/lib.rs`: row fields and fenced checkpoint/delivery updates.
 - `crates/buzz-relay/src/job_broker.rs`: Task existence, checkpoint arbitration, delivery gate, head projection.
 - `crates/buzz-relay/src/handlers/ingest.rs`: admission and broker routing for kind 43014.
 - `crates/buzz-cli/src/lib.rs` and `commands/jobs.rs`: public syntax and event construction.
-- `crates/buzz-test-client/tests/e2e_jobs.rs`: real-relay interruption/recovery proof.
+- `crates/buzz-test-client/tests/e2e_company_work.rs`: implicit-Task real-relay interruption/recovery proof.
 
 Do not touch dashboard, billing, playbook, connector, browser, cloud-fleet, or desktop UI code. Preserve all legacy job syntax and behavior.
 
@@ -154,7 +154,7 @@ Run the Step 2 command. Commit with `git commit -s -m "feat(cli): operate durabl
 
 **Files:**
 
-- Modify: `crates/buzz-test-client/tests/e2e_jobs.rs`
+- Modify: `crates/buzz-test-client/tests/e2e_company_work.rs`
 - Modify: `crates/buzz-test-client/src/bin/test_server.rs` only if the existing test-only lease expiry hook requires it
 
 - [ ] **Step 1: Write the acceptance test and prove it fails**
@@ -163,11 +163,11 @@ File one Task-linked run, claim attempt 1, checkpoint sequence 1, expire the lea
 
 - [ ] **Step 2: Run the focused real-relay proof**
 
-Run `. ./bin/activate-hermit && cargo test -p buzz-test-client --test e2e_jobs task_run_survives_lease_loss_from_checkpoint_and_requires_delivery_artifact -- --ignored --nocapture`. Expected: pass with Postgres, Redis, and the test relay. If infrastructure is unavailable, preserve the exact failure and do not claim relay proof.
+Run `. ./bin/activate-hermit && cargo test -p buzz-test-client --test e2e_company_work an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_delivery -- --ignored --exact --nocapture --test-threads=1`. Expected: pass with Postgres, Redis, and the test relay. If infrastructure is unavailable, preserve the exact failure and do not claim relay proof.
 
 - [ ] **Step 3: Run legacy and new job regressions**
 
-Run `cargo test -p buzz-test-client --test e2e_jobs -- --ignored --nocapture`. Expected: legacy jobs and Task-linked runs both pass. Commit with `git commit -s -m "test(tasks): prove checkpoint recovery and delivery"`.
+Run the existing `e2e_jobs` suite separately for legacy queue regressions. Expected: legacy jobs and Task-linked runs both pass. Commit with `git commit -s -m "test(tasks): prove checkpoint recovery and delivery"`.
 
 ## Task 6: Quality and delivery gates
 

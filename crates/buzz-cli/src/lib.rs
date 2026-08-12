@@ -286,7 +286,7 @@ enum Cmd {
     /// Hire and list the workspace's employees (kinds 9045/30190)
     #[command(subcommand)]
     Employees(EmployeesCmd),
-    /// File, claim, heartbeat, and finish employee jobs (kinds 43010-43013)
+    /// File, claim, heartbeat, checkpoint, and finish employee jobs (kinds 43010-43014)
     #[command(subcommand)]
     Jobs(JobsCmd),
 }
@@ -2644,7 +2644,7 @@ pub enum EmployeesCmd {
 }
 
 /// Subcommands for `buzz jobs`: the queue an employee works from (kinds
-/// 43010-43013). Filing creates work; claiming takes an exclusive lease on
+/// 43010-43014). Filing creates work; claiming takes an exclusive lease on
 /// it; heartbeating holds that lease; finishing reports back. A lease nobody
 /// renews lapses and the job returns to the queue, which is how work survives
 /// the machine running it dying. See `docs/design/company-employees.html`.
