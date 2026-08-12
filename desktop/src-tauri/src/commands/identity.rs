@@ -55,13 +55,18 @@ pub fn get_default_relay_url() -> String {
 }
 
 #[tauri::command]
+pub fn get_build_default_relay_url() -> Option<String> {
+    option_env!("BUZZ_DESKTOP_BUILD_RELAY_URL").map(str::to_string)
+}
+
+#[tauri::command]
 pub fn auto_connect_default_relay_enabled() -> bool {
     option_env!("BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY").is_some()
 }
 
 #[cfg(test)]
 mod auto_connect_default_relay_tests {
-    use super::auto_connect_default_relay_enabled;
+    use super::{auto_connect_default_relay_enabled, get_build_default_relay_url};
 
     #[test]
     #[ignore]
@@ -71,6 +76,14 @@ mod auto_connect_default_relay_tests {
         assert_eq!(
             auto_connect_default_relay_enabled(),
             expected == "true" || expected == "1"
+        );
+    }
+
+    #[test]
+    fn recovery_relay_uses_only_the_compiled_value() {
+        assert_eq!(
+            get_build_default_relay_url().as_deref(),
+            option_env!("BUZZ_DESKTOP_BUILD_RELAY_URL")
         );
     }
 }
