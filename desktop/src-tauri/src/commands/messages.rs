@@ -1,5 +1,10 @@
 use nostr::{Event, EventId, Keys, PublicKey};
 use tauri::{AppHandle, State};
+#[cfg(test)]
+mod feed;
+
+#[cfg(test)]
+use feed::build_feed_projection_filter;
 
 mod forum;
 

@@ -167,15 +167,13 @@ impl AgentMetricIndexRow {
             cumulative_cost_usd: cumulative.and_then(|c| c.cost_usd),
             cumulative_cache_read_tokens: cumulative.and_then(|c| c.cache_read_tokens),
             cumulative_cache_write_tokens: cumulative.and_then(|c| c.cache_write_tokens),
-            pricing_authority: payload
-                .pricing_identity
-                .as_ref()
-                .map(|pi| pi.authority.clone()),
-            pricing_model: payload.pricing_identity.as_ref().map(|pi| pi.model.clone()),
-            pricing_cache_class: payload
-                .pricing_identity
-                .as_ref()
-                .and_then(|pi| pi.cache_class.clone()),
+            // Colony's cost ledger carries pricing attribution in the ledger
+            // (`work_context`), not in the NIP-AM payload — upstream's
+            // `PricingIdentity` field does not exist on Colony's
+            // `AgentTurnMetricPayload`, so the archive columns stay null.
+            pricing_authority: None,
+            pricing_model: None,
+            pricing_cache_class: None,
             parse_status: ParseStatus::Valid,
         }
     }

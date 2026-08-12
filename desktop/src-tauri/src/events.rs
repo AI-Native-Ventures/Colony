@@ -8,15 +8,11 @@
 //!
 //! Each function validates inputs and returns a nostr::EventBuilder.
 //! Signing and submission happen in relay::submit_event.
+
 use buzz_core_pkg::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST};
 use nostr::{EventBuilder, EventId, Kind, Tag};
 use uuid::Uuid;
 
-mod message_tags;
-
-use message_tags::{
-    append_client_tags, append_sent_from_thread_tag, emoji_tags, imeta_tags, mention_reference_tags,
-};
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /// Maximum content size — matches buzz-sdk (64 KiB).
@@ -80,6 +76,56 @@ fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
     Ok(tags)
 }
 
+fn mention_reference_tags(mentions: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
+    for mention in mentions {
+        if mention.first().map(String::as_str) != Some("mention") {
+            return Err(format!(
+                "mention reference tags must use 'mention' prefix (got {:?})",
+                mention.first()
+            ));
+        }
+        let Some(pubkey) = mention.get(1) else {
+            return Err("mention reference tag missing pubkey".into());
+        };
+        check_pubkey(pubkey)?;
+        tags.push(tag(vec!["mention", &pubkey.to_ascii_lowercase()])?);
+    }
+    Ok(())
+}
+
+/// Validate and append imeta tags. Rejects any tag whose first element is not "imeta"
+/// to prevent injection of arbitrary tags (e.g., forged "h", "e", or "p" tags).
+fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
+    for mt in media_tags {
+        if mt.first().map(String::as_str) != Some("imeta") {
+            return Err(format!(
+                "media tags must use 'imeta' prefix (got {:?})",
+                mt.first()
+            ));
+        }
+        let parts: Vec<&str> = mt.iter().map(String::as_str).collect();
+        tags.push(Tag::parse(parts).map_err(|e| format!("invalid imeta tag: {e}"))?);
+    }
+    Ok(())
+}
+
+/// Validate and append NIP-30 custom-emoji tags. Mirrors `imeta_tags`: rejects
+/// any tag whose first element is not "emoji" so this path can't be used to
+/// smuggle forged "h"/"e"/"p" tags. Each tag is `["emoji", shortcode, url]`.
+fn emoji_tags(emoji_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
+    for et in emoji_tags {
+        if et.first().map(String::as_str) != Some("emoji") {
+            return Err(format!(
+                "emoji tags must use 'emoji' prefix (got {:?})",
+                et.first()
+            ));
+        }
+        let parts: Vec<&str> = et.iter().map(String::as_str).collect();
+        tags.push(Tag::parse(parts).map_err(|e| format!("invalid emoji tag: {e}"))?);
+    }
+    Ok(())
+}
+
 /// Validate a hex pubkey is exactly 64 hex characters.
 fn check_pubkey(pubkey: &str) -> Result<(), String> {
     if pubkey.len() != 64 || !pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -134,6 +180,7 @@ pub fn build_leave(channel_id: Uuid) -> Result<EventBuilder, String> {
 }
 
 /// Kind 9002 — update channel name/description/visibility/ttl.
+///
 /// `ttl`: outer `None` leaves it unchanged; `Some(Some(secs))` sets the
 /// ephemeral timeout; `Some(None)` clears it (emits `["ttl", ""]`).
 pub fn build_update_channel(
@@ -248,7 +295,6 @@ pub fn build_remove_member(channel_id: Uuid, target_pubkey: &str) -> Result<Even
 // ── Messages ─────────────────────────────────────────────────────────────────
 
 /// Kind 9 — stream message.
-#[allow(clippy::too_many_arguments)]
 pub fn build_message(
     channel_id: Uuid,
     content: &str,
@@ -276,6 +322,34 @@ pub fn build_message(
     )
 }
 
+/// Kind 9 — stream message with a closed set of safe Block reference tags.
+#[allow(clippy::too_many_arguments)]
+pub fn build_message_with_reference_tags(
+    channel_id: Uuid,
+    content: &str,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
+    reference_tags: &[Vec<String>],
+) -> Result<EventBuilder, String> {
+    build_message_with_client_and_reference_tags(
+        channel_id,
+        content,
+        thread_ref,
+        mentions,
+        media_tags,
+        custom_emoji_tags,
+        mention_ref_tags,
+        &[],
+        None,
+        &crate::relay::relay_api_base_url(),
+        &[],
+        reference_tags,
+    )
+}
+
 /// Kind 9 — stream message with internal client marker tags.
 ///
 /// This is intentionally narrower than arbitrary extra tags: callers can add
@@ -298,6 +372,37 @@ pub fn build_message_with_client_tags(
     if sent_from_thread_tag.is_some() && thread_ref.is_some() {
         return Err("sent-from-thread provenance requires a top-level message".into());
     }
+    build_message_with_client_and_reference_tags(
+        channel_id,
+        content,
+        thread_ref,
+        mentions,
+        media_tags,
+        custom_emoji_tags,
+        mention_ref_tags,
+        link_preview_tags,
+        sent_from_thread_tag,
+        relay_base,
+        client_tags,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_message_with_client_and_reference_tags(
+    channel_id: Uuid,
+    content: &str,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
+    client_tags: &[Vec<String>],
+    reference_tags: &[Vec<String>],
+) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
     if let Some(tr) = thread_ref {
@@ -310,7 +415,141 @@ pub fn build_message_with_client_tags(
     crate::link_preview_tags::append(link_preview_tags, relay_base, &mut tags)?;
     append_sent_from_thread_tag(sent_from_thread_tag, &mut tags)?;
     append_client_tags(client_tags, &mut tags)?;
+    append_block_reference_tags(reference_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
+}
+
+fn valid_block_handle(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' => true,
+            b'0'..=b'9' | b'-' => index > 0,
+            _ => false,
+        })
+}
+
+fn check_lower_hex_64(value: &str, field: &str) -> Result<(), String> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(format!("{field} must be 64 lowercase hex characters"))
+    }
+}
+
+fn append_block_reference_tags(
+    reference_tags: &[Vec<String>],
+    tags: &mut Vec<Tag>,
+) -> Result<(), String> {
+    for reference in reference_tags {
+        let valid = match reference.as_slice() {
+            [kind, coordinate, relay, marker] if kind == "a" => {
+                let parts = coordinate.split(':').collect::<Vec<_>>();
+                parts.len() == 3
+                    && parts[0] == "30178"
+                    && check_lower_hex_64(parts[1], "Block publisher").is_ok()
+                    && valid_block_handle(parts[2])
+                    && relay.is_empty()
+                    && marker == "block"
+            }
+            [kind, version, handle, manifest, instance] if kind == "block" => {
+                version == "1"
+                    && valid_block_handle(handle)
+                    && check_lower_hex_64(manifest, "Block manifest").is_ok()
+                    && Uuid::parse_str(instance).is_ok()
+            }
+            [kind, data] if kind == "block-data" => {
+                if data.len() > 32 * 1024 {
+                    false
+                } else if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
+                    buzz_core_pkg::block::canonical_json(&value).is_ok_and(|value| value == *data)
+                } else {
+                    false
+                }
+            }
+            [kind, source, mime, sha256, size] if kind == "block-data-ref" => {
+                url::Url::parse(source).is_ok_and(|url| {
+                    url.scheme() == "https"
+                        && url.host_str().is_some()
+                        && mime == "application/json"
+                        && check_lower_hex_64(sha256, "Block data hash").is_ok()
+                        && size
+                            .parse::<u64>()
+                            .is_ok_and(|size| (1..=2 * 1024 * 1024).contains(&size))
+                })
+            }
+            [kind, version, state] if kind == "block-attention" => {
+                version == "1" && state == "required"
+            }
+            [kind, manifest, relay, marker] if kind == "e" => {
+                check_lower_hex_64(manifest, "Block manifest").is_ok()
+                    && relay.is_empty()
+                    && marker == "block"
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(format!("invalid Block reference tag: {reference:?}"));
+        }
+        tags.push(Tag::parse(reference.clone()).map_err(|e| format!("invalid Block tag: {e}"))?);
+    }
+    Ok(())
+}
+
+const SENT_FROM_THREAD_TAG: &str = "buzz:sent-from-thread";
+const MAX_THREAD_ROOT_EXCERPT_CHARS: usize = 64;
+
+/// Attach a validated `buzz:sent-from-thread` provenance tag, or nothing when
+/// the message was sent from the thread it belongs to.
+fn append_sent_from_thread_tag(
+    source_tag: Option<&[String]>,
+    tags: &mut Vec<Tag>,
+) -> Result<(), String> {
+    let Some(source_tag) = source_tag else {
+        return Ok(());
+    };
+    if !matches!(source_tag.len(), 2 | 3)
+        || source_tag.first().map(String::as_str) != Some(SENT_FROM_THREAD_TAG)
+    {
+        return Err("invalid sent-from-thread tag shape".into());
+    }
+
+    EventId::from_hex(source_tag[1].trim())
+        .map_err(|_| "sent-from-thread tag has invalid root event ID")?;
+
+    if let Some(excerpt) = source_tag.get(2) {
+        if excerpt.trim().is_empty()
+            || excerpt.chars().count() > MAX_THREAD_ROOT_EXCERPT_CHARS
+            || excerpt.chars().any(char::is_control)
+        {
+            return Err("sent-from-thread tag has invalid root excerpt".into());
+        }
+    }
+
+    let parts: Vec<&str> = source_tag.iter().map(String::as_str).collect();
+    tags.push(Tag::parse(parts).map_err(|e| format!("invalid sent-from-thread tag: {e}"))?);
+    Ok(())
+}
+
+fn append_client_tags(client_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
+    for client_tag in client_tags {
+        if client_tag.first().map(String::as_str) != Some("client") {
+            return Err(format!(
+                "client tags must use 'client' prefix (got {:?})",
+                client_tag.first()
+            ));
+        }
+        if client_tag.len() < 2 {
+            return Err("client tag missing marker".into());
+        }
+        let parts: Vec<&str> = client_tag.iter().map(String::as_str).collect();
+        tags.push(Tag::parse(parts).map_err(|e| format!("invalid client tag: {e}"))?);
+    }
+    Ok(())
 }
 
 /// Kind 45001 — forum post.
@@ -347,6 +586,19 @@ pub fn build_forum_comment(
     Ok(EventBuilder::new(Kind::Custom(45003), content).tags(tags))
 }
 
+/// Kind 40003 — edit a message. Carries the full new content AND a fresh
+/// imeta tag set; the receiver overlays the imeta tags onto the original
+/// event so the rendered message reflects exactly the edited state. NIP-30
+/// custom-emoji tags ride along the same way so an edited body's `:shortcode:`s
+/// stay resolvable (the send path attaches these too).
+///
+/// `mentions` carries the pubkeys of mentions that are *newly added* by this
+/// edit (the caller diffs the edited body against the original). Only those get
+/// a `p` tag so the newly-mentioned party is notified/woken, while a typo-fix
+/// edit that leaves the mention set unchanged emits no `p` tags and never
+/// re-wakes anyone. This mirrors the send path's `mention_tags` (dedup +
+/// lowercase); the receiver overlays these onto the original event's audience.
+/// Edit tags grouped so the edit path and its callers share one shape.
 pub struct MessageEditTags<'a> {
     pub media: &'a [Vec<String>],
     pub custom_emoji: &'a [Vec<String>],
@@ -431,6 +683,7 @@ pub fn build_profile(
     picture: Option<&str>,
     about: Option<&str>,
     nip05: Option<&str>,
+    role: Option<&str>,
 ) -> Result<EventBuilder, String> {
     let mut map = serde_json::Map::new();
     if let Some(v) = display_name {
@@ -447,6 +700,12 @@ pub fn build_profile(
     }
     if let Some(v) = nip05 {
         map.insert("nip05".into(), serde_json::Value::String(v.into()));
+    }
+    // Workspace role. Each member runs their own instance of a role, so this
+    // is the only field that lets one member's client recognise another
+    // member's instance as the same colleague (docs/design/role-agents.html).
+    if let Some(v) = role {
+        map.insert("role".into(), serde_json::Value::String(v.into()));
     }
     let content = serde_json::Value::Object(map).to_string();
     Ok(EventBuilder::new(Kind::Custom(0), content))
@@ -801,199 +1060,5 @@ pub fn build_approval_deny(token: &str, note: Option<&str>) -> Result<EventBuild
 // ── Transport ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use nostr::Keys;
-    #[test]
-    fn channel_builders_reject_hash_only_names() {
-        let channel_id = Uuid::new_v4();
-        assert!(build_create_channel(channel_id, "###", "open", "stream", None, None).is_err());
-        assert!(build_update_channel(channel_id, Some("###"), None, None, None).is_err());
-    }
-    /// Builder layout regression for the NIP-IA owner-of-agent archive flow.
-    /// Compares against `docs/nips/NIP-IA.md` §Vector 1.
-    #[test]
-    fn archive_identity_request_matches_spec_vector_1_layout() {
-        const OWNER_HEX: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-        const TARGET_HEX: &str = "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
-        const CONDITIONS: &str = "kind=1&created_at<1713957000";
-        const SIG: &str = "8b7df2575caf0a108374f8471722b233c53f9ff827a8b0f91861966c3b9dd5cb2e189eae9f49d72187674c2f5bd244145e10ff86c9f257ffe65a1ee5f108b369";
-
-        let auth: [String; 4] = [
-            "auth".into(),
-            OWNER_HEX.into(),
-            CONDITIONS.into(),
-            SIG.into(),
-        ];
-        let builder = build_archive_identity_request(
-            TARGET_HEX,
-            "Archiving zombie agent after rebuild.",
-            Some("bot-rebuilt"),
-            None,
-            Some(&auth),
-        )
-        .expect("build_archive_identity_request");
-
-        let owner_secret = nostr::SecretKey::from_hex(
-            "0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        .unwrap();
-        let owner_keys = Keys::new(owner_secret);
-        let event = builder.sign_with_keys(&owner_keys).unwrap();
-
-        let tags: Vec<Vec<String>> = event.tags.iter().map(|t| t.as_slice().to_vec()).collect();
-
-        assert_eq!(event.kind, Kind::Custom(KIND_IA_ARCHIVE_REQUEST as u16));
-        // Spec layout: ["-"], ["p", target], ["reason", code], ["auth", ...]
-        assert_eq!(tags[0], vec!["-"]);
-        assert_eq!(tags[1], vec!["p", TARGET_HEX]);
-        assert_eq!(tags[2], vec!["reason", "bot-rebuilt"]);
-        assert_eq!(tags[3], vec!["auth", OWNER_HEX, CONDITIONS, SIG]);
-    }
-
-    #[test]
-    fn archive_request_rejects_replaced_by_equal_target() {
-        const TARGET_HEX: &str = "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
-        let err = build_archive_identity_request(TARGET_HEX, "", None, Some(TARGET_HEX), None)
-            .unwrap_err();
-        assert!(err.contains("replaced-by"));
-    }
-
-    #[test]
-    fn unarchive_request_layout_self_path() {
-        const TARGET_HEX: &str = "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
-        let builder = build_unarchive_identity_request(
-            TARGET_HEX,
-            "I am active again.",
-            Some("returned"),
-            None,
-        )
-        .unwrap();
-        let target_secret = nostr::SecretKey::from_hex(
-            "0000000000000000000000000000000000000000000000000000000000000002",
-        )
-        .unwrap();
-        let event = builder.sign_with_keys(&Keys::new(target_secret)).unwrap();
-        let tags: Vec<Vec<String>> = event.tags.iter().map(|t| t.as_slice().to_vec()).collect();
-        assert_eq!(event.kind, Kind::Custom(KIND_IA_UNARCHIVE_REQUEST as u16));
-        // Self-unarchive: the `p` tag MUST point at the signer. Verifies our
-        // `.allow_self_tagging()` call survives nostr 0.44's default scrub.
-        assert_eq!(tags[0], vec!["-"]);
-        assert_eq!(tags[1], vec!["p", TARGET_HEX]);
-        assert_eq!(tags[2], vec!["reason", "returned"]);
-        assert_eq!(tags.len(), 3, "self unarchive must not carry auth tag");
-        assert_eq!(event.pubkey.to_hex(), TARGET_HEX);
-    }
-
-    const CH_ID: &str = "11111111-1111-4111-8111-111111111111";
-    const ALICE_HEX: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-    const BOB_HEX: &str = "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
-
-    fn edit_tags(mentions: &[&str]) -> Vec<Vec<String>> {
-        edit_tags_with_refs(mentions, Some(&[]))
-    }
-
-    fn edit_tags_with_refs(
-        mentions: &[&str],
-        mention_refs: Option<&[Vec<String>]>,
-    ) -> Vec<Vec<String>> {
-        let channel = Uuid::parse_str(CH_ID).unwrap();
-        let target =
-            EventId::from_hex("d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1")
-                .unwrap();
-        let builder = build_message_edit(
-            channel,
-            target,
-            "hi @alice",
-            MessageEditTags {
-                media: &[],
-                custom_emoji: &[],
-                mentions,
-                mention_refs,
-            },
-            false,
-        )
-        .unwrap();
-        let secret = nostr::SecretKey::from_hex(
-            "0000000000000000000000000000000000000000000000000000000000000003",
-        )
-        .unwrap();
-        let event = builder.sign_with_keys(&Keys::new(secret)).unwrap();
-        event.tags.iter().map(|t| t.as_slice().to_vec()).collect()
-    }
-
-    #[test]
-    fn edit_with_added_mention_emits_p_tag() {
-        let tags = edit_tags(&[ALICE_HEX]);
-        assert_eq!(tags[0][0], "h");
-        assert_eq!(tags[1][0], "e");
-        assert_eq!(tags[2], vec!["p".to_string(), ALICE_HEX.to_string()]);
-    }
-
-    #[test]
-    fn edit_with_no_added_mentions_emits_no_p_tag() {
-        // Typo-fix edit: mention set unchanged, so the composer passes `&[]`.
-        // The edit event must carry no `p` tag and re-wake nobody.
-        let tags = edit_tags(&[]);
-        assert!(
-            !tags
-                .iter()
-                .any(|t| t.first().map(String::as_str) == Some("p")),
-            "unchanged-mention edit must not emit any `p` tag, got {tags:?}"
-        );
-    }
-
-    #[test]
-    fn edit_emits_full_mention_reference_snapshot() {
-        let tags = edit_tags_with_refs(&[], Some(&[vec!["mention".into(), ALICE_HEX.into()]]));
-        assert!(
-            tags.iter().any(|tag| tag == &["mention", ALICE_HEX]),
-            "stable mention reference must be present: {tags:?}"
-        );
-        assert!(
-            tags.iter().any(|tag| tag == &["buzz:mention-snapshot"]),
-            "snapshot marker must be present: {tags:?}"
-        );
-    }
-
-    #[test]
-    fn empty_edit_mention_snapshot_is_explicit() {
-        let tags = edit_tags_with_refs(&[], Some(&[]));
-        assert!(
-            tags.iter().any(|tag| tag == &["buzz:mention-snapshot"]),
-            "empty snapshot must still clear stale references: {tags:?}"
-        );
-        assert!(!tags
-            .iter()
-            .any(|tag| tag.first().map(String::as_str) == Some("mention")));
-    }
-
-    #[test]
-    fn partial_edit_omits_mention_snapshot() {
-        let tags = edit_tags_with_refs(&[], None);
-        assert!(!tags
-            .iter()
-            .any(|tag| tag.first().map(String::as_str) == Some("mention")));
-        assert!(!tags
-            .iter()
-            .any(|tag| tag.first().map(String::as_str) == Some("buzz:mention-snapshot")));
-    }
-
-    #[test]
-    fn edit_mentions_are_deduped_and_lowercased() {
-        let alice_upper = ALICE_HEX.to_ascii_uppercase();
-        let tags = edit_tags(&[ALICE_HEX, &alice_upper, BOB_HEX]);
-        let p_tags: Vec<&Vec<String>> = tags
-            .iter()
-            .filter(|t| t.first().map(String::as_str) == Some("p"))
-            .collect();
-        // ALICE appears twice (mixed case) but collapses to one lowercase tag.
-        assert_eq!(
-            p_tags.len(),
-            2,
-            "duplicate mention must collapse, got {p_tags:?}"
-        );
-        assert_eq!(p_tags[0], &vec!["p".to_string(), ALICE_HEX.to_string()]);
-        assert_eq!(p_tags[1], &vec!["p".to_string(), BOB_HEX.to_string()]);
-    }
-}
+#[path = "events/tests.rs"]
+mod tests;

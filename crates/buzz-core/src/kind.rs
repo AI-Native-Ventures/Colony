@@ -317,6 +317,26 @@ pub const KIND_JOB_HEAD: u32 = 30191;
 /// members; the narrower agent read scope is added in Task 11.
 pub const KIND_WORKSPACE_TAB_HEAD: u32 = 30192;
 
+/// Team catalog entry (parameterized replaceable, owner-authored).
+///
+/// Member of the shared-gated family: author-only unless the event carries
+/// exactly `["shared", "true"]`. Ingest additionally requires exactly one
+/// non-empty, bounded `d` tag — generic NIP-33 storage maps a missing `d` to
+/// the empty coordinate, which would collapse every team into one slot.
+///
+/// Content carries only sanitized fields: no env vars, no `respond_to`
+/// allowlist pubkeys, no source or local ids, no filesystem paths, no secrets.
+pub const KIND_TEAM_CATALOG: u32 = 30193;
+
+/// NIP-PMA: owner-encrypted private managed-agent aggregate.
+///
+/// Addressed by `(owner pubkey, kind, agent pubkey)`. The signed outer tags
+/// expose only the agent coordinate, CAS generation/predecessor, and active/deleted
+/// state required for relay enforcement. Content is NIP-44 v2 encrypted from
+/// the owner's key to itself and contains the runnable identity/configuration
+/// plus exact public projection bindings. See `docs/nips/NIP-PMA.md`.
+pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30194;
+
 /// A signed interaction with a chat-native Block instance.
 pub const KIND_BLOCK_ACTION: u32 = 40010;
 
@@ -455,6 +475,14 @@ pub fn event_is_shared(event: &nostr::Event) -> bool {
         }
     }
     count == 1
+}
+
+/// Upstream name for [`persona_event_is_shared`] used by the desktop crate's
+/// persona-sync paths. Introduced during the fork-port integration; the
+/// kind.rs reconciliation at integration folds these into the shared-gated
+/// family (see `SHARED_GATED_KINDS` upstream).
+pub fn event_is_shared(event: &nostr::Event) -> bool {
+    persona_event_is_shared(event)
 }
 
 /// NIP-AP: Agent Team (parameterized replaceable, owner-authored).
@@ -635,6 +663,15 @@ pub const KIND_WINDOW_BOUNDS: u32 = 39006;
 
 /// Workflow definition (parameterized replaceable, d=workflow_uuid).
 pub const KIND_WORKFLOW_DEF: u32 = 30620;
+
+/// NIP-MP: Multi-repo project — a named grouping of `kind:30617` repository
+/// announcements (parameterized replaceable, d=project slug).
+///
+/// Members are `a` tags holding `30617:<owner-hex>:<repo-d>` coordinates, so one
+/// project may span repositories owned by different pubkeys. The signer gains no
+/// authority over any member: push policy reads the repository's own
+/// announcement, never a project. See `docs/nips/NIP-MP.md`.
+pub const KIND_PROJECT: u32 = 30621;
 
 /// NIP-DV: per-viewer DM visibility snapshot (relay-signed, parameterized
 /// replaceable, d=viewer_pubkey). Carries one `h` tag per DM the viewer has
@@ -933,6 +970,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_EMPLOYEE,
     KIND_JOB_HEAD,
     KIND_WORKSPACE_TAB_HEAD,
+    KIND_TEAM_CATALOG,
+    KIND_PRIVATE_MANAGED_AGENT,
     KIND_JOB_FILING,
     KIND_JOB_CLAIM,
     KIND_JOB_HEARTBEAT,
@@ -1017,6 +1056,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_ASK_WITHDRAWAL,
     KIND_DECISION_LOG,
     KIND_WORKFLOW_DEF,
+    KIND_PROJECT,
     KIND_LONG_FORM,
     KIND_USER_STATUS,
     KIND_READ_STATE,
@@ -1185,6 +1225,8 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PROJECT)); // 30621 ∈ 
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30193 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30194 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WINDOW_BOUNDS)); // 39006 ∈ 30000–39999
 

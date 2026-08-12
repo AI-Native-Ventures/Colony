@@ -7,14 +7,18 @@ mod company;
 mod deep_link;
 mod discovery_credentials;
 mod discovery_worker;
-mod egress_guard;
 mod event_sync;
+mod egress_guard;
 mod events;
 mod host;
 mod huddle;
+mod identity_storage;
 mod initial_window;
+mod key_backup;
 mod link_preview_tags;
 mod managed_agents;
+#[cfg(target_os = "macos")]
+mod macos_notifications;
 mod media_proxy;
 #[cfg(feature = "mesh-llm")]
 mod mesh_llm;
@@ -34,6 +38,8 @@ mod relay;
 mod relay_admission;
 mod reset;
 mod secret_store;
+#[cfg(target_os = "macos")]
+mod tray_menu;
 mod shutdown;
 mod templates;
 mod terminal;
@@ -187,6 +193,14 @@ pub fn run() {
         .plugin(native_websocket::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
+
+    // WebDriverIO test harness (feature-gated, never in shipping builds):
+    // embeds a W3C WebDriver server (macOS-capable without external drivers)
+    // and the wdio execute/mock/log surface used by desktop/e2e-real-shell.
+    #[cfg(feature = "wdio-harness")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
 
     // The global-shortcut plugin is omitted from test builds: linking it into
     // the lib-test binary makes it fail to load on Windows
@@ -698,7 +712,7 @@ pub fn run() {
             get_relay_http_url,
             get_media_proxy_port,
             fetch_block_data,
-            fetch_link_preview_metadata,
+            fetch_link_preview_title,
             discover_acp_auth_methods,
             discover_acp_providers,
             discover_git_bash_prerequisite,
