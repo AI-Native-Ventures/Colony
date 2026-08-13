@@ -141,27 +141,12 @@ pub struct AppState {
     pub web_sessions: crate::web::WebManager,
 }
 
-/// Parse the `BUZZ_PRIVATE_KEY` env var into identity keys. `Some` means the
-/// env var was present and valid and MUST win over any persisted/keyring key
-/// (the dev/CI/harness override). `None` means absent or malformed — callers
-/// fall through to persisted resolution. A malformed value is logged and
-/// treated as absent rather than left on an ephemeral identity.
-fn identity_from_env() -> Option<Keys> {
-    match std::env::var("BUZZ_PRIVATE_KEY") {
-        Ok(nsec) => match Keys::parse(nsec.trim()) {
-            Ok(keys) => Some(keys),
-            Err(error) => {
-                eprintln!("buzz-desktop: invalid BUZZ_PRIVATE_KEY: {error}");
-                None
-            }
-        },
-        Err(std::env::VarError::NotUnicode(_)) => {
-            eprintln!("buzz-desktop: BUZZ_PRIVATE_KEY contains invalid UTF-8");
-            None
-        }
-        Err(std::env::VarError::NotPresent) => None,
-    }
-}
+/// The `BUZZ_PRIVATE_KEY` env-var override lives in a sibling module
+/// (`app_state_env.rs`); `identity_from_env` is imported here so both this
+/// module's call sites and `app_state_tests.rs` (via `use super::*`) see it.
+#[path = "app_state_env.rs"]
+mod env;
+use env::identity_from_env;
 
 /// Build the no-redirect HTTP client used for authenticated relay media
 /// fetches (download / copy).

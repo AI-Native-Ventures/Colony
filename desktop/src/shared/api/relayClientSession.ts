@@ -12,13 +12,12 @@ import {
   CHANNEL_EVENT_KINDS,
   KIND_CHANNEL_THREAD_SUMMARY,
 } from "@/shared/constants/kinds";
-import {
-  getTextPayload,
-  type ConnectionState,
-  type LiveSubscriptionReadiness,
-  type PendingEvent,
-  type RelaySubscription,
-  type RelaySubscriptionFilter,
+import type {
+  ConnectionState,
+  LiveSubscriptionReadiness,
+  PendingEvent,
+  RelaySubscription,
+  RelaySubscriptionFilter,
 } from "@/shared/api/relayClientShared";
 import {
   buildChannelAuxDeletionFilter,
@@ -29,15 +28,11 @@ import {
 } from "@/shared/api/relayChannelFilters";
 import {
   clearClosedRetry,
-  handleRelayClosed,
   handleSubscriptionEose,
   prepareSubscriptionEvent,
 } from "@/shared/api/relayClosedRecovery";
 import { replayLiveSubscriptions } from "@/shared/api/relayReconnectReplay";
-import {
-  activateRateLimit,
-  parseRateLimitHint,
-} from "@/shared/api/relayRateLimitGate";
+import { handleRelayWsMessage } from "@/shared/api/relayClientInbound";
 import { publishRelayEvent } from "@/shared/api/relayEventPublisher";
 import {
   fetchChunkedHistory,
@@ -46,9 +41,6 @@ import {
 } from "@/shared/api/relayGateBoundary";
 import { RelayConnectionStateEmitter } from "@/shared/api/relayConnectionStateEmitter";
 import {
-  isServiceRestartClose,
-  isWebSocketClose,
-  isWebSocketError,
   shouldRefuseConnect,
   shouldScheduleReconnect,
   shouldWaitForScheduledReconnect,
@@ -732,85 +724,27 @@ export class RelayClient {
   }
 
   private async handleWsMessage(message: unknown, generation: number) {
-    if (generation !== this.connectionGeneration) return;
-    this.stallWatchdog.recordInbound();
-
-    if (isWebSocketClose(message)) {
-      if (isServiceRestartClose(message))
-        this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
-      this.resetConnection(new Error("Relay connection closed."));
-      return;
-    }
-    if (isWebSocketError(message)) {
-      this.resetConnection(new Error("Relay connection errored."));
-      return;
-    }
-
-    const payload = getTextPayload(message);
-    if (!payload) {
-      return;
-    }
-
-    let data: unknown;
-    try {
-      data = JSON.parse(payload);
-    } catch {
-      return;
-    }
-
-    if (!Array.isArray(data) || data.length === 0) {
-      return;
-    }
-
-    const [type, ...rest] = data;
-    if (type === "AUTH" && typeof rest[0] === "string") {
-      await this.handleAuthChallenge(rest[0], generation);
-      return;
-    }
-    if (type === "EVENT" && typeof rest[0] === "string" && rest[1]) {
-      this.handleEvent(rest[0], rest[1] as RelayEvent);
-      return;
-    }
-
-    if (
-      type === "OK" &&
-      typeof rest[0] === "string" &&
-      typeof rest[1] === "boolean"
-    ) {
-      this.handleOk(
-        rest[0],
-        rest[1],
-        typeof rest[2] === "string" ? rest[2] : "",
-      );
-      return;
-    }
-
-    if (type === "EOSE" && typeof rest[0] === "string") {
-      this.handleEose(rest[0]);
-      return;
-    }
-
-    if (type === "CLOSED" && typeof rest[0] === "string") {
-      handleRelayClosed({
-        subscriptions: this.subscriptions,
-        subId: rest[0],
-        message: typeof rest[1] === "string" ? rest[1] : "",
-        sendReq: (subId, filter) =>
-          this.sendRawWithReconnectRetry(
-            ["REQ", subId, filter],
-            "Failed to restore relay subscription after CLOSED.",
-          ),
-      });
-      return;
-    }
-
-    if (type === "NOTICE" && typeof rest[0] === "string") {
-      const notice: string = rest[0];
-      // Relay back-pressure — arm the gate until the window expires.
-      if (notice.startsWith("rate-limited:")) {
-        activateRateLimit(parseRateLimitHint(notice));
-      }
-    }
+    return handleRelayWsMessage(
+      this.subscriptions,
+      {
+        connectionGeneration: this.connectionGeneration,
+        recordInbound: () => this.stallWatchdog.recordInbound(),
+        resetConnection: (error) => this.resetConnection(error),
+        handleAuthChallenge: (challenge, gen) =>
+          this.handleAuthChallenge(challenge, gen),
+        handleEvent: (subId, event) => this.handleEvent(subId, event),
+        handleOk: (eventId, success, msg) =>
+          this.handleOk(eventId, success, msg),
+        handleEose: (subId) => this.handleEose(subId),
+        sendRawWithReconnectRetry: (payload, fallbackMessage) =>
+          this.sendRawWithReconnectRetry(payload, fallbackMessage),
+        setReconnectDelay: (ms) => {
+          this.reconnectDelayMs = ms;
+        },
+      },
+      message,
+      generation,
+    );
   }
 
   private async handleAuthChallenge(challenge: string, generation: number) {

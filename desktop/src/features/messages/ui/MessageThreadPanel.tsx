@@ -54,6 +54,7 @@ import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useStableSendToChannel } from "./useStableSendToChannel";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
+import { getActiveContinuationDepths } from "./MessageThreadPanel.helpers";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   channel: Channel | null;
@@ -135,58 +136,8 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
 };
 
 const EMPTY_THREAD_REPLIES: MainTimelineEntry[] = [];
+
 const THREAD_PANEL_SUMMARY_INDENT_OFFSET_REM = 0;
-
-function hasLaterVisibleSibling(
-  entries: readonly MainTimelineEntry[],
-  entryIndex: number,
-): boolean {
-  const depth = entries[entryIndex]?.message.depth;
-  if (depth == null) {
-    return false;
-  }
-
-  for (let index = entryIndex + 1; index < entries.length; index += 1) {
-    const nextDepth = entries[index].message.depth;
-    if (nextDepth <= depth) {
-      return nextDepth === depth;
-    }
-  }
-
-  return false;
-}
-
-function getActiveContinuationDepths({
-  ancestors,
-  entries,
-  index,
-  message,
-}: {
-  ancestors: readonly { index: number; message: TimelineMessage }[];
-  entries: readonly MainTimelineEntry[];
-  index: number;
-  message: TimelineMessage;
-}): number[] {
-  const depths: number[] = [];
-
-  for (const ancestor of ancestors) {
-    if (ancestor.message.depth === 0) {
-      continue;
-    }
-
-    const childDepth = ancestor.message.depth + 1;
-    const pathChild =
-      message.depth === childDepth
-        ? { index, message }
-        : ancestors.find((candidate) => candidate.message.depth === childDepth);
-
-    if (pathChild && hasLaterVisibleSibling(entries, pathChild.index)) {
-      depths.push(ancestor.message.depth);
-    }
-  }
-
-  return depths;
-}
 
 export function MessageThreadPanel({
   channel,
