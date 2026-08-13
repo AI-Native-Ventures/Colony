@@ -14,7 +14,6 @@ mod queue;
 mod relay;
 mod setup_mode;
 mod usage;
-#[allow(dead_code)] // Colony work-context attribution, orphaned by the upstream publish-path port; re-wire tracked as follow-up.
 mod work_context;
 
 pub use usage::TurnUsage;

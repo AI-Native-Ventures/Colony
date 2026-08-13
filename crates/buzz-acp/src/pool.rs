@@ -90,6 +90,28 @@ pub struct AgentModelCapabilities {
     pub available_models_raw: Option<serde_json::Value>,
 }
 
+/// Cached outcome of the per-channel company-onboarding status lookup.
+///
+/// `Settled` is a real answer -- inject or don't, and never look again for
+/// the life of this session. `Unknown` means the lookup itself failed or
+/// timed out: the protocol is withheld for the message that triggered it
+/// (never guess toward injecting), but -- unlike `Settled(Approved)` --
+/// the channel's *next* message gets another attempt rather than the
+/// process silently carrying a false "it's Approved" belief for the rest
+/// of the session. See issue #98's follow-up: collapsing both into
+/// `Settled(Approved)` let a single cold-start relay timeout durably
+/// suppress the Chief of Staff's very first onboarding interview, with
+/// nothing in the product telling the founder why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingResolution {
+    /// A real answer was obtained: inject when `should_inject_company_onboarding`
+    /// says so, never re-checked for this session.
+    Settled(Option<buzz_core::company::CompanyOnboardingStatus>),
+    /// The lookup could not be completed. Worth trying again on the next
+    /// message to this channel.
+    Unknown,
+}
+
 /// Successful deliveries associated with one live channel session.
 #[derive(Default)]
 pub struct ChannelDeliveryState {
@@ -129,6 +151,14 @@ pub struct SessionState {
     /// Per-channel successful-delivery state. Created with the ACP session and
     /// cleared atomically with every invalidation path.
     pub deliveries: HashMap<Uuid, ChannelDeliveryState>,
+    /// channel_id → last company-onboarding status lookup outcome.
+    ///
+    /// `Settled` is cached for the life of the session (no per-turn re-check).
+    /// `Unknown` is retried on the channel's next message rather than being
+    /// treated as a final answer. Cleared on session invalidation like
+    /// `core_sections`/`canvas_sections`, so a freshly (re)created session
+    /// always starts from a clean lookup.
+    pub onboarding_resolution: HashMap<Uuid, OnboardingResolution>,
 }
 
 impl SessionState {
@@ -152,6 +182,7 @@ impl SessionState {
         self.turn_counts.remove(channel_id);
         self.core_sections.remove(channel_id);
         self.canvas_sections.remove(channel_id);
+        self.onboarding_resolution.remove(channel_id);
         self.deliveries.remove(channel_id);
         self.sessions.remove(channel_id).is_some()
     }
@@ -165,6 +196,7 @@ impl SessionState {
         self.heartbeat_standing_context_sent = false;
         self.core_sections.clear();
         self.canvas_sections.clear();
+        self.onboarding_resolution.clear();
         self.deliveries.clear();
     }
 
@@ -186,6 +218,7 @@ impl SessionState {
             || self.core_sections.contains_key(channel_id)
             || self.canvas_sections.contains_key(channel_id)
             || self.deliveries.contains_key(channel_id)
+            || self.onboarding_resolution.contains_key(channel_id)
     }
 }
 
@@ -984,32 +1017,131 @@ async fn resolve_new_session_channel_context(
     (is_dm, title_channel, Some(info.channel_type))
 }
 
+/// Whether a channel needs a fresh onboarding-status lookup: either it has
+/// no session yet (first message ever, or a prior retry already invalidated
+/// it), or its cached resolution is `Unknown` (the previous attempt could
+/// not reach the relay, worth trying again). A `Settled` cache entry, in
+/// either direction, is never re-checked -- only `Unknown` retries.
+///
+/// Pure and synchronous so the retry decision is testable without a live
+/// relay or agent process.
+fn needs_onboarding_lookup(state: &SessionState, cid: &Uuid) -> bool {
+    !state.sessions.contains_key(cid)
+        || state.onboarding_resolution.get(cid) == Some(&OnboardingResolution::Unknown)
+}
+
+/// Apply a freshly resolved onboarding lookup to session state.
+///
+/// Caches the resolution unconditionally. When the resolution is `Settled`
+/// and says the protocol should now be injected, AND the channel already
+/// has a live session, that session was built without the protocol -- a
+/// lookup only re-runs when the cache was `Unknown` or absent, per
+/// `needs_onboarding_lookup` -- so it is invalidated here, and the next
+/// session creation for this channel will carry it. Returns `true` when
+/// that invalidation happened, purely so the caller can log it; nothing
+/// else should branch on the return value.
+///
+/// Pure (no I/O) so the retry-recovery behavior is testable directly
+/// against a `SessionState`, without spawning an agent or a relay.
+fn apply_onboarding_resolution(
+    state: &mut SessionState,
+    cid: Uuid,
+    resolution: OnboardingResolution,
+) -> bool {
+    let has_session = state.sessions.contains_key(&cid);
+    let should_invalidate = matches!(
+        resolution,
+        OnboardingResolution::Settled(status)
+            if has_session && crate::should_inject_company_onboarding(status)
+    );
+    if should_invalidate {
+        state.invalidate_channel(&cid);
+    }
+    // Insert AFTER any invalidation above: invalidate_channel clears this
+    // same map entry, and the freshly resolved value must win.
+    state.onboarding_resolution.insert(cid, resolution);
+    should_invalidate
+}
+
+/// The onboarding section for a session about to be created, read from the
+/// resolution cache. `None` for `Unknown` or no entry -- withhold rather
+/// than guess. Only meaningful when a NEW session is about to be created;
+/// an existing session's prompt was already sent and cannot be amended.
+fn cached_onboarding_section(state: &SessionState, cid: &Uuid) -> Option<&'static str> {
+    match state.onboarding_resolution.get(cid) {
+        Some(OnboardingResolution::Settled(status)) => {
+            crate::should_inject_company_onboarding(*status)
+                .then_some(crate::COMPANY_ONBOARDING_PROMPT)
+        }
+        _ => None,
+    }
+}
+
+/// Bounded lookup of the workspace's company onboarding status for one
+/// channel. Timeout and transport/parse failure both resolve as `Unknown`
+/// -- worth trying again -- rather than being folded into a settled
+/// `Approved`, which would make a single cold-start relay hiccup
+/// indistinguishable from "onboarding is actually done" for the rest of
+/// the session (issue #98 follow-up).
+async fn resolve_onboarding_for_channel(rest: &RestClient, cid: Uuid) -> OnboardingResolution {
+    // Bounded -- same shape as the core-memory fetch: a stalled relay must
+    // not block session creation on this lookup.
+    const ONBOARDING_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
+    let fetch = crate::work_context::fetch_company_onboarding_status(rest);
+    match tokio::time::timeout(ONBOARDING_FETCH_TIMEOUT, fetch).await {
+        Ok(Ok(status)) => OnboardingResolution::Settled(status),
+        Ok(Err(error)) => {
+            tracing::warn!(
+                target: "pool::session",
+                channel = %cid,
+                "could not resolve company onboarding status, will retry on the channel's next message: {error}"
+            );
+            OnboardingResolution::Unknown
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "pool::session",
+                channel = %cid,
+                timeout_ms = ONBOARDING_FETCH_TIMEOUT.as_millis() as u64,
+                "company onboarding status fetch timed out, will retry on the channel's next message"
+            );
+            OnboardingResolution::Unknown
+        }
+    }
+}
+
 /// Create a new ACP session via `session_new_full()`, populate model capabilities
 /// on the agent (first session only), and apply `desired_model` if set.
 ///
 /// On error from `session_new_full()`, returns the `AcpError` — caller handles
 /// error reporting. Model-switch failures are logged and gracefully ignored
 /// (the agent proceeds with its default model).
+#[allow(clippy::too_many_arguments)]
 async fn create_session_and_apply_model(
     agent: &mut OwnedAgent,
     ctx: &PromptContext,
     agent_core: Option<&str>,
     agent_canvas: Option<&str>,
     channel_name: Option<&str>,
+    onboarding_section: Option<&str>,
     channel_id: Option<Uuid>,
     channel_type: Option<&str>,
 ) -> Result<String, AcpError> {
-    // Build base_prompt + system_prompt + agent core + canvas metadata into a
-    // single prompt. Standard protocol-v2 agents receive it in `session/new`;
-    // Goose receives it through the custom request below. Legacy agents receive
-    // the same content as user-message sections via `format_prompt`. Core carries
-    // its own `[Agent Memory — core]` header, and canvas carries its own
-    // `[Channel Canvas]` header; both are appended with a blank-line separator.
+    // Build base_prompt + system_prompt + onboarding protocol + agent core +
+    // canvas metadata into a single prompt. Standard protocol-v2 agents
+    // receive it in `session/new`; Goose receives it through the custom
+    // request below. Legacy agents receive the same content as user-message
+    // sections via `format_prompt`. Onboarding, core, and canvas each carry
+    // their own header (`[Company Onboarding]`, the core memory header,
+    // `[Channel Canvas]`); all are appended with a blank-line separator.
     let is_goose = agent.agent_name == "goose";
     let combined_system_prompt = with_canvas(
         with_core(
             with_team(
-                framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
+                with_company_onboarding(
+                    framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
+                    onboarding_section,
+                ),
                 ctx.team_instructions.as_deref(),
             ),
             agent_core,
@@ -1397,6 +1529,26 @@ fn workspace_section(cwd: &str) -> Option<String> {
     }
 }
 
+/// Append the company onboarding protocol as its own labelled section.
+///
+/// Kept separate from `[Base]`/`[System]` rather than folded into either, so
+/// it survives both `--no-base-prompt` and any `--base-prompt-file`
+/// override: `should_inject_company_onboarding` gates on company status, a
+/// concern that has nothing to do with which base prompt variant the
+/// operator chose. `onboarding` is always the full static
+/// `COMPANY_ONBOARDING_PROMPT` when `Some` (the caller already applied the
+/// gate), so unlike `with_team` there is no blank-content case to filter.
+fn with_company_onboarding(prompt: Option<String>, onboarding: Option<&str>) -> Option<String> {
+    match (prompt, onboarding) {
+        (Some(prompt), Some(onboarding)) => {
+            Some(format!("{prompt}\n\n[Company Onboarding]\n{onboarding}"))
+        }
+        (None, Some(onboarding)) => Some(format!("[Company Onboarding]\n{onboarding}")),
+        (Some(prompt), None) => Some(prompt),
+        (None, None) => None,
+    }
+}
+
 /// Append the team-owned instruction section after `[System]` and before core memory.
 fn with_team(prompt: Option<String>, instructions: Option<&str>) -> Option<String> {
     let instructions = instructions
@@ -1565,6 +1717,48 @@ pub async fn run_prompt_task(
         .unwrap_or_default();
     let _reaction_guard = ReactionGuard::new(ctx.rest_client.clone(), reaction_ids.clone());
 
+    // Company onboarding protocol -- resolved once per channel-session
+    // lifetime, with a bounded retry on the channel's NEXT message when the
+    // previous attempt could not reach the relay. Never per turn on a
+    // settled answer, and never for heartbeats or asks (the protocol tells
+    // the agent to publish Blocks into a channel, which a channel-less
+    // session has none of). Must run before every other per-session fetch
+    // below: if a retry invalidates the channel's session (see below), core
+    // memory and canvas need to see that BEFORE deciding whether to
+    // re-fetch, or a freshly recreated session would carry stale/missing
+    // sections.
+    //
+    // A settled answer (we successfully asked and got Draft/Approved/no
+    // company) is cached per channel and never re-fetched for the life of
+    // that session -- re-checking every turn would add a relay round trip
+    // to the hot path for a status that changes on the order of an
+    // onboarding conversation, not a message.
+    //
+    // An unresolved answer (the fetch failed or timed out) is NOT cached as
+    // if it were a settled "Approved": that collapse let a single
+    // cold-start relay timeout durably suppress the Chief of Staff's very
+    // first onboarding interview, with nothing in the product telling the
+    // founder why (issue #98 follow-up). Instead it is retried on the
+    // channel's next message. If that retry settles to a status that
+    // should now inject and the channel already has a live session (which,
+    // by construction, was created without the protocol), the channel's
+    // session is invalidated so the next session creation carries it. A
+    // retry that settles to "should not inject" (Approved) or is still
+    // unknown leaves the live session untouched.
+    if let PromptSource::Channel(cid) = &source {
+        if needs_onboarding_lookup(&agent.state, cid) {
+            let resolution = resolve_onboarding_for_channel(&ctx.rest_client, *cid).await;
+            if apply_onboarding_resolution(&mut agent.state, *cid, resolution) {
+                tracing::info!(
+                    target: "pool::session",
+                    channel = %cid,
+                    "company onboarding status resolved after a prior unknown; invalidating \
+                     the session so the protocol reaches the agent"
+                );
+            }
+        }
+    }
+
     //
     // Core memory is delivered inside the system prompt the harness already
     // builds (system role for protocol >= 2, the `[System]` user-message
@@ -1671,6 +1865,16 @@ pub async fn run_prompt_task(
         PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
     };
 
+    // The onboarding section for a session about to be created, from the
+    // cache the resolution block above just populated (or left in place, if
+    // this channel's session already exists and is settled/no lookup was
+    // needed). Cheap in-memory read; only actually consumed below when a new
+    // session is created, which is the only place `onboarding_section` is used.
+    let onboarding_section: Option<&'static str> = match &source {
+        PromptSource::Channel(cid) => cached_onboarding_section(&agent.state, cid),
+        PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
+    };
+
     // The canvas metadata section — channel-scoped, absent for heartbeats/DMs.
     // Prefer the committed cache; fall back to pending (for new sessions being created now).
     let agent_canvas: Option<String> = match &source {
@@ -1698,6 +1902,7 @@ pub async fn run_prompt_task(
                     agent_core.as_deref(),
                     agent_canvas.as_deref(),
                     title_channel.as_deref(),
+                    onboarding_section,
                     Some(*cid),
                     origin_channel_type.as_deref(),
                 )
@@ -1754,8 +1959,10 @@ pub async fn run_prompt_task(
             if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
-                match create_session_and_apply_model(&mut agent, &ctx, None, None, None, None, None)
-                    .await
+                match create_session_and_apply_model(
+                    &mut agent, &ctx, None, None, None, None, None, None,
+                )
+                .await
                 {
                     Ok(sid) => {
                         tracing::info!(
@@ -1973,6 +2180,36 @@ pub async fn run_prompt_task(
         }
     }
 
+    // What this turn is charged to, resolved from the relay's own records
+    // before a single token is spent.
+    //
+    // Resolution failure is not fatal here, and that is deliberate rather than
+    // lax: a message with no work reference is ordinary chat, and refusing to
+    // answer it would break every conversation that is not company work. What
+    // a failure does cost is the attribution -- the metric goes out without a
+    // work context, which is visible as unattributed spend rather than as a
+    // confident wrong number.
+    let work_context = match batch
+        .as_ref()
+        .and_then(|b| b.events.last())
+        .map(|batch_event| &batch_event.event)
+    {
+        Some(event) => {
+            match crate::work_context::resolve_for_event(&ctx.rest_client, event).await {
+                Ok(context) => context,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "pool::work_context",
+                        turn_id,
+                        "work context could not be established: {error}"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     // When the batch is a single slash-command message (e.g. "@Eva /goal …"),
     // `slash_command` holds the bare command. It is sent as the FIRST prompt
     // content block so ACP connectors' slash-command detection
@@ -2107,11 +2344,22 @@ pub async fn run_prompt_task(
     // own block. Per-section blocks let the observer size trimmer elide a
     // section body in place while every `[Header]` line survives at the head
     // of its own leaf — so the "Prompt context" panel counts every section.
-    let prompt_blocks: Vec<&str> = match slash_command {
-        Some(ref cmd) => std::iter::once(cmd.as_str())
+    // The work section follows the command, so the agent reads what it is
+    // working on before it reads the rest of the instruction. Each is its
+    // own block for the same reason every other section is.
+    let work_section = work_context
+        .as_ref()
+        .map(crate::work_context::work_context_section);
+    let prompt_blocks: Vec<&str> = match &slash_command {
+        Some(cmd) => std::iter::once(cmd.as_str())
+            .chain(work_section.as_deref())
             .chain(prompt_sections.iter().map(String::as_str))
             .collect(),
-        None => prompt_sections.iter().map(String::as_str).collect(),
+        None => work_section
+            .as_deref()
+            .into_iter()
+            .chain(prompt_sections.iter().map(String::as_str))
+            .collect(),
     };
     let prompt_bytes: usize = prompt_blocks.iter().map(|block| block.len()).sum();
     let has_standing_context = match &source {
@@ -2207,6 +2455,7 @@ pub async fn run_prompt_task(
                                     &session_id,
                                     &turn_id,
                                     Some(buzz_core::agent_turn_metric::StopReason::Cancelled),
+                                    work_context.as_ref().map(|context| &context.metric),
                                 )
                                 .await;
                                 send_prompt_result(
@@ -2243,6 +2492,7 @@ pub async fn run_prompt_task(
                                     &session_id,
                                     &turn_id,
                                     Some(buzz_core::agent_turn_metric::StopReason::Error),
+                                    work_context.as_ref().map(|context| &context.metric),
                                 )
                                 .await;
                                 send_prompt_result(
@@ -2306,6 +2556,7 @@ pub async fn run_prompt_task(
                             &session_id,
                             &turn_id,
                             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+                            work_context.as_ref().map(|context| &context.metric),
                         )
                         .await;
                         send_prompt_result(
@@ -2379,6 +2630,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(core_stop),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
 
@@ -2402,6 +2654,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(buzz_core::agent_turn_metric::StopReason::Error),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
             send_prompt_result(
@@ -2434,6 +2687,7 @@ pub async fn run_prompt_task(
                         &session_id,
                         &turn_id,
                         Some(buzz_core::agent_turn_metric::StopReason::Cancelled),
+                        work_context.as_ref().map(|context| &context.metric),
                     )
                     .await;
                     // Timeout triggers respawn in handle_prompt_result —
@@ -2462,6 +2716,7 @@ pub async fn run_prompt_task(
                         &session_id,
                         &turn_id,
                         Some(buzz_core::agent_turn_metric::StopReason::Error),
+                        work_context.as_ref().map(|context| &context.metric),
                     )
                     .await;
                     send_prompt_result(
@@ -2487,6 +2742,7 @@ pub async fn run_prompt_task(
                         &session_id,
                         &turn_id,
                         Some(buzz_core::agent_turn_metric::StopReason::Error),
+                        work_context.as_ref().map(|context| &context.metric),
                     )
                     .await;
                     send_prompt_result(
@@ -2516,6 +2772,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(buzz_core::agent_turn_metric::StopReason::Error),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
             send_prompt_result(
@@ -2543,6 +2800,7 @@ pub async fn run_prompt_task(
                 &session_id,
                 &turn_id,
                 Some(buzz_core::agent_turn_metric::StopReason::Error),
+                work_context.as_ref().map(|context| &context.metric),
             )
             .await;
             send_prompt_result(
@@ -4001,6 +4259,7 @@ async fn publish_agent_turn_metric(
     session_id: &str,
     turn_id: &str,
     stop_reason: Option<buzz_core::agent_turn_metric::StopReason>,
+    work_context: Option<&buzz_core::company::AgentWorkContext>,
 ) {
     use buzz_core::agent_turn_metric::AgentTurnMetricPayload;
     use nostr::{EventBuilder, Kind, Tag};
@@ -4023,7 +4282,7 @@ async fn publish_agent_turn_metric(
         turn: turn_counts,
         cumulative: cumulative_counts,
         pricing_identity: usage.pricing_identity.clone(),
-        work_context: None,
+        work_context: work_context.cloned(),
         delta_reliable: usage.delta_reliable,
         stop_reason,
     };
@@ -7093,6 +7352,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             "sess-1",
             "turn-1",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
@@ -7128,6 +7388,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             "sess-1",
             "turn-1",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
@@ -7167,6 +7428,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             "sess-1",
             "turn-1",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
@@ -7207,6 +7469,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             "sess-cancel",
             "turn-cancel",
             Some(buzz_core::agent_turn_metric::StopReason::Cancelled),
+            None,
         )
         .await;
     }
@@ -7247,6 +7510,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             "sess-ba",
             "turn-ba",
             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
         )
         .await;
     }
