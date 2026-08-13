@@ -11,8 +11,8 @@ use crate::managed_agents::{
 };
 
 mod nvm;
-mod runtime_metadata;
 mod presets;
+mod runtime_metadata;
 
 // Re-exported so every existing path to these keeps working: `runtime.rs`
 // reaches `find_nvm_default_bin` through `managed_agents`, and the tests reach

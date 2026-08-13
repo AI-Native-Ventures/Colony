@@ -63,7 +63,9 @@ fn mutations() -> Vec<Mutation> {
         ("system_prompt", |s| s.system_prompt = None),
         ("model", |s| s.model = None),
         ("provider", |s| s.provider = None),
-        ("credential_mode", |s| s.credential_mode = CredentialMode::ColonyCredits),
+        ("credential_mode", |s| {
+            s.credential_mode = CredentialMode::ColonyCredits
+        }),
         ("session_title", |s| s.session_title = None),
         ("auth_tag", |s| s.auth_tag = None),
         ("respond_to", |s| s.respond_to = "anyone".into()),
