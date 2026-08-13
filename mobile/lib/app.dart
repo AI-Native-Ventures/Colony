@@ -147,11 +147,8 @@ class App extends HookConsumerWidget {
   }
 }
 
-Widget _buildSettingsPage(BuildContext context) => SettingsPage(
-  profileHeader: const SettingsProfileHeader(),
-  identityRecoveryPageBuilder: (_) =>
-      const PairingPage(addingCommunity: true, identityRecoveryOnly: true),
-);
+Widget _buildSettingsPage(BuildContext context) =>
+    const SettingsPage(profileHeader: SettingsProfileHeader());
 
 class _SplashScreen extends StatelessWidget {
   const _SplashScreen();

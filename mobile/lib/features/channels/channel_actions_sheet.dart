@@ -8,7 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/clipboard_utils.dart';
 import '../../shared/mentions/agent_identity_provider.dart';
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/colony_loading_indicator.dart';
 import '../../shared/widgets/modal_presentation.dart';
 import '../../shared/widgets/sheet_divider.dart';
 import 'channel.dart';
@@ -260,7 +260,7 @@ class ChannelActionsSheet extends ConsumerWidget {
                 if (lifecycleCapabilitiesLoading)
                   const ListTile(
                     enabled: false,
-                    leading: BuzzLoadingIndicator(
+                    leading: ColonyLoadingIndicator(
                       size: 20,
                       semanticLabel: 'Loading channel actions',
                     ),

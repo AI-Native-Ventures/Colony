@@ -8,7 +8,7 @@ import '../../shared/mentions/agent_identity_provider.dart';
 import '../../shared/mentions/mention_tags.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/colony_loading_indicator.dart';
 import '../../shared/widgets/filter_chip_bar.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
@@ -535,7 +535,7 @@ class _SearchBody extends ConsumerWidget {
           const Padding(
             padding: EdgeInsets.all(Grid.sm),
             child: Center(
-              child: BuzzLoadingIndicator(
+              child: ColonyLoadingIndicator(
                 size: 36,
                 semanticLabel: 'Loading more search results',
               ),

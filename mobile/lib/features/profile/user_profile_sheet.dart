@@ -10,7 +10,7 @@ import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/utils/string_utils.dart';
 import '../../shared/widgets/avatar_image.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/colony_loading_indicator.dart';
 import '../../shared/widgets/modal_presentation.dart';
 import '../channels/channel.dart';
 import '../channels/channel_detail_page.dart';
@@ -404,7 +404,7 @@ class _ProfileActionTile extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           if (isLoading)
-            BuzzLoadingIndicator(
+            ColonyLoadingIndicator(
               size: 22,
               color: context.colors.onSurface,
               semanticLabel: 'Opening direct message',
