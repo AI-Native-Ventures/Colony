@@ -52,6 +52,7 @@ import { UnreadDivider } from "./UnreadDivider";
 import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
+import { ThreadReadStateToggle } from "./ThreadReadStateToggle";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   channel: Channel | null;
@@ -962,6 +963,12 @@ export function MessageThreadPanel({
       >
         <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
       </AuxiliaryPanelHeaderGroup>
+      <ThreadReadStateToggle
+        isUnread={(threadUnreadCount ?? 0) > 0}
+        message={threadHead}
+        onMarkRead={onMarkRead}
+        onMarkUnread={onMarkUnread}
+      />
     </>
   );
 
