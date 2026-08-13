@@ -181,7 +181,7 @@ impl SpawnConfigSnapshot {
             // (e.g. 8 → 3, where 3 is below the cap) do change the effective
             // pool and must badge. The diff surface consequently displays the
             // effective value — that is correct, it is what actually runs.
-            parallelism: super::effective_parallelism(&descriptor.command, record.parallelism),
+            parallelism: super::effective_parallelism(&record.agent_command, record.parallelism),
         }
     }
 
