@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
+import type { SearchCommand } from "@/features/search/ui/SearchResultItem";
 import { FeatureGate } from "@/shared/features";
 import type { Channel, SearchHit } from "@/shared/api/types";
 import {
@@ -22,12 +23,13 @@ import {
 import { SidebarMenuLabel } from "@/shared/ui/sidebar-menu-label";
 import type { SidebarSelectedView } from "../types";
 
-type AppSidebarPinnedHeaderProps = {
+export type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
   currentPubkey?: string;
   onBrowseChannels?: () => void;
   onCreateAgent: () => void;
   onCreateChannel: () => void;
+  commandActions?: readonly SearchCommand[];
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onOpenSearchResult: (hit: SearchHit) => void;
   onSelectChannel: (channelId: string) => void;
@@ -55,6 +57,7 @@ export function AppSidebarPinnedHeader({
   onBrowseChannels,
   onCreateAgent,
   onCreateChannel,
+  commandActions,
   onOpenDm,
   onOpenSearchResult,
   onSelectChannel,
@@ -78,6 +81,7 @@ export function AppSidebarPinnedHeader({
         onBrowseChannels={onBrowseChannels}
         onCreateAgent={onCreateAgent}
         onCreateChannel={onCreateChannel}
+        commandActions={commandActions}
         suggestionChannels={suggestionChannels}
       />
     </div>
