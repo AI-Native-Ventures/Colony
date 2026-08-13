@@ -26,6 +26,7 @@ pub(crate) use metadata::{
     SESSION_TITLE_ENV_VAR,
 };
 
+mod prime_agent_config;
 mod provisioned;
 pub(crate) use provisioned::{
     configure_runtime_cli, provisioned_spawn_env, spawn_agent_child_with_lease,
@@ -274,7 +275,6 @@ pub fn build_managed_agent_summary(
     // stamped at spawn.  This catches out-of-band adapter changes (manual
     // npm install/downgrade) that Phase-1 auto-restart doesn't cover.  The
     // cache is read-only here — no subprocess is spawned.
-    //
     // Global config drives both the restart-drift hash and descriptor env
     // layering below — the caller loads it once and passes it in, so
     // list-style callers pay one disk read per call rather than one per record.
@@ -527,6 +527,7 @@ fn spawn_agent_child_inner(
             })?;
     let effective_command = &descriptor.command;
     let agent_args = &descriptor.args;
+    prime_agent_config::ensure_prime_agent_default_config(effective_command);
     let runtime_meta = known_acp_runtime(effective_command);
     let effective_relay_url = runtime_key.relay_url.clone();
     let runtime_id = runtime_meta.map(|runtime| runtime.id).unwrap_or("custom");
@@ -641,7 +642,6 @@ fn spawn_agent_child_inner(
     // to guard against the parent-process environment. We then set it only
     // when desktop has computed NotReady — the desktop is the sole readiness
     // source and buzz-acp only transports the payload.
-    //
     // The JSON format mirrors `setup_mode::SetupPayload` in buzz-acp:
     //   { "agent_name": "...", "agent_pubkey": "...", "requirements": [{ "surface": "...", ... }] }
     //

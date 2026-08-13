@@ -19,6 +19,7 @@ const RUNTIME_LOGOS: Record<string, string> = {
 export const PRESET_LOGOS: Record<string, string> = {
   omp: "/harness-logos/omp.svg",
   opencode: "/harness-logos/opencode.svg",
+  "prime-agent": "/harness-logos/prime-agent.svg",
 };
 
 function isBuzzRuntime(runtime: AcpRuntimeCatalogEntry): boolean {

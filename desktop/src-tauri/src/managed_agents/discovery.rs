@@ -240,11 +240,8 @@ pub(crate) fn known_acp_runtime_exact(id: &str) -> Option<&'static KnownAcpRunti
 }
 
 /// The agent command a freshly-created agent defaults to when the create
-/// request supplies none. Resolves the bundled `buzz-agent` from the catalog so
-/// the default cannot drift from the provider definition. Falls back to the id
-/// if the catalog entry is missing.
-///
-/// The bundled `buzz-agent` ships with the app and resolves on every platform.
+/// request supplies none. Resolves the bundled `buzz-agent` (ships with the
+/// app, resolves on every platform) from the catalog so it cannot drift.
 pub fn default_agent_command() -> String {
     known_acp_runtime_exact("buzz-agent")
         .and_then(|p| p.commands.first().copied())
@@ -254,14 +251,9 @@ pub fn default_agent_command() -> String {
 
 /// Record-first harness resolution (unified agent model, Phase 1A).
 ///
-/// Resolution order:
-///   1. explicit override (non-empty) — a deliberate per-instance pin;
-///   2. the record's own `runtime` id mapped to its primary command —
-///      records materialize their runtime at create/migration time;
-///      checks both static builtins AND the loaded preset/custom registry;
-///   3. legacy fallback: the linked persona's `runtime` (records created
-///      before the unified model carry `persona_id` but no `runtime`);
-///   4. `default_agent_command()`.
+/// Resolution order: explicit override pin → the record's own materialized
+/// `runtime` id (static builtins then loaded preset/custom registry) →
+/// legacy persona `runtime` fallback → `default_agent_command()`.
 pub fn record_agent_command(
     record: &crate::managed_agents::types::ManagedAgentRecord,
     personas: &[crate::managed_agents::types::AgentDefinition],
@@ -295,11 +287,8 @@ pub fn record_agent_command(
 /// persona wins so persona harness edits propagate on the next spawn. An
 /// explicit per-instance override (`agent_command_override`) takes precedence.
 ///
-/// Resolution order:
-///   1. explicit override (non-empty) — a deliberate per-instance pin;
-///   2. the linked persona's `runtime` id mapped to its primary command
-///      (checks builtins then loaded preset/custom registry);
-///   3. `default_agent_command()` — no persona/runtime, or persona deleted.
+/// Resolution order: explicit override → persona `runtime` id (builtins then
+/// loaded registry) → `default_agent_command()` when no persona/runtime.
 pub fn effective_agent_command(
     persona_id: Option<&str>,
     personas: &[crate::managed_agents::types::AgentDefinition],
@@ -361,9 +350,7 @@ pub(crate) fn user_facing_harness_error(error: &str) -> String {
 }
 
 /// Summary-row display for a dangling harness id: shows the *missing* id so
-/// the agent list tells the same story as spawn (which refuses with the
-/// sentence above), rather than silently falling back to the default command
-/// as if the agent were healthy.
+/// the agent list matches spawn's refusal instead of silently defaulting.
 pub(crate) fn dangling_harness_display(id: &str) -> String {
     format!("harness (deleted): {id}")
 }
@@ -428,6 +415,7 @@ pub fn try_record_agent_command(
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
         "omp" | "opencode" => Some(vec!["acp".to_string()]),
+        "prime-agent" => Some(vec!["--mode".to_string(), "acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
         | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
@@ -1480,6 +1468,16 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://opencode.ai/docs",
         install_hint: "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
+        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "prime-agent",
+        label: "Prime Agent",
+        command: "prime-agent",
+        args: &["--mode", "acp"],
+        install_instructions_url: "https://github.com/PrimeIntellect-ai/prime-agent",
+        install_hint: "Colony talks to Prime Agent through its native ACP mode. Install with: npm install -g prime-agent",
         provider_env_var: Some("BUZZ_ACP_PROVIDER"),
         underlying_cli: None,
     },
