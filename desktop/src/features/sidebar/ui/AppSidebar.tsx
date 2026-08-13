@@ -34,6 +34,7 @@ import {
 import {
   AppSidebarPinnedHeader,
   AppSidebarPrimaryMenu,
+  type AppSidebarPinnedHeaderProps,
 } from "@/features/sidebar/ui/AppSidebarPinnedHeader";
 import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
 import { SidebarSection } from "@/features/sidebar/ui/SidebarSection";
@@ -79,7 +80,6 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/shared/ui/sidebar";
-
 type AppSidebarProps = {
   addCommunityPrefill?: AddCommunityPrefillRequest | null;
   activeCommunity: Community | null;
@@ -170,7 +170,7 @@ type AppSidebarProps = {
   onStarChannel?: (channelId: string) => void;
   onUnstarChannel?: (channelId: string) => void;
   workspaceExpanded?: boolean;
-};
+} & Pick<AppSidebarPinnedHeaderProps, "commandActions">;
 export function AppSidebar({
   addCommunityPrefill,
   activeCommunity,
@@ -207,6 +207,7 @@ export function AppSidebar({
   onUpdateCommunity,
   onRemoveCommunity,
   onCreateAgent,
+  commandActions,
   onSelectAgents,
   onSelectBlocks,
   onSelectDiscovery,
@@ -251,14 +252,11 @@ export function AppSidebar({
   const [dmActionsMenuOpen, setDmActionsMenuOpen] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   useSidebarScrollLock(scrollRef);
-
   React.useEffect(() => {
     const scrollElement = scrollRef.current;
     if (!scrollElement) return;
-
     const handleWheel = (event: WheelEvent) => {
       if (event.deltaY === 0) return;
-
       const maxScrollTop =
         scrollElement.scrollHeight - scrollElement.clientHeight;
       if (maxScrollTop <= 0) {
@@ -266,19 +264,16 @@ export function AppSidebar({
         event.stopPropagation();
         return;
       }
-
       const atTop = scrollElement.scrollTop <= 0;
       const atBottom = scrollElement.scrollTop >= maxScrollTop - 1;
       const scrollingPastTop = event.deltaY < 0 && atTop;
       const scrollingPastBottom = event.deltaY > 0 && atBottom;
-
       if (scrollingPastTop || scrollingPastBottom) {
         event.preventDefault();
         event.stopPropagation();
         scrollElement.scrollTop = scrollingPastTop ? 0 : maxScrollTop;
       }
     };
-
     scrollElement.addEventListener("wheel", handleWheel, {
       capture: true,
       passive: false,
@@ -568,10 +563,14 @@ export function AppSidebar({
       >
         <AppSidebarPinnedHeader
           channelLabels={dmChannelLabels}
+          currentChannelId={
+            selectedView === "channel" ? selectedChannelId : null
+          }
           currentPubkey={currentPubkey}
           onBrowseChannels={onBrowseChannels}
           onCreateAgent={onCreateAgent}
           onCreateChannel={handleOpenCreateChannel}
+          commandActions={commandActions}
           onOpenDm={onOpenDm}
           onOpenSearchResult={onOpenSearchResult}
           onSelectChannel={onSelectChannel}

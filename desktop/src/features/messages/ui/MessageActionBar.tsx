@@ -6,6 +6,7 @@ import {
   CornerUpLeft,
   EllipsisVertical,
   Flag,
+  Globe2,
   Link2,
   MailCheck,
   MailOpen,
@@ -17,6 +18,11 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { buildMessageLink } from "@/features/messages/lib/messageLink";
+import {
+  decideWorkspaceUrlOpening,
+  openUrlInWorkspace,
+} from "@/features/workspace/lib/openUrlInWorkspace";
+import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
 import { getThreadReference } from "@/features/messages/lib/threading";
@@ -62,6 +68,7 @@ function MoreActionsMenu({
   onMarkUnread,
   onMarkRead,
   onOpenChange,
+  onOpenInWorkspace,
   onRemindLater,
   onSendToChannel,
   onUnfollowThread,
@@ -79,6 +86,7 @@ function MoreActionsMenu({
   onMarkUnread?: (message: TimelineMessage) => void;
   onMarkRead?: (message: TimelineMessage) => void;
   onOpenChange: (open: boolean) => void;
+  onOpenInWorkspace?: () => void;
   onRemindLater?: (message: TimelineMessage) => void;
   onSendToChannel?: (message: TimelineMessage) => Promise<void>;
   onUnfollowThread?: (message: TimelineMessage) => void;
@@ -203,6 +211,16 @@ function MoreActionsMenu({
             >
               <Copy className="h-4 w-4" />
               Copy message
+            </DropdownMenuItem>
+          ) : null}
+
+          {onOpenInWorkspace ? (
+            <DropdownMenuItem
+              data-testid={`open-workspace-${message.id}`}
+              onClick={onOpenInWorkspace}
+            >
+              <Globe2 className="h-4 w-4" />
+              Open in workspace
             </DropdownMenuItem>
           ) : null}
 
@@ -420,6 +438,21 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   );
   const hasReplyAction = Boolean(onReply);
   const hasReactionAction = Boolean(onReactionSelect);
+  const workspaceUrlDecision =
+    channelId && !message.pending
+      ? decideWorkspaceUrlOpening(
+          message.body,
+          (kind) => getTabKind(kind) !== undefined,
+        )
+      : null;
+  const handleOpenInWorkspace = React.useCallback(() => {
+    if (!channelId) return;
+    const result = openUrlInWorkspace({
+      body: message.body,
+      channelId,
+    });
+    if (!result.ok) toast.error(result.message);
+  }, [channelId, message.body]);
 
   const hasMoreMenuActions =
     Boolean(onEdit) ||
@@ -576,6 +609,11 @@ export const MessageActionBar = React.memo(function MessageActionBar({
               onMarkUnread={onMarkUnread}
               onMarkRead={onMarkRead}
               onOpenChange={setIsDropdownOpen}
+              onOpenInWorkspace={
+                workspaceUrlDecision?.supported
+                  ? handleOpenInWorkspace
+                  : undefined
+              }
               onRemindLater={onRemindLater}
               onSendToChannel={onSendToChannel}
               onUnfollowThread={onUnfollowThread}

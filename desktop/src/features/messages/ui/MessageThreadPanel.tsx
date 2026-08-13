@@ -55,6 +55,7 @@ import { useStableSendToChannel } from "./useStableSendToChannel";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
 import { getActiveContinuationDepths } from "./MessageThreadPanel.helpers";
+import { ThreadReadStateToggle } from "./ThreadReadStateToggle";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   channel: Channel | null;
@@ -933,6 +934,12 @@ export function MessageThreadPanel({
       >
         <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
       </AuxiliaryPanelHeaderGroup>
+      <ThreadReadStateToggle
+        isUnread={(threadUnreadCount ?? 0) > 0}
+        message={threadHead}
+        onMarkRead={onMarkRead}
+        onMarkUnread={onMarkUnread}
+      />
     </>
   );
 

@@ -1,6 +1,5 @@
 import { Search } from "lucide-react";
 import * as React from "react";
-
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { getMinimumSearchQueryLength } from "@/features/search/hooks";
 import { useSearchResults } from "@/features/search/useSearchResults";
@@ -8,6 +7,7 @@ import {
   resultIcon,
   resultKey,
   resultTestId,
+  type SearchCommand,
   type SearchResult,
 } from "@/features/search/ui/SearchResultItem";
 import {
@@ -27,7 +27,6 @@ import {
 } from "@/shared/ui/mentionChip";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
-
 type TopbarSearchProps = {
   channelLabels?: Record<string, string>;
   channels: Channel[];
@@ -41,11 +40,11 @@ type TopbarSearchProps = {
   onBrowseChannels?: () => void | Promise<void>;
   onCreateAgent?: () => void | Promise<void>;
   onCreateChannel?: () => void | Promise<void>;
+  commandActions?: readonly SearchCommand[];
   suggestionChannels?: Channel[];
   scopeFocusRequest?: number;
   variant?: "bar" | "icon";
 };
-
 const MAX_SEARCH_SUGGESTIONS = 4;
 const SEARCH_RESULT_LIMIT = 40;
 const SEARCH_SECTION_TITLE_CLASS =
@@ -58,26 +57,21 @@ const SEARCH_RESULT_SECTION_ORDER = [
   "messages",
   "actions",
 ] as const;
-
 type SearchResultSectionKey = (typeof SEARCH_RESULT_SECTION_ORDER)[number];
-
 type SearchResultSection = {
   key: SearchResultSectionKey;
   results: SearchResult[];
   title: string;
 };
-
 type SearchHitContextLabel = {
   channelLabel: string | null;
   text: string;
 };
-
 function truncateResultText(content: string, maxLength = 96) {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
     return "No message body.";
   }
-
   if (trimmed.length <= maxLength) {
     return trimmed;
   }
@@ -405,6 +399,7 @@ export function TopbarSearch({
   onCreateAgent,
   onCreateChannel,
   scopeFocusRequest = 0,
+  commandActions = [],
   suggestionChannels,
   variant = "bar",
 }: TopbarSearchProps) {
@@ -454,40 +449,54 @@ export function TopbarSearch({
     [channels, suggestionChannels],
   );
   const suggestionActionResults = React.useMemo(() => {
-    const actions: SearchResult[] = [];
+    const actions: SearchResult[] = commandActions.map((action) => ({
+      action,
+      kind: "action" as const,
+    }));
+    const actionIds = new Set(
+      actions.flatMap((result) =>
+        result.kind === "action" ? [result.action.id] : [],
+      ),
+    );
 
-    if (onBrowseChannels) {
+    if (onBrowseChannels && !actionIds.has("browse-channels")) {
       actions.push({
         kind: "action",
         action: {
+          description: "Find a public channel to join",
           id: "browse-channels",
+          onSelect: onBrowseChannels,
           title: "Browse channels",
         },
       });
     }
 
-    if (onCreateChannel) {
+    if (onCreateChannel && !actionIds.has("create-channel")) {
       actions.push({
         kind: "action",
         action: {
+          description: "Start a new conversation space",
           id: "create-channel",
+          onSelect: onCreateChannel,
           title: "Create a new channel",
         },
       });
     }
 
-    if (onCreateAgent) {
+    if (onCreateAgent && !actionIds.has("create-agent")) {
       actions.push({
         kind: "action",
         action: {
+          description: "Set up a new managed agent",
           id: "create-agent",
+          onSelect: onCreateAgent,
           title: "Create a new agent",
         },
       });
     }
 
     return actions;
-  }, [onBrowseChannels, onCreateAgent, onCreateChannel]);
+  }, [commandActions, onBrowseChannels, onCreateAgent, onCreateChannel]);
   const suggestionResults = React.useMemo(
     () => [...suggestedResults, ...suggestionActionResults],
     [suggestedResults, suggestionActionResults],
@@ -504,9 +513,19 @@ export function TopbarSearch({
       ),
     [currentPubkeyNormalized, results],
   );
+  const filteredCommandResults = React.useMemo(() => {
+    if (isShowingSuggestions) return [];
+    const normalizedQuery = trimmedQuery.toLocaleLowerCase();
+    return suggestionActionResults.filter((result) => {
+      if (result.kind !== "action") return false;
+      return `${result.action.title} ${result.action.description ?? ""}`
+        .toLocaleLowerCase()
+        .includes(normalizedQuery);
+    });
+  }, [isShowingSuggestions, suggestionActionResults, trimmedQuery]);
   const searchResultSections = React.useMemo(
-    () => groupSearchResults(searchableResults),
-    [searchableResults],
+    () => groupSearchResults([...filteredCommandResults, ...searchableResults]),
+    [filteredCommandResults, searchableResults],
   );
   const groupedSearchResults = React.useMemo(
     () => searchResultSections.flatMap((section) => section.results),
@@ -565,34 +584,15 @@ export function TopbarSearch({
 
       if (result.kind === "action") {
         setSelectedMenuIndex(0);
-        if (result.action.id === "browse-channels") {
-          openAfterExit(() => {
-            void onBrowseChannels?.();
-          });
-        } else if (result.action.id === "create-channel") {
-          openAfterExit(() => {
-            void onCreateChannel?.();
-          });
-        } else {
-          openAfterExit(() => {
-            void onCreateAgent?.();
-          });
-        }
+        openAfterExit(() => {
+          void result.action.onSelect();
+        });
         return;
       }
 
       onOpenResult(result.hit);
     },
-    [
-      onBrowseChannels,
-      onCreateAgent,
-      onCreateChannel,
-      onOpenChannel,
-      onOpenResult,
-      onOpenUser,
-      openAfterExit,
-      setQuery,
-    ],
+    [onOpenChannel, onOpenResult, onOpenUser, openAfterExit, setQuery],
   );
 
   // Edge-trigger: the counter never resets, so `!== 0` would replay on remount.
@@ -873,12 +873,12 @@ export function TopbarSearch({
         </div>
       </div>
     )
-  ) : isSearchLoading && searchableResults.length === 0 ? (
+  ) : isSearchLoading && activeResults.length === 0 ? (
     <div className="max-h-[min(60vh,32rem)] overflow-y-auto">
       {currentChannelSearchAction}
       <SearchResultsSkeleton />
     </div>
-  ) : searchQuery.error instanceof Error && searchableResults.length === 0 ? (
+  ) : searchQuery.error instanceof Error && activeResults.length === 0 ? (
     <div className="max-h-[min(60vh,32rem)] overflow-y-auto">
       {currentChannelSearchAction}
       <p
@@ -890,7 +890,7 @@ export function TopbarSearch({
         {searchQuery.error.message}
       </p>
     </div>
-  ) : searchableResults.length === 0 ? (
+  ) : activeResults.length === 0 ? (
     <div className="max-h-[min(60vh,32rem)] overflow-y-auto">
       {currentChannelSearchAction}
       <p
