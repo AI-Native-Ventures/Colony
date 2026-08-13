@@ -56,6 +56,13 @@ type AgentProposalCommunityLease = {
 // intentionally not cleared by query refreshes or relay reconnects: a
 // replacement effect joins the same per-proposal queue while IPC is pending.
 const agentProposalExecutions = new Map<string, AgentProposalExecutionQueue>();
+// A browser CustomEvent is edge-triggered. Query refreshes can briefly unmount
+// the broker between publishing an action and receiving its event, so retain
+// locally acknowledged actions until an owner receipt is actually accepted.
+const acknowledgedAgentProposalActions = new Map<
+  string,
+  AcknowledgedAgentProposalAction
+>();
 let activeAgentProposalCommunityLease: AgentProposalCommunityLease | null =
   null;
 let nextAgentProposalCommunityGeneration = 1;
@@ -330,12 +337,27 @@ export function validateAgentProposalActionContext(input: {
 export function notifyAgentProposalActionAcknowledged(
   detail: AcknowledgedAgentProposalAction,
 ) {
+  rememberAcknowledgedAgentProposalAction(detail);
   window.dispatchEvent(
     new CustomEvent<AcknowledgedAgentProposalAction>(
       ACKNOWLEDGED_ACTION_EVENT,
       { detail },
     ),
   );
+}
+
+export function rememberAcknowledgedAgentProposalAction(
+  detail: AcknowledgedAgentProposalAction,
+) {
+  acknowledgedAgentProposalActions.set(detail.event.id, detail);
+}
+
+export function pendingAcknowledgedAgentProposalActions() {
+  return [...acknowledgedAgentProposalActions.values()];
+}
+
+function resolveAcknowledgedAgentProposalAction(actionEventId: string) {
+  acknowledgedAgentProposalActions.delete(actionEventId);
 }
 
 export function isAuthoritativeAgentProposalReceipt(input: {
@@ -413,11 +435,11 @@ async function publishReceipt(
   validated: ValidatedAgentProposalAction,
   result: AgentProposalReceiptResult,
   lease: AgentProposalCommunityLease,
-) {
-  if (!isCurrentAgentProposalCommunity(lease)) return null;
+): Promise<boolean> {
+  if (!isCurrentAgentProposalCommunity(lease)) return false;
   const existing = await existingReceiptForAction(actionEvent);
-  if (!isCurrentAgentProposalCommunity(lease)) return null;
-  if (existing) return existing;
+  if (!isCurrentAgentProposalCommunity(lease)) return false;
+  if (existing) return true;
   const resolved = result.outcome !== "failed";
   const status =
     result.outcome === "declined"
@@ -443,12 +465,13 @@ async function publishReceipt(
     content: canonicalBlockJson(result),
     tags,
   });
-  if (!isCurrentAgentProposalCommunity(lease)) return null;
-  return relayClient.publishEvent(
+  if (!isCurrentAgentProposalCommunity(lease)) return false;
+  await relayClient.publishEvent(
     receipt,
     "Timed out while saving the Agent Proposal result.",
     "Failed to save the Agent Proposal result.",
   );
+  return true;
 }
 
 async function fetchProposalInstance(actionEvent: RelayEvent) {
@@ -467,35 +490,39 @@ async function processAction(
   context: AgentProposalAuthorityContext,
   lease: AgentProposalCommunityLease,
 ) {
-  if (!isCurrentAgentProposalCommunity(lease)) return null;
+  if (!isCurrentAgentProposalCommunity(lease)) return false;
   const existing = await existingReceiptForAction(accepted.event);
-  if (!isCurrentAgentProposalCommunity(lease)) return null;
-  if (existing) return existing;
+  if (!isCurrentAgentProposalCommunity(lease)) return false;
+  if (existing) return true;
   const instanceEvent = await fetchProposalInstance(accepted.event);
-  if (!isCurrentAgentProposalCommunity(lease)) return null;
-  if (!instanceEvent) return null;
-  if (await proposalAlreadyResolved(instanceEvent, context.ownerPubkey))
-    return null;
-  if (!isCurrentAgentProposalCommunity(lease)) return null;
+  if (!isCurrentAgentProposalCommunity(lease)) return false;
+  if (!instanceEvent) return false;
+  // A different valid action may have resolved the same proposal while this
+  // acknowledgement was buffered. That is terminal for this local action too,
+  // so allow the caller to discard it rather than retrying it forever.
+  if (await proposalAlreadyResolved(instanceEvent, context.ownerPubkey)) {
+    return true;
+  }
+  if (!isCurrentAgentProposalCommunity(lease)) return false;
   const validated = validateAgentProposalActionContext({
     actionEvent: accepted.event,
     instanceEvent,
     context,
   });
-  if (!validated) return null;
+  if (!validated) return false;
 
   let result: AgentProposalReceiptResult;
   if (validated.kind === "decline") {
     result = { outcome: "declined" };
   } else {
-    if (!isCurrentAgentProposalCommunity(lease)) return null;
+    if (!isCurrentAgentProposalCommunity(lease)) return false;
     try {
       const execution = await executeAgentProposal(
         validated.action,
         lease.relayUrl,
         accepted.backendConfig,
       );
-      if (!isCurrentAgentProposalCommunity(lease)) return null;
+      if (!isCurrentAgentProposalCommunity(lease)) return false;
       result =
         execution.status === "applied"
           ? {
@@ -581,12 +608,16 @@ export function useAgentProposalBroker({
         proposalKey,
         accepted.event.id,
         () => processAction(accepted, context, lease),
-        (receipt) => {
-          if (!receipt) return false;
-          const parsed = parseBlockReceipt(receipt.tags);
-          return parsed.ok && parsed.value.resolvesAttention;
-        },
-      );
+        (receiptPublished) => receiptPublished,
+      )
+        .then((receiptPublished) => {
+          if (receiptPublished) {
+            resolveAcknowledgedAgentProposalAction(accepted.event.id);
+          }
+        })
+        .catch(() => {
+          // Leave the acknowledgement buffered for the next broker replay.
+        });
     };
     const replay = () => {
       void relayClient
@@ -604,6 +635,9 @@ export function useAgentProposalBroker({
       process((event as CustomEvent<AcknowledgedAgentProposalAction>).detail);
     };
     window.addEventListener(ACKNOWLEDGED_ACTION_EVENT, onAcknowledged);
+    for (const acknowledged of pendingAcknowledgedAgentProposalActions()) {
+      process(acknowledged);
+    }
     replay();
     const unsubscribeReconnect = relayClient.subscribeToReconnects(replay);
     void relayClient
