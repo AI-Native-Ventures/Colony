@@ -2301,8 +2301,8 @@ pub fn model_in_catalog(
 /// the bare model id (`deepseek-v4-flash`) alongside a provider selection.
 /// The returned `(method, applied_id)` pair carries the id actually applied so
 /// callers log and observe the real value.
-pub fn resolve_model_switch_candidate<'a>(
-    session_new_result: &'a serde_json::Value,
+pub fn resolve_model_switch_candidate(
+    session_new_result: &serde_json::Value,
     desired_model: &str,
     provider: Option<&str>,
 ) -> Option<(ModelSwitchMethod, String)> {
