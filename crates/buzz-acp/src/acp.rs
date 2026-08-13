@@ -2348,6 +2348,60 @@ pub fn model_in_catalog(
         })
 }
 
+/// Resolve the model-switch method for a desired model, falling back to the
+/// provider-qualified id (`provider/model`) when the plain id is absent from
+/// the fresh `session/new` catalog.
+///
+/// Oh My Pi and OpenCode advertise their model catalogs provider-qualified
+/// (e.g. `deepseek/deepseek-v4-flash`), while the Colony config surface stores
+/// the bare model id (`deepseek-v4-flash`) alongside a provider selection.
+/// The returned `(method, applied_id)` pair carries the id actually applied so
+/// callers log and observe the real value.
+pub fn resolve_model_switch_candidate(
+    session_new_result: &serde_json::Value,
+    desired_model: &str,
+    provider: Option<&str>,
+) -> Option<(ModelSwitchMethod, String)> {
+    if let Some(method) = resolve_model_switch_method(session_new_result, desired_model) {
+        return Some((method, desired_model.to_string()));
+    }
+    let provider = provider.map(str::trim).filter(|p| !p.is_empty())?;
+    if desired_model.contains('/') {
+        return None;
+    }
+    let qualified = format!("{provider}/{desired_model}");
+    resolve_model_switch_method(session_new_result, &qualified).map(|method| (method, qualified))
+}
+
+/// True when `desired_model` (or its `provider/`-qualified form) appears in
+/// the pre-extracted catalog halves. Companion to
+/// [`resolve_model_switch_candidate`] for the idle-path pre-cancel guard.
+pub fn qualified_model_in_catalog(
+    caps: &crate::pool::AgentModelCapabilities,
+    desired_model: &str,
+    provider: Option<&str>,
+) -> bool {
+    if model_in_catalog(
+        &caps.config_options_raw,
+        caps.available_models_raw.as_ref(),
+        desired_model,
+    ) {
+        return true;
+    }
+    let provider = provider.map(str::trim).filter(|p| !p.is_empty());
+    let Some(provider) = provider else {
+        return false;
+    };
+    if desired_model.contains('/') {
+        return false;
+    }
+    model_in_catalog(
+        &caps.config_options_raw,
+        caps.available_models_raw.as_ref(),
+        &format!("{provider}/{desired_model}"),
+    )
+}
+
 // ─── Drop: kill child process ─────────────────────────────────────────────────
 
 impl Drop for AcpClient {
@@ -3005,6 +3059,113 @@ mod tests {
     #[test]
     fn model_in_catalog_false_when_both_halves_empty() {
         assert!(!super::model_in_catalog(&[], None, "anything"));
+    }
+
+    // ── resolve_model_switch_candidate tests ──────────────────────────────
+
+    fn candidate_result() -> serde_json::Value {
+        serde_json::json!({
+            "sessionId": "sess-1",
+            "configOptions": [{
+                "configId": "model",
+                "category": "model",
+                "type": "select",
+                "options": [
+                    { "value": "deepseek/deepseek-v4-flash", "name": "DeepSeek V4 Flash" },
+                    { "value": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4" }
+                ]
+            }],
+            "models": null
+        })
+    }
+
+    #[test]
+    fn resolve_candidate_plain_id_wins_when_present() {
+        let result = serde_json::json!({
+            "configOptions": [{
+                "configId": "model",
+                "category": "model",
+                "options": [{ "value": "sonnet", "name": "Sonnet" }]
+            }]
+        });
+        let (method, applied) =
+            super::resolve_model_switch_candidate(&result, "sonnet", Some("anthropic"))
+                .expect("plain id must resolve");
+        assert_eq!(applied, "sonnet");
+        assert!(matches!(
+            method,
+            super::ModelSwitchMethod::ConfigOption { config_id, .. } if config_id == "model"
+        ));
+    }
+
+    #[test]
+    fn resolve_candidate_qualifies_with_provider_when_plain_missing() {
+        let (method, applied) = super::resolve_model_switch_candidate(
+            &candidate_result(),
+            "deepseek-v4-flash",
+            Some("deepseek"),
+        )
+        .expect("provider-qualified id must resolve");
+        assert_eq!(applied, "deepseek/deepseek-v4-flash");
+        assert!(matches!(
+            method,
+            super::ModelSwitchMethod::ConfigOption { config_id, .. } if config_id == "model"
+        ));
+    }
+
+    #[test]
+    fn resolve_candidate_skips_qualification_for_already_qualified_id() {
+        assert!(super::resolve_model_switch_candidate(
+            &candidate_result(),
+            "deepseek/deepseek-v4-flash",
+            Some("deepseek"),
+        )
+        .is_some());
+        // An already-qualified id that is missing must NOT get double-qualified.
+        assert!(super::resolve_model_switch_candidate(
+            &candidate_result(),
+            "anthropic/unknown-model",
+            Some("anthropic"),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn resolve_candidate_returns_none_without_provider() {
+        assert!(super::resolve_model_switch_candidate(
+            &candidate_result(),
+            "deepseek-v4-flash",
+            None,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn qualified_model_in_catalog_matches_provider_prefixed() {
+        let caps = crate::pool::AgentModelCapabilities {
+            config_options_raw: extract_model_config_options(&candidate_result()),
+            available_models_raw: None,
+        };
+        assert!(super::qualified_model_in_catalog(
+            &caps,
+            "deepseek-v4-flash",
+            Some("deepseek")
+        ));
+        assert!(!super::qualified_model_in_catalog(
+            &caps,
+            "deepseek-v4-flash",
+            Some("openai")
+        ));
+        assert!(!super::qualified_model_in_catalog(
+            &caps,
+            "deepseek-v4-flash",
+            None
+        ));
+        assert!(super::qualified_model_in_catalog(
+            &caps,
+            "deepseek/deepseek-v4-flash",
+            Some("deepseek")
+        ));
     }
 
     // ── Error variant display ─────────────────────────────────────────────

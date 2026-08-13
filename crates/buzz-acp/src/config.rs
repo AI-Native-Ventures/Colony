@@ -488,6 +488,12 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_MODEL")]
     pub model: Option<String>,
 
+    /// LLM provider the model belongs to (e.g. `"deepseek"`, `"anthropic"`).
+    /// Used to qualify an unqualified model id against provider-prefixed ACP
+    /// catalogs (`provider/model`), matching Oh My Pi / OpenCode conventions.
+    #[arg(long, env = "BUZZ_ACP_PROVIDER")]
+    pub provider: Option<String>,
+
     /// Title for the agent's ACP sessions, passed out-of-band in `session/new`
     /// `_meta`. Adapters that recognize it name the session after this value;
     /// others ignore it. Never enters the prompt.
@@ -644,6 +650,10 @@ pub struct Config {
     pub memory_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
+    /// LLM provider the desired model belongs to. Used to qualify an
+    /// unqualified model id against provider-prefixed ACP catalogs
+    /// (`provider/model`), matching Oh My Pi / OpenCode conventions.
+    pub provider: Option<String>,
     /// Sanitized session title, sent as `_meta.sessionTitle` on `session/new`.
     /// `None` when unset or when the configured value sanitized to empty.
     pub session_title: Option<String>,
@@ -856,7 +866,7 @@ pub(crate) fn normalize_agent_command_identity(command: &str) -> String {
 
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_agent_command_identity(command).as_str() {
-        "goose" => Some(vec!["acp".to_string()]),
+        "omp" | "opencode" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
         | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
@@ -1278,6 +1288,7 @@ impl Config {
             typing_enabled: !args.no_typing,
             memory_enabled: args.memory && !args.no_memory,
             model,
+            provider: args.provider,
             session_title: args
                 .session_title
                 .as_deref()
@@ -1651,6 +1662,7 @@ mod tests {
             typing_enabled: true,
             memory_enabled: true,
             model: None,
+            provider: None,
             session_title: None,
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
@@ -1773,9 +1785,14 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_goose_args_to_acp() {
-        assert_eq!(normalize_agent_args("goose", Vec::new()), vec!["acp"]);
-        assert_eq!(normalize_agent_args("goose", vec!["".into()]), vec!["acp"]);
+    fn normalizes_pi_family_args_to_acp() {
+        assert_eq!(normalize_agent_args("omp", Vec::new()), vec!["acp"]);
+        assert_eq!(normalize_agent_args("omp", vec!["".into()]), vec!["acp"]);
+        assert_eq!(normalize_agent_args("opencode", Vec::new()), vec!["acp"]);
+        assert_eq!(
+            normalize_agent_args("opencode", vec!["".into()]),
+            vec!["acp"]
+        );
     }
 
     #[test]

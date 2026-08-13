@@ -3,7 +3,7 @@ import { installMockBridge } from "../helpers/bridge";
 import { passThroughBackupStep } from "../helpers/onboarding";
 
 function runtime(
-  id: "buzz-agent" | "claude" | "codex" | "goose",
+  id: "buzz-agent" | "claude" | "codex" | "omp",
   availability: string,
   authStatus: Record<string, unknown>,
   overrides: Record<string, unknown> = {},
@@ -17,7 +17,7 @@ function runtime(
           ? "Claude Code"
           : id === "codex"
             ? "Codex"
-            : "Goose",
+            : "Oh My Pi",
     avatar_url: "",
     availability,
     command: availability === "available" ? id : null,
@@ -81,7 +81,7 @@ test("setup shows all bundled harnesses as detected", async ({ page }) => {
     {
       acpRuntimesCatalog: [
         runtime("buzz-agent", "available", { status: "not_applicable" }),
-        runtime("goose", "available", { status: "not_applicable" }),
+        runtime("omp", "available", { status: "not_applicable" }),
         runtime("codex", "available", { status: "logged_in" }),
         runtime("claude", "available", { status: "logged_in" }),
       ],
@@ -93,7 +93,7 @@ test("setup shows all bundled harnesses as detected", async ({ page }) => {
 
   await expect(page.getByTestId("onboarding-runtime-claude")).toBeVisible();
   await expect(page.getByTestId("onboarding-runtime-codex")).toBeVisible();
-  await expect(page.getByTestId("onboarding-runtime-goose")).toBeVisible();
+  await expect(page.getByTestId("onboarding-runtime-omp")).toBeVisible();
   await expect(page.getByTestId("onboarding-runtime-buzz-agent")).toBeVisible();
   await expect(page.getByRole("checkbox")).toHaveCount(0);
   const setupSkip = page.getByTestId("onboarding-setup-skip");
@@ -707,7 +707,7 @@ test("defaults auto-selects the only ready visible harness", async ({
     {
       acpRuntimesCatalog: [
         runtime("buzz-agent", "not_installed", { status: "not_applicable" }),
-        runtime("goose", "not_installed", { status: "not_applicable" }),
+        runtime("omp", "not_installed", { status: "not_applicable" }),
         runtime("claude", "available", { status: "logged_in" }),
         runtime("codex", "available", { status: "logged_out" }),
       ],
@@ -856,7 +856,7 @@ test("defaults requires a choice when multiple visible harnesses are ready", asy
     {
       acpRuntimesCatalog: [
         runtime("buzz-agent", "available", { status: "not_applicable" }),
-        runtime("goose", "available", { status: "not_applicable" }),
+        runtime("omp", "available", { status: "not_applicable" }),
         runtime("claude", "available", { status: "logged_in" }),
         runtime("codex", "available", { status: "logged_in" }),
       ],
@@ -875,7 +875,9 @@ test("defaults requires a choice when multiple visible harnesses are ready", asy
   await expect(page.getByTestId("onboarding-page-config")).toBeVisible();
 
   const harness = page.getByTestId("global-agent-default-harness");
-  await expect(harness).toHaveText("Select a harness");
+  // Fresh signup defaults to the shipped harness: Oh My Pi is preselected.
+  // Finish stays disabled because the DeepSeek default needs an API key.
+  await expect(harness).toHaveText("Oh My Pi");
   await expect(page.getByTestId("onboarding-finish")).toBeDisabled();
   await harness.click();
   await expect(
@@ -885,7 +887,7 @@ test("defaults requires a choice when multiple visible harnesses are ready", asy
     page.getByTestId("global-agent-default-harness-option-codex"),
   ).toBeVisible();
   await expect(
-    page.getByTestId("global-agent-default-harness-option-goose"),
+    page.getByTestId("global-agent-default-harness-option-omp"),
   ).toBeVisible();
   await expect(
     page.getByTestId("global-agent-default-harness-option-buzz-agent"),

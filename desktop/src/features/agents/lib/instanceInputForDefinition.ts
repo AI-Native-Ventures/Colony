@@ -47,8 +47,8 @@ export function resolveStartRuntimeForDefinition(
   runtimes: readonly AcpRuntime[],
   preferredRuntimeId?: string | null,
 ): { runtime: AcpRuntime; warnings: string[] } {
-  // Use the buzz-agent-first preference (buzz-agent → goose → first available)
-  // so a freshly installed goose never beats the bundled buzz-agent sidecar
+  // Use the omp-first default preference (omp → buzz-agent → first available)
+  // so the shipped signup default surfaces before the bundled sidecar
   // for runtime-less personas (item 13 regression guard).
   const defaultRuntime = getDefaultPersonaRuntime(runtimes, preferredRuntimeId);
   const { runtime, warnings, isOverridden }: ResolvePersonaRuntimeResult =

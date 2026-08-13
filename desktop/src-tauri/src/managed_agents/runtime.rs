@@ -728,16 +728,11 @@ fn spawn_agent_child_inner(
         command.env_remove("BUZZ_ACP_TEAM_INSTRUCTIONS");
     }
 
-    // Prompt, model, and provider all come from the single `effective_cfg`
-    // resolved at the top of this function — the SAME resolve the spawn-config
-    // snapshot reads, so env write and restart badge cannot disagree. Linked
-    // instances never consult the record's own model/provider/prompt bytes;
-    // definition-less instances fall back to their own fields, then global.
-    //
-    // Derive the mesh decision BEFORE moving fields out — `relay_mesh_model_id`
-    // is the single authoritative gate; the mesh-llm block below MUST use it
-    // rather than re-deriving from `effective_provider` to keep preflight and
-    // spawn semantics in lock-step (see `EffectiveAgentConfig::relay_mesh_model_id`).
+    // Prompt, model, and provider come from the single `effective_cfg` resolve
+    // (the SAME resolve `spawn_config_hash` performs, so env write and restart
+    // badge cannot disagree); definition-less instances fall back to their own
+    // fields, then global. Derive the mesh decision before moving fields out:
+    // `relay_mesh_model_id` is the single authoritative gate.
     #[cfg(feature = "mesh-llm")]
     let mesh_model_id = effective_cfg.relay_mesh_model_id();
     let effective_prompt = effective_cfg.system_prompt.value;
@@ -765,6 +760,11 @@ fn spawn_agent_child_inner(
         command.env("BUZZ_ACP_MODEL", model);
     } else {
         command.env_remove("BUZZ_ACP_MODEL");
+    }
+    if let Some(provider) = effective_provider.as_deref() {
+        command.env("BUZZ_ACP_PROVIDER", provider);
+    } else {
+        command.env_remove("BUZZ_ACP_PROVIDER");
     }
     // Session title for the harness to pass out-of-band on `session/new`. The
     // adapter names the session after it; it never reaches the prompt, so this

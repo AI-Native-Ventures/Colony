@@ -8,11 +8,13 @@
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 
 // Builtins that anchor the top of "Your runtimes" — mirrors the old
-// DoctorSettingsPanel RUNTIME_SORT_PRIORITY so the Buzz + Goose rows stay
-// where users learned to find them.
+// DoctorSettingsPanel RUNTIME_SORT_PRIORITY so the Colony Agent row stays
+// where users learned to find it.
 const ROW_SORT_PRIORITY: Record<string, number> = {
   "buzz-agent": 0,
-  goose: 1,
+  // Oh My Pi is the shipped signup default — anchor it right under the
+  // bundled Colony Agent row.
+  omp: 1,
 };
 
 /**

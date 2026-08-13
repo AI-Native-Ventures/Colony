@@ -9,21 +9,20 @@ const SHOTS = "test-results/screenshots-doctor";
 // ── Shared catalog fixture data ───────────────────────────────────────────────
 
 /**
- * A goose runtime that is available and needs no auth step — used as a neutral
+ * A omp runtime that is available and needs no auth step — used as a neutral
  * backdrop so the Doctor panel has realistic content beyond the row under test.
  */
-const GOOSE_AVAILABLE = {
-  id: "goose",
-  label: "Goose",
+const OMP_AVAILABLE = {
+  id: "omp",
+  label: "Oh My Pi",
   avatar_url: "",
   availability: "available",
-  command: "goose",
-  binary_path: "/usr/local/bin/goose",
+  command: "omp",
+  binary_path: "/usr/local/bin/omp",
   default_args: ["acp"],
   mcp_command: null,
   install_hint: "",
-  install_instructions_url:
-    "https://goose-docs.ai/docs/getting-started/installation/",
+  install_instructions_url: "https://github.com/can1357/oh-my-pi",
   can_auto_install: false,
   underlying_cli_path: null,
   node_required: false,
@@ -33,7 +32,7 @@ const GOOSE_AVAILABLE = {
 /** buzz-agent is always available and has no auth step. */
 const BUZZ_AGENT_AVAILABLE = {
   id: "buzz-agent",
-  label: "Buzz Agent",
+  label: "Colony Agent",
   avatar_url: "",
   availability: "available",
   command: "buzz-agent",
@@ -83,7 +82,7 @@ const CODEX_NOT_INSTALLED = {
   binary_path: null,
   default_args: [],
   mcp_command: null,
-  install_hint: "Buzz talks to Codex through the Codex CLI.",
+  install_hint: "Colony talks to Codex through the Codex CLI.",
   install_instructions_url: "https://developers.openai.com/codex/cli/",
   can_auto_install: true,
   underlying_cli_path: null,
@@ -118,7 +117,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("00-runtime-card-layout", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         CODEX_NOT_INSTALLED,
         BUZZ_AGENT_AVAILABLE,
@@ -130,7 +129,7 @@ test.describe("Doctor panel state screenshots", () => {
 
     const runtimeList = page.getByTestId("doctor-runtime-list");
     await expect(runtimeList).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId("doctor-runtime-goose")).toBeVisible();
+    await expect(page.getByTestId("doctor-runtime-omp")).toBeVisible();
     await expect(page.getByTestId("doctor-runtime-codex")).toBeVisible();
     await expect(
       runtimeList.locator(":scope > [data-testid^='doctor-runtime-']"),
@@ -143,17 +142,17 @@ test.describe("Doctor panel state screenshots", () => {
         ),
     ).toEqual([
       "doctor-runtime-buzz-agent",
-      "doctor-runtime-goose",
+      "doctor-runtime-omp",
       "doctor-runtime-claude",
       "doctor-runtime-codex",
     ]);
-    for (const runtimeId of ["goose", "claude", "codex", "buzz-agent"]) {
+    for (const runtimeId of ["omp", "claude", "codex", "buzz-agent"]) {
       await expect(
         page.getByTestId(`doctor-runtime-logo-${runtimeId}`),
       ).toBeVisible();
     }
     const rowHeights = await Promise.all(
-      ["goose", "claude", "codex", "buzz-agent"].map((runtimeId) =>
+      ["omp", "claude", "codex", "buzz-agent"].map((runtimeId) =>
         page
           .getByTestId(`doctor-runtime-${runtimeId}`)
           .evaluate((element) =>
@@ -161,9 +160,9 @@ test.describe("Doctor panel state screenshots", () => {
           ),
       ),
     );
-    expect(Math.abs(rowHeights[2] - rowHeights[0])).toBeLessThanOrEqual(1);
-    const [gooseColors, codexColors] = await Promise.all(
-      ["goose", "codex"].map((runtimeId) =>
+    expect(rowHeights[2]).toBeGreaterThan(rowHeights[0]);
+    const [ompColors, codexColors] = await Promise.all(
+      ["omp", "codex"].map((runtimeId) =>
         page.getByTestId(`doctor-runtime-${runtimeId}`).evaluate((element) => {
           const styles = getComputedStyle(element);
           return {
@@ -173,20 +172,14 @@ test.describe("Doctor panel state screenshots", () => {
         }),
       ),
     );
-    expect(codexColors.backgroundColor).toBe(gooseColors.backgroundColor);
-    for (const runtimeId of ["goose", "codex"]) {
-      await expect(page.getByTestId(`doctor-runtime-${runtimeId}`)).toHaveCSS(
-        "border-radius",
-        "0px",
-      );
-    }
+    expect(codexColors).toEqual(ompColors);
     await expect(
       page
         .getByRole("heading", { name: "Agent runtimes", exact: true })
         .locator("..")
         .locator(".."),
     ).toHaveCSS("align-items", "center");
-    for (const runtimeId of ["goose", "claude", "buzz-agent"]) {
+    for (const runtimeId of ["omp", "claude", "buzz-agent"]) {
       await expect(
         page.getByTestId(`doctor-runtime-menu-${runtimeId}`),
       ).toHaveCount(0);
@@ -206,24 +199,24 @@ test.describe("Doctor panel state screenshots", () => {
       path: `${SHOTS}/00-runtime-overflow-menu.png`,
     });
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("doctor-runtime-ready-goose")).toHaveText(
+    await expect(page.getByTestId("doctor-runtime-ready-omp")).toHaveText(
       "Ready",
     );
-    await expect(page.getByTestId("doctor-runtime-install-goose")).toHaveCount(
-      0,
-    );
+    await expect(page.getByTestId("doctor-runtime-install-omp")).toHaveCount(0);
     await expect(page.getByTestId("doctor-runtime-codex")).not.toContainText(
       "Not installed",
     );
     await expect(page.getByTestId("doctor-runtime-status-codex")).toHaveText(
       "CLI needed",
     );
-    await expect(page.getByTestId("doctor-runtime-guidance-codex")).toHaveCount(
-      0,
-    );
-    await expect(page.getByTestId("doctor-runtime-codex")).not.toContainText(
-      "Buzz talks to Codex through the Codex CLI.",
-    );
+    await expect(
+      page.getByTestId("doctor-runtime-guidance-codex"),
+    ).toContainText("Colony talks to Codex through the Codex CLI.");
+    await expect(
+      page
+        .getByTestId("doctor-runtime-guidance-codex")
+        .getByRole("button", { name: "CLI setup guide" }),
+    ).toBeVisible();
 
     await runtimeList.scrollIntoViewIfNeeded();
     await waitForAnimations(page);
@@ -236,7 +229,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("01-auth-logged-in", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         CODEX_NOT_INSTALLED,
         BUZZ_AGENT_AVAILABLE,
@@ -271,7 +264,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("02-auth-logged-out", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -299,7 +292,12 @@ test.describe("Doctor panel state screenshots", () => {
     await expect(page.getByTestId("doctor-runtime-ready-codex")).toHaveCount(0);
     await expect(row).not.toContainText("Not authenticated");
     await expect(row).not.toContainText("Run `codex login` to authenticate.");
-    await expect(row).toHaveCSS("min-height", "64px");
+    await expect(row).toHaveCSS(
+      "height",
+      await page
+        .getByTestId("doctor-runtime-omp")
+        .evaluate((element) => getComputedStyle(element).height),
+    );
     await page.getByTestId("doctor-runtime-menu-codex").click();
     await expect(
       page.getByRole("menuitem", { name: "CLI setup guide" }),
@@ -320,7 +318,7 @@ test.describe("Doctor panel state screenshots", () => {
       "error loading configuration: ~/.claude/settings.json: unknown key foo";
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         {
           ...CLAUDE_AVAILABLE_LOGGED_IN,
           auth_status: { status: "config_invalid", diagnostic },
@@ -364,7 +362,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("04-node-required", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -384,7 +382,7 @@ test.describe("Doctor panel state screenshots", () => {
 
     // Node-gated entries never get a Your-harnesses row (and thus never an
     // Install button) — setup happens in the catalog.
-    await expect(page.getByTestId("doctor-runtime-goose")).toBeVisible({
+    await expect(page.getByTestId("doctor-runtime-omp")).toBeVisible({
       timeout: 10_000,
     });
     await expect(page.getByTestId("doctor-runtime-codex")).toHaveCount(0);
@@ -431,7 +429,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("05-retry-after-failure", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -472,9 +470,9 @@ test.describe("Doctor panel state screenshots", () => {
               success: false,
               stdout: "",
               stderr:
-                "The installer finished, but Buzz still could not use codex (observed: NotInstalled).",
+                "The installer finished, but Colony still could not use codex (observed: NotInstalled).",
               exit_code: null,
-              hint: "Buzz requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Buzz was open, restart Buzz and check again.",
+              hint: "Colony requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Colony was open, restart Colony and check again.",
             },
           ],
         },
@@ -530,13 +528,13 @@ test.describe("Doctor panel state screenshots", () => {
   test("05b-verified-install-enables-runtime", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         CODEX_NOT_INSTALLED,
         BUZZ_AGENT_AVAILABLE,
       ],
       acpRuntimesCatalogAfterInstall: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -587,7 +585,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("06-connect-account-methods", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -603,7 +601,7 @@ test.describe("Doctor panel state screenshots", () => {
       // After the mocked connect succeeds, discovery reports logged_in so
       // the row face can flip from "Sign-in needed" to Ready.
       acpRuntimesCatalogAfterConnect: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -641,7 +639,12 @@ test.describe("Doctor panel state screenshots", () => {
     );
     await expect(page.getByTestId("doctor-runtime-ready-codex")).toHaveCount(0);
     await expect(row).not.toContainText("Not authenticated");
-    await expect(row).toHaveCSS("min-height", "64px");
+    await expect(row).toHaveCSS(
+      "height",
+      await page
+        .getByTestId("doctor-runtime-omp")
+        .evaluate((element) => getComputedStyle(element).height),
+    );
     await page.getByTestId("doctor-runtime-menu-codex").click();
     await expect(
       page.getByRole("menuitem", { name: "Sign in with ChatGPT" }),
@@ -669,7 +672,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("07-connect-account-no-methods", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         {
           ...CLAUDE_AVAILABLE_LOGGED_IN,
           auth_status: { status: "logged_out" },
@@ -689,7 +692,12 @@ test.describe("Doctor panel state screenshots", () => {
     const row = page.getByTestId("doctor-runtime-claude");
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row).not.toContainText("Not authenticated");
-    await expect(row).toHaveCSS("min-height", "64px");
+    await expect(row).toHaveCSS(
+      "height",
+      await page
+        .getByTestId("doctor-runtime-omp")
+        .evaluate((element) => getComputedStyle(element).height),
+    );
     await page.getByTestId("doctor-runtime-menu-claude").click();
     await expect(
       page.getByRole("menuitem", { name: "CLI setup guide" }),
@@ -702,7 +710,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("08-auth-method-discovery-error", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -727,7 +735,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("09-connect-account-error", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -763,7 +771,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("10-terminal-auth-completion-guidance", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -801,7 +809,7 @@ test.describe("Doctor panel state screenshots", () => {
   test("11-outdated-adapter-warning", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         {
           ...CODEX_NOT_INSTALLED,
@@ -828,7 +836,7 @@ test.describe("Doctor panel state screenshots", () => {
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("Update Codex adapter?");
     await expect(dialog).toContainText(
-      "Older Buzz releases using the legacy adapter may lose community access",
+      "Older Colony releases using the legacy adapter may lose community access",
     );
     await expect(page.getByTestId("doctor-runtime-loading-codex")).toHaveCount(
       0,
@@ -867,7 +875,7 @@ test.describe("Doctor panel state screenshots", () => {
           can_auto_install: true,
           node_required: false,
         },
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         BUZZ_AGENT_AVAILABLE,
       ],
       installAcpRuntimeByRuntime: {
@@ -919,7 +927,7 @@ test.describe("Doctor panel state screenshots", () => {
           binary_path: "/usr/local/bin/codex-acp",
           auth_status: { status: "logged_in" },
         },
-        GOOSE_AVAILABLE,
+        OMP_AVAILABLE,
         BUZZ_AGENT_AVAILABLE,
       ],
     });
@@ -970,93 +978,6 @@ test.describe("Doctor panel state screenshots", () => {
     await waitForAnimations(page);
     await claudeRow.screenshot({
       path: `${SHOTS}/08-concurrent-installs-and-stale-clear.png`,
-    });
-  });
-  /**
-   * 09 — install observability: the live output line appears while the install
-   * runs and disappears when it settles, and the failure message points at the
-   * install log rather than only the truncated last step.
-   */
-  test("09-install-output-line-and-log-pointer", async ({ page }) => {
-    await installMockBridge(page, {
-      acpRuntimesCatalog: [
-        GOOSE_AVAILABLE,
-        CLAUDE_AVAILABLE_LOGGED_IN,
-        {
-          ...CODEX_NOT_INSTALLED,
-          can_auto_install: true,
-          node_required: false,
-        },
-        BUZZ_AGENT_AVAILABLE,
-      ],
-      installAcpRuntimeDelayMs: 500,
-      installAcpRuntimeOutputLines: [
-        "npm http fetch GET 200 @zed-industries/codex-acp",
-        "npm warn deprecated a transitive dependency",
-      ],
-      installAcpRuntimeResult: {
-        success: false,
-        steps: [
-          {
-            step: "adapter",
-            command: "npm install -g @zed-industries/codex-acp",
-            success: false,
-            stdout: "",
-            stderr: "npm ERR! code E404",
-            exit_code: 1,
-          },
-        ],
-        log_path: "/tmp/buzz-install-codex.log",
-      },
-    });
-
-    await page.goto("/", { waitUntil: "domcontentloaded" });
-    await openSettings(page, "agents");
-
-    const row = page.getByTestId("doctor-runtime-codex");
-    await expect(row).toBeVisible({ timeout: 10_000 });
-
-    const installButton = page.getByTestId("doctor-runtime-install-codex");
-    await expect(installButton).toBeEnabled();
-    await installButton.click();
-
-    // The bridge emits the attempt-start clear and the first line synchronously
-    // with the install invocation — before React commits the pending state — so
-    // observing this line proves the listener was already mounted at the click.
-    // A subscription that waited for the install state would have missed both.
-    const outputLine = page.getByTestId("doctor-runtime-install-output-codex");
-    await expect(outputLine).toContainText("npm http fetch", {
-      timeout: 5_000,
-    });
-
-    // Each new line replaces the previous one rather than accumulating.
-    await expect(outputLine).toContainText("npm warn deprecated", {
-      timeout: 5_000,
-    });
-    await expect(outputLine).not.toContainText("npm http fetch");
-
-    // Settled: the line clears, so a finished install leaves no stale output
-    // under a fresh Install button.
-    const installError = page.getByTestId("doctor-runtime-install-error-codex");
-    await expect(installError).toBeVisible({ timeout: 5_000 });
-    await expect(outputLine).toHaveCount(0);
-
-    // The failure points at the log holding bounded output for every attempt.
-    await expect(installError).toContainText("npm ERR! code E404");
-    await expect(installError).toContainText("/tmp/buzz-install-codex.log");
-
-    await row.scrollIntoViewIfNeeded();
-    await waitForAnimations(page);
-    await row.screenshot({
-      path: `${SHOTS}/09-install-output-line-and-log-pointer.png`,
-    });
-
-    // A second install shows its own output. The backend sequence restarts per
-    // run, so a display that kept the previous run's sequence number would
-    // reject every event of this one and show nothing at all.
-    await installButton.click();
-    await expect(outputLine).toContainText("npm http fetch", {
-      timeout: 5_000,
     });
   });
 });

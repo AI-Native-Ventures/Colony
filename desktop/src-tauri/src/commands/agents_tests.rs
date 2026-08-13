@@ -20,7 +20,7 @@ fn bare_agent_record(
         relay_url: "ws://localhost:3000".to_string(),
         avatar_url: None,
         acp_command: "buzz-acp".to_string(),
-        agent_command: "goose".to_string(),
+        agent_command: "codex".to_string(),
         agent_command_override: None,
         agent_args: vec![],
         mcp_command: "".to_string(),
@@ -286,7 +286,7 @@ fn created_avatar_prefers_explicit_input() {
     let resolved = resolve_created_avatar_url(
         Some(" https://x/input.png "),
         Some("https://x/persona.png".to_string()),
-        "goose",
+        "codex",
     );
 
     assert_eq!(resolved.as_deref(), Some("https://x/input.png"));
@@ -295,7 +295,7 @@ fn created_avatar_prefers_explicit_input() {
 #[test]
 fn created_avatar_uses_persona_before_command_fallback() {
     let resolved =
-        resolve_created_avatar_url(None, Some(" https://x/persona.png ".to_string()), "goose");
+        resolve_created_avatar_url(None, Some(" https://x/persona.png ".to_string()), "codex");
 
     assert_eq!(resolved.as_deref(), Some("https://x/persona.png"));
 }
@@ -304,9 +304,9 @@ fn created_avatar_uses_persona_before_command_fallback() {
 fn created_avatar_uses_command_fallback_without_input_or_persona() {
     use crate::managed_agents::managed_agent_avatar_url;
 
-    let resolved = resolve_created_avatar_url(None, None, "goose");
+    let resolved = resolve_created_avatar_url(None, None, "codex");
 
-    assert_eq!(resolved, managed_agent_avatar_url("goose"));
+    assert_eq!(resolved, managed_agent_avatar_url("codex"));
 }
 
 fn profile(name: Option<&str>, picture: Option<&str>) -> crate::relay::AgentProfileInfo {
@@ -403,7 +403,7 @@ fn legacy_avatar_prefers_persona_over_corrupted_relay_picture() {
     let resolved = resolve_legacy_avatar(
         Some("https://x/persona.png".to_string()),
         Some("https://x/default-icon.png".to_string()),
-        "goose",
+        "codex",
     );
 
     assert_eq!(resolved, "https://x/persona.png");
@@ -411,7 +411,7 @@ fn legacy_avatar_prefers_persona_over_corrupted_relay_picture() {
 
 #[test]
 fn legacy_avatar_falls_back_to_relay_picture_without_persona() {
-    let resolved = resolve_legacy_avatar(None, Some("https://x/relay.png".to_string()), "goose");
+    let resolved = resolve_legacy_avatar(None, Some("https://x/relay.png".to_string()), "codex");
 
     assert_eq!(resolved, "https://x/relay.png");
 }
@@ -420,9 +420,9 @@ fn legacy_avatar_falls_back_to_relay_picture_without_persona() {
 fn legacy_avatar_falls_back_to_command_icon_when_no_persona_or_relay() {
     use crate::managed_agents::managed_agent_avatar_url;
 
-    let resolved = resolve_legacy_avatar(None, None, "goose");
+    let resolved = resolve_legacy_avatar(None, None, "codex");
 
-    assert_eq!(resolved, managed_agent_avatar_url("goose").unwrap());
+    assert_eq!(resolved, managed_agent_avatar_url("codex").unwrap());
 }
 
 #[test]
@@ -583,6 +583,33 @@ fn current_build_deploy_payload_forwards_compiled_policy() {
     };
     record.respond_to = RespondTo::Anyone;
     record.respond_to_allowlist = vec!["a".repeat(64)];
+
+fn deploy_payload_carries_the_full_behavioral_quad() {
+    let allow = "a".repeat(64);
+    let record: ManagedAgentRecord = serde_json::from_str(&format!(
+        r#"{{
+            "pubkey": "abcd1234",
+            "name": "test-agent",
+            "private_key_nsec": "nsec1fake",
+            "relay_url": "wss://localhost:3000",
+            "acp_command": "buzz-acp",
+            "agent_command": "codex",
+            "agent_args": [],
+            "mcp_command": "",
+            "turn_timeout_seconds": 320,
+            "system_prompt": null,
+            "parallelism": 4,
+            "respond_to": "allowlist",
+            "respond_to_allowlist": ["{allow}"],
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_started_at": null,
+            "last_stopped_at": null,
+            "last_exit_code": null,
+            "last_error": null
+        }}"#
+    ))
+    .expect("sample record");
 
     let payload = deploy_payload_json(
         &record,

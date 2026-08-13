@@ -29,7 +29,7 @@ const BAKED_DEFAULTS = [
 // → gate → submit); wire semantics stay component-test territory
 // (personaRuntimeModel.test.mjs).
 
-// Tyler's pubkey maps to gooseSurface in the mock bridge (runtimeId "goose"),
+// Tyler's pubkey maps to ompSurface in the mock bridge (runtimeId "omp"),
 // which supports LLM provider selection — same seed the readiness-screenshot
 // spec uses for its edit-dialog shot.
 const AGENT_PUBKEY = TEST_IDENTITIES.tyler.pubkey;

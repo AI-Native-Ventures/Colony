@@ -19,12 +19,7 @@ const RUNTIME_LOGOS: Record<string, string> = {
 export const PRESET_LOGOS: Record<string, string> = {
   devin: "/harness-logos/devin.svg",
   omp: "/harness-logos/omp.svg",
-  grok: "/harness-logos/grok.svg",
   opencode: "/harness-logos/opencode.svg",
-  kimi: "/harness-logos/kimi.png",
-  amp: "/harness-logos/amp.png",
-  hermes: "/harness-logos/hermes.png",
-  openclaw: "/harness-logos/openclaw.svg",
 };
 
 function isBuzzRuntime(runtime: AcpRuntimeCatalogEntry): boolean {
@@ -74,7 +69,6 @@ export function RuntimeIcon({
           "rounded-md object-contain",
           className,
           id === "omp" && "bg-[#0d0d0d] p-1",
-          id === "grok" && "bg-white p-1",
         )}
         onError={() => setImageFailed(true)}
         src={imageUrl}

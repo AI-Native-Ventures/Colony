@@ -137,9 +137,12 @@ test("getDefaultPersonaRuntime returns null when no runtime is available", () =>
 
 // ── runtimeSupportsLlmProviderSelection — provider gating ────────────────────
 
-test("runtimeSupportsLlmProviderSelection is true for buzz-agent and goose", () => {
+test("runtimeSupportsLlmProviderSelection is true for provider-selection runtimes", () => {
   assert.equal(runtimeSupportsLlmProviderSelection("buzz-agent"), true);
-  assert.equal(runtimeSupportsLlmProviderSelection("goose"), true);
+  assert.equal(runtimeSupportsLlmProviderSelection("omp"), true);
+  assert.equal(runtimeSupportsLlmProviderSelection("opencode"), true);
+  assert.equal(runtimeSupportsLlmProviderSelection("codex"), false);
+  assert.equal(runtimeSupportsLlmProviderSelection("claude"), false);
 });
 
 test("runtimeSupportsLlmProviderSelection is false for codex and claude", () => {
@@ -171,15 +174,15 @@ test("resetConfigForHarnessChange preserves compatible provider selection", () =
     provider: "anthropic",
   };
 
-  assert.deepEqual(resetConfigForHarnessChange(config, "goose"), {
+  assert.deepEqual(resetConfigForHarnessChange(config, "omp"), {
     env_vars: { KEEP_ME: "yes" },
     model: null,
-    preferred_runtime: "goose",
+    preferred_runtime: "omp",
     provider: "anthropic",
   });
 });
 
-test("resetConfigForHarnessChange does not carry relay mesh to Goose", () => {
+test("resetConfigForHarnessChange does not carry relay mesh to Oh My Pi", () => {
   const config = {
     env_vars: {},
     model: "auto",
@@ -187,7 +190,7 @@ test("resetConfigForHarnessChange does not carry relay mesh to Goose", () => {
     provider: "relay-mesh",
   };
 
-  assert.equal(resetConfigForHarnessChange(config, "goose").provider, null);
+  assert.equal(resetConfigForHarnessChange(config, "omp").provider, null);
 });
 
 // ── getPersonaModelOptions — codex/claude do not use global provider ──────────

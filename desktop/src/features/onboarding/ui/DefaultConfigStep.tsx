@@ -10,6 +10,7 @@ import {
 } from "@/features/agents/ui/AgentConfigFields";
 import { resetConfigForHarnessChange } from "@/features/agents/ui/agentConfigOptions";
 import { AgentDropdownSelect } from "@/features/agents/ui/agentConfigControls";
+import { createSaveCoalescer } from "./saveCoalescer";
 import { getBakedBuildEnv, type BakedEnvEntry } from "@/shared/api/tauri";
 import {
   getGlobalAgentConfig,
@@ -31,13 +32,11 @@ import {
   getReadyOnboardingRuntimes,
   getVisibleOnboardingRuntimes,
 } from "./onboardingRuntimeSelection";
-import type { DefaultConfigDraft, DefaultConfigStepActions } from "./types";
+import type { DefaultConfigStepActions } from "./types";
 
 type DefaultConfigStepProps = {
   actions: DefaultConfigStepActions;
   direction: OnboardingTransitionDirection;
-  draft: DefaultConfigDraft | null;
-  onSavingChange?: (isSaving: boolean) => void;
   readyRuntimeIds: readonly string[];
 };
 
@@ -46,41 +45,70 @@ function formatHarnessLabel(runtime: AcpRuntimeCatalogEntry | undefined) {
   return runtime.label;
 }
 
+/**
+ * Fresh-signup defaults for the global agent config: the shipped default
+ * harness is Oh My Pi, and the shipped default model is DeepSeek V4 Flash
+ * over the DeepSeek API (OpenAI-compatible base URL seeded so discovery and
+ * the harness resolve it without extra steps).
+ *
+ * Applied only when the config is COMPLETELY untouched (no preferred runtime,
+ * no provider, no model, no env vars) so existing or partially configured
+ * accounts are never overwritten.
+ */
+export function seedFreshSignupDefaults(
+  config: GlobalAgentConfig,
+  bakedEnv: BakedEnvEntry[] = [],
+): GlobalAgentConfig {
+  if (
+    config.preferred_runtime ||
+    config.provider ||
+    config.model ||
+    (config.env_vars && Object.keys(config.env_vars).length > 0)
+  ) {
+    return config;
+  }
+  // Internal builds bake a provider (BUZZ_AGENT_PROVIDER + credentials) into
+  // the app itself. Seeding DeepSeek over a baked provider would fight the
+  // build's intended default — only seed on OSS-style signups where the
+  // shipped default actually applies.
+  if (bakedEnv.some((entry) => entry.key === "BUZZ_AGENT_PROVIDER")) {
+    return config;
+  }
+  return {
+    ...config,
+    preferred_runtime: "omp",
+    provider: "deepseek",
+    model: "deepseek-v4-flash",
+    env_vars: {
+      ...(config.env_vars ?? {}),
+      OPENAI_COMPAT_BASE_URL: "https://api.deepseek.com",
+    },
+  };
+}
+
 function AgentDefaultsSection({
-  draft,
-  isPending,
-  onDraftChange,
   onPersistenceStateChange,
   readyRuntimeIds,
 }: {
-  draft: DefaultConfigDraft | null;
-  isPending: boolean;
-  onDraftChange: (draft: DefaultConfigDraft) => void;
   onPersistenceStateChange: (state: {
     canComplete: boolean;
-    commit: () => Promise<void>;
+    flush: () => Promise<void>;
   }) => void;
   readyRuntimeIds: readonly string[];
 }) {
   const runtimesQuery = useAcpRuntimesQuery();
-  const initialDraftRef = React.useRef(draft);
-  const [config, setConfig] = React.useState<GlobalAgentConfig>(
-    initialDraftRef.current?.config ?? EMPTY_GLOBAL_CONFIG,
-  );
-  const [isLoading, setIsLoading] = React.useState(
-    initialDraftRef.current === null,
-  );
-  const [isCustomProvider, setIsCustomProvider] = React.useState(
-    initialDraftRef.current?.isCustomProvider ?? false,
-  );
-  const [isCustomModelEditing, setIsCustomModelEditing] = React.useState(
-    initialDraftRef.current?.isCustomModelEditing ?? false,
-  );
+  const [config, setConfig] =
+    React.useState<GlobalAgentConfig>(EMPTY_GLOBAL_CONFIG);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [isCustomProvider, setIsCustomProvider] = React.useState(false);
+  const [isCustomModelEditing, setIsCustomModelEditing] = React.useState(false);
   const [bakedEnv, setBakedEnv] = React.useState<BakedEnvEntry[]>([]);
-  const configRef = React.useRef<GlobalAgentConfig>(
-    initialDraftRef.current?.config ?? EMPTY_GLOBAL_CONFIG,
-  );
-  const isDirtyRef = React.useRef(initialDraftRef.current?.isDirty ?? false);
+  const coalescerRef = React.useRef<{
+    enqueue: (value: GlobalAgentConfig) => void;
+    flush: () => Promise<void>;
+    cancel: () => void;
+  } | null>(null);
+  const [isSaving, setIsSaving] = React.useState(false);
   const [configIsValid, setConfigIsValid] = React.useState(false);
 
   React.useEffect(() => {
@@ -94,12 +122,16 @@ function AgentDefaultsSection({
 
       if (unmounted) return;
 
-      if (
-        initialDraftRef.current === null &&
-        configResult.status === "fulfilled"
-      ) {
-        configRef.current = configResult.value;
-        setConfig(configResult.value);
+      if (configResult.status === "fulfilled") {
+        // Fresh-account default: Oh My Pi + DeepSeek V4 Flash. The seed is a
+        // pure function of the loaded (empty) config, so the effect stays
+        // stable and the initial render already shows the shipped defaults.
+        setConfig(
+          seedFreshSignupDefaults(
+            configResult.value,
+            bakedEnvResult.status === "fulfilled" ? bakedEnvResult.value : [],
+          ),
+        );
       }
       if (bakedEnvResult.status === "fulfilled") {
         setBakedEnv(bakedEnvResult.value);
@@ -109,8 +141,25 @@ function AgentDefaultsSection({
 
     void loadDefaults();
 
+    // The coalescer serializes autosaves and drains any edit that arrived
+    // while a previous save was in flight. Cancel on unmount so a slow
+    // in-flight request never calls setState on an unmounted component.
+    const coalescer = createSaveCoalescer<GlobalAgentConfig>(
+      // set_global_agent_config returns a save result (config + restart
+      // counts); the coalescer round-trips the persisted config only.
+      async (next) => (await setGlobalAgentConfig(next)).config,
+      (saving) => {
+        if (!unmounted) setIsSaving(saving);
+      },
+      (saved) => {
+        if (!unmounted) setConfig(saved);
+      },
+    );
+    coalescerRef.current = coalescer;
+
     return () => {
       unmounted = true;
+      coalescer.cancel();
     };
   }, []);
 
@@ -160,38 +209,23 @@ function AgentDefaultsSection({
     [readyRuntimes],
   );
 
-  const updateDraft = React.useCallback(
-    (next: GlobalAgentConfig, overrides: Partial<DefaultConfigDraft> = {}) => {
-      isDirtyRef.current = overrides.isDirty ?? true;
-      configRef.current = next;
-      setConfig(next);
-      onDraftChange({
-        config: next,
-        isCustomModelEditing,
-        isCustomProvider,
-        isDirty: isDirtyRef.current,
-        ...overrides,
-      });
-    },
-    [isCustomModelEditing, isCustomProvider, onDraftChange],
-  );
-
   const handleHarnessChange = React.useCallback(
     (runtimeId: string) => {
       const next = resetConfigForHarnessChange(config, runtimeId);
       setIsCustomModelEditing(false);
       setIsCustomProvider(false);
-      updateDraft(next, {
-        isCustomModelEditing: false,
-        isCustomProvider: false,
-      });
+      setConfig(next);
+      coalescerRef.current?.enqueue(next);
     },
-    [config, updateDraft],
+    [config],
   );
 
+  // Auto-select the first ready harness in onboarding order (Oh My Pi when
+  // available) so a brand-new account lands on the shipped default rather
+  // than forcing a manual choice.
   React.useEffect(() => {
     if (configSurfaceLoading || selectedRuntimeId) return;
-    if (readyRuntimes.length !== 1) return;
+    if (readyRuntimes.length === 0) return;
     handleHarnessChange(readyRuntimes[0].id);
   }, [
     configSurfaceLoading,
@@ -200,34 +234,28 @@ function AgentDefaultsSection({
     selectedRuntimeId,
   ]);
 
-  const commitPersistence = React.useCallback(async () => {
-    if (!isDirtyRef.current) return;
-    const saved = await setGlobalAgentConfig(configRef.current);
-    isDirtyRef.current = false;
-    configRef.current = saved.config;
-    setConfig(saved.config);
-  }, []);
+  const flushPersistence = React.useCallback(
+    () => coalescerRef.current?.flush() ?? Promise.resolve(),
+    [],
+  );
   React.useEffect(() => {
     onPersistenceStateChange({
       // configIsValid comes from AgentConfigFields' onValidityChange and
       // covers model + provider credentials — a harness selection alone is
       // not a working default (e.g. buzz-agent with no provider configured).
-      canComplete: selectedRuntimeId.length > 0 && configIsValid,
-      commit: commitPersistence,
+      canComplete: selectedRuntimeId.length > 0 && configIsValid && !isSaving,
+      flush: flushPersistence,
     });
   }, [
-    commitPersistence,
     configIsValid,
+    flushPersistence,
+    isSaving,
     onPersistenceStateChange,
     selectedRuntimeId,
   ]);
 
   return (
-    <fieldset
-      aria-busy={isPending}
-      className="w-full space-y-4 text-left text-sm disabled:pointer-events-none disabled:opacity-70"
-      disabled={isPending}
-    >
+    <section className="w-full space-y-4 text-left text-sm">
       {configSurfaceLoading ? (
         <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
           <Spinner className="h-4 w-4 border-2" />
@@ -264,25 +292,15 @@ function AgentDefaultsSection({
             config={config}
             isCustomModelEditing={isCustomModelEditing}
             isCustomProvider={isCustomProvider}
-            onConfigChange={updateDraft}
-            onCustomModelEditingChange={(next) => {
-              setIsCustomModelEditing(next);
-              onDraftChange({
-                config: configRef.current,
-                isCustomModelEditing: next,
-                isCustomProvider,
-                isDirty: isDirtyRef.current,
-              });
+            onConfigChange={(next) => {
+              // Always apply optimistically so the UI never reverts mid-save,
+              // then enqueue the persist — the coalescer serialises multiple
+              // rapid edits into a single trailing request.
+              setConfig(next);
+              coalescerRef.current?.enqueue(next);
             }}
-            onIsCustomProviderChange={(next) => {
-              setIsCustomProvider(next);
-              onDraftChange({
-                config: configRef.current,
-                isCustomModelEditing,
-                isCustomProvider: next,
-                isDirty: isDirtyRef.current,
-              });
-            }}
+            onCustomModelEditingChange={setIsCustomModelEditing}
+            onIsCustomProviderChange={setIsCustomProvider}
             onValidityChange={setConfigIsValid}
             placeholderClassName="text-foreground/70"
             runtimeFileConfig={runtimeFileConfig}
@@ -293,7 +311,7 @@ function AgentDefaultsSection({
           />
         </div>
       )}
-    </fieldset>
+    </section>
   );
 }
 
@@ -305,45 +323,28 @@ function AgentDefaultsSection({
 export function DefaultConfigStep({
   actions,
   direction,
-  draft,
-  onSavingChange,
   readyRuntimeIds,
 }: DefaultConfigStepProps) {
   const [persistenceState, setPersistenceState] = React.useState<{
     canComplete: boolean;
-    commit: () => Promise<void>;
-  }>({ canComplete: false, commit: () => Promise.resolve() });
-  const [isSaving, setIsSaving] = React.useState(false);
-  const [saveError, setSaveError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    onSavingChange?.(isSaving);
-    return () => onSavingChange?.(false);
-  }, [isSaving, onSavingChange]);
+    flush: () => Promise<void>;
+  }>({ canComplete: false, flush: () => Promise.resolve() });
+  const [completionError, setCompletionError] = React.useState<string | null>(
+    null,
+  );
+  const [isCompleting, setIsCompleting] = React.useState(false);
 
   const handleComplete = React.useCallback(async () => {
-    if (isSaving) return;
-    setIsSaving(true);
-    setSaveError(null);
+    setIsCompleting(true);
+    setCompletionError(null);
     try {
-      await persistenceState.commit();
-      actions.discardDraft();
+      await persistenceState.flush();
       actions.complete();
-    } catch (cause) {
-      setSaveError(
-        cause instanceof Error
-          ? cause.message
-          : "Couldn’t save model settings.",
-      );
-    } finally {
-      setIsSaving(false);
+    } catch {
+      setCompletionError("Couldn't save your default harness. Try again.");
+      setIsCompleting(false);
     }
-  }, [actions, isSaving, persistenceState]);
-
-  const handleSkip = React.useCallback(() => {
-    actions.discardDraft();
-    actions.complete();
-  }, [actions]);
+  }, [actions, persistenceState]);
 
   return (
     <OnboardingSlideTransition
@@ -366,12 +367,17 @@ export function DefaultConfigStep({
       <div className="flex w-full flex-1 items-center justify-center py-10">
         <div className="w-full max-w-[328px]">
           <AgentDefaultsSection
-            draft={draft}
-            isPending={isSaving}
-            onDraftChange={actions.updateDraft}
             onPersistenceStateChange={setPersistenceState}
             readyRuntimeIds={readyRuntimeIds}
           />
+          {completionError ? (
+            <p
+              className="mt-3 text-center text-xs text-destructive"
+              role="alert"
+            >
+              {completionError}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -379,32 +385,22 @@ export function DefaultConfigStep({
         <Button
           className={`${ONBOARDING_PRIMARY_CTA_CLASS} text-sm`}
           data-testid="onboarding-finish"
-          disabled={!persistenceState.canComplete || isSaving}
+          disabled={!persistenceState.canComplete || isCompleting}
           onClick={() => void handleComplete()}
           type="button"
         >
-          {isSaving ? "Saving…" : "Next"}
+          Next
         </Button>
+
         <Button
-          className="h-9 whitespace-nowrap rounded-full px-6 text-sm hover:bg-foreground/10"
-          data-testid="onboarding-config-skip"
-          disabled={isSaving}
-          onClick={handleSkip}
+          className="h-9 rounded-full bg-foreground/10 px-6 text-sm hover:bg-foreground/15"
+          data-testid="onboarding-back"
+          onClick={actions.back}
           type="button"
           variant="ghost"
         >
-          Skip for now
+          Back
         </Button>
-
-        {saveError ? (
-          <p
-            className="max-w-[440px] text-center text-xs text-destructive"
-            data-testid="onboarding-config-save-error"
-            role="alert"
-          >
-            Couldn’t save model settings. {saveError} Try again.
-          </p>
-        ) : null}
       </OnboardingFooter>
     </OnboardingSlideTransition>
   );

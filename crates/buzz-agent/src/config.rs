@@ -887,16 +887,30 @@ impl Config {
                 env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
                 OpenAiApi::Auto, // unused for Anthropic
             ),
-            Provider::OpenAi => (
-                req("OPENAI_COMPAT_API_KEY")?,
-                resolve_model(
-                    buzz_agent_model.as_deref(),
-                    env("OPENAI_COMPAT_MODEL").as_deref(),
+            Provider::OpenAi => {
+                let openai_compat_default_base = if matches!(
+                    env("BUZZ_AGENT_PROVIDER")
+                        .as_deref()
+                        .map(str::trim)
+                        .map(str::to_ascii_lowercase)
+                        .as_deref(),
+                    Some("deepseek")
+                ) {
+                    "https://api.deepseek.com/v1"
+                } else {
+                    "https://api.openai.com/v1"
+                };
+                (
+                    req("OPENAI_COMPAT_API_KEY")?,
+                    resolve_model(
+                        buzz_agent_model.as_deref(),
+                        env("OPENAI_COMPAT_MODEL").as_deref(),
+                    )
+                    .ok_or_else(|| "config: OPENAI_COMPAT_MODEL required".to_string())?,
+                    env_or("OPENAI_COMPAT_BASE_URL", openai_compat_default_base),
+                    parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
                 )
-                .ok_or_else(|| "config: OPENAI_COMPAT_MODEL required".to_string())?,
-                env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
-                parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
-            ),
+            }
             Provider::Databricks | Provider::DatabricksV2 => (
                 env("DATABRICKS_TOKEN").unwrap_or_default(),
                 resolve_model(buzz_agent_model.as_deref(), databricks_model.as_deref())
@@ -1133,8 +1147,10 @@ fn resolve_provider(
                 "anthropic" => Err(
                     "config: ANTHROPIC_API_KEY required".into(),
                 ),
-                "openai" | "openai-compat" if present_nonempty(openai_key) => Ok(Provider::OpenAi),
-                "openai" | "openai-compat" => Err(
+                "openai" | "openai-compat" | "deepseek" if present_nonempty(openai_key) => {
+                    Ok(Provider::OpenAi)
+                }
+                "openai" | "openai-compat" | "deepseek" => Err(
                     "config: OPENAI_COMPAT_API_KEY required".into(),
                 ),
                 "databricks" => Ok(Provider::Databricks),

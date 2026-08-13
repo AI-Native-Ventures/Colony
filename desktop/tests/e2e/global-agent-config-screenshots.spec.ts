@@ -146,16 +146,16 @@ const CATALOG_NONE_AVAILABLE = [
     underlying_cli_path: null,
   },
   {
-    id: "goose",
-    label: "Goose",
+    id: "omp",
+    label: "Oh My Pi",
     avatar_url: "",
     availability: "not_installed",
-    command: "goose",
+    command: "omp",
     binary_path: null,
     default_args: [],
     mcp_command: null,
-    install_hint: "Install Goose to use this runtime.",
-    install_instructions_url: "https://github.com/block/goose",
+    install_hint: "Install Oh My Pi to use this runtime.",
+    install_instructions_url: "https://github.com/can1357/oh-my-pi",
     can_auto_install: false,
     underlying_cli_path: null,
   },
@@ -284,15 +284,15 @@ test.describe("global agent config screenshots", () => {
   }) => {
     await installMockBridge(page, {
       globalAgentConfig: {
-        preferred_runtime: "goose",
+        preferred_runtime: "omp",
         provider: "databricks_v2",
-        model: "goose-claude-4-6-opus",
+        model: "omp-claude-4-6-opus",
         env_vars: {},
       },
       runtimeFileConfigs: {
-        goose: {
+        omp: {
           provider: "databricks_v2",
-          model: "goose-claude-4-6-opus",
+          model: "omp-claude-4-6-opus",
           satisfiedEnvKeys: ["DATABRICKS_HOST"],
         },
       },
@@ -513,7 +513,7 @@ test.describe("global agent config screenshots", () => {
     );
 
     const harness = defaultsDialog.getByTestId("global-agent-default-harness");
-    await expect(harness).toHaveText("Colony Agent");
+    await expect(harness).toHaveText("Oh My Pi");
     const provider = defaultsDialog.getByTestId("global-agent-provider");
     await expect(provider).toBeVisible();
     await waitForAnimations(page);
@@ -588,7 +588,7 @@ test.describe("global agent config screenshots", () => {
     });
   });
 
-  test("unset defaults persist the visible Colony Agent fallback", async ({
+  test("unset defaults persist the visible Oh My Pi fallback", async ({
     page,
   }) => {
     await installMockBridge(page);
@@ -601,7 +601,7 @@ test.describe("global agent config screenshots", () => {
     const defaultsDialog = page.getByTestId("agent-ai-defaults-dialog");
     await expect(
       defaultsDialog.getByTestId("global-agent-default-harness"),
-    ).toHaveText("Colony Agent");
+    ).toHaveText("Oh My Pi");
 
     await defaultsDialog.getByTestId("global-agent-provider").click();
     await page.getByTestId("global-agent-provider-option-anthropic").click();
@@ -623,7 +623,7 @@ test.describe("global agent config screenshots", () => {
       ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config", null),
     );
     expect(saved).toMatchObject({
-      preferred_runtime: "buzz-agent",
+      preferred_runtime: "omp",
       provider: "anthropic",
     });
   });
@@ -771,7 +771,7 @@ test.describe("global agent config screenshots", () => {
       defaultsSection.getByText("Harness", { exact: true }),
     ).toBeVisible();
     await expect(
-      defaultsSection.getByText("Colony Agent", { exact: true }),
+      defaultsSection.getByText("Oh My Pi", { exact: true }),
     ).toBeVisible();
 
     // Global provider satisfies the provider-default rule → submit enabled.

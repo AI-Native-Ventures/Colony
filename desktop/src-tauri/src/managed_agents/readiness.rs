@@ -480,7 +480,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
             Some("DATABRICKS_MODEL")
         }
         Some("anthropic") => Some("ANTHROPIC_MODEL"),
-        Some("openai") | Some("openai-compat") => Some("OPENAI_COMPAT_MODEL"),
+        Some("openai") | Some("openai-compat") | Some("deepseek") => Some("OPENAI_COMPAT_MODEL"),
         Some("openrouter") => Some("OPENROUTER_MODEL"),
         _ => None,
     };
@@ -510,7 +510,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
                     key: "ANTHROPIC_API_KEY".to_string(),
                 });
             }
-        Some("openai")
+        Some("openai") | Some("deepseek")
             if env_key_missing("OPENAI_COMPAT_API_KEY") => {
                 missing.push(Requirement::EnvKey {
                     key: "OPENAI_COMPAT_API_KEY".to_string(),
@@ -840,12 +840,12 @@ mod tests {
     }
 
     #[test]
-    fn goose_with_provider_and_model_and_key_is_ready() {
+    fn provider_selection_runtime_with_provider_and_model_and_key_is_ready() {
         let env = make_env(
-            "goose",
+            "buzz-agent",
             env_with(&[
-                ("GOOSE_PROVIDER", "anthropic"),
-                ("GOOSE_MODEL", "claude-opus-4-5"),
+                ("BUZZ_AGENT_PROVIDER", "anthropic"),
+                ("BUZZ_AGENT_MODEL", "claude-opus-4-5"),
                 ("ANTHROPIC_API_KEY", "sk-test"),
             ]),
         );

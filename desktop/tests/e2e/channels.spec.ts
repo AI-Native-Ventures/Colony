@@ -2134,7 +2134,7 @@ test("members sidebar exposes view-activity for a viewer-owned relay agent", asy
       {
         pubkey: OWNED_RELAY_AGENT_PUBKEY,
         name: "nadia",
-        agentType: "goose",
+        agentType: "omp",
         capabilities: ["search", "summaries"],
         channelNames: ["agents"],
         respondTo: "anyone",

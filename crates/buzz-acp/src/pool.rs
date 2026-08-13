@@ -31,8 +31,8 @@ use uuid::Uuid;
 
 use crate::acp::{
     extract_model_config_options, extract_model_state, model_in_catalog,
-    resolve_model_switch_method, AcpClient, AcpError, EnvVar, McpServer, ModelSwitchMethod,
-    StopReason, SystemPromptTransport,
+    qualified_model_in_catalog, resolve_model_switch_candidate, resolve_model_switch_method,
+    AcpClient, AcpError, EnvVar, McpServer, ModelSwitchMethod, StopReason, SystemPromptTransport,
 };
 use crate::config::{compose_session_title, DedupMode, PermissionMode};
 use crate::observer;
@@ -231,6 +231,11 @@ pub struct OwnedAgent {
     pub model_capabilities: Option<AgentModelCapabilities>,
     /// Desired model ID (from `Config.model`). Applied after every `session_new_full()`.
     pub desired_model: Option<String>,
+    /// LLM provider the desired model belongs to (from `Config.provider`).
+    /// Used to qualify an unqualified desired model id against
+    /// provider-prefixed catalogs (`provider/model`) when the plain id is
+    /// absent — Oh My Pi / OpenCode advertise their models provider-qualified.
+    pub provider: Option<String>,
     /// Whether `desired_model` was set by a live `SwitchModel` control signal
     /// (as opposed to being derived from config/persona at spawn). Used by the
     /// desktop reader to distinguish a genuine runtime override from a stale
@@ -921,12 +926,16 @@ impl AgentPool {
 
         // Pre-cancel guard against the cached catalog. None = catalog not yet
         // populated (no session ever created); defer validation to apply time.
+        // The provider-qualified id is accepted as a fallback so a live pick
+        // of an unqualified model id still passes for provider-prefixed
+        // catalogs (Oh My Pi / OpenCode advertise `provider/model`).
         if let Some(caps) = agent.model_capabilities.as_ref() {
             if !model_in_catalog(
                 &caps.config_options_raw,
                 caps.available_models_raw.as_ref(),
                 model_id,
-            ) {
+            ) && !qualified_model_in_catalog(caps, model_id, agent.provider.as_deref())
+            {
                 return IdleSwitchResult::UnsupportedModel;
             }
         }
@@ -1207,9 +1216,9 @@ async fn create_session_and_apply_model(
     // Track whether the switch succeeded so session_config_captured reflects
     // the post-switch state (not the pre-switch desired state).
     let switch_succeeded = if let Some(ref desired) = agent.desired_model {
-        match resolve_model_switch_method(&resp.raw, desired) {
-            Some(method) => {
-                apply_model_switch(&mut agent.acp, &resp.session_id, desired, &method).await?;
+        match resolve_model_switch_candidate(&resp.raw, desired, agent.provider.as_deref()) {
+            Some((method, applied)) => {
+                apply_model_switch(&mut agent.acp, &resp.session_id, &applied, &method).await?;
                 true
             }
             None => {
@@ -7220,6 +7229,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             state: SessionState::default(),
             model_capabilities: None,
             desired_model: None,
+            provider: None,
             model_overridden: false,
             agent_name: "unknown".into(),
             goose_system_prompt_supported: None,
@@ -7279,6 +7289,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             state: SessionState::default(),
             model_capabilities: None,
             desired_model: None,
+            provider: None,
             model_overridden: false,
             agent_name: "unknown".into(),
             goose_system_prompt_supported: None,

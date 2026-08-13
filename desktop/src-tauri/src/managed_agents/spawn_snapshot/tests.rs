@@ -28,7 +28,7 @@ fn record() -> ManagedAgentRecord {
         relay_url: "ws://localhost:3000".into(),
         avatar_url: None,
         acp_command: "buzz-acp".into(),
-        agent_command: "goose".into(),
+        agent_command: "claude".into(),
         agent_command_override: None,
         agent_args: vec![],
         mcp_command: String::new(),
@@ -119,14 +119,14 @@ fn materializing_runtime_keeps_snapshot_stable() {
     // otherwise every running persona-linked agent would show a spurious
     // restart badge right after migration. Pre-migration the command resolves
     // through the persona fallback; post-migration through record.runtime.
-    // Same persona, same runtime, same command → equal snapshots.
-    let personas = vec![persona("p1", Some("goose"), "Persona prompt.")];
+    // Same persona, same runtime, same command → same hash.
+    let personas = vec![persona("p1", Some("claude"), "Persona prompt.")];
 
     let mut pre = record();
     pre.persona_id = Some("p1".into());
 
     let mut post = pre.clone();
-    post.runtime = Some("goose".into());
+    post.runtime = Some("claude".into());
 
     assert_eq!(
         snapshot(
@@ -176,8 +176,8 @@ fn persona_runtime_edit_changes_snapshot() {
     // runtime change means a restart WOULD change what runs → badge trips.
     let mut rec = record();
     rec.persona_id = Some("pers".into());
-    let before = [persona("pers", Some("goose"), "prompt")];
-    let after = [persona("pers", Some("claude"), "prompt")];
+    let before = [persona("pers", Some("claude"), "prompt")];
+    let after = [persona("pers", Some("codex"), "prompt")];
     assert_ne!(
         snapshot(&rec, &before, &[], "wss://ws.example", &Default::default()),
         snapshot(&rec, &after, &[], "wss://ws.example", &Default::default())
@@ -191,8 +191,8 @@ fn persona_prompt_edit_changes_snapshot() {
     // restart → the badge must trip.
     let mut rec = record();
     rec.persona_id = Some("pers".into());
-    let before = [persona("pers", Some("goose"), "old prompt")];
-    let after = [persona("pers", Some("goose"), "new prompt")];
+    let before = [persona("pers", Some("claude"), "old prompt")];
+    let after = [persona("pers", Some("claude"), "new prompt")];
     assert_ne!(
         snapshot(&rec, &before, &[], "wss://ws.example", &Default::default()),
         snapshot(&rec, &after, &[], "wss://ws.example", &Default::default())
@@ -331,7 +331,7 @@ fn resnapshot_does_not_clobber_record_quad_with_definition_absent_quad() {
     // snapshot identically whether or not its definition carries a quad —
     // activation of the definition-level defaults must never reach through
     // spawn and overwrite instance state.
-    let quadless_definition = vec![persona("p1", Some("goose"), "Persona prompt.")];
+    let quadless_definition = vec![persona("p1", Some("claude"), "Persona prompt.")];
 
     let mut rec = record();
     rec.persona_id = Some("p1".into());
@@ -384,10 +384,10 @@ fn empty_prompt_snapshots_like_absent_prompt() {
 fn definition_runtime_edit_changes_snapshot_for_materialized_record() {
     let mut rec = record();
     rec.persona_id = Some("pers".into());
-    rec.runtime = Some("goose".into()); // materialized runtime on instance
+    rec.runtime = Some("claude".into()); // materialized runtime on instance
 
-    let before = [persona("pers", Some("goose"), "prompt")];
-    let after = [persona("pers", Some("claude"), "prompt")];
+    let before = [persona("pers", Some("claude"), "prompt")];
+    let after = [persona("pers", Some("codex"), "prompt")];
     assert_ne!(
         snapshot(&rec, &before, &[], "wss://ws.example", &Default::default()),
         snapshot(&rec, &after, &[], "wss://ws.example", &Default::default()),
@@ -401,11 +401,11 @@ fn definition_runtime_edit_changes_snapshot_for_materialized_record() {
 fn known_runtime_pin_yields_to_definition_runtime_change() {
     let mut rec = record();
     rec.persona_id = Some("pers".into());
-    rec.runtime = Some("goose".into()); // materialized runtime
-    rec.agent_command_override = Some("goose".into()); // create-time pin
+    rec.runtime = Some("claude".into()); // materialized runtime
+    rec.agent_command_override = Some("claude".into()); // create-time pin
 
-    let before = [persona("pers", Some("goose"), "prompt")];
-    let after = [persona("pers", Some("claude"), "prompt")];
+    let before = [persona("pers", Some("claude"), "prompt")];
+    let after = [persona("pers", Some("codex"), "prompt")];
     assert_ne!(
         snapshot(&rec, &before, &[], "wss://ws.example", &Default::default()),
         snapshot(&rec, &after, &[], "wss://ws.example", &Default::default()),
@@ -419,10 +419,10 @@ fn known_runtime_pin_yields_to_definition_runtime_change() {
 fn custom_command_override_beats_definition_runtime_change() {
     let mut rec = record();
     rec.persona_id = Some("pers".into());
-    rec.runtime = Some("goose".into()); // materialized runtime
+    rec.runtime = Some("claude".into()); // materialized runtime
     rec.agent_command_override = Some("/opt/custom/my-agent".into());
 
-    let before = [persona("pers", Some("goose"), "prompt")];
+    let before = [persona("pers", Some("claude"), "prompt")];
     let after = [persona("pers", Some("claude"), "prompt")];
     assert_eq!(
         snapshot(&rec, &before, &[], "wss://ws.example", &Default::default()),
@@ -437,7 +437,7 @@ fn custom_command_override_beats_definition_runtime_change() {
 fn missing_definition_leaves_materialized_runtime_in_snapshot() {
     let mut rec = record();
     rec.persona_id = Some("missing".into());
-    rec.runtime = Some("goose".into()); // materialized runtime
+    rec.runtime = Some("claude".into()); // materialized runtime
 
     let no_personas: &[AgentDefinition] = &[];
 
@@ -471,7 +471,7 @@ fn global_model_change_trips_snapshot_for_linked_inherited_agent() {
     rec.persona_id = Some("p1".into());
     rec.model = Some("stale-record-model".into());
 
-    let personas = vec![persona("p1", Some("goose"), "prompt")];
+    let personas = vec![persona("p1", Some("claude"), "prompt")];
 
     let global_a = GlobalAgentConfig {
         model: Some("model-a".to_string()),
@@ -544,7 +544,7 @@ fn linked_instance_stale_prompt_bytes_are_inert_at_snapshot_time() {
     let mut matching_bytes = rec.clone();
     matching_bytes.system_prompt = Some("live prompt".into());
 
-    let personas = [persona("p1", Some("goose"), "live prompt")];
+    let personas = [persona("p1", Some("claude"), "live prompt")];
 
     assert_eq!(
         snapshot(
@@ -640,8 +640,8 @@ fn linked_instance_prompt_model_provider_resolve_from_one_call() {
     rec.persona_id = Some("p1".into());
     rec.system_prompt = Some("stale".into());
 
-    let before = [persona("p1", Some("goose"), "old definition prompt")];
-    let after = [persona("p1", Some("goose"), "new definition prompt")];
+    let before = [persona("p1", Some("claude"), "old definition prompt")];
+    let after = [persona("p1", Some("claude"), "new definition prompt")];
 
     assert_ne!(
         snapshot(&rec, &before, &[], "wss://ws.example", &Default::default()),

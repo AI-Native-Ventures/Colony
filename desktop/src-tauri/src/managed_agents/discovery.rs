@@ -26,7 +26,6 @@ pub(crate) use runtime_metadata::KnownAcpRuntime;
 // these two; `parallelism` keys caps on the normalizer below.
 pub(crate) use presets::{canonical_harness_command, command_for_runtime_id};
 
-const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
 const BUZZ_AGENT_AVATAR_URL: &str =
@@ -69,12 +68,6 @@ fn common_binary_paths() -> &'static [PathBuf] {
                         .join("Codex")
                         .join("bin"),
                 );
-            }
-            // Goose's legacy Windows installer (superseded by #2680) unpacked
-            // to %USERPROFILE%\goose\goose.exe, which is on no standard PATH —
-            // without this probe those installs stay permanently undiscovered.
-            if let Some(profile) = std::env::var_os("USERPROFILE") {
-                paths.push(PathBuf::from(profile).join("goose"));
             }
         }
         paths
@@ -293,9 +286,7 @@ pub(crate) fn known_acp_runtime_exact(id: &str) -> Option<&'static KnownAcpRunti
 /// the default cannot drift from the provider definition. Falls back to the id
 /// if the catalog entry is missing.
 ///
-/// The previous default was the bare global `goose`, which is not on PATH on a
-/// stock Windows install: every worker failed with `program not found`. The
-/// bundled `buzz-agent` ships with the app and resolves on every platform.
+/// The bundled `buzz-agent` ships with the app and resolves on every platform.
 pub fn default_agent_command() -> String {
     known_acp_runtime_exact("buzz-agent")
         .and_then(|p| p.commands.first().copied())
@@ -478,7 +469,7 @@ pub fn try_record_agent_command(
 
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
-        "goose" => Some(vec!["acp".to_string()]),
+        "omp" | "opencode" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
         | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
@@ -1422,6 +1413,11 @@ struct PresetHarness {
     args: &'static [&'static str],
     install_instructions_url: &'static str,
     install_hint: &'static str,
+    /// Env var the harness reads to select its LLM provider, when it has one.
+    /// `None` for harnesses whose provider is fixed or embedded in the model
+    /// id (Claude Code, Codex). `Some` renders the provider switcher and
+    /// gates provider-scoped model discovery.
+    provider_env_var: Option<&'static str>,
     /// Vendor CLI the ACP command wraps, when the preset is an adapter
     /// (e.g. Amp's `amp-acp` wraps the separately-installed `amp` CLI).
     /// Consulted only when the adapter is absent, so `AdapterMissing`
@@ -1488,7 +1484,7 @@ fn preset_catalog_entry(
         default_args,
         mcp_command: None,
         model_env_var: None,
-        provider_env_var: None,
+        provider_env_var: def.provider_env_var.map(str::to_string),
         thinking_env_var: None,
         max_tokens_env_var: None,
         context_limit_env_var: None,
@@ -1515,30 +1511,16 @@ fn preset_catalog_entry(
 
 const PRESET_HARNESSES: &[PresetHarness] = &[
     PresetHarness {
-        id: "cursor",
-        label: "Cursor",
-        command: "cursor-agent",
-        args: &["acp"],
-        install_instructions_url: "https://cursor.com/downloads",
-        install_hint: "Colony talks to Cursor through the cursor-agent CLI's ACP mode.",
-        underlying_cli: None,
-    },
-    PresetHarness {
         id: "omp",
         label: "Oh My Pi",
         command: "omp",
         args: &["acp"],
         install_instructions_url: "https://github.com/can1357/oh-my-pi",
         install_hint: "Colony talks to Oh My Pi through its CLI's ACP mode (omp acp).",
-        underlying_cli: None,
-    },
-    PresetHarness {
-        id: "grok",
-        label: "Grok Build",
-        command: "grok",
-        args: &["agent", "--always-approve", "stdio"],
-        install_instructions_url: "https://build.x.ai/docs",
-        install_hint: "Colony talks to Grok Build through its CLI's agent stdio mode.",
+        // BUZZ_ACP_PROVIDER is injected by the desktop for every harness and
+        // consumed by buzz-acp to qualify unqualified model ids against
+        // provider-prefixed ACP catalogs (omp model ids are `provider/model`).
+        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
         underlying_cli: None,
     },
     PresetHarness {
@@ -1548,49 +1530,7 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://opencode.ai/docs",
         install_hint: "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
-        underlying_cli: None,
-    },
-    PresetHarness {
-        id: "kimi",
-        label: "Kimi Code",
-        command: "kimi",
-        args: &["acp"],
-        install_instructions_url: "https://kimi.ai/download",
-        install_hint: "Colony talks to Kimi Code through its CLI's ACP mode (kimi acp).",
-        underlying_cli: None,
-    },
-    PresetHarness {
-        id: "amp",
-        label: "Amp",
-        command: "amp-acp",
-        args: &[],
-        install_instructions_url: "https://github.com/tao12345666333/amp-acp",
-        install_hint: "Colony talks to the Amp CLI through the amp-acp adapter. Follow the setup guide to install the adapter so the amp-acp command is on your PATH.",
-        underlying_cli: Some("amp"),
-    },
-    PresetHarness {
-        id: "hermes",
-        label: "Hermes Agent",
-        command: "hermes-acp",
-        args: &[],
-        install_instructions_url: "https://hermes-agent.nousresearch.com",
-        install_hint: "Colony talks to Hermes Agent through its hermes-acp command.",
-        underlying_cli: None,
-    },
-    PresetHarness {
-        id: "openclaw",
-        label: "OpenClaw",
-        command: "openclaw",
-        args: &["acp"],
-        install_instructions_url: "https://docs.openclaw.ai/start/getting-started",
-        install_hint: "Colony talks to OpenClaw through its ACP mode (openclaw acp), which relies on the OpenClaw Gateway daemon. Follow the setup guide to install both.\n\n\
-            ⚠️  Execution-locus note: `openclaw acp` runs tools inside the \
-            OpenClaw Gateway daemon, not in the Desktop process. \
-            Desktop-injected BUZZ_* env vars are visible to the `openclaw` \
-            harness process itself, but do NOT automatically reach the \
-            Gateway's execution environment. If your tools or agent logic \
-            needs BUZZ_* credentials at execution time, set them on the \
-            Gateway's own environment separately.",
+        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
         underlying_cli: None,
     },
 ];
@@ -1757,11 +1697,17 @@ pub fn discover_acp_runtimes_from(
                 command,
                 binary_path,
                 default_args,
-                // Custom harnesses are plain ACP — no MCP sidecar, no env-var
-                // model switching, no thinking knobs.
+                // Custom harnesses are plain ACP — no MCP sidecar and no
+                // thinking knobs, but the provider switcher + provider-scoped
+                // model discovery are driven through the universal
+                // BUZZ_ACP_PROVIDER env var (injected at spawn for every
+                // harness). The model field stays ACP-native/optional:
+                // BUZZ_ACP_MODEL is injected unconditionally at spawn, and a
+                // harness without an ACP model catalog (e.g. prime-agent)
+                // keeps using its own default when no model is selected.
                 mcp_command: None,
                 model_env_var: None,
-                provider_env_var: None,
+                provider_env_var: Some("BUZZ_ACP_PROVIDER".to_string()),
                 thinking_env_var: None,
                 max_tokens_env_var: None,
                 context_limit_env_var: None,
