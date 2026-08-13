@@ -50,6 +50,7 @@ pub fn sync_registration(_app: &tauri::AppHandle, _hs: &HuddleState) {}
 /// The plugin is omitted from test builds: linking it into the lib-test
 /// binary makes it fail to load on Windows (STATUS_ENTRYPOINT_NOT_FOUND)
 /// before any test runs.
+#[cfg_attr(test, allow(dead_code))]
 pub fn press_release_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;

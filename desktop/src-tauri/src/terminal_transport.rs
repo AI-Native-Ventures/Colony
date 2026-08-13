@@ -66,6 +66,7 @@ pub(crate) struct FramePublisher {
     subscription: Option<Subscription>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl FramePublisher {
     pub(crate) fn new(applied: Viewport) -> Self {
         Self {

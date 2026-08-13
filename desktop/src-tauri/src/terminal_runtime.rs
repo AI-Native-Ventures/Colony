@@ -321,6 +321,7 @@ impl TerminalSessions {
         f(session)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn shutdown_all(&self) {
         let sessions = self
             .0
