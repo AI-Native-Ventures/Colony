@@ -34,6 +34,7 @@ fn make_turn_metric_event(owner_keys: &Keys, agent_keys: &Keys) -> Event {
         cumulative: None,
         delta_reliable: true,
         stop_reason: None,
+        pricing_identity: None,
         work_context: None,
     };
     let ciphertext =

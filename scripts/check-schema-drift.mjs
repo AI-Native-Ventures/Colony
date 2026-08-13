@@ -51,9 +51,7 @@ export const KNOWN_DRIFT = new Map([
   ["party_action_claims", "same broker shape as company_action_claims; fails the same way once a party suite runs"],
   ["ledger_action_claims", "same broker shape as company_action_claims"],
   ["jobs", "unowned"],
-  ["git_repo_names", "unowned"],
   ["product_feedback", "unowned"],
-  ["parameterized_event_watermarks", "unowned"],
 ]);
 
 /** Table names created by `text`, excluding partition children. */

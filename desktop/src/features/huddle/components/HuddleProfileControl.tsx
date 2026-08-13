@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "@/shared/api/nativeBridge";
+
 import { Headphones } from "lucide-react";
 import * as React from "react";
 

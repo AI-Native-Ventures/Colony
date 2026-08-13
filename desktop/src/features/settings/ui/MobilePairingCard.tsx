@@ -6,7 +6,8 @@ import {
   RefreshCw,
   TriangleAlert,
 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/shared/api/nativeBridge";
+
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 

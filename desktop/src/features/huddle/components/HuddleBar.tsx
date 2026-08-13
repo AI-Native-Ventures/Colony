@@ -1,6 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { closeWindow, invoke, listen } from "@/shared/api/nativeBridge";
+
 import {
   Bot,
   Captions,
@@ -346,7 +345,7 @@ export function HuddleBar({
       return;
     }
     if (companionHadActiveHuddleRef.current) {
-      void getCurrentWindow().close();
+      void closeWindow();
     }
   }, [isHuddleVisible, mode]);
 
@@ -516,7 +515,7 @@ export function HuddleBar({
         // viewer. Close it immediately after it ends instead of depending on
         // an asynchronous state event to arrive first.
         if (mode === "room") {
-          void getCurrentWindow().close();
+          void closeWindow();
         }
       } else {
         locallyLeavingChannelRef.current = null;

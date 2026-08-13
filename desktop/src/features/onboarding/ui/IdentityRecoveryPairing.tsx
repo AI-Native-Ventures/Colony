@@ -1,5 +1,6 @@
+import { listen } from "@/shared/api/nativeBridge";
+
 import * as React from "react";
-import { listen } from "@tauri-apps/api/event";
 import {
   Check,
   Copy,

@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { listen } from "@/shared/api/nativeBridge";
+
 import type { BlobDescriptor } from "@/shared/api/tauri";
 import { cancelMediaUpload, uploadMediaFile } from "@/shared/api/tauriMedia";
 import {
@@ -101,7 +103,6 @@ async function ensureUploadListeners(): Promise<void> {
   uploadListenersPromise = (async () => {
     const disposers: (() => void)[] = [];
     try {
-      const { listen } = await import("@tauri-apps/api/event");
       disposers.push(
         await listen<{
           id: string;

@@ -4,8 +4,7 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
-import { isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { isTauri, listen } from "@/shared/api/nativeBridge";
 
 import { matchBackForwardChord } from "@/app/navigation/backForwardChords";
 import { isMacPlatform } from "@/shared/lib/platform";

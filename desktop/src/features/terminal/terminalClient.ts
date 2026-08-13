@@ -1,4 +1,4 @@
-import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import { NativeChannel, invoke, isTauri } from "@/shared/api/nativeBridge";
 
 import type { TerminalFrame } from "./terminalRenderer";
 
@@ -79,7 +79,7 @@ export class TerminalConnection {
           connection?.acknowledge(frame.sequence) ?? Promise.resolve(),
       });
     };
-    const channel = new Channel<TerminalMessage>(deliver);
+    const channel = new NativeChannel<TerminalMessage>(deliver);
     const response = await invoke<AttachResponse>("terminal_attach", {
       request,
       onFrame: channel,

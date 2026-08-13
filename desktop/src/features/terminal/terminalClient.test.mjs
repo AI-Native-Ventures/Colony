@@ -1,44 +1,39 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-const callbacks = new Map();
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
 const calls = [];
-let nextCallback = 1;
 let attachDuringInvoke;
 
-globalThis.isTauri = true;
-globalThis.window = {
-  __TAURI_INTERNALS__: {
-    invoke(command, args) {
-      calls.push({ command, args });
-      if (command === "terminal_attach") attachDuringInvoke?.(args);
-      return Promise.resolve(
-        command === "terminal_attach"
-          ? {
-              sessionId: "session-1",
-              subscriptionId: "subscription-1",
-              viewport: { columns: 80, generation: 0, screenLines: 24 },
-            }
-          : undefined,
-      );
-    },
-    transformCallback(callback) {
-      const id = nextCallback++;
-      callbacks.set(id, callback);
-      return id;
-    },
-    unregisterCallback(id) {
-      callbacks.delete(id);
-    },
-  },
-  isTauri: true,
-};
+setNativeBridge({
+  ...createMockNativeBridge((command, args) => {
+    calls.push({ command, args });
+    if (command === "terminal_attach") attachDuringInvoke?.(args);
+    return Promise.resolve(
+      command === "terminal_attach"
+        ? {
+            sessionId: "session-1",
+            subscriptionId: "subscription-1",
+            viewport: { columns: 80, generation: 0, screenLines: 24 },
+          }
+        : undefined,
+    );
+  }),
+  // The terminal attach path requires the Tauri marker; the default mock
+  // bridge reports false.
+  isTauri: () => true,
+});
 
 const { TerminalConnection } = await import("./terminalClient.ts");
 
 function emit(channel, message, index = 0) {
-  const id = Number(channel.toJSON().slice("__CHANNEL__:".length));
-  callbacks.get(id)({ index, message });
+  // The mock bridge hands the NativeChannel through verbatim (no Tauri
+  // Channel conversion), so frames are delivered straight to onmessage
+  // without the IPC index envelope.
+  void index;
+  channel.onmessage?.(message);
 }
 
 const request = {

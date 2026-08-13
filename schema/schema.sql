@@ -2268,7 +2268,7 @@ CREATE TABLE operator_access_log (
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('operator_access_log', 'deployment-wide operator accountability; filter and target values are stored only as digests');
 
--- Ported from migrations/0029_community_deletion.sql (upstream community-deletion + storage-sweep tables)
+-- Ported from migrations/0059_community_deletion.sql (upstream community-deletion + storage-sweep tables)
 CREATE TABLE community_deletion_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     community_id UUID NOT NULL UNIQUE REFERENCES communities(id),
@@ -2385,7 +2385,7 @@ CREATE INDEX community_serving_write_leases_active
     ON community_serving_write_leases (community_id, lease_until);
 
 
--- Ported from migrations/0029_community_deletion.sql (community-deletion approvals)
+-- Ported from migrations/0059_community_deletion.sql (community-deletion approvals)
 CREATE TABLE community_deletion_approvals (
     request_id UUID PRIMARY KEY,
     community_id UUID NOT NULL,
@@ -2397,3 +2397,322 @@ CREATE TABLE community_deletion_approvals (
         REFERENCES community_deletion_requests(id, community_id, inventory_digest)
         ON DELETE RESTRICT
 );;
+
+-- ── Git repo name registry (NIP-34 kind:30617) ───────────────────────────────
+-- Ported from migrations/0002_git_repo_names.sql (was KNOWN_DRIFT; needed by the
+-- community serving-fence catalog, which requires every scoped table to exist
+-- with a write fence).
+CREATE TABLE git_repo_names (
+    community_id  UUID NOT NULL REFERENCES communities(id),
+    repo_id       TEXT NOT NULL,
+    owner_pubkey  TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, repo_id)
+);;
+
+-- Backs the per-pubkey repo quota: COUNT(*) WHERE community_id = $1 AND owner_pubkey = $2.
+CREATE INDEX idx_git_repo_names_owner ON git_repo_names (community_id, owner_pubkey);
+
+-- ── Parameterized (NIP-33 LWW) read-state watermarks ─────────────────────────
+-- Ported from migrations/0007_nip_rs_retention.sql (was KNOWN_DRIFT; required by
+-- the community serving-fence catalog).
+CREATE TABLE parameterized_event_watermarks (
+    community_id  UUID NOT NULL REFERENCES communities(id),
+    kind          INT NOT NULL,
+    pubkey        BYTEA NOT NULL,
+    d_tag         TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+    event_id      BYTEA NOT NULL,
+    PRIMARY KEY (community_id, kind, pubkey, d_tag)
+);;
+
+INSERT INTO _operator_global_tables (table_name, reason) VALUES
+    ('community_deletion_requests', 'deployment deletion lifecycle and frozen inventory'),
+    ('community_deletion_approvals', 'deployment operator destructive approvals'),
+    ('community_deletion_checkpoints', 'deployment deletion executor checkpoints and failures'),
+    ('community_deletion_manifest_keys', 'deployment deletion frozen destructive key chunks'),
+    ('storage_taxonomy_sweeps', 'deployment object-store taxonomy sweep evidence'),
+    ('community_serving_write_leases', 'deployment serving side-effect leases drained by deletion'),
+    ('community_deletion_executor_heartbeats', 'deployment deletion worker liveness');
+
+CREATE FUNCTION community_deletion_lock_key(target UUID) RETURNS BIGINT
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT hashtextextended('buzz-community-deletion:' || target::text, 0)
+$$;
+-- Keep the deletion control plane writable while its target tenant is fenced.
+-- This predicate is the single SQL source of truth used by attachment and live
+-- catalog validation.
+CREATE FUNCTION community_write_fence_excluded_table(target NAME) RETURNS BOOLEAN
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT target::TEXT = ANY (ARRAY[
+        'community_deletion_requests',
+        'community_deletion_approvals',
+        'community_deletion_checkpoints',
+        'community_serving_write_leases',
+        'community_deletion_executor_heartbeats',
+        'product_feedback',
+        'rate_limit_violations'
+    ]::TEXT[])
+$$;
+
+-- Fleet-wide writers filter candidates through this VOLATILE predicate in
+-- the mutating statement so fenced tenants are skipped before row triggers run.
+CREATE FUNCTION community_write_allowed(target UUID) RETURNS BOOLEAN
+LANGUAGE plpgsql VOLATILE AS $$
+DECLARE
+    lifecycle TEXT;
+BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'community writes require READ COMMITTED isolation'
+            USING ERRCODE = 'invalid_transaction_state';
+    END IF;
+
+    IF target IS NULL THEN
+        RETURN true;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock_shared(community_deletion_lock_key(target));
+    SELECT deletion_state
+      INTO lifecycle
+      FROM communities
+     WHERE id = target;
+    RETURN FOUND AND lifecycle = 'active';
+END
+$$;
+
+CREATE FUNCTION assert_community_write_allowed(target UUID) RETURNS VOID
+LANGUAGE plpgsql AS $$
+DECLARE
+    lifecycle TEXT;
+    generation BIGINT;
+    executor_community TEXT;
+    executor_generation TEXT;
+    serving_community TEXT;
+    serving_lease_id TEXT;
+    serving_owner TEXT;
+    serving_generation TEXT;
+    serving_fence_generation TEXT;
+    serving_lease_valid BOOLEAN := false;
+BEGIN
+    -- The fence proof requires a fresh statement snapshot after lock grant;
+    -- pinned RR/Serializable snapshots can retain pre-fence authorization.
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'community writes require READ COMMITTED isolation'
+            USING ERRCODE = 'invalid_transaction_state';
+    END IF;
+
+    -- Nullable operator-attribution rows without a tenant are unrelated.
+    IF target IS NULL THEN
+        RETURN;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock_shared(community_deletion_lock_key(target));
+    SELECT deletion_state, deletion_fence_generation
+      INTO lifecycle, generation
+      FROM communities
+     WHERE id = target;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'community write rejected: community % is missing', target
+            USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+
+    -- Authorization is evaluated independently for every community checked.
+    executor_community := current_setting('buzz.deletion_executor_community', true);
+    executor_generation := current_setting('buzz.deletion_fence_generation', true);
+    IF executor_community = target::TEXT
+       AND executor_generation ~ '^[0-9]+$'
+       AND executor_generation::BIGINT = generation THEN
+        RETURN;
+    END IF;
+
+    -- A serving mutation admitted before quiescing may finish only while its
+    -- exact durable lease remains current and bound to this fence generation.
+    serving_community := current_setting('buzz.serving_write_community', true);
+    serving_lease_id := current_setting('buzz.serving_write_lease_id', true);
+    serving_owner := current_setting('buzz.serving_write_owner', true);
+    serving_generation := current_setting('buzz.serving_write_generation', true);
+    serving_fence_generation := current_setting('buzz.serving_write_fence_generation', true);
+    IF lifecycle IN ('active', 'quiescing')
+       AND serving_community = target::TEXT
+       AND serving_lease_id ~ '^[0-9a-fA-F-]{36}$'
+       AND serving_generation ~ '^[0-9]+$'
+       AND serving_fence_generation ~ '^[0-9]+$'
+       AND serving_fence_generation::BIGINT = generation THEN
+        SELECT EXISTS(
+            SELECT 1 FROM community_serving_write_leases lease
+             WHERE lease.id = serving_lease_id::UUID
+               AND lease.community_id = target
+               AND lease.owner = serving_owner
+               AND lease.generation = serving_generation::BIGINT
+               AND lease.fence_generation = serving_fence_generation::BIGINT
+               AND lease.lease_until >= now()
+        ) INTO serving_lease_valid;
+        IF serving_lease_valid THEN
+            RETURN;
+        END IF;
+    END IF;
+
+    IF lifecycle <> 'active' THEN
+        RAISE EXCEPTION 'community write fenced: community % generation %', target, generation
+            USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+END
+$$;
+
+CREATE FUNCTION enforce_community_write_fence() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM assert_community_write_allowed(NEW.community_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    ELSIF OLD.community_id IS NOT DISTINCT FROM NEW.community_id THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    ELSIF OLD.community_id IS NULL THEN
+        PERFORM assert_community_write_allowed(NEW.community_id);
+    ELSIF NEW.community_id IS NULL THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    ELSIF OLD.community_id < NEW.community_id THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+        PERFORM assert_community_write_allowed(NEW.community_id);
+    ELSE
+        PERFORM assert_community_write_allowed(NEW.community_id);
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    END IF;
+
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END
+$$;
+
+CREATE FUNCTION enforce_community_tombstone() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+    executor_community TEXT := current_setting('buzz.deletion_executor_community', true);
+    executor_generation TEXT := current_setting('buzz.deletion_fence_generation', true);
+    expected_generation BIGINT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.deletion_state <> 'active' OR OLD.deleted_at IS NOT NULL THEN
+            RAISE EXCEPTION 'community tombstones are permanent'
+                USING ERRCODE = 'object_not_in_prerequisite_state';
+        END IF;
+        RETURN OLD;
+    END IF;
+    expected_generation := CASE WHEN NEW.deletion_fence_generation > OLD.deletion_fence_generation
+        THEN NEW.deletion_fence_generation ELSE OLD.deletion_fence_generation END;
+    IF executor_community = OLD.id::text AND executor_generation ~ '^[0-9]+$'
+       AND executor_generation::BIGINT = expected_generation THEN RETURN NEW; END IF;
+    IF OLD.deletion_state <> 'active' OR NEW.deletion_state <> OLD.deletion_state
+       OR NEW.deletion_fence_generation <> OLD.deletion_fence_generation
+       OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+        RAISE EXCEPTION 'community tombstone mutation rejected: community % generation %',
+            OLD.id, OLD.deletion_fence_generation
+            USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+    RETURN NEW;
+END
+$$;
+CREATE TRIGGER communities_deletion_tombstone BEFORE UPDATE OR DELETE ON communities
+FOR EACH ROW EXECUTE FUNCTION enforce_community_tombstone();
+-- Attach the universal fence to one community-scoped relation. Future
+-- migrations must invoke this helper explicitly after CREATE/ALTER introduces
+-- community_id; the migration lint enforces that contract.
+CREATE FUNCTION attach_community_write_fence(target REGCLASS) RETURNS VOID
+LANGUAGE plpgsql AS $$
+DECLARE
+    relation_name NAME;
+BEGIN
+    SELECT c.relname
+      INTO relation_name
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.oid = target
+       AND n.nspname = current_schema()
+       AND c.relkind IN ('r', 'p')
+       AND NOT c.relispartition;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'community write fence target % is not a table in the current schema', target
+            USING ERRCODE = 'wrong_object_type';
+    END IF;
+    IF community_write_fence_excluded_table(relation_name) THEN
+        RETURN;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+         WHERE attrelid = target AND attname = 'community_id' AND NOT attisdropped
+    ) THEN
+        RAISE EXCEPTION 'community write fence target % has no community_id', target
+            USING ERRCODE = 'undefined_column';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+         WHERE tgrelid = target
+           AND tgname = 'community_write_fence_' || relation_name
+           AND NOT tgisinternal
+    ) THEN
+        EXECUTE format(
+            'CREATE TRIGGER %I BEFORE INSERT OR UPDATE OR DELETE ON %s '
+            'FOR EACH ROW EXECUTE FUNCTION enforce_community_write_fence()',
+            'community_write_fence_' || relation_name,
+            target
+        );
+    END IF;
+END
+$$;
+
+-- Attach the universal fence to every existing table carrying community_id,
+-- including deployment-private sidecars whose community_id is provenance.
+DO $$
+DECLARE
+    target REGCLASS;
+BEGIN
+    FOR target IN
+        SELECT c.oid::REGCLASS
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          JOIN pg_attribute a ON a.attrelid = c.oid
+         WHERE n.nspname = current_schema()
+           AND c.relkind IN ('r', 'p')
+           AND NOT c.relispartition
+           AND a.attname = 'community_id'
+           AND NOT a.attisdropped
+           AND NOT community_write_fence_excluded_table(c.relname)
+         ORDER BY c.oid::REGCLASS::TEXT
+    LOOP
+        PERFORM attach_community_write_fence(target);
+    END LOOP;
+END
+$$;
+
+-- Desired-state schema application does not replay migration history, so keep
+-- these explicit calls as first-class catalog declarations. They also make the
+-- fence contract visible to migration linting instead of hiding it only in the
+-- dynamic bootstrap loop above.
+SELECT attach_community_write_fence('api_tokens');
+SELECT attach_community_write_fence('archived_identities');
+SELECT attach_community_write_fence('audit_log');
+SELECT attach_community_write_fence('channel_members');
+SELECT attach_community_write_fence('channels');
+SELECT attach_community_write_fence('community_bans');
+SELECT attach_community_write_fence('delivery_log');
+SELECT attach_community_write_fence('event_mentions');
+SELECT attach_community_write_fence('events');
+SELECT attach_community_write_fence('git_repo_names');
+SELECT attach_community_write_fence('join_policy_acceptances');
+SELECT attach_community_write_fence('moderation_actions');
+SELECT attach_community_write_fence('moderation_reports');
+SELECT attach_community_write_fence('parameterized_event_watermarks');
+SELECT attach_community_write_fence('pubkey_allowlist');
+SELECT attach_community_write_fence('push_leases');
+SELECT attach_community_write_fence('push_match_queue');
+SELECT attach_community_write_fence('push_wake_outbox');
+SELECT attach_community_write_fence('reactions');
+SELECT attach_community_write_fence('relay_invites');
+SELECT attach_community_write_fence('relay_members');
+SELECT attach_community_write_fence('scheduled_workflow_fires');
+SELECT attach_community_write_fence('subscriptions');
+SELECT attach_community_write_fence('thread_metadata');
+SELECT attach_community_write_fence('users');
+SELECT attach_community_write_fence('workflow_approvals');
+SELECT attach_community_write_fence('workflow_runs');
+SELECT attach_community_write_fence('workflows');

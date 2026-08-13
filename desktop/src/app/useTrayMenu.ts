@@ -1,6 +1,6 @@
+import { invoke, isTauri, listen } from "@/shared/api/nativeBridge";
+
 import * as React from "react";
-import { isTauri, invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 
 import {
   getActiveTurnsForAgent,

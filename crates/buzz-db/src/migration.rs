@@ -507,6 +507,13 @@ mod tests {
             "push_gateway_delivery_request_replays",
             "product_feedback",
             "replica_heartbeat",
+            "community_deletion_requests",
+            "community_deletion_approvals",
+            "community_deletion_checkpoints",
+            "community_deletion_manifest_keys",
+            "storage_taxonomy_sweeps",
+            "community_serving_write_leases",
+            "community_deletion_executor_heartbeats",
             "accounts",
             "credit_ledger",
             "gateway_tokens",
@@ -727,7 +734,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 58);
+        assert_eq!(migrations.len(), 60);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1305,8 +1312,20 @@ mod tests {
             assert!(catalog_action_claims.contains(event_id));
         }
         assert!(!catalog_action_claims.contains("_operator_global_tables"));
+        // Upstream community-deletion migrations renumbered to 0059/0060:
+        // Colony's develop already occupies 0029 (company_action_claims) and
+        // 0030 (party_action_claims), and the upstream 0027/0028 duplicates of
+        // 0048/0049 were dropped at the port.
+        assert_eq!(migrations[58].version, 59);
+        let deletion = migrations[58].sql.as_str();
+        assert!(deletion.contains("CREATE TABLE community_deletion_requests"));
+        assert!(deletion.contains("CREATE FUNCTION enforce_community_write_fence"));
+        assert_eq!(migrations[59].version, 60);
+        let recovery = migrations[59].sql.as_str();
+        assert!(
+            recovery.contains("CREATE OR REPLACE FUNCTION community_write_fence_excluded_table")
+        );
     }
-
     #[test]
     fn block_action_claim_migration_is_community_scoped() {
         let migration = MIGRATOR

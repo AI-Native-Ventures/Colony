@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/shared/api/nativeBridge";
+
 import * as React from "react";
 
 const PIPELINE_HOTSTART_INTERVAL_MS = 15_000;

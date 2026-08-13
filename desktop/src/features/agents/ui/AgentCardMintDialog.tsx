@@ -8,8 +8,9 @@ import {
   Lock,
   Sparkles,
 } from "lucide-react";
+import { openUrl } from "@/shared/api/nativeBridge";
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
 import {

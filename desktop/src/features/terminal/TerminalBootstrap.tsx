@@ -1,5 +1,6 @@
+import { isTauri } from "@/shared/api/nativeBridge";
+
 import * as React from "react";
-import { isTauri } from "@tauri-apps/api/core";
 
 import {
   type TerminalDelivery,

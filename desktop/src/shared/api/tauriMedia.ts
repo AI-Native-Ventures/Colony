@@ -1,4 +1,4 @@
-import { invoke as invokeTauriRaw, isTauri } from "@tauri-apps/api/core";
+import { invokeRawBinary, isTauri } from "@/shared/api/nativeBridge";
 import { type BlobDescriptor, invokeTauri } from "./tauri";
 
 function encodeRawIpcHeader(value: string): string {
@@ -29,7 +29,7 @@ export async function uploadMediaFile(
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (signal?.aborted) throw new Error("upload cancelled");
 
-  return invokeTauriRaw<BlobDescriptor>("upload_media_bytes_raw", bytes, {
+  return invokeRawBinary<BlobDescriptor>("upload_media_bytes_raw", bytes, {
     headers,
   });
 }

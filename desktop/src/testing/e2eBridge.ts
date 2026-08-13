@@ -3501,8 +3501,12 @@ class E2eNativeBridge implements NativeBridge {
     return this.mockCommand(command, args ?? {}) as Promise<T>;
   }
 
-  invokeRawBinary(command: string, payload: Uint8Array): Promise<unknown> {
-    return this.mockCommand(command, payload);
+  invokeRawBinary<T = unknown>(
+    command: string,
+    payload: Uint8Array,
+    _options?: { headers?: Record<string, string> },
+  ): Promise<T> {
+    return this.mockCommand(command, payload) as Promise<T>;
   }
 
   async listen<T>(

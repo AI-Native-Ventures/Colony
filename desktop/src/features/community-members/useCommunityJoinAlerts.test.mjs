@@ -232,14 +232,16 @@ globalThis.window.Notification = StubNotification;
 /** @type {Map<string, (args: unknown) => Promise<unknown>>} */
 const ipcHandlers = new Map();
 
-globalThis.__TAURI_INTERNALS__ = {
-  invoke: (cmd, args) => {
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
+setNativeBridge(
+  createMockNativeBridge((cmd, args) => {
     const handler = ipcHandlers.get(cmd);
     if (handler) return handler(args);
     return Promise.reject(new Error(`unmocked Tauri command: ${cmd}`));
-  },
-  transformCallback: () => Math.random(),
-};
+  }),
+);
 
 // ── Production imports (after shims) ─────────────────────────────────────────
 

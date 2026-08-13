@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
+// desktop.ts routes through the NativeBridge seam; the default mock bridge
+// reports isTauri() === false, which is exactly the browser-notification path
+// this suite exercises.
+setNativeBridge(createMockNativeBridge(() => null));
+
 const notifications = [];
 
 class WorkingNotification {

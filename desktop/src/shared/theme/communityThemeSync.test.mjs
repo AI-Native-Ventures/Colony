@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { relayClient } from "@/shared/api/relayClient";
+
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
 import {
   CommunityThemeSyncManager,
   communityThemeHydrationRemote,
   isNewerCommunityThemeCoordinate,
   shouldSeedCommunityTheme,
 } from "./communityThemeSync.ts";
+
+function installTauriMock(invokeHandler) {
+  setNativeBridge(
+    createMockNativeBridge((command, args) => invokeHandler(command, args)),
+  );
+}
+
+function restoreTauriMock() {
+  setNativeBridge(createMockNativeBridge(() => null));
+}
 
 const preference = {
   version: 1,
@@ -110,14 +123,12 @@ test("live replacement delivered during empty onboarding fetch prevents default 
   const updates = [];
   let liveCallback;
   globalThis.window ??= {};
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke(command) {
-      if (command === "nip44_decrypt_from_self") {
-        return Promise.resolve(JSON.stringify(remotePreference));
-      }
-      throw new Error(`unexpected command: ${command}`);
-    },
-  };
+  installTauriMock((command) => {
+    if (command === "nip44_decrypt_from_self") {
+      return Promise.resolve(JSON.stringify(remotePreference));
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
   mock.method(relayClient, "subscribeLive", (_filter, callback, onReady) => {
     liveCallback = callback;
     onReady("eose");
@@ -152,7 +163,7 @@ test("live replacement delivered during empty onboarding fetch prevents default 
     assert.deepEqual(updates, [result.remote]);
     await unsubscribe();
   } finally {
-    delete globalThis.window.__TAURI_INTERNALS__;
+    restoreTauriMock();
     mock.reset();
   }
 });
@@ -197,14 +208,12 @@ test("EOSE-confirmed absence authorizes hydration seeding after live delivery dr
 test("unreadable live state cannot authorize hydration publishing", async () => {
   let liveCallback;
   globalThis.window ??= {};
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke(command) {
-      if (command === "nip44_decrypt_from_self") {
-        return Promise.reject(new Error("unsupported payload"));
-      }
-      throw new Error(`unexpected command: ${command}`);
-    },
-  };
+  installTauriMock((command) => {
+    if (command === "nip44_decrypt_from_self") {
+      return Promise.reject(new Error("unsupported payload"));
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
   mock.method(relayClient, "subscribeLive", (_filter, callback, onReady) => {
     liveCallback = callback;
     onReady("eose");
@@ -222,7 +231,7 @@ test("unreadable live state cannot authorize hydration publishing", async () => 
     assert.equal(communityThemeHydrationRemote(result), null);
     await unsubscribe();
   } finally {
-    delete globalThis.window.__TAURI_INTERNALS__;
+    restoreTauriMock();
     mock.reset();
   }
 });
@@ -302,23 +311,21 @@ test("new remote invalidates no-op suppression for A to B to A", async () => {
   const published = [];
   const acknowledgements = [];
   let signedEventId = "published-z";
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke(command, args) {
-      if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
-      if (command === "sign_event") {
-        return Promise.resolve(
-          JSON.stringify(
-            relayEvent({
-              id: signedEventId,
-              content: args.content,
-              created_at: args.createdAt,
-            }),
-          ),
-        );
-      }
-      throw new Error(`unexpected command: ${command}`);
-    },
-  };
+  installTauriMock((command, args) => {
+    if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
+    if (command === "sign_event") {
+      return Promise.resolve(
+        JSON.stringify(
+          relayEvent({
+            id: signedEventId,
+            content: args.content,
+            created_at: args.createdAt,
+          }),
+        ),
+      );
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
   mock.method(relayClient, "publishEvent", (event) => {
     published.push(event);
     return Promise.resolve();
@@ -345,7 +352,7 @@ test("new remote invalidates no-op suppression for A to B to A", async () => {
     assert.equal(acknowledgements[1].eventId, "republished-a");
     assert.equal(manager.getPending(), null);
   } finally {
-    delete globalThis.window.__TAURI_INTERNALS__;
+    restoreTauriMock();
     timer.restore();
     mock.reset();
   }
@@ -356,24 +363,22 @@ test("serializes an in-flight publish before sending the latest edit", async () 
   const first = Promise.withResolvers();
   const published = [];
   let signed = 0;
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke(command, args) {
-      if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
-      if (command === "sign_event") {
-        signed += 1;
-        return Promise.resolve(
-          JSON.stringify(
-            relayEvent({
-              id: `event-${signed}`,
-              content: args.content,
-              created_at: args.createdAt,
-            }),
-          ),
-        );
-      }
-      throw new Error(`unexpected command: ${command}`);
-    },
-  };
+  installTauriMock((command, args) => {
+    if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
+    if (command === "sign_event") {
+      signed += 1;
+      return Promise.resolve(
+        JSON.stringify(
+          relayEvent({
+            id: `event-${signed}`,
+            content: args.content,
+            created_at: args.createdAt,
+          }),
+        ),
+      );
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
   mock.method(relayClient, "publishEvent", (event) => {
     published.push(event);
     return published.length === 1 ? first.promise : Promise.resolve();
@@ -399,7 +404,7 @@ test("serializes an in-flight publish before sending the latest edit", async () 
     assert.ok(published[1].created_at > published[0].created_at);
     assert.deepEqual(manager.getPending(), null);
   } finally {
-    delete globalThis.window.__TAURI_INTERNALS__;
+    restoreTauriMock();
     timer.restore();
     mock.reset();
   }
@@ -411,24 +416,22 @@ test("republishes above a newer remote observed while publish is in flight", asy
   const published = [];
   const acknowledgements = [];
   let signed = 0;
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke(command, args) {
-      if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
-      if (command === "sign_event") {
-        signed += 1;
-        return Promise.resolve(
-          JSON.stringify(
-            relayEvent({
-              id: `event-${signed}`,
-              content: args.content,
-              created_at: args.createdAt,
-            }),
-          ),
-        );
-      }
-      throw new Error(`unexpected command: ${command}`);
-    },
-  };
+  installTauriMock((command, args) => {
+    if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
+    if (command === "sign_event") {
+      signed += 1;
+      return Promise.resolve(
+        JSON.stringify(
+          relayEvent({
+            id: `event-${signed}`,
+            content: args.content,
+            created_at: args.createdAt,
+          }),
+        ),
+      );
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
   mock.method(relayClient, "publishEvent", (event) => {
     published.push(event);
     return published.length === 1 ? first.promise : Promise.resolve();
@@ -457,7 +460,7 @@ test("republishes above a newer remote observed while publish is in flight", asy
     assert.ok(published[1].created_at > published[0].created_at + 100);
     assert.deepEqual(manager.getPending(), null);
   } finally {
-    delete globalThis.window.__TAURI_INTERNALS__;
+    restoreTauriMock();
     timer.restore();
     mock.reset();
   }
@@ -471,25 +474,23 @@ test("delayed live decryption fences publish acknowledgement and preserves local
   const acknowledgements = [];
   let liveCallback;
   let signed = 0;
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke(command, args) {
-      if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
-      if (command === "nip44_decrypt_from_self") return remotePlaintext.promise;
-      if (command === "sign_event") {
-        signed += 1;
-        return Promise.resolve(
-          JSON.stringify(
-            relayEvent({
-              id: `event-${signed}`,
-              content: args.content,
-              created_at: args.createdAt,
-            }),
-          ),
-        );
-      }
-      throw new Error(`unexpected command: ${command}`);
-    },
-  };
+  installTauriMock((command, args) => {
+    if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
+    if (command === "nip44_decrypt_from_self") return remotePlaintext.promise;
+    if (command === "sign_event") {
+      signed += 1;
+      return Promise.resolve(
+        JSON.stringify(
+          relayEvent({
+            id: `event-${signed}`,
+            content: args.content,
+            created_at: args.createdAt,
+          }),
+        ),
+      );
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
   mock.method(relayClient, "subscribeLive", (_filter, callback) => {
     liveCallback = callback;
     return Promise.resolve(async () => {});
@@ -532,7 +533,7 @@ test("delayed live decryption fences publish acknowledgement and preserves local
     assert.ok(published[1].created_at > published[0].created_at + 100);
     assert.deepEqual(manager.getPending(), null);
   } finally {
-    delete globalThis.window.__TAURI_INTERNALS__;
+    restoreTauriMock();
     timer.restore();
     mock.reset();
   }
@@ -543,23 +544,21 @@ test("transient publish failure retries and acknowledges exact event", async () 
   const published = [];
   const acknowledgements = [];
   let attempts = 0;
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke(command, args) {
-      if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
-      if (command === "sign_event") {
-        return Promise.resolve(
-          JSON.stringify(
-            relayEvent({
-              id: "published-event",
-              content: args.content,
-              created_at: args.createdAt,
-            }),
-          ),
-        );
-      }
-      throw new Error(`unexpected command: ${command}`);
-    },
-  };
+  installTauriMock((command, args) => {
+    if (command === "nip44_encrypt_to_self") return Promise.resolve("cipher");
+    if (command === "sign_event") {
+      return Promise.resolve(
+        JSON.stringify(
+          relayEvent({
+            id: "published-event",
+            content: args.content,
+            created_at: args.createdAt,
+          }),
+        ),
+      );
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
   mock.method(relayClient, "publishEvent", (event) => {
     attempts += 1;
     if (attempts === 1) return Promise.reject(new Error("timeout"));
@@ -587,7 +586,7 @@ test("transient publish failure retries and acknowledges exact event", async () 
       eventId: "published-event",
     });
   } finally {
-    delete globalThis.window.__TAURI_INTERNALS__;
+    restoreTauriMock();
     timer.restore();
     mock.reset();
   }

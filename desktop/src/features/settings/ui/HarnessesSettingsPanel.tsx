@@ -1,6 +1,7 @@
 import * as React from "react";
+import { openUrl } from "@/shared/api/nativeBridge";
+
 import { ExternalLink, Plus, RefreshCw } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 import {
   useAcpRuntimesQuery,

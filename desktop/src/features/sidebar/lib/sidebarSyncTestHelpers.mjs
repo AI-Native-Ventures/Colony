@@ -1,5 +1,8 @@
 // Shared helpers for sidebar sync manager tests.
 
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
 export function makeFakeWindow() {
   const storage = new Map();
   const ls = {
@@ -46,11 +49,9 @@ export function installFakeWindow(fw) {
 }
 
 export function installTauriMock(goodCipherPayload) {
-  const orig = globalThis.window?.__TAURI_INTERNALS__;
-  if (typeof globalThis.window === "undefined") globalThis.window = {};
   let captured = null;
-  globalThis.window.__TAURI_INTERNALS__ = {
-    invoke: (cmd, args) => {
+  setNativeBridge(
+    createMockNativeBridge((cmd, args) => {
       if (cmd === "nip44_decrypt_from_self") {
         if (args?.ciphertext === "bad-cipher")
           return Promise.reject(new Error("decrypt failed"));
@@ -73,12 +74,11 @@ export function installTauriMock(goodCipherPayload) {
           }),
         );
       return Promise.reject(new Error(`unmocked: ${cmd}`));
-    },
-  };
+    }),
+  );
   return {
     restore: () => {
-      if (orig !== undefined) globalThis.window.__TAURI_INTERNALS__ = orig;
-      else delete globalThis.window.__TAURI_INTERNALS__;
+      setNativeBridge(createMockNativeBridge(() => null));
     },
     capturedPlaintext: () => captured,
   };

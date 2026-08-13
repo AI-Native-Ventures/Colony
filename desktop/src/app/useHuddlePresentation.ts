@@ -1,7 +1,7 @@
+import { invoke, listen } from "@/shared/api/nativeBridge";
+
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "@tanstack/react-router";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import * as React from "react";
 import {
   loadHuddleBackingChannelIds,
