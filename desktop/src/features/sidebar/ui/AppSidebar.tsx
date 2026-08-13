@@ -33,6 +33,7 @@ import {
 import {
   AppSidebarPinnedHeader,
   AppSidebarPrimaryMenu,
+  type AppSidebarPinnedHeaderProps,
 } from "@/features/sidebar/ui/AppSidebarPinnedHeader";
 import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
 import { SidebarSection } from "@/features/sidebar/ui/SidebarSection";
@@ -78,7 +79,6 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/shared/ui/sidebar";
-
 type AppSidebarProps = {
   addCommunityPrefill?: AddCommunityPrefillRequest | null;
   activeCommunity: Community | null;
@@ -169,7 +169,7 @@ type AppSidebarProps = {
   onStarChannel?: (channelId: string) => void;
   onUnstarChannel?: (channelId: string) => void;
   workspaceExpanded?: boolean;
-};
+} & Pick<AppSidebarPinnedHeaderProps, "commandActions">;
 export function AppSidebar({
   addCommunityPrefill,
   activeCommunity,
@@ -206,6 +206,7 @@ export function AppSidebar({
   onUpdateCommunity,
   onRemoveCommunity,
   onCreateAgent,
+  commandActions,
   onSelectAgents,
   onSelectBlocks,
   onSelectDiscovery,
@@ -571,6 +572,7 @@ export function AppSidebar({
           onBrowseChannels={onBrowseChannels}
           onCreateAgent={onCreateAgent}
           onCreateChannel={handleOpenCreateChannel}
+          commandActions={commandActions}
           onOpenDm={onOpenDm}
           onOpenSearchResult={onOpenSearchResult}
           onSelectChannel={onSelectChannel}

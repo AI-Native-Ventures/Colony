@@ -19,8 +19,8 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
   // Navigation
   {
     id: "quick-search",
-    label: "Quick search",
-    description: "Open the search dialog",
+    label: "Search or navigate",
+    description: "Search messages, channels, people, or app destinations",
     keys: "⌘K",
     keysWindows: "Ctrl+K",
     category: "Navigation",

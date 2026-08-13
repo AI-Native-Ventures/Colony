@@ -8,6 +8,7 @@ import { AppShellChannelSurface } from "@/app/AppShellChannelSurface";
 import { AppHuddleShell } from "@/app/AppHuddleShell";
 import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { useNavigationCommands } from "@/app/navigation/navigationCommands";
 import { useAppShellReadFrontier } from "@/app/useAppShellReadFrontier";
 import { useSettingsPanelHandlers } from "@/app/useSettingsPanelHandlers";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
@@ -39,6 +40,7 @@ import {
   useHomeFeedNotificationState,
 } from "@/features/notifications/hooks";
 import { PreventSleepProvider } from "@/features/agents/usePreventSleep";
+import { useFeatureEnabled } from "@/shared/features";
 import { requestOpenCreateAgent } from "@/features/agents/openCreateAgentEvent";
 import { useAgentsDataRefresh } from "@/features/agents/lib/useAgentsDataRefresh";
 import { useManagedAgentRuntimeReconciliation } from "@/features/agents/useManagedAgentRuntimeReconciliation";
@@ -123,6 +125,9 @@ export function AppShell() {
     viewHuddleChannel,
   } = useHuddlePresentation();
   const hasCommunityRail = communitiesHook.communities.length > 1;
+  const pulseEnabled = useFeatureEnabled("pulse");
+  const projectsEnabled = useFeatureEnabled("projects");
+  const workflowsEnabled = useFeatureEnabled("workflows");
   const addCommunityDialog = useAddCommunityDialogState();
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
@@ -621,6 +626,24 @@ export function AppShell() {
     () => setIsCreateChannelOpen(true),
     [],
   );
+  const commandActions = useNavigationCommands({
+    createAgent: requestOpenCreateAgent,
+    createChannel: handleOpenCreateChannel,
+    goAgents,
+    goBlocks,
+    goDiscovery,
+    goHome,
+    goNewMessage: handleOpenNewDm,
+    goProjects,
+    goPulse,
+    goSettings: handleOpenSettings,
+    goSpend,
+    goWorkflows,
+    openBrowseChannels: handleOpenBrowseChannels,
+    projectsEnabled,
+    pulseEnabled,
+    workflowsEnabled,
+  });
   React.useLayoutEffect(() => {
     if (settingsOpen || isHuddleRoom) {
       return;
@@ -846,6 +869,7 @@ export function AppShell() {
                         }
                         onSwitchCommunity={handleSwitchCommunity}
                         onCreateAgent={() => requestOpenCreateAgent()}
+                        commandActions={commandActions}
                         selfPresenceStatus={presenceSession.currentStatus}
                         communities={communitiesHook.communities}
                         onCreateChannel={handleCreateChannel}
