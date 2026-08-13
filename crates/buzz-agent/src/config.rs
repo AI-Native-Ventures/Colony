@@ -862,6 +862,7 @@ impl Config {
             env("ANTHROPIC_API_KEY").as_deref(),
             env("OPENAI_COMPAT_API_KEY").as_deref(),
             env("OPENROUTER_API_KEY").as_deref(),
+            env("DEEPSEEK_API_KEY").as_deref(),
         )?;
 
         // Universal model override — takes priority over provider-specific model
@@ -1138,6 +1139,7 @@ fn resolve_provider(
     anthropic_key: Option<&str>,
     openai_key: Option<&str>,
     openrouter_key: Option<&str>,
+    deepseek_key: Option<&str>,
 ) -> Result<Provider, String> {
     match requested.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => {
@@ -1147,12 +1149,15 @@ fn resolve_provider(
                 "anthropic" => Err(
                     "config: ANTHROPIC_API_KEY required".into(),
                 ),
-                "openai" | "openai-compat" | "deepseek" if present_nonempty(openai_key) => {
+                "openai" | "openai-compat" if present_nonempty(openai_key) => Ok(Provider::OpenAi),
+                "deepseek" if present_nonempty(deepseek_key) => Ok(Provider::OpenAi),
+                "openai" | "openai-compat" => Err("config: OPENAI_COMPAT_API_KEY required".into()),
+                "deepseek" if present_nonempty(openai_key) => {
+                    // Legacy configs stored the DeepSeek key under
+                    // OPENAI_COMPAT_API_KEY before DEEPSEEK_API_KEY existed.
                     Ok(Provider::OpenAi)
                 }
-                "openai" | "openai-compat" | "deepseek" => Err(
-                    "config: OPENAI_COMPAT_API_KEY required".into(),
-                ),
+                "deepseek" => Err("config: DEEPSEEK_API_KEY required".into()),
                 "databricks" => Ok(Provider::Databricks),
                 "databricks_v2" | "databricks-v2" => Ok(Provider::DatabricksV2),
                 "openrouter" if present_nonempty(openrouter_key) => Ok(Provider::OpenRouter),
@@ -1450,11 +1455,11 @@ mod tests {
     #[test]
     fn resolve_provider_keeps_requested_provider_when_token_present() {
         assert_eq!(
-            resolve_provider(Some("anthropic"), Some("sk-ant"), None, None).unwrap(),
+            resolve_provider(Some("anthropic"), Some("sk-ant"), None, None, None).unwrap(),
             Provider::Anthropic
         );
         assert_eq!(
-            resolve_provider(Some("openai"), None, Some("sk-openai"), None).unwrap(),
+            resolve_provider(Some("openai"), None, Some("sk-openai"), None, None).unwrap(),
             Provider::OpenAi
         );
     }
@@ -1462,17 +1467,18 @@ mod tests {
     #[test]
     fn resolve_provider_errors_when_requested_provider_key_missing() {
         // No fallback — missing key returns an error regardless of Databricks availability.
-        let err = resolve_provider(Some("anthropic"), None, None, None).unwrap_err();
+        let err = resolve_provider(Some("anthropic"), None, None, None, None).unwrap_err();
         assert!(err.contains("ANTHROPIC_API_KEY required"), "{err}");
 
-        let err = resolve_provider(Some("openai-compat"), None, Some("   "), None).unwrap_err();
+        let err =
+            resolve_provider(Some("openai-compat"), None, Some("   "), None, None).unwrap_err();
         assert!(err.contains("OPENAI_COMPAT_API_KEY required"), "{err}");
     }
 
     #[test]
     fn resolve_provider_errors_when_provider_env_absent() {
         // No implicit inference — absent BUZZ_AGENT_PROVIDER is an error.
-        let err = resolve_provider(None, None, None, None).unwrap_err();
+        let err = resolve_provider(None, None, None, None, None).unwrap_err();
         assert!(err.contains("BUZZ_AGENT_PROVIDER is required"), "{err}");
     }
 
@@ -1482,19 +1488,19 @@ mod tests {
         // When BUZZ_AGENT_PROVIDER=databricks, resolve_provider succeeds regardless
         // of DATABRICKS_HOST/MODEL (those are validated later in from_env()).
         assert_eq!(
-            resolve_provider(Some("databricks"), None, None, None).unwrap(),
+            resolve_provider(Some("databricks"), None, None, None, None).unwrap(),
             Provider::Databricks
         );
         // Missing key for other providers still errors — no Databricks fallback.
-        let err = resolve_provider(Some("openai"), None, None, None).unwrap_err();
+        let err = resolve_provider(Some("openai"), None, None, None, None).unwrap_err();
         assert!(err.contains("OPENAI_COMPAT_API_KEY required"), "{err}");
-        let err = resolve_provider(None, None, None, None).unwrap_err();
+        let err = resolve_provider(None, None, None, None, None).unwrap_err();
         assert!(err.contains("BUZZ_AGENT_PROVIDER is required"), "{err}");
     }
 
     #[test]
     fn resolve_provider_unsupported_error_preserves_user_casing() {
-        let err = resolve_provider(Some("OpenAIish"), None, None, None).unwrap_err();
+        let err = resolve_provider(Some("OpenAIish"), None, None, None, None).unwrap_err();
         assert!(err.contains("BUZZ_AGENT_PROVIDER=OpenAIish"));
     }
 
@@ -3044,14 +3050,14 @@ mod tests {
     #[test]
     fn resolve_provider_openrouter_with_key() {
         assert_eq!(
-            resolve_provider(Some("openrouter"), None, None, Some("sk-or-123")).unwrap(),
+            resolve_provider(Some("openrouter"), None, None, Some("sk-or-123"), None).unwrap(),
             Provider::OpenRouter
         );
     }
 
     #[test]
     fn resolve_provider_openrouter_missing_key() {
-        let err = resolve_provider(Some("openrouter"), None, None, None).unwrap_err();
+        let err = resolve_provider(Some("openrouter"), None, None, None, None).unwrap_err();
         assert!(err.contains("OPENROUTER_API_KEY"));
     }
 
@@ -3173,5 +3179,19 @@ mod tests {
     fn pricing_authority_unknown_host_returns_none() {
         assert_eq!(pricing_authority("https://api.databricks.com/v1"), None);
         assert_eq!(pricing_authority("https://custom.llm.corp/v1"), None);
+
+    #[test]
+    fn resolve_provider_deepseek_uses_native_key() {
+        assert_eq!(
+            resolve_provider(Some("deepseek"), None, None, None, Some("sk-ds")).unwrap(),
+            Provider::OpenAi
+        );
+        // Legacy configs with the key under OPENAI_COMPAT_API_KEY still work.
+        assert_eq!(
+            resolve_provider(Some("deepseek"), None, Some("sk-legacy"), None, None).unwrap(),
+            Provider::OpenAi
+        );
+        let err = resolve_provider(Some("deepseek"), None, None, None, None).unwrap_err();
+        assert!(err.contains("DEEPSEEK_API_KEY required"), "{err}");
     }
 }
