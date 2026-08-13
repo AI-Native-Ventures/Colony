@@ -962,9 +962,6 @@ pub fn run() {
             read_clipboard_text,
             start_identity_recovery_pairing,
             archive::get_agent_usage_series,
-            macos_notifications::notification_permission_state,
-            macos_notifications::request_notification_access,
-            macos_notifications::take_pending_activations,
             terminal_runtime::terminal_ack,
             terminal_runtime::terminal_attach,
             terminal_runtime::terminal_close,
@@ -974,11 +971,23 @@ pub fn run() {
             terminal_runtime::terminal_resize,
             terminal_runtime::terminal_scroll,
             terminal_runtime::terminal_viewport_ready,
+        ]);
+
+    #[cfg(target_os = "macos")]
+    let app = app
+        .invoke_handler(tauri::generate_handler![
+            macos_notifications::notification_permission_state,
+            macos_notifications::request_notification_access,
+            macos_notifications::take_pending_activations,
             tray_menu::take_tray_actions,
             tray_menu::requeue_tray_actions,
             tray_menu::clear_tray_agent_activity,
             tray_menu::update_tray_agent_activity,
         ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    #[cfg(not(target_os = "macos"))]
+    let app = app
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
