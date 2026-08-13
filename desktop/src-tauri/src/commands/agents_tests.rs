@@ -583,6 +583,77 @@ fn current_build_deploy_payload_forwards_compiled_policy() {
     };
     record.respond_to = RespondTo::Anyone;
     record.respond_to_allowlist = vec!["a".repeat(64)];
+fn deploy_payload_matches_the_shared_full_launch_fixture() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../crates/buzz-backend-kubernetes/tests/fixtures/provider-wire/deploy-full-launch.request.json",
+    );
+    let fixture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", fixture_path.display())),
+    )
+    .expect("parse shared provider fixture");
+    let record: ManagedAgentRecord = serde_json::from_value(serde_json::json!({
+        "pubkey": "abcd1234",
+        "name": "worker",
+        "private_key_nsec": "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+        "relay_url": "wss://localhost:3000",
+        "auth_tag": "tag-1",
+        "acp_command": "buzz-acp",
+        "agent_command": "goose",
+        "runtime": "goose",
+        "model": "gpt-5",
+        "provider": "openai",
+        "env_vars": {"USER_KEY": "user-value"},
+        "agent_args": [],
+        "mcp_command": "",
+        "turn_timeout_seconds": 300,
+        "system_prompt": null,
+        "idle_timeout_seconds": null,
+        "max_turn_duration_seconds": null,
+        "parallelism": 10,
+        "respond_to": "allowlist",
+        "respond_to_allowlist": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z"
+    }))
+    .expect("fixture source record");
+    let descriptor = crate::managed_agents::resolve_effective_harness_descriptor(
+        &record,
+        &[],
+        &crate::managed_agents::GlobalAgentConfig::default(),
+    )
+    .expect("resolve fixture source record descriptor");
+    let launch = super::deploy::build_launch_block(
+        &record,
+        &descriptor,
+        &[],
+        None,
+        Some("gpt-5"),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    let agent = deploy_payload_json(
+        &record,
+        "wss://relay.example".into(),
+        DeployProjections {
+            effective_model: Some("gpt-5".into()),
+            effective_provider: Some("openai".into()),
+            effective_prompt: None,
+            effective_parallelism: crate::managed_agents::effective_parallelism(
+                &descriptor.command,
+                record.parallelism,
+            ),
+            // Fixture asserts the record's own access fields survive.
+            owner_only_access: false,
+        },
+        std::collections::BTreeMap::from([("USER_KEY".into(), "user-value".into())]),
+        launch,
+    );
+
+    assert_eq!(
+        agent, fixture["agent"],
+        "desktop payload drifted from the shared provider fixture"
+    );
+}
 
 fn deploy_payload_carries_the_full_behavioral_quad() {
     let allow = "a".repeat(64);
