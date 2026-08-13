@@ -182,30 +182,74 @@ type AgentAutocompleteCandidate = {
   isManagedAgent?: boolean;
   isMember?: boolean;
   personaId?: string | null;
+  /** Workspace role, from the agent's published kind-0 profile. */
+  roleId?: string | null;
 };
 
-function agentIdentityKey<T extends AgentAutocompleteCandidate>(candidate: T) {
-  if (candidate.isAgent !== true || !candidate.pubkey) {
+function normalizeLabel(label: string | null | undefined) {
+  return label?.trim().toLowerCase() || null;
+}
+
+function agentIdentityKey<T extends AgentAutocompleteCandidate>(
+  candidate: T,
+  currentPubkey: string | null | undefined,
+  getLabel: (candidate: T) => string | null | undefined,
+) {
+  if (candidate.isAgent !== true) {
     return null;
   }
 
-  // Pubkeys—not persona metadata or a display name—are agent identities.
-  // A persona may be installed more than once, and an owner may intentionally
-  // create multiple same-named agents. Collapsing either case makes one agent
-  // impossible to choose from autocomplete.
-  return `pubkey:${normalizePubkey(candidate.pubkey)}`;
+  // Role first, and deliberately above persona and owner. Each member runs
+  // their own instance of a workspace role, with its own key, owner and
+  // persona id — the role is the only thing they share, so it is the only key
+  // that collapses them into the one colleague the workspace should see
+  // (docs/design/role-agents.html).
+  if (candidate.roleId) {
+    return `role:${candidate.roleId.trim().toLowerCase()}`;
+  }
+
+  if (candidate.personaId) {
+    return `persona:${candidate.personaId}`;
+  }
+
+  const label = normalizeLabel(getLabel(candidate));
+  if (!label) {
+    return null;
+  }
+
+  const ownerPubkey = candidate.ownerPubkey
+    ? normalizePubkey(candidate.ownerPubkey)
+    : null;
+  if (ownerPubkey) {
+    if (currentPubkey && ownerPubkey === normalizePubkey(currentPubkey)) {
+      return `local:name:${label}`;
+    }
+    return `owner:${ownerPubkey}:name:${label}`;
+  }
+
+  return null;
 }
 
 function agentCandidateRank<T extends AgentAutocompleteCandidate>(
   candidate: T,
+  currentPubkey: string | null | undefined,
   preferredPubkeys: ReadonlySet<string>,
 ) {
   const pubkey = candidate.pubkey ? normalizePubkey(candidate.pubkey) : null;
+  const ownerPubkey = candidate.ownerPubkey
+    ? normalizePubkey(candidate.ownerPubkey)
+    : null;
+  const normalizedCurrentPubkey = currentPubkey
+    ? normalizePubkey(currentPubkey)
+    : null;
 
   return [
+    // Own instance first: a merged role must resolve to the agent that will
+    // actually answer this member, which is the one they own.
+    ownerPubkey && ownerPubkey === normalizedCurrentPubkey ? 0 : 1,
+    candidate.isManagedAgent === true ? 0 : 1,
     candidate.isMember === true ? 0 : 1,
     pubkey && preferredPubkeys.has(pubkey) ? 0 : 1,
-    candidate.isManagedAgent === true ? 0 : 1,
     candidate.personaId ? 0 : 1,
   ];
 }
@@ -213,10 +257,15 @@ function agentCandidateRank<T extends AgentAutocompleteCandidate>(
 function isPreferredAgentCandidate<T extends AgentAutocompleteCandidate>(
   next: T,
   current: T,
+  currentPubkey: string | null | undefined,
   preferredPubkeys: ReadonlySet<string>,
 ) {
-  const nextRank = agentCandidateRank(next, preferredPubkeys);
-  const currentRank = agentCandidateRank(current, preferredPubkeys);
+  const nextRank = agentCandidateRank(next, currentPubkey, preferredPubkeys);
+  const currentRank = agentCandidateRank(
+    current,
+    currentPubkey,
+    preferredPubkeys,
+  );
 
   for (let index = 0; index < nextRank.length; index++) {
     if (nextRank[index] !== currentRank[index]) {
@@ -255,8 +304,8 @@ export function coalesceAgentAutocompleteCandidates<
 >(
   candidates: readonly T[],
   {
-    currentPubkey: _currentPubkey,
-    getLabel: _getLabel,
+    currentPubkey,
+    getLabel,
     preferredPubkeys = new Set(),
   }: {
     currentPubkey?: string | null;
@@ -268,7 +317,7 @@ export function coalesceAgentAutocompleteCandidates<
   const indexesByKey = new Map<string, number>();
 
   for (const candidate of candidates) {
-    const key = agentIdentityKey(candidate);
+    const key = agentIdentityKey(candidate, currentPubkey, getLabel);
     if (!key) {
       output.push(candidate);
       continue;
@@ -285,6 +334,7 @@ export function coalesceAgentAutocompleteCandidates<
       isPreferredAgentCandidate(
         candidate,
         output[currentIndex],
+        currentPubkey,
         preferredPubkeys,
       )
     ) {

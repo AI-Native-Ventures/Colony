@@ -8,23 +8,28 @@ use crate::managed_agents::{
 use super::normalize_agent_args;
 
 /// Static data for a well-known tier-2 ACP harness.
-pub(super) struct PresetHarness {
+pub(crate) struct PresetHarness {
     pub(super) id: &'static str,
-    label: &'static str,
-    command: &'static str,
-    args: &'static [&'static str],
-    install_instructions_url: &'static str,
-    install_hint: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) command: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) install_instructions_url: &'static str,
+    pub(crate) install_hint: &'static str,
     /// Vendor CLI the ACP command wraps, when the preset is an adapter.
     ///
     /// Consulted only when the adapter is absent, so `AdapterMissing` replaces
     /// `NotInstalled` when the CLI is present but the adapter is not. `None`
     /// when the command is itself the vendor CLI.
-    underlying_cli: Option<&'static str>,
+    /// Env var the harness reads to select its LLM provider, when it has one.
+    /// `None` for harnesses whose provider is fixed or embedded in the model
+    /// id. `Some` renders the provider switcher and gates provider-scoped
+    /// model discovery.
+    pub(crate) provider_env_var: Option<&'static str>,
+    pub(crate) underlying_cli: Option<&'static str>,
 }
 
 /// Build one preset catalog entry through an injectable command resolver.
-pub(super) fn preset_catalog_entry(
+pub(crate) fn preset_catalog_entry(
     def: &PresetHarness,
     resolve: impl Fn(&str) -> Option<PathBuf>,
 ) -> AcpRuntimeCatalogEntry {
@@ -65,7 +70,7 @@ pub(super) fn preset_catalog_entry(
         ),
         mcp_command: None,
         model_env_var: None,
-        provider_env_var: None,
+        provider_env_var: def.provider_env_var.map(str::to_string),
         thinking_env_var: None,
         max_tokens_env_var: None,
         context_limit_env_var: None,
@@ -89,7 +94,7 @@ pub(super) fn preset_catalog_entry(
     }
 }
 
-pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
+pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
     PresetHarness {
         id: "devin",
         label: "Devin",
@@ -97,6 +102,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://docs.devin.ai/cli",
         install_hint: "Buzz talks to Devin through the official Devin CLI's ACP mode (devin acp).",
+        provider_env_var: None,
         underlying_cli: None,
     },
     PresetHarness {
@@ -106,6 +112,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://cursor.com/downloads",
         install_hint: "Buzz talks to Cursor through the cursor-agent CLI's ACP mode.",
+        provider_env_var: None,
         underlying_cli: None,
     },
     PresetHarness {
@@ -115,6 +122,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://omp.sh/",
         install_hint: "Buzz talks to Oh My Pi through its CLI's ACP mode (omp acp).",
+        provider_env_var: None,
         underlying_cli: None,
     },
     PresetHarness {
@@ -124,6 +132,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["agent", "--always-approve", "stdio"],
         install_instructions_url: "https://build.x.ai/docs",
         install_hint: "Buzz talks to Grok Build through its CLI's agent stdio mode.",
+        provider_env_var: None,
         underlying_cli: None,
     },
     PresetHarness {
@@ -133,6 +142,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://opencode.ai/docs",
         install_hint: "Buzz talks to OpenCode through its CLI's ACP mode (opencode acp).",
+        provider_env_var: None,
         underlying_cli: None,
     },
     PresetHarness {
@@ -142,6 +152,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://kimi.ai/download",
         install_hint: "Buzz talks to Kimi Code through its CLI's ACP mode (kimi acp).",
+        provider_env_var: None,
         underlying_cli: None,
     },
     PresetHarness {
@@ -151,6 +162,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &[],
         install_instructions_url: "https://github.com/tao12345666333/amp-acp",
         install_hint: "Buzz talks to the Amp CLI through the amp-acp adapter. Follow the setup guide to install the adapter so the amp-acp command is on your PATH.",
+        provider_env_var: None,
         underlying_cli: Some("amp"),
     },
     PresetHarness {
@@ -160,6 +172,7 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &[],
         install_instructions_url: "https://hermes-agent.nousresearch.com",
         install_hint: "Buzz talks to Hermes Agent through its hermes-acp command.",
+        provider_env_var: None,
         underlying_cli: None,
     },
     PresetHarness {
@@ -176,6 +189,18 @@ pub(super) const PRESET_HARNESSES: &[PresetHarness] = &[
             Gateway's execution environment. If your tools or agent logic \
             needs BUZZ_* credentials at execution time, set them on the \
             Gateway's own environment separately.",
+        provider_env_var: None,
+        underlying_cli: None,
+    },
+
+    PresetHarness {
+        id: "prime-agent",
+        label: "Prime Agent",
+        command: "prime-agent",
+        args: &["--mode", "acp"],
+        install_instructions_url: "https://github.com/PrimeIntellect-ai/prime-agent",
+        install_hint: "Colony talks to Prime Agent through its native ACP mode. Install with: npm install -g prime-agent",
+        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
         underlying_cli: None,
     },
 ];
@@ -292,6 +317,7 @@ mod tests {
         args: &[],
         install_instructions_url: "https://example.com/install",
         install_hint: "Install the amp-acp npm adapter.",
+        provider_env_var: None,
         underlying_cli: Some("amp"),
     };
 
@@ -401,6 +427,7 @@ mod tests {
     #[test]
     fn preset_without_underlying_cli_stays_simple() {
         let preset = PresetHarness {
+            provider_env_var: None,
             underlying_cli: None,
             ..ADAPTER_PRESET
         };

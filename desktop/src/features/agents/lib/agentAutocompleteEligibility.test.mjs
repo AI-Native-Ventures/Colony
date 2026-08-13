@@ -336,28 +336,6 @@ test("shouldHideAgentFromMentions: normalizes the pubkey before lookup", () => {
   );
 });
 
-test("coalesceAgentAutocompleteCandidates: keeps agents with the same persona id distinct", () => {
-  const first = makeAgent({ pubkey: PUB_A, personaId: "pinky" });
-  const second = makeAgent({
-    pubkey: PUB_B,
-    personaId: "pinky",
-    isMember: true,
-  });
-
-  assert.deepEqual(coalesce([first, second]), [first, second]);
-});
-
-test("coalesceAgentAutocompleteCandidates: keeps agents with the same owner and name distinct", () => {
-  const first = makeAgent({ pubkey: PUB_A, ownerPubkey: OWNER_PUBKEY });
-  const second = makeAgent({
-    pubkey: PUB_B,
-    ownerPubkey: OWNER_PUBKEY,
-    isMember: true,
-  });
-
-  assert.deepEqual(coalesce([first, second]), [first, second]);
-});
-
 test("coalesceAgentAutocompleteCandidates: keeps same-name agents with different owners distinct", () => {
   const first = makeAgent({ pubkey: PUB_A, ownerPubkey: OWNER_PUBKEY });
   const second = makeAgent({
@@ -380,27 +358,6 @@ test("coalesceAgentAutocompleteCandidates: keeps owner-less managed same-name ag
   const second = makeAgent({ pubkey: PUB_B, isManagedAgent: true });
 
   assert.deepEqual(coalesce([first, second]), [first, second]);
-});
-
-test("coalesceAgentAutocompleteCandidates: keeps current-owner same-name agents distinct", () => {
-  const first = makeAgent({ pubkey: PUB_A, ownerPubkey: CURRENT_PUBKEY });
-  const second = makeAgent({
-    pubkey: PUB_B,
-    ownerPubkey: CURRENT_PUBKEY,
-    isManagedAgent: true,
-  });
-
-  assert.deepEqual(coalesce([first, second]), [first, second]);
-});
-
-test("coalesceAgentAutocompleteCandidates: coalesces repeated source rows for the same pubkey", () => {
-  const first = makeAgent({ pubkey: PUB_A });
-  const second = makeAgent({
-    pubkey: PUB_A.toUpperCase(),
-    isMember: true,
-  });
-
-  assert.deepEqual(coalesce([first, second]), [second]);
 });
 
 test("coalesceAgentAutocompleteCandidates: leaves non-agents alone", () => {

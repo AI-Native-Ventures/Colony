@@ -18,7 +18,6 @@ import {
   getAgentObserverSnapshot,
   getAgentTranscript,
   subscribeAgentObserverStore,
-  subscribeAgentManagementRequests,
   resetAgentObserverStore,
   _testProcessLiveObserverEvents,
 } from "./observerRelayStore.ts";
@@ -1667,56 +1666,6 @@ describe("observer → active-turns bridge sync", () => {
       0,
       "the terminal event must still clear derived liveness",
     );
-  });
-
-  it("makes the triggering frame visible before management callbacks", () => {
-    const managementFrame = makeEvent({
-      seq: 2,
-      kind: "acp_message",
-      timestamp: "2024-01-01T00:00:01Z",
-      payload: {
-        type: "agent_management_request",
-        action: "create",
-        requestId: "request-1",
-        request: {
-          channelId: "chan-1",
-          displayName: "Fleet Observer",
-          systemPrompt: "Observe the fleet.",
-        },
-      },
-    });
-    let visibleSeqs = [];
-    let observerNotifications = 0;
-    const unsubscribeObserver = subscribeAgentObserverStore(() => {
-      observerNotifications += 1;
-    });
-    const unsubscribeManagement = subscribeAgentManagementRequests(
-      (agentPubkey) => {
-        assert.equal(agentPubkey, AGENT);
-        visibleSeqs = getAgentObserverSnapshot(AGENT, true).events.map(
-          (event) => event.seq,
-        );
-        assert.equal(
-          observerNotifications,
-          0,
-          "the global publication must remain deferred until callbacks finish",
-        );
-      },
-    );
-
-    _testProcessLiveObserverEvents(AGENT, [
-      makeEvent({ seq: 1, kind: "turn_started" }),
-      managementFrame,
-    ]);
-    unsubscribeManagement();
-    unsubscribeObserver();
-
-    assert.deepEqual(
-      visibleSeqs,
-      [1, 2],
-      "management callback must observe its triggering frame and prior envelope frames",
-    );
-    assert.equal(observerNotifications, 1);
   });
 
   it("does not publish when a replay batch is entirely duplicate", () => {

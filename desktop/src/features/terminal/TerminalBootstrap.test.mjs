@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, test } from "node:test";
 
 import { JSDOM } from "jsdom";
+
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
 import { setTerminalPanelMode } from "./terminalPanelStore.ts";
 
 // `pretendToBeVisual` is what gives jsdom requestAnimationFrame. The banner's
@@ -13,7 +17,7 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
 });
 const callbacks = new Map();
 const calls = [];
-let nextCallback = 1;
+const nextCallback = 1;
 let channel;
 let resizeCallback;
 let canvasWidth = 840;
@@ -80,8 +84,8 @@ before(async () => {
     setTransform() {},
     textBaseline: "",
   });
-  dom.window.__TAURI_INTERNALS__ = {
-    invoke(command, args) {
+  setNativeBridge({
+    ...createMockNativeBridge((command, args) => {
       calls.push({ command, args });
       if (command === "terminal_attach") {
         channel = args.onFrame;
@@ -116,16 +120,9 @@ before(async () => {
         });
       }
       return Promise.resolve();
-    },
-    transformCallback(callback) {
-      const id = nextCallback++;
-      callbacks.set(id, callback);
-      return id;
-    },
-    unregisterCallback(id) {
-      callbacks.delete(id);
-    },
-  };
+    }),
+    isTauri: () => true,
+  });
 });
 
 after(() => dom.window.close());
@@ -144,8 +141,8 @@ afterEach(async () => {
 });
 
 function emit(message, index = 0) {
-  const id = Number(channel.toJSON().slice("__CHANNEL__:".length));
-  callbacks.get(id)({ index, message });
+  void index;
+  channel?.onmessage?.(message);
 }
 
 test("mounted bootstrap passes GUI context and ACKs only after consuming a frame", async () => {

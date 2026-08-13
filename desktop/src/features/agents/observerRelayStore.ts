@@ -7,10 +7,6 @@ import { putAgentSessionConfig } from "@/shared/api/tauri";
 import { putManagedAgentRuntimeLifecycle } from "@/shared/api/tauriManagedAgents";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { decryptObserverEvent } from "@/shared/api/tauriObserver";
-import {
-  parseAgentManagementRequest,
-  type AgentManagementRequest,
-} from "./agentManagement";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useQueryClient } from "@tanstack/react-query";
 import { agentConfigSurfaceQueryKey } from "@/features/agents/hooks";
@@ -99,10 +95,6 @@ export function getLatestLiveSessionId(
 const controlResultListeners = new Map<
   string,
   Set<(frame: ControlResultFrame) => void>
->();
-
-const agentManagementListeners = new Set<
-  (agentPubkey: string, request: AgentManagementRequest) => void
 >();
 
 // Normalized pubkeys of agents we are actively managing. Only events whose
@@ -411,12 +403,6 @@ function processLiveObserverEvents(
         });
       }
     }
-    const managementRequest = parseAgentManagementRequest(parsed.payload);
-    if (managementRequest) {
-      for (const listener of agentManagementListeners) {
-        listener(agentPubkey, managementRequest);
-      }
-    }
     if (parsed.kind === "session_config_captured") {
       void putAgentSessionConfig(agentPubkey, parsed.payload);
       onSessionConfigCaptured?.(agentPubkey);
@@ -569,20 +555,6 @@ function dispatchControlResult(agentPubkey: string, payload: unknown) {
   for (const subscriber of subscribers) {
     subscriber(payload);
   }
-}
-
-/**
- * Subscribe to `control_result` frames for a single agent. Returns an
- * unsubscribe function. Used by the ModelPicker to learn the async outcome of
- * a `switch_model` frame.
- */
-export function subscribeAgentManagementRequests(
-  listener: (agentPubkey: string, request: AgentManagementRequest) => void,
-) {
-  agentManagementListeners.add(listener);
-  return () => {
-    agentManagementListeners.delete(listener);
-  };
 }
 
 export function subscribeControlResults(
@@ -855,7 +827,6 @@ export function resetAgentObserverStore() {
   knownAgentsBySubscription.clear();
   pendingUnknownAgentFrames.length = 0;
   latestLiveSessionByAgentChannel.clear();
-  agentManagementListeners.clear();
   onSessionConfigCaptured = null;
   connectionState = "idle";
   errorMessage = null;

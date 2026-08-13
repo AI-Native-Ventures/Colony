@@ -1,12 +1,13 @@
 use super::overrides::{divergent_agent_command_override, update_time_agent_command_override};
+use super::presets::{preset_catalog_entry, PresetHarness};
 #[cfg(windows)]
 use super::refresh_login_shell_path;
 use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
     codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
     effective_agent_command, find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
-    preset_catalog_entry, probe_codex_acp_version, record_agent_command, try_record_agent_command,
-    PresetHarness, BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
+    probe_codex_acp_version, record_agent_command, try_record_agent_command, BUZZ_AGENT_AVATAR_URL,
+    CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
 use std::path::PathBuf;

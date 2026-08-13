@@ -3,6 +3,11 @@ import { after, afterEach, before, test } from "node:test";
 
 import { JSDOM } from "jsdom";
 
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
+setNativeBridge(createMockNativeBridge(() => null));
+
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://localhost",
 });

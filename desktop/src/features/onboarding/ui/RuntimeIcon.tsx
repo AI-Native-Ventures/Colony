@@ -19,7 +19,12 @@ const RUNTIME_LOGOS: Record<string, string> = {
 export const PRESET_LOGOS: Record<string, string> = {
   devin: "/harness-logos/devin.svg",
   omp: "/harness-logos/omp.svg",
+  grok: "/harness-logos/grok.svg",
   opencode: "/harness-logos/opencode.svg",
+  kimi: "/harness-logos/kimi.png",
+  amp: "/harness-logos/amp.png",
+  hermes: "/harness-logos/hermes.png",
+  openclaw: "/harness-logos/openclaw.svg",
   "prime-agent": "/harness-logos/prime-agent.svg",
 };
 

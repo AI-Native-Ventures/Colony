@@ -3,6 +3,11 @@ import { after, before, beforeEach, test } from "node:test";
 
 import { JSDOM } from "jsdom";
 
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
+setNativeBridge(createMockNativeBridge(() => null));
+
 let act;
 let cleanup;
 let createElement;

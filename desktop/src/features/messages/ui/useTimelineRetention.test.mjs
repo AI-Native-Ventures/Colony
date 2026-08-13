@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { afterEach, it } from "node:test";
 
 import { JSDOM } from "jsdom";
+
+import { setNativeBridge } from "@/shared/api/nativeBridge";
+import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
+
+setNativeBridge(createMockNativeBridge(() => null));
+
 import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
