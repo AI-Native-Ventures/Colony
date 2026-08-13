@@ -840,12 +840,18 @@ mod tests {
     }
 
     #[test]
-    fn goose_with_provider_and_model_and_key_is_ready() {
+    fn provider_selection_runtime_with_provider_and_model_and_key_is_ready() {
+        // buzz-agent is the shipped provider-selection runtime; the full
+        // agent_readiness path (runtime resolution + requirements) must report
+        // ready when provider/model/credential are all present. (The old goose
+        // variant died with the goose catalog removal — goose is no longer a
+        // known runtime, so agent_readiness reports MissingBinary on machines
+        // without the goose CLI.)
         let env = make_env(
-            "goose",
+            "buzz-agent",
             env_with(&[
-                ("GOOSE_PROVIDER", "anthropic"),
-                ("GOOSE_MODEL", "claude-opus-4-5"),
+                ("BUZZ_AGENT_PROVIDER", "anthropic"),
+                ("BUZZ_AGENT_MODEL", "claude-opus-4-5"),
                 ("ANTHROPIC_API_KEY", "sk-test"),
             ]),
         );
