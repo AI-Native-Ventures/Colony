@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'accent_colors.dart';
 import 'app_colors.dart';
 
 /// Name of the first-party Colony theme. Colony reuses the GitHub Light palette
@@ -64,13 +63,6 @@ Color navigationSearchSurface(BuildContext context) {
 /// A low-contrast navigation divider derived from the active theme foreground.
 Color navigationDivider(BuildContext context, double opacity) =>
     navigationPrimaryForeground(context).withValues(alpha: opacity);
-
-/// Colony renders with its fixed neutral foreground while preserving the
-/// stored wire accent so the user's choice returns on another theme.
-int effectiveAccentIndex(String themeName, String storedAccent) {
-  if (isColonyTheme(themeName)) return neutralAccentIndex;
-  return accentIndexForWireValue(storedAccent) ?? defaultAccentIndex;
-}
 
 /// Gradient stops, matching desktop's `--buzz-gradient-*` custom properties.
 /// Desktop has not renamed those properties, so the reference is deliberate.

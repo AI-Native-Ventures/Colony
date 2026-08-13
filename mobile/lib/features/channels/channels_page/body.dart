@@ -7,9 +7,6 @@ class _ChannelsBody extends StatelessWidget {
   final SessionStatus sessionStatus;
   final bool showConnectionSkeleton;
   final String? currentPubkey;
-  final double topSectionHeight;
-  final bool usesPinnedGradient;
-  final ScrollController scrollController;
   final Future<void> Function() onRefresh;
   final Future<void> Function(Channel channel) onSelectChannel;
 
@@ -20,16 +17,13 @@ class _ChannelsBody extends StatelessWidget {
     required this.sessionStatus,
     required this.showConnectionSkeleton,
     required this.currentPubkey,
-    required this.topSectionHeight,
-    required this.usesPinnedGradient,
-    required this.scrollController,
     required this.onRefresh,
     required this.onSelectChannel,
   });
 
   @override
   Widget build(BuildContext context) {
-    final barHeight = topSectionHeight;
+    final barHeight = frostedAppBarHeight(context);
     final loadedChannels = channels;
     final loading =
         showConnectionSkeleton || (loadedChannels == null && !showError);
@@ -40,36 +34,17 @@ class _ChannelsBody extends StatelessWidget {
           )
         : loadedChannels == null
         ? const SizedBox.shrink()
-        : BeeRefreshIndicator(
+        : RefreshIndicator(
             edgeOffset: barHeight,
             onRefresh: onRefresh,
             child: CustomScrollView(
-              controller: scrollController,
-              // The transparent gap shows the top section and must not absorb
-              // taps meant for the community or profile controls beneath it.
-              hitTestBehavior: HitTestBehavior.deferToChild,
               slivers: [
                 SliverToBoxAdapter(child: SizedBox(height: barHeight)),
-                if (usesPinnedGradient)
-                  _SliverChannelsList(
-                    channels: loadedChannels,
-                    currentPubkey: currentPubkey,
-                    onSelectChannel: onSelectChannel,
-                  )
-                else
-                  DecoratedSliver(
-                    decoration: BoxDecoration(
-                      color: context.colors.surface,
-                      borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(Radii.dialog),
-                      ),
-                    ),
-                    sliver: _SliverChannelsList(
-                      channels: loadedChannels,
-                      currentPubkey: currentPubkey,
-                      onSelectChannel: onSelectChannel,
-                    ),
-                  ),
+                _SliverChannelsList(
+                  channels: loadedChannels,
+                  currentPubkey: currentPubkey,
+                  onSelectChannel: onSelectChannel,
+                ),
               ],
             ),
           );
@@ -126,7 +101,6 @@ class _SliverChannelsList extends HookConsumerWidget {
     final starredExpanded = useState(true);
     final channelsExpanded = useState(true);
     final dmsExpanded = useState(true);
-    final sortState = ref.watch(channelSortProvider);
     final initialSeedComplete = useState(false);
     final seededPubkey = useRef<String?>(null);
     final seedCompleteForPubkey =
@@ -173,6 +147,11 @@ class _SliverChannelsList extends HookConsumerWidget {
             readState.effectiveTimestamp(channelId) != null)
           channelId,
     };
+    final unreadChannelCounts = {
+      for (final entry in unreadState.counts.entries)
+        if (unreadChannelIds.contains(entry.key)) entry.key: entry.value,
+    };
+
     // Build sorted user-defined sections and compute which stream channels
     // belong to each section. Channels not assigned to any valid section fall
     // through to the built-in "Channels" list.
@@ -186,33 +165,16 @@ class _SliverChannelsList extends HookConsumerWidget {
     };
     // Starred is exclusive: a starred channel lives only in the Starred section,
     // not in its custom section or the default Channels list.
-    final starredStreamChannels = sortChannelsForList(
-      streamChannels.where((c) => starredChannelIds.contains(c.id)).toList(),
-      sortState.sortModeFor('starred'),
-    );
-    final ungroupedStreamChannels = sortChannelsForList(
-      streamChannels
-          .where(
-            (c) =>
-                !assignedChannelIds.contains(c.id) &&
-                !starredChannelIds.contains(c.id),
-          )
-          .toList(),
-      sortState.sortModeFor('channels'),
-    );
-    // DMs default to the display-label alphabetical order (labels can differ
-    // from channel names); Recent mode reorders by last message time.
-    final sortedDmChannels =
-        sortState.sortModeFor('dms') == ChannelSortMode.recent
-        ? sortChannelsForList(dmChannels, ChannelSortMode.recent)
-        : dmChannels;
-
-    final liveSectionIds = [for (final s in userSections) s.id];
-    void setSortMode(String groupKey, ChannelSortMode mode) {
-      ref
-          .read(channelSortProvider.notifier)
-          .setSortModeFor(groupKey, mode, liveSectionIds: liveSectionIds);
-    }
+    final starredStreamChannels = streamChannels
+        .where((c) => starredChannelIds.contains(c.id))
+        .toList();
+    final ungroupedStreamChannels = streamChannels
+        .where(
+          (c) =>
+              !assignedChannelIds.contains(c.id) &&
+              !starredChannelIds.contains(c.id),
+        )
+        .toList();
 
     final sectionExpandedStates = useState<Map<String, bool>>({});
 
@@ -246,28 +208,25 @@ class _SliverChannelsList extends HookConsumerWidget {
                 onToggle: () => starredExpanded.value = !starredExpanded.value,
                 channels: starredStreamChannels,
                 unreadChannelIds: unreadChannelIds,
+                unreadChannelCounts: unreadChannelCounts,
                 mutedChannelIds: mutedChannelIds,
                 currentPubkey: currentPubkey,
                 emptyLabel: '',
-                sortMode: sortState.sortModeFor('starred'),
-                onSortModeChange: (mode) => setSortMode('starred', mode),
                 onSelectChannel: onSelectChannel,
               ),
             // User-defined sections for stream channels, in user-defined order.
             for (final section in userSections)
               _CustomChannelSection(
                 section: section,
-                channels: sortChannelsForList(
-                  streamChannels
-                      .where(
-                        (c) =>
-                            sectionAssignments[c.id] == section.id &&
-                            !starredChannelIds.contains(c.id),
-                      )
-                      .toList(),
-                  sortState.sortModeFor(sectionSortGroupKey(section.id)),
-                ),
+                channels: streamChannels
+                    .where(
+                      (c) =>
+                          sectionAssignments[c.id] == section.id &&
+                          !starredChannelIds.contains(c.id),
+                    )
+                    .toList(),
                 unreadChannelIds: unreadChannelIds,
+                unreadChannelCounts: unreadChannelCounts,
                 mutedChannelIds: mutedChannelIds,
                 currentPubkey: currentPubkey,
                 expanded: sectionExpanded(section.id),
@@ -278,7 +237,7 @@ class _SliverChannelsList extends HookConsumerWidget {
                     userSections.first.id != section.id,
                 onToggle: () => toggleSection(section.id),
                 onRename: () async {
-                  final name = await showBuzzDialog<String>(
+                  final name = await showDialog<String>(
                     context: context,
                     builder: (_) => _SectionNameDialog(
                       title: 'Rename Section',
@@ -293,7 +252,7 @@ class _SliverChannelsList extends HookConsumerWidget {
                   }
                 },
                 onDelete: () async {
-                  final confirmed = await showBuzzDialog<bool>(
+                  final confirmed = await showDialog<bool>(
                     context: context,
                     builder: (_) => AlertDialog(
                       title: Text('Delete "${section.name}"?'),
@@ -327,11 +286,6 @@ class _SliverChannelsList extends HookConsumerWidget {
                 onMoveDown: () => ref
                     .read(channelSectionsProvider.notifier)
                     .moveSectionDown(section.id),
-                sortMode: sortState.sortModeFor(
-                  sectionSortGroupKey(section.id),
-                ),
-                onSortModeChange: (mode) =>
-                    setSortMode(sectionSortGroupKey(section.id), mode),
                 onSelectChannel: onSelectChannel,
                 onMarkChannelRead: (channel) {
                   final ts = dateTimeToUnixSeconds(channel.lastMessageAt);
@@ -358,11 +312,10 @@ class _SliverChannelsList extends HookConsumerWidget {
               onToggle: () => channelsExpanded.value = !channelsExpanded.value,
               channels: ungroupedStreamChannels,
               unreadChannelIds: unreadChannelIds,
+              unreadChannelCounts: unreadChannelCounts,
               mutedChannelIds: mutedChannelIds,
               currentPubkey: currentPubkey,
               emptyLabel: 'No stream channels yet',
-              sortMode: sortState.sortModeFor('channels'),
-              onSortModeChange: (mode) => setSortMode('channels', mode),
               onSelectChannel: onSelectChannel,
             ),
             _ChannelSection(
@@ -371,13 +324,12 @@ class _SliverChannelsList extends HookConsumerWidget {
               showTopDivider: true,
               expanded: dmsExpanded.value,
               onToggle: () => dmsExpanded.value = !dmsExpanded.value,
-              channels: sortedDmChannels,
+              channels: dmChannels,
               unreadChannelIds: unreadChannelIds,
+              unreadChannelCounts: unreadChannelCounts,
               mutedChannelIds: mutedChannelIds,
               currentPubkey: currentPubkey,
               emptyLabel: 'No direct messages yet',
-              sortMode: sortState.sortModeFor('dms'),
-              onSortModeChange: (mode) => setSortMode('dms', mode),
               onSelectChannel: onSelectChannel,
             ),
           ],

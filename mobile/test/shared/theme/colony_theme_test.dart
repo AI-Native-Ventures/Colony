@@ -60,24 +60,6 @@ void main() {
       );
     });
 
-    test('forces neutral rendering without changing the stored accent', () {
-      const storedAccent = '#ef4444';
-
-      expect(
-        effectiveAccentIndex(colonyThemeName, storedAccent),
-        neutralAccentIndex,
-      );
-      expect(
-        effectiveAccentIndex(colonyDarkThemeName, storedAccent),
-        neutralAccentIndex,
-      );
-      expect(
-        effectiveAccentIndex('github-light', storedAccent),
-        accentIndexForWireValue(storedAccent),
-      );
-      expect(storedAccent, '#ef4444');
-    });
-
     test('resolve across brightnesses like any other pair', () {
       final resolved = resolveSchemes(colonyThemeName, ThemeMode.system);
       expect(resolved.forcedMode, isNull);
