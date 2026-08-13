@@ -945,6 +945,34 @@ test.describe("thread unread indicator", () => {
   // a message in the channel you are looking at is never unread). So the only
   // route to an unread top-level message here is the mark-unread action itself,
   // which is exactly what the toggle's forced-unread overlay exists to drive.
+  test("16-thread-header-read-state-toggle", async ({ page }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await waitForMockLiveSubscription(page, "general");
+
+    await emitMockMessage(page, "general", "Initial thread reply", {
+      parentEventId: "mock-general-welcome",
+      pubkey: TEST_IDENTITIES.alice.pubkey,
+      createdAt: Math.floor(Date.now() / 1000) - 10,
+    });
+    const summary = page.getByTestId("message-thread-summary").first();
+    await expect(summary).toBeVisible();
+    await summary.click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toBeVisible();
+
+    const toggle = panel.getByTestId("thread-read-state-toggle");
+    await expect(toggle).toHaveAttribute("aria-label", "Mark thread as unread");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-label", "Mark thread as read");
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-label", "Mark thread as unread");
+  });
+
   test("15-mark-read-unread-menu-single-toggle", async ({ page }) => {
     await installMockBridge(page);
     await page.goto("/");
