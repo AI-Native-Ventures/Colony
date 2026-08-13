@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 551,
+    "rust_total": 553,
     "tauri_coupled": 215,
-    "portable": 336,
+    "portable": 338,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -362,6 +362,7 @@
       "src-tauri/src/huddle/agent_tts_routing.rs",
       "src-tauri/src/huddle/agent_tts_routing_tests.rs",
       "src-tauri/src/huddle/jitter.rs",
+      "src-tauri/src/huddle/latency_bench.rs",
       "src-tauri/src/huddle/models_tests.rs",
       "src-tauri/src/huddle/models_voice_upgrade.rs",
       "src-tauri/src/huddle/pocket.rs",
@@ -372,6 +373,7 @@
       "src-tauri/src/huddle/tts_pipeline_controls.rs",
       "src-tauri/src/huddle/tts_startup.rs",
       "src-tauri/src/huddle/tts_startup_tests.rs",
+      "src-tauri/src/huddle/tts_streaming.rs",
       "src-tauri/src/huddle/tts_tests.rs",
       "src-tauri/src/huddle/tts_tests/token_split.rs",
       "src-tauri/src/huddle/tts_voice_registry.rs",
@@ -673,8 +675,8 @@
   "commands_per_module": {
     "src-tauri/src/commands/identity.rs": 23,
     "src-tauri/src/commands/channels.rs": 17,
-    "src-tauri/src/huddle/mod.rs": 14,
     "src-tauri/src/archive/mod.rs": 14,
+    "src-tauri/src/huddle/mod.rs": 13,
     "src-tauri/src/commands/web.rs": 12,
     "src-tauri/src/commands/messages.rs": 11,
     "src-tauri/src/commands/workflows.rs": 11,
@@ -695,6 +697,7 @@
     "src-tauri/src/commands/terminal.rs": 6,
     "src-tauri/src/commands/project_git_workflow.rs": 5,
     "src-tauri/src/commands/channel_templates.rs": 5,
+    "src-tauri/src/huddle/commands.rs": 4,
     "src-tauri/src/commands/initiative.rs": 4,
     "src-tauri/src/commands/workspace.rs": 4,
     "src-tauri/src/commands/task_transition.rs": 4,
@@ -715,7 +718,6 @@
     "src-tauri/src/electron_host/updater.rs": 3,
     "src-tauri/src/huddle/agent_voice.rs": 3,
     "src-tauri/src/huddle/audio_output.rs": 3,
-    "src-tauri/src/huddle/commands.rs": 3,
     "src-tauri/src/commands/ledger.rs": 3,
     "src-tauri/src/macos_notifications.rs": 3,
     "src-tauri/src/operator_console.rs": 3,
@@ -798,8 +800,8 @@
       ]
     },
     "add_agent_to_huddle": {
-      "defining_file": "src-tauri/src/huddle/mod.rs",
-      "module": "mod",
+      "defining_file": "src-tauri/src/huddle/commands.rs",
+      "module": "commands",
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
@@ -1184,7 +1186,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:605",
+        "src/features/huddle/HuddleContext.tsx:609",
         "src/parity/session/script.ts:688",
         "src/parity/session/script.ts:689"
       ]
@@ -1761,7 +1763,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:501"
+        "src/features/huddle/HuddleContext.tsx:505"
       ]
     },
     "ensure_huddle_agent_voice_settings": {
@@ -2225,7 +2227,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:555",
+        "src/features/huddle/HuddleContext.tsx:559",
         "src/parity/session/script.ts:306",
         "src/shared/api/tauriIdentity.ts:25"
       ]
@@ -2733,7 +2735,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/huddle/HuddleContext.tsx:88",
-        "src/features/huddle/HuddleContext.tsx:714"
+        "src/features/huddle/HuddleContext.tsx:722"
       ]
     },
     "leave_channel": {
@@ -2753,9 +2755,9 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:471",
-        "src/features/huddle/HuddleContext.tsx:473",
-        "src/features/huddle/HuddleContext.tsx:505"
+        "src/features/huddle/HuddleContext.tsx:475",
+        "src/features/huddle/HuddleContext.tsx:477",
+        "src/features/huddle/HuddleContext.tsx:509"
       ]
     },
     "ledger_add_price": {
@@ -3436,7 +3438,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:836"
+        "src/features/huddle/HuddleContext.tsx:845"
       ]
     },
     "record_org_placement": {
@@ -3846,8 +3848,9 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/HuddleContext.tsx:282",
-        "src/features/huddle/HuddleContext.tsx:357"
+        "src/features/huddle/HuddleContext.tsx:232",
+        "src/features/huddle/HuddleContext.tsx:286",
+        "src/features/huddle/HuddleContext.tsx:361"
       ]
     },
     "set_huddle_transcription_enabled": {
@@ -3971,7 +3974,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1562",
         "src/parity/session/script.ts:1563",
-        "src/shared/theme/ThemeProvider.tsx:495"
+        "src/shared/theme/ThemeProvider.tsx:498"
       ]
     },
     "show_native_notification": {
@@ -4068,7 +4071,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/huddle/HuddleContext.tsx:88",
-        "src/features/huddle/HuddleContext.tsx:639"
+        "src/features/huddle/HuddleContext.tsx:645"
       ]
     },
     "start_identity_recovery_pairing": {
