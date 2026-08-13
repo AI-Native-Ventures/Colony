@@ -6,6 +6,7 @@ import {
   CornerUpLeft,
   EllipsisVertical,
   Flag,
+  Globe2,
   Link2,
   MailCheck,
   MailOpen,
@@ -16,6 +17,11 @@ import {
 import * as React from "react";
 
 import { buildMessageLink } from "@/features/messages/lib/messageLink";
+import {
+  decideWorkspaceUrlOpening,
+  openUrlInWorkspace,
+} from "@/features/workspace/lib/openUrlInWorkspace";
+import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
 import { getThreadReference } from "@/features/messages/lib/threading";
@@ -30,6 +36,7 @@ import {
   useQuickReactionEmojis,
 } from "@/features/messages/ui/useQuickReactionEmojis";
 import { reactionEmojiUrl } from "@/shared/api/customEmoji";
+import { toast } from "sonner";
 import { cn } from "@/shared/lib/cn";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { emojiDisplayName } from "@/shared/lib/emojiName";
@@ -69,6 +76,7 @@ function MoreActionsMenu({
   onMarkUnread,
   onMarkRead,
   onOpenChange,
+  onOpenInWorkspace,
   onRemindLater,
   onUnfollowThread,
   open,
@@ -85,6 +93,7 @@ function MoreActionsMenu({
   onMarkUnread?: (message: TimelineMessage) => void;
   onMarkRead?: (message: TimelineMessage) => void;
   onOpenChange: (open: boolean) => void;
+  onOpenInWorkspace?: () => void;
   onRemindLater?: (message: TimelineMessage) => void;
   onUnfollowThread?: (message: TimelineMessage) => void;
   open: boolean;
@@ -208,6 +217,16 @@ function MoreActionsMenu({
             >
               <Copy className="h-4 w-4" />
               Copy message
+            </DropdownMenuItem>
+          ) : null}
+
+          {onOpenInWorkspace ? (
+            <DropdownMenuItem
+              data-testid={`open-workspace-${message.id}`}
+              onClick={onOpenInWorkspace}
+            >
+              <Globe2 className="h-4 w-4" />
+              Open in workspace
             </DropdownMenuItem>
           ) : null}
 
@@ -422,6 +441,21 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   );
   const hasReplyAction = Boolean(onReply);
   const hasReactionAction = Boolean(onReactionSelect);
+  const workspaceUrlDecision =
+    channelId && !message.pending
+      ? decideWorkspaceUrlOpening(
+          message.body,
+          (kind) => getTabKind(kind) !== undefined,
+        )
+      : null;
+  const handleOpenInWorkspace = React.useCallback(() => {
+    if (!channelId) return;
+    const result = openUrlInWorkspace({
+      body: message.body,
+      channelId,
+    });
+    if (!result.ok) toast.error(result.message);
+  }, [channelId, message.body]);
 
   const hasMoreMenuActions =
     Boolean(onEdit) ||
@@ -577,6 +611,11 @@ export const MessageActionBar = React.memo(function MessageActionBar({
               onMarkUnread={onMarkUnread}
               onMarkRead={onMarkRead}
               onOpenChange={setIsDropdownOpen}
+              onOpenInWorkspace={
+                workspaceUrlDecision?.supported
+                  ? handleOpenInWorkspace
+                  : undefined
+              }
               onRemindLater={onRemindLater}
               onUnfollowThread={onUnfollowThread}
               open={isDropdownOpen}
