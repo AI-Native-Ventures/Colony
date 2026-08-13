@@ -92,7 +92,7 @@ export type ProviderCredentialConfig =
       /** The env key holding the user-typed API secret. */
       secretEnvVar: string;
       /** Display label for the credential input field, e.g. "Anthropic API Key". */
-      apiKeyLabel: string;
+      apiKeyLabel?: string;
     };
 
 /**

@@ -76,8 +76,8 @@ export type DefaultConfigDraft = {
 export type DefaultConfigStepActions = {
   back: () => void;
   complete: () => void;
-  discardDraft: () => void;
-  updateDraft: (draft: DefaultConfigDraft) => void;
+  discardDraft?: () => void;
+  updateDraft?: (draft: DefaultConfigDraft) => void;
 };
 
 export type SetupStepRuntimeState = {
