@@ -2262,3 +2262,133 @@ CREATE TABLE operator_access_log (
 
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('operator_access_log', 'deployment-wide operator accountability; filter and target values are stored only as digests');
+
+-- Ported from migrations/0029_community_deletion.sql (upstream community-deletion + storage-sweep tables)
+CREATE TABLE community_deletion_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    community_id UUID NOT NULL UNIQUE REFERENCES communities(id),
+    community_host TEXT NOT NULL,
+    stage TEXT NOT NULL DEFAULT 'submitted' CHECK (stage IN (
+        'submitted', 'inventoried', 'approved', 'fenced', 'drained',
+        'bindings_removed', 'postgres_purged', 'cache_purged',
+        'logically_verified', 'retention_pending'
+    )),
+    requested_by TEXT NOT NULL,
+    reason TEXT,
+    schema_manifest JSONB,
+    storage_manifest JSONB,
+    destructive_storage_manifest JSONB,
+    destructive_storage_frozen_at TIMESTAMPTZ,
+    inventory_manifest JSONB,
+    inventory_digest BYTEA CHECK (inventory_digest IS NULL OR length(inventory_digest) = 32),
+    inventory_frozen_at TIMESTAMPTZ,
+    fence_generation BIGINT CHECK (fence_generation IS NULL OR fence_generation > 0),
+    lease_owner TEXT,
+    lease_generation BIGINT NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+    lease_until TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+    retry_stage TEXT CHECK (retry_stage IS NULL OR retry_stage IN (
+        'approved', 'fenced', 'drained', 'bindings_removed',
+        'postgres_purged', 'cache_purged', 'logically_verified'
+    )),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error TEXT,
+    last_error_at TIMESTAMPTZ,
+    blocked_at TIMESTAMPTZ,
+    blocked_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    CHECK ((blocked_at IS NULL) = (blocked_reason IS NULL)),
+    CHECK ((inventory_frozen_at IS NULL) = (inventory_digest IS NULL)),
+    UNIQUE (id, community_id, inventory_digest)
+);;
+
+CREATE TABLE community_deletion_checkpoints (
+    request_id UUID NOT NULL REFERENCES community_deletion_requests(id) ON DELETE RESTRICT,
+    sequence BIGINT GENERATED ALWAYS AS IDENTITY,
+    stage TEXT NOT NULL,
+    unit_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+    lease_generation BIGINT NOT NULL CHECK (lease_generation > 0),
+    attempts INTEGER NOT NULL DEFAULT 1 CHECK (attempts > 0),
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    PRIMARY KEY (request_id, sequence),
+    UNIQUE (request_id, stage, unit_key),
+    CHECK ((status = 'completed') = (completed_at IS NOT NULL)),
+    CHECK ((status = 'failed') = (error IS NOT NULL))
+);;
+
+CREATE TABLE community_deletion_manifest_keys (
+    request_id UUID NOT NULL REFERENCES community_deletion_requests(id) ON DELETE CASCADE,
+    chunk_no BIGINT NOT NULL CHECK (chunk_no >= 0),
+    prefix TEXT NOT NULL,
+    keys JSONB NOT NULL,
+    deleted_at TIMESTAMPTZ,
+    PRIMARY KEY (request_id, chunk_no)
+);;
+
+CREATE TABLE storage_taxonomy_sweeps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    started_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    listed_objects BIGINT NOT NULL CHECK (listed_objects >= 0),
+    unknown_object_count BIGINT NOT NULL CHECK (unknown_object_count >= 0),
+    unknown_key_sample JSONB NOT NULL DEFAULT '[]'::jsonb,
+    object_cap BIGINT NOT NULL CHECK (object_cap > 0),
+    CHECK (completed_at >= started_at)
+);;
+
+CREATE TABLE community_serving_write_leases (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    community_id UUID NOT NULL REFERENCES communities(id),
+    operation TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    generation BIGINT NOT NULL DEFAULT 1 CHECK (generation > 0),
+    -- Community fence generation observed when this lease was acquired.
+    fence_generation BIGINT NOT NULL CHECK (fence_generation >= 0),
+    lease_until TIMESTAMPTZ NOT NULL,
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);;
+
+CREATE TABLE community_deletion_executor_heartbeats (
+    executor_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL CHECK (mode IN ('run', 'drain', 'worker')),
+    request_id UUID REFERENCES community_deletion_requests(id) ON DELETE SET NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    draining BOOLEAN NOT NULL DEFAULT false,
+    stopped_at TIMESTAMPTZ
+);;
+
+CREATE INDEX community_deletion_requests_runnable
+    ON community_deletion_requests (next_attempt_at, created_at)
+    WHERE blocked_at IS NULL
+      AND stage IN ('approved', 'fenced', 'drained', 'bindings_removed',
+                    'postgres_purged', 'cache_purged', 'logically_verified');
+CREATE INDEX community_deletion_requests_lease
+    ON community_deletion_requests (lease_until)
+    WHERE lease_owner IS NOT NULL;
+CREATE INDEX storage_taxonomy_sweeps_latest
+    ON storage_taxonomy_sweeps (completed_at DESC);
+CREATE INDEX community_serving_write_leases_active
+    ON community_serving_write_leases (community_id, lease_until);
+
+
+-- Ported from migrations/0029_community_deletion.sql (community-deletion approvals)
+CREATE TABLE community_deletion_approvals (
+    request_id UUID PRIMARY KEY,
+    community_id UUID NOT NULL,
+    inventory_digest BYTEA NOT NULL CHECK (length(inventory_digest) = 32),
+    approved_by TEXT NOT NULL,
+    note TEXT,
+    approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (request_id, community_id, inventory_digest)
+        REFERENCES community_deletion_requests(id, community_id, inventory_digest)
+        ON DELETE RESTRICT
+);;
