@@ -428,6 +428,7 @@ pub fn try_record_agent_command(
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
         "omp" | "opencode" => Some(vec!["acp".to_string()]),
+        "prime-agent" => Some(vec!["--mode".to_string(), "acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
         | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
@@ -1480,6 +1481,16 @@ const PRESET_HARNESSES: &[PresetHarness] = &[
         args: &["acp"],
         install_instructions_url: "https://opencode.ai/docs",
         install_hint: "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
+        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "prime-agent",
+        label: "Prime Agent",
+        command: "prime-agent",
+        args: &["--mode", "acp"],
+        install_instructions_url: "https://github.com/PrimeIntellect-ai/prime-agent",
+        install_hint: "Colony talks to Prime Agent through its native ACP mode. Install with: npm install -g prime-agent",
         provider_env_var: Some("BUZZ_ACP_PROVIDER"),
         underlying_cli: None,
     },
