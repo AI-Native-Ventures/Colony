@@ -486,6 +486,25 @@ fn normalize_openai_compatible_models(
         .collect()
 }
 
+/// Credential env var for an OpenAI-compatible provider. The Pi-family
+/// harnesses (Oh My Pi, Prime Agent) resolve their native `deepseek` provider
+/// from `DEEPSEEK_API_KEY`; everything else uses `OPENAI_COMPAT_API_KEY`.
+/// Legacy configs that stored a DeepSeek key under `OPENAI_COMPAT_API_KEY`
+/// keep working via the fallback.
+fn openai_compatible_api_key_env(provider: Option<&str>) -> &'static str {
+    if matches!(
+        provider
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("deepseek")
+    ) {
+        "DEEPSEEK_API_KEY"
+    } else {
+        "OPENAI_COMPAT_API_KEY"
+    }
+}
+
 async fn discover_openai_compatible_models(
     client: &reqwest::Client,
     provider: &DiscoveryProvider,
@@ -501,9 +520,21 @@ async fn discover_openai_compatible_models(
     let api_key = if relay_mesh {
         crate::managed_agents::RELAY_MESH_API_KEY_PLACEHOLDER.to_string()
     } else {
-        match provider.required_env(env, "OPENAI_COMPAT_API_KEY")? {
+        let primary = openai_compatible_api_key_env(provider.as_deref());
+        let legacy = if primary == "DEEPSEEK_API_KEY" {
+            Some("OPENAI_COMPAT_API_KEY")
+        } else {
+            None
+        };
+        // Legacy configs may hold the DeepSeek key under OPENAI_COMPAT_API_KEY.
+        let found = env_or_process_value(env, primary)
+            .or_else(|| legacy.and_then(|key| env_or_process_value(env, key)));
+        match found {
             Some(api_key) => api_key,
-            None => return Ok(None),
+            None => match provider.required_env(env, primary)? {
+                Some(api_key) => api_key,
+                None => return Ok(None),
+            },
         }
     };
     let redaction_env = redaction_env_with_value(env, "OPENAI_COMPAT_API_KEY", &api_key);

@@ -116,11 +116,14 @@ const PROVIDER_CREDENTIAL_CONFIG: Partial<
     secretEnvVar: "OPENROUTER_API_KEY",
   },
   deepseek: {
-    // DeepSeek's API is OpenAI-compatible; the key rides the same env var as
-    // the other OpenAI-compatible endpoints and the base URL defaults to
-    // https://api.deepseek.com (see agent_models.rs discovery).
-    requiredEnvKeys: ["OPENAI_COMPAT_API_KEY"],
-    secretEnvVar: "OPENAI_COMPAT_API_KEY",
+    // DeepSeek's API is OpenAI-compatible (base URL defaults to
+    // https://api.deepseek.com in discovery), but the Pi-family harnesses
+    // (Oh My Pi, Prime Agent) resolve their native deepseek provider's
+    // credential from DEEPSEEK_API_KEY — so that is the env var the field
+    // writes. buzz-agent and the HTTP discovery fall back to
+    // OPENAI_COMPAT_API_KEY for legacy configs.
+    requiredEnvKeys: ["DEEPSEEK_API_KEY"],
+    secretEnvVar: "DEEPSEEK_API_KEY",
   },
 };
 

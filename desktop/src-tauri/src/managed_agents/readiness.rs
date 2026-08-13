@@ -510,12 +510,12 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
                     key: "ANTHROPIC_API_KEY".to_string(),
                 });
             }
-        Some("openai") | Some("deepseek")
-            if env_key_missing("OPENAI_COMPAT_API_KEY") => {
-                missing.push(Requirement::EnvKey {
-                    key: "OPENAI_COMPAT_API_KEY".to_string(),
-                });
-            }
+        Some("openai") if env_key_missing("OPENAI_COMPAT_API_KEY") => {
+            missing.push(Requirement::EnvKey { key: "OPENAI_COMPAT_API_KEY".to_string() });
+        }
+        Some("deepseek") if env_key_missing("DEEPSEEK_API_KEY") && env_key_missing("OPENAI_COMPAT_API_KEY") => {
+            missing.push(Requirement::EnvKey { key: "DEEPSEEK_API_KEY".to_string() });
+        }
         Some("databricks") | Some("databricks_v2") | Some("databricks-v2")
             // DATABRICKS_HOST is hard-required; DATABRICKS_TOKEN is optional
             // (OAuth PKCE is the normal path — see buzz-agent/src/config.rs:143).
