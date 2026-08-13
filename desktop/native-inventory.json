@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 400,
-    "rust_lines": 161954,
+    "rust_total": 401,
+    "rust_lines": 162082,
     "tauri_coupled": 158,
-    "portable": 242,
-    "portable_lines": 91568,
+    "portable": 243,
+    "portable_lines": 91695,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -352,6 +352,7 @@
       "src-tauri/src/managed_agents/runtime/lifecycle.rs",
       "src-tauri/src/managed_agents/runtime/metadata.rs",
       "src-tauri/src/managed_agents/runtime/path.rs",
+      "src-tauri/src/managed_agents/runtime/prime_agent_config.rs",
       "src-tauri/src/managed_agents/runtime/sweep.rs",
       "src-tauri/src/managed_agents/runtime/test_fixtures.rs",
       "src-tauri/src/managed_agents/runtime/tests.rs",

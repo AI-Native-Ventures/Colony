@@ -24,6 +24,8 @@ const HARNESS_DESCRIPTIONS: Record<string, string> = {
   omp: "A terminal coding agent with integrated development tools.",
   // Source: https://github.com/anomalyco/opencode
   opencode: "An open-source coding agent.",
+  // Source: https://github.com/PrimeIntellect-ai/prime-agent
+  "prime-agent": "An open-source coding agent from Prime Intellect.",
 };
 
 /**

@@ -26,6 +26,7 @@ pub(crate) use metadata::{
     DISPLAY_NAME_ENV_VAR, SESSION_TITLE_ENV_VAR,
 };
 
+mod prime_agent_config;
 mod provisioned;
 pub(crate) use provisioned::{
     configure_runtime_cli, provisioned_spawn_env, spawn_agent_child_with_lease,
@@ -478,6 +479,7 @@ fn spawn_agent_child_inner(
             })?;
     let effective_command = &descriptor.command;
     let agent_args = &descriptor.args;
+    prime_agent_config::ensure_prime_agent_default_config(effective_command);
     let runtime_meta = known_acp_runtime(effective_command);
     let effective_relay_url = runtime_key.relay_url.clone();
     let runtime_id = runtime_meta.map(|runtime| runtime.id).unwrap_or("custom");
@@ -593,7 +595,6 @@ fn spawn_agent_child_inner(
     // to guard against the parent-process environment. We then set it only
     // when desktop has computed NotReady — the desktop is the sole readiness
     // source and buzz-acp only transports the payload.
-    //
     // The JSON format mirrors `setup_mode::SetupPayload` in buzz-acp:
     //   { "agent_name": "...", "agent_pubkey": "...", "requirements": [{ "surface": "...", ... }] }
     //

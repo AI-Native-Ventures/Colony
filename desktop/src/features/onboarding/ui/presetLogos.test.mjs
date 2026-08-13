@@ -42,8 +42,8 @@ test("PRESET_HARNESSES parse found the preset ids", () => {
   // Guards the regex itself: a struct-field rename would otherwise silently
   // yield zero ids and make every assertion below vacuously pass.
   assert.ok(
-    presetIds.length >= 2,
-    `expected at least 2 preset ids, parsed ${presetIds.length}`,
+    presetIds.length >= 3,
+    `expected at least 3 preset ids, parsed ${presetIds.length}`,
   );
 });
 
