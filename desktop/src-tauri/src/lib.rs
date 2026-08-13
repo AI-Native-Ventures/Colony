@@ -43,6 +43,8 @@ mod tray_menu;
 mod shutdown;
 mod templates;
 mod terminal;
+mod terminal_runtime;
+mod terminal_transport;
 mod util;
 mod web;
 #[cfg(target_os = "linux")]
@@ -327,6 +329,7 @@ pub fn run() {
         })
         .manage(build_app_state())
         .manage(terminal::TerminalManager::default())
+        .manage(terminal_runtime::TerminalSessions::default())
         .manage(ClipboardState::new())
         .manage(PendingCommunityDeepLinks::default())
         .manage(commands::pairing::PairingHandle::new())
@@ -943,7 +946,40 @@ pub fn run() {
             archive::read_unindexed_observer_rows,
             is_auto_update_supported,
             set_window_vibrancy,
-        ])
+        
+    agent_access_owner_only,
+    cancel_media_upload,
+    upload_media_bytes_raw,
+    card_mint_key_status,
+    card_mint_save_openai_key,
+    list_agent_cards,
+    load_agent_card,
+    mint_agent_card,
+    save_agent_card,
+    create_ncryptsec_backup,
+    verify_ncryptsec_backup,
+    save_ncryptsec_copy,
+    generate_backup_passphrase,
+    read_clipboard_text,
+    start_identity_recovery_pairing,
+    archive::get_agent_usage_series,
+    macos_notifications::notification_permission_state,
+    macos_notifications::request_notification_access,
+    macos_notifications::take_pending_activations,
+    terminal_runtime::terminal_ack,
+    terminal_runtime::terminal_attach,
+    terminal_runtime::terminal_close,
+    terminal_runtime::terminal_detach,
+    terminal_runtime::terminal_focus,
+    terminal_runtime::terminal_input,
+    terminal_runtime::terminal_resize,
+    terminal_runtime::terminal_scroll,
+    terminal_runtime::terminal_viewport_ready,
+    tray_menu::take_tray_actions,
+    tray_menu::requeue_tray_actions,
+    tray_menu::clear_tray_agent_activity,
+    tray_menu::update_tray_agent_activity,
+])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
