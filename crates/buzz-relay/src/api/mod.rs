@@ -15,6 +15,7 @@ pub mod operator_auth;
 pub mod payments;
 pub mod provisioned_employees;
 pub mod self_provisioning;
+pub mod workflows;
 
 // Re-export imeta helpers used by ingest pipeline.
 pub use crate::handlers::imeta::{validate_imeta_tags, verify_imeta_blobs};

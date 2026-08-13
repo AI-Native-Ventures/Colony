@@ -776,7 +776,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 74);
+        assert_eq!(migrations.len(), 75);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1592,6 +1592,35 @@ mod tests {
         assert!(pgschema_reconciliation.contains("ON CONFLICT (id) DO NOTHING"));
         assert!(pgschema_reconciliation.contains("pg_class"));
         assert!(pgschema_reconciliation.contains("reloptions"));
+    }
+
+    #[test]
+    fn workflow_run_error_codes_are_additive_and_backfilled_without_parsing_diagnostics() {
+        // Upstream ships this as 0031; Colony's migration numbering ran ahead
+        // long ago, so it lands as 0075. The version is looked up rather than
+        // indexed so a later renumber cannot make this pass against the wrong
+        // file.
+        let migration = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == 75)
+            .expect("workflow run error code migration");
+        let sql = migration.sql.as_str();
+        assert!(sql.contains("ALTER TABLE workflow_runs ADD COLUMN error_code TEXT"));
+        assert!(sql.contains("SET error_code = 'legacy_unclassified'"));
+        assert!(sql.contains("status IN ('failed', 'cancelled')"));
+        // The backfill classifies by status, never by reading the human
+        // diagnostic: error_message is redacted and its wording is not an API.
+        assert!(!sql.contains("error_message LIKE"));
+        assert!(!MIGRATOR
+            .iter()
+            .find(|migration| migration.version == 1)
+            .expect("initial migration")
+            .sql
+            .as_str()
+            .contains("error_code"));
+        // A migration without its schema.sql mirror fails Detect Changed Paths
+        // and skips the whole CI matrix, which reads as broad breakage.
+        assert!(include_str!("../../../../schema/schema.sql").contains("error_code          TEXT"));
     }
 
     #[test]
