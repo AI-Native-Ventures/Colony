@@ -841,7 +841,6 @@ mod tests {
 
     #[test]
     fn provider_selection_runtime_with_provider_and_model_and_key_is_ready() {
-        // Full agent_readiness path ready with provider/model/key.
         let env = make_env(
             "buzz-agent",
             env_with(&[
