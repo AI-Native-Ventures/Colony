@@ -162,6 +162,7 @@ export default defineConfig({
         "**/agents.spec.ts",
         "**/agent-snapshot-recipient.spec.ts",
         "**/company-work-context.spec.ts",
+        "**/task-thread-delivery.spec.ts",
         "**/onboarding.spec.ts",
         "**/stream.spec.ts",
         "**/integration.spec.ts",

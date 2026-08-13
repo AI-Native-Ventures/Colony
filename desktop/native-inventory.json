@@ -72,6 +72,7 @@
       "src-tauri/src/commands/relay_members.rs",
       "src-tauri/src/commands/relay_reconnect.rs",
       "src-tauri/src/commands/social.rs",
+      "src-tauri/src/commands/task_artifacts.rs",
       "src-tauri/src/commands/team_snapshot.rs",
       "src-tauri/src/commands/teams.rs",
       "src-tauri/src/commands/terminal.rs",
@@ -350,10 +351,10 @@
     ]
   },
   "commands": {
-    "registered": 303,
-    "defined": 303,
+    "registered": 304,
+    "defined": 304,
     "by_reach": {
-      "frontend": 299,
+      "frontend": 300,
       "frontend-plugin-prefixed": 2,
       "NO CALLER FOUND": 2
     },
@@ -364,7 +365,7 @@
   },
   "params": {
     "AppHandle": 309,
-    "State": 231,
+    "State": 232,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 3
@@ -372,7 +373,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 306,
-      "State": 231,
+      "State": 232,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 3
@@ -515,6 +516,7 @@
     "src-tauri/src/commands/legacy_storage.rs": 1,
     "src-tauri/src/commands/agent_logs.rs": 1,
     "src-tauri/src/commands/os_idle.rs": 1,
+    "src-tauri/src/commands/task_artifacts.rs": 1,
     "src-tauri/src/commands/updater.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
     "src-tauri/src/commands/personas/inbound.rs": 1,
@@ -608,7 +610,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:258",
+        "src/features/communities/useCommunityInit.ts:262",
         "src/features/communities/useNestNotifications.ts:12",
         "src/features/communities/useNestNotifications.ts:21"
       ]
@@ -1947,6 +1949,15 @@
         "src/shared/api/tauri.ts:1062"
       ]
     },
+    "get_task_artifact_event": {
+      "defining_file": "src-tauri/src/commands/task_artifacts.rs",
+      "module": "task_artifacts",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/workspace/lib/taskArtifactEvent.ts:8"
+      ]
+    },
     "get_thread_replies": {
       "defining_file": "src-tauri/src/commands/messages.rs",
       "module": "messages",
@@ -2068,7 +2079,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:244",
+        "src/features/communities/useCommunityInit.ts:248",
         "src/parity/session/script.ts:321",
         "src/shared/api/tauriIdentity.ts:32"
       ]

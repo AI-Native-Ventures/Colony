@@ -2,6 +2,10 @@ import type * as React from "react";
 
 import { registerTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
+  ArtifactBody,
+  artifactKindDefinition,
+} from "@/features/workspace/kinds/artifactKind";
+import {
   FileBody,
   fileKindDefinition,
 } from "@/features/workspace/kinds/fileKind";
@@ -62,6 +66,8 @@ export function registerAllTabKinds(): void {
     stableKindsRegistered = true;
     registerTabKind(scratchpadKindDefinition);
     bodies.set(scratchpadKindDefinition.kind, ScratchpadBody);
+    registerTabKind(artifactKindDefinition);
+    bodies.set(artifactKindDefinition.kind, ArtifactBody);
     registerTabKind(fileKindDefinition);
     bodies.set(fileKindDefinition.kind, FileBody);
     registerTabKind(imageKindDefinition);

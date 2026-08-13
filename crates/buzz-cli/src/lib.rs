@@ -289,7 +289,7 @@ enum Cmd {
     /// Hire and list the workspace's employees (kinds 9045/30190)
     #[command(subcommand)]
     Employees(EmployeesCmd),
-    /// File, claim, heartbeat, and finish employee jobs (kinds 43010-43013)
+    /// File, claim, heartbeat, checkpoint, and finish employee jobs (kinds 43010-43014)
     #[command(subcommand)]
     Jobs(JobsCmd),
 }
@@ -2780,7 +2780,7 @@ pub enum EmployeesCmd {
 }
 
 /// Subcommands for `buzz jobs`: the queue an employee works from (kinds
-/// 43010-43013). Filing creates work; claiming takes an exclusive lease on
+/// 43010-43014). Filing creates work; claiming takes an exclusive lease on
 /// it; heartbeating holds that lease; finishing reports back. A lease nobody
 /// renews lapses and the job returns to the queue, which is how work survives
 /// the machine running it dying. See `docs/design/company-employees.html`.
@@ -2806,6 +2806,9 @@ pub enum JobsCmd {
         /// delegating employee's.
         #[arg(long)]
         parent: Option<String>,
+        /// Canonical Company Task this durable run executes
+        #[arg(long)]
+        task: Option<String>,
     },
     /// Take the lease on a job (kind 43011). Only the job's own human may
     /// claim it. Read the head afterwards to find out whether you won.
@@ -2826,6 +2829,29 @@ pub enum JobsCmd {
         #[arg(long)]
         attempt: i32,
     },
+    /// Persist resumable progress under the current fenced lease (kind
+    /// 43014). A later lease holder receives the newest checkpoint in the
+    /// canonical job head.
+    Checkpoint {
+        /// The job id (64 hex characters)
+        #[arg(long)]
+        job: String,
+        /// Current lease attempt from the canonical head
+        #[arg(long)]
+        attempt: i32,
+        /// Strictly increasing checkpoint sequence
+        #[arg(long)]
+        sequence: i64,
+        /// Work completed and the next resumable step
+        #[arg(long)]
+        summary: String,
+        /// Optional non-secret worker resume cursor
+        #[arg(long)]
+        resume_token: Option<String>,
+        /// Optional completion estimate from 0 through 100
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+        progress: Option<u8>,
+    },
     /// Report a job finished (kind 43013). Only the current lease holder may.
     Done {
         /// The job id (64 hex characters)
@@ -2843,6 +2869,10 @@ pub enum JobsCmd {
         /// Model that executed the job; stamped on the head
         #[arg(long)]
         model: Option<String>,
+        /// Delivery evidence as KIND:REF. Repeat for supporting artifacts.
+        /// Task-linked jobs require at least one artifact.
+        #[arg(long = "artifact")]
+        artifacts: Vec<String>,
     },
     /// Report a job failed (kind 43013). Only the current lease holder may.
     Fail {

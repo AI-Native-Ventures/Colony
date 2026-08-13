@@ -722,7 +722,7 @@ pub const KIND_JOB_CANCEL: u32 = 43005;
 /// An agent job failed with an error.
 pub const KIND_JOB_ERROR: u32 = 43006;
 
-// Colony job queue (43010–43013). The kinds above (43001–43006) are the
+// Colony job queue (43010–43014). The kinds above (43001–43006) are the
 // older announcement-only protocol: they narrate an agent job in the feed
 // but nothing arbitrates them, so two machines can answer the same request.
 // The kinds below are the queue proper — every one of them is a request to
@@ -743,6 +743,9 @@ pub const KIND_JOB_HEARTBEAT: u32 = 43012;
 
 /// The lease holder reporting the job done or failed.
 pub const KIND_JOB_OUTCOME: u32 = 43013;
+
+/// The current lease holder durably records resumable Task-run state.
+pub const KIND_JOB_CHECKPOINT: u32 = 43014;
 
 /// Relay-signed notification: the target pubkey was added to a channel.
 /// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
@@ -937,6 +940,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_JOB_CLAIM,
     KIND_JOB_HEARTBEAT,
     KIND_JOB_OUTCOME,
+    KIND_JOB_CHECKPOINT,
     KIND_LEDGER_ACTION,
     KIND_LEDGER_RECEIPT,
     KIND_TEAM,
@@ -1214,6 +1218,7 @@ const _: () = assert!(KIND_DISCOVERY_WORKER_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(KIND_WORKSPACE_TAB_ACTION <= u16::MAX as u32);
 const _: () = assert!(KIND_WORKSPACE_TAB_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(KIND_WORKSPACE_TAB_HEAD <= u16::MAX as u32);
+const _: () = assert!(KIND_JOB_CHECKPOINT <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_COMPANY_PROFILE));
 const _: () = assert!(!is_ephemeral(KIND_INITIATIVE));
 const _: () = assert!(!is_ephemeral(KIND_TASK));
@@ -1264,6 +1269,17 @@ mod tests {
         ] {
             assert!(!unique.contains(&existing));
         }
+    }
+
+    #[test]
+    fn job_checkpoint_is_a_stored_member_authored_kind() {
+        assert_eq!(KIND_JOB_CHECKPOINT, 43014);
+        assert!(ALL_KINDS.contains(&KIND_JOB_CHECKPOINT));
+        assert!(!is_ephemeral(KIND_JOB_CHECKPOINT));
+        assert!(!is_replaceable(KIND_JOB_CHECKPOINT));
+        assert!(!is_parameterized_replaceable(KIND_JOB_CHECKPOINT));
+        assert!(!is_relay_only_kind(KIND_JOB_CHECKPOINT));
+        assert!(!is_command_kind(KIND_JOB_CHECKPOINT));
     }
 
     /// The party kinds are addressable, distinct, and not colliding with any

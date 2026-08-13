@@ -116,6 +116,9 @@ type MessageTimelineProps = {
   searchQuery?: string;
   targetMessageId?: string | null;
   onTargetReached?: (messageId: string) => void;
+  /** Event id of the thread whose panel is open; its root message row in the
+   *  channel timeline is highlighted with the accent tint. */
+  openThreadHeadId?: string | null;
   splitThreadPanelOpen?: boolean;
   /** Event id of the oldest unread top-level message at channel open, or null. */
   firstUnreadMessageId?: string | null;
@@ -205,6 +208,7 @@ const MessageTimelineBase = React.forwardRef<
     searchQuery,
     targetMessageId = null,
     onTargetReached,
+    openThreadHeadId = null,
     splitThreadPanelOpen = false,
     firstUnreadMessageId = null,
     unreadCount = 0,
@@ -682,6 +686,7 @@ const MessageTimelineBase = React.forwardRef<
       personaLookup={personaLookup}
       profiles={profiles}
       ownerProfiles={ownerProfiles}
+      openThreadHeadId={openThreadHeadId}
       searchActiveMessageId={searchActiveMessageId}
       searchMatchingMessageIds={searchMatchingMessageIds}
       searchQuery={searchQuery}

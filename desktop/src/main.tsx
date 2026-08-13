@@ -22,6 +22,7 @@ import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
 import { installTauriNativeBridge } from "@/shared/api/tauriNativeBridge";
+import { registerAllTabKinds } from "@/features/workspace/kinds";
 
 // Install the default (Tauri) bridge before anything can call it. The e2e
 // mock replaces it in bootstrap via setNativeBridge when running under a
@@ -184,6 +185,7 @@ async function installRealShellHarnessIfConfigured() {
 async function bootstrap() {
   resetDevWebviewStateFromUrl();
   configureDevE2eBridgeFromUrl();
+  registerAllTabKinds();
   recoverLocalStorageQuotaOnStartup();
   await installE2eBridgeIfConfigured();
   await installRealShellHarnessIfConfigured();

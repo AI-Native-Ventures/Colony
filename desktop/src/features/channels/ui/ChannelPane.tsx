@@ -647,6 +647,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             searchMatchingMessageIds={channelFind.matchingMessageIds}
             searchQuery={channelFind.query}
             targetMessageId={targetMessageId}
+            openThreadHeadId={openThreadHeadId}
             splitThreadPanelOpen={
               useSplitAuxiliaryPane &&
               !useFocusThreadDrawer &&

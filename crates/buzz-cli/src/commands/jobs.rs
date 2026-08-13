@@ -19,10 +19,12 @@
 use nostr::{EventBuilder, Kind, Tag};
 
 use buzz_core::job::{
-    parse_job_claim, parse_job_filing, parse_job_heartbeat, parse_job_outcome, JobStatus,
+    parse_job_checkpoint, parse_job_claim, parse_job_filing, parse_job_heartbeat,
+    parse_job_outcome, JobStatus, TaskArtifact, TaskArtifactKind, TaskCheckpoint,
 };
 use buzz_core::kind::{
-    KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT, KIND_JOB_OUTCOME,
+    KIND_JOB_CHECKPOINT, KIND_JOB_CLAIM, KIND_JOB_FILING, KIND_JOB_HEAD, KIND_JOB_HEARTBEAT,
+    KIND_JOB_OUTCOME,
 };
 
 use crate::client::{
@@ -39,6 +41,7 @@ pub async fn cmd_file(
     channel: Option<&str>,
     thread: Option<&str>,
     parent: Option<&str>,
+    task: Option<&str>,
 ) -> Result<(), CliError> {
     let mut tags = vec![vec!["p", employee]];
     if let Some(channel) = channel {
@@ -50,9 +53,49 @@ pub async fn cmd_file(
     if let Some(parent) = parent {
         tags.push(vec!["job", parent]);
     }
+    if let Some(task) = task {
+        tags.push(vec!["task", task]);
+    }
 
     let event = sign(client, KIND_JOB_FILING, instruction, tags)?;
     parse_job_filing(&event).map_err(|e| CliError::Usage(format!("invalid job filing: {e}")))?;
+
+    let response = client.submit_event(event).await?;
+    println!("{}", normalize_write_response(&response));
+    Ok(())
+}
+
+/// Persist one resumable checkpoint under the current lease fence.
+pub async fn cmd_checkpoint(
+    client: &BuzzClient,
+    job: &str,
+    attempt: i32,
+    sequence: i64,
+    summary: &str,
+    resume_token: Option<&str>,
+    progress: Option<u8>,
+) -> Result<(), CliError> {
+    let checkpoint = TaskCheckpoint {
+        summary: summary.to_string(),
+        resume_token: resume_token.map(str::to_string),
+        progress,
+    };
+    let content = serde_json::to_string(&checkpoint)
+        .map_err(|e| CliError::Other(format!("failed to serialize checkpoint: {e}")))?;
+    let attempt = attempt.to_string();
+    let sequence = sequence.to_string();
+    let event = sign(
+        client,
+        KIND_JOB_CHECKPOINT,
+        &content,
+        vec![
+            vec!["job", job],
+            vec!["attempt", &attempt],
+            vec!["sequence", &sequence],
+        ],
+    )?;
+    parse_job_checkpoint(&event)
+        .map_err(|e| CliError::Usage(format!("invalid job checkpoint: {e}")))?;
 
     let response = client.submit_event(event).await?;
     println!("{}", normalize_write_response(&response));
@@ -96,35 +139,72 @@ pub async fn cmd_beat(client: &BuzzClient, job: &str, attempt: i32) -> Result<()
     Ok(())
 }
 
-/// Report how a job ended.
-pub async fn cmd_finish(
-    client: &BuzzClient,
-    job: &str,
+struct FinishInput<'a> {
+    job: &'a str,
     attempt: i32,
     status: JobStatus,
-    detail: &str,
-    provider: Option<&str>,
-    model: Option<&str>,
-) -> Result<(), CliError> {
-    let attempt = attempt.to_string();
+    detail: &'a str,
+    provider: Option<&'a str>,
+    model: Option<&'a str>,
+    artifacts: &'a [String],
+}
+
+/// Report how a job ended.
+async fn cmd_finish(client: &BuzzClient, input: FinishInput<'_>) -> Result<(), CliError> {
+    let attempt = input.attempt.to_string();
     let mut tags = vec![
-        vec!["job", job],
+        vec!["job", input.job],
         vec!["attempt", &attempt],
-        vec!["status", status.as_str()],
+        vec!["status", input.status.as_str()],
     ];
-    if let Some(provider) = provider {
+    if let Some(provider) = input.provider {
         tags.push(vec!["provider", provider]);
     }
-    if let Some(model) = model {
+    if let Some(model) = input.model {
         tags.push(vec!["model", model]);
     }
 
-    let event = sign(client, KIND_JOB_OUTCOME, detail, tags)?;
+    let artifacts = input
+        .artifacts
+        .iter()
+        .map(|value| parse_artifact_spec(value))
+        .collect::<Result<Vec<_>, _>>()?;
+    let artifact_json = artifacts
+        .iter()
+        .map(TaskArtifact::canonical_json)
+        .collect::<Vec<_>>();
+    for artifact in &artifact_json {
+        tags.push(vec!["artifact", artifact]);
+    }
+
+    let event = sign(client, KIND_JOB_OUTCOME, input.detail, tags)?;
     parse_job_outcome(&event).map_err(|e| CliError::Usage(format!("invalid job outcome: {e}")))?;
 
     let response = client.submit_event(event).await?;
     println!("{}", normalize_write_response(&response));
     Ok(())
+}
+
+fn parse_artifact_spec(value: &str) -> Result<TaskArtifact, CliError> {
+    let (kind, reference) = value.split_once(':').ok_or_else(|| {
+        CliError::Usage("artifact must use KIND:REF (event, url, path, or text)".to_string())
+    })?;
+    let kind = match kind {
+        "event" => TaskArtifactKind::Event,
+        "url" => TaskArtifactKind::Url,
+        "path" => TaskArtifactKind::Path,
+        "text" => TaskArtifactKind::Text,
+        _ => {
+            return Err(CliError::Usage(
+                "artifact kind must be event, url, path, or text".to_string(),
+            ));
+        }
+    };
+    Ok(TaskArtifact {
+        kind,
+        reference: reference.to_string(),
+        label: None,
+    })
 }
 
 /// List job heads, optionally narrowed to a state or to one person's jobs.
@@ -203,6 +283,14 @@ pub async fn cmd_show(client: &BuzzClient, job: &str) -> Result<(), CliError> {
         .get("failure")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    row["checkpoint"] = content
+        .get("checkpoint")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    row["artifacts"] = content
+        .get("artifacts")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
 
     println!(
         "{}",
@@ -288,6 +376,11 @@ fn project(event: &serde_json::Value) -> serde_json::Value {
         "lease_expires": extract_tag_value(event, "lease-expires"),
         "provider": extract_tag_value(event, "provider"),
         "model": extract_tag_value(event, "model"),
+        "task": extract_tag_value(event, "task"),
+        "run_status": extract_tag_value(event, "run-status"),
+        "checkpoint_sequence": extract_tag_value(event, "checkpoint-seq"),
+        "checkpoint_event": extract_tag_value(event, "checkpoint-event"),
+        "outcome_event": extract_tag_value(event, "outcome-event"),
     })
 }
 
@@ -319,6 +412,7 @@ pub async fn dispatch(cmd: crate::JobsCmd, client: &BuzzClient) -> Result<(), Cl
             channel,
             thread,
             parent,
+            task,
         } => {
             cmd_file(
                 client,
@@ -327,26 +421,50 @@ pub async fn dispatch(cmd: crate::JobsCmd, client: &BuzzClient) -> Result<(), Cl
                 channel.as_deref(),
                 thread.as_deref(),
                 parent.as_deref(),
+                task.as_deref(),
             )
             .await
         }
         JobsCmd::Claim { job } => cmd_claim(client, &job).await,
         JobsCmd::Beat { job, attempt } => cmd_beat(client, &job, attempt).await,
+        JobsCmd::Checkpoint {
+            job,
+            attempt,
+            sequence,
+            summary,
+            resume_token,
+            progress,
+        } => {
+            cmd_checkpoint(
+                client,
+                &job,
+                attempt,
+                sequence,
+                &summary,
+                resume_token.as_deref(),
+                progress,
+            )
+            .await
+        }
         JobsCmd::Done {
             job,
             attempt,
             result,
             provider,
             model,
+            artifacts,
         } => {
             cmd_finish(
                 client,
-                &job,
-                attempt,
-                JobStatus::Done,
-                &result,
-                provider.as_deref(),
-                model.as_deref(),
+                FinishInput {
+                    job: &job,
+                    attempt,
+                    status: JobStatus::Done,
+                    detail: &result,
+                    provider: provider.as_deref(),
+                    model: model.as_deref(),
+                    artifacts: &artifacts,
+                },
             )
             .await
         }
@@ -357,12 +475,15 @@ pub async fn dispatch(cmd: crate::JobsCmd, client: &BuzzClient) -> Result<(), Cl
         } => {
             cmd_finish(
                 client,
-                &job,
-                attempt,
-                JobStatus::Failed,
-                &reason,
-                None,
-                None,
+                FinishInput {
+                    job: &job,
+                    attempt,
+                    status: JobStatus::Failed,
+                    detail: &reason,
+                    provider: None,
+                    model: None,
+                    artifacts: &[],
+                },
             )
             .await
         }
@@ -379,6 +500,19 @@ pub async fn dispatch(cmd: crate::JobsCmd, client: &BuzzClient) -> Result<(), Cl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_specs_preserve_colons_in_the_reference() {
+        let artifact = parse_artifact_spec("url:https://example.com/report").unwrap();
+        assert_eq!(artifact.kind, TaskArtifactKind::Url);
+        assert_eq!(artifact.reference, "https://example.com/report");
+    }
+
+    #[test]
+    fn artifact_specs_reject_unknown_kinds() {
+        let error = parse_artifact_spec("file:report.md").unwrap_err();
+        assert!(error.to_string().contains("artifact kind"));
+    }
 
     /// Two heads for one job with identical `created_at` must resolve by the
     /// lower `id` (NIP-16), in both relay orders, and the trailing sort must

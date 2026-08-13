@@ -5899,6 +5899,16 @@ impl Db {
         .await
     }
 
+    /// Persist a fenced checkpoint and extend its live lease
+    /// (see [`jobs::checkpoint_job`]).
+    pub async fn checkpoint_job(
+        &self,
+        community: CommunityId,
+        checkpoint: jobs::JobCheckpoint<'_>,
+    ) -> Result<Option<jobs::JobRow>> {
+        jobs::checkpoint_job(&self.pool, community, checkpoint).await
+    }
+
     /// Record how a job ended (see [`jobs::finish_job`]).
     pub async fn finish_job(
         &self,

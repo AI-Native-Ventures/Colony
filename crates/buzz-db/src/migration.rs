@@ -727,7 +727,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 57);
+        assert_eq!(migrations.len(), 58);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -858,6 +858,28 @@ mod tests {
         assert!(operator_analytics.contains("operator_activity_daily_day_idx"));
         assert!(operator_analytics.contains("operator_activity_daily_person_idx"));
         assert!(operator_analytics.contains("operator_activity_daily_deployment_idx"));
+        assert_eq!(migrations[57].version, 58);
+        let task_runs = migrations[57].sql.as_str();
+        for column in [
+            "ADD COLUMN task_id TEXT",
+            "ADD COLUMN checkpoint_seq BIGINT NOT NULL DEFAULT 0",
+            "ADD COLUMN checkpoint JSONB",
+            "ADD COLUMN checkpoint_event BYTEA",
+            "ADD COLUMN checkpoint_at BIGINT",
+            "ADD COLUMN artifacts JSONB",
+            "ADD COLUMN outcome_event BYTEA",
+        ] {
+            assert!(
+                task_runs.contains(column),
+                "migration 0058 must contain {column}"
+            );
+        }
+        assert!(task_runs.contains("CHECK (checkpoint_seq >= 0)"));
+        assert!(task_runs.contains("LENGTH(checkpoint_event) = 32"));
+        assert!(task_runs.contains("LENGTH(outcome_event) = 32"));
+        assert!(task_runs.contains("jsonb_array_length(artifacts) > 0"));
+        assert!(task_runs.contains("ON jobs (community_id, task_id)"));
+        assert!(!task_runs.contains("_operator_global_tables"));
         assert!(migrations[0]
             .sql
             .as_str()

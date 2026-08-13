@@ -53,6 +53,8 @@ pub struct JobRow {
     pub channel_id: Option<uuid::Uuid>,
     /// The thread the job came from, if any.
     pub thread: Option<Vec<u8>>,
+    /// The canonical Company Task this job executes, for Task-linked runs.
+    pub task_id: Option<String>,
     /// What to do.
     pub instruction: String,
     /// One of `open`, `leased`, `done`, `failed`, `abandoned`.
@@ -71,6 +73,18 @@ pub struct JobRow {
     pub provider: Option<String>,
     /// The model stamp on a finished job, when the worker set one.
     pub model: Option<String>,
+    /// Monotonic sequence of the latest durable checkpoint.
+    pub checkpoint_seq: i64,
+    /// Latest bounded resumable checkpoint payload.
+    pub checkpoint: Option<serde_json::Value>,
+    /// Worker-signed checkpoint event accepted as the checkpoint receipt.
+    pub checkpoint_event: Option<Vec<u8>>,
+    /// Unix seconds when the latest checkpoint was accepted.
+    pub checkpoint_at: Option<i64>,
+    /// Delivery artifacts declared by a completed Task run.
+    pub artifacts: Option<serde_json::Value>,
+    /// Worker-signed terminal outcome event used as the delivery receipt.
+    pub outcome_event: Option<Vec<u8>>,
     /// The stall ask filed about this job, if one has been.
     pub escalated_ask: Option<Vec<u8>>,
     /// Unix seconds when the job was filed.
@@ -114,6 +128,10 @@ pub struct FinishedJob<'a> {
     pub provider: Option<&'a str>,
     /// Model stamp for the head, when the outcome carried one.
     pub model: Option<&'a str>,
+    /// Canonical artifact array. Required and non-empty for Task-linked done.
+    pub artifacts: Option<&'a serde_json::Value>,
+    /// Exact worker-signed outcome event id.
+    pub outcome_event: Option<&'a [u8]>,
     /// Unix seconds to stamp the row with.
     pub now: i64,
 }
@@ -133,8 +151,31 @@ pub struct NewJob<'a> {
     pub channel_id: Option<uuid::Uuid>,
     /// The thread the filing came from, if any.
     pub thread: Option<&'a [u8]>,
+    /// Canonical Company Task id, when this job is its durable run.
+    pub task_id: Option<&'a str>,
     /// What to do.
     pub instruction: &'a str,
+}
+
+/// Borrowed input for one fenced durable checkpoint update.
+#[derive(Debug, Clone, Copy)]
+pub struct JobCheckpoint<'a> {
+    /// The filing event id, which is the job id.
+    pub job_id: &'a [u8],
+    /// The seat reporting the checkpoint.
+    pub holder: &'a [u8],
+    /// Current lease attempt fencing token.
+    pub attempt: i32,
+    /// Strictly increasing checkpoint sequence.
+    pub sequence: i64,
+    /// Canonical bounded checkpoint JSON.
+    pub checkpoint: &'a serde_json::Value,
+    /// Exact worker-signed checkpoint event id.
+    pub checkpoint_event: &'a [u8],
+    /// Unix seconds when the relay accepts the checkpoint.
+    pub now: i64,
+    /// Extended lease deadline.
+    pub lease_expires_at: i64,
 }
 
 // Every query below repeats the same column list. sqlx rejects SQL assembled
@@ -149,6 +190,7 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<JobRow> {
         originator: row.try_get("originator")?,
         channel_id: row.try_get("channel_id")?,
         thread: row.try_get("thread")?,
+        task_id: row.try_get("task_id")?,
         instruction: row.try_get("instruction")?,
         status: row.try_get("status")?,
         lease_holder: row.try_get("lease_holder")?,
@@ -158,6 +200,12 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<JobRow> {
         failure: row.try_get("failure")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
+        checkpoint_seq: row.try_get("checkpoint_seq")?,
+        checkpoint: row.try_get("checkpoint")?,
+        checkpoint_event: row.try_get("checkpoint_event")?,
+        checkpoint_at: row.try_get("checkpoint_at")?,
+        artifacts: row.try_get("artifacts")?,
+        outcome_event: row.try_get("outcome_event")?,
         escalated_ask: row.try_get("escalated_ask")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -185,12 +233,13 @@ pub async fn insert_job(
     let now = Utc::now().timestamp();
     let row = sqlx::query(
         "INSERT INTO jobs (community_id, job_id, employee, filed_by, originator, channel_id, \
-                           thread, instruction, status, attempts, created_at, updated_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',0,$9,$9) \
+                           thread, task_id, instruction, status, attempts, created_at, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open',0,$10,$10) \
          ON CONFLICT DO NOTHING \
-         RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
+         RETURNING job_id, employee, filed_by, originator, channel_id, thread, task_id, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   provider, model, escalated_ask, created_at, updated_at",
+                   provider, model, checkpoint_seq, checkpoint, checkpoint_event, checkpoint_at, \
+                   artifacts, outcome_event, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job.job_id)
@@ -199,6 +248,7 @@ pub async fn insert_job(
     .bind(job.originator)
     .bind(job.channel_id)
     .bind(job.thread)
+    .bind(job.task_id)
     .bind(job.instruction)
     .bind(now)
     .fetch_optional(pool)
@@ -214,9 +264,10 @@ pub async fn find_job(
     job_id: &[u8],
 ) -> Result<Option<JobRow>> {
     let row = sqlx::query(
-        "SELECT job_id, employee, filed_by, originator, channel_id, thread, instruction, \
+        "SELECT job_id, employee, filed_by, originator, channel_id, thread, task_id, instruction, \
                 status, lease_holder, lease_expires_at, attempts, result, failure, \
-                provider, model, escalated_ask, created_at, updated_at \
+                provider, model, checkpoint_seq, checkpoint, checkpoint_event, checkpoint_at, \
+                artifacts, outcome_event, escalated_ask, created_at, updated_at \
          FROM jobs WHERE community_id = $1 AND job_id = $2",
     )
     .bind(community.as_uuid())
@@ -257,9 +308,10 @@ pub async fn claim_job(
          WHERE community_id = $1 AND job_id = $2 \
            AND attempts < $4 \
            AND (status = 'open' OR (status = 'leased' AND lease_expires_at < $6)) \
-         RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
+         RETURNING job_id, employee, filed_by, originator, channel_id, thread, task_id, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   provider, model, escalated_ask, created_at, updated_at",
+                   provider, model, checkpoint_seq, checkpoint, checkpoint_event, checkpoint_at, \
+                   artifacts, outcome_event, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)
@@ -292,9 +344,10 @@ pub async fn heartbeat_job(
         "UPDATE jobs SET lease_expires_at = $5, updated_at = $6 \
          WHERE community_id = $1 AND job_id = $2 AND status = 'leased' \
            AND lease_holder = $3 AND attempts = $4 \
-         RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
+         RETURNING job_id, employee, filed_by, originator, channel_id, thread, task_id, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   provider, model, escalated_ask, created_at, updated_at",
+                   provider, model, checkpoint_seq, checkpoint, checkpoint_event, checkpoint_at, \
+                   artifacts, outcome_event, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)
@@ -308,14 +361,61 @@ pub async fn heartbeat_job(
     row.map(row_to_job).transpose()
 }
 
+/// Persist a checkpoint while extending the exact live lease that wrote it.
+///
+/// The holder, attempt, unexpired deadline, and increasing sequence are one
+/// conditional update. A stale or replayed worker therefore gets `Ok(None)`
+/// and cannot overwrite recovery state from the current attempt.
+pub async fn checkpoint_job(
+    pool: &PgPool,
+    community: CommunityId,
+    checkpoint: JobCheckpoint<'_>,
+) -> Result<Option<JobRow>> {
+    let JobCheckpoint {
+        job_id,
+        holder,
+        attempt,
+        sequence,
+        checkpoint,
+        checkpoint_event,
+        now,
+        lease_expires_at,
+    } = checkpoint;
+    let row = sqlx::query(
+        "UPDATE jobs SET checkpoint_seq = $5, checkpoint = $6, checkpoint_event = $7, \
+                         checkpoint_at = $8, lease_expires_at = $9, updated_at = $8 \
+         WHERE community_id = $1 AND job_id = $2 AND status = 'leased' \
+           AND lease_holder = $3 AND attempts = $4 AND lease_expires_at >= $8 \
+           AND checkpoint_seq < $5 \
+         RETURNING job_id, employee, filed_by, originator, channel_id, thread, task_id, instruction, \
+                   status, lease_holder, lease_expires_at, attempts, result, failure, \
+                   provider, model, checkpoint_seq, checkpoint, checkpoint_event, checkpoint_at, \
+                   artifacts, outcome_event, escalated_ask, created_at, updated_at",
+    )
+    .bind(community.as_uuid())
+    .bind(job_id)
+    .bind(holder)
+    .bind(attempt)
+    .bind(sequence)
+    .bind(checkpoint)
+    .bind(checkpoint_event)
+    .bind(now)
+    .bind(lease_expires_at)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_job).transpose()
+}
+
 /// Record how a job ended.
 ///
 /// `status` is `done` or `failed`; the caller has already refused anything
 /// else. Deliberately does not care whether the lease has expired, only
-/// whether this caller still holds the lease it names: work that finished a
-/// second late is still work, and throwing it away would be worse than
-/// accepting it. What it will not accept is an outcome from a superseded
-/// lease, because then somebody else owns the answer.
+/// whether this caller still holds the lease it names. Legacy non-Task jobs
+/// retain the historical grace period for a result that arrives after the
+/// deadline but before another claim. Task-linked delivery is stricter: an
+/// expired lease is no longer execution authority, even before a replacement
+/// claims it. Neither path accepts an outcome from a superseded attempt.
 pub async fn finish_job(
     pool: &PgPool,
     community: CommunityId,
@@ -329,6 +429,8 @@ pub async fn finish_job(
         detail,
         provider,
         model,
+        artifacts,
+        outcome_event,
         now,
     } = outcome;
     let row = sqlx::query(
@@ -337,13 +439,20 @@ pub async fn finish_job(
                          failure = CASE WHEN $5 = 'failed' THEN $6 ELSE failure END, \
                          provider = CASE WHEN $5 = 'done' THEN $8 ELSE provider END, \
                          model = CASE WHEN $5 = 'done' THEN $9 ELSE model END, \
+                         artifacts = CASE WHEN $5 = 'done' THEN $10 ELSE artifacts END, \
+                         outcome_event = $11, \
                          lease_expires_at = NULL, \
                          updated_at = $7 \
          WHERE community_id = $1 AND job_id = $2 AND status = 'leased' \
            AND lease_holder = $3 AND attempts = $4 \
-         RETURNING job_id, employee, filed_by, originator, channel_id, thread, instruction, \
+           AND (task_id IS NULL OR lease_expires_at >= $7) \
+           AND ($5 <> 'done' OR task_id IS NULL OR ( \
+                $10 IS NOT NULL AND jsonb_typeof($10) = 'array' \
+                AND jsonb_array_length($10) > 0 AND $11 IS NOT NULL)) \
+         RETURNING job_id, employee, filed_by, originator, channel_id, thread, task_id, instruction, \
                    status, lease_holder, lease_expires_at, attempts, result, failure, \
-                   provider, model, escalated_ask, created_at, updated_at",
+                   provider, model, checkpoint_seq, checkpoint, checkpoint_event, checkpoint_at, \
+                   artifacts, outcome_event, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)
@@ -354,6 +463,8 @@ pub async fn finish_job(
     .bind(now)
     .bind(provider)
     .bind(model)
+    .bind(artifacts)
+    .bind(outcome_event)
     .fetch_optional(pool)
     .await?;
 
@@ -390,9 +501,11 @@ pub async fn expire_due_leases(
          FROM due JOIN communities c ON c.id = due.community_id \
          WHERE jobs.community_id = due.community_id AND jobs.job_id = due.job_id \
          RETURNING jobs.community_id, c.host, jobs.job_id, jobs.employee, jobs.filed_by, \
-                   jobs.originator, jobs.channel_id, jobs.thread, jobs.instruction, \
+                   jobs.originator, jobs.channel_id, jobs.thread, jobs.task_id, jobs.instruction, \
                    jobs.status, jobs.lease_holder, jobs.lease_expires_at, jobs.attempts, \
-                   jobs.result, jobs.failure, jobs.provider, jobs.model, jobs.escalated_ask, \
+                   jobs.result, jobs.failure, jobs.provider, jobs.model, jobs.checkpoint_seq, \
+                   jobs.checkpoint, jobs.checkpoint_event, jobs.checkpoint_at, jobs.artifacts, \
+                   jobs.outcome_event, jobs.escalated_ask, \
                    jobs.created_at, jobs.updated_at",
     )
     .bind(now)
@@ -416,9 +529,10 @@ pub async fn list_jobs_needing_escalation(
 ) -> Result<Vec<TenantJobRow>> {
     let rows = sqlx::query(
         "SELECT j.community_id, c.host, j.job_id, j.employee, j.filed_by, j.originator, \
-                j.channel_id, j.thread, j.instruction, j.status, j.lease_holder, \
+                j.channel_id, j.thread, j.task_id, j.instruction, j.status, j.lease_holder, \
                 j.lease_expires_at, j.attempts, j.result, j.failure, j.provider, j.model, \
-                j.escalated_ask, j.created_at, j.updated_at \
+                j.checkpoint_seq, j.checkpoint, j.checkpoint_event, j.checkpoint_at, j.artifacts, \
+                j.outcome_event, j.escalated_ask, j.created_at, j.updated_at \
          FROM jobs j JOIN communities c ON c.id = j.community_id \
          WHERE j.escalated_ask IS NULL \
            AND (j.status = 'abandoned' OR (j.status = 'open' AND j.created_at < $1)) \
@@ -467,9 +581,10 @@ pub async fn stamp_head(
     let row = sqlx::query(
         "UPDATE jobs SET head_at = GREATEST(head_at + 1, $3) \
          WHERE community_id = $1 AND job_id = $2 \
-         RETURNING head_at, job_id, employee, filed_by, originator, channel_id, thread, \
+         RETURNING head_at, job_id, employee, filed_by, originator, channel_id, thread, task_id, \
                    instruction, status, lease_holder, lease_expires_at, attempts, result, \
-                   failure, provider, model, escalated_ask, created_at, updated_at",
+                   failure, provider, model, checkpoint_seq, checkpoint, checkpoint_event, \
+                   checkpoint_at, artifacts, outcome_event, escalated_ask, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(job_id)

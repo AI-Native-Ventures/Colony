@@ -47,6 +47,7 @@ mod util;
 mod web;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
+
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use colony_provisioning::*;
 use commands::*;
@@ -87,12 +88,10 @@ use std::sync::{
 use tauri::Listener;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // mesh-llm's async chains (model download, node start/join) overflow
-    // tokio's default 2 MiB worker stacks — a stack-guard SIGABRT, not a
-    // panic. Upstream mesh-llm and mesh-console both run on 8 MiB worker
+    // mesh-llm's async chains (model download, node start/join) overflow tokio's
+    // default 2 MiB worker stacks. Upstream mesh-llm and mesh-console use 8 MiB
     // stacks for this reason; give Tauri's command runtime the same headroom
     // before anything else touches tauri::async_runtime.
     #[cfg(feature = "mesh-llm")]
@@ -155,7 +154,6 @@ pub fn run() {
                     #[cfg(target_os = "macos")]
                     {
                         set_initial_window_backing(&window);
-
                         let (initial_render_tx, initial_render_rx) = tokio::sync::oneshot::channel();
                         window
                             .app_handle()
@@ -764,6 +762,7 @@ pub fn run() {
             add_reaction,
             remove_reaction,
             get_event,
+            get_task_artifact_event,
             show_native_notification,
             upload_media,
             pick_and_upload_media,
