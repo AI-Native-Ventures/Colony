@@ -417,6 +417,9 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   managedAgentHeads?: MockManagedAgentHeadSeed[];
   /** Real fixture signatures for ownership-sensitive native adapter reads. */
   managedAgentHeadEvents?: RelayEvent[];
+  /** Reject successive relay-agent directory reads, then resume. */
+  relayAgentListErrors?: (string | null)[];
+  /** Delay both managed and relay agent directory reads. */
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];

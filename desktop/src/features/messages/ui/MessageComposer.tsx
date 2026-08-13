@@ -567,6 +567,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
           setSpoileredAttachmentUrls(draft.spoileredAttachmentUrls);
         },
         restoreMentionRefs: mentions.restoreDraftMentionRefs,
+        revalidateMentionPubkeys: mentions.revalidateMentionPubkeys,
         shouldRestoreComposer: () => canRestoreEditDraftRef.current,
         setDeferredUploadPending: setDeferredEditPending,
         setUploadError: (message) =>
@@ -659,6 +660,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     effectiveDraftKey,
     mentions.getDraftMentionRefs,
     mentions.restoreDraftMentionRefs,
+    mentions.revalidateMentionPubkeys,
   ]);
   submitMessageRef.current = submitMessage;
   useComposerAutoSubmit(
