@@ -172,8 +172,8 @@ fn saved_agent_model_discovery_uses_record_snapshot_for_definition_less_agent() 
             "private_key_nsec": "nsec1fake",
             "relay_url": "wss://localhost:3000",
             "acp_command": "buzz-acp",
-            "agent_command": "goose",
-            "agent_command_override": "goose",
+            "agent_command": "buzz-agent",
+            "agent_command_override": "buzz-agent",
             "agent_args": [],
             "mcp_command": "",
             "turn_timeout_seconds": 320,
@@ -201,15 +201,15 @@ fn saved_agent_model_discovery_uses_record_snapshot_for_definition_less_agent() 
     let discovery = agent_model_discovery_config(&record, &[], &Default::default())
         .expect("discovery config should resolve for a valid record");
 
-    assert_eq!(discovery.command.as_str(), "goose");
+    assert_eq!(discovery.command.as_str(), "buzz-agent");
     assert_eq!(discovery.model.as_deref(), Some("record-model"));
     assert_eq!(discovery.provider.as_deref(), Some("databricks"));
     assert_eq!(
-        discovery.env.get("GOOSE_MODEL").map(String::as_str),
+        discovery.env.get("BUZZ_AGENT_MODEL").map(String::as_str),
         Some("record-model")
     );
     assert_eq!(
-        discovery.env.get("GOOSE_PROVIDER").map(String::as_str),
+        discovery.env.get("BUZZ_AGENT_PROVIDER").map(String::as_str),
         Some("databricks")
     );
     assert_eq!(
@@ -220,7 +220,7 @@ fn saved_agent_model_discovery_uses_record_snapshot_for_definition_less_agent() 
     assert!(!discovery.env.contains_key("BUZZ_PRIVATE_KEY"));
     // The provider env var is recovered from the runtime metadata for the
     // effective command (the old SavedAgentModelDiscoveryConfig.provider_env_var).
-    assert_eq!(discovery.provider_env_var, Some("GOOSE_PROVIDER"));
+    assert_eq!(discovery.provider_env_var, Some("BUZZ_AGENT_PROVIDER"));
 }
 
 // ---------------------------------------------------------------------------
@@ -290,12 +290,13 @@ const UNSET_CREDENTIAL: &str = "BUZZ_TEST_UNSET_DISCOVERY_CREDENTIAL";
 
 #[test]
 fn env_derived_provider_falls_through_when_its_credential_is_missing() {
-    let env = BTreeMap::from([("GOOSE_PROVIDER".to_string(), "anthropic".to_string())]);
-    let inferred = effective_discovery_provider(None, Some("GOOSE_PROVIDER"), &env);
+    let env = BTreeMap::from([("BUZZ_ACP_PROVIDER".to_string(), "anthropic".to_string())]);
+    let inferred = effective_discovery_provider(None, Some("BUZZ_ACP_PROVIDER"), &env);
     assert_eq!(inferred.as_deref(), Some("anthropic"));
 
-    // `export GOOSE_PROVIDER=anthropic` is goose's documented way to pick a
-    // provider, and it keeps the API key in its own config/keyring rather than in
+    // `export BUZZ_ACP_PROVIDER=anthropic` mirrors the universal provider env var
+    // the desktop injects for every harness; the credential may live outside
+    // Buzz's env (e.g. the harness keyring) rather than in
     // Buzz's env — so the provider is visible here and the credential is not.
     // Erroring would swap the working subprocess catalog for a hard
     // "config: ... required" on exactly the null-provider records this fallback
@@ -308,7 +309,7 @@ fn explicit_provider_still_reports_a_missing_credential() {
     // An explicit provider is an assertion about this agent, so a missing
     // credential is a real misconfiguration and stays user-visible.
     let env = BTreeMap::new();
-    let explicit = effective_discovery_provider(Some("anthropic"), Some("GOOSE_PROVIDER"), &env);
+    let explicit = effective_discovery_provider(Some("anthropic"), Some("BUZZ_ACP_PROVIDER"), &env);
     assert_eq!(
         explicit.required_env(&env, UNSET_CREDENTIAL),
         Err(format!("config: {UNSET_CREDENTIAL} required"))
@@ -318,14 +319,14 @@ fn explicit_provider_still_reports_a_missing_credential() {
 #[test]
 fn required_env_returns_a_configured_credential_however_the_provider_was_resolved() {
     let env = BTreeMap::from([
-        ("GOOSE_PROVIDER".to_string(), "anthropic".to_string()),
+        ("BUZZ_ACP_PROVIDER".to_string(), "anthropic".to_string()),
         (
             UNSET_CREDENTIAL.to_string(),
             "  sk-configured  ".to_string(),
         ),
     ]);
     for provider in [Some("anthropic"), None] {
-        let resolved = effective_discovery_provider(provider, Some("GOOSE_PROVIDER"), &env);
+        let resolved = effective_discovery_provider(provider, Some("BUZZ_ACP_PROVIDER"), &env);
         assert_eq!(
             resolved.required_env(&env, UNSET_CREDENTIAL),
             Ok(Some("sk-configured".to_string())),
@@ -336,17 +337,18 @@ fn required_env_returns_a_configured_credential_however_the_provider_was_resolve
 
 #[test]
 fn effective_discovery_provider_reads_the_runtimes_own_env_var() {
-    // goose keys its provider off GOOSE_PROVIDER, so a BUZZ_AGENT_PROVIDER in
-    // the env must not be mistaken for this runtime's provider.
+    // A runtime keys its provider off its own env var (BUZZ_ACP_PROVIDER is the
+    // universal one the desktop injects), so a BUZZ_AGENT_PROVIDER in the env
+    // must not be mistaken for this runtime's provider.
     let env = BTreeMap::from([
-        ("GOOSE_PROVIDER".to_string(), "databricks".to_string()),
+        ("BUZZ_ACP_PROVIDER".to_string(), "databricks".to_string()),
         (
             "BUZZ_AGENT_PROVIDER".to_string(),
             "databricks_v2".to_string(),
         ),
     ]);
     assert_eq!(
-        effective_discovery_provider(None, Some("GOOSE_PROVIDER"), &env).as_deref(),
+        effective_discovery_provider(None, Some("BUZZ_ACP_PROVIDER"), &env).as_deref(),
         Some("databricks")
     );
 }
@@ -365,7 +367,7 @@ fn model_discovery_ignores_stale_record_for_linked_agent() {
             "private_key_nsec": "nsec1fake",
             "relay_url": "wss://localhost:3000",
             "acp_command": "buzz-acp",
-            "agent_command": "goose",
+            "agent_command": "buzz-agent",
             "agent_args": [],
             "mcp_command": "",
             "turn_timeout_seconds": 320,
@@ -390,7 +392,7 @@ fn model_discovery_ignores_stale_record_for_linked_agent() {
         display_name: "Persona".to_string(),
         avatar_url: None,
         system_prompt: "You are a persona.".to_string(),
-        runtime: Some("goose".to_string()),
+        runtime: Some("buzz-agent".to_string()),
         model: Some("persona-model".to_string()),
         provider: Some("anthropic".to_string()),
         name_pool: Vec::new(),
@@ -422,11 +424,11 @@ fn model_discovery_ignores_stale_record_for_linked_agent() {
     // resolves through the definition — the derived model env var must carry
     // the persona's model, not the stale record snapshot.
     assert_eq!(
-        discovery.env.get("GOOSE_MODEL").map(String::as_str),
+        discovery.env.get("BUZZ_AGENT_MODEL").map(String::as_str),
         Some("persona-model")
     );
     assert_eq!(
-        discovery.env.get("GOOSE_PROVIDER").map(String::as_str),
+        discovery.env.get("BUZZ_AGENT_PROVIDER").map(String::as_str),
         Some("anthropic")
     );
 }
@@ -485,7 +487,7 @@ fn linked_instance_ignores_model_provider_prompt_writes() {
             "private_key_nsec": "nsec1fake",
             "relay_url": "wss://localhost:3000",
             "acp_command": "buzz-acp",
-            "agent_command": "goose",
+            "agent_command": "claude",
             "agent_args": [],
             "mcp_command": "",
             "turn_timeout_seconds": 320,
@@ -536,7 +538,7 @@ fn definition_less_instance_accepts_model_provider_prompt_writes() {
             "private_key_nsec": "nsec1fake",
             "relay_url": "wss://localhost:3000",
             "acp_command": "buzz-acp",
-            "agent_command": "goose",
+            "agent_command": "claude",
             "agent_args": [],
             "mcp_command": "",
             "turn_timeout_seconds": 320,

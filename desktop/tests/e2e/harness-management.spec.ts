@@ -24,39 +24,40 @@ import { installMockBridge } from "../helpers/bridge";
 
 // ── Shared catalog fixtures ───────────────────────────────────────────────────
 
-/** Hermes preset with availability "available" — earns a Your-harnesses row. */
-const HERMES_AVAILABLE = {
-  id: "hermes",
-  label: "Hermes",
+/** Oh My Pi preset with availability "available" — earns a Your-harnesses row. */
+const OMP_AVAILABLE = {
+  id: "omp",
+  label: "Oh My Pi",
   avatar_url: "",
   availability: "available",
-  command: "hermes-acp",
-  binary_path: "/usr/local/bin/hermes-acp",
-  default_args: [],
+  command: "omp",
+  binary_path: "/usr/local/bin/omp",
+  default_args: ["acp"],
   mcp_command: null,
-  install_hint: "Colony talks to Hermes Agent through its hermes-acp command.",
-  install_instructions_url: "https://hermes-agent.nousresearch.com",
+  install_hint:
+    "Colony talks to Oh My Pi through its CLI's ACP mode (omp acp).",
+  install_instructions_url: "https://github.com/can1357/oh-my-pi",
   can_auto_install: false,
-  requires_external_cli: true,
+  requires_external_cli: false,
   underlying_cli_path: null,
   node_required: false,
   auth_status: { status: "unknown" },
   source: "preset",
 } as const;
 
-/** OpenClaw preset "not_installed" + no auto-install — catalog-only. */
-const OPENCLAW_NOT_INSTALLED = {
-  id: "openclaw",
-  label: "OpenClaw",
+/** OpenCode preset "not_installed" + no auto-install — catalog-only. */
+const OPENCODE_NOT_INSTALLED = {
+  id: "opencode",
+  label: "OpenCode",
   avatar_url: "",
   availability: "not_installed",
-  command: "openclaw",
+  command: "opencode",
   binary_path: null,
   default_args: ["acp"],
   mcp_command: null,
   install_hint:
-    "Colony talks to OpenClaw through its ACP mode (openclaw acp), which relies on the OpenClaw Gateway daemon. Follow the setup guide to install both.",
-  install_instructions_url: "https://docs.openclaw.ai/start/getting-started",
+    "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
+  install_instructions_url: "https://opencode.ai/docs",
   can_auto_install: false,
   requires_external_cli: true,
   underlying_cli_path: null,
@@ -65,23 +66,21 @@ const OPENCLAW_NOT_INSTALLED = {
   source: "preset",
 } as const;
 
-/** Cursor preset — deliberately has NO bundled logo (brand assets not
- * licensed for redistribution). Must render the terminal glyph, never
- * initials. */
-const CURSOR_AVAILABLE = {
-  id: "cursor",
-  label: "Cursor",
+/** OpenCode preset — available, with a bundled logo. */
+const OPENCODE_AVAILABLE = {
+  id: "opencode",
+  label: "OpenCode",
   avatar_url: "",
   availability: "available",
-  command: "cursor-agent",
-  binary_path: "/usr/local/bin/cursor-agent",
-  default_args: [],
+  command: "opencode",
+  binary_path: "/usr/local/bin/opencode",
+  default_args: ["acp"],
   mcp_command: null,
   install_hint:
-    "Colony talks to Cursor through the cursor-agent CLI's ACP mode.",
-  install_instructions_url: "https://cursor.com/cli",
+    "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
+  install_instructions_url: "https://opencode.ai/docs",
   can_auto_install: false,
-  requires_external_cli: true,
+  requires_external_cli: false,
   underlying_cli_path: null,
   node_required: false,
   auth_status: { status: "unknown" },
@@ -178,21 +177,21 @@ test.describe("your harnesses split", () => {
     page,
   }) => {
     await installMockBridge(page, {
-      acpRuntimesCatalog: [HERMES_AVAILABLE, OPENCLAW_NOT_INSTALLED],
+      acpRuntimesCatalog: [OMP_AVAILABLE, OPENCODE_NOT_INSTALLED],
     });
     await openHarnessSettings(page);
 
     // Ready preset row with a Ready status chip.
-    const hermesRow = page.getByTestId("doctor-runtime-hermes");
-    await expect(hermesRow).toBeVisible();
-    await expect(page.getByTestId("doctor-runtime-ready-hermes")).toHaveText(
+    const ompRow = page.getByTestId("doctor-runtime-omp");
+    await expect(ompRow).toBeVisible();
+    await expect(page.getByTestId("doctor-runtime-ready-omp")).toHaveText(
       "Ready",
     );
 
     // Needs-setup preset must NOT render a row (and thus no Install button).
-    await expect(page.getByTestId("doctor-runtime-openclaw")).toHaveCount(0);
+    await expect(page.getByTestId("doctor-runtime-opencode")).toHaveCount(0);
     await expect(
-      page.getByTestId("doctor-runtime-install-openclaw"),
+      page.getByTestId("doctor-runtime-install-opencode"),
     ).toHaveCount(0);
   });
 
@@ -200,36 +199,36 @@ test.describe("your harnesses split", () => {
     page,
   }) => {
     await installMockBridge(page, {
-      acpRuntimesCatalog: [HERMES_AVAILABLE, OPENCLAW_NOT_INSTALLED],
+      acpRuntimesCatalog: [OMP_AVAILABLE, OPENCODE_NOT_INSTALLED],
     });
     await openHarnessSettings(page);
     await openCatalog(page);
 
-    // Needs-setup entries sort first, so OpenClaw is auto-selected.
+    // Needs-setup entries sort first, so OpenCode is auto-selected.
     await expect(
-      page.getByTestId("harness-catalog-list-item-openclaw"),
+      page.getByTestId("harness-catalog-list-item-opencode"),
     ).toBeVisible();
     const detail = page.getByTestId("harness-catalog-detail-pane");
-    await expect(detail).toContainText("OpenClaw");
+    await expect(detail).toContainText("OpenCode");
     // Status chip.
     await expect(
-      page.getByTestId("harness-catalog-status-openclaw"),
+      page.getByTestId("harness-catalog-status-opencode"),
     ).toHaveText("CLI needed");
     // Curated one-liner (first-party-sourced category sentence).
-    await expect(detail).toContainText(
-      "A personal AI assistant that runs on your own devices.",
-    );
+    await expect(detail).toContainText("An open-source coding agent.");
     // Operational setup hint from runtime state.
-    await expect(detail).toContainText("OpenClaw Gateway daemon");
+    await expect(detail).toContainText(
+      "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
+    );
     // Primary setup action under the header (no auto-install → setup guide).
     await expect(
-      page.getByTestId("harness-catalog-setup-openclaw"),
+      page.getByTestId("harness-catalog-setup-opencode"),
     ).toBeVisible();
 
     // Technical details are visible by default.
-    const technical = page.getByTestId("harness-catalog-technical-openclaw");
+    const technical = page.getByTestId("harness-catalog-technical-opencode");
     await expect(technical).toBeVisible();
-    await expect(technical).toContainText("openclaw");
+    await expect(technical).toContainText("opencode");
     await expect(technical).toContainText("acp");
   });
 
@@ -237,29 +236,27 @@ test.describe("your harnesses split", () => {
     page,
   }) => {
     await installMockBridge(page, {
-      acpRuntimesCatalog: [HERMES_AVAILABLE, OPENCLAW_NOT_INSTALLED],
+      acpRuntimesCatalog: [OMP_AVAILABLE, OPENCODE_NOT_INSTALLED],
     });
     await openHarnessSettings(page);
     await openCatalog(page);
 
     // Ready entries live in the "Installed" accordion, collapsed by default.
-    await expect(
-      page.getByTestId("harness-catalog-list-item-hermes"),
-    ).toHaveCount(0);
+    await expect(page.getByTestId("harness-catalog-list-item-omp")).toHaveCount(
+      0,
+    );
     await expect(
       page.getByTestId("harness-catalog-section-installed-count"),
     ).toHaveText("1");
     await page.getByTestId("harness-catalog-section-installed").click();
 
-    await page.getByTestId("harness-catalog-list-item-hermes").click();
+    await page.getByTestId("harness-catalog-list-item-omp").click();
     const detail = page.getByTestId("harness-catalog-detail-pane");
     await expect(detail).toContainText("Ready");
-    await expect(
-      page.getByTestId("harness-catalog-install-hermes"),
-    ).toHaveCount(0);
-    await expect(page.getByTestId("harness-catalog-setup-hermes")).toHaveCount(
+    await expect(page.getByTestId("harness-catalog-install-omp")).toHaveCount(
       0,
     );
+    await expect(page.getByTestId("harness-catalog-setup-omp")).toHaveCount(0);
   });
 
   test("catalog Update for an outdated adapter requires confirmation before installing", async ({
@@ -270,11 +267,11 @@ test.describe("your harnesses split", () => {
     // never mutate straight from the catalog CTA.
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        HERMES_AVAILABLE,
+        OMP_AVAILABLE,
         {
-          ...OPENCLAW_NOT_INSTALLED,
+          ...OPENCODE_NOT_INSTALLED,
           availability: "adapter_outdated",
-          binary_path: "/usr/local/bin/openclaw",
+          binary_path: "/usr/local/bin/opencode",
           can_auto_install: true,
         },
       ],
@@ -291,19 +288,19 @@ test.describe("your harnesses split", () => {
           ).filter((command) => command === "install_acp_runtime").length,
       );
 
-    await page.getByTestId("harness-catalog-list-item-openclaw").click();
+    await page.getByTestId("harness-catalog-list-item-opencode").click();
     await expect(
-      page.getByTestId("harness-catalog-status-openclaw"),
+      page.getByTestId("harness-catalog-status-opencode"),
     ).toHaveText("Update needed");
-    const updateButton = page.getByTestId("harness-catalog-install-openclaw");
+    const updateButton = page.getByTestId("harness-catalog-install-opencode");
     await expect(updateButton).toHaveText("Update");
 
     // Cancel path: clicking Update opens the warning, no mutation fires.
     await updateButton.click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText("Update OpenClaw adapter?");
+    await expect(dialog).toContainText("Update OpenCode adapter?");
     await expect(dialog).toContainText(
-      "This replaces the machine-wide openclaw adapter.",
+      "This replaces the machine-wide opencode adapter.",
     );
     // Generic runtimes must never get Codex's package copy.
     await expect(dialog).not.toContainText("codex-acp");
@@ -314,7 +311,7 @@ test.describe("your harnesses split", () => {
 
     // Confirm path: exactly one install fires after confirmation.
     await updateButton.click();
-    await page.getByTestId("harness-catalog-confirm-update-openclaw").click();
+    await page.getByTestId("harness-catalog-confirm-update-opencode").click();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await expect.poll(installCalls).toBe(1);
     // No duplicate mutation after the flow settles.
@@ -323,25 +320,24 @@ test.describe("your harnesses split", () => {
 
   test("catalog search filters the list", async ({ page }) => {
     await installMockBridge(page, {
-      acpRuntimesCatalog: [
-        HERMES_AVAILABLE,
-        OPENCLAW_NOT_INSTALLED,
-        CURSOR_AVAILABLE,
-      ],
+      acpRuntimesCatalog: [OMP_AVAILABLE, OPENCODE_NOT_INSTALLED],
     });
     await openHarnessSettings(page);
     await openCatalog(page);
 
-    await page.getByTestId("harness-catalog-search").fill("claw");
+    // "Oh My" matches only the omp entry — opencode is filtered out.
+    await page.getByTestId("harness-catalog-search").fill("Oh My");
     await expect(
-      page.getByTestId("harness-catalog-list-item-openclaw"),
+      page.getByTestId("harness-catalog-list-item-omp"),
     ).toBeVisible();
     await expect(
-      page.getByTestId("harness-catalog-list-item-hermes"),
+      page.getByTestId("harness-catalog-list-item-opencode"),
     ).toHaveCount(0);
+    // Clearing the search restores both entries.
+    await page.getByTestId("harness-catalog-search").fill("");
     await expect(
-      page.getByTestId("harness-catalog-list-item-cursor"),
-    ).toHaveCount(0);
+      page.getByTestId("harness-catalog-list-item-opencode"),
+    ).toBeVisible();
     // The custom-harness entry stays available regardless of the filter.
     await expect(
       page.getByTestId("harness-catalog-list-item-custom"),
@@ -355,27 +351,27 @@ test("harness rows render bundled preset logos, not initials", async ({
   page,
 }) => {
   await installMockBridge(page, {
-    acpRuntimesCatalog: [HERMES_AVAILABLE, CURSOR_AVAILABLE],
+    acpRuntimesCatalog: [OMP_AVAILABLE, OPENCODE_AVAILABLE],
   });
   await openHarnessSettings(page);
 
   // Preset rows must show the same bundled logo the catalog uses
   // (PRESET_LOGOS via RuntimeIcon), even though presets emit an empty
   // avatar_url (the no-remote-icon security line).
-  const hermesLogo = page.getByTestId("doctor-runtime-logo-hermes");
-  await expect(hermesLogo).toBeVisible();
-  await expect(hermesLogo.locator("img")).toHaveAttribute(
+  const ompLogo = page.getByTestId("doctor-runtime-logo-omp");
+  await expect(ompLogo).toBeVisible();
+  await expect(ompLogo.locator("img")).toHaveAttribute(
     "src",
-    "/harness-logos/hermes.png",
+    "/harness-logos/omp.svg",
   );
 
-  // Cursor renders its inline SVG mark (RUNTIME_MARKS, CC0 simple-icons
-  // path) — an svg, never an img or initials.
-  const cursorLogo = page.getByTestId("doctor-runtime-logo-cursor");
-  await expect(cursorLogo).toBeVisible();
-  await expect(cursorLogo.locator("svg")).toBeVisible();
-  await expect(cursorLogo.locator("img")).not.toBeVisible();
-  await expect(cursorLogo).not.toContainText("C");
+  // OpenCode also renders its bundled logo.
+  const opencodeLogo = page.getByTestId("doctor-runtime-logo-opencode");
+  await expect(opencodeLogo).toBeVisible();
+  await expect(opencodeLogo.locator("img")).toHaveAttribute(
+    "src",
+    "/harness-logos/opencode.svg",
+  );
 });
 
 // ── Custom harness add (via catalog) ─────────────────────────────────────────
@@ -385,7 +381,7 @@ test.describe("add custom harness", () => {
     page,
   }) => {
     await installMockBridge(page, {
-      acpRuntimesCatalog: [HERMES_AVAILABLE, OPENCLAW_NOT_INSTALLED],
+      acpRuntimesCatalog: [OMP_AVAILABLE, OPENCODE_NOT_INSTALLED],
     });
     await openHarnessSettings(page);
 
@@ -428,8 +424,8 @@ test.describe("add custom harness", () => {
   }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        HERMES_AVAILABLE,
-        OPENCLAW_NOT_INSTALLED,
+        OMP_AVAILABLE,
+        OPENCODE_NOT_INSTALLED,
         makeCustomEntry({ definition_env: { MY_API_KEY: "sk-test" } }),
       ],
     });
@@ -455,8 +451,8 @@ test.describe("add custom harness", () => {
   test("same-ID edit replaces row — no duplicate", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        HERMES_AVAILABLE,
-        OPENCLAW_NOT_INSTALLED,
+        OMP_AVAILABLE,
+        OPENCODE_NOT_INSTALLED,
         makeCustomEntry({ label: "V1 Label" }),
       ],
     });
@@ -481,8 +477,8 @@ test.describe("add custom harness", () => {
   test("rename removes old row and inserts new row", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        HERMES_AVAILABLE,
-        OPENCLAW_NOT_INSTALLED,
+        OMP_AVAILABLE,
+        OPENCODE_NOT_INSTALLED,
         makeCustomEntry({ id: "old-harness", label: "Old" }),
       ],
     });
@@ -517,8 +513,8 @@ test.describe("delete custom harness", () => {
   test("delete success removes the row", async ({ page }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        HERMES_AVAILABLE,
-        OPENCLAW_NOT_INSTALLED,
+        OMP_AVAILABLE,
+        OPENCODE_NOT_INSTALLED,
         makeCustomEntry(),
       ],
     });
@@ -549,8 +545,8 @@ test.describe("delete custom harness", () => {
   }) => {
     await installMockBridge(page, {
       acpRuntimesCatalog: [
-        HERMES_AVAILABLE,
-        OPENCLAW_NOT_INSTALLED,
+        OMP_AVAILABLE,
+        OPENCODE_NOT_INSTALLED,
         makeCustomEntry(),
       ],
       deleteCustomHarnessError: "permission denied: could not remove file",
@@ -578,8 +574,8 @@ test.describe("delete custom harness", () => {
 test("available custom harness row shows a Ready chip", async ({ page }) => {
   await installMockBridge(page, {
     acpRuntimesCatalog: [
-      HERMES_AVAILABLE,
-      OPENCLAW_NOT_INSTALLED,
+      OMP_AVAILABLE,
+      OPENCODE_NOT_INSTALLED,
       makeCustomEntry({ availability: "available" }),
     ],
   });
@@ -597,8 +593,8 @@ test("not-ready custom harness row shows status, no install action", async ({
 }) => {
   await installMockBridge(page, {
     acpRuntimesCatalog: [
-      HERMES_AVAILABLE,
-      OPENCLAW_NOT_INSTALLED,
+      OMP_AVAILABLE,
+      OPENCODE_NOT_INSTALLED,
       makeCustomEntry(),
     ],
   });

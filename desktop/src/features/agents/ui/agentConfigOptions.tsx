@@ -40,6 +40,7 @@ const KNOWN_LLM_PROVIDER_IDS = [
   "anthropic",
   "databricks",
   "databricks_v2",
+  "deepseek",
   "openai",
   "openai-compat",
   "openrouter",
@@ -114,6 +115,13 @@ const PROVIDER_CREDENTIAL_CONFIG: Partial<
     requiredEnvKeys: ["OPENROUTER_API_KEY"],
     secretEnvVar: "OPENROUTER_API_KEY",
   },
+  deepseek: {
+    // DeepSeek's API is OpenAI-compatible; the key rides the same env var as
+    // the other OpenAI-compatible endpoints and the base URL defaults to
+    // https://api.deepseek.com (see agent_models.rs discovery).
+    requiredEnvKeys: ["OPENAI_COMPAT_API_KEY"],
+    secretEnvVar: "OPENAI_COMPAT_API_KEY",
+  },
 };
 
 const DEFAULT_MODEL_OPTION: PersonaModelOption = {
@@ -123,6 +131,7 @@ const DEFAULT_MODEL_OPTION: PersonaModelOption = {
 
 export const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
   { id: "anthropic", label: "Anthropic" },
+  { id: "deepseek", label: "DeepSeek" },
   { id: "openai", label: "OpenAI" },
   { id: "openai-compat", label: "OpenAI-compatible" },
   { id: "openrouter", label: "OpenRouter" },
@@ -135,7 +144,6 @@ const PERSONA_MODEL_OPTIONS_BY_RUNTIME: Record<
   string,
   readonly PersonaModelOption[]
 > = {
-  goose: [DEFAULT_MODEL_OPTION],
   "buzz-agent": [DEFAULT_MODEL_OPTION],
   claude: [DEFAULT_MODEL_OPTION],
   codex: [DEFAULT_MODEL_OPTION],
@@ -165,7 +173,13 @@ export function requiredCredentialEnvKeys(
   provider: string,
 ): readonly string[] {
   const normalizedRuntime = runtimeId.trim();
-  if (normalizedRuntime !== "buzz-agent" && normalizedRuntime !== "goose") {
+  // Oh My Pi and OpenCode take provider credentials through the same
+  // OpenAI-compatible / vendor env vars as buzz-agent.
+  if (
+    normalizedRuntime !== "buzz-agent" &&
+    normalizedRuntime !== "omp" &&
+    normalizedRuntime !== "opencode"
+  ) {
     return [];
   }
   const config = PROVIDER_CREDENTIAL_CONFIG[provider.trim().toLowerCase()];
@@ -180,7 +194,15 @@ export function isMissingRequiredDropdownField(
 }
 
 export function runtimeSupportsLlmProviderSelection(runtimeId: string) {
-  return runtimeId === "buzz-agent" || runtimeId === "goose";
+  // Oh My Pi and OpenCode select their LLM through the same provider switcher
+  // as Colony Agent: the provider is applied via the universal
+  // BUZZ_ACP_PROVIDER env var and model ids are provider-qualified
+  // (`provider/model`) for the harness's ACP model catalog.
+  return (
+    runtimeId === "buzz-agent" ||
+    runtimeId === "omp" ||
+    runtimeId === "opencode"
+  );
 }
 
 /** Clears values whose meaning or support changes with the selected harness. */
@@ -284,6 +306,7 @@ export function providerRequiresExplicitModel(
   const trimmedProvider = providerId?.trim() ?? "";
   return (
     trimmedProvider === "anthropic" ||
+    trimmedProvider === "deepseek" ||
     trimmedProvider === "openai" ||
     trimmedProvider === "openai-compat" ||
     trimmedProvider === "openrouter"
@@ -294,7 +317,9 @@ export function providerDisplayLabel(providerId: string) {
   const trimmedProvider = providerId.trim();
   return trimmedProvider === "relay-mesh"
     ? "Colony shared compute"
-    : trimmedProvider;
+    : trimmedProvider === "deepseek"
+      ? "DeepSeek"
+      : trimmedProvider;
 }
 
 export function getDefaultLlmProviderLabel(
@@ -508,10 +533,8 @@ function runtimePreferenceSortRank(runtimeId: string) {
   switch (runtimeId) {
     case "buzz-agent":
       return 0;
-    case "goose":
-      return 1;
     default:
-      return 2;
+      return 1;
   }
 }
 

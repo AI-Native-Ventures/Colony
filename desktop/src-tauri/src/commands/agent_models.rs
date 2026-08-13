@@ -340,7 +340,7 @@ fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
             .map(str::trim)
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("openai" | "openai-compat")
+        Some("openai" | "openai-compat" | "deepseek")
     )
 }
 
@@ -351,9 +351,23 @@ fn openai_compatible_models_url(env: &BTreeMap<String, String>) -> String {
     format!("{}/models", base_url.trim_end_matches('/'))
 }
 
-fn openai_compatible_models_url_for_discovery(env: &BTreeMap<String, String>) -> String {
+fn openai_compatible_models_url_for_discovery(
+    env: &BTreeMap<String, String>,
+    provider: Option<&str>,
+) -> String {
+    let default_base = if matches!(
+        provider
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("deepseek")
+    ) {
+        "https://api.deepseek.com/v1"
+    } else {
+        "https://api.openai.com/v1"
+    };
     let base_url = env_or_process_value(env, "OPENAI_COMPAT_BASE_URL")
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_else(|| default_base.to_string());
     format!("{}/models", base_url.trim_end_matches('/'))
 }
 
@@ -496,7 +510,7 @@ async fn discover_openai_compatible_models(
     let url = if relay_mesh {
         format!("{}/models", crate::managed_agents::RELAY_MESH_API_BASE_URL)
     } else {
-        openai_compatible_models_url_for_discovery(env)
+        openai_compatible_models_url_for_discovery(env, provider.as_deref())
     };
     let response = client
         .get(&url)

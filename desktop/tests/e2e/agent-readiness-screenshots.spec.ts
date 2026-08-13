@@ -4,8 +4,8 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const SHOTS = "test-results/agent-readiness";
 
-// An existing goose-runtime managed agent for the Edit-dialog shot.
-// Tyler's pubkey maps to gooseSurface in the mock bridge (runtimeId: "goose"),
+// An existing omp-runtime managed agent for the Edit-dialog shot.
+// Tyler's pubkey maps to ompSurface in the mock bridge (runtimeId: "omp"),
 // which supports LLM provider selection — the edit dialog's provider/model
 // pickers render for it just as they do for buzz-agent.
 const EDIT_AGENT_PUBKEY = TEST_IDENTITIES.tyler.pubkey;
@@ -100,7 +100,7 @@ async function openEditDialog(
 
   await page.getByTestId("user-profile-edit-agent").click();
 
-  // Wait for the Edit dialog's LLM provider field (goose runtime supports it).
+  // Wait for the Edit dialog's LLM provider field (omp runtime supports it).
   // The Edit dialog renders provider selection via PersonaDropdownField, whose
   // trigger button carries this id.
   await expect(page.locator("#edit-agent-llm-provider")).toBeVisible({
@@ -288,7 +288,7 @@ test.describe("agent readiness gate screenshots", () => {
     });
   });
 
-  // Shot 07: Edit dialog for an existing managed agent (goose runtime) showing
+  // Shot 07: Edit dialog for an existing managed agent (omp runtime) showing
   // the provider/model pickers.
   test("07-edit-dialog-extracted-fields", async ({ page }) => {
     await installMockBridge(page, {
@@ -311,20 +311,24 @@ test.describe("agent readiness gate screenshots", () => {
     });
   });
 
-  // Shot 08: goose runtime, provider empty + no global → save BLOCKED (same rule as buzz-agent).
-  test("08-create-goose-empty-provider-marker", async ({ page }) => {
+  // Shot 08: omp runtime, provider empty + no global → save BLOCKED (same rule as buzz-agent).
+  test("08-create-omp-empty-provider-marker", async ({ page }) => {
     await installMockBridge(page);
     await openCreateDialog(page);
 
-    // Opt into per-agent customization, then switch to goose to confirm a
+    // Opt into per-agent customization, then switch to Oh My Pi to confirm a
     // genuinely incomplete customized configuration remains blocked.
     await page.getByRole("tab", { name: "Customize for this agent" }).click();
     await expect(page.locator("#persona-llm-provider")).toBeVisible({
       timeout: 10_000,
     });
-    await selectDropdownOption(page, page.locator("#persona-runtime"), "Goose");
+    await selectDropdownOption(
+      page,
+      page.locator("#persona-runtime"),
+      "Oh My Pi",
+    );
 
-    // Provider field still visible for goose (also a provider-selection runtime).
+    // Provider field still visible for Oh My Pi (also a provider-selection runtime).
     await expect(page.locator("#persona-llm-provider")).toBeVisible({
       timeout: 5_000,
     });
@@ -337,7 +341,7 @@ test.describe("agent readiness gate screenshots", () => {
 
     const dialog = page.getByRole("dialog");
     await dialog.screenshot({
-      path: `${SHOTS}/08-create-goose-empty-provider-marker.png`,
+      path: `${SHOTS}/08-create-omp-empty-provider-marker.png`,
     });
   });
 });

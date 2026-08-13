@@ -104,8 +104,8 @@ fn codex_has_mcp_command() {
 }
 
 #[test]
-fn goose_has_no_mcp_hooks() {
-    let p = known_acp_runtime("goose").expect("should resolve");
+fn claude_has_no_mcp_hooks() {
+    let p = known_acp_runtime("claude").expect("should resolve");
     assert!(!p.mcp_hooks);
     assert_eq!(p.mcp_command, None);
 }

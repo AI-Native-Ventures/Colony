@@ -245,7 +245,7 @@ test.describe("observer feed screenshots", () => {
           method: "session/request_permission",
           params: {
             title: "Read file system",
-            message: "Agent wants to read ~/.config/goose/config.yaml",
+            message: "Agent wants to read ~/.omp/agent/settings.json",
             options: [
               { optionId: "opt-allow", kind: "allow_once", name: "Allow once" },
               { optionId: "opt-deny", kind: "reject_once", name: "Deny" },

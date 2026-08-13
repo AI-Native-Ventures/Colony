@@ -5,7 +5,7 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 const SHOTS = "test-results/config-bridge";
 
 // Use well-known test pubkeys that map to distinct config surface fixtures
-const GOOSE_PUBKEY = TEST_IDENTITIES.tyler.pubkey;
+const OMP_PUBKEY = TEST_IDENTITIES.tyler.pubkey;
 const PRESPAWN_PUBKEY = TEST_IDENTITIES.bob.pubkey;
 const RUNTIME_OVERRIDE_PUBKEY = TEST_IDENTITIES.outsider.pubkey;
 // Synthetic agent whose config surface mixes four distinct provenance origins
@@ -17,8 +17,8 @@ const BUZZ_AGENT_PUBKEY =
 
 const MANAGED_AGENTS = [
   {
-    pubkey: GOOSE_PUBKEY,
-    name: "Goose Agent",
+    pubkey: OMP_PUBKEY,
+    name: "Oh My Pi Agent",
     status: "running" as const,
     channelNames: ["agents"],
   },
@@ -163,7 +163,7 @@ test.describe("config bridge screenshots", () => {
   test("01 — folded config panel", async ({ page }) => {
     await installMockBridge(page, { managedAgents: MANAGED_AGENTS });
 
-    const panel = await openAgentProfileFromChannel(page, "Goose Agent");
+    const panel = await openAgentProfileFromChannel(page, "Oh My Pi Agent");
 
     // The folded config panel: provenance sentences inline under each value.
     await expect(panel.getByText("Set in Colony").first()).toBeVisible();
@@ -202,11 +202,9 @@ test.describe("config bridge screenshots", () => {
     await expect(panel.getByText("Set in Colony").first()).toBeVisible();
     await expect(panel.getByText("Inherited from template")).toBeVisible();
     await expect(
-      panel.getByText("From environment variable (GOOSE_MODE)"),
+      panel.getByText("From environment variable (BUZZ_ACP_PROVIDER)"),
     ).toBeVisible();
-    await expect(
-      panel.getByText("From config file (~/.config/goose/config.yaml)").first(),
-    ).toBeVisible();
+
     await settleAnimations(panel);
 
     await panel.screenshot({
@@ -231,7 +229,7 @@ test.describe("config bridge screenshots", () => {
   test("05 — advanced flat list", async ({ page }) => {
     await installMockBridge(page, { managedAgents: MANAGED_AGENTS });
 
-    const panel = await openAgentProfileFromChannel(page, "Goose Agent");
+    const panel = await openAgentProfileFromChannel(page, "Oh My Pi Agent");
 
     // Advanced runtime fields render directly in the profile panel's flat list,
     // grouped under their own "Advanced" header.

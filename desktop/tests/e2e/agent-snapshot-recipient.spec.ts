@@ -277,7 +277,7 @@ test("recipient_import_navigates_to_agents_and_opens_preview", async ({
   await expect(metadata).toContainText("Preferred model");
   await expect(metadata).toContainText("claude-opus-4-5");
   await expect(metadata).toContainText("Preferred runtime");
-  await expect(metadata).toContainText("goose");
+  await expect(metadata).toContainText("omp");
 });
 
 // ── Confirm imports the agent ─────────────────────────────────────────────────

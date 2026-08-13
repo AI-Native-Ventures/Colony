@@ -1767,10 +1767,10 @@ function buildMockConfigSurface(pubkey: string): {
   extensions: unknown[];
   sources: Record<string, unknown>;
 } {
-  // Goose running — mixed origins, override on model
-  const gooseSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+  // Oh My Pi running — mixed origins, override on model
+  const ompSurface = {
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: false,
     normalized: {
       model: {
@@ -1788,8 +1788,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.provider",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.provider",
         },
       },
       mode: {
@@ -1798,7 +1798,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_PROVIDER" },
       },
       thinkingEffort: {
         value: "medium",
@@ -1807,8 +1807,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.thinkingEffort",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.thinkingEffort",
         },
       },
       maxOutputTokens: null,
@@ -1835,8 +1835,8 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
@@ -1906,8 +1906,8 @@ function buildMockConfigSurface(pubkey: string): {
 
   // Pre-spawn — model from config file, ACP fields pending
   const preSpawnSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: true,
     normalized: {
       model: {
@@ -1916,7 +1916,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "gooseNativeConfigWrite", configKey: "goose.model" },
+        writeVia: { type: "ompNativeConfigWrite", configKey: "omp.model" },
       },
       provider: {
         value: "openai",
@@ -1925,8 +1925,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.provider",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.provider",
         },
       },
       mode: {
@@ -1956,8 +1956,8 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "pending",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
@@ -1973,7 +1973,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "gooseNativeConfigWrite", configKey: "goose.model" },
+        writeVia: { type: "ompNativeConfigWrite", configKey: "omp.model" },
       },
       provider: {
         value: "openai",
@@ -1982,8 +1982,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.provider",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.provider",
         },
       },
       mode: {
@@ -1992,7 +1992,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "gooseNativeConfigWrite", configKey: "goose.mode" },
+        writeVia: { type: "ompNativeConfigWrite", configKey: "omp.mode" },
       },
       thinkingEffort: null,
       maxOutputTokens: null,
@@ -2010,8 +2010,8 @@ function buildMockConfigSurface(pubkey: string): {
           options: ["suggest", "auto-edit", "full-auto", "unless-allow-listed"],
         },
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.approval_policy",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.approval_policy",
         },
       },
       {
@@ -2023,7 +2023,7 @@ function buildMockConfigSurface(pubkey: string): {
           type: "enum",
           options: ["container", "host", "none"],
         },
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_SANDBOX_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_MODE" },
       },
     ],
     extensions: [
@@ -2044,8 +2044,8 @@ function buildMockConfigSurface(pubkey: string): {
   // switched at runtime. The live model rides over the persona baseline as a
   // secondary value WITHOUT strikethrough (the headline runtimeOverride render).
   const runtimeOverrideSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: false,
     normalized: {
       model: {
@@ -2070,7 +2070,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_PROVIDER" },
       },
       thinkingEffort: {
         value: "high",
@@ -2079,8 +2079,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.thinkingEffort",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.thinkingEffort",
         },
       },
       maxOutputTokens: null,
@@ -2094,8 +2094,8 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
@@ -2104,8 +2104,8 @@ function buildMockConfigSurface(pubkey: string): {
   // "Inherited from template", "From config file (...)" and
   // "From environment variable (...)".
   const multiOriginSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: false,
     normalized: {
       model: {
@@ -2130,7 +2130,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_PROVIDER" },
       },
       thinkingEffort: {
         value: "medium",
@@ -2139,8 +2139,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.thinkingEffort",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.thinkingEffort",
         },
       },
       maxOutputTokens: null,
@@ -2154,19 +2154,19 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
   const buzzAgentSurface = {
-    ...gooseSurface,
+    ...ompSurface,
     runtimeId: "buzz-agent",
     runtimeLabel: "Colony Agent",
     advanced: [],
     extensions: [],
     sources: {
-      ...gooseSurface.sources,
+      ...ompSurface.sources,
       configFilePath: null,
       mcpConfigFilePath: null,
     },
@@ -2193,7 +2193,7 @@ function buildMockConfigSurface(pubkey: string): {
     case PUBKEY_BUZZ_AGENT:
       return buzzAgentSurface;
     default:
-      return gooseSurface;
+      return ompSurface;
   }
 }
 
@@ -2210,7 +2210,7 @@ function buildSeededManagedAgent(seed: MockManagedAgentSeed): MockManagedAgent {
     runtime: seed.runtime ?? null,
     relay_url: DEFAULT_RELAY_WS_URL,
     acp_command: "buzz-acp",
-    agent_command: "goose",
+    agent_command: "omp",
     agent_args: ["acp"],
     mcp_command: "",
     turn_timeout_seconds: 320,
@@ -2265,7 +2265,7 @@ function resetMockRelayAgents(config?: E2eConfig) {
     mockRelayAgents.push({
       pubkey: seed.pubkey,
       name: seed.name,
-      agent_type: seed.agentType ?? "goose",
+      agent_type: seed.agentType ?? "omp",
       channels: channels.map((channel) => channel.name),
       channel_ids: channels.map((channel) => channel.id),
       capabilities: seed.capabilities ?? ["messages", "channels", "mcp"],
@@ -3862,7 +3862,7 @@ const defaultMockRelayAgents: RawRelayAgent[] = [
   {
     pubkey: ALICE_PUBKEY,
     name: "alice",
-    agent_type: "goose",
+    agent_type: "omp",
     channels: ["general", "agents"],
     channel_ids: [
       "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
@@ -8019,24 +8019,24 @@ function withMockRuntimeConfigMetadata(
         ? runtime.model_env_var
         : runtime.id === "buzz-agent"
           ? "BUZZ_AGENT_MODEL"
-          : runtime.id === "goose"
-            ? "GOOSE_MODEL"
+          : runtime.id === "omp"
+            ? "BUZZ_ACP_MODEL"
             : null,
     provider_env_var:
       "provider_env_var" in runtime
         ? runtime.provider_env_var
         : runtime.id === "buzz-agent"
           ? "BUZZ_AGENT_PROVIDER"
-          : runtime.id === "goose"
-            ? "GOOSE_PROVIDER"
+          : runtime.id === "omp"
+            ? "BUZZ_ACP_PROVIDER"
             : null,
     thinking_env_var:
       "thinking_env_var" in runtime
         ? runtime.thinking_env_var
         : runtime.id === "buzz-agent"
           ? "BUZZ_AGENT_THINKING_EFFORT"
-          : runtime.id === "goose"
-            ? "GOOSE_THINKING_EFFORT"
+          : runtime.id === "omp"
+            ? "BUZZ_AGENT_THINKING_EFFORT"
             : null,
   };
 }
@@ -8087,22 +8087,22 @@ async function handleDiscoverAcpRuntimes(
   }
   const defaultCatalog: RawAcpRuntimeCatalogEntry[] = [
     {
-      id: "goose",
-      label: "Goose",
+      id: "omp",
+      label: "Oh My Pi",
       avatar_url: "",
       availability: "available",
-      command: "goose",
-      binary_path: "/usr/local/bin/goose",
+      command: "omp",
+      binary_path: "/usr/local/bin/omp",
       default_args: ["acp"],
       mcp_command: null,
-      install_hint: "Install Goose via the official install script.",
-      install_instructions_url: "https://block.github.io/goose/",
-      can_auto_install: true,
-      requires_external_cli: true,
+      install_hint: "Install Oh My Pi via the official install script.",
+      install_instructions_url: "https://github.com/can1357/oh-my-pi",
+      can_auto_install: false,
+      requires_external_cli: false,
       underlying_cli_path: null,
       node_required: false,
       auth_status: { status: "not_applicable" },
-      source: "builtin",
+      source: "preset",
       login_hint: undefined,
     },
     {
@@ -8992,7 +8992,7 @@ async function handleCreateManagedAgent(
   const agentArgs =
     args.input.agentArgs && args.input.agentArgs.length > 0
       ? [...args.input.agentArgs]
-      : agentCommand === "goose"
+      : agentCommand === "omp"
         ? ["acp"]
         : [];
   const managedAgent: MockManagedAgent = {
@@ -12597,7 +12597,7 @@ export function maybeInstallE2eTauriMocks() {
           displayName: "Imported Agent",
           isBuiltIn: true,
           model: "claude-opus-4-5",
-          runtime: "goose",
+          runtime: "omp",
           systemPrompt: null,
           avatarUrl: null,
           memoryLevel: "none",
@@ -12811,12 +12811,12 @@ export function maybeInstallE2eTauriMocks() {
         ];
         const anthropicModels = [
           {
-            id: "goose-claude-4-6-opus",
+            id: "omp-claude-4-6-opus",
             name: "Claude Opus 4.6",
             description: null,
           },
           {
-            id: "goose-claude-4-6-sonnet",
+            id: "omp-claude-4-6-sonnet",
             name: "Claude Sonnet 4.6",
             description: null,
           },
