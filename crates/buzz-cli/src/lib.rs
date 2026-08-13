@@ -3661,6 +3661,7 @@ mod tests {
             "parties",
             "patches",
             "pr",
+            "projects",
             "reactions",
             "repos",
             "social",

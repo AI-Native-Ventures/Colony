@@ -83,6 +83,10 @@ CREATE TABLE channels (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     archived_at     TIMESTAMPTZ,
     deleted_at      TIMESTAMPTZ,
+    deletion_state  TEXT NOT NULL DEFAULT 'active'
+        CHECK (deletion_state IN ('active', 'quiescing', 'fenced', 'tombstone')),
+    deletion_fence_generation BIGINT NOT NULL DEFAULT 0
+        CHECK (deletion_fence_generation >= 0),
     nip29_group_id  VARCHAR(255),
     topic_required  BOOLEAN NOT NULL DEFAULT FALSE,
     max_members     INT,
