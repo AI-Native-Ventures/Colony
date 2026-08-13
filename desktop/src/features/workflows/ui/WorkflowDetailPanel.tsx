@@ -8,6 +8,7 @@ import {
   useWorkflowRunsQuery,
 } from "@/features/workflows/hooks";
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
+import { workflowRunRecoveryLabel } from "@/features/workflows/ui/workflowRunRecovery";
 import type { Workflow } from "@/shared/api/types";
 import { Badge, type BadgeProps } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -152,6 +153,7 @@ export function WorkflowDetailPanel({
                       run.startedAt,
                       run.completedAt,
                     );
+                    const recoveryLabel = workflowRunRecoveryLabel(run.status);
 
                     return (
                       <div
@@ -166,7 +168,9 @@ export function WorkflowDetailPanel({
                           aria-expanded={isSelected}
                           className="w-full px-4 py-3 text-left"
                           data-testid={
-                            isSelected ? "workflow-selected-run" : undefined
+                            isSelected
+                              ? "workflow-selected-run"
+                              : `workflow-run-${run.id}`
                           }
                           onClick={() =>
                             setSelectedRunId(isSelected ? null : run.id)
@@ -222,6 +226,22 @@ export function WorkflowDetailPanel({
                                 <span className="text-2xs tracking-[0.12em] text-muted-foreground/80">
                                   Refreshing approvals...
                                 </span>
+                              ) : null}
+                              {recoveryLabel ? (
+                                <Button
+                                  className="ml-auto"
+                                  data-testid={`workflow-run-again-${run.id}`}
+                                  disabled={triggerMutation.isPending}
+                                  onClick={() => void handleTrigger()}
+                                  size="sm"
+                                  type="button"
+                                  variant="outline"
+                                >
+                                  <Play className="mr-1 h-3.5 w-3.5" />
+                                  {triggerMutation.isPending
+                                    ? "Running..."
+                                    : recoveryLabel}
+                                </Button>
                               ) : null}
                             </div>
                             {approvalsQuery.error instanceof Error ? (

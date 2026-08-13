@@ -184,6 +184,18 @@ type MockHuddleSeed = {
   isCreator?: boolean;
 };
 
+type MockWorkflowRunSeed = {
+  workflowId: string;
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "waiting_approval";
+  errorMessage?: string | null;
+};
+
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
@@ -345,6 +357,7 @@ type E2eConfig = {
     channelMembersReadDelayMs?: number;
     createManagedAgentDelayMs?: number;
     channelTemplates?: ChannelTemplate[];
+    workflowRunSeeds?: MockWorkflowRunSeed[];
     channelsReadError?: string;
     /** Reject successive mock `get_channels` calls, then resume. */
     channelsReadErrors?: (string | null)[];
@@ -3941,6 +3954,49 @@ function resetMockWorkflows() {
   mockWorkflows.length = 0;
   mockWorkflowRuns = [];
   mockWorkflowIdCounter = 0;
+}
+
+function seedMockWorkflowRuns(seeds: MockWorkflowRunSeed[] | undefined) {
+  if (!seeds?.length) return;
+  const now = Math.floor(Date.now() / 1000);
+  for (const [index, seed] of seeds.entries()) {
+    const workflow =
+      mockWorkflows.find((candidate) => candidate.id === seed.workflowId) ??
+      (() => {
+        const created: MockWorkflow = {
+          id: seed.workflowId,
+          name: "Recovery test workflow",
+          owner_pubkey: MOCK_IDENTITY_PUBKEY,
+          channel_id: STARTER_GENERAL_CHANNEL_ID,
+          definition: {
+            name: "Recovery test workflow",
+            trigger: { on: "manual" },
+            steps: [{ id: "step_1", action: "notify" }],
+          },
+          status: "active",
+          created_at: now,
+          updated_at: now,
+        };
+        mockWorkflows.push(created);
+        return created;
+      })();
+    mockWorkflowRuns.push({
+      id: `mock-seeded-run-${index + 1}`,
+      workflow_id: workflow.id,
+      status: seed.status,
+      current_step: null,
+      execution_trace: [],
+      started_at: seed.status === "pending" ? null : now,
+      completed_at:
+        seed.status === "failed" ||
+        seed.status === "cancelled" ||
+        seed.status === "completed"
+          ? now
+          : null,
+      error_message: seed.errorMessage ?? null,
+      created_at: now - index,
+    });
+  }
 }
 
 function parseWorkflowDefinition(
@@ -10643,6 +10699,7 @@ export function maybeInstallE2eTauriMocks() {
   seedMockCompanyRecords(config.mock?.companyWorkContext);
   seedMockSearchProfiles(config);
   resetMockWorkflows();
+  seedMockWorkflowRuns(config.mock?.workflowRunSeeds);
   resetMockMesh();
   resetMockUserStatuses();
   resetMockPersonaCatalogEvents(config);

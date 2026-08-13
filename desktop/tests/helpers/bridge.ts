@@ -135,6 +135,18 @@ type MockTeamSeed = {
   leadPersonaId?: string | null;
 };
 
+type MockWorkflowRunSeed = {
+  workflowId: string;
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "waiting_approval";
+  errorMessage?: string | null;
+};
+
 export type MockEngramEntry = {
   slug: string;
   body: string;
@@ -321,6 +333,7 @@ type MockBridgeOptions = {
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];
+  workflowRunSeeds?: MockWorkflowRunSeed[];
   addChannelMembersDelayMs?: number;
   /** Sequenced add-member failures. A string fails that call; null succeeds. */
   addChannelMembersErrors?: (string | null)[];
