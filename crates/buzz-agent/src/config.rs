@@ -3179,6 +3179,7 @@ mod tests {
     fn pricing_authority_unknown_host_returns_none() {
         assert_eq!(pricing_authority("https://api.databricks.com/v1"), None);
         assert_eq!(pricing_authority("https://custom.llm.corp/v1"), None);
+    }
 
     #[test]
     fn resolve_provider_deepseek_uses_native_key() {
