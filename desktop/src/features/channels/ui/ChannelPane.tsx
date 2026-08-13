@@ -836,7 +836,6 @@ export const ChannelPane = React.memo(function ChannelPane({
                 onSendToChannel={
                   isComposerDisabled ? undefined : onSendToChannel
                 }
-
                 onScrollTargetResolved={() => resolveScrollTarget()}
                 onScrollTargetSettled={resolveScrollTarget}
                 onToggleReaction={onToggleReaction}
