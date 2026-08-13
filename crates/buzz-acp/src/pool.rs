@@ -31,8 +31,8 @@ use uuid::Uuid;
 
 use crate::acp::{
     extract_model_config_options, extract_model_state, model_in_catalog,
-    qualified_model_in_catalog, resolve_model_switch_candidate, resolve_model_switch_method,
-    AcpClient, AcpError, EnvVar, McpServer, ModelSwitchMethod, StopReason, SystemPromptTransport,
+    qualified_model_in_catalog, resolve_model_switch_candidate, AcpClient, AcpError, EnvVar,
+    McpServer, ModelSwitchMethod, StopReason, SystemPromptTransport,
 };
 use crate::config::{compose_session_title, DedupMode, PermissionMode};
 use crate::observer;
@@ -5821,6 +5821,7 @@ done"#
             state: SessionState::default(),
             model_capabilities: None,
             desired_model: None,
+            provider: None,
             model_overridden: false,
             agent_name: "legacy-test-agent".into(),
             goose_system_prompt_supported: None,
@@ -5916,6 +5917,7 @@ done"#
             state: SessionState::default(),
             model_capabilities: None,
             desired_model: None,
+            provider: None,
             model_overridden: false,
             agent_name: "legacy-test-agent".into(),
             goose_system_prompt_supported: None,
@@ -6089,6 +6091,7 @@ done"#
             state: SessionState::default(),
             model_capabilities: None,
             desired_model: None,
+            provider: None,
             model_overridden: false,
             agent_name: "legacy-test-agent".into(),
             goose_system_prompt_supported: None,
@@ -6240,6 +6243,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             state: SessionState::default(),
             model_capabilities: None,
             desired_model: None,
+            provider: None,
             model_overridden: false,
             agent_name: "legacy-test-agent".into(),
             goose_system_prompt_supported: None,

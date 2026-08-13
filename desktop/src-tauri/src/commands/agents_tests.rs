@@ -583,6 +583,44 @@ fn current_build_deploy_payload_forwards_compiled_policy() {
     };
     record.respond_to = RespondTo::Anyone;
     record.respond_to_allowlist = vec!["a".repeat(64)];
+
+    let payload = deploy_payload_json(
+        &record,
+        "wss://relay.example".to_string(),
+        DeployProjections {
+            effective_model: None,
+            effective_provider: None,
+            effective_prompt: None,
+            effective_parallelism: record.parallelism,
+            owner_only_access: crate::managed_agents::owner_only_access_build(),
+        },
+        std::collections::BTreeMap::new(),
+        // The compiled access policy is the subject here; the launch block is
+        // exercised by the shared provider fixture test above.
+        serde_json::Value::Null,
+    );
+    let expected_mode = if expected_owner_only {
+        "owner-only"
+    } else {
+        "anyone"
+    };
+
+    assert_eq!(
+        payload["respond_to"], expected_mode,
+        "current-build deploy payload did not forward the compiled policy",
+    );
+    let expected_allowlist = if expected_owner_only {
+        serde_json::json!([])
+    } else {
+        serde_json::json!(["a".repeat(64)])
+    };
+    assert_eq!(
+        payload["respond_to_allowlist"], expected_allowlist,
+        "current-build deploy payload did not apply the compiled policy to the stale allowlist",
+    );
+}
+
+#[test]
 fn deploy_payload_matches_the_shared_full_launch_fixture() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
         "../../crates/buzz-backend-kubernetes/tests/fixtures/provider-wire/deploy-full-launch.request.json",
