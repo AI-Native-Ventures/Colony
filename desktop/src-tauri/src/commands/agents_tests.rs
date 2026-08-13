@@ -707,7 +707,7 @@ fn deploy_payload_carries_the_full_behavioral_quad() {
     let expected_mode = if expected_owner_only {
         "owner-only"
     } else {
-        "anyone"
+        "allowlist"
     };
 
     assert_eq!(
