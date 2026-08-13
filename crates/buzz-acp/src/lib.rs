@@ -2027,6 +2027,7 @@ async fn tokio_main() -> Result<()> {
                         state: SessionState::default(),
                         model_capabilities: None,
                         desired_model: config.model.clone(),
+                        provider: config.provider.clone(),
                         model_overridden: false,
                         agent_name,
                         goose_system_prompt_supported: None,
@@ -4541,6 +4542,7 @@ struct PoolStartup {
     extra_env: Vec<(String, String)>,
     has_generated_codex_config: bool,
     model: Option<String>,
+    provider: Option<String>,
     observer: Option<observer::ObserverHandle>,
 }
 
@@ -4553,6 +4555,7 @@ impl PoolStartup {
             extra_env: config.persona_env_vars.clone(),
             has_generated_codex_config: config.has_generated_codex_config,
             model: config.model.clone(),
+            provider: config.provider.clone(),
             observer,
         }
     }
@@ -4639,6 +4642,7 @@ async fn initialize_agent_pool(
                             state: SessionState::default(),
                             model_capabilities: None,
                             desired_model: startup.model.clone(),
+                            provider: startup.provider.clone(),
                             model_overridden: false,
                             agent_name,
                             goose_system_prompt_supported: None,
@@ -5857,6 +5861,7 @@ mod build_mcp_servers_tests {
             typing_enabled: true,
             memory_enabled: false,
             model: None,
+            provider: None,
             session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
@@ -6087,6 +6092,7 @@ mod error_outcome_emission_tests {
             typing_enabled: true,
             memory_enabled: false,
             model: None,
+            provider: None,
             session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
@@ -6130,6 +6136,7 @@ mod error_outcome_emission_tests {
             state: Default::default(),
             model_capabilities: None,
             desired_model: None,
+            provider: None,
             model_overridden: false,
             agent_name: "unknown".into(),
             goose_system_prompt_supported: None,

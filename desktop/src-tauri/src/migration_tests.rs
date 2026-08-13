@@ -533,7 +533,7 @@ fn patch_json_records_rewrites_secret_store_owner_only() {
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
         dir.path(),
-        &serde_json::json!([{ "private_key_nsec": "nsec1secret", "provider": "goose" }]),
+        &serde_json::json!([{ "private_key_nsec": "nsec1secret", "provider": "claude" }]),
     );
     let path = dir.path().join("agents/managed-agents.json");
 
@@ -548,7 +548,7 @@ fn patch_json_records_rewrites_secret_store_owner_only() {
     assert_eq!(mode, 0o600, "secret-bearing rewrite must be owner-only");
     let records = read_agents_json(dir.path());
     assert_eq!(records[0]["private_key_nsec"], "nsec1secret");
-    assert_eq!(records[0]["runtime"], "goose");
+    assert_eq!(records[0]["runtime"], "claude");
 }
 
 #[test]
@@ -559,12 +559,12 @@ fn rename_provider_to_runtime_migrates_field() {
         &serde_json::json!([{
             "id": "persona-1",
             "displayName": "Alice",
-            "provider": "goose"
+            "provider": "claude"
         }]),
     );
     rename_provider_to_runtime_in_personas(&dir.path().join("agents/personas.json"));
     let records = read_personas_json(dir.path());
-    assert_eq!(records[0]["runtime"], "goose");
+    assert_eq!(records[0]["runtime"], "claude");
     assert!(records[0].get("provider").is_none());
 }
 
@@ -576,7 +576,7 @@ fn rename_provider_to_runtime_is_idempotent() {
         &serde_json::json!([{
             "id": "persona-1",
             "displayName": "Alice",
-            "runtime": "goose"
+            "runtime": "claude"
         }]),
     );
     let before = std::fs::read_to_string(dir.path().join("agents/personas.json")).unwrap();
@@ -633,7 +633,7 @@ fn reconcile_mcp_commands_clears_stale_buzz_mcp_server() {
         dir.path(),
         &serde_json::json!([{
             "name": "Fizz",
-            "agent_command": "goose",
+            "agent_command": "claude",
             "mcp_command": "buzz-mcp-server"
         }]),
     );
@@ -663,7 +663,7 @@ fn reconcile_mcp_commands_leaves_custom_value_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let json = serde_json::json!([{
         "name": "Fizz",
-        "agent_command": "goose",
+        "agent_command": "claude",
         "mcp_command": "my-custom-mcp"
     }]);
     write_agents_json(dir.path(), &json);
@@ -695,7 +695,7 @@ fn reconcile_mcp_commands_is_idempotent() {
         dir.path(),
         &serde_json::json!([{
             "name": "Fizz",
-            "agent_command": "goose",
+            "agent_command": "claude",
             "mcp_command": "buzz-mcp-server"
         }]),
     );
@@ -712,9 +712,9 @@ fn reconcile_mcp_commands_handles_mixed_agents() {
     write_agents_json(
         dir.path(),
         &serde_json::json!([
-            {"name": "Stale Goose", "agent_command": "goose", "mcp_command": "buzz-mcp-server"},
-            {"name": "Clean Goose", "agent_command": "goose", "mcp_command": ""},
-            {"name": "Custom Agent", "agent_command": "goose", "mcp_command": "my-custom-mcp"},
+            {"name": "Stale Claude", "agent_command": "claude", "mcp_command": "buzz-mcp-server"},
+            {"name": "Clean Claude", "agent_command": "claude", "mcp_command": ""},
+            {"name": "Custom Agent", "agent_command": "claude", "mcp_command": "my-custom-mcp"},
             {"name": "Stale Buzz", "agent_command": "buzz-agent", "mcp_command": "buzz-mcp-server"}
         ]),
     );
@@ -729,7 +729,7 @@ fn reconcile_mcp_commands_handles_mixed_agents() {
 #[test]
 fn reconcile_mcp_commands_resolves_persona_runtime_over_stale_snapshot() {
     // The frozen snapshot is buzz-agent (wants buzz-dev-mcp), but the linked
-    // persona's runtime is goose (wants no mcp). The reconcile must follow the
+    // persona's runtime is claude (wants no mcp). The reconcile must follow the
     // EFFECTIVE harness (persona-wins) and clear the stale buzz-mcp-server.
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
@@ -743,7 +743,7 @@ fn reconcile_mcp_commands_resolves_persona_runtime_over_stale_snapshot() {
     );
     write_personas_json(
         dir.path(),
-        &serde_json::json!([{"id": "p1", "runtime": "goose"}]),
+        &serde_json::json!([{"id": "p1", "runtime": "claude"}]),
     );
     reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
     let records = read_agents_json(dir.path());
@@ -769,21 +769,21 @@ fn reconcile_mcp_commands_sees_team_dir_runtime_edit_same_launch() {
             "mcp_command": ""
         }]),
     );
-    // Pre-edit launch state: persona runtime is goose (no mcp_command). A
-    // reader running against this stale file derives the empty goose value.
+    // Pre-edit launch state: persona runtime is claude (no mcp_command). A
+    // reader running against this stale file derives the empty claude value.
     write_personas_json(
         dir.path(),
-        &serde_json::json!([{"id": "p1", "runtime": "goose"}]),
+        &serde_json::json!([{"id": "p1", "runtime": "claude"}]),
     );
     reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
     assert_eq!(
         read_agents_json(dir.path())[0]["mcp_command"],
         "",
-        "reader-before-writer would see only the stale goose runtime"
+        "reader-before-writer would see only the stale claude runtime"
     );
 
     // Same launch: sync_team_personas propagates a team-dir harness edit
-    // (goose → buzz-agent) into personas.json. The reader runs AFTER, so it
+    // (claude → buzz-agent) into personas.json. The reader runs AFTER, so it
     // must derive the NEW buzz-agent mcp_command without a second launch.
     write_personas_json(
         dir.path(),
@@ -800,7 +800,7 @@ fn reconcile_mcp_commands_sees_team_dir_runtime_edit_same_launch() {
 #[test]
 fn reconcile_mcp_commands_honors_explicit_override_over_persona() {
     // An explicit per-instance pin (agent_command_override) beats the persona
-    // runtime: persona is goose (no mcp) but the pin is buzz-agent, so the
+    // runtime: persona is claude (no mcp) but the pin is buzz-agent, so the
     // reconcile sets the buzz-agent mcp_command.
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
@@ -808,14 +808,14 @@ fn reconcile_mcp_commands_honors_explicit_override_over_persona() {
         &serde_json::json!([{
             "name": "Fizz",
             "persona_id": "p1",
-            "agent_command": "goose",
+            "agent_command": "claude",
             "agent_command_override": "buzz-agent",
             "mcp_command": ""
         }]),
     );
     write_personas_json(
         dir.path(),
-        &serde_json::json!([{"id": "p1", "runtime": "goose"}]),
+        &serde_json::json!([{"id": "p1", "runtime": "claude"}]),
     );
     reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
     let records = read_agents_json(dir.path());

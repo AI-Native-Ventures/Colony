@@ -480,7 +480,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
             Some("DATABRICKS_MODEL")
         }
         Some("anthropic") => Some("ANTHROPIC_MODEL"),
-        Some("openai") | Some("openai-compat") => Some("OPENAI_COMPAT_MODEL"),
+        Some("openai") | Some("openai-compat") | Some("deepseek") => Some("OPENAI_COMPAT_MODEL"),
         Some("openrouter") => Some("OPENROUTER_MODEL"),
         _ => None,
     };
@@ -510,7 +510,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
                     key: "ANTHROPIC_API_KEY".to_string(),
                 });
             }
-        Some("openai")
+        Some("openai") | Some("deepseek")
             if env_key_missing("OPENAI_COMPAT_API_KEY") => {
                 missing.push(Requirement::EnvKey {
                     key: "OPENAI_COMPAT_API_KEY".to_string(),

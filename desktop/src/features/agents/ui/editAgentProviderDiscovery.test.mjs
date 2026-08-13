@@ -29,11 +29,11 @@ test("editAgent_providerFieldVisible_forBuzzAgent", () => {
   );
 });
 
-test("editAgent_providerFieldVisible_forGoose", () => {
+test("editAgent_providerFieldVisible_forOmp", () => {
   assert.equal(
-    runtimeSupportsLlmProviderSelection("goose"),
+    runtimeSupportsLlmProviderSelection("omp"),
     true,
-    "goose runtime must expose the provider picker",
+    "omp runtime must expose the provider picker",
   );
 });
 
@@ -321,9 +321,9 @@ test("editAgent_catalogArrival_doesNotOverwriteUserSelection", () => {
   const catalog = [
     { id: "buzz-agent", command: agentCommand, defaultArgs: [] },
   ];
-  const runtimeTouched = true; // user already picked goose
+  const runtimeTouched = true; // user already picked omp
 
-  let selectedRuntimeId = "goose"; // user's choice
+  let selectedRuntimeId = "omp"; // user's choice
   if (!runtimeTouched && catalog.length > 0) {
     const matched = catalog.find(
       (r) => r.command?.trim() === agentCommand.trim(),
@@ -335,7 +335,7 @@ test("editAgent_catalogArrival_doesNotOverwriteUserSelection", () => {
 
   assert.equal(
     selectedRuntimeId,
-    "goose",
+    "omp",
     "catalog-arrival effect must NOT overwrite user's selection when runtimeTouched is true",
   );
 });
@@ -493,11 +493,11 @@ test("editAgent_resolveAgentCommandUpdate_pinsUnchangedPrefillOnInheritTransitio
   assert.equal(
     resolveAgentCommandUpdate({
       inheritHarness: false,
-      agentCommand: "goose run",
-      originalAgentCommand: "goose run", // prefilled, unchanged
+      agentCommand: "omp run",
+      originalAgentCommand: "omp run", // prefilled, unchanged
       agentCommandOverride: null, // was inheriting
     }),
-    "goose run",
+    "omp run",
     "unchanged prefilled command must still be pinned on inherit→pin transition",
   );
 });
@@ -1318,13 +1318,13 @@ test("requiredCredentialEnvKeys: buzz-agent + databricks_v2 → DATABRICKS_HOST 
   assert.deepEqual(keys, ["DATABRICKS_HOST"]);
 });
 
-test("requiredCredentialEnvKeys: goose + anthropic → ANTHROPIC_API_KEY", () => {
-  const keys = requiredCredentialEnvKeys("goose", "anthropic");
+test("requiredCredentialEnvKeys: omp + anthropic → ANTHROPIC_API_KEY", () => {
+  const keys = requiredCredentialEnvKeys("omp", "anthropic");
   assert.deepEqual(keys, ["ANTHROPIC_API_KEY"]);
 });
 
-test("requiredCredentialEnvKeys: goose + openai → OPENAI_COMPAT_API_KEY", () => {
-  const keys = requiredCredentialEnvKeys("goose", "openai");
+test("requiredCredentialEnvKeys: omp + openai → OPENAI_COMPAT_API_KEY", () => {
+  const keys = requiredCredentialEnvKeys("omp", "openai");
   assert.deepEqual(keys, ["OPENAI_COMPAT_API_KEY"]);
 });
 

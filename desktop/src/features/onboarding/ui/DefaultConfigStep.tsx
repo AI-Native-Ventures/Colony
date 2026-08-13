@@ -45,6 +45,47 @@ function formatHarnessLabel(runtime: AcpRuntimeCatalogEntry | undefined) {
   return runtime.label;
 }
 
+/**
+ * Fresh-signup defaults for the global agent config: the shipped default
+ * harness is Oh My Pi, and the shipped default model is DeepSeek V4 Flash
+ * over the DeepSeek API (OpenAI-compatible base URL seeded so discovery and
+ * the harness resolve it without extra steps).
+ *
+ * Applied only when the config is COMPLETELY untouched (no preferred runtime,
+ * no provider, no model, no env vars) so existing or partially configured
+ * accounts are never overwritten.
+ */
+export function seedFreshSignupDefaults(
+  config: GlobalAgentConfig,
+  bakedEnv: BakedEnvEntry[] = [],
+): GlobalAgentConfig {
+  if (
+    config.preferred_runtime ||
+    config.provider ||
+    config.model ||
+    (config.env_vars && Object.keys(config.env_vars).length > 0)
+  ) {
+    return config;
+  }
+  // Internal builds bake a provider (BUZZ_AGENT_PROVIDER + credentials) into
+  // the app itself. Seeding DeepSeek over a baked provider would fight the
+  // build's intended default — only seed on OSS-style signups where the
+  // shipped default actually applies.
+  if (bakedEnv.some((entry) => entry.key === "BUZZ_AGENT_PROVIDER")) {
+    return config;
+  }
+  return {
+    ...config,
+    preferred_runtime: "omp",
+    provider: "deepseek",
+    model: "deepseek-v4-flash",
+    env_vars: {
+      ...(config.env_vars ?? {}),
+      OPENAI_COMPAT_BASE_URL: "https://api.deepseek.com",
+    },
+  };
+}
+
 function AgentDefaultsSection({
   onPersistenceStateChange,
   readyRuntimeIds,
@@ -82,7 +123,15 @@ function AgentDefaultsSection({
       if (unmounted) return;
 
       if (configResult.status === "fulfilled") {
-        setConfig(configResult.value);
+        // Fresh-account default: Oh My Pi + DeepSeek V4 Flash. The seed is a
+        // pure function of the loaded (empty) config, so the effect stays
+        // stable and the initial render already shows the shipped defaults.
+        setConfig(
+          seedFreshSignupDefaults(
+            configResult.value,
+            bakedEnvResult.status === "fulfilled" ? bakedEnvResult.value : [],
+          ),
+        );
       }
       if (bakedEnvResult.status === "fulfilled") {
         setBakedEnv(bakedEnvResult.value);
@@ -171,9 +220,12 @@ function AgentDefaultsSection({
     [config],
   );
 
+  // Auto-select the first ready harness in onboarding order (Oh My Pi when
+  // available) so a brand-new account lands on the shipped default rather
+  // than forcing a manual choice.
   React.useEffect(() => {
     if (configSurfaceLoading || selectedRuntimeId) return;
-    if (readyRuntimes.length !== 1) return;
+    if (readyRuntimes.length === 0) return;
     handleHarnessChange(readyRuntimes[0].id);
   }, [
     configSurfaceLoading,
