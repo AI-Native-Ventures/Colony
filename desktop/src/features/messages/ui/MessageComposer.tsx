@@ -60,7 +60,7 @@ import { usePersistentAgentMentionHydration } from "./usePersistentAgentMentionH
 import { useComposerContentState } from "./useComposerContentState";
 import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
 import { submitMessageEdit } from "./submitMessageEdit";
-import { useComposerLinkPreviews } from "./useComposerLinkPreviews";
+import { useManagedComposerLinkPreviews } from "./useComposerLinkPreviews";
 import { useComposerAutoSubmit } from "./useComposerAutoSubmit";
 import type { MessageComposerProps } from "./MessageComposer.types";
 function MessageComposerImpl(props: MessageComposerProps) {
@@ -106,6 +106,9 @@ function MessageComposerImpl(props: MessageComposerProps) {
     syncComposerContentFromEditor,
     syncContentRefFromEditorRef,
   } = useComposerContentState();
+  // Colony-only: the reply model derives its recipient set from the same
+  // link-preview content string, so it is retained here even though upstream
+  // dropped this state when the composer moved to the managed preview hook.
   const [previewContent, setPreviewContent] = React.useState("");
   const {
     previewList: composerLinkPreviews,
@@ -113,7 +116,8 @@ function MessageComposerImpl(props: MessageComposerProps) {
     hasPendingSnapshots: hasPendingLinkPreviewSnapshots,
     // Ref lets the submit guard block Enter/form/auto-submit until snapshots settle.
     hasPendingSnapshotsRef: hasPendingLinkPreviewSnapshotsRef,
-  } = useComposerLinkPreviews(previewContent, editTarget == null);
+    updateContent: updateLinkPreviewContent,
+  } = useManagedComposerLinkPreviews(editTarget == null);
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
   const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
   const [spoileredAttachmentUrls, setSpoileredAttachmentUrls] = React.useState<
@@ -280,6 +284,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     onUpdate: ({ cursor, linkPreviewContent, text }) => {
       setComposerContentFromText(text);
       setPreviewContent(linkPreviewContent);
+      updateLinkPreviewContent(linkPreviewContent);
       mentions.updateMentionQuery(text, cursor);
       channelLinks.updateChannelQuery(text, cursor);
       emojiAutocomplete.updateEmojiQuery(text, cursor);
