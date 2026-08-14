@@ -980,6 +980,7 @@ export const MessageRow = React.memo(
     prev.isContinuation === next.isContinuation &&
     prev.isFollowingThread === next.isFollowingThread &&
     prev.isUnread === next.isUnread &&
+    prev.isOpenThreadRoot === next.isOpenThreadRoot &&
     prev.layoutVariant === next.layoutVariant &&
     prev.onCollapseDepthGuide === next.onCollapseDepthGuide &&
     prev.onCollapseDepthGuideHoverChange ===
@@ -995,5 +996,4 @@ export const MessageRow = React.memo(
     prev.videoReviewCommentRootId === next.videoReviewCommentRootId &&
     prev.videoReviewContext === next.videoReviewContext,
 );
-
 MessageRow.displayName = "MessageRow";

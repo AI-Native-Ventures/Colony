@@ -2162,13 +2162,22 @@ test("opens a single-level thread panel with inline expansion", async ({
   await rootMessage.hover();
   await rootMessage.getByRole("button", { name: "Reply" }).click();
   await expect(threadPanel).toBeVisible();
+  await expect(threadPanel).not.toHaveClass(/thread-panel-accent-tint/);
   await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
     "Welcome to #general",
   );
+  await expect(rootMessage).toHaveClass(/bg-primary\/\[0\.07\]/);
+  await expect(rootMessage).toHaveClass(/ring-primary\/20/);
 
   await threadComposer.fill(firstReply);
   await threadSendButton.click();
   await expect(threadReplies).toContainText(firstReply);
+  await expect(rootSummaryRow.locator("xpath=../..")).toHaveClass(
+    /bg-primary\/\[0\.07\]/,
+  );
+  await expect(rootSummaryRow.locator("xpath=../..")).toHaveClass(
+    /ring-primary\/20/,
+  );
 
   await threadComposer.fill(siblingReply);
   await threadSendButton.click();
@@ -2305,6 +2314,10 @@ test("opens a single-level thread panel with inline expansion", async ({
 
   await threadPanel.getByTestId("auxiliary-panel-close").click();
   await expect(threadPanel).toBeHidden();
+  await expect(rootMessage).not.toHaveClass(/bg-primary\/\[0\.07\]/);
+  await expect(rootSummaryRow.locator("xpath=../..")).not.toHaveClass(
+    /bg-primary\/\[0\.07\]/,
+  );
 
   await rootSummaryRow.click();
   await expect(threadPanel).toBeVisible();
