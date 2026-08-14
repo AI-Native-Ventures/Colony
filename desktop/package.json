@@ -88,6 +88,7 @@
     "jdenticon": "^3.3.0",
     "linkifyjs": "^4.3.2",
     "lucide-react": "^1.0.0",
+    "mdast-util-from-markdown": "^2.0.3",
     "mermaid": "11.17.2",
     "motion": "^12.38.0",
     "node-pty": "1.1.0",

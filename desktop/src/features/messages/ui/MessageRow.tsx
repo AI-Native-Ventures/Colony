@@ -53,9 +53,7 @@ import type {
 import type { TimelineMessage } from "@/features/messages/types";
 import { parseFirstJobSuggestion } from "@/features/onboarding/firstJobSuggestion";
 import { parseScoutOnboardingRoot } from "@/features/onboarding/channelOnboardingRuntime/protocol";
-import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
-import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
-import { VideoReviewTimecodeButton } from "@/shared/ui/VideoReviewTimecodeButton";
+import { VideoReviewCommentMarkdown } from "@/shared/ui/VideoReviewCommentMarkdown";
 import { MessageActionBar } from "./MessageActionBar";
 import { editMessage } from "@/shared/api/tauri";
 import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
@@ -245,7 +243,6 @@ export const MessageRow = React.memo(
     const bodyOffsetClass = emojiOnly ? "mt-1" : "-mt-0.5";
 
     const { nonDmChannelNames: channelNames } = useChannelNavigation();
-    const openVideoReviewAt = useOpenVideoReviewAt();
 
     const indentRem = getThreadReplyIndentRem(message.depth);
     const descendantGuideOffsetRem = connectDescendants
@@ -359,12 +356,14 @@ export const MessageRow = React.memo(
             );
           }
 
-          const reviewRootEventId = videoReviewCommentRootId;
-          const reviewTimecode = reviewRootEventId
-            ? parseVideoReviewTimecode(message.body)
-            : null;
+          // A video-review comment renders its timecode inside the first
+          // Markdown line (upstream #5748); everything else keeps Colony's
+          // long-prose disclosure wrapper.
+          const ProseComponent = videoReviewCommentRootId
+            ? VideoReviewCommentMarkdown
+            : MessageProse;
           const markdown = (
-            <MessageProse
+            <ProseComponent
               scopeKey={`${channelId}:${message.id}:${layoutVariant}`}
               channelNames={channelNames}
               className={cn(
@@ -380,7 +379,7 @@ export const MessageRow = React.memo(
                 message,
                 isKnownAgentPubkey,
               )}
-              content={reviewTimecode?.text ?? message.body}
+              content={message.body}
               messageId={message.id}
               linkPreviewsSuppressed={linkPreviewsSuppressed}
               linkPreviewTags={message.tags}
@@ -392,6 +391,7 @@ export const MessageRow = React.memo(
               mentionPubkeysByName={mentionPubkeysByName}
               searchQuery={searchQuery}
               snapshotSharedBy={snapshotSharedBy}
+              videoReviewCommentRootId={videoReviewCommentRootId}
               videoReviewContext={videoReviewContext}
             />
           );
@@ -421,23 +421,7 @@ export const MessageRow = React.memo(
               </React.Suspense>
             );
           }
-          if (!reviewRootEventId || !reviewTimecode || !openVideoReviewAt) {
-            return markdown;
-          }
-
-          return (
-            <div className="flex min-w-0 items-start gap-1.5">
-              <VideoReviewTimecodeButton
-                surface="message"
-                timecode={reviewTimecode.timecode}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openVideoReviewAt(reviewRootEventId, reviewTimecode.seconds);
-                }}
-              />
-              <div className="min-w-0 flex-1">{markdown}</div>
-            </div>
-          );
+          return markdown;
         }
       }
     };
