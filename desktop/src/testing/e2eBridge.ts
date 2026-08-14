@@ -6220,7 +6220,7 @@ function createMockEvent(
   tags: string[][],
   pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
   createdAt = Math.floor(Date.now() / 1000),
-  id = crypto.randomUUID().replace(/-/g, ""),
+  id = mockEventId(),
 ): RelayEvent {
   return {
     id,
