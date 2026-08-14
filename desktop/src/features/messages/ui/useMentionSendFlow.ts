@@ -27,7 +27,6 @@ import type { UseEmojiAutocompleteResult } from "@/features/messages/lib/useEmoj
 import {
   buildOutgoingMessage,
   type ImetaMedia,
-  mergeOutgoingTags,
 } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { UseMentionsResult } from "@/features/messages/lib/useMentions";
 import type { UseRichTextEditorResult } from "@/features/messages/lib/useRichTextEditor";
@@ -38,6 +37,7 @@ import type { AcpRuntime, ChannelType, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { buildCustomEmojiTags } from "@/shared/lib/customEmojiTags";
 import {
+  attachOutgoingWorkContext,
   getErrorMessage,
   isManagedAgentRunning,
   isProviderBackedAgent,
@@ -555,9 +555,12 @@ export function useMentionSendFlow({
               ),
             ]),
           );
-          const finalOutgoingTags = mergeOutgoingTags(
+          const finalOutgoingTags = await attachOutgoingWorkContext(
+            sendChannelId ?? draft.capturedChannelId ?? "",
+            finalContent,
+            agentMentionPubkeys,
             mediaTags,
-            outgoingTags ?? [],
+            outgoingTags,
           );
           if (signal?.aborted) return;
           await send(
@@ -612,7 +615,6 @@ export function useMentionSendFlow({
             return;
           }
         }
-
         // Replace the sent body directly with its final post-send state before
         // the async network send starts. This avoids an intermediate blank frame
         // for persistent audiences while preserving the ordinary empty state.

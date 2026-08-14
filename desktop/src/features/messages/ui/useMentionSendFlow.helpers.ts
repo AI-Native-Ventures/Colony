@@ -1,4 +1,6 @@
 import type { ManagedAgent } from "@/shared/api/types";
+import { attachWorkContext } from "@/features/company/attachWorkContext";
+import { mergeOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { QueuedMediaAttachment } from "@/features/messages/lib/backgroundMediaUploadStore";
 import type { DraftMentionRef } from "@/features/messages/lib/useDrafts";
@@ -58,6 +60,21 @@ export function mergeOutgoingTagsWithReferenceMentions(
     ...(outgoingTags ?? []),
     ...normalizedPubkeys.map((pubkey) => [MENTION_REFERENCE_TAG, pubkey]),
   ];
+}
+
+export async function attachOutgoingWorkContext(
+  channelId: string,
+  content: string,
+  agentPubkeys: readonly string[],
+  mediaTags: string[][] | undefined,
+  outgoingTags?: string[][],
+) {
+  return await attachWorkContext({
+    channelId,
+    content,
+    agentPubkeys,
+    outgoingTags: mergeOutgoingTags(mediaTags, outgoingTags ?? []) ?? [],
+  });
 }
 
 export function getErrorMessage(error: unknown, fallback: string) {
