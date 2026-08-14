@@ -85,8 +85,8 @@ export function ChainOfCommand() {
         </div>
 
         <p className="mx-auto mt-12 max-w-xl text-sm leading-relaxed text-colony-ink/60 sm:text-base">
-          Only what truly needs you reaches you. That's not a promise the
-          agents try to keep. It's how the system is built.
+          Only what truly needs you reaches you. That's not a promise the agents
+          try to keep. It's how the system is built.
         </p>
       </div>
     </section>
