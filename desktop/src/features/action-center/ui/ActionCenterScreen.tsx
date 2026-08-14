@@ -32,6 +32,7 @@ type ActionCenterScreenProps = {
   error: Error | null;
   filter: ActionCenterFilter;
   isLoading: boolean;
+  isSettled: boolean;
   items: ActionItem[];
   openCount: number;
   selectedItemId: string | null;
@@ -51,6 +52,7 @@ export function ActionCenterScreen({
   error,
   filter,
   isLoading,
+  isSettled,
   items,
   openCount,
   selectedItemId,
@@ -78,18 +80,45 @@ export function ActionCenterScreen({
     [allItems, selectedItemId],
   );
   const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const [refreshRequestedFor, setRefreshRequestedFor] = React.useState<
+    string | null
+  >(null);
 
   React.useEffect(() => {
-    if (selectedItemId && selectedItem === null) {
-      onSelectItem(null);
+    if (refreshRequestedFor && refreshRequestedFor !== selectedItemId) {
+      setRefreshRequestedFor(null);
     }
-  }, [onSelectItem, selectedItem, selectedItemId]);
+  }, [refreshRequestedFor, selectedItemId]);
+
+  React.useEffect(() => {
+    if (!isSettled || error || !selectedItemId) return;
+    const isVisibleInFilter =
+      filter === "all" || items.some((item) => item.id === selectedItemId);
+    const wasRefreshed = refreshRequestedFor === selectedItemId;
+    if (
+      (selectedItem === null && wasRefreshed) ||
+      (selectedItem && !isVisibleInFilter)
+    ) {
+      onSelectItem(null);
+      if (wasRefreshed) setRefreshRequestedFor(null);
+    }
+  }, [
+    error,
+    filter,
+    isSettled,
+    items,
+    onSelectItem,
+    refreshRequestedFor,
+    selectedItem,
+    selectedItemId,
+  ]);
 
   React.useEffect(() => {
     if (visibleFilter !== filter) onFilterChange(visibleFilter);
   }, [filter, onFilterChange, visibleFilter]);
 
   const handleRefresh = async () => {
+    if (selectedItemId) setRefreshRequestedFor(selectedItemId);
     setIsRefreshing(true);
     try {
       await onRefresh();
@@ -98,8 +127,13 @@ export function ActionCenterScreen({
     }
   };
 
-  const showList = !isMobile || selectedItem === null;
-  const showDetail = !isMobile || selectedItem !== null;
+  const unavailableItemId =
+    isSettled && selectedItemId && selectedItem === null
+      ? selectedItemId
+      : null;
+  const hasDetail = selectedItem !== null || unavailableItemId !== null;
+  const showList = !isMobile || !hasDetail;
+  const showDetail = !isMobile || hasDetail;
 
   return (
     <section
@@ -202,7 +236,7 @@ export function ActionCenterScreen({
 
         {showDetail ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {isMobile && selectedItem ? (
+            {isMobile && hasDetail ? (
               <div className="shrink-0 border-b border-border/45 px-4 py-2">
                 <Button
                   onClick={() => onSelectItem(null)}
@@ -224,7 +258,9 @@ export function ActionCenterScreen({
                 onBack={() => onSelectItem(null)}
                 onMarkDone={onMarkDone}
                 onOpenSource={(item) => void onOpenSource(item)}
+                onRefresh={handleRefresh}
                 onUndoDone={onUndoDone}
+                unavailableItemId={unavailableItemId}
               />
             )}
           </div>

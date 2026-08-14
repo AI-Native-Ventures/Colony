@@ -6,6 +6,7 @@ import { ActionCenterMessageDetail } from "./ActionCenterMessageDetail";
 import { ActionCenterReminderDetail } from "./ActionCenterReminderDetail";
 import { ActionCenterTaskDetail } from "./ActionCenterTaskDetail";
 import { ActionCenterWorkflowDetail } from "./ActionCenterWorkflowDetail";
+import { Button } from "@/shared/ui/button";
 
 export function ActionCenterDetail({
   currentPubkey,
@@ -13,16 +14,52 @@ export function ActionCenterDetail({
   onBack,
   onMarkDone,
   onOpenSource,
+  onRefresh,
   onUndoDone,
+  unavailableItemId,
 }: {
   currentPubkey: string;
   item: ActionItem | null;
   onBack: () => void;
   onMarkDone: (item: ActionItem) => void;
   onOpenSource: (item: ActionItem) => void;
+  onRefresh: () => Promise<void>;
   onUndoDone: (item: ActionItem) => void;
+  unavailableItemId: string | null;
 }) {
   if (!item) {
+    if (unavailableItemId) {
+      return (
+        <section
+          className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background/60 px-6 py-10 text-center"
+          data-testid="action-center-detail-unavailable"
+        >
+          <div className="max-w-sm">
+            <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-muted text-muted-foreground">
+              <ClipboardList className="size-6" />
+            </div>
+            <p className="mt-4 text-base font-semibold">
+              This action is no longer available
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              The source may have been completed, withdrawn, or removed. Refresh
+              to check again.
+            </p>
+            <p className="mt-3 break-all font-mono text-2xs text-muted-foreground">
+              {unavailableItemId}
+            </p>
+            <Button
+              className="mt-4"
+              onClick={() => void onRefresh()}
+              size="sm"
+              variant="outline"
+            >
+              Refresh sources
+            </Button>
+          </div>
+        </section>
+      );
+    }
     return (
       <section
         className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background/60 px-6 py-10 text-center"

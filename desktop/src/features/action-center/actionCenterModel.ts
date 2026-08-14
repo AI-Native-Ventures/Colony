@@ -7,12 +7,12 @@ import {
   KIND_JOB_REQUEST,
   KIND_JOB_RESULT,
   KIND_JOB_HEAD,
-  KIND_REMINDER,
   KIND_APPROVAL_REQUEST,
 } from "@/shared/constants/kinds";
 import type {
   ActionCenterFilter,
   ActionCenterProjectionInput,
+  ActionCenterStateFilter,
   ActionItem,
   ActionItemKind,
   ActionItemState,
@@ -35,7 +35,6 @@ const FILTER_KIND: Record<
 const STRUCTURED_FEED_KINDS = new Set([
   KIND_APPROVAL_REQUEST,
   KIND_EVENT_REMINDER,
-  KIND_REMINDER,
   KIND_JOB_REQUEST,
   KIND_JOB_ACCEPTED,
   KIND_JOB_PROGRESS,
@@ -142,7 +141,6 @@ function taskItem(source: ActionTaskSource): ActionItem {
   const isActive =
     source.run?.runStatus === "queued" ||
     source.run?.runStatus === "executing" ||
-    source.run?.runStatus === "recoverable" ||
     source.task.status === "inProgress" ||
     source.task.status === "inReview";
   const state: ActionItemState = isCompleted
@@ -295,14 +293,24 @@ export function buildActionCenterItems({
 export function filterActionCenterItems(
   items: readonly ActionItem[],
   filter: ActionCenterFilter,
+  state?: ActionCenterStateFilter,
 ): ActionItem[] {
-  if (filter === "all") return [...items];
-  if (filter === "needs-action") {
-    return items.filter(
-      (item) => item.state === "needs-action" || item.state === "failed",
-    );
-  }
-  return items.filter((item) => item.kind === FILTER_KIND[filter]);
+  const filteredByKind =
+    filter === "all" || filter === "needs-action"
+      ? [...items]
+      : items.filter((item) => item.kind === FILTER_KIND[filter]);
+  const filteredByDefaultState =
+    filter === "needs-action"
+      ? filteredByKind.filter(
+          (item) => item.state === "needs-action" || item.state === "failed",
+        )
+      : filteredByKind;
+  if (!state) return filteredByDefaultState;
+  return filteredByDefaultState.filter((item) =>
+    state === "open"
+      ? item.state === "needs-action" || item.state === "failed"
+      : item.state === state,
+  );
 }
 
 export function countActionableItems(items: readonly ActionItem[]): number {

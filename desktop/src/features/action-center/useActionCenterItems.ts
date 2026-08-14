@@ -37,6 +37,7 @@ import {
 import { buildTaskSources } from "./lib/taskActionCenter";
 import type {
   ActionCenterFilter,
+  ActionCenterStateFilter,
   ActionItem,
   ActionWorkflowSource,
 } from "./contracts";
@@ -44,6 +45,7 @@ import type {
 export type ActionCenterItemsOptions = {
   filter?: ActionCenterFilter;
   localDoneIds?: ReadonlySet<string>;
+  state?: ActionCenterStateFilter;
 };
 
 function firstError(errors: readonly unknown[]): Error | null {
@@ -62,6 +64,7 @@ function latestWorkflowRun(runs: readonly WorkflowRun[]): WorkflowRun | null {
 export function useActionCenterItems({
   filter = "needs-action",
   localDoneIds = new Set<string>(),
+  state,
 }: ActionCenterItemsOptions = {}) {
   const identityQuery = useIdentityQuery();
   const { activeCommunity } = useCommunities();
@@ -157,18 +160,26 @@ export function useActionCenterItems({
       workflows.flatMap((workflow, index) => {
         const run = latestRuns[index];
         if (!run) return [];
+        const approvalQuery = workflowApprovalQueries[index];
         const approvals =
-          (workflowApprovalQueries[index]?.data as
-            | WorkflowApproval[]
-            | undefined) ?? [];
+          (approvalQuery?.data as WorkflowApproval[] | undefined) ?? [];
+        const approval =
+          approvals.find((candidate) => candidate.status === "pending") ?? null;
+        // A waiting run is only actionable when the backend returned a real
+        // approval record. Do not manufacture an inert workflow row while the
+        // approval read is loading, failed, or empty.
+        if (
+          run.status === "waiting_approval" &&
+          (approvalQuery?.isLoading || approvalQuery?.isError || !approval)
+        ) {
+          return [];
+        }
         return [
           {
             kind: "workflow" as const,
             workflow,
             run,
-            approval:
-              approvals.find((approval) => approval.status === "pending") ??
-              null,
+            approval,
           },
         ];
       }),
@@ -204,8 +215,8 @@ export function useActionCenterItems({
     ],
   );
   const items = React.useMemo(
-    () => filterActionCenterItems(allItems, filter),
-    [allItems, filter],
+    () => filterActionCenterItems(allItems, filter, state),
+    [allItems, filter, state],
   );
 
   const refetchHomeFeed = homeFeedQuery.refetch;
@@ -257,14 +268,25 @@ export function useActionCenterItems({
     ...workflowApprovalQueries.map((query) => query.error),
   ];
 
+  const isCoreLoading =
+    identityQuery.isLoading ||
+    homeFeedQuery.isLoading ||
+    openAsks.isLoading ||
+    remindersQuery.isLoading;
+  const isOptionalSourceLoading =
+    channelsQuery.isLoading ||
+    activeCompanyQuery.isLoading ||
+    tasksQuery.isLoading ||
+    taskRunsQuery.isLoading ||
+    workflowsQuery.isLoading ||
+    workflowRunQueries.some((query) => query.isLoading) ||
+    workflowApprovalQueries.some((query) => query.isLoading);
+
   return {
     allItems,
     error: firstError(queryErrors),
-    isLoading:
-      identityQuery.isLoading ||
-      homeFeedQuery.isLoading ||
-      openAsks.isLoading ||
-      remindersQuery.isLoading,
+    isLoading: isCoreLoading,
+    isSettled: !isCoreLoading && !isOptionalSourceLoading,
     items,
     openCount: countActionableItems(allItems),
     refetch,
@@ -273,6 +295,7 @@ export function useActionCenterItems({
     allItems: ActionItem[];
     error: Error | null;
     isLoading: boolean;
+    isSettled: boolean;
     items: ActionItem[];
     openCount: number;
     refetch: () => Promise<void>;

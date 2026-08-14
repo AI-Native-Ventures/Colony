@@ -1,6 +1,6 @@
 import type { CompanyTask } from "@/features/company/contracts";
 import {
-  collapseAndSelectCurrentTaskRun,
+  collapseAndSelectCurrentTaskRuns,
   type TaskRunContext,
   type TaskRunHead,
 } from "@/features/company/taskRunContracts";
@@ -20,15 +20,12 @@ export function selectTaskRuns(
   tasks: readonly CompanyTask[],
   events: readonly RelayEvent[],
 ): ReadonlyMap<string, TaskRunHead | null> {
-  const runs = new Map<string, TaskRunHead | null>();
-  for (const task of tasks) {
+  const contexts = tasks.flatMap((task) => {
     const context = taskContext(task);
-    runs.set(
-      task.id,
-      context ? collapseAndSelectCurrentTaskRun(events, context) : null,
-    );
-  }
-  return runs;
+    return context ? [context] : [];
+  });
+  const selected = collapseAndSelectCurrentTaskRuns(events, contexts);
+  return new Map(tasks.map((task) => [task.id, selected.get(task.id) ?? null]));
 }
 
 export function buildTaskSources(

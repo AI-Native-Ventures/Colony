@@ -5,7 +5,9 @@ import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useAppShell } from "@/app/AppShellContext";
 import {
   ACTION_CENTER_FILTERS,
+  ACTION_CENTER_STATES,
   type ActionCenterFilter,
+  type ActionCenterStateFilter,
   type ActionItem,
 } from "@/features/action-center/contracts";
 import {
@@ -19,12 +21,14 @@ import { useIdentityQuery } from "@/shared/api/hooks";
 export type ActionCenterRouteSearch = {
   filter?: ActionCenterFilter;
   item?: string;
+  state?: ActionCenterStateFilter;
 };
 
 function validateActionCenterSearch(
   search: Record<string, unknown>,
 ): ActionCenterRouteSearch {
   const filter = search.filter;
+  const state = search.state;
   return {
     filter:
       typeof filter === "string" &&
@@ -34,6 +38,11 @@ function validateActionCenterSearch(
     item:
       typeof search.item === "string" && search.item.trim() !== ""
         ? search.item
+        : undefined,
+    state:
+      typeof state === "string" &&
+      ACTION_CENTER_STATES.includes(state as ActionCenterStateFilter)
+        ? (state as ActionCenterStateFilter)
         : undefined,
   };
 }
@@ -52,6 +61,7 @@ function ActionCenterRouteComponent() {
   const actionCenter = useActionCenterItems({
     filter,
     localDoneIds: feedItemState.doneSet,
+    state: search.state,
   });
 
   const selectItem = React.useCallback(
@@ -59,9 +69,10 @@ function ActionCenterRouteComponent() {
       void goActionCenter({
         filter: filter === "needs-action" ? undefined : filter,
         item: itemId ?? undefined,
+        state: search.state,
       });
     },
-    [filter, goActionCenter],
+    [filter, goActionCenter, search.state],
   );
   const changeFilter = React.useCallback(
     (nextFilter: ActionCenterFilter) => {
@@ -120,6 +131,7 @@ function ActionCenterRouteComponent() {
       error={actionCenter.error}
       filter={filter}
       isLoading={actionCenter.isLoading}
+      isSettled={actionCenter.isSettled}
       items={actionCenter.items}
       onFilterChange={changeFilter}
       onMarkDone={markDone}

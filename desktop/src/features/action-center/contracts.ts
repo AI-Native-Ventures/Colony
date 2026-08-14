@@ -21,6 +21,15 @@ export const ACTION_CENTER_FILTERS = [
 
 export type ActionCenterFilter = (typeof ACTION_CENTER_FILTERS)[number];
 
+export const ACTION_CENTER_STATES = [
+  "open",
+  "active",
+  "completed",
+  "failed",
+] as const;
+
+export type ActionCenterStateFilter = (typeof ACTION_CENTER_STATES)[number];
+
 export type ActionItemKind =
   | "ask"
   | "task"

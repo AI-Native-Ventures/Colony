@@ -40,8 +40,15 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
     typeof fields.headline === "string" ? fields.headline.trim() : "";
   if (!headline) return null;
   const tags = event.tags ?? [];
-  const channelId = tags.find((tag) => tag[0] === "h" && tag.length === 2)?.[1];
-  const threadId = tags.find((tag) => tag[0] === "e" && tag.length === 2)?.[1];
+  const sourceTag = (name: string) =>
+    tags
+      .find(
+        (tag) =>
+          tag[0] === name && typeof tag[1] === "string" && tag[1].trim() !== "",
+      )?.[1]
+      ?.trim() ?? null;
+  const channelId = sourceTag("h");
+  const threadId = sourceTag("e");
   return {
     id: event.id,
     askType: typeof fields.type === "string" ? fields.type : "question",

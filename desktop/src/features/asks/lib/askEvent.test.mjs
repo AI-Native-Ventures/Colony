@@ -27,6 +27,24 @@ test("a well-formed ask reads its fields", () => {
   assert.equal(ask.rawContent, event.content);
 });
 
+test("an ask keeps optional channel and thread source tags", () => {
+  const ask = readAsk({
+    ...askEvent("ask-source", { type: "question", headline: "Need context" }),
+    tags: [
+      ["h", "channel-1"],
+      ["e", "thread-1", "", "root"],
+    ],
+  });
+  assert.equal(ask.channelId, "channel-1");
+  assert.equal(ask.threadId, "thread-1");
+});
+
+test("an ask with no source tags remains channel-less", () => {
+  const ask = readAsk(askEvent("ask-global", { headline: "Need a decision" }));
+  assert.equal(ask.channelId, null);
+  assert.equal(ask.threadId, null);
+});
+
 test("an ask with no headline is not renderable and reads as null", () => {
   assert.equal(readAsk(askEvent("ask-2", { type: "decision" })), null);
   assert.equal(readAsk(askEvent("ask-3", {})), null);

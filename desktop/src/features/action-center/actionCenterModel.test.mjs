@@ -90,12 +90,13 @@ test("projects actionable sources into stable, sorted items", () => {
   );
 });
 
-test("deduplicates structured reminder and ignored workflow/job feed events", () => {
+test("keeps stream reminders while deduplicating local reminders and job records", () => {
   const items = buildActionCenterItems({
     asks: [],
     feed: {
       mentions: [
-        message("reminder-1-event", 400, "mention"),
+        { ...message("stream-reminder", 700), kind: 40007 },
+        { ...message("reminder-1-event", 400, "mention") },
         { ...message("job-1", 500), kind: 43003 },
         { ...message("approval-1", 600), kind: 46010 },
       ],
@@ -108,8 +109,9 @@ test("deduplicates structured reminder and ignored workflow/job feed events", ()
 
   assert.deepEqual(
     items.map((item) => item.id),
-    ["reminder:reminder-1"],
+    ["message:stream-reminder", "reminder:reminder-1"],
   );
+  assert.equal(items[0]?.source.kind, "message");
 });
 
 test("uses local done state for message actions without hiding all activity", () => {
@@ -176,4 +178,77 @@ test("projects durable tasks and real workflow recovery records", () => {
   assert.equal(items[0]?.state, "failed");
   assert.equal(items[0]?.capabilities.includes("run-again"), true);
   assert.equal(items[1]?.capabilities.includes("open-source"), true);
+});
+
+test("treats recoverable task runs as actionable rather than in progress", () => {
+  const [item] = buildActionCenterItems({
+    asks: [],
+    reminders: [],
+    tasks: [
+      {
+        kind: "task",
+        task: {
+          id: "task-recoverable",
+          title: "Resume the interrupted task",
+          status: "ready",
+          createdAt: 100,
+          updatedAt: 120,
+          sourceChannelId: "channel-1",
+          sourceEventId: "thread-1",
+        },
+        run: {
+          eventId: "head-1",
+          jobId: "job-1",
+          employeePubkey: PUBKEY,
+          originatorPubkey: PUBKEY,
+          filedByPubkey: PUBKEY,
+          taskId: "task-recoverable",
+          channelId: "channel-1",
+          threadId: "thread-1",
+          runStatus: "recoverable",
+          attempts: 1,
+          leaseHolderPubkey: null,
+          leaseExpiresAt: null,
+          instruction: "Resume",
+          result: null,
+          failure: null,
+          checkpoint: null,
+          artifacts: [],
+          outcomeEventId: null,
+          createdAt: 200,
+        },
+        channelId: "channel-1",
+        threadId: "thread-1",
+      },
+    ],
+  });
+
+  assert.equal(item?.state, "needs-action");
+  assert.equal(filterActionCenterItems([item], "needs-action").length, 1);
+});
+
+test("applies optional state filters without changing the default queue", () => {
+  const items = buildActionCenterItems({
+    asks: [ask("ask-open")],
+    feed: {
+      mentions: [message("message-active", 300, "activity")],
+      needsAction: [],
+      activity: [],
+      agentActivity: [],
+    },
+    reminders: [],
+  });
+
+  assert.deepEqual(
+    filterActionCenterItems(items, "all", "open").map((item) => item.id),
+    ["ask:ask-open"],
+  );
+  assert.deepEqual(
+    filterActionCenterItems(items, "all", "active").map((item) => item.id),
+    ["message:message-active"],
+  );
+  assert.equal(
+    filterActionCenterItems(items, "needs-action", "completed").length,
+    0,
+  );
 });

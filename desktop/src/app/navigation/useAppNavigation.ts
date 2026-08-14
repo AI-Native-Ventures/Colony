@@ -8,7 +8,10 @@ import {
 
 import { cacheSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { resolveSearchHitDestination } from "@/app/navigation/resolveSearchHitDestination";
-import type { ActionCenterFilter } from "@/features/action-center/contracts";
+import type {
+  ActionCenterFilter,
+  ActionCenterStateFilter,
+} from "@/features/action-center/contracts";
 import type {
   DiscoverySearch,
   DiscoverySurface,
@@ -24,6 +27,7 @@ type NavigationBehavior = {
 export type ActionCenterNavigationOptions = NavigationBehavior & {
   filter?: ActionCenterFilter;
   item?: string;
+  state?: ActionCenterStateFilter;
 };
 
 type NewMessageNavigationOptions = NavigationBehavior & {
@@ -126,6 +130,7 @@ export function useAppNavigation() {
           search: {
             ...(options?.filter ? { filter: options.filter } : {}),
             ...(options?.item ? { item: options.item } : {}),
+            ...(options?.state ? { state: options.state } : {}),
           },
         },
         options,
