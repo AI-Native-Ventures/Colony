@@ -978,6 +978,16 @@ test.describe("community rail", () => {
 
     // The app settles into the new community once apply completes.
     await expect(buttonB).toHaveAttribute("aria-current", "true");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.__BUZZ_E2E_COMMANDS__?.filter(
+              (command) => command === "clear_pending_navigation_deep_links",
+            ).length ?? 0,
+        ),
+      )
+      .toBe(1);
   });
 
   test("leaving the final community returns to setup without resetting identity", async ({
@@ -1047,6 +1057,12 @@ test.describe("community rail", () => {
       )
       .toEqual(identityBefore);
   });
+
+  // Upstream's case for this ("shows a recoverable error when leaving the
+  // final community cannot clear navigation") is not ported: it asserts the
+  // `community-apply-error` surface raised by upstream's leave-community
+  // reset path in useCommunityInit, which Colony does not have. The drain
+  // reset itself is ported and covered by deep-link.test.mjs.
 
   test("keeps the far-left rail and add action with a single community", async ({
     page,

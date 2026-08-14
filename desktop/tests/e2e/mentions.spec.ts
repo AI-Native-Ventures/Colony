@@ -1110,10 +1110,11 @@ test("selecting a person mention inserts @Name into input", async ({
   await dropdown.getByText("bob").click();
 
   await expect(input).toHaveText("Hey @bob ");
-  const mentionChip = input.locator(".mention-chip", {
-    hasText: "@bob",
+  const mentionChip = input.locator(".human-mention-highlight", {
+    hasText: "bob",
   });
   await expect(mentionChip).toBeVisible();
+  await expect(mentionChip).toHaveText("bob");
   await expect(mentionChip).not.toHaveClass(/agent-mention-highlight/);
   await expect(mentionChip).toHaveCSS("display", "inline");
   await expect(
@@ -1223,7 +1224,6 @@ test("typing an unregistered @token before existing text is left alone", async (
 // decorates agent mentions only (mentionHighlightExtension emits
 // "mention-chip agent-mention-highlight"); the human and channel chip
 // decorations arrive with #5638.
-
 
 test("channel references keep caret movement through the channel name", async ({
   page,
@@ -3494,9 +3494,9 @@ test("sent non-member person mention uses the normal mention style", async ({
   const mentionChip = page
     .getByTestId("message-row")
     .last()
-    .locator("[data-mention]", { hasText: "@outsider" });
+    .locator("[data-mention]", { hasText: "outsider" });
   await expect(mentionChip).toBeVisible();
-  await expect(mentionChip.locator("svg")).toHaveCount(0);
+  await expect(mentionChip).toHaveClass(/inline-chip-icon-human/);
 });
 
 test("sent managed non-member agent mention uses the agent mention style", async ({
@@ -3634,8 +3634,8 @@ test("mention text is highlighted in sent messages", async ({ page }) => {
     .last()
     .locator("[data-mention].mention-chip", { hasText: "bob" });
   await expect(mentionChip).toBeVisible();
-  await expect(mentionChip.locator(".mention-chip-prefix")).toHaveText("@");
-  await expect(mentionChip.locator("svg")).toHaveCount(0);
+  await expect(mentionChip).toHaveText("bob");
+  await expect(mentionChip).toHaveClass(/inline-chip-icon-human/);
 });
 
 test("clicking author name opens user profile panel", async ({ page }) => {
@@ -3717,8 +3717,8 @@ test("clicking a mention chip in the timeline opens the profile panel", async ({
 
   const mentionChip = page
     .getByTestId("message-row")
-    .filter({ hasText: "Ping @bob about the launch" })
-    .locator("[data-mention]", { hasText: "@bob" });
+    .filter({ hasText: "Ping bob about the launch" })
+    .locator("[data-mention]", { hasText: "bob" });
   await expect(mentionChip).toBeVisible();
   await mentionChip.click();
 
@@ -3745,8 +3745,8 @@ test("mention text matching the kind-0 name alias resolves and opens the profile
 
   const mentionChip = page
     .getByTestId("message-row")
-    .filter({ hasText: "Ask @bobby to review the doc" })
-    .locator("[data-mention]", { hasText: "@bobby" });
+    .filter({ hasText: "Ask bobby to review the doc" })
+    .locator("[data-mention]", { hasText: "bobby" });
   await expect(mentionChip).toBeVisible();
   await mentionChip.click();
 
@@ -3771,7 +3771,7 @@ test("clicking a mention chip in a forum post opens the profile panel", async ({
   await page.getByTestId("channel-watercooler").click();
   await expect(page.getByTestId("chat-title")).toHaveText("watercooler");
 
-  const mentionChip = page.locator("[data-mention]", { hasText: "@bob" });
+  const mentionChip = page.locator("[data-mention]", { hasText: "bob" });
   await expect(mentionChip).toBeVisible();
   await mentionChip.click();
 
