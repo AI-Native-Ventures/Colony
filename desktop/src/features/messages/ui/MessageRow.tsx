@@ -13,7 +13,6 @@ import {
   assertCanSendMessageToChannel,
   canSendMessageToChannel,
 } from "@/features/messages/lib/canSendToChannel";
-import { AgentRoleSubtitle } from "@/features/agents/ui/AgentRoleSubtitle";
 import { useIsKnownAgentPubkey } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { isBlockMessage } from "@/features/blocks/blockTags";
@@ -60,7 +59,8 @@ import { editMessage } from "@/shared/api/tauri";
 import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
 import { toast } from "sonner";
 import { MessageAgentOwner } from "./MessageAgentOwner";
-import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
+import { MessageAuthorText } from "./MessageHeader";
+import { MessageRowHeader } from "./MessageRowHeader";
 import { MessageTimestamp } from "./MessageTimestamp";
 import { SentFromThreadLine } from "./SentFromThreadLine";
 import { WaveMessageAttachment } from "./WaveMessageAttachment";
@@ -503,7 +503,6 @@ export const MessageRow = React.memo(
           className="opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
           createdAt={message.createdAt}
           hideDayPeriod
-          time={message.time}
         />
       </div>
     );
@@ -608,10 +607,18 @@ export const MessageRow = React.memo(
 
     const inlineMetadataNode = (
       <div className="flex shrink-0 items-baseline gap-2 text-xs">
-        <MessageTimestamp createdAt={message.createdAt} time={message.time} />
+        <MessageTimestamp createdAt={message.createdAt} />
         {statusMetadataNode}
       </div>
     );
+
+    const personaNode =
+      message.personaDisplayName &&
+      message.personaDisplayName !== message.author ? (
+        <span className="text-xs text-muted-foreground">
+          {message.personaDisplayName}
+        </span>
+      ) : null;
 
     const continuationMetadataNode =
       isDisplayedAsContinuation && statusMetadataNode ? (
@@ -621,36 +628,15 @@ export const MessageRow = React.memo(
       ) : null;
 
     const headerNode = isDisplayedAsContinuation ? null : (
-      // pe reserves the measured action-rail footprint (0px until measured) so
-      // header content ends before the rail's left edge in every rail state.
-      <MessageHeaderRow className="colony-message-header pe-[var(--message-action-rail-width,0px)]">
-        {message.pubkey ? (
-          <UserProfilePopover
-            pubkey={message.pubkey}
-            role={profilePopoverRole}
-            botIdenticonValue={message.author}
-            // The trigger wrapper is a flex item whose `min-width: auto`
-            // refuses to shrink below the nowrap width of its truncating
-            // child, so a long author name overflowed the header row
-            // (upstream #7550).
-            triggerClassName="min-w-0 max-w-full"
-          >
-            <button
-              className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-              type="button"
-            >
-              {authorNode}
-            </button>
-          </UserProfilePopover>
-        ) : (
-          authorNode
-        )}
-        {agentOwnerNode}
-        {inlineMetadataNode}
-        {profilePopoverRole === "bot" && (
-          <AgentRoleSubtitle pubkey={message.pubkey} />
-        )}
-      </MessageHeaderRow>
+      <MessageRowHeader
+        agentOwnerNode={agentOwnerNode}
+        authorNode={authorNode}
+        botIdenticonValue={message.author}
+        inlineMetadataNode={inlineMetadataNode}
+        personaNode={personaNode}
+        profilePopoverRole={profilePopoverRole}
+        pubkey={message.pubkey}
+      />
     );
     const bodyContainerClass = isDisplayedAsContinuation
       ? "mt-0"
@@ -929,7 +915,9 @@ export const MessageRow = React.memo(
     prev.message.ownerLabel === next.message.ownerLabel &&
     prev.message.avatarUrl === next.message.avatarUrl &&
     prev.message.accent === next.message.accent &&
-    prev.message.time === next.message.time &&
+    // The header timestamp and hover gutter both derive from createdAt (the
+    // old `time` prop was the same value pre-formatted; this row reads neither).
+    prev.message.createdAt === next.message.createdAt &&
     prev.message.depth === next.message.depth &&
     prev.message.kind === next.message.kind &&
     prev.message.pending === next.message.pending &&
