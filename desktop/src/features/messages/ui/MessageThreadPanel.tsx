@@ -946,15 +946,13 @@ export function MessageThreadPanel({
   return (
     <VideoReviewNavigationProvider>
       <AuxiliaryPanel
-        className="relative thread-panel-accent-tint"
+        className="relative"
         // The focus drawer animates itself; a second slide here would compound.
         enterMotion={!isFocusMode}
         footer={threadFooter}
         header={
           isHuddleTranscript ? undefined : (
-            <AuxiliaryPanelHeader surface="tinted">
-              {threadHeaderContent}
-            </AuxiliaryPanelHeader>
+            <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
           )
         }
         isSinglePanelView={isSinglePanelView}
