@@ -84,7 +84,7 @@ function ThreadComposerSkeleton({
         </div>
         <div
           className={cn(
-            "h-7 bg-primary/[0.07] pb-1 pt-0",
+            "h-7 bg-background pb-1 pt-0",
             THREAD_PANEL_COMPOSER_GUTTER_CLASS,
           )}
         />
@@ -156,14 +156,12 @@ export function MessageThreadPanelSkeleton({
 
   return (
     <AuxiliaryPanel
-      className="relative thread-panel-accent-tint"
+      className="relative"
       // See `MessageThreadPanel`: the focus drawer owns the slide.
       enterMotion={!isFocusMode}
       footer={<ThreadComposerSkeleton columnMaxWidthPx={columnMaxWidthPx} />}
       header={
-        <AuxiliaryPanelHeader surface="tinted">
-          {threadHeaderContent}
-        </AuxiliaryPanelHeader>
+        <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
       }
       isSinglePanelView={isSinglePanelView}
       layout={layout}
