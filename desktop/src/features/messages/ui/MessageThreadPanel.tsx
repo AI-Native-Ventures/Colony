@@ -865,7 +865,7 @@ export function MessageThreadPanel({
       ) : null}
 
       <div
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-40 isolate before:absolute before:inset-x-0 before:bottom-0 before:-z-10 before:h-24 before:bg-gradient-to-b before:from-transparent before:to-primary/[0.07] before:content-[''] after:absolute after:inset-x-0 after:bottom-0 after:-z-10 after:h-12 after:bg-primary/[0.07] after:content-['']"
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-40 isolate before:absolute before:inset-x-0 before:bottom-0 before:-z-10 before:h-24 before:bg-gradient-to-b before:from-transparent before:to-background before:content-[''] after:absolute after:inset-x-0 after:bottom-0 after:-z-10 after:h-12 after:bg-background after:content-['']"
         data-testid="thread-composer-overlay"
         ref={threadComposerWrapperRef}
       >
@@ -974,15 +974,13 @@ export function MessageThreadPanel({
 
   return (
     <AuxiliaryPanel
-      className="relative thread-panel-accent-tint"
+      className="relative"
       // The focus drawer animates itself; a second slide here would compound.
       enterMotion={!isFocusMode}
       footer={threadFooter}
       header={
         isHuddleTranscript ? undefined : (
-          <AuxiliaryPanelHeader surface="tinted">
-            {threadHeaderContent}
-          </AuxiliaryPanelHeader>
+          <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
         )
       }
       isSinglePanelView={isSinglePanelView}
