@@ -99,6 +99,17 @@ function parseAttention(
   return { ok: true, value: true };
 }
 
+/** Returns whether an event should use the inline Block renderer. */
+export function isBlockMessage(event: {
+  kind?: number;
+  tags?: string[][];
+}): boolean {
+  return (
+    event.kind === KIND_STREAM_MESSAGE &&
+    (event.tags?.some((tag) => tag[0] === "block") ?? false)
+  );
+}
+
 export function parseBlockInstance(
   tags: string[][],
 ): BlockParseResult<BlockInstanceRef> {
