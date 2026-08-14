@@ -444,6 +444,17 @@ mod tests {
 
     async fn delete_test_community(pool: &PgPool, community: CommunityId) {
         let mut tx = pool.begin().await.expect("begin test cleanup");
+        // Community rows are permanent tombstones. Authorize this fixture-only
+        // cleanup with the initial fence generation, then leave the host row in
+        // place instead of bypassing the tombstone contract with DELETE.
+        sqlx::query(
+            "SELECT set_config('buzz.deletion_executor_community', $1, true), \
+                    set_config('buzz.deletion_fence_generation', '0', true)",
+        )
+        .bind(community.to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("authorize test cleanup");
         sqlx::query("DELETE FROM relay_invites WHERE community_id = $1")
             .bind(community.as_uuid())
             .execute(&mut *tx)
@@ -454,11 +465,17 @@ mod tests {
             .execute(&mut *tx)
             .await
             .expect("delete test members");
-        sqlx::query("DELETE FROM communities WHERE id = $1")
-            .bind(community.as_uuid())
-            .execute(&mut *tx)
-            .await
-            .expect("delete test community");
+        sqlx::query(
+            "UPDATE communities SET deletion_state = 'tombstone', \
+                    deleted_at = COALESCE(deleted_at, now()), \
+                    archived_at = COALESCE(archived_at, now()), \
+                    signing_key = NULL \
+             WHERE id = $1 AND deletion_state = 'active'",
+        )
+        .bind(community.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("tombstone test community");
         tx.commit().await.expect("commit test cleanup");
     }
 

@@ -54,6 +54,7 @@ CREATE TABLE communities (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     host            VARCHAR(255) NOT NULL,
     signing_key     BYTEA,
+    icon            TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     archived_at     TIMESTAMPTZ,
     deleted_at      TIMESTAMPTZ,
@@ -1280,7 +1281,8 @@ CREATE TABLE discovery_workspace_action_claims (
     idempotency_key UUID NOT NULL,
     operation TEXT NOT NULL CHECK (operation IN (
         'access', 'create_campaign', 'update_campaign_sources',
-        'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts'
+        'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts',
+        'get_lead', 'update_lead'
     )),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
@@ -1824,6 +1826,37 @@ CREATE INDEX discovery_business_observations_name_locality_dedupe_idx
     ON discovery_business_observations (community_id, normalized_name_locality_digest)
     WHERE normalized_name_locality_digest IS NOT NULL;
 
+-- Phase B: mutable lead state for the Discovery CRM surface. The observation
+-- row stays immutable; this profile carries human/agent edits and the funnel
+-- status, whose vocabulary and transitions come from the Party contract.
+CREATE TABLE discovery_lead_profiles (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    lead_id UUID NOT NULL,
+    status TEXT NOT NULL DEFAULT 'candidate'
+        CHECK (status IN (
+            'candidate', 'accepted', 'qualified', 'dormant', 'disqualified',
+            'client_active'
+        )),
+    owner_persona_id TEXT,
+    website TEXT,
+    email TEXT,
+    phone TEXT,
+    linkedin_url TEXT,
+    contact_name TEXT,
+    contact_title TEXT,
+    notes TEXT CHECK (notes IS NULL OR octet_length(notes) <= 8000),
+    score SMALLINT CHECK (score IS NULL OR score BETWEEN 0 AND 100),
+    updated_by BYTEA NOT NULL CHECK (octet_length(updated_by) = 32),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, lead_id),
+    FOREIGN KEY (community_id, lead_id)
+        REFERENCES discovery_business_observations(community_id, id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_lead_profiles_status_idx
+    ON discovery_lead_profiles (community_id, status);
+
 CREATE TABLE discovery_usage (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     run_id UUID NOT NULL,
@@ -2135,6 +2168,88 @@ CREATE UNIQUE INDEX IF NOT EXISTS employees_hire_event_uniq
 CREATE UNIQUE INDEX IF NOT EXISTS employees_active_role_uniq
     ON employees (community_id, role_id) WHERE status = 'active';
 
+-- 0044/0058: durable employee job queue and task-linked recovery state.
+-- The lease row is the authority for one machine at a time; checkpoint and
+-- outcome evidence make Task-linked jobs restart-safe without a second queue.
+CREATE TABLE jobs (
+    community_id     UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    job_id           BYTEA NOT NULL,
+    employee         BYTEA NOT NULL,
+    filed_by         BYTEA NOT NULL,
+    originator       BYTEA NOT NULL,
+    channel_id       UUID,
+    thread           BYTEA,
+    instruction      TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'open'
+                     CHECK (status IN ('open','leased','done','failed','abandoned')),
+    lease_holder     BYTEA,
+    lease_expires_at BIGINT,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    result           TEXT,
+    failure          TEXT,
+    escalated_ask    BYTEA,
+    head_at          BIGINT NOT NULL DEFAULT 0,
+    created_at       BIGINT NOT NULL,
+    updated_at       BIGINT NOT NULL,
+    task_id          TEXT,
+    checkpoint_seq   BIGINT NOT NULL DEFAULT 0,
+    checkpoint       JSONB,
+    checkpoint_event BYTEA,
+    checkpoint_at    BIGINT,
+    artifacts        JSONB,
+    outcome_event    BYTEA,
+    PRIMARY KEY (community_id, job_id),
+    CHECK (LENGTH(job_id) = 32),
+    CHECK (LENGTH(employee) = 32),
+    CHECK (LENGTH(filed_by) = 32),
+    CHECK (LENGTH(originator) = 32),
+    CHECK (thread IS NULL OR LENGTH(thread) = 32),
+    CHECK (lease_holder IS NULL OR LENGTH(lease_holder) = 32),
+    CHECK (escalated_ask IS NULL OR LENGTH(escalated_ask) = 32),
+    CHECK (
+        (status = 'open' AND lease_holder IS NULL AND lease_expires_at IS NULL)
+        OR (status = 'leased' AND lease_holder IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR status IN ('done','failed','abandoned')
+    ),
+    CONSTRAINT jobs_task_id_bounded
+        CHECK (task_id IS NULL OR (LENGTH(BTRIM(task_id)) BETWEEN 1 AND 128)),
+    CONSTRAINT jobs_checkpoint_sequence_nonnegative
+        CHECK (checkpoint_seq >= 0),
+    CONSTRAINT jobs_checkpoint_event_shape
+        CHECK (checkpoint_event IS NULL OR LENGTH(checkpoint_event) = 32),
+    CONSTRAINT jobs_outcome_event_shape
+        CHECK (outcome_event IS NULL OR LENGTH(outcome_event) = 32),
+    CONSTRAINT jobs_checkpoint_complete
+        CHECK (
+            (checkpoint_seq = 0 AND checkpoint IS NULL
+                AND checkpoint_event IS NULL AND checkpoint_at IS NULL)
+            OR
+            (checkpoint_seq > 0 AND checkpoint IS NOT NULL
+                AND checkpoint_event IS NOT NULL AND checkpoint_at IS NOT NULL)
+        ),
+    CONSTRAINT jobs_artifacts_nonempty_array
+        CHECK (
+            artifacts IS NULL
+            OR (jsonb_typeof(artifacts) = 'array' AND jsonb_array_length(artifacts) > 0)
+        ),
+    CONSTRAINT jobs_task_delivery_has_evidence
+        CHECK (
+            task_id IS NULL OR status <> 'done'
+            OR (artifacts IS NOT NULL AND outcome_event IS NOT NULL)
+        )
+);
+
+CREATE INDEX jobs_originator_status_idx
+    ON jobs (community_id, originator, status);
+CREATE INDEX jobs_employee_status_idx
+    ON jobs (community_id, employee, status);
+CREATE INDEX jobs_expiring_leases_idx
+    ON jobs (lease_expires_at) WHERE status = 'leased';
+CREATE INDEX jobs_unclaimed_idx
+    ON jobs (created_at) WHERE status = 'open';
+CREATE INDEX jobs_community_task_idx
+    ON jobs (community_id, task_id) WHERE task_id IS NOT NULL;
+
 -- Durable idempotency claims for relay-brokered Colony Company Actions
 -- (migration 0029).
 --
@@ -2153,6 +2268,30 @@ CREATE TABLE IF NOT EXISTS company_action_claims (
     head_event_id    BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
     receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key)
+);
+
+-- Durable idempotency claims for relay-brokered Colony party actions.
+-- Merge actions retain both the surviving head and the retired-handle alias.
+CREATE TABLE party_action_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key UUID NOT NULL,
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    head_event_id BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
+    alias_event_id BYTEA CHECK (alias_event_id IS NULL OR octet_length(alias_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key)
+);
+
+-- Durable idempotency claims for relay-brokered Colony ledger actions.
+CREATE TABLE ledger_action_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key UUID NOT NULL,
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    head_event_id BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, idempotency_key)
 );
 
@@ -2690,18 +2829,46 @@ $$;
 -- dynamic bootstrap loop above.
 SELECT attach_community_write_fence('api_tokens');
 SELECT attach_community_write_fence('archived_identities');
+SELECT attach_community_write_fence('asks');
 SELECT attach_community_write_fence('audit_log');
+SELECT attach_community_write_fence('block_action_claims');
+SELECT attach_community_write_fence('block_catalog_action_claims');
 SELECT attach_community_write_fence('channel_members');
 SELECT attach_community_write_fence('channels');
 SELECT attach_community_write_fence('community_bans');
+SELECT attach_community_write_fence('company_action_claims');
 SELECT attach_community_write_fence('delivery_log');
+SELECT attach_community_write_fence('discovery_action_claims');
+SELECT attach_community_write_fence('discovery_actor_grants');
+SELECT attach_community_write_fence('discovery_business_observations');
+SELECT attach_community_write_fence('discovery_campaigns');
+SELECT attach_community_write_fence('discovery_entitlements');
+SELECT attach_community_write_fence('discovery_lead_profiles');
+SELECT attach_community_write_fence('discovery_observation_batches');
+SELECT attach_community_write_fence('discovery_run_business_searches');
+SELECT attach_community_write_fence('discovery_run_checkpoints');
+SELECT attach_community_write_fence('discovery_run_source_plans');
+SELECT attach_community_write_fence('discovery_run_sources');
+SELECT attach_community_write_fence('discovery_runs');
+SELECT attach_community_write_fence('discovery_source_observation_batches');
+SELECT attach_community_write_fence('discovery_source_usage');
+SELECT attach_community_write_fence('discovery_usage');
+SELECT attach_community_write_fence('discovery_worker_action_claims');
+SELECT attach_community_write_fence('discovery_workspace_action_claims');
+SELECT attach_community_write_fence('discovery_workspace_protocols');
+SELECT attach_community_write_fence('employees');
 SELECT attach_community_write_fence('event_mentions');
 SELECT attach_community_write_fence('events');
 SELECT attach_community_write_fence('git_repo_names');
+SELECT attach_community_write_fence('jobs');
 SELECT attach_community_write_fence('join_policy_acceptances');
+SELECT attach_community_write_fence('ledger_action_claims');
 SELECT attach_community_write_fence('moderation_actions');
 SELECT attach_community_write_fence('moderation_reports');
+SELECT attach_community_write_fence('operator_activity_cursor');
+SELECT attach_community_write_fence('operator_activity_daily');
 SELECT attach_community_write_fence('parameterized_event_watermarks');
+SELECT attach_community_write_fence('party_action_claims');
 SELECT attach_community_write_fence('pubkey_allowlist');
 SELECT attach_community_write_fence('push_leases');
 SELECT attach_community_write_fence('push_match_queue');
@@ -2716,3 +2883,4 @@ SELECT attach_community_write_fence('users');
 SELECT attach_community_write_fence('workflow_approvals');
 SELECT attach_community_write_fence('workflow_runs');
 SELECT attach_community_write_fence('workflows');
+SELECT attach_community_write_fence('workspace_tabs');
