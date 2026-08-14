@@ -68,7 +68,11 @@ import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { OperatorConsoleCard } from "./OperatorConsoleCard";
 import { AgentsSettingsPanel } from "./AgentsSettingsPanel";
-import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
+import {
+  SettingsOptionGroup,
+  SettingsOptionGroupList,
+  SettingsOptionRow,
+} from "./SettingsOptionGroup";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
 import { CompanySettingsCard } from "./CompanySettingsCard";
@@ -385,7 +389,7 @@ function ThemeSettingsCard() {
         description="Choose how Colony looks and feels."
       />
 
-      <div className="space-y-12">
+      <SettingsOptionGroupList>
         <SettingsOptionGroup
           data-testid="appearance-theme-card"
           headerAction={
@@ -535,7 +539,7 @@ function ThemeSettingsCard() {
           <LinkPreviewStyleSetting />
           <ThreadLayoutSetting />
         </SettingsOptionGroup>
-      </div>
+      </SettingsOptionGroupList>
     </section>
   );
 }

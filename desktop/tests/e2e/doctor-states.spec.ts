@@ -199,7 +199,8 @@ test.describe("Doctor panel state screenshots", () => {
         .getByRole("heading", { name: "Agent runtimes", exact: true })
         .locator("..")
         .locator(".."),
-    ).toHaveCSS("align-items", "center");
+    ).toHaveCSS("align-items", "flex-end");
+    // Colony ships Oh My Pi where upstream ships Goose.
     for (const runtimeId of ["omp", "claude", "buzz-agent"]) {
       await expect(
         page.getByTestId(`doctor-runtime-menu-${runtimeId}`),

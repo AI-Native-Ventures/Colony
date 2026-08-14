@@ -206,6 +206,7 @@ export default defineConfig({
         "**/mobile-pairing-qr.spec.ts",
         "**/profile-nsec-reveal.spec.ts",
         "**/signout-confirmation.spec.ts",
+        "**/settings-section-layout.spec.ts",
         "**/agent-provider-dropdowns.spec.ts",
         "**/agent-lifecycle-feedback.spec.ts",
         "**/agent-access-warning.spec.ts",
