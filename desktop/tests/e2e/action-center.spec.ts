@@ -19,10 +19,13 @@ test("opens the native Action Center with URL-backed filters and selection", asy
     "data-active",
     "true",
   );
+  await expect(page.getByTestId("action-center-filter-trigger")).toBeVisible();
+  await page.getByTestId("action-center-filter-trigger").click();
   await expect(
     page.getByTestId("action-center-filter-needs-action"),
   ).toBeVisible();
   await expect(page.getByTestId("action-center-filter-all")).toBeVisible();
+  await page.keyboard.press("Escape");
 
   const selectedItem = page.getByTestId(
     "action-center-item-message:mock-feed-mention",
@@ -38,6 +41,7 @@ test("opens the native Action Center with URL-backed filters and selection", asy
   await page.getByRole("button", { name: "Mark done" }).click();
   await expect(page).not.toHaveURL(/item=/);
 
+  await page.getByTestId("action-center-filter-trigger").click();
   await page.getByTestId("action-center-filter-all").click();
   await expect(page).toHaveURL(/filter=all/);
   await expect(page.getByTestId("action-center-list-pane")).toBeVisible();

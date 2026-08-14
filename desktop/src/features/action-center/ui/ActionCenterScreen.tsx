@@ -7,7 +7,6 @@ import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 import {
   ACTION_CENTER_FILTERS,
@@ -15,17 +14,8 @@ import {
   type ActionItem,
 } from "../contracts";
 import { ActionCenterDetail } from "./ActionCenterDetail";
+import { ActionCenterFilterMenu } from "./ActionCenterFilterMenu";
 import { ActionCenterList } from "./ActionCenterList";
-
-const FILTER_LABELS: Record<ActionCenterFilter, string> = {
-  "needs-action": "Needs action",
-  all: "All activity",
-  asks: "Asks",
-  tasks: "Tasks",
-  messages: "Messages",
-  reminders: "Reminders",
-  workflows: "Workflows",
-};
 
 type ActionCenterScreenProps = {
   currentPubkey: string;
@@ -191,29 +181,12 @@ export function ActionCenterScreen({
             )}
             data-testid="action-center-list-pane"
           >
-            <div className="shrink-0 overflow-x-auto px-3 py-3">
-              <Tabs
-                onValueChange={(value) => {
-                  if (
-                    ACTION_CENTER_FILTERS.includes(value as ActionCenterFilter)
-                  ) {
-                    onFilterChange(value as ActionCenterFilter);
-                  }
-                }}
-                value={visibleFilter}
-              >
-                <TabsList className="h-auto min-w-max">
-                  {availableFilters.map((candidate) => (
-                    <TabsTrigger
-                      key={candidate}
-                      value={candidate}
-                      data-testid={`action-center-filter-${candidate}`}
-                    >
-                      {FILTER_LABELS[candidate]}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
+            <div className="shrink-0 px-3 py-3">
+              <ActionCenterFilterMenu
+                availableFilters={availableFilters}
+                filter={visibleFilter}
+                onFilterChange={onFilterChange}
+              />
             </div>
             {isLoading ? (
               <div
