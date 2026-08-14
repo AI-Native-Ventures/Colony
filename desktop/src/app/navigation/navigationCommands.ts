@@ -7,6 +7,7 @@ type DiscoveryCommandTarget = (options: { surface: "leads" }) => unknown;
 export type NavigationCommandTargets = {
   createAgent: NavigationCommandTarget;
   createChannel: NavigationCommandTarget;
+  goActionCenter: NavigationCommandTarget;
   goAgents: NavigationCommandTarget;
   goBlocks: NavigationCommandTarget;
   goDiscovery: DiscoveryCommandTarget;
@@ -35,6 +36,14 @@ export function buildNavigationCommands(
         void targets.goHome();
       },
       title: "Open inbox",
+    },
+    {
+      description: "Answer asks and open actionable work",
+      id: "open-action-center",
+      onSelect: () => {
+        void targets.goActionCenter();
+      },
+      title: "Open Action Center",
     },
     {
       description: "Manage agents and view their activity",
@@ -151,6 +160,7 @@ export function useNavigationCommands(
   const {
     createAgent,
     createChannel,
+    goActionCenter,
     goAgents,
     goBlocks,
     goDiscovery,
@@ -172,6 +182,7 @@ export function useNavigationCommands(
       buildNavigationCommands({
         createAgent,
         createChannel,
+        goActionCenter,
         goAgents,
         goBlocks,
         goDiscovery,
@@ -190,6 +201,7 @@ export function useNavigationCommands(
     [
       createAgent,
       createChannel,
+      goActionCenter,
       goAgents,
       goBlocks,
       goDiscovery,

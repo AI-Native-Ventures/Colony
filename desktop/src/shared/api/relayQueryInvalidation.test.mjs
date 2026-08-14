@@ -11,6 +11,8 @@ test("relay invalidation includes relay-backed channel and profile queries", () 
     ["thread-replies", "channel-1", "root-1"],
     ["forum-posts", "channel-1"],
     ["home-feed"],
+    ["action-center-task-runs", "community-1", ["task-1"]],
+    ["open-asks", "community-1", "alice"],
     ["users-batch", "alice"],
     ["presence", "alice"],
     ["user-status", "alice"],

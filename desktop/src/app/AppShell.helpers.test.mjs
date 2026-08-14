@@ -37,3 +37,9 @@ test("blocks route derives the Blocks sidebar selection", () => {
     selectedView: "blocks",
   });
 });
+test("action center route derives the Action Center sidebar selection", () => {
+  assert.deepEqual(deriveShellRoute("/action-center?filter=all&item=ask:1"), {
+    selectedChannelId: null,
+    selectedView: "action-center",
+  });
+});

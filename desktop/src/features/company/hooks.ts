@@ -13,6 +13,11 @@ import type { CompanyParseResult } from "./contracts";
 
 const COMPANY_ROOT = "colony-company" as const;
 
+/** Key for the active company profile in one community. */
+export function activeCompanyQueryKey(communityId: string) {
+  return [COMPANY_ROOT, communityId, "active-profile"] as const;
+}
+
 export function companyQueryKey(communityId: string, companyId: string) {
   return [COMPANY_ROOT, communityId, "profile", companyId] as const;
 }
@@ -49,6 +54,16 @@ function requireAvailable<T>(
     throw new Error(result.message);
   }
   return result;
+}
+
+export function useActiveCompany(communityId: string, enabled = true) {
+  return useQuery({
+    queryKey: activeCompanyQueryKey(communityId),
+    queryFn: async () =>
+      requireAvailable(await companyRepository.getActiveCompany()),
+    enabled: enabled && communityId !== "",
+    staleTime: 30_000,
+  });
 }
 
 export function useCompany(

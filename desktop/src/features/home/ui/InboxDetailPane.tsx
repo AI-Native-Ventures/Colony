@@ -10,8 +10,9 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { useOpenAsks } from "@/features/asks/useOpenAsks";
+import { answerAsk } from "@/features/asks/answerAsk";
 import { AskDetailCard } from "@/features/asks/ui/AskDetailCard";
+import { useOpenAsks } from "@/features/asks/useOpenAsks";
 import type {
   InboxContextMessage,
   InboxItem,
@@ -43,7 +44,7 @@ import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 import { relayClient } from "@/shared/api/relayClient";
 import { signRelayEvent } from "@/shared/api/tauri";
 import type { Channel, UserProfileSummary } from "@/shared/api/types";
-import { KIND_ASK, KIND_ASK_RESOLUTION } from "@/shared/constants/kinds";
+import { KIND_ASK } from "@/shared/constants/kinds";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
@@ -188,22 +189,13 @@ function InboxMessageDetailPane({
       setAskAnswerError(null);
       setIsSubmittingAsk(true);
       try {
-        const event = await signRelayEvent({
-          kind: KIND_ASK_RESOLUTION,
-          content: JSON.stringify({ answer: { decision, rationale } }),
-          tags: [["e", selectedAsk.id]],
+        await answerAsk(selectedAsk, decision, rationale, {
+          invalidateQueries: (queryKey) =>
+            queryClient.invalidateQueries({ queryKey }),
+          publishEvent: (event, timeoutMessage, sendErrorMessage) =>
+            relayClient.publishEvent(event, timeoutMessage, sendErrorMessage),
+          signRelayEvent,
         });
-        await relayClient.publishEvent(
-          event,
-          "Timed out answering the ask.",
-          "Failed to answer the ask.",
-        );
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["open-asks"] }),
-          queryClient.invalidateQueries({
-            queryKey: ["open-ask-closures"],
-          }),
-        ]);
       } catch (error) {
         setAskAnswerError(
           error instanceof Error ? error.message : "Failed to answer the ask.",

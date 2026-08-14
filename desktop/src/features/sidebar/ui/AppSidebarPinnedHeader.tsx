@@ -5,6 +5,7 @@ import {
   Compass,
   FolderGit2,
   Inbox,
+  ListChecks,
   Receipt,
   Zap,
 } from "lucide-react";
@@ -39,7 +40,9 @@ export type AppSidebarPinnedHeaderProps = {
 };
 
 type AppSidebarPrimaryMenuProps = {
+  actionCenterBadgeCount: number;
   homeBadgeCount: number;
+  onSelectActionCenter: () => void;
   onSelectAgents: () => void;
   onSelectBlocks: () => void;
   onSelectDiscovery: () => void;
@@ -89,7 +92,9 @@ export function AppSidebarPinnedHeader({
 }
 
 export function AppSidebarPrimaryMenu({
+  actionCenterBadgeCount,
   homeBadgeCount,
+  onSelectActionCenter,
   onSelectAgents,
   onSelectBlocks,
   onSelectDiscovery,
@@ -123,6 +128,26 @@ export function AppSidebarPrimaryMenu({
               data-testid="sidebar-home-count"
             >
               {Math.min(homeBadgeCount, 99)}
+            </SidebarMenuBadge>
+          ) : null}
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            data-testid="open-action-center-view"
+            isActive={selectedView === "action-center"}
+            onClick={onSelectActionCenter}
+            tooltip="Action Center"
+            type="button"
+          >
+            <ListChecks className="h-4 w-4" />
+            <SidebarMenuLabel>Action Center</SidebarMenuLabel>
+          </SidebarMenuButton>
+          {actionCenterBadgeCount > 0 ? (
+            <SidebarMenuBadge
+              className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+              data-testid="sidebar-action-center-count"
+            >
+              {Math.min(actionCenterBadgeCount, 99)}
             </SidebarMenuBadge>
           ) : null}
         </SidebarMenuItem>

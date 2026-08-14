@@ -9,6 +9,8 @@ export type OpenAsk = {
   filerPubkey: string;
   createdAt: number;
   rawContent: string;
+  channelId: string | null;
+  threadId: string | null;
 };
 
 type AskEventShape = {
@@ -17,6 +19,7 @@ type AskEventShape = {
   pubkey: string;
   created_at: number;
   content: string;
+  tags?: string[][];
 };
 
 /**
@@ -36,6 +39,9 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
   const headline =
     typeof fields.headline === "string" ? fields.headline.trim() : "";
   if (!headline) return null;
+  const tags = event.tags ?? [];
+  const channelId = tags.find((tag) => tag[0] === "h" && tag.length === 2)?.[1];
+  const threadId = tags.find((tag) => tag[0] === "e" && tag.length === 2)?.[1];
   return {
     id: event.id,
     askType: typeof fields.type === "string" ? fields.type : "question",
@@ -45,6 +51,8 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
     filerPubkey: event.pubkey,
     createdAt: event.created_at,
     rawContent: event.content,
+    channelId: channelId?.trim() || null,
+    threadId: threadId?.trim() || null,
   };
 }
 

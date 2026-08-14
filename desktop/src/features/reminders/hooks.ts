@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useCommunities } from "@/features/communities/useCommunities";
 import {
   cancelReminder,
   completeReminder,
@@ -13,8 +14,10 @@ import type {
   ReminderTarget,
 } from "@/features/reminders/lib/reminderTypes";
 
-export const remindersQueryKey = (pubkey: string) =>
-  ["reminders", pubkey] as const;
+export const remindersQueryKey = (pubkey: string, communityId?: string) =>
+  communityId
+    ? (["reminders", pubkey, communityId] as const)
+    : (["reminders", pubkey] as const);
 
 /** Re-exported so the inbox badge has one import for the due count. */
 export const countDueReminders = countDue;
@@ -25,9 +28,11 @@ export const countDueReminders = countDue;
  * (see {@link useReminderMutations}) keeps every surface consistent.
  */
 export function useRemindersQuery(pubkey: string | undefined) {
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
   return useQuery({
-    enabled: Boolean(pubkey),
-    queryKey: remindersQueryKey(pubkey ?? ""),
+    enabled: Boolean(pubkey) && communityId !== "",
+    queryKey: remindersQueryKey(pubkey ?? "", communityId),
     queryFn: () => fetchReminders(pubkey ?? ""),
     staleTime: 30_000,
   });
@@ -60,9 +65,12 @@ export function useDueReminderBadgeCount(
  * skipped invalidation would leave those surfaces stale until the next refetch.
  */
 export function useReminderMutations(pubkey: string) {
+  const { activeCommunity } = useCommunities();
   const queryClient = useQueryClient();
   const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: remindersQueryKey(pubkey) });
+    queryClient.invalidateQueries({
+      queryKey: remindersQueryKey(pubkey, activeCommunity?.id ?? ""),
+    });
 
   const create = useMutation({
     mutationFn: (input: {
