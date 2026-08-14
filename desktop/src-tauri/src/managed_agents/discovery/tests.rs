@@ -7,7 +7,6 @@ use super::{
     codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
     effective_agent_command, find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
     probe_codex_acp_version, record_agent_command, try_record_agent_command, BUZZ_AGENT_AVATAR_URL,
-    CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
 use std::path::PathBuf;
@@ -15,26 +14,26 @@ use std::path::PathBuf;
 fn resolves_known_avatar_for_bare_command() {
     let avatar_url = managed_agent_avatar_url("codex-acp").expect("codex avatar should resolve");
 
-    assert_eq!(avatar_url, CODEX_AVATAR_URL);
+    assert_eq!(avatar_url, super::CODEX_AVATAR_URL);
 }
 
 #[test]
 fn resolves_known_avatar_for_command_paths_and_aliases() {
     assert_eq!(
         managed_agent_avatar_url("/usr/local/bin/codex-acp"),
-        Some(CODEX_AVATAR_URL.to_string())
+        Some(super::CODEX_AVATAR_URL.to_string())
     );
     assert_eq!(
         managed_agent_avatar_url("Claude Code"),
-        Some(CLAUDE_CODE_AVATAR_URL.to_string())
+        Some(super::CLAUDE_CODE_AVATAR_URL.to_string())
     );
     assert_eq!(
         managed_agent_avatar_url(r"C:\Tools\claude-agent-acp.exe"),
-        Some(CLAUDE_CODE_AVATAR_URL.to_string())
+        Some(super::CLAUDE_CODE_AVATAR_URL.to_string())
     );
     assert_eq!(
         managed_agent_avatar_url("/usr/local/bin/claude-code-acp"),
-        Some(CLAUDE_CODE_AVATAR_URL.to_string())
+        Some(super::CLAUDE_CODE_AVATAR_URL.to_string())
     );
 }
 
