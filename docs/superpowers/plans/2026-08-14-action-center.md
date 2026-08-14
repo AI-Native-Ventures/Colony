@@ -105,7 +105,7 @@ assert.deepEqual(items.map((item) => item.id), [
   "approval-1",
   "reminder:reminder-1",
   "ask:ask-1",
-  "message-1",
+  "message:message-1",
 ]);
 assert.equal(filterActionCenterItems(items, "asks").length, 1);
 assert.equal(filterActionCenterItems(items, "needs-action").every((item) => item.state === "needs-action"), true);
