@@ -9,6 +9,7 @@ function targets(overrides = {}) {
   return {
     createAgent: target,
     createChannel: target,
+    goActionCenter: target,
     goAgents: target,
     goBlocks: target,
     goDiscovery: target,
@@ -32,6 +33,7 @@ test("buildNavigationCommands includes enabled destinations", () => {
     buildNavigationCommands(targets()).map((command) => command.id),
     [
       "open-home",
+      "open-action-center",
       "open-agents",
       "new-message",
       "browse-channels",
@@ -75,10 +77,12 @@ test("command callbacks delegate to their navigation targets", () => {
   const calls = [];
   const commands = buildNavigationCommands(
     targets({
+      goActionCenter: () => calls.push("action-center"),
       goSettings: () => calls.push("settings"),
     }),
   );
 
   commands.find((command) => command.id === "open-settings")?.onSelect();
-  assert.deepEqual(calls, ["settings"]);
+  commands.find((command) => command.id === "open-action-center")?.onSelect();
+  assert.deepEqual(calls, ["settings", "action-center"]);
 });

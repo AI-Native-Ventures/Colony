@@ -142,6 +142,7 @@ export function AppShell() {
   const queryClient = useQueryClient();
   useManagedAgentRuntimeReconciliation(communitiesHook.communities); // sync storage snapshot
   const {
+    goActionCenter,
     goAgents,
     goBlocks,
     goChannel,
@@ -629,6 +630,7 @@ export function AppShell() {
   const commandActions = useNavigationCommands({
     createAgent: requestOpenCreateAgent,
     createChannel: handleOpenCreateChannel,
+    goActionCenter,
     goAgents,
     goBlocks,
     goDiscovery,
@@ -887,6 +889,7 @@ export function AppShell() {
                             });
                           await goChannel(directMessage.id);
                         }}
+                        onSelectActionCenter={() => void goActionCenter()}
                         onSelectAgents={() => void goAgents()}
                         onSelectBlocks={() => void goBlocks()}
                         onSelectDiscovery={() =>

@@ -9,6 +9,7 @@ import {
   FolderGit2,
   Hash,
   House,
+  ListChecks,
   MessageCircle,
   Plus,
   Receipt,
@@ -33,6 +34,7 @@ export type SearchCommandId =
   | "create-agent"
   | "create-channel"
   | "new-message"
+  | "open-action-center"
   | "open-agents"
   | "open-blocks"
   | "open-discovery"
@@ -100,6 +102,8 @@ export function resultIcon(
       case "browse-channels":
         return HashSearch;
       case "create-agent":
+      case "open-action-center":
+        return ListChecks;
       case "open-agents":
         return Bot;
       case "create-channel":

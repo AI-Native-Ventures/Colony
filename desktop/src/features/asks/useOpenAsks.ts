@@ -7,6 +7,7 @@ import {
   type OpenAsk,
 } from "@/features/asks/lib/askEvent";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { relayClient } from "@/shared/api/relayClient";
 import type { RelayEvent } from "@/shared/api/types";
 import { useRelayConnection } from "@/shared/api/useRelayConnection";
@@ -18,12 +19,20 @@ import {
 
 const ASK_QUERY_LIMIT = 500;
 
-function openAsksQueryKey(ownerPubkey: string | null) {
-  return ["open-asks", ownerPubkey] as const;
+/** Key for open asks addressed to an owner in one community. */
+export function openAsksQueryKey(
+  communityId: string,
+  ownerPubkey: string | null,
+) {
+  return ["open-asks", communityId, ownerPubkey] as const;
 }
 
-function askClosuresQueryKey(askIds: readonly string[]) {
-  return ["open-ask-closures", askIds] as const;
+/** Key for closure events corresponding to one community's asks. */
+export function askClosuresQueryKey(
+  communityId: string,
+  askIds: readonly string[],
+) {
+  return ["open-ask-closures", communityId, askIds] as const;
 }
 
 function closureAskIds(events: RelayEvent[] | undefined): string[] {
@@ -45,15 +54,22 @@ function closureAskIds(events: RelayEvent[] | undefined): string[] {
  * ids. Closure events are filtered by the ask id they name, not by their own
  * event ids.
  */
-export function useOpenAsks(): { asks: OpenAsk[]; isLoading: boolean } {
+export function useOpenAsks(): {
+  asks: OpenAsk[];
+  error: Error | null;
+  isLoading: boolean;
+  refetch: () => Promise<void>;
+} {
   const identityQuery = useIdentityQuery();
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
   const ownerPubkey = identityQuery.data?.pubkey ?? null;
   const connectionState = useRelayConnection();
   const connected = connectionState === "connected";
 
   const asksQuery = useQuery<RelayEvent[]>({
-    enabled: ownerPubkey !== null,
-    queryKey: openAsksQueryKey(ownerPubkey),
+    enabled: ownerPubkey !== null && communityId !== "",
+    queryKey: openAsksQueryKey(communityId, ownerPubkey),
     queryFn: () =>
       relayClient.fetchEvents({
         kinds: [KIND_ASK],
@@ -79,8 +95,8 @@ export function useOpenAsks(): { asks: OpenAsk[]; isLoading: boolean } {
   const askIds = React.useMemo(() => asks.map((ask) => ask.id), [asks]);
 
   const closuresQuery = useQuery<RelayEvent[]>({
-    enabled: ownerPubkey !== null && askIds.length > 0,
-    queryKey: askClosuresQueryKey(askIds),
+    enabled: ownerPubkey !== null && communityId !== "" && askIds.length > 0,
+    queryKey: askClosuresQueryKey(communityId, askIds),
     queryFn: () =>
       relayClient.fetchEvents({
         kinds: [KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL],
@@ -102,9 +118,21 @@ export function useOpenAsks(): { asks: OpenAsk[]; isLoading: boolean } {
     [asks, closuresQuery.data],
   );
 
+  const refetchAsks = asksQuery.refetch;
+  const refetchClosures = closuresQuery.refetch;
+  const refetch = React.useCallback(async () => {
+    await Promise.all([refetchAsks(), refetchClosures()]);
+  }, [refetchAsks, refetchClosures]);
+  const error =
+    [asksQuery.error, closuresQuery.error].find(
+      (cause): cause is Error => cause instanceof Error,
+    ) ?? null;
+
   return {
     asks: openAsks,
+    error,
     isLoading:
       identityQuery.isLoading || asksQuery.isLoading || closuresQuery.isLoading,
+    refetch,
   };
 }
