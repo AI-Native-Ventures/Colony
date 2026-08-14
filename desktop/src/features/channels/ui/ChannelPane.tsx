@@ -548,6 +548,7 @@ export const ChannelPane = React.memo(function ChannelPane({
       {!isSinglePanelView ? (
         <section
           aria-label="Channel messages and composer"
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
           hidden={workspaceExpanded}
           inert={channelIsCovered ? true : undefined}
           data-testid="channel-drop-zone"
