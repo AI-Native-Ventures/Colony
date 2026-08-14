@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- feat(desktop): add a native Action Center for asks, tasks, messages, reminders, and workflow approvals.
+
 - Rebrand: the app is now Colony. New ant mark, landing, loading animations, icons, and marketing site. Internal names (crates, env vars, protocol) are unchanged.
 
 ## v0.5.2
