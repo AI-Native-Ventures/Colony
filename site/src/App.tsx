@@ -1,7 +1,7 @@
 import { CapabilitiesStrip } from "@/sections/CapabilitiesStrip";
 import { Cards } from "@/sections/Cards";
 import { ChainOfCommand } from "@/sections/ChainOfCommand";
-import { Download } from "@/sections/Download";
+import { ComingSoon } from "@/sections/ComingSoon";
 import { Footer } from "@/sections/Footer";
 import { Hero } from "@/sections/Hero";
 import { Jobs } from "@/sections/Jobs";
@@ -18,7 +18,7 @@ export function App() {
       <Jobs />
       <CapabilitiesStrip />
       <Cards />
-      <Download />
+      <ComingSoon />
       <Footer />
     </main>
   );
