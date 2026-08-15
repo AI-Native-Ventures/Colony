@@ -6,6 +6,13 @@
 
 - Rebrand: the app is now Colony. New ant mark, landing, loading animations, icons, and marketing site. Internal names (crates, env vars, protocol) are unchanged.
 
+## v0.10.16
+
+### Desktop and shared changes
+
+- fix(desktop): validate Block schemas without code generation ([#256](https://github.com/AI-Native-Ventures/Colony/pull/256)) ([`248c30c0e908bf7e37b112e88efae2b4db86c3ab`](https://github.com/AI-Native-Ventures/Colony/commit/248c30c0e908bf7e37b112e88efae2b4db86c3ab))
+- fix(desktop): restore the Tauri command handler ([#255](https://github.com/AI-Native-Ventures/Colony/pull/255)) ([`3d2bcca41`](https://github.com/AI-Native-Ventures/Colony/commit/3d2bcca41))
+
 ## v0.5.10
 
 ### Desktop and shared changes
