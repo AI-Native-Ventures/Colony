@@ -14,6 +14,7 @@ import { Route as projectsRouteImport } from "./routes/projects";
 import { Route as discoveryRouteImport } from "./routes/discovery";
 import { Route as blocksRouteImport } from "./routes/blocks";
 import { Route as agentsRouteImport } from "./routes/agents";
+import { Route as actionCenterRouteImport } from "./routes/action-center";
 import { Route as indexRouteImport } from "./routes/index";
 import { Route as workflowsDotworkflowIdRouteImport } from "./routes/workflows.$workflowId";
 import { Route as projectsDotprojectIdRouteImport } from "./routes/projects.$projectId";
@@ -66,6 +67,11 @@ const agentsRoute = agentsRouteImport.update({
   path: "/agents",
   getParentRoute: () => rootRouteImport,
 } as any);
+const actionCenterRoute = actionCenterRouteImport.update({
+  id: "/action-center",
+  path: "/action-center",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const indexRoute = indexRouteImport.update({
   id: "/",
   path: "/",
@@ -100,6 +106,7 @@ const channelsDotchannelIdDotpostsDotpostIdRoute =
 
 export interface FileRoutesByFullPath {
   "/": typeof indexRoute;
+  "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/blocks": typeof blocksRoute;
   "/discovery": typeof discoveryRoute;
@@ -117,6 +124,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof indexRoute;
+  "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/blocks": typeof blocksRoute;
   "/discovery": typeof discoveryRoute;
@@ -135,6 +143,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof indexRoute;
+  "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/blocks": typeof blocksRoute;
   "/discovery": typeof discoveryRoute;
@@ -154,6 +163,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
   fullPaths:
     | "/"
+    | "/action-center"
     | "/agents"
     | "/blocks"
     | "/discovery"
@@ -171,6 +181,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/"
+    | "/action-center"
     | "/agents"
     | "/blocks"
     | "/discovery"
@@ -188,6 +199,7 @@ export interface FileRouteTypes {
   id:
     | "__root__"
     | "/"
+    | "/action-center"
     | "/agents"
     | "/blocks"
     | "/discovery"
@@ -206,6 +218,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   indexRoute: typeof indexRoute;
+  actionCenterRoute: typeof actionCenterRoute;
   agentsRoute: typeof agentsRoute;
   blocksRoute: typeof blocksRoute;
   discoveryRoute: typeof discoveryRoute;
@@ -287,6 +300,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof agentsRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/action-center": {
+      id: "/action-center";
+      path: "/action-center";
+      fullPath: "/action-center";
+      preLoaderRoute: typeof actionCenterRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/": {
       id: "/";
       path: "/";
@@ -334,6 +354,7 @@ declare module "@tanstack/react-router" {
 
 const rootRouteChildren: RootRouteChildren = {
   indexRoute: indexRoute,
+  actionCenterRoute: actionCenterRoute,
   agentsRoute: agentsRoute,
   blocksRoute: blocksRoute,
   discoveryRoute: discoveryRoute,

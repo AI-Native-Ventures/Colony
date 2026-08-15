@@ -352,11 +352,7 @@ export function parseTaskRunHead(
   };
 }
 
-/** Collapse NIP-33 coordinates and choose the newest valid task-bound run. */
-export function collapseAndSelectCurrentTaskRun(
-  events: readonly RelayEvent[],
-  context: TaskRunContext,
-): TaskRunHead | null {
+function collapseNip33Heads(events: readonly RelayEvent[]): RelayEvent[] {
   const coordinates = new Map<string, RelayEvent>();
   for (const event of events) {
     const coordinate = singleTag(event, "d");
@@ -370,8 +366,23 @@ export function collapseAndSelectCurrentTaskRun(
       coordinates.set(coordinate, event);
     }
   }
+  return [...coordinates.values()];
+}
+
+function isNewerRun(left: TaskRunHead, right: TaskRunHead): boolean {
   return (
-    [...coordinates.values()]
+    left.createdAt > right.createdAt ||
+    (left.createdAt === right.createdAt && left.eventId < right.eventId)
+  );
+}
+
+/** Collapse NIP-33 coordinates and choose the newest valid task-bound run. */
+export function collapseAndSelectCurrentTaskRun(
+  events: readonly RelayEvent[],
+  context: TaskRunContext,
+): TaskRunHead | null {
+  return (
+    collapseNip33Heads(events)
       .map((event) => parseTaskRunHead(event, context))
       .filter((parsed): parsed is { ok: true; value: TaskRunHead } => parsed.ok)
       .map((parsed) => parsed.value)
@@ -380,5 +391,49 @@ export function collapseAndSelectCurrentTaskRun(
           right.createdAt - left.createdAt ||
           left.eventId.localeCompare(right.eventId),
       )[0] ?? null
+  );
+}
+
+/**
+ * Collapse one bounded Job-head read for all task contexts in one pass.
+ *
+ * NIP-33 coordinates are collapsed before context validation, matching the
+ * single-context helper above. Each surviving head is then signature-checked
+ * at most once, instead of once per task in the global read.
+ */
+export function collapseAndSelectCurrentTaskRuns(
+  events: readonly RelayEvent[],
+  contexts: readonly TaskRunContext[],
+): ReadonlyMap<string, TaskRunHead | null> {
+  const contextByKey = new Map(
+    contexts.map((context) => [
+      `${context.taskId}\u0000${context.channelId}\u0000${context.threadId}`,
+      context,
+    ]),
+  );
+  const selected = new Map<string, TaskRunHead>();
+
+  for (const event of collapseNip33Heads(events)) {
+    const taskId = singleTag(event, "task");
+    const channelId = singleTag(event, "h");
+    const threadId = singleTag(event, "e");
+    if (!taskId || !channelId || !threadId) continue;
+    const context = contextByKey.get(
+      `${taskId}\u0000${channelId}\u0000${threadId}`,
+    );
+    if (!context) continue;
+    const parsed = parseTaskRunHead(event, context);
+    if (!parsed.ok) continue;
+    const current = selected.get(context.taskId);
+    if (!current || isNewerRun(parsed.value, current)) {
+      selected.set(context.taskId, parsed.value);
+    }
+  }
+
+  return new Map(
+    contexts.map((context) => [
+      context.taskId,
+      selected.get(context.taskId) ?? null,
+    ]),
   );
 }

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { useCommunities } from "@/features/communities/useCommunities";
 import { getHomeFeed } from "@/shared/api/tauri";
 import { useRelayConnection } from "@/shared/api/useRelayConnection";
 import { useFocusedRefetchInterval } from "@/shared/lib/useDocumentVisible";
@@ -15,7 +16,13 @@ export const homeFeedFocusRefetchPolicy = {
   refetchOnWindowFocus: true,
 } as const;
 
+/** Key for the community-scoped Home feed projection. */
+export const homeFeedQueryKey = (communityId: string) =>
+  ["home-feed", communityId] as const;
+
 export function useHomeFeedQuery() {
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
   const connectionState = useRelayConnection();
   const connected = connectionState === "connected";
   const refetchInterval = useFocusedRefetchInterval(
@@ -23,7 +30,8 @@ export function useHomeFeedQuery() {
   );
 
   return useQuery({
-    queryKey: ["home-feed"],
+    queryKey: homeFeedQueryKey(communityId),
+    enabled: communityId !== "",
     queryFn: () =>
       getHomeFeed({
         limit: 50,

@@ -9,6 +9,10 @@ import {
 import { cacheSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { resolveSearchHitDestination } from "@/app/navigation/resolveSearchHitDestination";
 import type {
+  ActionCenterFilter,
+  ActionCenterStateFilter,
+} from "@/features/action-center/contracts";
+import type {
   DiscoverySearch,
   DiscoverySurface,
   DiscoveryTab,
@@ -18,6 +22,12 @@ import type { SearchHit } from "@/shared/api/types";
 type NavigationBehavior = {
   replace?: boolean;
   resetScroll?: boolean;
+};
+
+export type ActionCenterNavigationOptions = NavigationBehavior & {
+  filter?: ActionCenterFilter;
+  item?: string;
+  state?: ActionCenterStateFilter;
 };
 
 type NewMessageNavigationOptions = NavigationBehavior & {
@@ -108,6 +118,22 @@ export function useAppNavigation() {
           to: "/agents",
         },
         behavior,
+      ),
+    [commitNavigation],
+  );
+
+  const goActionCenter = React.useCallback(
+    (options?: ActionCenterNavigationOptions) =>
+      commitNavigation(
+        {
+          to: "/action-center",
+          search: {
+            ...(options?.filter ? { filter: options.filter } : {}),
+            ...(options?.item ? { item: options.item } : {}),
+            ...(options?.state ? { state: options.state } : {}),
+          },
+        },
+        options,
       ),
     [commitNavigation],
   );
@@ -402,6 +428,7 @@ export function useAppNavigation() {
     closeForumPost,
     closeSettings,
     closeWorkflowDetail,
+    goActionCenter,
     goAgents,
     goBlocks,
     goChannel,

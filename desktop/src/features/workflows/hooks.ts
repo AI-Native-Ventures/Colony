@@ -76,7 +76,8 @@ function invalidateWorkflowListQueries(
   void queryClient.invalidateQueries({
     predicate: (query) =>
       query.queryKey[0] === "workflows" ||
-      query.queryKey[0] === "workflows-all",
+      query.queryKey[0] === "workflows-all" ||
+      query.queryKey[0] === "action-center-workflows",
   });
 }
 
@@ -189,7 +190,9 @@ export function useTriggerWorkflowMutation(workflowId: string) {
     mutationFn: () => triggerWorkflow(workflowId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: workflowRunsQueryKey(workflowId),
+        predicate: (query) =>
+          query.queryKey[0] === "workflow-runs" ||
+          query.queryKey[0] === "action-center-workflow-runs",
       });
     },
   });
@@ -212,7 +215,8 @@ export function useApprovalMutation() {
         predicate: (query) =>
           query.queryKey[0] === "workflow-runs" ||
           query.queryKey[0] === "workflow" ||
-          query.queryKey[0] === "run-approvals",
+          query.queryKey[0] === "run-approvals" ||
+          query.queryKey[0] === "action-center-workflow-approvals",
       });
     },
   });

@@ -9,6 +9,7 @@ import {
 
 import {
   collapseAndSelectCurrentTaskRun,
+  collapseAndSelectCurrentTaskRuns,
   parseTaskRunHead,
 } from "./taskRunContracts.ts";
 
@@ -76,6 +77,46 @@ function jobHead({
     secret,
   );
 }
+
+test("selects current runs for multiple task contexts in one bounded pass", () => {
+  const secondTask = "company:task-two";
+  const secondChannel = "product";
+  const secondThread = "a".repeat(64);
+  const selected = collapseAndSelectCurrentTaskRuns(
+    [
+      jobHead(),
+      jobHead({
+        jobId: "b".repeat(64),
+        taskId: secondTask,
+        createdAt: 1_800_000_001,
+      }),
+      jobHead({
+        jobId: "c".repeat(64),
+        taskId: "unrelated-task",
+        createdAt: 1_800_000_002,
+      }),
+    ],
+    [
+      { taskId: TASK, channelId: CHANNEL, threadId: THREAD },
+      {
+        taskId: secondTask,
+        channelId: CHANNEL,
+        threadId: THREAD,
+      },
+    ],
+  );
+
+  assert.equal(selected.get(TASK)?.jobId, JOB);
+  assert.equal(selected.get(secondTask)?.jobId, "b".repeat(64));
+  assert.equal(selected.has("unrelated-task"), false);
+
+  // A context mismatch must not make a valid head appear under another task.
+  const mismatched = collapseAndSelectCurrentTaskRuns(
+    [jobHead({ taskId: secondTask })],
+    [{ taskId: secondTask, channelId: secondChannel, threadId: secondThread }],
+  );
+  assert.equal(mismatched.get(secondTask), null);
+});
 
 test("parses an accepted checkpoint and preserves only public recovery fields", () => {
   const parsed = parseTaskRunHead(

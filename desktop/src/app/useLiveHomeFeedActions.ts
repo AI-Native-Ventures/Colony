@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { remindersQueryKey } from "@/features/reminders/hooks";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   KIND_APPROVAL_REQUEST,
@@ -76,6 +77,8 @@ export function useLiveHomeFeedActions(
   memberChannelIds: string[] = [],
 ) {
   const queryClient = useQueryClient();
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
   // Stable primitive key so a fresh-but-equal member list (e.g. while the
   // channels query is loading) does not churn live subscriptions.
   const memberChannelIdsKey = React.useMemo(
@@ -89,14 +92,14 @@ export function useLiveHomeFeedActions(
     (normalizedPubkey: string) => {
       onHomeFeedEvent();
       void queryClient.invalidateQueries({
-        queryKey: remindersQueryKey(normalizedPubkey),
+        queryKey: remindersQueryKey(normalizedPubkey, communityId),
       });
     },
   );
 
   React.useEffect(() => {
     const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
-    if (!normalizedPubkey) {
+    if (!normalizedPubkey || !communityId) {
       return;
     }
 
@@ -196,5 +199,5 @@ export function useLiveHomeFeedActions(
       disposers = [];
       disposeAll(currentDisposers);
     };
-  }, [memberChannelIdsKey, pubkey]);
+  }, [communityId, memberChannelIdsKey, pubkey]);
 }

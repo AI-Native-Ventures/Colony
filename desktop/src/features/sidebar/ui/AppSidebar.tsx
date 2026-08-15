@@ -1,5 +1,7 @@
 // biome-ignore format: keep compact to stay within file size limit
 import * as React from "react";
+import { useAppShell } from "@/app/AppShellContext";
+import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 import type { Community } from "@/features/communities/types";
@@ -20,6 +22,7 @@ import {
   sortChannelsForSidebar,
 } from "@/features/sidebar/lib/channelSortPreference";
 import { useChannelSortPreference } from "@/features/sidebar/lib/useChannelSortPreference";
+import { useSidebarScrollBoundary } from "@/features/sidebar/lib/useSidebarScrollBoundary";
 import { useSidebarScrollLock } from "@/features/sidebar/lib/useSidebarScrollLock";
 import { isSidebarBackgroundTarget } from "@/features/sidebar/lib/sidebarBackgroundTarget";
 import { useUnreadOverflow } from "@/features/sidebar/lib/useUnreadOverflow";
@@ -133,6 +136,7 @@ type AppSidebarProps = {
   ) => void;
   onRemoveCommunity: (id: string) => Promise<LeaveCommunityResult | undefined>;
   onCreateAgent: () => void;
+  onSelectActionCenter: () => void;
   onSelectAgents: () => void;
   onSelectBlocks: () => void;
   onSelectDiscovery: () => void;
@@ -209,6 +213,7 @@ export function AppSidebar({
   onRemoveCommunity,
   onCreateAgent,
   commandActions,
+  onSelectActionCenter,
   onSelectAgents,
   onSelectBlocks,
   onSelectDiscovery,
@@ -242,6 +247,10 @@ export function AppSidebar({
   onUnstarChannel,
   workspaceExpanded = false,
 }: AppSidebarProps) {
+  const { feedItemState } = useAppShell();
+  const actionCenter = useActionCenterItems({
+    localDoneIds: feedItemState.doneSet,
+  });
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
   const { status: updateStatus } = useUpdaterContext();
   const canShowSidebarUpdateCard = shouldShowSidebarUpdateCard(updateStatus);
@@ -254,38 +263,7 @@ export function AppSidebar({
   const [dmActionsMenuOpen, setDmActionsMenuOpen] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   useSidebarScrollLock(scrollRef);
-  React.useEffect(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) return;
-    const handleWheel = (event: WheelEvent) => {
-      if (event.deltaY === 0) return;
-      const maxScrollTop =
-        scrollElement.scrollHeight - scrollElement.clientHeight;
-      if (maxScrollTop <= 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      const atTop = scrollElement.scrollTop <= 0;
-      const atBottom = scrollElement.scrollTop >= maxScrollTop - 1;
-      const scrollingPastTop = event.deltaY < 0 && atTop;
-      const scrollingPastBottom = event.deltaY > 0 && atBottom;
-      if (scrollingPastTop || scrollingPastBottom) {
-        event.preventDefault();
-        event.stopPropagation();
-        scrollElement.scrollTop = scrollingPastTop ? 0 : maxScrollTop;
-      }
-    };
-    scrollElement.addEventListener("wheel", handleWheel, {
-      capture: true,
-      passive: false,
-    });
-    return () => {
-      scrollElement.removeEventListener("wheel", handleWheel, {
-        capture: true,
-      });
-    };
-  }, []);
+  useSidebarScrollBoundary(scrollRef);
 
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
@@ -606,7 +584,9 @@ export function AppSidebar({
               data-testid="sidebar-scroll-content"
             >
               <AppSidebarPrimaryMenu
+                actionCenterBadgeCount={actionCenter.openCount}
                 homeBadgeCount={homeBadgeCount}
+                onSelectActionCenter={onSelectActionCenter}
                 onSelectAgents={onSelectAgents}
                 onSelectBlocks={onSelectBlocks}
                 onSelectDiscovery={onSelectDiscovery}

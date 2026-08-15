@@ -1,4 +1,8 @@
 const RELAY_QUERY_ROOTS = new Set<string>([
+  "action-center-task-runs",
+  "action-center-workflow-approvals",
+  "action-center-workflow-runs",
+  "action-center-workflows",
   "archivedIdentities",
   "channel-canvas",
   "channel-messages",
@@ -14,6 +18,8 @@ const RELAY_QUERY_ROOTS = new Set<string>([
   "my-notes",
   "myRelayMembership",
   "oaOwner",
+  "open-ask-closures",
+  "open-asks",
   "presence",
   "profile",
   "pulse-note",
