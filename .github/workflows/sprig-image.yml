@@ -123,8 +123,10 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: |
             type=registry,ref=${{ env.IMAGE_NAME }}-buildcache:${{ matrix.arch }}
+          # Pull requests build without publishing to GHCR. In particular, a
+          # fork's GITHUB_TOKEN cannot write the upstream image's registry cache.
           cache-to: |
-            ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && format('type=registry,ref={0}-buildcache:{1},mode=max,compression=zstd', env.IMAGE_NAME, matrix.arch) || '' }}
+            ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}-buildcache:{1},mode=max,compression=zstd', env.IMAGE_NAME, matrix.arch) || '' }}
 
       - name: Export digest
         if: github.event_name != 'pull_request'
