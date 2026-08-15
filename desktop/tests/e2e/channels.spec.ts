@@ -1276,6 +1276,20 @@ test("does not reopen a sent direct message after leaving during cache reseed", 
 test("shows capped participant stack in group direct message header", async ({
   page,
 }) => {
+  await installMockBridge(page, {
+    searchProfiles: [
+      {
+        pubkey: TEST_IDENTITIES.alice.pubkey,
+        displayName: "alice",
+        isAgent: false,
+      },
+      {
+        pubkey: TEST_IDENTITIES.charlie.pubkey,
+        displayName: "charlie",
+        isAgent: false,
+      },
+    ],
+  });
   await page.goto("/");
 
   await openNewMessagePage(page);

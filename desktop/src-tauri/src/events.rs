@@ -351,12 +351,6 @@ pub fn build_message_with_reference_tags(
     )
 }
 
-/// Kind 9 — stream message with internal client marker tags.
-///
-/// This is intentionally narrower than arbitrary extra tags: callers can add
-/// only `["client", ...]` tags, which are useful for idempotency markers but
-/// cannot forge channel/thread/mention metadata.
-#[allow(clippy::too_many_arguments)]
 /// Kind 9 — stream message with link previews, provenance, client markers, and
 /// validated Block reference tags.
 #[allow(clippy::too_many_arguments)]
@@ -390,6 +384,12 @@ pub fn build_message_with_reference_and_client_tags(
     )
 }
 
+/// Kind 9 — stream message with internal client marker tags.
+///
+/// This is intentionally narrower than arbitrary extra tags: callers can add
+/// only `["client", ...]` tags, which are useful for idempotency markers but
+/// cannot forge channel/thread/mention metadata.
+#[allow(clippy::too_many_arguments)]
 pub fn build_message_with_client_tags(
     channel_id: Uuid,
     content: &str,

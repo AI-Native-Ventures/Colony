@@ -50,7 +50,15 @@ async function seedIconChannelSection(page: Page) {
 
 async function openChannel(page: Page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.getByTestId("channel-general").click();
+  // Locator clicks may scroll the virtualized sidebar before dispatching the
+  // event. Click the already-visible row at its current coordinates so the
+  // palette assertions observe the initial pinned-header geometry.
+  const channelRow = page.getByTestId("channel-general");
+  const channelRowBox = await channelRow.boundingBox();
+  if (!channelRowBox) throw new Error("General channel row is not measurable");
+  await channelRow.click({
+    position: { x: 30, y: channelRowBox.height / 2 },
+  });
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 }
