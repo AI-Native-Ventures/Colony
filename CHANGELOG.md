@@ -6,7 +6,15 @@
 
 - Rebrand: the app is now Colony. New ant mark, landing, loading animations, icons, and marketing site. Internal names (crates, env vars, protocol) are unchanged.
 
+## v0.10.17
+
+### Desktop and shared changes
+
+- fix(ci): build the Kubernetes provider sidecar in the macOS release job. v0.10.16 tagged but never published: `buzz-backend-kubernetes` became a packaged sidecar in #255 without being added to the release job's build list, so the bundler stopped the build. No app-visible change beyond shipping the v0.10.16 fixes.
+
 ## v0.10.16
+
+Tagged, never published. See v0.10.17, which ships these changes.
 
 ### Desktop and shared changes
 

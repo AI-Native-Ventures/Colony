@@ -136,12 +136,19 @@ jobs:
             | awk '{printf "  %7.1f GiB  %s\n", $1/1024/1024, $2}'
           exit 1
 
+      # This package list must cover every entry in tauri.conf.json's
+      # externalBin, because scripts/bundle-sidecars.sh refuses to bundle a
+      # sidecar it cannot find and Tauri refuses to package one that is not
+      # bundled. v0.10.16 failed here: buzz-backend-kubernetes was added to
+      # externalBin and to the bundler without being added to this line, and
+      # nothing else in CI runs the macOS bundle step.
       - name: Build sidecar binaries
         run: |
           . ./bin/activate-hermit
           export PATH="$HOME/.cargo/bin:$PATH"
           cargo build --release --target aarch64-apple-darwin \
-            -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+            -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp \
+            -p git-credential-nostr -p buzz-cli
           scripts/bundle-sidecars.sh aarch64-apple-darwin
 
       - name: Check sidecars are real binaries
@@ -150,7 +157,7 @@ jobs:
         # with stub sidecars installs fine and then cannot launch any agent,
         # so refuse to continue with any suspiciously small sidecar.
         run: |
-          for bin in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+          for bin in buzz-acp buzz-agent buzz-backend-kubernetes buzz-dev-mcp git-credential-nostr buzz; do
             f="desktop/src-tauri/binaries/${bin}-aarch64-apple-darwin"
             size=$(stat -f %z "$f" 2>/dev/null || echo 0)
             if [ "$size" -lt 500000 ]; then
