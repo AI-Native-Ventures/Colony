@@ -1,9 +1,11 @@
+import {
+  format,
+  type OutputUnit,
+  type Schema,
+  Validator,
+} from "@cfworker/json-schema";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import Ajv2020, {
-  type ErrorObject,
-  type ValidateFunction,
-} from "ajv/dist/2020.js";
 import { z } from "zod";
 
 import {
@@ -226,24 +228,33 @@ const manifestSchema = z
   })
   .strict();
 
-const ajv = new Ajv2020({
-  allErrors: true,
-  strict: false,
-  validateFormats: true,
-});
-ajv.addFormat("uuid", UUID_RE);
-ajv.addFormat("uri", {
-  type: "string",
-  validate(value: string): boolean {
-    try {
-      return Boolean(new URL(value));
-    } catch {
-      return false;
-    }
-  },
-});
+// Manifests arrive from the relay at runtime, so their schemas can only be
+// interpreted, never precompiled. The packaged desktop CSP has no
+// `'unsafe-eval'` (desktop/src-tauri/tauri.conf.json, pinned by
+// src-tauri/tests/csp.rs), which rules out any validator that generates code
+// and hands it to `new Function`. @cfworker/json-schema walks the schema
+// instead, so Blocks render under the shipped CSP.
+//
+// Its format table is shared module state; these two entries replace the
+// library defaults with the stricter ones this module has always enforced:
+// RFC 4122 versions 1-8 for uuid, and WHATWG URL parsing for uri.
+format.uuid = (value: string): boolean => UUID_RE.test(value);
+format.uri = (value: string): boolean => {
+  try {
+    return Boolean(new URL(value));
+  } catch {
+    return false;
+  }
+};
 
-const schemaValidators = new WeakMap<object, ValidateFunction>();
+type SchemaValidationResult = {
+  valid: boolean;
+  errors: OutputUnit[];
+};
+
+type SchemaValidator = (value: unknown) => SchemaValidationResult;
+
+const schemaValidators = new WeakMap<object, SchemaValidator>();
 
 function failure<T>(
   code: BlockFailureCode,
@@ -262,10 +273,10 @@ function formatZodError(error: z.ZodError): string {
     .join("; ");
 }
 
-function formatAjvErrors(errors: ErrorObject[] | null | undefined): string {
-  return (errors ?? [])
+function formatSchemaErrors(errors: readonly OutputUnit[]): string {
+  return errors
     .slice(0, 4)
-    .map((error) => `${error.instancePath || "/"} ${error.message ?? ""}`)
+    .map((error) => `${error.instanceLocation || "#"} ${error.error}`)
     .join("; ");
 }
 
@@ -317,7 +328,7 @@ function containsSecretLookingKey(value: unknown): boolean {
 function compileDynamicSchema(
   schema: unknown,
   context: string,
-): BlockParseResult<ValidateFunction> {
+): BlockParseResult<SchemaValidator> {
   if (
     !schema ||
     typeof schema !== "object" ||
@@ -348,7 +359,28 @@ function compileDynamicSchema(
     return { ok: true, value: cached };
   }
   try {
-    const validator = ajv.compile(schema);
+    // An interpreting validator defers work Ajv did at compile time, so a
+    // schema that cannot be evaluated (an unresolved local $ref, an instance
+    // type it refuses) throws on first use rather than here. Convert that into
+    // an ordinary rejection so callers keep their existing failure shape.
+    const compiled = new Validator(schema as Schema, "2020-12", false);
+    const validator: SchemaValidator = (value) => {
+      try {
+        return compiled.validate(value);
+      } catch (error) {
+        return {
+          valid: false,
+          errors: [
+            {
+              keyword: "$schema",
+              keywordLocation: "#",
+              instanceLocation: "#",
+              error: `schema could not be evaluated: ${String(error)}`,
+            },
+          ],
+        };
+      }
+    };
     schemaValidators.set(schema, validator);
     return { ok: true, value: validator };
   } catch (error) {
@@ -688,11 +720,11 @@ export function validateBlockManifest(
       if (example.name.trim() === "") {
         return failure("invalid-manifest", "example names must not be empty");
       }
-      const valid = inputSchema.value(example.data);
-      if (!valid) {
+      const validated = inputSchema.value(example.data);
+      if (!validated.valid) {
         return failure(
           "invalid-manifest",
-          `example ${example.name} is invalid: ${formatAjvErrors(inputSchema.value.errors)}`,
+          `example ${example.name} is invalid: ${formatSchemaErrors(validated.errors)}`,
         );
       }
       const questionOptionsError = validateQuestionOptionsData(
@@ -727,10 +759,11 @@ export function validateBlockData(
     if (!compiled.ok) {
       return failure("invalid-data", compiled.message);
     }
-    if (!compiled.value(value)) {
+    const validated = compiled.value(value);
+    if (!validated.valid) {
       return failure(
         "invalid-data",
-        `Block data does not match the manifest: ${formatAjvErrors(compiled.value.errors)}`,
+        `Block data does not match the manifest: ${formatSchemaErrors(validated.errors)}`,
       );
     }
     const questionOptionsError = validateQuestionOptionsData(
@@ -773,11 +806,12 @@ export function validateBlockActionData(
     if (!compiled.ok) {
       return failure("invalid-data", compiled.message);
     }
-    return compiled.value(value)
+    const validated = compiled.value(value);
+    return validated.valid
       ? { ok: true, value }
       : failure(
           "invalid-data",
-          `action data does not match ${actionId}: ${formatAjvErrors(compiled.value.errors)}`,
+          `action data does not match ${actionId}: ${formatSchemaErrors(validated.errors)}`,
         );
   } catch (error) {
     return failure(
