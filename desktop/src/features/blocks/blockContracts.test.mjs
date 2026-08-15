@@ -179,6 +179,29 @@ test("block manifest validates fixed primitives and dynamic data", () => {
   assert.equal(validateBlockManifest(remoteRef).ok, false);
 });
 
+test("a local reference that resolves to nothing is rejected, not thrown", () => {
+  const danglingRef = validManifest({
+    input_schema: {
+      $schema: BLOCK_SCHEMA_DRAFT_2020_12,
+      type: "object",
+      properties: { title: { $ref: "#/$defs/missing" } },
+    },
+  });
+  const manifest = validateBlockManifest(danglingRef);
+  assert.equal(manifest.ok, false);
+  assert.match(manifest.message, /schema could not be evaluated/);
+
+  // The same schema reaching validateBlockData through an already-trusted
+  // manifest must also fail closed rather than escape as an exception.
+  const trusted = validateBlockManifest(validManifest());
+  assert.ok(trusted.ok);
+  const data = validateBlockData(
+    { ...trusted.value, input_schema: danglingRef.input_schema },
+    { title: "Hello" },
+  );
+  assert.equal(data.ok, false);
+});
+
 test("Question manifests accept exactly one bounded static or data-backed option source", () => {
   const question = {
     type: "question",
